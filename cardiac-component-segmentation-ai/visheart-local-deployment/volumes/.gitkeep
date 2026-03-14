@@ -1,0 +1,2 @@
+# This file ensures the volumes directory is tracked by git
+# Even though it's empty, the directory structure is important

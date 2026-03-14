@@ -1,0 +1,12 @@
+[submodule "Cardiac_Segmentation_FYP_Server"]
+	path = Cardiac_Segmentation_FYP_Server
+	url = https://github.com/jamesmuking5/Cardiac_Segmentation_FYP_Server.git
+	branch = feat/aws-metrics-merge-4d
+[submodule "visheart-frontend"]
+	path = visheart-frontend
+	url = https://github.com/jamesmuking5/visheart-frontend.git
+	branch = feat/aws-metrics-merge-4d
+[submodule "visheart-inference-gpu"]
+	path = visheart-inference-gpu
+	url = https://github.com/jamesmuking5/visheart-inference-gpu.git
+	branch = main

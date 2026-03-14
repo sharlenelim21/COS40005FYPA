@@ -1,0 +1,214 @@
+# Docker Compose for LOCAL Deployment - Combined Container Version
+
+services:
+  # ============================================
+  # Combined VisHeart Application
+  # Frontend (Next.js) + Backend (Node.js)
+  # ============================================
+  visheart-app:
+    image: jesmineting/visheart-local:1.0.0
+    container_name: visheart-local
+    restart: unless-stopped
+    ports:
+      - "3000:3000"  # Frontend
+      - "5000:5000"  # Backend API
+    environment:
+      # ========== Backend Configuration ==========
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 5000
+      
+      # MongoDB Configuration
+      MONGODB_URI: "mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin"
+      
+      # Redis Configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      
+      # Session Configuration
+      SESSION_SECRET: LOCAL-SESSION-SECRET-CHANGE-IN-PRODUCTION-12345
+      SESSION_NAME: visheart.sid
+      SESSION_MAX_AGE: 86400000
+      
+      # S3/MinIO Configuration
+      STORAGE_MODE: s3
+      AWS_BUCKET_NAME: visheart-bucket
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin123
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin123
+      S3_FORCE_PATH_STYLE: "true"
+      
+      # GPU Service Configuration
+      GPU_API_URL: http://gpu:8001
+      GPU_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
+      GPU_SERVER_URL: gpu
+      GPU_SERVER_PORT: 8001
+      GPU_SERVER_SSL: "false"
+      GPU_SERVER_AUTH_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
+      GPU_SERVER_ID_FOR_GPU_SERVER: default-server-id
+      GPU_SERVER_IDENTITY: default-gpu-server-identity
+      GPU_SERVER_JWT_REFRESH_INTERVAL: 480000
+      GPU_SERVER_JWT_LIFETIME_SECONDS: 600
+
+      # Callback URL Configuration
+      CALLBACK_URL: http://visheart-app:5000
+      
+      # ========== Frontend Configuration ==========
+      NEXT_PUBLIC_API_URL: http://localhost:5000
+      NEXT_PUBLIC_ENV: development
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      gpu:
+        condition: service_started
+    networks:
+      - visheart-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/", "&&", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================
+  # MongoDB Database
+  # ============================================
+  mongodb:
+    image: mongo:7.0
+    container_name: visheart-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: P@ssw0rd123!
+      MONGO_INITDB_DATABASE: visheart
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - visheart-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # Redis Cache & Session Store
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: visheart-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - visheart-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ============================================
+  # MinIO Object Storage (S3-compatible)
+  # ============================================
+  minio:
+    image: minio/minio:latest
+    container_name: visheart-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - visheart-network
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ============================================
+  # MinIO Bucket Setup
+  # ============================================
+  minio-setup:
+    image: minio/mc:latest
+    container_name: visheart-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin123;
+      mc mb myminio/visheart-bucket --ignore-existing;
+      mc anonymous set download myminio/visheart-bucket;
+      exit 0;
+      "
+    networks:
+      - visheart-network
+
+  # ============================================
+  # GPU Inference Service
+  # ============================================
+  gpu:
+    image: sveltes/visheart-inference-gpu:faithful-latest
+    container_name: visheart-gpu
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      USE_GPU: "true" # Set to "true" if GPU is available
+      JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
+      YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
+      MEDSAM_MODEL_NAME: medsam_vit_b.pth
+      FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
+      GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
+      SERVER_USERNAME: visheart-gpu-inference
+      ALLOWED_NODE_USERNAME: visheart-node-server
+      ENV_TYPE: development
+      GPU_SEMAPHORE_COUNT: 3
+      RECONSTRUCTION_USE_FIXED_SEED: "true"
+      RECONSTRUCTION_RANDOM_SEED: "42"
+    networks:
+      - visheart-network
+
+networks:
+  visheart-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
