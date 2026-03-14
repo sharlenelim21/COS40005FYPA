@@ -1,0 +1,85 @@
+# Environment files# Environment variables
+
+.env.env
+
+.env.local.env.local
+
+.env.production.env.*.local
+
+
+
+# Data volumes (contain sensitive data)# Docker volumes (persistent data)
+
+volumes/mongodb/*volumes/
+
+volumes/redis/*!volumes/.gitkeep
+
+volumes/minio/*
+
+# Logs
+
+# Keep directory structure*.log
+
+!volumes/.gitkeeplogs/
+
+!volumes/mongodb/.gitkeep
+
+!volumes/redis/.gitkeep# OS files
+
+!volumes/minio/.gitkeep.DS_Store
+
+Thumbs.db
+
+# Logsdesktop.ini
+
+*.log
+
+logs/# IDE
+
+.vscode/
+
+# Temporary files.idea/
+
+*.tmp*.swp
+
+*.temp*.swo
+
+.DS_Store*~
+
+Thumbs.db
+
+# Temporary files
+
+# IDE*.tmp
+
+.vscode/tmp/
+
+.idea/temp/
+
+*.swp
+
+*.swo# Docker
+
+.docker/
+
+# Build artifacts
+
+dist/# Node modules (if any)
+
+build/node_modules/
+
+*.zip
+
+!visheart-deployment-*.zip# Python cache
+
+__pycache__/
+
+# Node modules (if accidentally copied)*.pyc
+
+node_modules/*.pyo
+
+*.pyd
+
+# Backup files
+*.bak
+*.backup
