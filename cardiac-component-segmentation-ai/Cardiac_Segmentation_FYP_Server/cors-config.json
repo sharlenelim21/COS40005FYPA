@@ -1,0 +1,19 @@
+{
+  "CORSRules": [
+    {
+      "AllowedHeaders": ["*"],
+      "AllowedMethods": ["GET", "HEAD"],
+      "AllowedOrigins": [
+        "http://localhost:3000",
+        "http://localhost:5000",
+        "http://localhost:5001",
+        "http://localhost:5173",
+        "http://dual-docker-alb-1560987899.ap-southeast-1.elb.amazonaws.com",
+        "https://api.visheart.art",
+        "https://www.visheart.art"
+      ],
+      "ExposeHeaders": ["ETag", "x-amz-meta-custom-header"],
+      "MaxAgeSeconds": 3000
+    }
+  ]
+}

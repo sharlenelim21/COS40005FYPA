@@ -1,0 +1,39 @@
+__pycache__/
+**/__pycache__/
+app/scripts/
+environment.yml
+LICENSE
+README.md
+.vscode/
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+.env
+*.egg-info/
+dist/
+build/
+venv/
+.venv
+.venv/
+.envrc
+
+# Secrets
+*.pem
+*.key
+*.crt
+*.env
+secrets/
+.secrets
+.todo
+
+# Docker
+Dockerfile
+.dockerignore

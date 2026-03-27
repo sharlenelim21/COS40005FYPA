@@ -1,0 +1,14 @@
+/node_modules
+/__tests__
+.env
+.vscode
+.gitignore
+.github
+/README.md
+/win_only_read_mongodb_logs.bat
+
+# remember to also ignore /src and keep /dist only in the final image
+
+# Ignore the Dockerfile and .dockerignore itself
+Dockerfile
+.dockerignore

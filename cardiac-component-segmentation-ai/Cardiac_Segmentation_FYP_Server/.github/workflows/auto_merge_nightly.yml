@@ -1,0 +1,30 @@
+# name: Auto Merge to Nightly
+
+# on:
+#   push:
+#     branches:
+#       - Clarissa
+#       - auth_pipeline
+#       - mongodb_init
+
+# jobs:
+#   merge:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - name: Checkout the repository
+#         uses: actions/checkout@v4
+#         with:
+#           ref: nightly
+#           fetch-depth: 0  # Important for merge
+
+#       - name: Set up Git
+#         run: |
+#           git config user.name "github-actions[bot]"
+#           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+#       - name: Merge source branch into nightly
+#         run: |
+#           git checkout nightly
+#           git merge origin/${{ github.ref_name }} --no-ff -m "Auto-merged ${{ github.ref_name }} into nightly"
+#           git push origin nightly
