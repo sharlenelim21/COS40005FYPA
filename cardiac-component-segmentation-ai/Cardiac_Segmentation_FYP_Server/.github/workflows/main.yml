@@ -1,0 +1,52 @@
+# # .github/workflows/ci.yml
+
+# name: Node.js CI # Name of the workflow displayed on GitHub Actions tab
+
+# # Controls when the workflow will run
+# on:
+#   push: # Run on pushes to these branches
+#     branches: [main] # Adjust if you use a different main branch name
+#   pull_request: # Run on pull requests targeting these branches
+#     branches: [main] # Adjust if you use a different main branch name
+
+# jobs:
+#   build-and-test: # Define a job named 'build-and-test'
+#     runs-on: ubuntu-latest # Use the latest available Ubuntu runner
+
+#     strategy:
+#       matrix:
+#         node-version: [18.x, 20.x, 22.x] # Test on multiple Node.js versions (optional, adjust as needed)
+#         # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+#     steps:
+#       # 1. Get the code from the repository
+#       - name: Checkout repository
+#         uses: actions/checkout@v4 # Use the standard checkout action
+
+#       # 2. Setup Node.js environment
+#       - name: Use Node.js ${{ matrix.node-version }}
+#         uses: actions/setup-node@v4
+#         with:
+#           node-version: ${{ matrix.node-version }}
+#           cache: "npm" # Enable caching for npm dependencies
+
+#       # 3. Install dependencies securely using the lockfile
+#       # npm ci is generally recommended for CI environments as it's faster and safer
+#       - name: Install dependencies
+#         run: npm ci
+
+#       # 4. Optional: Run Linting (if you have it configured)
+#       # Assumes you have a lint script in your package.json like "lint": "eslint ."
+#       # - name: Run linter
+#       #   run: npm run lint
+
+#       # 5. Build TypeScript code (if needed)
+#       # Assumes you have a build script in your package.json like "build": "tsc"
+#       - name: Build project
+#         run: npm run build --if-present # --if-present makes it optional if no build script exists
+
+
+#       # Stop unit testing temporarily. Can add back later if got time.
+#       # 6. Run tests
+#       # - name: Run tests
+#       #   run: npm test

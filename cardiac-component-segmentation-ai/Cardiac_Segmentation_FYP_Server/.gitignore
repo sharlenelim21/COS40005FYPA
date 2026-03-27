@@ -1,0 +1,13 @@
+.env
+.env.fyp
+/node_modules
+/logs/winston_logger/*
+/dist
+
+/src/temp_upload/.gitkeep
+/src/temp_upload/*
+/src/temp_jpeg/.gitkeep
+/src/temp_jpeg/*
+/src/temp_mesh/*
+
+.venv/

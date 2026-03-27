@@ -1,0 +1,9 @@
+__pycache__/
+**/__pycache__/
+app/scripts/test_results_folder/*
+app/scripts/test*
+app/models/*sam*
+.env
+.venv
+.todo
+.secrets

@@ -1,0 +1,18 @@
+# requirements-other.txt
+ultralytics
+tensorrt==10.9.0.34
+scikit-image
+fastapi
+uvicorn
+python-multipart
+aiohttp
+segment-anything
+python-jose
+httpx
+python-dotenv
+psutil
+pyjwt
+# dev requirements
+onnx
+onnxslim
+onnxruntime-gpu
