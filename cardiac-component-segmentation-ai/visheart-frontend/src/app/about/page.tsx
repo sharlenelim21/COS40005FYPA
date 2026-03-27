@@ -45,7 +45,7 @@ MemberCard.displayName = "MemberCard";
 const AboutPage = () => {
   const supervisors = [
     {
-      name: "Dr. Brian",
+      name: "Dr. Miko",
       role: "Project Supervisor",
       imageUrl: dr_miko_image,
       description:
