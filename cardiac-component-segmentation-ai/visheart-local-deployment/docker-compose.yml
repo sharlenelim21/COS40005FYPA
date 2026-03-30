@@ -176,13 +176,13 @@ services:
     restart: unless-stopped
     ports:
       - "8001:8001"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
     environment:
       USE_GPU: "true" # Set to "true" if GPU is available
       JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
