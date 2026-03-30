@@ -44,20 +44,32 @@ class MedSamHandler:
         """Load the MedSAM model from the specified path"""
         logger = logging.getLogger("visheart")
         logger.info(f"Loading MedSAM from {self.model_path.split('/')[-1]} on device {self.device}")
-        
+
         try:
             self._clear_gpu_memory()
-            
-            # Temporarily suppress specific warnings during model loading
+
+            # Map checkpoint tensors to resolved runtime device (cpu/cuda/mps)
+            target_device = torch.device(str(self.device))
+            original_torch_load = torch.load
+
+            def patched_torch_load(*args, **kwargs):
+                kwargs.setdefault("map_location", target_device)
+                return original_torch_load(*args, **kwargs)
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.load.*weights_only.*")
-                self.model = sam_model_registry["vit_b"](checkpoint=self.model_path)
-            
-            self.model = self.model.to(self.device)
+                torch.load = patched_torch_load
+                try:
+                    self.model = sam_model_registry["vit_b"](checkpoint=self.model_path)
+                finally:
+                    torch.load = original_torch_load
+
+            self.model = self.model.to(target_device)
             self.model.eval()
+
         except Exception as e:
             logger.error(f"Error loading MedSAM model: {e}")
-            raise e
+            raise
 
     def _clear_gpu_memory(self):
         """Clear GPU memory to prevent fragmentation"""
