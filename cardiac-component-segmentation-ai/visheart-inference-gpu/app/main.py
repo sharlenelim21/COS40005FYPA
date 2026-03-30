@@ -22,7 +22,7 @@ from app.routes.inference_route_old import router as inference_router_old
 from app.dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan # Updated import
 
 # Import additional logging functions
-from utils.logging_config import log_startup_complete
+from app.utils.logging_config import log_startup_complete
 
 # Composite the lifespans
 @asynccontextmanager

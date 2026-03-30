@@ -16,7 +16,7 @@ from app.dependencies.model_init import get_yolo_model
 from typing import Annotated  # Add Annotated
 
 # Import the verification dependency and the payload model
-from security.backend_authentication import conditional_verify_jwt, TokenPayLoad
+from app.security.backend_authentication import conditional_verify_jwt, TokenPayLoad
 
 # Initialize the router
 router = APIRouter()

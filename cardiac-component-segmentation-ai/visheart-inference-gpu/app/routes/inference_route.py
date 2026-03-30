@@ -21,7 +21,7 @@ from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
 from app.dependencies.model_init import get_fourd_reconstruction_model
 
 # Import the verification dependency and the payload model
-from security.backend_authentication import conditional_verify_jwt, TokenPayLoad
+from app.security.backend_authentication import conditional_verify_jwt, TokenPayLoad
 
 # Import inference jobs
 from app.helpers.inference_jobs import (
