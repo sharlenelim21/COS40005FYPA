@@ -158,7 +158,6 @@ class MedSamHandler:
             masks[class_name] = mask
 
         del image_embedding # Cleanup
-        # torch.cuda.empty_cache() # Optional
 
         end_time = time.time()
         # print(f"[Thread-{threading.get_ident()}] MedSAM blocking inference finished in {end_time - start_time:.3f}s")

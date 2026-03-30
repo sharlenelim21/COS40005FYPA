@@ -178,7 +178,7 @@ class BiomechanicsLoss_kdtree(nn.Module):
         motion_inside = torch.index_select(motion_inside, dim=0, index=tree_list1)
         warped_inside = torch.index_select(warped_inside, dim=0, index=tree_list1)
 
-        # # 创建一个线网格对象
+        # # åˆ›å»ºä¸€ä¸ªçº¿ç½‘æ ¼å¯¹è±¡
         # vertices = np.vstack((warped_inside_compute[0:1000].cpu().detach().numpy(),
         #                       warped_inside[0:1000].cpu().detach().numpy()))
         # faces = np.stack((np.arange(1000), np.arange(1000, 2000)), axis=1)
