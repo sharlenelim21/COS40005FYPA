@@ -14,6 +14,8 @@ def create_mesh_4dsdf(
     start = time.time()
     ply_filename = filename
 
+    device = c_s.device
+
     # NOTE: the voxel_origin is actually the (bottom, left, down) corner, not the middle
     voxel_origin = [-volume_size/2.0, -volume_size/2.0, -volume_size/2.0]
     voxel_size = volume_size / (N - 1)
@@ -39,7 +41,8 @@ def create_mesh_4dsdf(
     head = 0
     warped = []
     while head < num_samples:
-        sample_subset = samples[head : min(head + max_batch, num_samples), 0:3].cuda()
+        #sample_subset = samples[head : min(head + max_batch, num_samples), 0:3].cuda()
+        sample_subset = samples[head : min(head + max_batch, num_samples), 0:3].to(device)
 
         new_xyz, sdf_pred= deep_sdf.utils.decode_4dsdf(decoder, sample_subset, t, c_s, c_m)
         new_xyz = new_xyz.detach().cpu().numpy()
@@ -78,6 +81,7 @@ def create_mesh_4dsdf(
 def create_mesh(
     decoder, latent_vec, filename, N=256, max_batch=(32 ** 3 * 4), offset=None, scale=None, Ti=None, volume_size=2.0
 ):
+    device = latent_vec.device
     start = time.time()
     ply_filename = filename
 
@@ -107,7 +111,8 @@ def create_mesh(
     head = 0
 
     while head < num_samples:
-        sample_subset = samples[head : min(head + max_batch, num_samples), 0:3].cuda()
+        #sample_subset = samples[head : min(head + max_batch, num_samples), 0:3].cuda()
+        sample_subset = samples[head : min(head + max_batch, num_samples), 0:3].to(device)
 
         samples[head : min(head + max_batch, num_samples), 3] = (
             deep_sdf.utils.decode_sdf(decoder, latent_vec, sample_subset)
@@ -136,6 +141,7 @@ def create_mesh(
 def create_mesh_octree(
         decoder, latent_vec, filename, N=256, max_batch=32 ** 3, offset=None, scale=None, clamp_func=None,
         volume_size=2.0):
+    device = latent_vec.device
     start = time.time()
     ply_filename = filename
 
@@ -172,13 +178,15 @@ def create_mesh_octree(
 
         test_mask = np.logical_and(grid_mask, dirty)
         samples_ = samples[test_mask]
-        samples_ = torch.from_numpy(samples_).cuda()
+        #samples_ = torch.from_numpy(samples_).cuda()
+        samples_ = torch.from_numpy(samples_).to(device)
         sdf_ = []
 
         head = 0
         print(samples_.shape[0])
         while head < samples_.shape[0]:
-            query_idx = torch.arange(head, min(head + max_batch, samples_.shape[0])).long().cuda()
+            #query_idx = torch.arange(head, min(head + max_batch, samples_.shape[0])).long().cuda()
+            query_idx = torch.arange(head, min(head + max_batch, samples_.shape[0]), device=device).long()
             s = (deep_sdf.utils.decode_sdf(
                     decoder, latent_vec, samples_[query_idx, :3]).view([-1]).detach()
             )

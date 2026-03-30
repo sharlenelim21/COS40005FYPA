@@ -53,34 +53,58 @@ def load_model_parameters(experiment_directory, checkpoint, decoder):
     return data["epoch"]
 
 
-def build_decoder(experiment_directory, experiment_specs):
+# def build_decoder(experiment_directory, experiment_specs):
 
+#     arch = __import__(
+#         "networks." + experiment_specs["NetworkArch"], fromlist=["Decoder"]
+#     )
+
+#     latent_size = experiment_specs["CodeLength"]
+
+#     decoder = arch.Decoder(latent_size, **experiment_specs["NetworkSpecs"]).cuda()
+
+#     return decoder
+
+def build_decoder(experiment_directory, experiment_specs, device=None):
     arch = __import__(
         "networks." + experiment_specs["NetworkArch"], fromlist=["Decoder"]
     )
-
     latent_size = experiment_specs["CodeLength"]
+    decoder = arch.Decoder(latent_size, **experiment_specs["NetworkSpecs"])
 
-    decoder = arch.Decoder(latent_size, **experiment_specs["NetworkSpecs"]).cuda()
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    decoder = decoder.to(device)
 
     return decoder
 
 
+# def load_decoder(
+#     experiment_directory, experiment_specs, checkpoint, data_parallel=True
+# ):
+
+#     decoder = build_decoder(experiment_directory, experiment_specs)
+
+#     if data_parallel:
+#         decoder = torch.nn.DataParallel(decoder)
+
+#     epoch = load_model_parameters(experiment_directory, checkpoint, decoder)
+
+#     return (decoder, epoch)
+
 def load_decoder(
-    experiment_directory, experiment_specs, checkpoint, data_parallel=True
+    experiment_directory, experiment_specs, checkpoint, data_parallel=True, device=None
 ):
+    decoder = build_decoder(experiment_directory, experiment_specs, device=device)
 
-    decoder = build_decoder(experiment_directory, experiment_specs)
-
-    if data_parallel:
+    if data_parallel and str(decoder.device if hasattr(decoder, "device") else device).startswith("cuda"):
         decoder = torch.nn.DataParallel(decoder)
 
     epoch = load_model_parameters(experiment_directory, checkpoint, decoder)
-
     return (decoder, epoch)
 
-
-def load_pre_trained_latent_vectors(experiment_directory, checkpoint):
+#def load_pre_trained_latent_vectors(experiment_directory, checkpoint):
+def load_pre_trained_latent_vectors(experiment_directory, checkpoint, device=None):
 
     filename = os.path.join(
         experiment_directory, latent_codes_subdir, checkpoint + ".pth"
@@ -93,6 +117,9 @@ def load_pre_trained_latent_vectors(experiment_directory, checkpoint):
         )
 
     data = torch.load(filename)
+    
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if isinstance(data["latent_codes"], torch.Tensor):
 
@@ -100,8 +127,8 @@ def load_pre_trained_latent_vectors(experiment_directory, checkpoint):
 
         lat_vecs = []
         for i in range(num_vecs):
-            lat_vecs.append(data["latent_codes"][i].cuda())
-
+            #lat_vecs.append(data["latent_codes"][i].cuda())
+            lat_vecs.append(data["latent_codes"][i].to(device))
         return lat_vecs
 
     else:
@@ -111,9 +138,8 @@ def load_pre_trained_latent_vectors(experiment_directory, checkpoint):
         lat_vecs = torch.nn.Embedding(num_embeddings, embedding_dim)
 
         lat_vecs.load_state_dict(data["latent_codes"])
-
-        return lat_vecs.weight.data.detach()
-
+        #return lat_vecs.weight.data.detach()
+        return lat_vecs.weight.data.detach().to(device)
 
 def load_latent_vectors(experiment_directory, filename, lat_vecs):
 

@@ -1,3 +1,4 @@
+#This module provides utilities for detecting and working with the current PyTorch device backend (CPU, CUDA, ROCm).
 from __future__ import annotations
 
 from typing import Literal, Optional, Dict, Any

@@ -8,11 +8,17 @@ from functools import wraps
 from uuid import UUID
 from pydantic import HttpUrl, Field
 from urllib.parse import urlparse
-import torch
+#import torch
 import numpy as np
 import base64
 from typing import Dict, List, Union, Tuple, Any, TYPE_CHECKING
 from fastapi import HTTPException # <-- Add HTTPException
+
+from app.classes.device_runtime import (
+    get_backend,
+    safe_empty_cache,
+    safe_memory_stats,
+)
 
 def _extract_frame_index_from_filename(filename: str) -> int | None:
     """Extract frame index from filename like 'patient006_4d_gt_4D_frame02_ED.obj'"""
@@ -20,14 +26,14 @@ def _extract_frame_index_from_filename(filename: str) -> int | None:
     return int(match.group(1)) if match else None
 
 if TYPE_CHECKING:
-    from classes.pydantic_schema import FourDReconstructionJobRequest
+    from app.classes.pydantic_schema import FourDReconstructionJobRequest
 
 # File handler (now needs async usage)
-from classes.file_fetch_handler import FileFetchHandler
+from app.classes.file_fetch_handler import FileFetchHandler
 
 # Model handlers (methods are now async)
-from classes.yolo_handler import YoloHandler
-from dependencies.model_init import get_yolo_model
+from app.classes.yolo_handler import YoloHandler
+from app.dependencies.model_init import get_yolo_model
 
 def obj_to_npz_base64(obj_file_path: str) -> str:
     """
@@ -69,17 +75,17 @@ def obj_to_npz_base64(obj_file_path: str) -> str:
     base64_data = base64.b64encode(npz_data).decode('utf-8')
     
     return base64_data
-from classes.medsam_handler import MedSamHandler
-from dependencies.model_init import get_medsam_model
-from classes.fourdreconstruction_handler import FourDReconstructionHandler
-from dependencies.model_init import get_fourd_reconstruction_model
+from app.classes.medsam_handler import MedSamHandler
+from app.dependencies.model_init import get_medsam_model
+from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
+from app.dependencies.model_init import get_fourd_reconstruction_model
 
-from helpers.inference_helpers import (
+from app.helpers.inference_helpers import (
     filter_detections, encode_and_name_masks, sort_medsam_results,
 )
 
 # Import the new Pydantic models to be used for constructing the result
-from classes.pydantic_schema import ManualInputBox, ResultPerImageManual
+from app.classes.pydantic_schema import ManualInputBox, ResultPerImageManual
 
 # Constants
 serviceLocation = "Inference Service"
@@ -260,12 +266,17 @@ async def send_callback(
 
 def log_gpu_status(uuid, stage):
     """Log GPU status for debugging"""
-    if torch.cuda.is_available():
-        mem_allocated = torch.cuda.memory_allocated() / (1024**2)
-        mem_reserved = torch.cuda.memory_reserved() / (1024**2)
+    try:
+        backend = get_backend()
+        stats = safe_memory_stats()
+        mem_allocated = stats["allocated_bytes"] / (1024**2)
+        mem_reserved = stats["reserved_bytes"] / (1024**2)
         print(
-            f"[{serviceLocation}] Job {uuid} {stage} - GPU Memory: {mem_allocated:.2f}MB allocated, {mem_reserved:.2f}MB reserved"
+            f"[{serviceLocation}] Job {uuid} {stage} - backend={backend}, "
+            f"Memory: {mem_allocated:.2f}MB allocated, {mem_reserved:.2f}MB reserved"
         )
+    except Exception as e:
+        print(f"[{serviceLocation}] Job {uuid} {stage} - unable to read memory stats: {e}")
 
 # --- BBox Job (existing async callback version) ---
 async def process_bbox_job_with_semaphore(
@@ -401,10 +412,15 @@ async def _process_medsam_job(
                             masks = await medsam_handler.generate_mask(image_path, filtered_dets)
                             break
                         except RuntimeError as e:
-                            if "CUDA" in str(e) and retry_count < max_retries:
-                                print(f"[{serviceLocation}] CUDA error, retrying ({retry_count+1}/{max_retries})...")
+                            msg = str(e)
+                            is_runtime_device_error = any(k in msg.lower() for k in [
+                                "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                            ])
+
+                            if is_runtime_device_error and retry_count < max_retries:
+                                print(f"[{serviceLocation}] Device/backend runtime error, retrying ({retry_count+1}/{max_retries})... err={msg}")
                                 retry_count += 1
-                                torch.cuda.empty_cache()
+                                safe_empty_cache()
                                 await asyncio.sleep(1)
                             else:
                                 raise
@@ -444,10 +460,15 @@ async def _process_medsam_job(
                             masks = await medsam_handler.generate_mask(file_path, filtered_detections)
                             break
                         except RuntimeError as e:
-                            if "CUDA" in str(e) and retry_count < max_retries:
-                                print(f"[{serviceLocation}] CUDA error, retrying ({retry_count+1}/{max_retries})...")
+                            msg = str(e)
+                            is_runtime_device_error = any(k in msg.lower() for k in [
+                                "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                            ])
+
+                            if is_runtime_device_error and retry_count < max_retries:
+                                print(f"[{serviceLocation}] Device/backend runtime error, retrying ({retry_count+1}/{max_retries})... err={msg}")
                                 retry_count += 1
-                                torch.cuda.empty_cache()
+                                safe_empty_cache()
                                 await asyncio.sleep(1)
                             else:
                                 raise
@@ -545,10 +566,15 @@ async def _process_medsam_manual_job(
                     )
                     break
                 except RuntimeError as e:
-                    if "CUDA" in str(e) and retry_count < max_retries:
-                        print(f"[{serviceLocation}] CUDA error, retrying ({retry_count+1}/{max_retries})...")
+                    msg = str(e)
+                    is_runtime_device_error = any(k in msg.lower() for k in [
+                        "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                    ])
+
+                    if is_runtime_device_error and retry_count < max_retries:
+                        print(f"[{serviceLocation}] Device/backend runtime error, retrying ({retry_count+1}/{max_retries})... err={msg}")
                         retry_count += 1
-                        torch.cuda.empty_cache()
+                        safe_empty_cache()
                         await asyncio.sleep(1)
                     else:
                         raise
@@ -621,21 +647,26 @@ async def execute_medsam_manual_job_synchronously(
                     )
                     break
                 except RuntimeError as e:
-                    if "CUDA" in str(e) and attempt < max_retries:
-                        print(f"[{serviceLocation}] SYNC Job {uuid}: CUDA error on attempt {attempt + 1}/{max_retries + 1} for {image_name}. Retrying... Error: {str(e)}")
-                        if torch.cuda.is_available(): torch.cuda.empty_cache()
+                    msg = str(e)
+                    is_runtime_device_error = any(k in msg.lower() for k in [
+                        "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                    ])
+
+                    if is_runtime_device_error and attempt < max_retries:
+                        print(f"[{serviceLocation}] Device/backend runtime error, retrying ({attempt+1}/{max_retries+1})... err={msg}")
+                        safe_empty_cache()
                         await asyncio.sleep(1 + attempt)
-                    elif "Input image is None" in str(e) or "Failed to load image" in str(e):
-                        err_detail = f"MedSAM handler failed to load image: {image_name}. Underlying error: {str(e)}"
+                    elif "Input image is None" in msg or "Failed to load image" in msg:
+                        err_detail = f"MedSAM handler failed to load image: {image_name}. Underlying error: {msg}"
                         print(f"[{serviceLocation}] Error in SYNC job {uuid}: {err_detail} at '{target_image_path}'.")
                         log_gpu_status(uuid, "error-manual-sync-imgloadfail")
                         raise HTTPException(status_code=400, detail={"detail": err_detail, "uuid": str(uuid)})
                     else:
-                        err_detail = f"Error during MedSAM mask generation for {image_name}: {str(e)}"
+                        err_detail = f"Error during MedSAM mask generation for {image_name}: {msg}"
                         print(f"[{serviceLocation}] Error in SYNC job {uuid} during mask generation (attempt {attempt+1}): {err_detail}")
                         log_gpu_status(uuid, "error-manual-sync-maskgenruntime")
-                        if "CUDA" in str(e):
-                             raise HTTPException(status_code=503, detail={"detail": f"GPU error processing {image_name} after {max_retries +1} attempts: {str(e)}", "uuid": str(uuid)})
+                        if is_runtime_device_error:
+                            raise HTTPException(status_code=503, detail={"detail": f"GPU error processing {image_name} after {max_retries + 1} attempts: {msg}", "uuid": str(uuid)})
                         raise HTTPException(status_code=500, detail={"detail": err_detail, "uuid": str(uuid)})
                 except ValueError as e:
                     err_detail = f"Invalid input for MedSAM processing of {image_name}. Likely bad image or bbox. Error: {str(e)}"

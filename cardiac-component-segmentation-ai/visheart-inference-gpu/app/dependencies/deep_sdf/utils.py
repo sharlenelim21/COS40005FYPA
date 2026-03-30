@@ -66,10 +66,15 @@ def decode_sdf(decoder, latent_vector, queries):
 
 def decode_4dsdf(decoder, xyz, t, c_s, c_m):
     N = xyz.shape[0]
+    device = xyz.device  # use caller/runtime device
 
-    cs_vecs = c_s.expand(N, -1).cuda()
-    cm_vecs = c_m.expand(N, -1).cuda()
-    t_ = t.expand(N, -1).squeeze(-1).cuda()
+    # cs_vecs = c_s.expand(N, -1).cuda()
+    # cm_vecs = c_m.expand(N, -1).cuda()
+    # t_ = t.expand(N, -1).squeeze(-1).cuda()
+    cs_vecs = c_s.expand(N, -1).to(device)
+    cm_vecs = c_m.expand(N, -1).to(device)
+    t_ = t.expand(N, -1).squeeze(-1).to(device)
+        
     with torch.no_grad():
         new_xyz, sdf_pred = decoder(xyz, t_, cm_vecs, cs_vecs)
     return new_xyz, sdf_pred
