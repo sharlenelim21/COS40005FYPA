@@ -4,6 +4,7 @@ from scipy.spatial import KDTree
 import numpy as np
 
 
+
 def apply_pointwise_reg(warped_xyz, xyz_, huber_fn, num_sdf_samples):
     dist = torch.norm(warped_xyz - xyz_, dim=-1)
     pw_loss = huber_fn(dist, delta=0.25) / num_sdf_samples
@@ -92,11 +93,14 @@ class BiomechanicsLoss(nn.Module):
         Ci[3, 3] = 2 * (1 + vp) / Ep
         Ci[4, 4] = 2 * (1 + vp) / Ep
         Ci[5, 5] = 2 * (1 + vp) / Ep
-        self.C = Ci.inverse().cuda()
+        #self.C = Ci.inverse().cuda()
+        self.C = Ci.inverse()  # keep on CPU; move to runtime device in forward
 
     def forward(self, coords, warped, gt_sdf):
         # warp: [N, 3], pred_sdf: [N, 1], coords: [N, 3]
         # new_coords = warped.requires_grad_(True)
+        device = warped.device
+        C = self.C.to(device)
         motion = coords - warped  # ED to t phase
 
         # select surface points
@@ -114,7 +118,8 @@ class BiomechanicsLoss(nn.Module):
         #           [uy, vy, wy],
         #           [uz, vz, wz]]
 
-        et = torch.empty(warped.shape[0], 6).float().cuda()  # [N, 6]
+        #et = torch.empty(warped.shape[0], 6).float().cuda()  # [N, 6]
+        et = torch.empty(warped.shape[0], 6, device=device, dtype=torch.float32)
         et[:, 0] = grad_u[:, 0]
         et[:, 1] = grad_v[:, 1]
         et[:, 2] = grad_w[:, 2]
@@ -125,7 +130,8 @@ class BiomechanicsLoss(nn.Module):
         e = et.t()
 
         # W = ||et * C * e||
-        W = torch.diag(torch.matmul(et, torch.matmul(self.C, e))).norm(dim=-1)
+        #W = torch.diag(torch.matmul(et, torch.matmul(self.C, e))).norm(dim=-1)
+        W = torch.diag(torch.matmul(et, torch.matmul(C, e))).norm(dim=-1)
         return W/et.shape[0]
 
 
@@ -148,11 +154,14 @@ class BiomechanicsLoss_kdtree(nn.Module):
         Ci[3, 3] = 2 * (1 + vp) / Ep
         Ci[4, 4] = 2 * (1 + vp) / Ep
         Ci[5, 5] = 2 * (1 + vp) / Ep
-        self.C = Ci.inverse().cuda()
+        #self.C = Ci.inverse().cuda()
+        self.C = Ci.inverse()  # keep on CPU; move to runtime device in forward
 
     def forward(self, new_xyz, xyz, gt_sdf): # ED to t phase
         # warp: [N, 3], pred_sdf: [N, 1], coords: [N, 3]
         # new_coords = warped.requires_grad_(True)
+        device = new_xyz.device
+        C = self.C.to(device)
         motion = new_xyz - xyz # ED to t phase
 
         # select surface points
@@ -160,7 +169,7 @@ class BiomechanicsLoss_kdtree(nn.Module):
         motion_inside = torch.index_select(motion, dim=0, index=index_list)
         warped_inside = torch.index_select(new_xyz, dim=0, index=index_list)
 
-        import pyrender
+        #import pyrender
         # points = warped.cpu().detach().numpy()
         # colors = np.zeros(points.shape)
         # cloud = pyrender.Mesh.from_points(points, colors=colors)
@@ -171,14 +180,20 @@ class BiomechanicsLoss_kdtree(nn.Module):
         warped_inside_np = warped_inside.cpu().detach().numpy()
         tree = KDTree(warped_inside_np)
         distances, indices = tree.query(warped_inside_np, k=2)
-        tree_list1 = torch.IntTensor(np.array(np.nonzero(distances[:, 1] > 1e-8)).squeeze()).cuda()
-        tree_list2 = torch.IntTensor(indices[tree_list1.cpu(), 1].squeeze()).cuda()
+        #tree_list1 = torch.IntTensor(np.array(np.nonzero(distances[:, 1] > 1e-8)).squeeze()).cuda()
+        #tree_list2 = torch.IntTensor(indices[tree_list1.cpu(), 1].squeeze()).cuda()
+        tree_list1_np = np.array(np.nonzero(distances[:, 1] > 1e-8)).squeeze()
+        tree_list1 = torch.as_tensor(tree_list1_np, dtype=torch.long, device=device)
+
+        tree_list2_np = indices[tree_list1.detach().cpu().numpy(), 1].squeeze()
+        tree_list2 = torch.as_tensor(tree_list2_np, dtype=torch.long, device=device)
+        
         motion_inside_compute = torch.index_select(motion_inside, dim=0, index=tree_list2)
         warped_inside_compute = torch.index_select(warped_inside, dim=0, index=tree_list2)
         motion_inside = torch.index_select(motion_inside, dim=0, index=tree_list1)
         warped_inside = torch.index_select(warped_inside, dim=0, index=tree_list1)
 
-        # # åˆ›å»ºä¸€ä¸ªçº¿ç½‘æ ¼å¯¹è±¡
+        # # Create a line mesh object
         # vertices = np.vstack((warped_inside_compute[0:1000].cpu().detach().numpy(),
         #                       warped_inside[0:1000].cpu().detach().numpy()))
         # faces = np.stack((np.arange(1000), np.arange(1000, 2000)), axis=1)
@@ -205,7 +220,8 @@ class BiomechanicsLoss_kdtree(nn.Module):
         # #           [uy, vy, wy],
         # #           [uz, vz, wz]]
         #
-        et = torch.empty(warped_inside.shape[0], 6).float().cuda()  # [N, 6]
+        #et = torch.empty(warped_inside.shape[0], 6).float().cuda()  # [N, 6]
+        et = torch.empty(warped_inside.shape[0], 6, device=device, dtype=torch.float32)
         et[:, 0] = grad_u[:, 0]
         et[:, 1] = grad_v[:, 1]
         et[:, 2] = grad_w[:, 2]
@@ -214,7 +230,8 @@ class BiomechanicsLoss_kdtree(nn.Module):
         et[:, 5] = (grad_w[:, 1] + grad_v[:, 2]) / 2
         e = et.t()
         # W = ||et * C * e||
-        W = torch.diag(torch.matmul(et, torch.matmul(self.C, e))).norm(dim=-1)
+        #W = torch.diag(torch.matmul(et, torch.matmul(self.C, e))).norm(dim=-1)
+        W = torch.diag(torch.matmul(et, torch.matmul(C, e))).norm(dim=-1)
         return W/et.shape[0]
 
 
