@@ -13,6 +13,14 @@ from segment_anything import sam_model_registry
 from typing import Dict, List, Tuple, Any, Optional
 from skimage import io # skimage.io is synchronous
 
+# ✅ add
+from app.classes.device_runtime import (
+    resolve_device,
+    get_backend,
+    safe_empty_cache,
+    safe_synchronize,
+)
+
 class MedSamHandler:
     def __init__(self, model_path):
         """
@@ -23,7 +31,11 @@ class MedSamHandler:
         """
         self.model_path = model_path
         self.model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # New: Resolve device using utility function for better control and logging
+        preferred_device = os.getenv("VISHEART_DEVICE", "auto")
+        self.device = resolve_device(preferred_device)
+        self.backend = get_backend()
+
         self._load_model() # Sync load during init is fine
         self.inference_count = 0
         self.cleanup_frequency = 5
@@ -32,28 +44,37 @@ class MedSamHandler:
         """Load the MedSAM model from the specified path"""
         logger = logging.getLogger("visheart")
         logger.info(f"Loading MedSAM from {self.model_path.split('/')[-1]} on device {self.device}")
-        
+
         try:
             self._clear_gpu_memory()
-            
-            # Temporarily suppress specific warnings during model loading
+
+            # Map checkpoint tensors to resolved runtime device (cpu/cuda/mps)
+            target_device = torch.device(str(self.device))
+            original_torch_load = torch.load
+
+            def patched_torch_load(*args, **kwargs):
+                kwargs.setdefault("map_location", target_device)
+                return original_torch_load(*args, **kwargs)
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.load.*weights_only.*")
-                self.model = sam_model_registry["vit_b"](checkpoint=self.model_path)
-            
-            self.model = self.model.to(self.device)
+                torch.load = patched_torch_load
+                try:
+                    self.model = sam_model_registry["vit_b"](checkpoint=self.model_path)
+                finally:
+                    torch.load = original_torch_load
+
+            self.model = self.model.to(target_device)
             self.model.eval()
+
         except Exception as e:
             logger.error(f"Error loading MedSAM model: {e}")
-            raise e
+            raise
 
     def _clear_gpu_memory(self):
         """Clear GPU memory to prevent fragmentation"""
-        if torch.cuda.is_available():
-            with torch.cuda.device(self.device):
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-                gc.collect()
+        safe_empty_cache(self.device)
+        gc.collect()
 
     # Preprocessing might be fast enough, but can be offloaded if needed
     def _preprocess_image_sync(self, img_np):
@@ -145,7 +166,8 @@ class MedSamHandler:
         # 1. Image Encoding (Blocking)
         # Assuming img_tensor_device is already on self.device
         image_embedding = self.model.image_encoder(img_tensor_device)
-        torch.cuda.synchronize() # Explicit sync point after heavy operation
+        #New: Use safe_synchronize to handle GPU sync without crashing on CPU
+        safe_synchronize(self.device)
 
         masks = {}
         # 2. Loop through boxes and decode masks (Blocking)
@@ -154,11 +176,11 @@ class MedSamHandler:
             class_name = data["class_name"]
             # Call the synchronous segmentation function
             mask = self._segment_with_box(image_embedding, box_1024, H, W)
-            torch.cuda.synchronize() # Explicit sync point after mask generation
+            #New: Use safe_synchronize to handle GPU sync without crashing on CPU
+            safe_synchronize(self.device)
             masks[class_name] = mask
 
         del image_embedding # Cleanup
-        # torch.cuda.empty_cache() # Optional
 
         end_time = time.time()
         # print(f"[Thread-{threading.get_ident()}] MedSAM blocking inference finished in {end_time - start_time:.3f}s")
@@ -227,7 +249,8 @@ class MedSamHandler:
         finally:
             # --- 5. Cleanup ---
             del img_tensor_device # Cleanup tensor
-            torch.cuda.empty_cache() # Explicit cleanup
+            #New - Use safe_empty_cache to handle GPU cleanup without crashing on CPU
+            safe_empty_cache(self.device)
 
         return masks
 
