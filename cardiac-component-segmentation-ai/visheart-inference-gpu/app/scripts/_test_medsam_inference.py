@@ -18,7 +18,7 @@ from collections import defaultdict  # To group detections by class
 
 # Add parent directory ('app') to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from classes.yolo_handler import YoloHandler  # noqa: E402
+from app.classes.yolo_handler import YoloHandler  # noqa: E402
 
 
 # --- Visualization Functions (Optional) ---

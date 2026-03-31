@@ -25,7 +25,7 @@ from pathlib import Path
 
 # Add parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from classes.file_fetch_handler import FileFetchHandler
+from app.classes.file_fetch_handler import FileFetchHandler
 
 
 class MedSAMApp:
