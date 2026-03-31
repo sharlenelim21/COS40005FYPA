@@ -8,15 +8,15 @@ from typing import Dict, List, Any
 import numpy as np
 
 # Import your handlers and dependencies
-from classes.file_fetch_handler import FileFetchHandler
-from classes.yolo_handler import YoloHandler
-from dependencies.model_init import get_yolo_model
+from app.classes.file_fetch_handler import FileFetchHandler
+from app.classes.yolo_handler import YoloHandler
+from app.dependencies.model_init import get_yolo_model
 
 # For checking JWT token during authentication
 from typing import Annotated  # Add Annotated
 
 # Import the verification dependency and the payload model
-from security.backend_authentication import conditional_verify_jwt, TokenPayLoad
+from app.security.backend_authentication import conditional_verify_jwt, TokenPayLoad
 
 # Initialize the router
 router = APIRouter()
@@ -134,8 +134,8 @@ async def bbox_inference(
 
 # Separate MedSAM inference
 from collections import defaultdict
-from dependencies.model_init import get_medsam_model
-from classes.medsam_handler import MedSamHandler
+from app.dependencies.model_init import get_medsam_model
+from app.classes.medsam_handler import MedSamHandler
 
 
 @router.post("/medsam-inference", response_model=Dict[str, Dict[str, Any]])
