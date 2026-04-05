@@ -36,6 +36,10 @@ POST /inference/v2/4d-reconstruction
 | `callback_url` | string (HttpUrl) | ✅ | URL on your server where results should be POSTed |
 | `num_iterations` | integer | ❌ | Number of optimization iterations (default: 50, range: 1-200) |
 | `resolution` | integer | ❌ | Marching cubes resolution for mesh generation (default: 128, range: 32-256) |
+| `extract_point_cloud` | boolean | ❌ | If true, exports pre-marching-cubes point cloud per frame (default: false) |
+| `point_cloud_format` | string | ❌ | Point cloud format when extraction enabled: `npy` or `ply` (default: `npy`) |
+| `extract_sdf` | boolean | ❌ | If true, exports dense pre-marching-cubes SDF volume per frame as `.npy` (default: false) |
+| `verify_sdf_sign` | boolean | ❌ | If true, writes per-frame sign spot-check JSON (`inside negative`, `outside positive`) |
 | `debug_save` | boolean | ❌ | Save OBJ file to persistent debug location (default: false) |
 | `debug_dir` | string | ❌ | Debug directory path (default: "/tmp/4d_reconstruction_debug") |
 

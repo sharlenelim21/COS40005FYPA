@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "C:/Users/-Sharlene-/anaconda3/envs/visheart312/python.exe",
+  "python.analysis.extraPaths": [
+    "cardiac-component-segmentation-ai/visheart-inference-gpu/app",
+    "cardiac-component-segmentation-ai/visheart-inference-gpu/app/dependencies"
+  ]
+}

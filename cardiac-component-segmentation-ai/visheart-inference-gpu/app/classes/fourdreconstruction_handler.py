@@ -602,7 +602,11 @@ class FourDReconstructionHandler:
     
     def _generate_mesh_sync(self, c_s: torch.Tensor, c_m: torch.Tensor, 
                            sdf_data: Dict, output_file: str, resolution: int = 128, 
-                           export_format: str = "obj") -> str:
+                           export_format: str = "obj",
+                           extract_point_cloud: bool = False,
+                           point_cloud_format: str = "npy",
+                           extract_sdf: bool = False,
+                           verify_sdf_sign: bool = False) -> str:
         """
         Generate 3D mesh from optimized latent codes
         
@@ -613,6 +617,10 @@ class FourDReconstructionHandler:
             output_file: Path to save the mesh file (with correct extension)
             resolution: Marching cubes resolution
             export_format: Output format - "obj" or "glb"
+            extract_point_cloud: If true, save point cloud extracted from near-zero SDF band
+            point_cloud_format: Point cloud format, "npy" or "ply"
+            extract_sdf: If true, save dense SDF volume as .npy
+            verify_sdf_sign: If true, save SDF sign spot-check report as JSON
             
         Returns:
             Path to generated mesh file
@@ -654,12 +662,24 @@ class FourDReconstructionHandler:
                 # The create_mesh_4dsdf function automatically adds .ply extension
                 # So we need to provide the filename without extension
                 ply_base_name = base_name
+
+                point_cloud_ext = point_cloud_format.lower().strip()
+                if point_cloud_ext not in ["npy", "ply"]:
+                    raise ValueError(f"Unsupported point_cloud_format: {point_cloud_format}. Use 'npy' or 'ply'.")
+
+                sdf_output_filename = f"{ply_base_name}_sdf.npy" if extract_sdf else None
+                point_cloud_output_filename = f"{ply_base_name}_pointcloud.{point_cloud_ext}" if extract_point_cloud else None
+                sdf_sign_report_filename = f"{ply_base_name}_sdf_sign_check.json" if verify_sdf_sign else None
                 
                 deep_sdf.mesh.create_mesh_4dsdf(
                     self.decoder, c_s_vec, c_m_vec, phase_t,
                     ply_base_name, motion_filename,
                     N=resolution, max_batch=self.max_batch,
-                    offset=offset, scale=scale, Ti=Ti
+                    offset=offset, scale=scale, Ti=Ti,
+                    sdf_output_filename=sdf_output_filename,
+                    point_cloud_output_filename=point_cloud_output_filename,
+                    verify_sdf_sign=verify_sdf_sign,
+                    sdf_sign_report_filename=sdf_sign_report_filename,
                 )
                 
                 # Force GPU sync after mesh generation
@@ -792,6 +812,10 @@ class FourDReconstructionHandler:
             num_iterations = kwargs.get('num_iterations', 50)
             resolution = kwargs.get('resolution', 128)
             export_format = kwargs.get('export_format', 'obj')
+            extract_point_cloud = kwargs.get('extract_point_cloud', False)
+            point_cloud_format = kwargs.get('point_cloud_format', 'npy')
+            extract_sdf = kwargs.get('extract_sdf', False)
+            verify_sdf_sign = kwargs.get('verify_sdf_sign', False)
             
             # PHASE 1 EXPERIMENT: Configurable regularization and verbose logging
             code_reg_lambda = kwargs.get('code_reg_lambda', 1e-4)  # Default 1e-4, can be reduced or set to 0
@@ -799,6 +823,10 @@ class FourDReconstructionHandler:
             
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
             print(f"Export format: {export_format.upper()}")
+            print(
+                f"Extraction config: point_cloud={extract_point_cloud} ({point_cloud_format}), "
+                f"sdf={extract_sdf}, verify_sdf_sign={verify_sdf_sign}"
+            )
             print(f"Optimization config: iterations={num_iterations}, lr=5e-4, reg_lambda={code_reg_lambda}")
             if verbose_logging:
                 print(f"Verbose logging: ENABLED")
@@ -832,7 +860,33 @@ class FourDReconstructionHandler:
             file_extension = export_format  # "obj" or "glb"
             output_file = os.path.join(output_dir, f"{input_filename}_reconstructed.{file_extension}")
             
-            mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+            mesh_file = self._generate_mesh_sync(
+                c_s,
+                c_m,
+                sdf_data,
+                output_file,
+                resolution,
+                export_format,
+                extract_point_cloud=extract_point_cloud,
+                point_cloud_format=point_cloud_format,
+                extract_sdf=extract_sdf,
+                verify_sdf_sign=verify_sdf_sign,
+            )
+
+            extraction_files = []
+            output_base = os.path.splitext(output_file)[0]
+            if extract_point_cloud:
+                point_cloud_file = f"{output_base}_pointcloud.{point_cloud_format.lower()}"
+                if os.path.exists(point_cloud_file):
+                    extraction_files.append(point_cloud_file)
+            if extract_sdf:
+                sdf_file = f"{output_base}_sdf.npy"
+                if os.path.exists(sdf_file):
+                    extraction_files.append(sdf_file)
+            if verify_sdf_sign:
+                sign_file = f"{output_base}_sdf_sign_check.json"
+                if os.path.exists(sign_file):
+                    extraction_files.append(sign_file)
             
             # Debug mode: Copy to persistent location if enabled
             debug_save = kwargs.get('debug_save', False)
@@ -858,6 +912,7 @@ class FourDReconstructionHandler:
                 "num_iterations": num_iterations,
                 "resolution": resolution,
                 "export_format": export_format,
+                "extraction_files": extraction_files,
                 "output_directory": output_dir,
                 # New metadata for consistency with 4D processing
                 "is_4d_input": False,
@@ -910,6 +965,10 @@ class FourDReconstructionHandler:
             num_iterations = kwargs.get('num_iterations', 50)
             resolution = kwargs.get('resolution', 128)
             export_format = kwargs.get('export_format', 'obj')
+            extract_point_cloud = kwargs.get('extract_point_cloud', False)
+            point_cloud_format = kwargs.get('point_cloud_format', 'npy')
+            extract_sdf = kwargs.get('extract_sdf', False)
+            verify_sdf_sign = kwargs.get('verify_sdf_sign', False)
             
             # PHASE 1 EXPERIMENT: Configurable regularization
             code_reg_lambda = kwargs.get('code_reg_lambda', 1e-4)
@@ -918,6 +977,10 @@ class FourDReconstructionHandler:
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
             print(f"ED frame index: {ed_frame_index}, Process all frames: {process_all_frames}")
             print(f"Export format: {export_format.upper()}")
+            print(
+                f"Extraction config: point_cloud={extract_point_cloud} ({point_cloud_format}), "
+                f"sdf={extract_sdf}, verify_sdf_sign={verify_sdf_sign}"
+            )
             print(f"Optimization config: iterations={num_iterations}, reg_lambda={code_reg_lambda}")
             
             # Step 1: Detect and validate 4D input
@@ -991,6 +1054,7 @@ class FourDReconstructionHandler:
             if process_all_frames:
                 print("Step 3: Processing multiple frames (Phase 2 implementation)...")
                 mesh_files = []
+                extraction_files = []
                 processed_frame_indices = []
                 
                 os.makedirs(output_dir, exist_ok=True)
@@ -1044,9 +1108,34 @@ class FourDReconstructionHandler:
                             output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}.{file_extension}")
                         
                         print(f"Generating mesh for frame {original_frame_idx}...")
-                        frame_mesh_file = self._generate_mesh_sync(frame_c_s, frame_c_m, frame_sdf_data, output_file, resolution, export_format)
+                        frame_mesh_file = self._generate_mesh_sync(
+                            frame_c_s,
+                            frame_c_m,
+                            frame_sdf_data,
+                            output_file,
+                            resolution,
+                            export_format,
+                            extract_point_cloud=extract_point_cloud,
+                            point_cloud_format=point_cloud_format,
+                            extract_sdf=extract_sdf,
+                            verify_sdf_sign=verify_sdf_sign,
+                        )
                         mesh_files.append(frame_mesh_file)
                         processed_frame_indices.append(original_frame_idx)
+
+                        frame_base = os.path.splitext(output_file)[0]
+                        if extract_point_cloud:
+                            frame_point_cloud = f"{frame_base}_pointcloud.{point_cloud_format.lower()}"
+                            if os.path.exists(frame_point_cloud):
+                                extraction_files.append(frame_point_cloud)
+                        if extract_sdf:
+                            frame_sdf = f"{frame_base}_sdf.npy"
+                            if os.path.exists(frame_sdf):
+                                extraction_files.append(frame_sdf)
+                        if verify_sdf_sign:
+                            frame_sign = f"{frame_base}_sdf_sign_check.json"
+                            if os.path.exists(frame_sign):
+                                extraction_files.append(frame_sign)
                         
                         print(f"✅ Successfully generated mesh for frame {original_frame_idx}: {os.path.basename(frame_mesh_file)}")
                         
@@ -1123,9 +1212,35 @@ class FourDReconstructionHandler:
                 file_extension = export_format  # "obj" or "glb"
                 output_file = os.path.join(output_dir, f"{input_filename}_4D_ED{ed_frame_index:02d}.{file_extension}")
                 
-                primary_mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+                primary_mesh_file = self._generate_mesh_sync(
+                    c_s,
+                    c_m,
+                    sdf_data,
+                    output_file,
+                    resolution,
+                    export_format,
+                    extract_point_cloud=extract_point_cloud,
+                    point_cloud_format=point_cloud_format,
+                    extract_sdf=extract_sdf,
+                    verify_sdf_sign=verify_sdf_sign,
+                )
                 mesh_files = [primary_mesh_file]
                 processed_frame_indices = [ed_frame_index]
+                extraction_files = []
+
+                frame_base = os.path.splitext(output_file)[0]
+                if extract_point_cloud:
+                    frame_point_cloud = f"{frame_base}_pointcloud.{point_cloud_format.lower()}"
+                    if os.path.exists(frame_point_cloud):
+                        extraction_files.append(frame_point_cloud)
+                if extract_sdf:
+                    frame_sdf = f"{frame_base}_sdf.npy"
+                    if os.path.exists(frame_sdf):
+                        extraction_files.append(frame_sdf)
+                if verify_sdf_sign:
+                    frame_sign = f"{frame_base}_sdf_sign_check.json"
+                    if os.path.exists(frame_sign):
+                        extraction_files.append(frame_sign)
             
             # Clean up temporary files
             import shutil
@@ -1146,6 +1261,7 @@ class FourDReconstructionHandler:
                 "num_iterations": num_iterations,
                 "resolution": resolution,
                 "export_format": export_format,
+                "extraction_files": extraction_files,
                 "output_directory": output_dir,
                 # 4D-specific metadata
                 "is_4d_input": True,

@@ -178,15 +178,31 @@ class FourDReconstructionJobRequest(BaseModel):
     )
     verbose_logging: Optional[bool] = Field(
         default=False,
-        description="Enable detailed optimization logging (latent code norms, regularization losses per epoch)"
+        description="Enable detailed op timization logging (latent code norms, regularization losses per epoch)"
     )
-    process_all_frames: Optional[bool] = Field(
+    process_all_frames: Optional[bool] =Field(
         default=True,
         description="If True, process all cardiac phases (4D). If False, ED frame only (3D-like)"
     )
     export_format: Optional[Literal["obj", "glb"]] = Field(
         default="obj",
         description="Output mesh format: 'obj' for Wavefront OBJ or 'glb' for binary glTF 2.0"
+    )
+    extract_point_cloud: Optional[bool] = Field(
+        default=False,
+        description="If true, extracts point cloud at pre-marching-cubes SDF stage"
+    )
+    point_cloud_format: Optional[Literal["npy", "ply"]] = Field(
+        default="npy",
+        description="Point cloud output format when extract_point_cloud is enabled"
+    )
+    extract_sdf: Optional[bool] = Field(
+        default=False,
+        description="If true, saves dense SDF volume before marching cubes as .npy"
+    )
+    verify_sdf_sign: Optional[bool] = Field(
+        default=False,
+        description="If true, writes sign-convention spot-check report (inside negative, outside positive)"
     )
     debug_save: Optional[bool] = Field(
         default=False,

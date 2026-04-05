@@ -3,13 +3,113 @@ import numpy as np
 import plyfile
 import skimage.measure
 import time
+import json
 import torch
 import deep_sdf.utils
 import SimpleITK as sitk
 
 
+def _voxel_indices_to_world(points_ijk, voxel_origin, voxel_size):
+    """Convert voxel indices to world-space coordinates."""
+    points_ijk = np.asarray(points_ijk, dtype=np.float32)
+    xyz = np.zeros_like(points_ijk, dtype=np.float32)
+    xyz[:, 0] = voxel_origin[0] + points_ijk[:, 0] * voxel_size
+    xyz[:, 1] = voxel_origin[1] + points_ijk[:, 1] * voxel_size
+    xyz[:, 2] = voxel_origin[2] + points_ijk[:, 2] * voxel_size
+    return xyz
+
+
+def _save_point_cloud(points_xyz, output_path):
+    """Save point cloud as .npy or .ply based on output extension."""
+    ext = output_path.lower().rsplit(".", 1)[-1]
+    if ext == "npy":
+        np.save(output_path, points_xyz.astype(np.float32))
+        return
+
+    if ext == "ply":
+        verts_tuple = np.zeros((points_xyz.shape[0],), dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")])
+        for i in range(points_xyz.shape[0]):
+            verts_tuple[i] = tuple(points_xyz[i, :])
+        ply_data = plyfile.PlyData([plyfile.PlyElement.describe(verts_tuple, "vertex")])
+        ply_data.write(output_path)
+        return
+
+    raise ValueError(f"Unsupported point cloud output extension: {output_path}")
+
+
+def _extract_point_cloud_from_sdf_volume(sdf_volume, voxel_origin, voxel_size, output_path, iso_band=None, max_points=500000):
+    """Extract near-surface points from the SDF volume and save them."""
+    if iso_band is None:
+        iso_band = max(voxel_size, 1e-4)
+
+    near_surface_mask = np.abs(sdf_volume) <= iso_band
+    point_indices = np.argwhere(near_surface_mask)
+    if point_indices.shape[0] == 0:
+        point_indices = np.argwhere(np.abs(sdf_volume) <= (2.0 * iso_band))
+
+    if point_indices.shape[0] > max_points:
+        selection = np.random.choice(point_indices.shape[0], max_points, replace=False)
+        point_indices = point_indices[selection]
+
+    points_xyz = _voxel_indices_to_world(point_indices, voxel_origin, voxel_size)
+    _save_point_cloud(points_xyz, output_path)
+
+
+def _write_sdf_sign_report(sdf_volume, voxel_origin, voxel_size, output_path):
+    """Write a lightweight sign-convention spot-check report from sampled SDF extrema."""
+    min_flat_idx = int(np.argmin(sdf_volume))
+    max_flat_idx = int(np.argmax(sdf_volume))
+
+    min_idx = np.unravel_index(min_flat_idx, sdf_volume.shape)
+    max_idx = np.unravel_index(max_flat_idx, sdf_volume.shape)
+
+    min_val = float(sdf_volume[min_idx])
+    max_val = float(sdf_volume[max_idx])
+
+    min_xyz = _voxel_indices_to_world(np.array([min_idx], dtype=np.float32), voxel_origin, voxel_size)[0].tolist()
+    max_xyz = _voxel_indices_to_world(np.array([max_idx], dtype=np.float32), voxel_origin, voxel_size)[0].tolist()
+
+    report = {
+        "shape": list(sdf_volume.shape),
+        "sdf_min": min_val,
+        "sdf_max": max_val,
+        "inside_candidate": {
+            "voxel_index": [int(min_idx[0]), int(min_idx[1]), int(min_idx[2])],
+            "world_xyz": min_xyz,
+            "sdf": min_val,
+            "expected_sign": "negative"
+        },
+        "outside_candidate": {
+            "voxel_index": [int(max_idx[0]), int(max_idx[1]), int(max_idx[2])],
+            "world_xyz": max_xyz,
+            "sdf": max_val,
+            "expected_sign": "positive"
+        },
+        "sign_convention_ok": bool(min_val < 0.0 and max_val > 0.0)
+    }
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+
+
 def create_mesh_4dsdf(
-    decoder, c_s, c_m, t, filename, motion_filename=None, N=256, max_batch=(32 ** 3 * 4), offset=None, scale=None, Ti=None, volume_size=2.0
+    decoder,
+    c_s,
+    c_m,
+    t,
+    filename,
+    motion_filename=None,
+    N=256,
+    max_batch=(32 ** 3 * 4),
+    offset=None,
+    scale=None,
+    Ti=None,
+    volume_size=2.0,
+    sdf_output_filename=None,
+    point_cloud_output_filename=None,
+    point_cloud_iso_band=None,
+    verify_sdf_sign=False,
+    sdf_sign_report_filename=None,
 ):
     start = time.time()
     ply_filename = filename
@@ -51,6 +151,23 @@ def create_mesh_4dsdf(
     sdf_values = samples[:, 3]
     sdf_values = sdf_values.reshape(N, N, N)
 
+    sdf_values_np = sdf_values.detach().cpu().numpy()
+
+    if sdf_output_filename is not None:
+        np.save(sdf_output_filename, sdf_values_np.astype(np.float32))
+
+    if point_cloud_output_filename is not None:
+        _extract_point_cloud_from_sdf_volume(
+            sdf_values_np,
+            voxel_origin,
+            voxel_size,
+            point_cloud_output_filename,
+            iso_band=point_cloud_iso_band,
+        )
+
+    if verify_sdf_sign and sdf_sign_report_filename is not None:
+        _write_sdf_sign_report(sdf_values_np, voxel_origin, voxel_size, sdf_sign_report_filename)
+
     warped = np.concatenate(warped, axis=0)
     motion = warped - samples[:, 0:3].cpu().numpy()
     motion = motion.reshape([N, N, N, 3])
@@ -60,7 +177,7 @@ def create_mesh_4dsdf(
     logging.debug("sampling takes: %f" % (end - start))
 
     convert_sdf_samples_to_ply(
-        sdf_values.data.cpu(),
+        sdf_values_np,
         voxel_origin,
         voxel_size,
         ply_filename + ".ply",

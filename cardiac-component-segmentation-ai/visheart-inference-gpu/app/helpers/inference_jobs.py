@@ -753,6 +753,10 @@ async def _process_fourd_reconstruction_job(
                         resolution=request.resolution,
                         process_all_frames=request.process_all_frames,
                         export_format=request.export_format,
+                        extract_point_cloud=request.extract_point_cloud,
+                        point_cloud_format=request.point_cloud_format,
+                        extract_sdf=request.extract_sdf,
+                        verify_sdf_sign=request.verify_sdf_sign,
                         debug_save=request.debug_save,
                         debug_dir=request.debug_dir,
                         # PHASE 1 EXPERIMENT: Pass new parameters
