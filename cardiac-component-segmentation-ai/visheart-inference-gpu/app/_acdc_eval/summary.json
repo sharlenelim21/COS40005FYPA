@@ -1,0 +1,243 @@
+{
+  "generated_at_utc": "2026-04-05T10:06:04.877702Z",
+  "model_path": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\models\\fourd_model_epoch_250.pth",
+  "num_iterations": 120,
+  "resolution": 160,
+  "process_all_frames": false,
+  "ed_frame_index": 0,
+  "samples": [
+    {
+      "sample_name": "patient001_4d",
+      "mesh_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient001_4d\\patient001_4d.nii_4D_ED00.obj",
+      "pointcloud_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient001_4d\\patient001_4d.nii_4D_ED00_pointcloud.npy",
+      "sdf_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient001_4d\\patient001_4d.nii_4D_ED00_sdf.npy",
+      "sign_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient001_4d\\patient001_4d.nii_4D_ED00_sdf_sign_check.json",
+      "point_count": 309145,
+      "point_bbox_min": [
+        -0.7358490228652954,
+        -0.7106918096542358,
+        -0.9748427867889404
+      ],
+      "point_bbox_max": [
+        0.7106918096542358,
+        0.6729558706283569,
+        0.8867924213409424
+      ],
+      "point_centroid": [
+        -0.008067955262959003,
+        -0.05232204124331474,
+        -0.16228635609149933
+      ],
+      "sdf_shape": [
+        160,
+        160,
+        160
+      ],
+      "sdf_min": -0.061016812920570374,
+      "sdf_max": 0.9996827840805054,
+      "sdf_mean": 0.4007487893104553,
+      "sdf_std": 0.3545410931110382,
+      "sdf_near_surface_frac_005": 0.033988037109375,
+      "sign_check": {
+        "shape": [
+          160,
+          160,
+          160
+        ],
+        "sdf_min": -0.061016812920570374,
+        "sdf_max": 0.9996827840805054,
+        "inside_candidate": {
+          "voxel_index": [
+            93,
+            123,
+            67
+          ],
+          "world_xyz": [
+            0.16981124877929688,
+            0.5471698045730591,
+            -0.15723276138305664
+          ],
+          "sdf": -0.061016812920570374,
+          "expected_sign": "negative"
+        },
+        "outside_candidate": {
+          "voxel_index": [
+            0,
+            0,
+            159
+          ],
+          "world_xyz": [
+            -1.0,
+            -1.0,
+            0.9999998807907104
+          ],
+          "sdf": 0.9996827840805054,
+          "expected_sign": "positive"
+        },
+        "sign_convention_ok": true
+      },
+      "elapsed_sec": 13.111857891082764
+    },
+    {
+      "sample_name": "patient002_4d",
+      "mesh_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient002_4d\\patient002_4d.nii_4D_ED00.obj",
+      "pointcloud_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient002_4d\\patient002_4d.nii_4D_ED00_pointcloud.npy",
+      "sdf_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient002_4d\\patient002_4d.nii_4D_ED00_sdf.npy",
+      "sign_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient002_4d\\patient002_4d.nii_4D_ED00_sdf_sign_check.json",
+      "point_count": 323590,
+      "point_bbox_min": [
+        -0.7106918096542358,
+        -0.7106918096542358,
+        -0.9622641801834106
+      ],
+      "point_bbox_max": [
+        0.6855344772338867,
+        0.698113203048706,
+        0.911949634552002
+      ],
+      "point_centroid": [
+        -0.013240218162536621,
+        -0.03602185845375061,
+        -0.1632302850484848
+      ],
+      "sdf_shape": [
+        160,
+        160,
+        160
+      ],
+      "sdf_min": -0.05701521039009094,
+      "sdf_max": 0.9997714757919312,
+      "sdf_mean": 0.40609753131866455,
+      "sdf_std": 0.3573693633079529,
+      "sdf_near_surface_frac_005": 0.036974609375,
+      "sign_check": {
+        "shape": [
+          160,
+          160,
+          160
+        ],
+        "sdf_min": -0.05701521039009094,
+        "sdf_max": 0.9997714757919312,
+        "inside_candidate": {
+          "voxel_index": [
+            95,
+            123,
+            74
+          ],
+          "world_xyz": [
+            0.19496846199035645,
+            0.5471698045730591,
+            -0.0691823959350586
+          ],
+          "sdf": -0.05701521039009094,
+          "expected_sign": "negative"
+        },
+        "outside_candidate": {
+          "voxel_index": [
+            0,
+            0,
+            159
+          ],
+          "world_xyz": [
+            -1.0,
+            -1.0,
+            0.9999998807907104
+          ],
+          "sdf": 0.9997714757919312,
+          "expected_sign": "positive"
+        },
+        "sign_convention_ok": true
+      },
+      "elapsed_sec": 11.205285787582397
+    },
+    {
+      "sample_name": "patient003_4d",
+      "mesh_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient003_4d\\patient003_4d.nii_4D_ED00.obj",
+      "pointcloud_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient003_4d\\patient003_4d.nii_4D_ED00_pointcloud.npy",
+      "sdf_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient003_4d\\patient003_4d.nii_4D_ED00_sdf.npy",
+      "sign_file": "C:\\Users\\-Sharlene-\\OneDrive - Swinburne Sarawak\\Documents\\GitHub\\COS40005FYPA\\cardiac-component-segmentation-ai\\visheart-inference-gpu\\app\\_acdc_eval\\patient003_4d\\patient003_4d.nii_4D_ED00_sdf_sign_check.json",
+      "point_count": 313268,
+      "point_bbox_min": [
+        -0.7106918096542358,
+        -0.7232704162597656,
+        -0.9874213933944702
+      ],
+      "point_bbox_max": [
+        0.698113203048706,
+        0.6855344772338867,
+        0.911949634552002
+      ],
+      "point_centroid": [
+        -0.007634798996150494,
+        -0.05967232957482338,
+        -0.16603335738182068
+      ],
+      "sdf_shape": [
+        160,
+        160,
+        160
+      ],
+      "sdf_min": -0.054248929023742676,
+      "sdf_max": 0.9996380805969238,
+      "sdf_mean": 0.4021909832954407,
+      "sdf_std": 0.35726872086524963,
+      "sdf_near_surface_frac_005": 0.033970703125,
+      "sign_check": {
+        "shape": [
+          160,
+          160,
+          160
+        ],
+        "sdf_min": -0.054248929023742676,
+        "sdf_max": 0.9996380805969238,
+        "inside_candidate": {
+          "voxel_index": [
+            93,
+            124,
+            57
+          ],
+          "world_xyz": [
+            0.16981124877929688,
+            0.5597484111785889,
+            -0.28301888704299927
+          ],
+          "sdf": -0.054248929023742676,
+          "expected_sign": "negative"
+        },
+        "outside_candidate": {
+          "voxel_index": [
+            0,
+            0,
+            159
+          ],
+          "world_xyz": [
+            -1.0,
+            -1.0,
+            0.9999998807907104
+          ],
+          "sdf": 0.9996380805969238,
+          "expected_sign": "positive"
+        },
+        "sign_convention_ok": true
+      },
+      "elapsed_sec": 12.596927881240845
+    }
+  ],
+  "pairwise_metrics": [
+    {
+      "a": "patient001_4d",
+      "b": "patient002_4d",
+      "chamfer_l2": 0.09607169032096863
+    },
+    {
+      "a": "patient001_4d",
+      "b": "patient003_4d",
+      "chamfer_l2": 0.09735792875289917
+    },
+    {
+      "a": "patient002_4d",
+      "b": "patient003_4d",
+      "chamfer_l2": 0.10220889747142792
+    }
+  ]
+}

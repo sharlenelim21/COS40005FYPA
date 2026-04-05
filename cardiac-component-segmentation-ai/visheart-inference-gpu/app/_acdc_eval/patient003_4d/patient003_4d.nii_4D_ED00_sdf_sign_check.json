@@ -1,0 +1,38 @@
+{
+  "shape": [
+    160,
+    160,
+    160
+  ],
+  "sdf_min": -0.054248929023742676,
+  "sdf_max": 0.9996380805969238,
+  "inside_candidate": {
+    "voxel_index": [
+      93,
+      124,
+      57
+    ],
+    "world_xyz": [
+      0.16981124877929688,
+      0.5597484111785889,
+      -0.28301888704299927
+    ],
+    "sdf": -0.054248929023742676,
+    "expected_sign": "negative"
+  },
+  "outside_candidate": {
+    "voxel_index": [
+      0,
+      0,
+      159
+    ],
+    "world_xyz": [
+      -1.0,
+      -1.0,
+      0.9999998807907104
+    ],
+    "sdf": 0.9996380805969238,
+    "expected_sign": "positive"
+  },
+  "sign_convention_ok": true
+}
