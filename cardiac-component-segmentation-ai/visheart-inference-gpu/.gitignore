@@ -12,3 +12,4 @@ cardiac-component-segmentation-ai/visheart-inference-gpu/.venv311/
 .venv311/
 .venv/
 venv/
+mamba-unet-env/
