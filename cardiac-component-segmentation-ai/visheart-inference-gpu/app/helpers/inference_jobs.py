@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import numpy as np
 import base64
 from typing import Dict, List, Union, Tuple, Any, TYPE_CHECKING
+
 from fastapi import HTTPException # <-- Add HTTPException
 
 from app.classes.device_runtime import (

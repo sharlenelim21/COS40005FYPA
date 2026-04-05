@@ -1,5 +1,11 @@
 import { Document } from "mongoose";
 
+// Enum for segmentation model selection.
+export enum SegmentationModel {
+  MEDSAM = "medsam",
+  UNET = "unet"
+}
+
 /* Interfaces */
 // Enumeration for user roles
 /**
@@ -219,6 +225,7 @@ export enum ComponentBoundingBoxesClass {
  * @property {string} frames.slices.segmentationmasks.segmentationmaskcontents - The contents of the segmentation mask (e.g., RLE format).
  */
 export interface IProjectSegmentationMask {
+  
   // Identifiers
   _id?: any; // Allow _id to be compatible with the transformed object for new segmentations
   projectid: string; // MongoDB Project ID of the project to which the segmentation mask belongs
@@ -227,7 +234,8 @@ export interface IProjectSegmentationMask {
   description?: string; // Description of the segmentation mask
   isSaved: boolean; // Indicates if the segmentation mask is saved in the database
   segmentationmaskRLE: boolean; // Indicates if the mask is in RLE format
-  isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (should not delete if its the output of MedSAM)
+  isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (kept for backward compatibility)
+  segmentationModel?: SegmentationModel; // Optional model tag for future extensibility
   // Properties of the bounding box coordinates used to input into MedSAM for segmentation
   // If the segmentation mask is a single frame, there will be only one entry in the frames array
   frames: {
@@ -385,6 +393,7 @@ export interface IJob {
   segmentationName?: string; // Optional user-defined name for the resulting segmentation
   segmentationDescription?: string; // Optional user-defined description for the resulting segmentation
   segmentationSource?: segmentationSource; // Source of the image for segmentation
+  segmentationModel?: SegmentationModel; // Track which model was used
 }
 export interface IJobDocument extends IJob, Document {}
 

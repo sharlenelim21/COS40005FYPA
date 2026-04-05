@@ -10,6 +10,9 @@ import LogError from '../utils/error_logger';
 const router = express.Router();
 const serviceLocation = 'API(SampleNifti)';
 
+const toSingleString = (value: string | string[] | undefined): string | undefined =>
+    Array.isArray(value) ? value[0] : value;
+
 // Define the sample NIfTI directory path
 const sampleNiftiDir = path.join(__dirname, '../../public/sample_nifti');
 
@@ -98,7 +101,7 @@ router.get('/info', async (req: Request, res: Response) => {
  */
 router.get('/download/:filename', async (req: Request, res: Response) => {
     try {
-        const { filename } = req.params;
+        const filename = toSingleString(req.params.filename);
 
         // Validate filename
         if (!filename || !filename.endsWith('.nii.gz')) {
@@ -169,7 +172,7 @@ router.get('/download/:filename', async (req: Request, res: Response) => {
  */
 router.get('/metadata/:filename', async (req: Request, res: Response) => {
     try {
-        const { filename } = req.params;
+        const filename = toSingleString(req.params.filename);
 
         // Validate filename
         if (!filename || !filename.endsWith('.nii.gz')) {

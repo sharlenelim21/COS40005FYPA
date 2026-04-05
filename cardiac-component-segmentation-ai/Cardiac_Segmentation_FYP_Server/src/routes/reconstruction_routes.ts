@@ -19,6 +19,9 @@ import LogError from "../utils/error_logger";
 const router = Router();
 const serviceLocation = "ReconstructionRoutes";
 
+const toSingleString = (value: string | string[] | undefined): string | undefined =>
+    Array.isArray(value) ? value[0] : value;
+
 /**
  * Start 4D cardiac reconstruction job
  * Follows the same pattern as segmentation routes - delegates to service layer
@@ -31,7 +34,10 @@ router.post("/start-reconstruction/:projectId",
     isAuthAndNotGuest,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
-        const { projectId } = req.params;
+        const projectId = toSingleString(req.params.projectId);
+        if (!projectId) {
+            return res.status(400).json({ message: "Project ID is required." });
+        }
         const { reconstructionName, reconstructionDescription, parameters, ed_frame, export_format } = req.body;
         
         logger.info(`${serviceLocation}: Received start 4D reconstruction request for project ${projectId} with ed_frame ${ed_frame}, export_format ${export_format || 'default'} by user ${req.user?.username} with id ${req.user?._id}`);
@@ -59,7 +65,7 @@ router.post("/start-reconstruction/:projectId",
  * @access Private (authenticated users only)
  */
 router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, res: Response) => {
-    const { projectId } = req.params;
+    const projectId = toSingleString(req.params.projectId);
 
     if (!projectId) {
         logger.warn(`${serviceLocation}: Project ID is required to fetch reconstruction results.`);
@@ -237,7 +243,7 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
             });
         }
 
-        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => (p._id as string).toString());
+        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => String(p._id));
         const unauthorizedProjects = projectIds.filter((id: string) => !userProjectIds.includes(id));
 
         if (unauthorizedProjects.length > 0) {
@@ -308,7 +314,7 @@ router.delete("/delete-project-reconstructions/:projectId",
     isAuth,
     isAuthAndNotGuest,
     async (req: Request, res: Response) => {
-        const { projectId } = req.params;
+        const projectId = toSingleString(req.params.projectId);
         const userId = (req.user as any)?._id?.toString();
 
         logger.info(`${serviceLocation}: Received request to delete all reconstructions for project ${projectId} by user ${req.user?.username}`);
