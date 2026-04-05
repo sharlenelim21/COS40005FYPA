@@ -12,3 +12,7 @@ cardiac-component-segmentation-ai/visheart-inference-gpu/.venv311/
 .venv311/
 .venv/
 venv/
+
+# personal testing
+test.ts
+*.test.local.ts

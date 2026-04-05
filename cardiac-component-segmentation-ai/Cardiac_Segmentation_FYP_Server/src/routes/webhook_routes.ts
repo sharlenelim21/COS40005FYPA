@@ -108,7 +108,19 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
     return res.status(400).json("Missing Cloud GPU Job ID in headers");
   }
 
-  const jobReadResult = await readJob(gpuJobId);
+  let effectiveJobId = gpuJobId;
+  let jobReadResult = await readJob(effectiveJobId);
+  if (!jobReadResult.success || !jobReadResult.job) {
+    const bodyUuid = typeof req.body?.uuid === "string" ? req.body.uuid : undefined;
+    if (bodyUuid && bodyUuid !== gpuJobId) {
+      logger.warn(
+        `${serviceLocation}: Job lookup by X-Job-ID ${gpuJobId} failed. Retrying lookup with callback body uuid ${bodyUuid}.`
+      );
+      effectiveJobId = bodyUuid;
+      jobReadResult = await readJob(effectiveJobId);
+    }
+  }
+
   if (!jobReadResult.success || !jobReadResult.job) {
     logger.error(
       `${serviceLocation}: Job with GPU Job ID ${gpuJobId} not found in database. Reason: ${jobReadResult.message || "Job not found"}`
@@ -160,7 +172,7 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
       message: jobMessage,
     };
 
-    const updateResult = await updateJob(gpuJobId, jobUpdatePayload);
+    const updateResult = await updateJob(effectiveJobId, jobUpdatePayload);
 
     if (!updateResult.success || !updateResult.job) {
       logger.error(
@@ -182,14 +194,14 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
       typeof gpuResult === "object" &&
       Object.keys(gpuResult).length > 0
     ) {
-      const currentJob = updateResult.job;
+        const currentJob = updateResult.job;
       if (!currentJob) {
         logger.error(
-          `${serviceLocation}: Job with UUID ${gpuJobId} not found after update during webhook processing.`
+            `${serviceLocation}: Job with UUID ${effectiveJobId} not found after update during webhook processing.`
         );
         return res
           .status(404)
-          .json({ message: `Job ${gpuJobId} not found after update.` });
+            .json({ message: `Job ${effectiveJobId} not found after update.` });
       }
       const projectId = currentJob.projectid;
 
@@ -454,7 +466,7 @@ const recentCallbacks = new Map<string, number>();
 const CALLBACK_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
 // Clean up old callback tracking entries periodically
-setInterval(() => {
+const callbackCleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [jobId, timestamp] of recentCallbacks.entries()) {
     if (now - timestamp > CALLBACK_TIMEOUT) {
@@ -462,6 +474,11 @@ setInterval(() => {
     }
   }
 }, 60000); // Clean every minute
+
+// Avoid keeping test processes alive because of this periodic cleanup task.
+if (typeof callbackCleanupInterval.unref === "function") {
+  callbackCleanupInterval.unref();
+}
 
 router.post("/gpu-reconstruction-callback", preMulterLogging, gpuObjUploadFilter, handleMulterError, async (req: Request, res: Response) => {
   const uploadedFiles = (req.files as Express.Multer.File[]) || [];
