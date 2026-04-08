@@ -48,6 +48,10 @@ CLASS_INDEX_TO_NAME = {
     3: "lvc",
 }
 
+# Module-level cache for lazy-loaded UNet model (loaded once, reused for all subsequent inferences)
+_cached_unet_model = None
+_cached_device = None
+
 
 class conv2D_block(nn.Module):
     def __init__(self, in_ch: int, out_ch: int):
@@ -246,27 +250,48 @@ def run_model2_inference(
     volume = extract_volume(nifti_path)
 
     if not checkpoint_path:
-        raise FileNotFoundError("MODEL2 checkpoint path is missing.")
+        raise FileNotFoundError(
+            "UNet checkpoint path is missing. "
+            "Please set UNET_CHECKPOINT_PATH env var or pass checkpoint_path parameter. "
+            "Default: app/models/unet.pth"
+        )
     if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        raise FileNotFoundError(
+            f"UNet checkpoint file not found at: {checkpoint_path}\n"
+            f"Expected location: visheart-inference-gpu/app/models/unet.pth\n"
+            f"Please download or place the unet.pth file in that location."
+        )
 
-    # Initialize model and load pretrained cardiac segmentation weights
-    model = UNet2D(in_ch=1, out_ch=4, pretrained=False).to(device_obj)
-    state_dict = torch.load(checkpoint_path, map_location=device_obj)
-    # Support common checkpoint wrappers used by different training scripts.
-    if isinstance(state_dict, dict) and "state_dict" in state_dict:
-        state_dict = state_dict["state_dict"]
-    elif isinstance(state_dict, dict) and "model_state_dict" in state_dict:
-        state_dict = state_dict["model_state_dict"]
-    # strict=False allows loading checkpoints with extra/missing keys
-    # (useful when checkpoint includes optimizer state or other metadata)
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    model.eval()  # Set model to evaluation mode (disable dropout, batchnorm updates)
+    # Initialize model and load pretrained cardiac segmentation weights (cached after first load)
+    global _cached_unet_model, _cached_device
+    
+    # Check if model is already loaded and device matches
+    if _cached_unet_model is not None and _cached_device == device_obj:
+        model = _cached_unet_model
+        print(f"Reusing cached UNet model on {device_obj}", file=sys.stderr)
+    else:
+        # Load model for the first time or device changed
+        print(f"Loading UNet model into cache on {device_obj}", file=sys.stderr)
+        model = UNet2D(in_ch=1, out_ch=4, pretrained=False).to(device_obj)
+        state_dict = torch.load(checkpoint_path, map_location=device_obj)
+        # Support common checkpoint wrappers used by different training scripts.
+        if isinstance(state_dict, dict) and "state_dict" in state_dict:
+            state_dict = state_dict["state_dict"]
+        elif isinstance(state_dict, dict) and "model_state_dict" in state_dict:
+            state_dict = state_dict["model_state_dict"]
+        # strict=False allows loading checkpoints with extra/missing keys
+        # (useful when checkpoint includes optimizer state or other metadata)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        model.eval()  # Set model to evaluation mode (disable dropout, batchnorm updates)
 
-    if missing:
-        print(f"Warning: missing checkpoint keys: {missing}", file=sys.stderr)
-    if unexpected:
-        print(f"Warning: unexpected checkpoint keys: {unexpected}", file=sys.stderr)
+        if missing:
+            print(f"Warning: missing checkpoint keys: {missing}", file=sys.stderr)
+        if unexpected:
+            print(f"Warning: unexpected checkpoint keys: {unexpected}", file=sys.stderr)
+        
+        # Cache the model for future use
+        _cached_unet_model = model
+        _cached_device = device_obj
 
     frames: List[Dict[str, Any]] = []
     num_frames = volume.shape[3]

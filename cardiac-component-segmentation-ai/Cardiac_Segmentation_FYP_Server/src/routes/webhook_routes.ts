@@ -23,6 +23,7 @@ import {
   JobStatus,
   IProjectSegmentationMask,
   ComponentBoundingBoxesClass,
+  SegmentationModel,
   CRUDOperation,
   IJob,
   IProjectSegmentationMaskDocument,
@@ -131,7 +132,7 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
   }
   // const job = jobReadResult.job; // Get the full job object // Not directly used, currentJob is used later
 
-  const { status, result: gpuResult, error: gpuErrorDetail } = req.body;
+  const { status, result: gpuResult, error: gpuErrorDetail, segmentation_model: callbackSegmentationModelRaw } = req.body;
 
   if (!status) {
     logger.error(
@@ -204,22 +205,32 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
             .json({ message: `Job ${effectiveJobId} not found after update.` });
       }
       const projectId = currentJob.projectid;
+      const callbackSegmentationModel =
+        typeof callbackSegmentationModelRaw === "string"
+          ? callbackSegmentationModelRaw.toLowerCase()
+          : undefined;
+      const resolvedSegmentationModel =
+        callbackSegmentationModel === SegmentationModel.UNET ||
+        currentJob.segmentationModel === SegmentationModel.UNET
+          ? SegmentationModel.UNET
+          : SegmentationModel.MEDSAM;
 
       logger.info(
-        `${serviceLocation}: Processing structured segmentation results for job ${gpuJobId}, project ${projectId}. Segmentation source from job: ${currentJob.segmentationSource}`
+        `${serviceLocation}: Processing structured segmentation results for job ${gpuJobId}, project ${projectId}. Segmentation source from job: ${currentJob.segmentationSource}, resolved model: ${resolvedSegmentationModel}`
       );
 
       const aiSegmentationSet: Partial<IProjectSegmentationMask> = {
         projectid: projectId,
         name:
           currentJob.segmentationName ||
-          `AI Output - Job ${gpuJobId.substring(0, 8)}`,
+          `${resolvedSegmentationModel === SegmentationModel.UNET ? "UNET" : "AI"} Output - Job ${gpuJobId.substring(0, 8)}`,
         description:
           currentJob.segmentationDescription ||
-          `AI segmentation results from job ${gpuJobId}`,
+          `${resolvedSegmentationModel.toUpperCase()} segmentation results from job ${gpuJobId}`,
         isSaved: false,
         segmentationmaskRLE: true,
-        isMedSAMOutput: true, // Explicitly true for AI output
+        isMedSAMOutput: resolvedSegmentationModel === SegmentationModel.MEDSAM,
+        segmentationModel: resolvedSegmentationModel,
         frames: [],
       };
 
@@ -254,120 +265,193 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         return undefined;
       };
 
-      for (const [imageFilename, segmentationData] of Object.entries(
-        gpuResult as Record<string, any>
-      )) {
-        if (typeof segmentationData !== "object" || segmentationData === null) {
+      if (resolvedSegmentationModel === SegmentationModel.UNET) {
+        const unetFrames = (gpuResult as any)?.frames;
+        if (!Array.isArray(unetFrames)) {
           logger.warn(
-            `${serviceLocation}: Invalid segmentation data for ${imageFilename} in job ${gpuJobId}. Skipping.`
+            `${serviceLocation}: UNET callback for job ${gpuJobId} does not contain a valid frames array. Skipping structured storage.`
           );
-          continue;
-        }
-
-        const filenameParts = imageFilename.replace(/\.jpg$/i, "").split("_");
-        let frameNumber: number | undefined;
-        let sliceNumber: number | undefined;
-
-        if (filenameParts.length >= 2) {
-          const potentialSlice = parseInt(
-            filenameParts[filenameParts.length - 1],
-            10
-          );
-          const potentialFrame = parseInt(
-            filenameParts[filenameParts.length - 2],
-            10
-          );
-          if (!isNaN(potentialSlice) && !isNaN(potentialFrame)) {
-            sliceNumber = potentialSlice;
-            frameNumber = potentialFrame;
-          } else {
-            logger.warn(
-              `${serviceLocation}: Could not parse frame/slice numbers from filename parts for ${imageFilename} in job ${gpuJobId}`
+        } else {
+          for (const frame of unetFrames) {
+            const frameNumber = Number(
+              (frame as any)?.frameindex ?? (frame as any)?.frame_index
             );
-          }
-        }
-
-        if (frameNumber === undefined || sliceNumber === undefined) {
-          logger.warn(
-            `${serviceLocation}: Could not parse valid frame/slice from filename ${imageFilename} for job ${gpuJobId}. Skipping entry.`
-          );
-          continue;
-        }
-
-        if (!framesDataMap.has(frameNumber)) {
-          framesDataMap.set(frameNumber, {
-            frameindex: frameNumber,
-            frameinferred: true,
-            slices: new Map(),
-          });
-        }
-        const currentFrameData = framesDataMap.get(frameNumber)!;
-
-        if (!currentFrameData.slices.has(sliceNumber)) {
-          currentFrameData.slices.set(sliceNumber, {
-            sliceindex: sliceNumber,
-            componentboundingboxes: [],
-            segmentationmasks: [],
-          });
-        }
-        const currentSliceData = currentFrameData.slices.get(sliceNumber)!;
-
-        if (segmentationData.boxes && Array.isArray(segmentationData.boxes)) {
-          for (const box of segmentationData.boxes) {
-            if (
-              box &&
-              typeof box === "object" &&
-              box.bbox &&
-              Array.isArray(box.bbox) &&
-              box.bbox.length === 4
-            ) {
-              const mappedClass = mapGpuClassNameToEnum(box.class_name);
-              if (mappedClass) {
-                currentSliceData.componentboundingboxes.push({
-                  class: mappedClass,
-                  confidence:
-                    typeof box.confidence === "number" ? box.confidence : 0,
-                  x_min: box.bbox[0],
-                  y_min: box.bbox[1],
-                  x_max: box.bbox[2],
-                  y_max: box.bbox[3],
-                });
-              } else {
-                logger.warn(
-                  `${serviceLocation}: Skipping box for ${imageFilename} due to unmappable class "${box.class_name}" in job ${gpuJobId}.`
-                );
-              }
-            } else {
+            if (isNaN(frameNumber)) {
               logger.warn(
-                `${serviceLocation}: Invalid box data for ${imageFilename}, class ${box?.class_name} in job ${gpuJobId}. Skipping box.`
+                `${serviceLocation}: UNET callback frame missing frame index for job ${gpuJobId}. Skipping frame.`
               );
+              continue;
+            }
+
+            if (!framesDataMap.has(frameNumber)) {
+              framesDataMap.set(frameNumber, {
+                frameindex: frameNumber,
+                frameinferred: true,
+                slices: new Map(),
+              });
+            }
+            const currentFrameData = framesDataMap.get(frameNumber)!;
+            const unetSlices = Array.isArray((frame as any)?.slices)
+              ? (frame as any).slices
+              : [];
+
+            for (const slice of unetSlices) {
+              const sliceNumber = Number(
+                (slice as any)?.sliceindex ?? (slice as any)?.slice_index
+              );
+              if (isNaN(sliceNumber)) {
+                logger.warn(
+                  `${serviceLocation}: UNET callback slice missing slice index for job ${gpuJobId}. Skipping slice.`
+                );
+                continue;
+              }
+
+              if (!currentFrameData.slices.has(sliceNumber)) {
+                currentFrameData.slices.set(sliceNumber, {
+                  sliceindex: sliceNumber,
+                  componentboundingboxes: [],
+                  segmentationmasks: [],
+                });
+              }
+
+              const currentSliceData = currentFrameData.slices.get(sliceNumber)!;
+              const unetMasks = Array.isArray((slice as any)?.segmentationmasks)
+                ? (slice as any).segmentationmasks
+                : [];
+
+              for (const mask of unetMasks) {
+                const mappedClass = mapGpuClassNameToEnum((mask as any)?.class);
+                const rleString = (mask as any)?.segmentationmaskcontents;
+                if (mappedClass && typeof rleString === "string") {
+                  currentSliceData.segmentationmasks.push({
+                    class: mappedClass,
+                    segmentationmaskcontents: rleString,
+                  });
+                } else {
+                  logger.warn(
+                    `${serviceLocation}: Invalid UNET mask entry in job ${gpuJobId}. class='${(mask as any)?.class}'.`
+                  );
+                }
+              }
             }
           }
         }
+      } else {
+        for (const [imageFilename, segmentationData] of Object.entries(
+          gpuResult as Record<string, any>
+        )) {
+          if (typeof segmentationData !== "object" || segmentationData === null) {
+            logger.warn(
+              `${serviceLocation}: Invalid segmentation data for ${imageFilename} in job ${gpuJobId}. Skipping.`
+            );
+            continue;
+          }
 
-        if (
-          segmentationData.masks &&
-          typeof segmentationData.masks === "object"
-        ) {
-          for (const [className, rleString] of Object.entries(
-            segmentationData.masks
-          )) {
-            if (typeof rleString === "string") {
-              const mappedClass = mapGpuClassNameToEnum(className);
-              if (mappedClass) {
-                currentSliceData.segmentationmasks.push({
-                  class: mappedClass,
-                  segmentationmaskcontents: rleString,
-                });
-              } else {
-                logger.warn(
-                  `${serviceLocation}: Skipping RLE mask for ${imageFilename} due to unmappable class "${className}" in job ${gpuJobId}.`
-                );
-              }
+          const filenameParts = imageFilename.replace(/\.jpg$/i, "").split("_");
+          let frameNumber: number | undefined;
+          let sliceNumber: number | undefined;
+
+          if (filenameParts.length >= 2) {
+            const potentialSlice = parseInt(
+              filenameParts[filenameParts.length - 1],
+              10
+            );
+            const potentialFrame = parseInt(
+              filenameParts[filenameParts.length - 2],
+              10
+            );
+            if (!isNaN(potentialSlice) && !isNaN(potentialFrame)) {
+              sliceNumber = potentialSlice;
+              frameNumber = potentialFrame;
             } else {
               logger.warn(
-                `${serviceLocation}: Invalid RLE string for ${imageFilename}, class ${className} in job ${gpuJobId}. Skipping mask.`
+                `${serviceLocation}: Could not parse frame/slice numbers from filename parts for ${imageFilename} in job ${gpuJobId}`
               );
+            }
+          }
+
+          if (frameNumber === undefined || sliceNumber === undefined) {
+            logger.warn(
+              `${serviceLocation}: Could not parse valid frame/slice from filename ${imageFilename} for job ${gpuJobId}. Skipping entry.`
+            );
+            continue;
+          }
+
+          if (!framesDataMap.has(frameNumber)) {
+            framesDataMap.set(frameNumber, {
+              frameindex: frameNumber,
+              frameinferred: true,
+              slices: new Map(),
+            });
+          }
+          const currentFrameData = framesDataMap.get(frameNumber)!;
+
+          if (!currentFrameData.slices.has(sliceNumber)) {
+            currentFrameData.slices.set(sliceNumber, {
+              sliceindex: sliceNumber,
+              componentboundingboxes: [],
+              segmentationmasks: [],
+            });
+          }
+          const currentSliceData = currentFrameData.slices.get(sliceNumber)!;
+
+          if (segmentationData.boxes && Array.isArray(segmentationData.boxes)) {
+            for (const box of segmentationData.boxes) {
+              if (
+                box &&
+                typeof box === "object" &&
+                box.bbox &&
+                Array.isArray(box.bbox) &&
+                box.bbox.length === 4
+              ) {
+                const mappedClass = mapGpuClassNameToEnum(box.class_name);
+                if (mappedClass) {
+                  currentSliceData.componentboundingboxes.push({
+                    class: mappedClass,
+                    confidence:
+                      typeof box.confidence === "number" ? box.confidence : 0,
+                    x_min: box.bbox[0],
+                    y_min: box.bbox[1],
+                    x_max: box.bbox[2],
+                    y_max: box.bbox[3],
+                  });
+                } else {
+                  logger.warn(
+                    `${serviceLocation}: Skipping box for ${imageFilename} due to unmappable class "${box.class_name}" in job ${gpuJobId}.`
+                  );
+                }
+              } else {
+                logger.warn(
+                  `${serviceLocation}: Invalid box data for ${imageFilename}, class ${box?.class_name} in job ${gpuJobId}. Skipping box.`
+                );
+              }
+            }
+          }
+
+          if (
+            segmentationData.masks &&
+            typeof segmentationData.masks === "object"
+          ) {
+            for (const [className, rleString] of Object.entries(
+              segmentationData.masks
+            )) {
+              if (typeof rleString === "string") {
+                const mappedClass = mapGpuClassNameToEnum(className);
+                if (mappedClass) {
+                  currentSliceData.segmentationmasks.push({
+                    class: mappedClass,
+                    segmentationmaskcontents: rleString,
+                  });
+                } else {
+                  logger.warn(
+                    `${serviceLocation}: Skipping RLE mask for ${imageFilename} due to unmappable class "${className}" in job ${gpuJobId}.`
+                  );
+                }
+              } else {
+                logger.warn(
+                  `${serviceLocation}: Invalid RLE string for ${imageFilename}, class ${className} in job ${gpuJobId}. Skipping mask.`
+                );
+              }
             }
           }
         }
@@ -394,35 +478,35 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
             `${serviceLocation}: Successfully created AI segmentation mask document for job ${gpuJobId}, project ${projectId}. Mask ID: ${aiCreationResult.projectsegmentationmask._id}`
           );
 
-          // Now create the editable manual mask
-          const manualSegmentationSet: IProjectSegmentationMask = {
-            // _id: uuidv4(), // REMOVE THIS LINE - Let Mongoose generate the ObjectId
-            projectid: projectId,
-            name: `Manual Edit - ${currentJob.segmentationName || `Job ${gpuJobId.substring(0, 8)}`}`,
-            description: `Editable manual segmentation, based on AI output from job ${gpuJobId}`,
-            isSaved: false,
-            segmentationmaskRLE: true,
-            isMedSAMOutput: false, // Explicitly false for manual/editable mask
-            frames: deepCopyFrames(
-              aiCreationResult.projectsegmentationmask.frames
-            ), // Deep copy frames from AI mask
-          };
+          if (resolvedSegmentationModel === SegmentationModel.MEDSAM) {
+            // Keep existing MedSAM behavior: create a second editable manual mask.
+            const manualSegmentationSet: IProjectSegmentationMask = {
+              projectid: projectId,
+              name: `Manual Edit - ${currentJob.segmentationName || `Job ${gpuJobId.substring(0, 8)}`}`,
+              description: `Editable manual segmentation, based on AI output from job ${gpuJobId}`,
+              isSaved: false,
+              segmentationmaskRLE: true,
+              isMedSAMOutput: false,
+              frames: deepCopyFrames(
+                aiCreationResult.projectsegmentationmask.frames
+              ),
+            };
 
-          const manualCreationResult = await createProjectSegmentationMask(
-            manualSegmentationSet
-          );
-          if (
-            manualCreationResult.success &&
-            manualCreationResult.projectsegmentationmask
-          ) {
-            logger.info(
-              `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId}. AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
+            const manualCreationResult = await createProjectSegmentationMask(
+              manualSegmentationSet
             );
-          } else {
-            logger.error(
-              `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} after AI mask creation. Reason: ${manualCreationResult.message}`
-            );
-            // Log this error, but don't fail the whole callback if AI mask was created.
+            if (
+              manualCreationResult.success &&
+              manualCreationResult.projectsegmentationmask
+            ) {
+              logger.info(
+                `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId}. AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
+              );
+            } else {
+              logger.error(
+                `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} after AI mask creation. Reason: ${manualCreationResult.message}`
+              );
+            }
           }
         } else {
           logger.error(
