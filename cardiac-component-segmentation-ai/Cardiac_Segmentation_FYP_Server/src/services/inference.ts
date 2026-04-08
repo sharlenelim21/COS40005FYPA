@@ -1,9 +1,9 @@
 // File: src/services/inference.ts
 // Description: Service layer for initiating the inference process, including Cloud GPU communication.
 
-import { IUserSafe, ProjectCrudResult, segmentationSource, IProjectSegmentationMask, SegmentationModel, ComponentBoundingBoxesClass } from "../types/database_types";
+import { IUserSafe, ProjectCrudResult, segmentationSource, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
-import { createJob, createProjectSegmentationMask, IJob, JobStatus, readProject, updateJob } from "./database";
+import { createJob, IJob, JobStatus, readProject, updateJob } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
@@ -31,29 +31,6 @@ const resolveMedsamBaseUrl = async (): Promise<string | null> => {
     return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
 };
 
-/**
- * DEVELOPER NOTE: Schema Compatibility Mapper
- * 
- * Converts UNet model output labels (strings from Python) to backend database enum values.
- * This ensures UNet outputs can be stored and retrieved using the existing MedSAM schema.
- * 
- * Mapping logic:
- * - "rv" (Right Ventricle) -> ComponentBoundingBoxesClass.RV
- * - "myo" (Myocardium) -> ComponentBoundingBoxesClass.MYO
- * - "lvc" or "lv" (Left Ventricular Chamber) -> ComponentBoundingBoxesClass.LVC
- * - Unknown labels -> undefined (filtered out with warning log)
- * 
- * This abstraction layer allows the Python model to use any labeling scheme
- * while maintaining database schema consistency.
- */
-const mapUnetLabelToComponentClass = (label: string): ComponentBoundingBoxesClass | undefined => {
-    const normalizedLabel = label.trim().toLowerCase();
-    if (normalizedLabel === "rv") return ComponentBoundingBoxesClass.RV;
-    if (normalizedLabel === "myo") return ComponentBoundingBoxesClass.MYO;
-    if (normalizedLabel === "lvc" || normalizedLabel === "lv") return ComponentBoundingBoxesClass.LVC;
-    return undefined;
-};
-
 // Interface for the expected GPU response for direct manual segmentation
 interface GpuManualPredictionResponseData {
     uuid?: string; // GPU's internal request/job ID
@@ -71,20 +48,10 @@ interface GpuManualPredictionResponseData {
 }
 
 interface UnetApiResponse {
-    success: boolean;
-    mask?: {
-        frames: Array<{
-            frameindex: number;
-            frameinferred: boolean;
-            slices: Array<{
-                sliceindex: number;
-                segmentationmasks: Array<{
-                    class: string;
-                    segmentationmaskcontents: string;
-                }>;
-            }>;
-        }>;
-    };
+    uuid?: string;
+    job_id?: string;
+    status?: string;
+    message?: string;
     error?: string;
 }
 
@@ -266,9 +233,16 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
 };
 
 const sendUnetInferenceRequestToApi = async (
-    inferenceData: { url: string; uuid: string; device?: "cpu" | "cuda" | "auto"; checkpointPath?: string },
+    inferenceData: {
+        url: string;
+        uuid: string;
+        callbackUrl: string;
+        segmentationModel: SegmentationModel.UNET;
+        device?: "cpu" | "cuda" | "auto";
+        checkpointPath?: string;
+    },
     gpuAuthToken: string
-): Promise<{ success: boolean; mask?: UnetApiResponse["mask"]; error?: string }> => {
+): Promise<{ success: boolean; jobId?: string; status?: string; error?: string }> => {
     const unetBaseUrl = await resolveMedsamBaseUrl();
     if (!unetBaseUrl) {
         logger.error(`${serviceLocation}: UNET API server URL could not be resolved from local/remote configuration.`);
@@ -287,6 +261,8 @@ const sendUnetInferenceRequestToApi = async (
             {
                 url: inferenceData.url,
                 uuid: inferenceData.uuid,
+                callback_url: inferenceData.callbackUrl,
+                segmentation_model: inferenceData.segmentationModel,
                 device: inferenceData.device || "cpu",
                 checkpoint_path: inferenceData.checkpointPath,
             },
@@ -295,12 +271,17 @@ const sendUnetInferenceRequestToApi = async (
                     Authorization: `Bearer ${gpuAuthToken}`,
                     "Content-Type": "application/json",
                 },
-                timeout: 10 * 60 * 1000,
+                // Submission call only; processing happens asynchronously in GPU service.
+                timeout: 30 * 1000,
             }
         );
 
-        if (response.status === 200 && response.data?.success && response.data.mask?.frames) {
-            return { success: true, mask: response.data.mask };
+        if (response.status === 202 && response.data) {
+            return {
+                success: true,
+                jobId: response.data.job_id || response.data.uuid || inferenceData.uuid,
+                status: response.data.status || "queued",
+            };
         }
 
         return {
@@ -325,9 +306,8 @@ const sendUnetInferenceRequestToApi = async (
  * 2. Creates a job record for tracking (same pattern as MedSAM)
  * 3. Creates a presigned NIfTI URL
  * 4. Calls FastAPI UNET endpoint (CPU/GPU selected by deviceType)
- * 5. Maps UNet output labels to backend-compatible enum values
- * 6. Saves segmentation mask to project in database
- * 7. Updates job status
+ * 5. Returns immediately after remote job acceptance
+ * 6. Result persistence is handled by existing webhook callback flow
  * 
  * KEY CHARACTERISTICS:
  * - Uses backend-to-backend API call (same architecture style as MedSAM)
@@ -368,10 +348,11 @@ export async function startModel2Inference(
         const projectData = projectResult.projects[0];
         const niftiS3Url = projectData.originalfilepath;
         const s3BucketName = process.env.AWS_BUCKET_NAME;
+        const callbackBaseUrl = process.env.CALLBACK_URL;
 
-        if (!niftiS3Url || !s3BucketName) {
+        if (!niftiS3Url || !s3BucketName || !callbackBaseUrl) {
             logger.error(`${serviceLocation}: Missing NIfTI source path or AWS bucket configuration for UNET inference on project ${projectId}.`);
-            return { success: false, message: "Project NIfTI source is missing." };
+            return { success: false, message: "Project NIfTI source or callback URL is missing." };
         }
 
         let s3Key = "";
@@ -394,6 +375,8 @@ export async function startModel2Inference(
             return { success: false, message: "Failed to prepare NIfTI URL for UNET inference." };
         }
 
+        const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/webhook/gpu-callback`;
+
         // DEVELOPER NOTE: Create job record for tracking (identical to MedSAM pattern)
         // This allows both segmentation models to be tracked in the same job system
         // Job status progresses: PENDING -> COMPLETED/FAILED
@@ -412,17 +395,23 @@ export async function startModel2Inference(
             return { success: false, message: `Failed to create UNET job record: ${jobCreationResult.message || 'Unknown error'}` };
         }
 
+        // NOTE: Checkpoint path is OPTIONAL and owned by the GPU service.
+        // If not provided here, GPU service will resolve it portably using its env var
+        // (UNET_CHECKPOINT_PATH, defaults to app/models/unet.pth).
+        // This allows the system to work on any machine without hardcoded paths.
         const inferenceResult = await sendUnetInferenceRequestToApi(
             {
                 url: niftiPresignedUrl,
                 uuid: jobUuid,
+                callbackUrl,
+                segmentationModel: SegmentationModel.UNET,
                 device: modelConfig?.deviceType || "cpu",
                 checkpointPath: modelConfig?.checkpointPath,
             },
             gpuAuthToken
         );
 
-        if (!inferenceResult.success || !inferenceResult.mask?.frames) {
+        if (!inferenceResult.success) {
             await updateJob(jobUuid, {
                 status: JobStatus.FAILED,
                 message: inferenceResult.error || "UNET inference failed.",
@@ -433,68 +422,9 @@ export async function startModel2Inference(
             };
         }
 
-            // DEVELOPER NOTE: Schema Mapping for Database Compatibility
-            // UNet outputs string labels ("rv", "myo", "lvc") from Python model
-            // Backend database expects ComponentBoundingBoxesClass enum values
-            // This mapping function transparently converts between formats:
-            // - "rv" -> ComponentBoundingBoxesClass.RV
-            // - "myo" -> ComponentBoundingBoxesClass.MYO
-            // - "lvc" / "lv" -> ComponentBoundingBoxesClass.LVC
-            // Unsupported classes are filtered out with warning logs
-            const mappedFrames: IProjectSegmentationMask["frames"] = inferenceResult.mask.frames.map((frame) => ({
-                frameindex: frame.frameindex,
-                frameinferred: true,
-                slices: frame.slices.map((slice) => ({
-                    sliceindex: slice.sliceindex,
-                    segmentationmasks: slice.segmentationmasks
-                        .map((mask) => {
-                            const mappedClass = mapUnetLabelToComponentClass(mask.class);
-                            if (!mappedClass) {
-                                logger.warn(`${serviceLocation}: Skipping UNET mask with unsupported class '${mask.class}' for project ${projectId}.`);
-                                return undefined;
-                            }
-
-                            return {
-                                class: mappedClass,
-                                segmentationmaskcontents: mask.segmentationmaskcontents,
-                            };
-                        })
-                        .filter((mask): mask is NonNullable<typeof mask> => Boolean(mask)),
-                })),
-            }));
-
-            // Create segmentation mask document in database with metadata
-        const unetSegmentationMask: IProjectSegmentationMask = {
-            projectid: projectId,
-            name: `UNET Output - Job ${jobUuid.substring(0, 8)}`,
-            description: `UNET API segmentation output for project ${projectId}`,
-            isSaved: false,
-            segmentationmaskRLE: true,
-            isMedSAMOutput: false,
-            segmentationModel: SegmentationModel.UNET,
-            frames: mappedFrames,
-        };
-
-        const maskCreationResult = await createProjectSegmentationMask(unetSegmentationMask);
-        if (!maskCreationResult.success) {
-            await updateJob(jobUuid, {
-                status: JobStatus.FAILED,
-                message: maskCreationResult.message || "Failed to save UNET segmentation mask.",
-            });
-            return {
-                success: false,
-                message: `UNET inference completed, but saving the mask failed: ${maskCreationResult.message || 'Unknown error'}`,
-            };
-        }
-
-        // Mark job as completed successfully
-        await updateJob(jobUuid, {
-            status: JobStatus.COMPLETED,
-        });
-
         return {
             success: true,
-            message: "UNET inference completed successfully.",
+            message: `UNET inference job accepted (${inferenceResult.status || "queued"}).`,
             uuid: jobUuid,
         };
 

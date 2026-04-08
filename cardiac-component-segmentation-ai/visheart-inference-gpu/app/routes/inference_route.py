@@ -1,16 +1,19 @@
 # In zz_gemini/app/routes/inference_route.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, Field, field_validator
 import os, asyncio, traceback
 from uuid import UUID
 from typing import (
-    Annotated,
     Dict,
     List,
     Any,
     Literal,
 )  # Added Any for MedSamManualSynchronousError
+try:
+    from typing import Annotated
+except ImportError:
+    from typing_extensions import Annotated
 
 # Import handlers and dependencies
 from app.classes.file_fetch_handler import FileFetchHandler
@@ -30,8 +33,8 @@ from app.helpers.inference_jobs import (
     process_medsam_job_with_semaphore,
     execute_medsam_manual_job_synchronously,
     process_fourd_reconstruction_job_with_semaphore,
+    process_unet_job_with_semaphore,
 )
-from app.helpers.unet_inference_api import run_unet_inference_from_nifti
 
 from app.helpers.inference_helpers import (
     filter_detections,
@@ -83,8 +86,10 @@ class JobRequest(BaseModel):
 class UnetInferenceRequest(BaseModel):
     url: HttpUrl = Field(..., description="Presigned URL for input NIfTI file")
     uuid: UUID = Field(..., description="Unique identifier for this UNET inference request")
+    callback_url: HttpUrl = Field(..., description="Callback URL for sending results")
     device: Literal["cpu", "cuda", "auto"] = Field(default="cpu", description="Compute device: cpu, cuda, or auto")
     checkpoint_path: str | None = Field(default=None, description="Optional checkpoint override path")
+    segmentation_model: Literal["unet"] = Field(default="unet", description="Model tag used by webhook processing")
 
     @field_validator('device')
     @classmethod
@@ -154,40 +159,30 @@ async def queue_medsam_inference(
 
 @router.post(
     "/unet-inference",
-    summary="Synchronous UNET inference for NIfTI input",
+    status_code=202,
+    response_model=JobAcceptedResponse,
+    summary="Asynchronous UNET inference for NIfTI input",
 )
-async def unet_inference_synchronous(
+async def unet_inference_async(
     token_payload: Annotated[TokenPayLoad, Depends(conditional_verify_jwt)],
     request: UnetInferenceRequest,
+    background_tasks: BackgroundTasks,
 ):
     client_id = token_payload.sub
     print(f"Received UNET inference job {request.uuid} from client {client_id}")
 
-    try:
-        async with FileFetchHandler(str(request.url)) as fetched_file:
-            nifti_path = fetched_file.get_file_path()
-            result = await asyncio.to_thread(
-                run_unet_inference_from_nifti,
-                nifti_path,
-                request.device,
-                request.checkpoint_path,
-            )
+    background_tasks.add_task(
+        process_unet_job_with_semaphore,
+        input_url=request.url,
+        uuid=request.uuid,
+        callback_url=request.callback_url,
+        device=request.device,
+        checkpoint_path=request.checkpoint_path,
+    )
 
-        if not isinstance(result, dict) or not result.get("success"):
-            return {
-                "success": False,
-                "error": (result or {}).get("error", "UNET inference failed without detailed error."),
-            }
-
-        return result
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "detail": f"UNET inference failed: {str(exc)}",
-                "uuid": str(request.uuid),
-            },
-        )
+    print(f"[{request.uuid}] UNET async task added.")
+    response_data = JobAcceptedResponse(uuid=request.uuid)
+    return response_data
 
 
 # --- MODIFIED Synchronous MedSAM Manual Inference Endpoint ---

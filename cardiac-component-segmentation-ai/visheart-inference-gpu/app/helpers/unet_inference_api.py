@@ -49,6 +49,7 @@ def run_unet_inference_from_nifti(
 ) -> Dict[str, Any]:
     """
     Execute UNET inference and return backend-compatible JSON result.
+    Resolves checkpoint path portably: provided path > UNET_CHECKPOINT_PATH env > app/models/unet.pth
     """
     module = _load_unet_module()
 
@@ -56,6 +57,15 @@ def run_unet_inference_from_nifti(
     if not resolved_checkpoint:
         resolved_checkpoint = os.path.join(os.path.dirname(__file__), "..", "models", "unet.pth")
         resolved_checkpoint = os.path.abspath(resolved_checkpoint)
+
+    # Validate checkpoint exists before passing to inference function
+    if not os.path.isfile(resolved_checkpoint):
+        return {
+            "success": False,
+            "error": f"UNet checkpoint file not found at: {resolved_checkpoint}\n"
+                     f"Expected location: app/models/unet.pth\n"
+                     f"Please follow the setup guide in visheart-inference-gpu/README.md"
+        }
 
     return module.run_model2_inference(
         nifti_path=nifti_path,

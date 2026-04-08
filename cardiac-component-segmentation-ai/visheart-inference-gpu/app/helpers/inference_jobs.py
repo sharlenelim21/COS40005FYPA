@@ -80,6 +80,7 @@ from app.classes.medsam_handler import MedSamHandler
 from app.dependencies.model_init import get_medsam_model
 from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
 from app.dependencies.model_init import get_fourd_reconstruction_model
+from app.helpers.unet_inference_api import run_unet_inference_from_nifti
 
 from app.helpers.inference_helpers import (
     filter_detections, encode_and_name_masks, sort_medsam_results,
@@ -203,6 +204,7 @@ async def send_callback(
     success: bool,
     result: dict | None,
     error_detail: str | None,
+    segmentation_model: str = "medsam",
 ):
     """Sends the processing result back to the client's callback URL with enhanced error logging."""
     callback_payload = {
@@ -210,6 +212,7 @@ async def send_callback(
         "status": "completed" if success else "failed",
         "result": result if success else None,
         "error": error_detail if not success else None,
+        "segmentation_model": segmentation_model,
     }
     parsed_url = urlparse(str(callback_url))
     host = parsed_url.hostname
@@ -515,7 +518,83 @@ async def _process_medsam_job(
             error_detail = f"An error occurred during inference: {str(e)}"
     finally:
         print(f"[{serviceLocation}] Sending final callback for job {uuid} with success={success}")
-        await send_callback(callback_url, uuid, success, result, error_detail)
+        await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="medsam")
+
+
+async def process_unet_job_with_semaphore(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "cpu",
+    checkpoint_path: str | None = None,
+):
+    print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (unet)...")
+    async with gpu_semaphore:
+        print(f"[{serviceLocation}] Job {uuid} acquired GPU access (unet)")
+        log_gpu_status(uuid, "start-unet")
+        try:
+            await _process_unet_job(input_url, uuid, callback_url, device, checkpoint_path)
+        finally:
+            log_gpu_status(uuid, "end-unet")
+            print(f"[{serviceLocation}] Job {uuid} released GPU access (unet)")
+
+
+async def _process_unet_job(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "cpu",
+    checkpoint_path: str | None = None,
+):
+    print(f"[{serviceLocation}] Starting UNET job {uuid}")
+    result = None
+    error_detail = None
+    success = False
+    parsed_url = urlparse(str(input_url))
+
+    if not all([parsed_url.scheme, parsed_url.netloc]):
+        error_detail = "Invalid URL provided. Please check the URL format."
+        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+        await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
+        return
+
+    try:
+        async with FileFetchHandler(str(input_url)) as handler:
+            file_path = handler.get_file_path()
+
+            if not file_path or not os.path.isfile(file_path):
+                error_detail = "No valid NIfTI file was found at the provided URL"
+                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
+                return
+
+            inference_output = await asyncio.to_thread(
+                run_unet_inference_from_nifti,
+                file_path,
+                device,
+                checkpoint_path,
+            )
+
+            if not isinstance(inference_output, dict) or not inference_output.get("success"):
+                error_detail = (inference_output or {}).get("error", "UNET inference failed without detailed error.")
+                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+            else:
+                result = inference_output.get("mask")
+                success = True
+                print(f"[{serviceLocation}] Successfully processed UNET job {uuid}")
+
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_details}")
+        if "403" in str(e):
+            error_detail = "Access denied (403). Presigned URL invalid/expired."
+        elif "download" in str(e).lower() or "extraction" in str(e).lower():
+            error_detail = f"Error downloading/extracting file: {str(e)}"
+        else:
+            error_detail = f"Error during UNET inference: {str(e)}"
+    finally:
+        print(f"[{serviceLocation}] Sending final callback for UNET job {uuid} with success={success}")
+        await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
 
 # --- MedSAM Manual Job (existing async callback version) ---
 async def process_medsam_manual_job_with_semaphore(
