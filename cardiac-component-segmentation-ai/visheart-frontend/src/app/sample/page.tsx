@@ -161,6 +161,27 @@ const SamplePage: React.FC = () => {
               </div>
             </>
           )}
+
+          <Card className="border-none bg-muted/30 shadow-none">
+            <CardContent className="space-y-4 p-6">
+              <h2 className="text-xl font-semibold">How to use these files</h2>
+              <div className="grid gap-4 md:grid-cols-4">
+                {[
+                  "Download a sample file above",
+                  "Go to Dashboard and create a New Project",
+                  "Upload the .nii.gz file",
+                  "Run segmentation to view results",
+                ].map((step, index) => (
+                  <div key={step} className="flex items-start gap-3">
+                    <div className="bg-pink-500 text-white flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold">
+                      {index + 1}
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-6">{step}</p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
     </div>
