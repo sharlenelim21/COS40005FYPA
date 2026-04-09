@@ -16,6 +16,9 @@ const router = express.Router();
 const REGION = process.env.AWS_REGION || "ap-southeast-1";
 const s3Client = new S3Client({ region: REGION });
 
+const toSingleString = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value;
+
 // Helper function to handle metric requests
 async function handleMetricRequest(
   req: Request,
@@ -24,7 +27,7 @@ async function handleMetricRequest(
   fetchFunction: (bucketName: string) => Promise<{ timestamps: string[]; values: number[] }>
 ): Promise<void> {
   try {
-    const { bucketName } = req.params;
+    const bucketName = toSingleString(req.params.bucketName);
 
     if (!bucketName) {
       res.status(400).json({ error: 'Bucket name is required' });
@@ -94,7 +97,7 @@ router.get("/:bucketName/put-requests", async (req: Request, res: Response): Pro
 // Route: GET /metrics/s3/:bucketName/all - Fetch all S3 metrics for a bucket
 router.get("/:bucketName/all", async (req: Request, res: Response) => {
   try {
-    const { bucketName } = req.params;
+    const bucketName = toSingleString(req.params.bucketName);
 
     if (!bucketName) {
       res.status(400).json({ error: 'Bucket name is required' });
