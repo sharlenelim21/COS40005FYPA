@@ -7,6 +7,7 @@ import { tarImageCache } from "@/lib/tar-image-cache";
 import { reconstructionCache } from "@/lib/reconstruction-cache";
 import * as ProjectTypes from "@/types/project";
 import { LoadingStage } from "@/types/project";
+import { usePathname } from "next/navigation";
 
 interface ProjectContextType {
   // Loading states
@@ -86,6 +87,11 @@ interface ProjectProviderProps {
 }
 
 export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
+  const pathname = usePathname();
+  const isDocPage = pathname?.startsWith("/doc");
+  const isProjectOverviewPage = !!pathname && /^\/project\/[^/]+$/.test(pathname);
+  const shouldSkipReconstructionPreload = isDocPage || isProjectOverviewPage;
+
   const [loading, setLoading] = useState<LoadingStage>("idle");
 
   // Performance monitoring effect - logs loading time metrics
