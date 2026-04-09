@@ -49,12 +49,15 @@ const withTransaction = async <T>(
 
 const serviceLocation = "ReconstructionHandler";
 
-export interface ProcessedObjFile {
+type ArtifactType = "mesh" | "point_cloud";
+
+export interface ProcessedArtifactFile {
   filename: string;
   originalName: string;
   tempPath: string;
   size: number;
   frameIndex?: number;
+  artifactType: ArtifactType;
 }
 
 export interface ReconstructionCallbackResult {
@@ -75,7 +78,8 @@ export interface ReconstructionCallbackResult {
  */
 export async function processReconstructionCallback(
   gpuJobId: string,
-  uploadedFiles: Express.Multer.File[],
+  meshFiles: Express.Multer.File[],
+  pointCloudFiles: Express.Multer.File[],
   callbackMetadata: any
 ): Promise<ReconstructionCallbackResult> {
   try {
@@ -91,7 +95,9 @@ export async function processReconstructionCallback(
     }
 
     // Extract GPU metadata and validate status
-    const safeUploadedFiles = uploadedFiles || [];
+    const safeMeshFiles = meshFiles || [];
+    const safePointCloudFiles = pointCloudFiles || [];
+    const safeUploadedFiles = [...safeMeshFiles, ...safePointCloudFiles];
     const { status, result: gpuResult, error: gpuErrorDetail } = callbackMetadata;
     
     logger.info(`${serviceLocation}: Processing reconstruction callback - Job: ${gpuJobId}, Files: ${safeUploadedFiles.length}, Status: ${status}`);
@@ -127,7 +133,7 @@ export async function processReconstructionCallback(
       return metadataValidation;
     }
 
-    const validationResult = validateObjFiles(safeUploadedFiles, gpuJobId);
+    const validationResult = validateArtifactFiles(safeMeshFiles, safePointCloudFiles, gpuJobId);
     if (!validationResult.success) {
       logger.error(`${serviceLocation}: File validation failed: ${validationResult.message}`);
       
@@ -140,7 +146,7 @@ export async function processReconstructionCallback(
       // Cleanup any uploaded files even on validation failure
       if (safeUploadedFiles.length > 0) {
         try {
-          const processedFiles = await processObjFiles(safeUploadedFiles, gpuJobId);
+          const processedFiles = await processArtifactFiles(safeUploadedFiles, gpuJobId);
           await cleanupTempFiles(processedFiles, '');
         } catch (cleanupError) {
           logger.warn(`${serviceLocation}: Failed to cleanup files after validation failure: ${(cleanupError as Error).message}`);
@@ -151,7 +157,8 @@ export async function processReconstructionCallback(
     }
 
     // Process OBJ mesh files and extract project information
-    const processedFiles = await processObjFiles(safeUploadedFiles, gpuJobId);
+    const processedFiles = await processArtifactFiles(safeUploadedFiles, gpuJobId);
+    const processedMeshFiles = processedFiles.filter(file => file.artifactType === "mesh");
     const { userId, filehash, projectId, maskId } = await getProjectDetails(gpuJobId);
     
     // Create TAR archive containing all mesh frames
@@ -241,7 +248,7 @@ export async function processReconstructionCallback(
           userId,
           filehash,
           gpuResult,
-          processedFiles,
+          processedMeshFiles,
           tarResult.tarSize!,
           reconstructionFileS3Url,
           maskId
@@ -325,9 +332,9 @@ export async function processReconstructionCallback(
 
     // Cleanup any temporary files that may have been created
     try {
-      const safeFiles = uploadedFiles || [];
+      const safeFiles = [...(meshFiles || []), ...(pointCloudFiles || [])];
       if (safeFiles.length > 0) {
-        const processedFiles = await processObjFiles(safeFiles, gpuJobId);
+        const processedFiles = await processArtifactFiles(safeFiles, gpuJobId);
         await cleanupTempFiles(processedFiles, '');
       }
     } catch (cleanupError) {
@@ -409,61 +416,38 @@ function validateMetadata(
 /**
  * Validate uploaded mesh files (OBJ or GLB) with enhanced debugging
  */
-function validateObjFiles(
-  uploadedFiles: Express.Multer.File[],
+function validateArtifactFiles(
+  meshFiles: Express.Multer.File[],
+  pointCloudFiles: Express.Multer.File[],
   gpuJobId: string
 ): ReconstructionCallbackResult {
-  // Ensure uploadedFiles is always an array to prevent undefined errors
-  const safeFiles = uploadedFiles || [];
-  
-  // Filter files by type for validation - support both OBJ and GLB
-  const meshFiles = safeFiles.filter(file => {
-    const filename = file.originalname.toLowerCase();
-    return filename.endsWith('.obj') || filename.endsWith('.glb');
-  });
-  
-  const jsonFiles = safeFiles.filter(file => 
-    file.originalname.toLowerCase().endsWith('.json')
-  );
-  
-  const otherFiles = safeFiles.filter(file => {
-    const filename = file.originalname.toLowerCase();
-    return !filename.endsWith('.obj') && 
-           !filename.endsWith('.glb') && 
-           !filename.endsWith('.json');
-  });
+  const safeMeshFiles = meshFiles || [];
+  const safePointCloudFiles = pointCloudFiles || [];
 
-  if (meshFiles.length === 0) {
+  if (safeMeshFiles.length === 0) {
     logger.error(`${serviceLocation}: No mesh files (.obj or .glb) received for job ${gpuJobId}`);
     return {
       success: false,
       message: "No mesh files received in reconstruction callback. The reconstruction may have failed to generate mesh output or encountered an error during processing."
     };
   }
-  
-  if (otherFiles.length > 0) {
-    logger.error(`${serviceLocation}: Unexpected file formats for job ${gpuJobId}: ${otherFiles.map(f => f.originalname).join(', ')}`);
-    return {
-      success: false,
-      message: `Unexpected file formats received. Expected .obj/.glb files and optional .json metadata, but received: ${otherFiles.map(f => f.originalname).join(', ')}`
-    };
-  }
 
-  const totalMeshSize = meshFiles.reduce((sum, f) => sum + f.size, 0);
-  const meshFormat = meshFiles[0].originalname.toLowerCase().endsWith('.glb') ? 'GLB' : 'OBJ';
-  logger.info(`${serviceLocation}: Validated ${meshFiles.length} ${meshFormat} files (${Math.round(totalMeshSize / 1024 / 1024)} MB total)`);
+  const totalMeshSize = safeMeshFiles.reduce((sum, f) => sum + f.size, 0);
+  const totalPointCloudSize = safePointCloudFiles.reduce((sum, f) => sum + f.size, 0);
+  const meshFormat = safeMeshFiles[0].originalname.toLowerCase().endsWith('.glb') ? 'GLB' : 'OBJ';
+  logger.info(`${serviceLocation}: Validated ${safeMeshFiles.length} ${meshFormat} files (${Math.round(totalMeshSize / 1024 / 1024)} MB total), point clouds: ${safePointCloudFiles.length} (${Math.round(totalPointCloudSize / 1024 / 1024)} MB total)`);
   
   return { success: true, message: "Files validated successfully" };
 }
 
 /**
- * Process uploaded OBJ files and extract metadata
+ * Process uploaded artifacts and extract metadata
  */
-async function processObjFiles(
+async function processArtifactFiles(
   uploadedFiles: Express.Multer.File[],
   gpuJobId: string
-): Promise<ProcessedObjFile[]> {
-  const processedFiles: ProcessedObjFile[] = [];
+): Promise<ProcessedArtifactFile[]> {
+  const processedFiles: ProcessedArtifactFile[] = [];
   
   // Create job-specific directory for file isolation
   const jobTempDir = path.join("src/temp_mesh/", `job_${gpuJobId}`);
@@ -484,10 +468,13 @@ async function processObjFiles(
       tempPath: isolatedPath,
       size: file.size,
       frameIndex: frameIndex,
+      artifactType: file.originalname.toLowerCase().endsWith('.obj') || file.originalname.toLowerCase().endsWith('.glb')
+        ? "mesh"
+        : "point_cloud",
     });
   }
   
-  logger.info(`${serviceLocation}: Processed ${processedFiles.length} OBJ files for job ${gpuJobId} in isolated directory`);
+  logger.info(`${serviceLocation}: Processed ${processedFiles.length} artifacts for job ${gpuJobId} in isolated directory`);
   return processedFiles;
 }
 
@@ -540,7 +527,7 @@ async function getProjectDetails(gpuJobId: string): Promise<{ userId: string; fi
  * Create TAR bundle from mesh files (OBJ or GLB) following naming convention
  */
 async function createReconstructionTar(
-  processedFiles: ProcessedObjFile[],
+  processedFiles: ProcessedArtifactFile[],
   userId: string,
   filehash: string,
   gpuJobId: string
@@ -552,8 +539,9 @@ async function createReconstructionTar(
     const tarPath = path.join("src/temp_mesh/", tarFilename);
     const tempTarPath = `${tarPath}.tmp`; // Atomic creation using temp file
     
-    const meshFormat = processedFiles[0]?.tempPath?.toLowerCase().endsWith('.glb') ? 'GLB' : 'OBJ';
-    logger.info(`${serviceLocation}: Creating TAR bundle with ${processedFiles.length} ${meshFormat} files`);
+    const meshCount = processedFiles.filter(f => f.artifactType === "mesh").length;
+    const pointCloudCount = processedFiles.filter(f => f.artifactType === "point_cloud").length;
+    logger.info(`${serviceLocation}: Creating TAR bundle with ${meshCount} mesh files and ${pointCloudCount} point cloud files`);
     
     // Comprehensive mesh file validation (OBJ or GLB)
     for (const file of processedFiles) {
@@ -570,6 +558,8 @@ async function createReconstructionTar(
       // Format-specific validation
       const isGlb = file.tempPath.toLowerCase().endsWith('.glb');
       const isObj = file.tempPath.toLowerCase().endsWith('.obj');
+      const isNpy = file.tempPath.toLowerCase().endsWith('.npy');
+      const isPly = file.tempPath.toLowerCase().endsWith('.ply');
       
       if (isObj) {
         // OBJ format validation: check for vertices and faces
@@ -587,8 +577,18 @@ async function createReconstructionTar(
         if (magic !== 0x46546C67) {
           throw new Error(`Invalid GLB file format (missing glTF magic number): ${file.tempPath}`);
         }
+      } else if (isNpy) {
+        const buffer = await fs.readFile(file.tempPath);
+        if (buffer.length < 6 || buffer[0] !== 0x93 || buffer.toString('ascii', 1, 6) !== 'NUMPY') {
+          throw new Error(`Invalid NPY file format: ${file.tempPath}`);
+        }
+      } else if (isPly) {
+        const header = await fs.readFile(file.tempPath, 'utf-8');
+        if (!header.startsWith('ply')) {
+          throw new Error(`Invalid PLY file format: ${file.tempPath}`);
+        }
       } else {
-        throw new Error(`Unknown mesh file format: ${file.tempPath}`);
+        throw new Error(`Unknown artifact file format: ${file.tempPath}`);
       }
     }
     
@@ -668,7 +668,7 @@ async function createReconstructionRecord(
   userId: string,
   filehash: string,
   gpuResult: any,
-  processedFiles: ProcessedObjFile[],
+  processedFiles: ProcessedArtifactFile[],
   tarSize: number,
   reconstructionFileS3Url: string,
   maskId?: string
@@ -774,13 +774,13 @@ async function createReconstructionRecord(
 }
 
 /**
- * Cleans up temporary OBJ files and TAR archive after processing
- * Removes individual mesh files and TAR bundle from temp directories
+ * Cleans up temporary artifact files and TAR archive after processing
+ * Removes individual artifacts and TAR bundle from temp directories
  * 
- * @param processedFiles - Array of processed OBJ files to clean up
+ * @param processedFiles - Array of processed artifact files to clean up
  * @param tarPath - Path to TAR archive file to remove
  */
-async function cleanupTempFiles(processedFiles: ProcessedObjFile[], tarPath: string): Promise<void> {
+async function cleanupTempFiles(processedFiles: ProcessedArtifactFile[], tarPath: string): Promise<void> {
   try {
     // Clean up job-specific directory if it exists
     if (processedFiles.length > 0) {
@@ -792,12 +792,12 @@ async function cleanupTempFiles(processedFiles: ProcessedObjFile[], tarPath: str
       } catch (dirError) {
         logger.warn(`${serviceLocation}: Failed to remove job directory: ${jobTempDir}`);
         
-        // Fallback: clean up individual OBJ files
-        for (const objFile of processedFiles) {
+        // Fallback: clean up individual files
+        for (const artifactFile of processedFiles) {
           try {
-            await fs.unlink(objFile.tempPath);
+            await fs.unlink(artifactFile.tempPath);
           } catch (fileError) {
-            logger.warn(`${serviceLocation}: Failed to delete temp file: ${objFile.tempPath}`);
+            logger.warn(`${serviceLocation}: Failed to delete temp file: ${artifactFile.tempPath}`);
           }
         }
       }

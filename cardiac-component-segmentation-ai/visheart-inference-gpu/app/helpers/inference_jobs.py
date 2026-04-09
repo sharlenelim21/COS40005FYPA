@@ -6,7 +6,7 @@ import re
 from enum import Enum
 from functools import wraps
 from uuid import UUID
-from pydantic import HttpUrl, Field
+from pydantic import HttpUrl
 from urllib.parse import urlparse
 import torch
 import numpy as np
@@ -103,9 +103,10 @@ async def send_callback_with_files(
     result: dict | None,
     error_detail: str | None,
     mesh_files: List[str] | None = None,
+    point_cloud_files: List[str] | None = None,
     export_format: str = "obj",
 ):
-    """Sends the processing result back to the client's callback URL with mesh files as multipart/form-data."""
+    """Sends the processing result back to the client's callback URL with mesh/point-cloud files as multipart/form-data."""
     
     # Determine MIME type based on export format
     mime_type_map = {
@@ -128,23 +129,27 @@ async def send_callback_with_files(
     print(f"[{serviceLocation}] Attempting callback to {host}:{port} for job {uuid}")
     
     try:
-        if success and mesh_files:
+        if success and (mesh_files or point_cloud_files):
             # Send as multipart/form-data with file attachments
             files = {}
             total_size = 0
+            total_file_count = 0
+            mesh_file_list = mesh_files or []
+            point_cloud_file_list = point_cloud_files or []
             
             # Add JSON metadata as a form field
             files['metadata'] = ('metadata.json', json.dumps(callback_payload), 'application/json')
             
             # Add each mesh file
-            for i, mesh_file_path in enumerate(mesh_files):
+            for i, mesh_file_path in enumerate(mesh_file_list):
                 if os.path.exists(mesh_file_path):
                     file_size = os.path.getsize(mesh_file_path)
                     total_size += file_size
+                    total_file_count += 1
                     
                     # Generate field name and filename
                     filename = os.path.basename(mesh_file_path)
-                    field_name = f'mesh_{i}' if len(mesh_files) > 1 else 'mesh'
+                    field_name = f'mesh_{i}' if len(mesh_file_list) > 1 else 'mesh'
                     
                     # Read file content
                     with open(mesh_file_path, 'rb') as f:
@@ -152,13 +157,35 @@ async def send_callback_with_files(
                     
                     files[field_name] = (filename, file_content, mesh_mime_type)
                     print(f"[{serviceLocation}] Added {filename} ({file_size} bytes, {mesh_mime_type}) to multipart payload")
+
+            # Add each point cloud file
+            point_cloud_mime_map = {
+                ".npy": "application/octet-stream",
+                ".ply": "application/octet-stream",
+            }
+            for i, point_cloud_path in enumerate(point_cloud_file_list):
+                if os.path.exists(point_cloud_path):
+                    file_size = os.path.getsize(point_cloud_path)
+                    total_size += file_size
+                    total_file_count += 1
+
+                    filename = os.path.basename(point_cloud_path)
+                    field_name = f'point_cloud_{i}' if len(point_cloud_file_list) > 1 else 'point_cloud'
+                    ext = os.path.splitext(filename)[1].lower()
+                    point_cloud_mime_type = point_cloud_mime_map.get(ext, "application/octet-stream")
+
+                    with open(point_cloud_path, 'rb') as f:
+                        file_content = f.read()
+
+                    files[field_name] = (filename, file_content, point_cloud_mime_type)
+                    print(f"[{serviceLocation}] Added {filename} ({file_size} bytes, {point_cloud_mime_type}) to multipart payload")
             
             print(f"[{serviceLocation}] Multipart payload total size: {total_size} bytes ({len(files)} parts)")
             
             headers = {
                 "User-Agent": "VisHeart-GPU-Service/1.0",
                 "X-Job-ID": str(uuid),
-                "X-File-Count": str(len(mesh_files)),
+                "X-File-Count": str(total_file_count),
             }
             
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -720,6 +747,7 @@ async def _process_fourd_reconstruction_job(
     error_detail = None
     success = False
     mesh_files = None  # Initialize mesh files list
+    point_cloud_files = None  # Initialize point cloud files list
     
     # Validate URL
     parsed_url = urlparse(str(request.url))
@@ -777,10 +805,16 @@ async def _process_fourd_reconstruction_job(
                         # Prepare result with metadata (no large data in JSON)
                         mesh_file = reconstruction_result["mesh_file"]  # Primary mesh file
                         all_mesh_files = reconstruction_result.get("mesh_files", [mesh_file])  # All mesh files
+                        all_extraction_files = reconstruction_result.get("extraction_files", [])
+                        point_cloud_files = [
+                            f for f in all_extraction_files
+                            if f.lower().endswith("_pointcloud.npy") or f.lower().endswith("_pointcloud.ply")
+                        ]
                         
                         if os.path.exists(mesh_file):
                             # Calculate total size of all mesh files
                             total_size = sum(os.path.getsize(f) for f in all_mesh_files if os.path.exists(f))
+                            total_point_cloud_size = sum(os.path.getsize(f) for f in point_cloud_files if os.path.exists(f))
                             primary_size = os.path.getsize(mesh_file)
                             
                             result = {
@@ -789,11 +823,14 @@ async def _process_fourd_reconstruction_job(
                                 "total_mesh_files": len(all_mesh_files),
                                 "total_mesh_size": total_size,
                                 "mesh_format": "obj",
+                                "total_point_cloud_files": len(point_cloud_files),
+                                "total_point_cloud_size": total_point_cloud_size,
+                                "point_cloud_format": request.point_cloud_format,
                                 "reconstruction_time": reconstruction_result["reconstruction_time"],
                                 "num_iterations": reconstruction_result["num_iterations"],
                                 "resolution": reconstruction_result["resolution"],
                                 "status": "reconstruction_completed",
-                                "message": f"4D reconstruction completed successfully. {len(all_mesh_files)} mesh files sent as multipart attachments.",
+                                "message": f"4D reconstruction completed successfully. {len(all_mesh_files)} mesh files and {len(point_cloud_files)} point cloud files sent as multipart attachments.",
                                 
                                 # Add 4D-specific metadata
                                 "is_4d_input": reconstruction_result.get("is_4d_input", False),
@@ -810,6 +847,14 @@ async def _process_fourd_reconstruction_job(
                                         "frame_index": _extract_frame_index_from_filename(os.path.basename(f))
                                     }
                                     for f in all_mesh_files
+                                ],
+                                "point_cloud_files_info": [
+                                    {
+                                        "filename": os.path.basename(f),
+                                        "size": os.path.getsize(f) if os.path.exists(f) else 0,
+                                        "frame_index": _extract_frame_index_from_filename(os.path.basename(f))
+                                    }
+                                    for f in point_cloud_files
                                 ]
                             }
                             
@@ -824,7 +869,7 @@ async def _process_fourd_reconstruction_job(
                             # Send callback WHILE files still exist in temp directory
                             print(f"[{serviceLocation}] Sending multipart callback with {len(mesh_files)} files...")
                             export_format = reconstruction_result.get("export_format", "obj")
-                            await send_callback_with_files(request.callback_url, request.uuid, success, result, None, mesh_files, export_format)
+                            await send_callback_with_files(request.callback_url, request.uuid, success, result, None, mesh_files, point_cloud_files, export_format)
                             print(f"[{serviceLocation}] Multipart callback sent successfully for job {request.uuid}")
                             return  # Exit early after successful callback
                             
@@ -857,6 +902,6 @@ async def _process_fourd_reconstruction_job(
     # Use multipart callback for successful cases with mesh files
     if success and 'mesh_files' in locals() and mesh_files:
         export_format = result.get("export_format", "obj") if result else "obj"
-        await send_callback_with_files(request.callback_url, request.uuid, success, result, error_detail, mesh_files, export_format)
+        await send_callback_with_files(request.callback_url, request.uuid, success, result, error_detail, mesh_files, point_cloud_files, export_format)
     else:
         await send_callback(request.callback_url, request.uuid, success, result, error_detail)

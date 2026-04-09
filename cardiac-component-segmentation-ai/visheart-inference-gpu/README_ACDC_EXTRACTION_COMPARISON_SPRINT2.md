@@ -1,7 +1,5 @@
 # ACDC Extraction Comparison (Sprint 2)
 
-This report was regenerated from a clean run and replaces previous cluttered outputs.
-
 ## Run Configuration
 
 - Generated at: 2026-04-05T10:06:04.877702Z
@@ -72,6 +70,58 @@ Lower Chamfer-L2 means more similar point clouds.
 - patient001_4d vs patient003_4d: chamfer_l2=0.097358
 - patient002_4d vs patient003_4d: chamfer_l2=0.102209
 
-## Recommendation
+## Qualitative Visual Evidence (3 ACDC Samples)
 
-Use this high-quality extraction setting (higher iterations/resolution) for qualitative review and keep Chamfer-L2 in the summary as a quick quantitative sanity check when visuals appear similar.
+Visuals were reviewed from `app/_acdc_eval/visuals/` for patient001_4d, patient002_4d, and patient003_4d.
+
+### Point Cloud (Projections)
+
+Files used:
+
+- `app/_acdc_eval/visuals/patient001_4d_pointcloud_views.png`
+- `app/_acdc_eval/visuals/patient002_4d_pointcloud_views.png`
+- `app/_acdc_eval/visuals/patient003_4d_pointcloud_views.png`
+
+Observations:
+
+- Across all 3 samples, XY/XZ/YZ projections preserve a consistent heart-like outer shell and inner cavity pattern.
+- Shapes are similar across patients, with expected anatomical variation (minor orientation/contour differences).
+- Point clouds show useful geometric detail but contain scattered interior points/noise, which can make direct deformation constraints less stable without additional processing.
+
+### SDF (Central Slices)
+
+Files used:
+
+- `app/_acdc_eval/visuals/patient001_4d_sdf_slices.png`
+- `app/_acdc_eval/visuals/patient002_4d_sdf_slices.png`
+- `app/_acdc_eval/visuals/patient003_4d_sdf_slices.png`
+
+Observations:
+
+- Sign convention is consistent for all 3 samples (`sign_convention_ok=True` in each sign report).
+- Central slices show smooth, continuous signed distance transitions with stable myocardium/ring-like structure.
+- SDF fields look less noisy than point clouds and provide volumetric inside/outside information, which is useful for robust deformation optimization.
+
+## Sprint 2 Recommendation (Point Cloud vs SDF)
+
+### Decision
+
+Use **SDF** as the primary representation for generic model deformation in Sprint 2. Keep point clouds as a secondary artifact for fast qualitative QA and visualization.
+
+### Why SDF is more suitable
+
+- Provides a dense volumetric field with explicit inside/outside sign, not just surface samples.
+- Better supports stable optimization objectives (distance-to-surface and smooth gradients in nearby regions).
+- More robust to local sampling irregularities than raw point clouds.
+- Visual review across 3 ACDC samples shows consistent structure and sign behavior.
+
+### Trade-offs
+
+- SDF uses more memory and compute than point clouds.
+- At fixed grid resolution, SDF can smooth fine details.
+
+### Mitigation
+
+- Keep current `resolution=160` for Sprint 2 baseline and only increase if deformation quality requires it.
+- Continue generating point cloud projections for fast artifact detection during QA.
+

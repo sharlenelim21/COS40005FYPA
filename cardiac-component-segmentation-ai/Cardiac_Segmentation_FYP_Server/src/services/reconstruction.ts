@@ -31,6 +31,8 @@ const sendReconstructionRequestToCloudGpu = async (
         num_iterations?: number;  
         resolution?: number;
         process_all_frames?: boolean;
+        extract_point_cloud?: boolean;
+        point_cloud_format?: "npy" | "ply";
         debug_save?: boolean;    
         debug_dir?: string;
     },
@@ -225,6 +227,8 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         }
 
         // Prepare reconstruction request payload - match GPU server schema
+        const pointCloudFormat: "npy" | "ply" = parameters?.point_cloud_format === 'ply' ? 'ply' : 'npy';
+
         const reconstructionPayload = {
             url: dataUrlForGpu,  // Presigned URL for segmentation data
             uuid: jobUuid,
@@ -233,6 +237,8 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
             num_iterations: parameters?.num_iterations || 50,  // Flattened parameters
             resolution: parameters?.resolution || 128,
             process_all_frames: parameters?.process_all_frames ?? true,  // Enable 4D processing by default
+            extract_point_cloud: parameters?.extract_point_cloud ?? false,
+            point_cloud_format: pointCloudFormat,
             export_format: meshFormat,  // NEW: Send mesh format to GPU (obj or glb)
             debug_save: parameters?.debug_save || parameters?.debug || false,  // Support both debug and debug_save
             debug_dir: parameters?.debug_dir || "/tmp/4d_reconstruction_debug"
