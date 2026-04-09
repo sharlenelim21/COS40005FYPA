@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import {
   Card,
@@ -9,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Users,
   Shield,
@@ -63,27 +65,38 @@ const recentActivities = [
 
 const quickActions = [
   {
-    title: "Add New User",
-    description: "Create a new user account",
+    title: "User Management",
+    description: "Manage users, roles, and permissions",
     href: "/admin/user-management",
     icon: Users,
     variant: "default" as const,
+    section: "core" as const,
   },
   {
-    title: "System Backup",
-    description: "Create system backup",
-    href: "/admin/database",
-    icon: Shield,
-    variant: "secondary" as const,
-    disabled: true,
+    title: "System Monitor & Configuration",
+    description: "Monitor system health, performance, and configure settings",
+    href: "/admin/system-monitor",
+    icon: Activity,
+    variant: "default" as const,
+    section: "core" as const,
   },
   {
-    title: "View Reports",
-    description: "Check system analytics",
+    title: "AWS Analytics",
+    description: "View AWS metrics and reports",
     href: "/admin/analytics",
     icon: TrendingUp,
     variant: "secondary" as const,
     disabled: true,
+    section: "advanced" as const,
+  },
+  {
+    title: "Database Management",
+    description: "Manage database operations and backups",
+    href: "/admin/database",
+    icon: Shield,
+    variant: "secondary" as const,
+    disabled: true,
+    section: "advanced" as const,
   },
 ];
 
@@ -95,22 +108,25 @@ const quickActions = [
  */
 export default function AdminPageHome() {
   const { user } = useAuth();
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
+
+  const visibleQuickActions = quickActions.filter((action) => {
+    if (action.section === "core") return true;
+    return showAdvancedTools;
+  });
 
   return (
     <div className="space-y-8">
-      {/* Welcome Section */}
       <div className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight">
           Welcome back, {user?.username}
         </h1>
         <p className="text-muted-foreground">
-          Here's an overview of your VisHeart system.
+          Here&apos;s an overview of your VisHeart system.
         </p>
       </div>
 
-      {/* System Statistics Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        {/* Total Users */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Users</CardTitle>
@@ -124,7 +140,6 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
-        {/* Active Users */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Users</CardTitle>
@@ -136,7 +151,6 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
-        {/* System Health */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">System Health</CardTitle>
@@ -152,7 +166,6 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
-        {/* Uptime */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Uptime</CardTitle>
@@ -165,9 +178,7 @@ export default function AdminPageHome() {
         </Card>
       </div>
 
-      {/* Two Column Layout for Activities and Quick Actions */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Recent Activities */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -212,16 +223,30 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
-        {/* Quick Actions */}
         <Card>
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Common administrative tasks</CardDescription>
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle>Quick Actions</CardTitle>
+              <CardDescription>Common administrative tasks</CardDescription>
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAdvancedTools((prev) => !prev)}
+              >
+                {showAdvancedTools ? "Hide" : "Show"} Analytics & Database
+              </Button>
+            </div>
           </CardHeader>
+
           <CardContent>
             <div className="space-y-3">
-              {quickActions.map((action) => {
+              {visibleQuickActions.map((action) => {
                 const Icon = action.icon;
+
                 return (
                   <div
                     key={action.title}
@@ -242,6 +267,7 @@ export default function AdminPageHome() {
                         </p>
                       </div>
                     </div>
+
                     {action.disabled && (
                       <Badge variant="secondary" className="text-xs">
                         Coming Soon
@@ -251,11 +277,17 @@ export default function AdminPageHome() {
                 );
               })}
             </div>
+
+            {!showAdvancedTools && (
+              <p className="text-muted-foreground mt-4 text-xs">
+                Analytics and Database Management are currently hidden based on
+                the latest client scope.
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* System Information Footer */}
       <Card>
         <CardContent className="pt-6">
           <div className="text-muted-foreground flex items-center justify-between text-sm">
