@@ -4,12 +4,12 @@ import logging
 from fastapi import FastAPI
 
 # Import your model handlers
-from classes.yolo_handler import YoloHandler
-from classes.medsam_handler import MedSamHandler
-from classes.fourdreconstruction_handler import FourDReconstructionHandler
+from app.classes.yolo_handler import YoloHandler
+from app.classes.medsam_handler import MedSamHandler
+from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
 
 # Import logging utilities
-from utils.logging_config import log_model_loading, log_startup_complete
+from app.utils.logging_config import log_model_loading, log_startup_complete
 
 # Base model path
 MODEL_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
@@ -128,7 +128,7 @@ async def fourd_reconstruction_model_lifespan(app: FastAPI):
     global fourd_reconstruction_model
 
     # Get model name from environment variable with default fallback
-    model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "250.pth")
+    model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "fourd_model_epoch_250.pth")
 
     # Construct absolute path to model file
     model_path = os.path.join(MODEL_DIR, model_name)

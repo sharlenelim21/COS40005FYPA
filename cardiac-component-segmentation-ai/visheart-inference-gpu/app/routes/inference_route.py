@@ -1,44 +1,49 @@
 # In zz_gemini/app/routes/inference_route.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, HttpUrl, Field
+from pydantic import BaseModel, HttpUrl, Field, field_validator
 import os, asyncio, traceback
 from uuid import UUID
 from typing import (
-    Annotated,
     Dict,
     List,
     Any,
+    Literal,
 )  # Added Any for MedSamManualSynchronousError
+try:
+    from typing import Annotated
+except ImportError:
+    from typing_extensions import Annotated
 
 # Import handlers and dependencies
-from classes.file_fetch_handler import FileFetchHandler
-from classes.yolo_handler import YoloHandler
-from dependencies.model_init import get_yolo_model
-from classes.medsam_handler import MedSamHandler
-from dependencies.model_init import get_medsam_model
-from classes.fourdreconstruction_handler import FourDReconstructionHandler
-from dependencies.model_init import get_fourd_reconstruction_model
+from app.classes.file_fetch_handler import FileFetchHandler
+from app.classes.yolo_handler import YoloHandler
+from app.dependencies.model_init import get_yolo_model
+from app.classes.medsam_handler import MedSamHandler
+from app.dependencies.model_init import get_medsam_model
+from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
+from app.dependencies.model_init import get_fourd_reconstruction_model
 
 # Import the verification dependency and the payload model
-from security.backend_authentication import conditional_verify_jwt, TokenPayLoad
+from app.security.backend_authentication import conditional_verify_jwt, TokenPayLoad
 
 # Import inference jobs
-from helpers.inference_jobs import (
+from app.helpers.inference_jobs import (
     process_bbox_job_with_semaphore,
     process_medsam_job_with_semaphore,
     execute_medsam_manual_job_synchronously,
     process_fourd_reconstruction_job_with_semaphore,
+    process_unet_job_with_semaphore,
 )
 
-from helpers.inference_helpers import (
+from app.helpers.inference_helpers import (
     filter_detections,
     encode_and_name_masks,
     sort_medsam_results,
 )
 
 # Import the request and response models
-from classes.pydantic_schema import (
+from app.classes.pydantic_schema import (
     JobAcceptedResponse,
     SynchronousManualBboxRequest,
     MedSamManualSynchronousResult,  # Updated model
@@ -76,6 +81,26 @@ class JobRequest(BaseModel):
     )
     uuid: UUID = Field(..., description="Unique identifier for this job")
     callback_url: HttpUrl = Field(..., description="Callback URL for sending results")
+
+
+class UnetInferenceRequest(BaseModel):
+    url: HttpUrl = Field(..., description="Presigned URL for input NIfTI file")
+    uuid: UUID = Field(..., description="Unique identifier for this UNET inference request")
+    callback_url: HttpUrl = Field(..., description="Callback URL for sending results")
+    device: Literal["cpu", "cuda", "auto"] = Field(default="cpu", description="Compute device: cpu, cuda, or auto")
+    checkpoint_path: str | None = Field(default=None, description="Optional checkpoint override path")
+    segmentation_model: Literal["unet"] = Field(default="unet", description="Model tag used by webhook processing")
+
+    @field_validator('device')
+    @classmethod
+    def validate_device(cls, v: str) -> str:
+        """Validate device field contains only allowed values."""
+        allowed_devices = {"cpu", "cuda", "auto"}
+        if v not in allowed_devices:
+            raise ValueError(
+                f"Invalid device '{v}'. Must be one of: {', '.join(allowed_devices)}"
+            )
+        return v
 
 
 # Async /bbox-inference (remains the same)
@@ -128,6 +153,34 @@ async def queue_medsam_inference(
         )
     )
     print(f"[{request.uuid}] MedSAM task added.")
+    response_data = JobAcceptedResponse(uuid=request.uuid)
+    return response_data
+
+
+@router.post(
+    "/unet-inference",
+    status_code=202,
+    response_model=JobAcceptedResponse,
+    summary="Asynchronous UNET inference for NIfTI input",
+)
+async def unet_inference_async(
+    token_payload: Annotated[TokenPayLoad, Depends(conditional_verify_jwt)],
+    request: UnetInferenceRequest,
+    background_tasks: BackgroundTasks,
+):
+    client_id = token_payload.sub
+    print(f"Received UNET inference job {request.uuid} from client {client_id}")
+
+    background_tasks.add_task(
+        process_unet_job_with_semaphore,
+        input_url=request.url,
+        uuid=request.uuid,
+        callback_url=request.callback_url,
+        device=request.device,
+        checkpoint_path=request.checkpoint_path,
+    )
+
+    print(f"[{request.uuid}] UNET async task added.")
     response_data = JobAcceptedResponse(uuid=request.uuid)
     return response_data
 
