@@ -475,10 +475,11 @@ router.put("/save-manual-segmentation/:projectId",
     async (req: Request, res: Response) => {
         const { projectId } = req.params;
         const userId = req.user?._id;
-        const { name, description, frames: framesFromBody } = req.body as {
+        const { name, description, frames: framesFromBody, model } = req.body as {
             name?: string;
             description?: string;
             frames?: IProjectSegmentationMask['frames'];
+            model?: string;
         };
 
         logger.info(`${serviceLocation}: Received request to update manual segmentation for project ${projectId} by user ${userId}`);
@@ -533,6 +534,10 @@ router.put("/save-manual-segmentation/:projectId",
                 updatePayload.description = description;
             } else {
                 updatePayload.description = editableMask.description;
+            }
+
+            if (model !== undefined) {
+                updatePayload.model = model;
             }
 
             if (framesFromBody !== undefined) {
