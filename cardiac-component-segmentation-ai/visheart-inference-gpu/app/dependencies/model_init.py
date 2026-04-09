@@ -128,7 +128,7 @@ async def fourd_reconstruction_model_lifespan(app: FastAPI):
     global fourd_reconstruction_model
 
     # Get model name from environment variable with default fallback
-    model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "250.pth")
+    model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "fourd_model_epoch_250.pth")
 
     # Construct absolute path to model file
     model_path = os.path.join(MODEL_DIR, model_name)
