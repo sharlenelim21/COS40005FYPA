@@ -263,7 +263,7 @@ export interface IProjectSegmentationMask {
 // Segmentation Mask Model Interface (single segmentation mask document in the database)
 export interface IProjectSegmentationMaskDocument
   extends IProjectSegmentationMask,
-    Document {
+    Omit<Document, "model"> {
   _id: any; // Ensure _id is part of the document type
 }
 
