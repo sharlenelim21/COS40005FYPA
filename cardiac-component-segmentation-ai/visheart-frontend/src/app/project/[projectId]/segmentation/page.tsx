@@ -21,6 +21,16 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
+export type SegmentationModelId = "existing_model" | "model_2";
+
+const MODEL_OPTIONS: { value: SegmentationModelId; label: string }[] = [
+  { value: "existing_model", label: "Existing Model" },
+  { value: "model_2",        label: "Model 2"        },
+];
+
+const isValidModel = (v: string | null): v is SegmentationModelId =>
+  v === "existing_model" || v === "model_2";
+
 const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas").then((mod) => mod.ImageCanvas), {
   ssr: false,
   loading: () => (
@@ -34,7 +44,6 @@ export default function SegmentationResultsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
 
-  // Get data from ProjectContext (eliminates duplicate API calls and state)
   const {
     loading,
     error,
@@ -51,7 +60,6 @@ export default function SegmentationResultsPage() {
     getReconstructionGLB,
   } = useProject();
 
-  // Update page title dynamically
   useEffect(() => {
     if (projectData?.name) {
       document.title = `VisHeart | ${projectData.name} - Segmentation`;
@@ -64,18 +72,14 @@ export default function SegmentationResultsPage() {
     };
   }, [projectData?.name]);
 
-  // Segmentation-specific state (not duplicated in context)
   const [masksInitialized, setMasksInitialized] = useState(false);
   const [localDecodedMasks, setLocalDecodedMasks] = useState<Record<string, Uint8Array> | null>(null);
 
-  // Use local decoded masks if available (for edits), otherwise use context masks
   const decodedMasks = localDecodedMasks || contextDecodedMasks;
   const setDecodedMasks = setLocalDecodedMasks;
 
-  // After loading guard, we know contextDecodedMasks is available, so create a safe version
   const safeDecodedMasks = decodedMasks || {};
 
-  // Debug: Log mask data flow for troubleshooting (only in development)
   useEffect(() => {
     if (process.env.NODE_ENV === 'development') {
       console.log("[Segmentation Debug] Data flow check:", {
@@ -102,11 +106,43 @@ export default function SegmentationResultsPage() {
   const [resetTrigger, setResetTrigger] = useState<number>(0);
   const [revertDialogOpen, setRevertDialogOpen] = useState(false);
 
-  // 3D Viewer state
+  const modelSessionKey = `selectedModel_${projectId}`;
+
+  const [selectedModel, setSelectedModel] = useState<SegmentationModelId>(() => {
+    try {
+      const stored = sessionStorage.getItem(`selectedModel_${projectId}`);
+      if (isValidModel(stored)) return stored;
+    } catch {
+
+    }
+    return "existing_model";
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(modelSessionKey, selectedModel);
+    } catch {
+
+    }
+  }, [selectedModel, modelSessionKey]);
+
+  const handleModelChange = useCallback((value: SegmentationModelId) => {
+    setSelectedModel(value);
+  }, []);
+
+  const [model2DialogOpen, setModel2DialogOpen] = useState(false);
+
+  const handleModelSelect = useCallback((value: SegmentationModelId) => {
+    if (value === "model_2") {
+      setModel2DialogOpen(true);
+    } else {
+      setSelectedModel(value);
+    }
+  }, []);
+
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
 
-  // Load 3D reconstruction model when frame changes
   useEffect(() => {
     if (!hasReconstructions || !reconstructionCacheReady) {
       setReconstructionModelUrl(null);
@@ -136,13 +172,11 @@ export default function SegmentationResultsPage() {
     loadModel();
   }, [currentFrame, hasReconstructions, reconstructionCacheReady, getReconstructionGLB]);
 
-  // Reset zoom and position
   const handleReset = useCallback(() => {
     setZoomLevel(1);
     setResetTrigger(prev => prev + 1);
   }, []);
 
-  // Use custom history hook to simplify state management
   const {
     currentHistory,
     currentStep: currentHistoryStep,
@@ -163,17 +197,14 @@ export default function SegmentationResultsPage() {
 
   const [visibleMasks, setVisibleMasks] = useState<Set<AnatomicalLabel>>(new Set(["lvc", "rv", "myo"]));
 
-  // Memoize mask changes calculation using editable key format
   const calculateMaskChanges = useCallback(
     (oldMasks: Record<string, Uint8Array>, newMasks: Record<string, Uint8Array>, label: string): HistoryEntry["maskChanges"] => {
       const editableMaskKey = generateMaskKey(currentFrame, currentSlice, label as AnatomicalLabel);
       const oldMask = oldMasks[editableMaskKey];
       const newMask = newMasks[editableMaskKey];
 
-      // If newMask doesn't exist, no changes to track
       if (!newMask) return undefined;
 
-      // Treat missing oldMask as an empty mask (all zeros) to properly track initial drawing
       let added = 0;
       let removed = 0;
 
@@ -191,24 +222,20 @@ export default function SegmentationResultsPage() {
     [currentFrame, currentSlice],
   );
 
-  // Update Masks with History Tracking - Frame/Slice Specific
   const updateMasksWithHistory = useCallback(
     (newMasks: Record<string, Uint8Array>, actionType: HistoryEntry["type"] = "brush", description?: string) => {
       if (!decodedMasks) return;
 
       const maskChanges = calculateMaskChanges(decodedMasks, newMasks, activeLabel);
       
-      // CRITICAL: Snapshot the CURRENT state (before change) so undo can restore to it
-      // This allows undoing back to the initial empty state
       const newEntry = createHistoryEntry(
         actionType, 
         description || `${actionType} action on ${activeLabel.toUpperCase()}`, 
-        decodedMasks, // Capture state BEFORE change, not after!
+        decodedMasks,
         maskChanges, 
         activeLabel
       );
 
-      // Add to history using our custom hook
       addToHistory(newEntry);
 
       setDecodedMasks(newMasks);
@@ -219,28 +246,22 @@ export default function SegmentationResultsPage() {
     [decodedMasks, activeLabel, createHistoryEntry, addToHistory, calculateMaskChanges, setDecodedMasks],
   );
 
-  // Compute canvas dimensions based on project data
   const canvasDimensions = useMemo(() => {
-    // Define database dimensions (original stored values)
     const dbWidth = projectData?.dimensions?.width || 512;
     const dbHeight = projectData?.dimensions?.height || 512;
 
-    // Define canvas dimensions
     return {
       width: dbWidth,
       height: dbHeight,
     };
   }, [projectData?.dimensions]);
 
-  // Optimized function to restore masks from history entry
   const restoreMasksFromHistory = useCallback((entry: HistoryEntry | null) => {
     if (!entry || !entry.masksSnapshot || !decodedMasks) return;
 
-    // Only restore masks for current frame/slice
     const currentFrameSlicePrefix = `editable_frame_${currentFrame}_slice_${currentSlice}_`;
     const mergedMasks = { ...decodedMasks };
 
-    // Step 1: Remove current frame/slice masks that don't exist in snapshot (deleted masks)
     for (const key of Object.keys(mergedMasks)) {
       if (key.startsWith(currentFrameSlicePrefix) && !(key in entry.masksSnapshot)) {
         delete mergedMasks[key];
@@ -248,7 +269,6 @@ export default function SegmentationResultsPage() {
       }
     }
 
-    // Step 2: Add/update masks from snapshot
     for (const [key, maskData] of Object.entries(entry.masksSnapshot)) {
       if (key.startsWith(currentFrameSlicePrefix) && maskData) {
         try {
@@ -263,7 +283,6 @@ export default function SegmentationResultsPage() {
     setHasUnsavedChanges(true);
   }, [decodedMasks, currentFrame, currentSlice, setDecodedMasks]);
 
-  // Enhanced history step change handler that updates masks
   const handleHistoryStepChangeWithMasks = useCallback((step: number) => {
     console.log(`[Segmentation] Navigating to history step ${step}`);
     const entry = handleHistoryStepChange(step);
@@ -274,7 +293,6 @@ export default function SegmentationResultsPage() {
     return entry;
   }, [handleHistoryStepChange, restoreMasksFromHistory]);
 
-  // Undo Handler - uses custom hook
   const handleUndo = useCallback(() => {
     if (!canUndo || !decodedMasks) return;
     
@@ -284,7 +302,6 @@ export default function SegmentationResultsPage() {
     }
   }, [canUndo, decodedMasks, handleHistoryStepChangeWithMasks, currentHistoryStep]);
 
-  // Redo Handler - uses custom hook  
   const handleRedo = useCallback(() => {
     if (!canRedo || !decodedMasks) return;
     
@@ -292,7 +309,7 @@ export default function SegmentationResultsPage() {
     if (nextEntry) {
       console.log(`[Segmentation] Redo operation completed`);
     }
-  }, [canRedo, decodedMasks, handleHistoryStepChangeWithMasks, currentHistoryStep]);  // Clear Handler
+  }, [canRedo, decodedMasks, handleHistoryStepChangeWithMasks, currentHistoryStep]); 
   const handleClear = useCallback(() => {
     if (!decodedMasks) return;
 
@@ -305,24 +322,24 @@ export default function SegmentationResultsPage() {
     }
   }, [decodedMasks, currentFrame, currentSlice, activeLabel, updateMasksWithHistory]);
 
-  // History Checkpoint Handler - creates manual checkpoint
   const handleHistoryCheckpoint = useCallback(() => {
     if (!decodedMasks) return;
 
-    // Get the next checkpoint number for current frame/slice
     const existingCheckpoints = currentHistory.filter((entry) => entry.type === "checkpoint").length;
     const nextCheckpointNum = existingCheckpoints + 1;
 
     updateMasksWithHistory(decodedMasks, "checkpoint", `Manual checkpoint #${nextCheckpointNum} created`);
   }, [decodedMasks, currentHistory, updateMasksWithHistory]);
 
-  // Save Handler - only save editable masks with proper RLE encoding
   const handleSave = useCallback(async () => {
     if (!decodedMasks || !projectId || isSaving) return;
+    if (selectedModel === "model_2") {
+      setModel2DialogOpen(true);
+      return;
+    }
 
     setIsSaving(true);
     try {
-      // Filter only editable masks for saving
       const editableMasks = Object.entries(decodedMasks)
         .filter(([key]) => key.startsWith("editable_"))
         .reduce(
@@ -335,12 +352,10 @@ export default function SegmentationResultsPage() {
 
       console.log("[Segmentation] Saving editable masks:", Object.keys(editableMasks));
 
-      // Convert masks to the proper backend format with RLE encoding
       const frames = createFramesStructureFromEditableMasks(editableMasks);
 
       console.log("[Segmentation] Converted to backend frames format:", frames);
 
-      // Temporary: Test RLE encoding to verify it works
       if (frames.length > 0 && frames[0].slices && frames[0].slices.length > 0) {
         const firstMask = frames[0].slices[0].segmentationmasks?.[0];
         if (firstMask) {
@@ -353,17 +368,15 @@ export default function SegmentationResultsPage() {
         name: `Manual Segmentation - ${new Date().toISOString()}`,
         description: "Manually edited segmentation masks with RLE encoding",
         frames: frames,
+        model: selectedModel,
       });
 
       console.log("[Segmentation] Successfully saved masks to backend");
 
-      // Optimistic update - update context directly with current masks
-      // This eliminates the need for refreshMasks and prevents UI reload
       updateContextMasks(decodedMasks);
 
-      // Clear local changes state immediately
       setHasUnsavedChanges(false);
-      setLocalDecodedMasks(null); // Clear local edits since they're now saved in context
+      setLocalDecodedMasks(null); 
 
       console.log("[Segmentation] Successfully saved and updated context with optimistic approach");
     } catch (err) {
@@ -373,13 +386,11 @@ export default function SegmentationResultsPage() {
     }
   }, [decodedMasks, projectId, isSaving, updateContextMasks]);
 
-  // Revert to AI Handler - copies AI mask data to editable mask and saves
   const handleRevertToAI = useCallback(async () => {
     if (!projectId || isSaving || !undecodedMasks) return;
 
     setIsSaving(true);
     try {
-      // 1. Find AI mask and editable mask from context
       const aiMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === true);
       const editableMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === false);
 
@@ -395,16 +406,14 @@ export default function SegmentationResultsPage() {
         frameCount: aiMask.frames?.length || 0,
       });
 
-      // 2. Copy AI mask's frames to editable mask using existing save API
       const revertData = {
-        frames: aiMask.frames, // Full frame array with slices and RLE data
+        frames: aiMask.frames, 
       };
 
       await segmentationApi.saveManualSegmentation(projectId, revertData);
 
       console.log("[Segmentation] ✅ Successfully reverted to AI mask");
 
-      // 3. Reload window to refresh all mask data
       setTimeout(() => {
         window.location.reload();
       }, 500);
@@ -416,14 +425,11 @@ export default function SegmentationResultsPage() {
     }
   }, [projectId, isSaving, undecodedMasks]);
 
-  // Keyboard shortcuts handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Ctrl+S to save
       if (event.ctrlKey && event.key === 's') {
-        event.preventDefault(); // Prevent browser's default save dialog
+        event.preventDefault(); 
         
-        // Only save if there are unsaved changes and not currently saving
         if (hasUnsavedChanges && !isSaving) {
           console.log('[Segmentation] Ctrl+S shortcut triggered - saving changes...');
           handleSave();
@@ -431,23 +437,18 @@ export default function SegmentationResultsPage() {
       }
     };
 
-    // Add event listener
     window.addEventListener('keydown', handleKeyDown);
 
-    // Cleanup on unmount
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [hasUnsavedChanges, isSaving, handleSave]);
 
-  // Export history timeline handler
   const handleHistoryExport = useCallback(() => {
     console.log("Export triggered from page level");
   }, []);
 
-  // Initialize history when masks become available from context - ONLY ONCE
   useEffect(() => {
-    // Only initialize history if we have masks from context and haven't initialized yet
     if (contextDecodedMasks && !masksInitialized) {
       console.log("[Segmentation] Initializing history with context masks");
       initializeHistory(contextDecodedMasks);
@@ -455,7 +456,6 @@ export default function SegmentationResultsPage() {
     }
   }, [contextDecodedMasks, masksInitialized, initializeHistory]);
 
-  // Auto-initialize history for new frame/slice combinations
   useEffect(() => {
     if (masksInitialized && decodedMasks) {
       console.log(`[Segmentation] Auto-initializing history for new frame/slice if needed`);
@@ -463,24 +463,77 @@ export default function SegmentationResultsPage() {
     }
   }, [currentFrame, currentSlice, masksInitialized, decodedMasks, initializeHistory]);
 
-  // Loading states - now much simpler since ProjectContext handles main data loading
   if (!projectId) return <ErrorProject error="Project ID is missing." />;
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error) return <ErrorProject error={error} />;
   if (segmentationError && !hasMasks) return <ErrorProject error={segmentationError} />;
-
-  // Don't show error if we're currently saving (refreshing masks) - show loading instead
   if (!projectData || (!contextDecodedMasks && !isSaving)) {
     return <ErrorProject error="No data available" />;
   }
-
-  // Show loading state while saving/refreshing masks
   if (isSaving && !contextDecodedMasks) {
     return <LoadingProject loadingStage="mask" />;
   }
 
   return (
-    <div className="h-full w-full bg-background">
+    <div className="h-full w-full bg-background flex flex-col">
+
+      {/* AI Model Selector Bar */}
+      <div className="flex items-center gap-3 px-4 py-2 border-b bg-background shrink-0 flex-wrap">
+        {/* Icon + label */}
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75a6 6 0 1 1 4.5 11.25M9.75 3.75A6 6 0 0 0 3.75 9.75M9.75 3.75 3.75 9.75m10.5 0a6 6 0 0 1-4.5 11.25M14.25 9.75A6 6 0 0 1 20.25 15" />
+            </svg>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground leading-none">AI Model</p>
+            <p className="text-xs font-medium text-foreground leading-tight mt-0.5">Select segmentation model</p>
+          </div>
+        </div>
+
+        {/* Dropdown */}
+        <div className="relative">
+          <select
+            value={selectedModel}
+            onChange={(e) => handleModelSelect(e.target.value as SegmentationModelId)}
+            className="text-sm border border-border rounded-md pl-3 pr-8 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-ring cursor-pointer appearance-none min-w-[160px]"
+          >
+            {MODEL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          {/* chevron */}
+          <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+            <svg className="h-3.5 w-3.5 text-muted-foreground" fill="none" viewBox="0 0 10 10" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2 3.5 5 6.5l3-3" />
+            </svg>
+          </div>
+        </div>
+
+        {/* Status badge */}
+        {selectedModel === "existing_model" ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
+            Ready to segment
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 inline-block" />
+            Sprint 2 — UI only
+          </span>
+        )}
+
+        {/* Confirmation text */}
+        <span className="text-xs text-muted-foreground">
+          Using: <strong className="text-foreground font-medium">
+            {MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label}
+          </strong>
+        </span>
+      </div>
+
+      {/* Main segmentation layout */}
+      <div className="flex-1 min-h-0 overflow-hidden">
       {/* Mobile: Stack vertically */}
       <div className="lg:hidden w-full h-full p-4 flex flex-col gap-4">
         <div className="flex-1 relative bg-muted/40 rounded-xl border shadow-sm p-4 flex items-center justify-center overflow-hidden">
@@ -502,6 +555,7 @@ export default function SegmentationResultsPage() {
             zoomLevel={zoomLevel}
             setZoomLevel={setZoomLevel}
             resetTrigger={resetTrigger}
+            selectedModel={selectedModel}
           />
         </div>
         
@@ -541,6 +595,8 @@ export default function SegmentationResultsPage() {
             zoomLevel={zoomLevel}
             setZoomLevel={setZoomLevel}
             onReset={handleReset}
+            selectedModel={selectedModel}
+            onModelChange={handleModelSelect}
           />
         </div>
       </div>
@@ -554,35 +610,35 @@ export default function SegmentationResultsPage() {
           {/* Canvas Panel with horizontal split for 3D viewer */}
           <ResizablePanel defaultSize={70} minSize={20}>
             <ResizablePanelGroup direction="horizontal">
-              {/* 3D Viewer (Left) - Only show if reconstructions exist */}
-              {hasReconstructions && (
-                <>
-                  <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
-                    <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
-                      <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                        <h3 className="text-sm font-semibold">3D Reconstruction of Left Ventricle Myocardium</h3>
-                        {isLoadingModel && (
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Loading model...
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-h-0 max-h-full">
-                        <ReconstructionGLBViewer
-                          modelUrl={reconstructionModelUrl}
-                          frame={currentFrame+1} // 1-based index for user friendliness
-                          className="w-full h-full"
-                        />
-                      </div>
+              {/* 3D Viewer (Left)*/}
+              <>
+                <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
+                  <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
+                    <div className="flex items-center justify-between mb-2 flex-shrink-0">
+                      <h3 className="text-sm font-semibold">3D Reconstruction of Left Ventricle Myocardium</h3>
+                      {isLoadingModel && (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Loading model...
+                        </div>
+                      )}
                     </div>
-                  </ResizablePanel>
-                  <ResizableHandle withHandle />
-                </>
-              )}
+
+                    <div className="flex-1 min-h-0 max-h-full">
+                      <ReconstructionGLBViewer
+                        modelUrl={reconstructionModelUrl}
+                        frame={currentFrame + 1}
+                        className="w-full h-full"
+                      />
+                    </div>
+                  </div>
+                </ResizablePanel>
+
+                <ResizableHandle withHandle />
+              </>
 
               {/* 2D Canvas (Right) */}
-              <ResizablePanel defaultSize={hasReconstructions ? 65 : 100} minSize={0}>
+              <ResizablePanel defaultSize={65}>
                 <div className="w-full relative bg-muted/40 p-4 flex items-center justify-center" style={{ height: 'calc(100vh - 120px)' }}>
                   <ImageCanvas
                     projectData={projectData}
@@ -602,6 +658,7 @@ export default function SegmentationResultsPage() {
                     zoomLevel={zoomLevel}
                     setZoomLevel={setZoomLevel}
                     resetTrigger={resetTrigger}
+                    selectedModel={selectedModel}
                   />
                 </div>
               </ResizablePanel>
@@ -649,11 +706,67 @@ export default function SegmentationResultsPage() {
                 zoomLevel={zoomLevel}
                 setZoomLevel={setZoomLevel}
                 onReset={handleReset}
+                selectedModel={selectedModel}
+                onModelChange={handleModelSelect}
               />
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
+
+      {/* Model 2 Acknowledgement Dialog */}
+      <AlertDialog open={model2DialogOpen} onOpenChange={setModel2DialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 2.5v7M8 12v1" />
+                </svg>
+              </span>
+              Model 2 — Sprint 1 Limitation
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p>
+                Model 2 will only show acknowledgement in Sprint 1.{" "}
+                <strong>No segmentation API call will be made yet.</strong>
+              </p>
+              <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3">
+                <p className="text-sm text-amber-900 dark:text-amber-100">
+                  Full backend integration for Model 2 is scheduled for Sprint 2.
+                  You can still select it and your choice will be saved for when
+                  the integration is complete.
+                </p>
+              </div>
+              <div className="rounded-lg bg-muted p-3 font-mono text-xs space-y-0.5">
+                <p className="text-muted-foreground">{"// Request payload (Sprint 2)"}</p>
+                <p>{"{ "}<span className="text-blue-600 dark:text-blue-400">"model"</span>{": "}<span className="text-green-600 dark:text-green-400">"model_2"</span>{" }"}</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                if (selectedModel !== "model_2") {
+                  // already on existing_model
+                }
+                setModel2DialogOpen(false);
+              }}
+            >
+              Switch back to Existing Model
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setSelectedModel("model_2");
+                setModel2DialogOpen(false);
+              }}
+              className="bg-amber-600 text-white hover:bg-amber-700"
+            >
+              Understood, keep Model 2
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Revert to AI Confirmation Dialog */}
       <AlertDialog open={revertDialogOpen} onOpenChange={setRevertDialogOpen}>
@@ -694,6 +807,8 @@ export default function SegmentationResultsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      </div>
     </div>
   );
 }

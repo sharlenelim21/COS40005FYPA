@@ -232,6 +232,7 @@ export interface IProjectSegmentationMask {
   // User inputs
   name: string; // Name of the segmentation mask
   description?: string; // Description of the segmentation mask
+  model?: string; // Segmentation model used (e.g., 'existing_model', 'model_2')
   isSaved: boolean; // Indicates if the segmentation mask is saved in the database
   segmentationmaskRLE: boolean; // Indicates if the mask is in RLE format
   isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (kept for backward compatibility)

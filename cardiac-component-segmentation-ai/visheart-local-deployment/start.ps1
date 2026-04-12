@@ -74,12 +74,34 @@ if ($needsHostsUpdate) {
 }
 Write-Host ""
 
-# Start services
-Write-Host "Starting VisHeart services..." -ForegroundColor Yellow
-Write-Host "This may take a few minutes on first run..." -ForegroundColor Gray
+# Detect Nvidia GPU automatically
+Write-Host "Detecting hardware capabilities..." -ForegroundColor Yellow
+$env:COMPOSE_PROFILES = "cpu"
+$gpuDetected = $false
+try {
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        $nvidiaInfo = & nvidia-smi 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $env:COMPOSE_PROFILES = "gpu"
+            $gpuDetected = $true
+        }
+    }
+} catch {}
+
+if ($gpuDetected) {
+    Write-Host "OK: NVIDIA GPU Detected! Utilizing 'gpu' profile." -ForegroundColor Green
+} else {
+    Write-Host "INFO: No compatible NVIDIA GPU found. Falling back to 'cpu' profile." -ForegroundColor Cyan
+}
 Write-Host ""
 
-docker-compose up -d
+# Start services
+Write-Host "Starting VisHeart services..." -ForegroundColor Yellow
+Write-Host "This may take a few minutes on first run..." -ForegroundColor Gray  
+Write-Host ""
+
+# Provide the profile dynamically via the COMPOSE_PROFILES env var
+docker-compose --profile $env:COMPOSE_PROFILES up -d
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
