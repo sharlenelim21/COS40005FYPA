@@ -1,6 +1,6 @@
 import { Request, Response, Router } from "express";
 import logger from "../services/logger";
-import { startInference } from "../services/inference";
+import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import {
     readProjectSegmentationMask,
@@ -14,7 +14,7 @@ import {
 } from "../services/database";
 import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
 import LogError from "../utils/error_logger";
-import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument } from "../types/database_types";
+import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument, SegmentationModel } from "../types/database_types";
 import fs from 'fs-extra'; // Use fs-extra for easier directory handling and tar extraction
 import path from 'path';
 import { exec } from 'child_process';
@@ -26,6 +26,19 @@ import { getFreshGPUServerAddress } from "../services/gpu_auth_client"; // Impor
 
 const router = Router();
 const serviceLocation = "SegmentationRoutes";
+
+const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
+    const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
+    if (useLocalhost) {
+        return (process.env.MEDSAM_LOCAL_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+    }
+
+    const remoteBaseUrl = await getFreshGPUServerAddress();
+    return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
+};
+
+const toSingleString = (value: string | string[] | undefined): string | undefined =>
+    Array.isArray(value) ? value[0] : value;
 
 interface GpuManualInferenceResponse {
     uuid: string;
@@ -47,15 +60,47 @@ router.post("/start-segmentation/:projectId",
     isAuth,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
-        const { projectId } = req.params;
+        const projectId = toSingleString(req.params.projectId);
+        if (!projectId) {
+            return res.status(400).json({ message: "Project ID is required." });
+        }
+
+        const segmentationModel = req.body?.segmentationModel || SegmentationModel.MEDSAM;
+        // DEVELOPER NOTE: deviceType parameter is optional and only used by the UNET API inference path.
+        // Supported values: "cpu" (default), "cuda" (for NVIDIA GPU), or "auto" (automatic selection).
+        // For MEDSAM (Cloud GPU), this parameter is ignored.
+        const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : undefined;
         logger.info(`${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}`);
+
         try {
+            if (segmentationModel === SegmentationModel.UNET) {
+                // DEVELOPER NOTE: UNET API inference path
+                // - Uses FastAPI endpoint on the GPU inference service
+                // - Shares remote API architecture style with MedSAM
+                // - Uses gpuAuthToken for backend-to-GPU authentication
+                const resultFromApi = await startModel2Inference(projectId, req.user, res.locals.gpuAuthToken, {
+                    deviceType: modelDevice as "cpu" | "cuda" | "auto" | undefined,
+                });
+                if (resultFromApi.success) {
+                    return res.status(200).json({ message: resultFromApi.message, uuid: resultFromApi.uuid });
+                }
+                return res.status(500).json({ message: resultFromApi.message });
+            }
+
+            if (segmentationModel !== SegmentationModel.MEDSAM) {
+                return res.status(400).json({ error: "Unknown segmentation model" });
+            }
+
+            // DEVELOPER NOTE: MEDSAM remote Cloud GPU inference path (original implementation, unchanged)
+            // - Sends inference request to remote Cloud GPU server
+            // - Requires valid gpuAuthToken (injected by injectGpuAuthToken middleware)
+            // - Callback URL is used by GPU server to post results back
+            // - deviceType parameter is ignored for MEDSAM (GPU type is managed by remote server)
             const result = await startInference(projectId, req.user, res.locals.gpuAuthToken);
             if (result.success) {
-                res.status(200).json({ message: result.message, uuid: result.uuid });
-            } else {
-                res.status(500).json({ message: result.message });
+                return res.status(200).json({ message: result.message, uuid: result.uuid });
             }
+            return res.status(500).json({ message: result.message });
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, "Error starting inference");
             if (!res.headersSent) {
@@ -65,7 +110,7 @@ router.post("/start-segmentation/:projectId",
     });
 
 router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res: Response) => {
-    const { projectId } = req.params;
+    const projectId = toSingleString(req.params.projectId);
 
     if (!projectId) {
         logger.warn(`${serviceLocation}: Project ID is required to fetch segmentation masks.`);
@@ -102,7 +147,10 @@ router.post("/start-manual-segmentation/:projectId",
     isAuth,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
-        const { projectId } = req.params;
+        const projectId = toSingleString(req.params.projectId);
+        if (!projectId) {
+            return res.status(400).json({ success: false, message: "Project ID is required." });
+        }
         const userId = req.user?._id;
         const {
             image_name,
@@ -158,14 +206,13 @@ router.post("/start-manual-segmentation/:projectId",
 
             const gpuRequestId = uuidv4();
 
-            // Get fresh GPU server configuration from database
-            const gpuServerAddress = await getFreshGPUServerAddress();
-            if (!gpuServerAddress) {
-                logger.error(`${serviceLocation}: GPU server configuration is not available.`);
-                return res.status(500).json({ success: false, message: "Server configuration error: GPU server details missing." });
+            const medsamBaseUrl = await resolveMedsamServerBaseUrl();
+            if (!medsamBaseUrl) {
+                logger.error(`${serviceLocation}: MedSAM server URL could not be resolved from local/remote configuration.`);
+                return res.status(500).json({ success: false, message: "Server configuration error: MedSAM server details missing." });
             }
 
-            const gpuServerUrl = `${gpuServerAddress}/inference/v2/medsam-inference-manual`;
+            const gpuServerUrl = `${medsamBaseUrl}/inference/v2/medsam-inference-manual`;
             logger.info(`${serviceLocation}: Sending request to GPU server ${gpuServerUrl} for image ${image_name} with UUID ${gpuRequestId}.`);
             const gpuServerPayload = { url: presignedUrl, uuid: gpuRequestId, image_name: image_name, bbox: bbox };
 
@@ -473,7 +520,7 @@ function mergeFramesData(
 router.put("/save-manual-segmentation/:projectId",
     isAuthAndNotGuest,
     async (req: Request, res: Response) => {
-        const { projectId } = req.params;
+        const projectId = toSingleString(req.params.projectId);
         const userId = req.user?._id;
         const { name, description, frames: framesFromBody, model } = req.body as {
             name?: string;
@@ -594,7 +641,7 @@ router.put("/save-manual-segmentation/:projectId",
 
 // Route to export project data as a NIfTI segmentation mask
 router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: Response) => {
-    const { projectId } = req.params;
+    const projectId = toSingleString(req.params.projectId);
     const userId = req.user?._id;
     const serviceLocationExport = `${serviceLocation}/exportProjectDataNifti`;
     const tempExportId = uuidv4();
@@ -841,7 +888,7 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
             });
         }
 
-        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => (p._id as string).toString());
+        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => String(p._id));
         const unauthorizedProjects = projectIds.filter((id: string) => !userProjectIds.includes(id));
 
         if (unauthorizedProjects.length > 0) {
