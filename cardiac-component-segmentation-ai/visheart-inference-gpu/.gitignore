@@ -16,3 +16,4 @@ venv/
 # personal testing
 test.ts
 *.test.local.ts
+mamba-unet-env/
