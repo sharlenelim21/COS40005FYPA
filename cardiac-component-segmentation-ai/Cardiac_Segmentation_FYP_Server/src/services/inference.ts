@@ -263,7 +263,7 @@ const sendUnetInferenceRequestToApi = async (
                 uuid: inferenceData.uuid,
                 callback_url: inferenceData.callbackUrl,
                 segmentation_model: inferenceData.segmentationModel,
-                device: inferenceData.device || "cpu",
+                device: inferenceData.device || "auto",
                 checkpoint_path: inferenceData.checkpointPath,
             },
             {
