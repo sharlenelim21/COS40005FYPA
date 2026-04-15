@@ -185,6 +185,7 @@ services:
               capabilities: [gpu]
     environment:
       USE_GPU: "true" # Set to "true" if GPU is available
+      UNET_INFERENCE_SCRIPT_PATH: /app/app/compat_unet_inference.py
       JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
       YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
       MEDSAM_MODEL_NAME: medsam_vit_b.pth
@@ -196,6 +197,8 @@ services:
       GPU_SEMAPHORE_COUNT: 3
       RECONSTRUCTION_USE_FIXED_SEED: "true"
       RECONSTRUCTION_RANDOM_SEED: "42"
+    volumes:
+      - ../Cardiac_Segmentation_FYP_Server/src/python/unet_inference.py:/app/app/compat_unet_inference.py:ro
     networks:
       - visheart-network
 
