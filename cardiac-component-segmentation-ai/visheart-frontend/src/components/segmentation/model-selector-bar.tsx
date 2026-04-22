@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export type SegmentationModelId = "existing_model" | "model_2";
+export type SegmentationModelId = "medsam" | "unet";
 
 interface ModelSelectorBarProps {
   selectedModel: SegmentationModelId;
@@ -19,15 +19,15 @@ interface ModelSelectorBarProps {
 }
 
 const MODEL_LABELS: Record<SegmentationModelId, string> = {
-  existing_model: "Existing Model",
-  model_2: "Model 2",
+  medsam: "Existing Model",
+  unet: "Model 2",
 };
 
 export function ModelSelectorBar({
   selectedModel,
   onModelChange,
 }: ModelSelectorBarProps) {
-  const isExistingModel = selectedModel === "existing_model";
+  const isExistingModel = selectedModel === "medsam";
 
   return (
     <div className="w-full mb-4 rounded-lg border bg-background shadow-sm overflow-hidden">
@@ -53,12 +53,12 @@ export function ModelSelectorBar({
               onChange={(e) => onModelChange(e.target.value as any)}
               className="text-sm border rounded px-2 py-1"
             >
-              <option value="existing_model">Existing Model</option>
-              <option value="model_2">Model 2</option>
+              <option value="medsam">Existing Model</option>
+              <option value="unet">Model 2</option>
             </select>
 
             <div className="text-xs text-muted-foreground mt-1">
-              Model used: {selectedModel === "model_2" ? "Model 2" : "Existing Model"}
+              Model used: {selectedModel === "unet" ? "Model 2" : "Existing Model"}
             </div>
           </div>
         </div>

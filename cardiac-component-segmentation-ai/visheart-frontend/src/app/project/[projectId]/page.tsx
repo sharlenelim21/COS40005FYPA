@@ -341,7 +341,16 @@ export default function ProjectPage() {
     setSegmentationError(null);
 
     try {
-      await segmentationApi.startSegmentation(projectId);
+      // Get the last selected model from sessionStorage
+      const storedModel =
+        typeof window !== "undefined"
+          ? (sessionStorage.getItem(`selectedModel_${projectId}`) as "medsam" | "unet" | null)
+          : null;
+
+      await segmentationApi.startSegmentation(
+        projectId,
+        storedModel ?? "medsam"
+      );
       
       // Wait a moment for the backend to create the job, then refresh
       await new Promise(resolve => setTimeout(resolve, 1000));
