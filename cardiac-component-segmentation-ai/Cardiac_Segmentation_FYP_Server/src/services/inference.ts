@@ -22,13 +22,37 @@ const serviceLocation = "Inference";
  * Set MEDSAM_USE_LOCALHOST="false" to use database-configured remote GPU host.
  */
 const resolveMedsamBaseUrl = async (): Promise<string | null> => {
-    const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
-    if (useLocalhost) {
-        return (process.env.MEDSAM_LOCAL_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
-    }
+  logger.warn("[Inference Debug] Env snapshot", {
+    GPU_API_URL: process.env.GPU_API_URL,
+    MEDSAM_USE_LOCALHOST: process.env.MEDSAM_USE_LOCALHOST,
+    MEDSAM_LOCAL_BASE_URL: process.env.MEDSAM_LOCAL_BASE_URL,
+    GPU_SERVER_URL: process.env.GPU_SERVER_URL,
+    GPU_SERVER_PORT: process.env.GPU_SERVER_PORT,
+    CALLBACK_URL: process.env.CALLBACK_URL,
+  });
 
-    const remoteBaseUrl = await getFreshGPUServerAddress();
-    return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
+  const directGpuApiUrl = process.env.GPU_API_URL?.replace(/\/$/, "");
+  if (directGpuApiUrl) {
+    logger.warn(`[Inference Debug] Using GPU_API_URL: ${directGpuApiUrl}`);
+    return directGpuApiUrl;
+  }
+
+  const useLocalhost =
+    (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
+
+  if (useLocalhost) {
+    const localUrl = (
+      process.env.MEDSAM_LOCAL_BASE_URL ||
+      `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8000"}`
+    ).replace(/\/$/, "");
+
+    logger.warn(`[Inference Debug] Using localhost-style URL: ${localUrl}`);
+    return localUrl;
+  }
+
+  const remoteBaseUrl = await getFreshGPUServerAddress();
+  logger.warn(`[Inference Debug] Using remote GPU URL: ${remoteBaseUrl}`);
+  return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
 };
 
 // Interface for the expected GPU response for direct manual segmentation
@@ -71,7 +95,8 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
     }
 
     const inferenceEndpoint = `${medsamBaseUrl}/inference/v2/medsam-inference`;
-
+    logger.warn(`[Inference Debug] Final endpoint = ${inferenceEndpoint}`);
+    
     try {
         const response = await axios.post(inferenceEndpoint, inferenceData, {
             headers: {
@@ -178,7 +203,10 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         }
 
         const dataUrlForGpu = await generatePresignedGetUrl(s3BucketName, objectKeyForTar);
-
+        logger.error("[MedSAM Debug] s3BucketName =", s3BucketName);
+        logger.error("[MedSAM Debug] extractedfolderpath =", s3HttpsUrlForTar);
+        logger.error("[MedSAM Debug] objectKeyForTar =", objectKeyForTar);
+                
         if (!dataUrlForGpu) {
             logger.error(`${serviceLocation}: Failed to generate presigned S3 URL for project ${projectId}, TAR S3 Key: ${objectKeyForTar}`);
             return { success: false, message: "Failed to prepare TAR file URL for inference." };
@@ -255,6 +283,8 @@ const sendUnetInferenceRequestToApi = async (
     }
 
     const endpoint = `${unetBaseUrl}/inference/v2/unet-inference`;
+    logger.warn(`[Inference Debug] Final UNET endpoint = ${endpoint}`);
+
     try {
         const response = await axios.post<UnetApiResponse>(
             endpoint,
@@ -370,6 +400,8 @@ export async function startModel2Inference(
         }
 
         const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
+        logger.error("[MedSAM Debug] dataUrlForGpu =", dataUrlForGpu);
+        
         if (!niftiPresignedUrl) {
             logger.error(`${serviceLocation}: Failed to generate presigned NIfTI URL for UNET inference on project ${projectId}.`);
             return { success: false, message: "Failed to prepare NIfTI URL for UNET inference." };

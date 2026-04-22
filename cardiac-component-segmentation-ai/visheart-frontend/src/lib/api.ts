@@ -251,15 +251,21 @@ export const projectApi = {
 // Segmentation functions
 export const segmentationApi = {
   // Start segmentation for a project
-  startSegmentation: async (projectId: string) => {
-    try {
-      const response = await api.post(
-        `/segmentation/start-segmentation/${projectId}`,
-      );
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+  startSegmentation: async (
+    projectId: string,
+    segmentationModel: "medsam" | "unet" = "medsam"
+  ) => {
+    console.log("[API] startSegmentation request:", {
+      projectId,
+      segmentationModel,
+    });
+
+    const response = await api.post(
+      `/segmentation/start-segmentation/${projectId}`,
+      { segmentationModel }
+    );
+
+    return response.data;
   },
 
   // Get segmentation results for a project

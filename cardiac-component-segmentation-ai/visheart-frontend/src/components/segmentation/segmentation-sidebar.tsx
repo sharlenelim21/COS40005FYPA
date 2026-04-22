@@ -437,7 +437,7 @@ export function SegmentationSidebar({
   zoomLevel,
   setZoomLevel,
   onReset,
-  selectedModel = "existing_model",
+  selectedModel = "medsam",
   onModelChange,
 }: SegmentationSidebarProps & {
   selectedModel?: SegmentationModelId;
@@ -489,9 +489,9 @@ export function SegmentationSidebar({
         <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] text-muted-foreground">Model:</span>
         <span className="text-[11px] font-semibold text-foreground truncate">
-          {selectedModel === "existing_model" ? "Existing Model" : "Model 2"}
+          {selectedModel === "medsam" ? "MedSam" : "Unet"}
         </span>
-        {selectedModel === "existing_model" ? (
+        {selectedModel === "medsam" ? (
           <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 shrink-0">
             <span className="h-1 w-1 rounded-full bg-green-500 inline-block" />
             Active

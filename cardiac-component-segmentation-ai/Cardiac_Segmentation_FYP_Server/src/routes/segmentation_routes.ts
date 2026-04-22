@@ -60,6 +60,7 @@ router.post("/start-segmentation/:projectId",
     isAuth,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
+        console.log("=== LOCAL BACKEND HIT /start-segmentation ===");
         const projectId = toSingleString(req.params.projectId);
         if (!projectId) {
             return res.status(400).json({ message: "Project ID is required." });
@@ -567,7 +568,7 @@ router.put("/save-manual-segmentation/:projectId",
 
             logger.info(`${serviceLocation}: Found editable segmentation mask with ID ${editableMask._id} for project ${projectId}.`);
 
-            const updatePayload: Partial<IProjectSegmentationMaskDocument> = {
+            const updatePayload: Partial<IProjectSegmentationMask> & { model?: string } = {
                 isSaved: true,
             };
 
@@ -598,7 +599,10 @@ router.put("/save-manual-segmentation/:projectId",
                 updatePayload.frames = editableMask.frames;
             }
 
-            const segmentationDbUpdateResult = await updateProjectSegmentationMask(editableMask._id.toString(), updatePayload);
+            const segmentationDbUpdateResult = await updateProjectSegmentationMask(
+                editableMask._id.toString(),
+                updatePayload as Partial<IProjectSegmentationMaskDocument>
+            );
 
             if (!segmentationDbUpdateResult.success || !segmentationDbUpdateResult.projectsegmentationmask) {
                 logger.error(`${serviceLocation}: Failed to update manual segmentation mask ${editableMask._id} in database. Message: ${segmentationDbUpdateResult.message}`);
