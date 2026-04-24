@@ -12,14 +12,14 @@ FROM base AS frontend-builder
 WORKDIR /app/frontend
 
 # Copy frontend package files
-COPY ../visheart-frontend/package.json ./
-COPY ../visheart-frontend/pnpm-lock.yaml ./
+COPY visheart-frontend/package.json ./
+COPY visheart-frontend/pnpm-lock.yaml ./
 
 # Install dependencies
 RUN pnpm install --no-frozen-lockfile
 
 # Copy frontend source
-COPY ../visheart-frontend/ ./
+COPY visheart-frontend/ ./
 
 # Set environment variables for LOCAL build
 ENV NEXT_PUBLIC_API_URL=http://localhost:5000
@@ -36,14 +36,14 @@ FROM base AS backend-builder
 WORKDIR /app/backend
 
 # Copy backend package files
-COPY ../Cardiac_Segmentation_FYP_Server/package.json ./
-COPY ../Cardiac_Segmentation_FYP_Server/pnpm-lock.yaml ./
+COPY Cardiac_Segmentation_FYP_Server/package.json ./
+COPY Cardiac_Segmentation_FYP_Server/pnpm-lock.yaml ./
 
 # Install dependencies
 RUN pnpm install --no-frozen-lockfile
 
 # Copy backend source
-COPY ../Cardiac_Segmentation_FYP_Server/ ./
+COPY Cardiac_Segmentation_FYP_Server/ ./
 
 # Build backend
 RUN pnpm run build
@@ -86,12 +86,12 @@ COPY --from=backend-builder /app/backend/public ./backend/public
 # ============================================
 # Frontend dependencies
 WORKDIR /app/frontend
-COPY ../visheart-frontend/pnpm-lock.yaml ./
+COPY visheart-frontend/pnpm-lock.yaml ./
 RUN pnpm install --prod --no-frozen-lockfile --shamefully-hoist
 
 # Backend dependencies
 WORKDIR /app/backend
-COPY ../Cardiac_Segmentation_FYP_Server/pnpm-lock.yaml ./
+COPY Cardiac_Segmentation_FYP_Server/pnpm-lock.yaml ./
 RUN pnpm install --prod --no-frozen-lockfile --shamefully-hoist
 
 # Install Python requirements in final image
