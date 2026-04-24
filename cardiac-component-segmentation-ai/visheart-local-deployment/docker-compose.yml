@@ -20,7 +20,10 @@ services:
   # Frontend (Next.js) + Backend (Node.js)
   # ============================================
   visheart-app:
-    image: jesmineting/visheart-local:1.0.0
+    image: visheart-local:dev
+    build:
+      context: ..
+      dockerfile: visheart-local-deployment/Dockerfile
     container_name: visheart-local
     restart: unless-stopped
     ports:
