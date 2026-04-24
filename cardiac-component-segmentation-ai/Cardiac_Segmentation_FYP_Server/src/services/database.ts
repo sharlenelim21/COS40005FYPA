@@ -5,6 +5,7 @@ import path from "path";
 import dotenv from "dotenv";
 import logger from "./logger";
 import * as bcrypt from "bcrypt";
+import { loadEnvFromKnownLocations } from "../utils/env";
 
 // Import utility functions
 import LogError from "../utils/error_logger"; // Import the error logging utility
@@ -20,7 +21,7 @@ import { IGPUHost, IGPUHostDocument, GPUHostCrudResult } from "../types/database
 // Load environment variables from .env file
 try {
   // override: true allows to override cached environment variables
-  dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
+  loadEnvFromKnownLocations(__dirname);
 } catch (error: unknown) {
   LogError(error as Error, serviceLocation, "Error loading .env file.");
 };
@@ -1999,7 +2000,7 @@ const seedGPUHost = async (): Promise<void> => {
     // Create a new GPU host configuration with default values
     const newGpuHostConfig: IGPUHost = {
       host: process.env.GPU_SERVER_URL || 'localhost',
-      port: parseInt(process.env.GPU_SERVER_PORT || '8000', 10),
+      port: parseInt(process.env.GPU_SERVER_PORT || '8001', 10),
       isHTTPS: process.env.GPU_SERVER_SSL === 'true',
       gpuServerAuthJwtSecret: process.env.GPU_SERVER_AUTH_JWT_SECRET || 'change-this',
       serverIdForGpuServer: process.env.GPU_SERVER_ID_FOR_GPU_SERVER || 'default-server-id',

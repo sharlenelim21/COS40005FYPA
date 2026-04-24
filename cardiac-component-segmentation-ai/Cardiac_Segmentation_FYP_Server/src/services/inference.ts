@@ -17,7 +17,7 @@ const serviceLocation = "Inference";
  *
  * Default behavior is local-first to reduce cloud GPU cost:
  * - MEDSAM_USE_LOCALHOST is "true" by default
- * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8000
+ * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8001
  *
  * Set MEDSAM_USE_LOCALHOST="false" to use database-configured remote GPU host.
  */
@@ -43,7 +43,7 @@ const resolveMedsamBaseUrl = async (): Promise<string | null> => {
   if (useLocalhost) {
     const localUrl = (
       process.env.MEDSAM_LOCAL_BASE_URL ||
-      `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8000"}`
+      `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
     ).replace(/\/$/, "");
 
     logger.warn(`[Inference Debug] Using localhost-style URL: ${localUrl}`);
@@ -400,7 +400,7 @@ export async function startModel2Inference(
         }
 
         const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
-        logger.error("[MedSAM Debug] dataUrlForGpu =", dataUrlForGpu);
+        logger.info("[UNET Debug] niftiPresignedUrl prepared", { projectId, s3Key });
         
         if (!niftiPresignedUrl) {
             logger.error(`${serviceLocation}: Failed to generate presigned NIfTI URL for UNET inference on project ${projectId}.`);

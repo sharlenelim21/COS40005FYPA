@@ -115,7 +115,7 @@ function loadConfigFromEnvironment(): GPUConfig {
 
   // Load with defaults matching the database schema defaults
   const host = process.env.GPU_SERVER_URL || "localhost";
-  const port = parseInt(process.env.GPU_SERVER_PORT || "8000", 10);
+  const port = parseInt(process.env.GPU_SERVER_PORT || "8001", 10);
   const isHTTPS = process.env.GPU_SERVER_SSL === "true";
   const gpuServerAuthJwtSecret =
     process.env.GPU_SERVER_AUTH_JWT_SECRET || "change-this";
