@@ -1,75 +1,110 @@
-import axios, { AxiosError } from "axios";
-import type {
-  LandmarkInferenceResponse,
-  FramePrediction,
-} from "@/types/landmark";
+import axios, { type AxiosError } from "axios";
+import type { LandmarkCoord, LandmarkInferenceResponse, FramePrediction } from "@/types/landmark";
 
 const baseURL = process.env.NEXT_PUBLIC_API_URL;
-if (!baseURL) {
-  console.error("[landmarkApi] NEXT_PUBLIC_API_URL is not defined.");
+
+if (!baseURL && process.env.NODE_ENV !== "test") {
+  console.warn("[landmarkApi] NEXT_PUBLIC_API_URL is not defined. Stub mode will be used.");
 }
 
 const api = axios.create({
-  baseURL,
+  baseURL: baseURL ?? "",
   withCredentials: true,
-  timeout: 120_000, 
+  timeout: 120_000,  
 });
 
-const LANDMARK_USE_STUB =
-  process.env.NEXT_PUBLIC_LANDMARK_USE_STUB !== "false";
+const USE_STUB =
+  process.env.NEXT_PUBLIC_LANDMARK_USE_STUB !== "false"; 
 
-/**
- * ⚠️ SWAP THIS when real model is ready:
- *   NEXT_PUBLIC_LANDMARK_USE_STUB=false
- *   NEXT_PUBLIC_LANDMARK_ENDPOINT=/landmark-detection/infer
- *
- * Real endpoint POST body: multipart/form-data { file: File }
- * Real endpoint response:  LandmarkInferenceResponse
- */
-const LANDMARK_ENDPOINT =
+const ENDPOINT =
   process.env.NEXT_PUBLIC_LANDMARK_ENDPOINT ?? "/landmark-detection/infer";
 
 const predictionCache = new Map<string, LandmarkInferenceResponse>();
 
-function cacheKey(projectId: string, filename: string): string {
-  return `${projectId}::${filename}`;
-}
 
 export const landmarkApi = {
   /**
-   * @param projectId   - VisHeart project ID (for cache key + API path)
-   * @param file        - .nii or .nii.gz File object from upload picker
-   * @param onProgress  - optional 0–100 progress callback during upload
+   * @param projectId  -
+   * @param model     
    */
-  runDetection: async (
+  runDetectionByProject: async (
+    projectId: string,
+    model = "hrnet-lv",
+  ): Promise<LandmarkInferenceResponse> => {
+    if (predictionCache.has(projectId)) {
+      if (process.env.NODE_ENV === "development") {
+        console.log("[landmarkApi] ✅ Cache hit for project", projectId);
+      }
+      return predictionCache.get(projectId)!;
+    }
+
+    if (USE_STUB) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          "[landmarkApi] ⚠️  STUB MODE — set NEXT_PUBLIC_LANDMARK_USE_STUB=false when model is ready.",
+        );
+      }
+      const result = await mockInferenceResponse(projectId);
+      predictionCache.set(projectId, result);
+      return result;
+    }
+
+    try {
+      const response = await api.post<LandmarkInferenceResponse>(ENDPOINT, {
+        project_id: projectId,
+        model,
+      });
+
+      if (!response.data.predictions?.length) {
+        throw new LandmarkApiError(
+          "empty_predictions",
+          "The model returned no landmark predictions for this project.",
+        );
+      }
+
+      predictionCache.set(projectId, response.data);
+      return response.data;
+    } catch (err) {
+      if (err instanceof LandmarkApiError) throw err;
+      return handleAxiosError(err as AxiosError);
+    }
+  },
+
+  /**
+   * @param projectId    
+   * @param file       
+   * @param model      
+   * @param onProgress   
+   */
+  runDetectionWithFile: async (
     projectId: string,
     file: File,
+    model = "hrnet-lv",
     onProgress?: (pct: number) => void,
   ): Promise<LandmarkInferenceResponse> => {
-    const key = cacheKey(projectId, file.name);
+    const key = `${projectId}::${file.name}`;
 
     if (predictionCache.has(key)) {
-      console.log("[landmarkApi] ✅ Returning cached predictions for", file.name);
       return predictionCache.get(key)!;
     }
 
-    if (LANDMARK_USE_STUB) {
-      console.warn(
-        "[landmarkApi] ⚠️  Using STUB response. " +
-        "Set NEXT_PUBLIC_LANDMARK_USE_STUB=false when real model is ready.",
-      );
-      const result = await mockInferenceResponse(file);
+    if (USE_STUB) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[landmarkApi] ⚠️  STUB MODE (file re-upload path)");
+      }
+      const result = await mockInferenceResponse(projectId);
       predictionCache.set(key, result);
       return result;
     }
-    console.log("[landmarkApi] 🚀 Calling real inference endpoint:", LANDMARK_ENDPOINT);
-
-    const formData = new FormData();
-    formData.append("file", file);
 
     try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("project_id", projectId);
+      formData.append("model", model);
+
       const response = await api.post<LandmarkInferenceResponse>(
-        LANDMARK_ENDPOINT,
+        `${ENDPOINT}/upload`,
         formData,
         {
           headers: { "Content-Type": "multipart/form-data" },
@@ -82,44 +117,41 @@ export const landmarkApi = {
       );
 
       if (!response.data.predictions?.length) {
-        throw new LandmarkApiError(
-          "empty_predictions",
-          "The model returned no landmark predictions. Please check the uploaded file.",
-        );
+        throw new LandmarkApiError("empty_predictions", "Model returned no predictions.");
       }
 
       predictionCache.set(key, response.data);
       return response.data;
     } catch (err) {
       if (err instanceof LandmarkApiError) throw err;
-      handleAxiosError(err as AxiosError);
+      return handleAxiosError(err as AxiosError);
     }
-
-    // unreachable, but TypeScript needs it
-    throw new LandmarkApiError("unknown", "Unknown error occurred.");
   },
 
-  clearCache: (projectId: string, filename: string) => {
-    predictionCache.delete(cacheKey(projectId, filename));
+  invalidateCache: (projectId: string) => {
+    // Remove both primary and any file-keyed entries for this project
+    const toDelete: string[] = [];
+    for (const k of predictionCache.keys()) {
+      if (k === projectId || k.startsWith(`${projectId}::`)) toDelete.push(k);
+    }
+    toDelete.forEach((k) => predictionCache.delete(k));
   },
 
-  clearAllCache: () => {
-    predictionCache.clear();
-  },
+  hasCached: (projectId: string): boolean => predictionCache.has(projectId),
 };
 
-// Error class 
 export type LandmarkErrorCode =
-  | "invalid_file"
-  | "upload_failed"
   | "inference_failed"
   | "timeout"
   | "empty_predictions"
+  | "network_error"
+  | "server_error"
+  | "invalid_project"
   | "unknown";
 
 export class LandmarkApiError extends Error {
   constructor(
-    public code: LandmarkErrorCode,
+    public readonly code: LandmarkErrorCode,
     message: string,
   ) {
     super(message);
@@ -131,69 +163,62 @@ function handleAxiosError(err: AxiosError): never {
   if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
     throw new LandmarkApiError(
       "timeout",
-      "Landmark detection timed out. The file may be too large or the server is busy. Please try again.",
+      "Landmark detection timed out. The server may be busy — please try again.",
     );
   }
   if (!err.response) {
     throw new LandmarkApiError(
-      "upload_failed",
-      "Could not reach the inference server. Please check your connection and try again.",
+      "network_error",
+      "Could not reach the inference server. Check your connection and try again.",
     );
   }
   const status = err.response.status;
-  if (status === 422) {
+  if (status === 404) {
     throw new LandmarkApiError(
-      "invalid_file",
-      "The server rejected the file. Please ensure it is a valid NIfTI cardiac MRI file.",
+      "invalid_project",
+      "Project MRI data not found. Please ensure the project has been fully uploaded.",
     );
   }
   if (status >= 500) {
     throw new LandmarkApiError(
-      "inference_failed",
-      `Inference failed on the server (HTTP ${status}). Please try again or contact support.`,
+      "server_error",
+      `Inference server error (HTTP ${status}). Please try again or contact support.`,
     );
   }
-  throw new LandmarkApiError(
-    "unknown",
-    `Unexpected error (HTTP ${status}). Please try again.`,
-  );
+  throw new LandmarkApiError("unknown", `Unexpected error (HTTP ${status}). Please try again.`);
 }
 
-// ⚠️ STUB: mock response generator 
-/**
- * Generates realistic-looking per-frame landmark predictions.
- * Simulates cardiac motion across frames with slight coordinate variation.
- *
- * ⚠️ DELETE this function after W2 D3 real integration is confirmed.
- */
-async function mockInferenceResponse(file: File): Promise<LandmarkInferenceResponse> {
-  const delay = 1500 + Math.random() * 1000;
-  await new Promise((r) => setTimeout(r, delay));
+async function mockInferenceResponse(projectId: string): Promise<LandmarkInferenceResponse> {
+  await new Promise<void>((r) => setTimeout(r, 1500 + Math.random() * 800));
 
-  const TOTAL_FRAMES = 10; 
+  const TOTAL_FRAMES = 10;
   const W = 256, H = 256;
+  const seed = projectId.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
+  const jitter = (base: number) => base + ((seed % 7) - 3);
 
-  // Base positions (centre of image)
-  const baseRV1: [number, number] = [162, 108];
-  const baseRV2: [number, number] = [158, 148];
-  const baseApex: [number, number] = [128, 220];
-  const baseBasalAnt: [number, number] = [128, 60];
-  const motion = (frame: number, amplitude: number) =>
-    Math.round(Math.sin((frame / TOTAL_FRAMES) * 2 * Math.PI) * amplitude);
+  const basePositions = {
+    rv1:  [jitter(162), jitter(108)] as [number, number],
+    rv2:  [jitter(158), jitter(148)] as [number, number],
+    apex: [jitter(128), jitter(220)] as [number, number],
+    bant: [jitter(128), jitter(60)]  as [number, number],
+    binf: [jitter(100), jitter(195)] as [number, number],
+    blat: [jitter(200), jitter(128)] as [number, number],
+    mant: [jitter(128), jitter(110)] as [number, number],
+  };
 
-  const predictions: FramePrediction[] = Array.from(
-    { length: TOTAL_FRAMES },
-    (_, i) => ({
-      frame_id: i,
-      rv_insertion_1: [baseRV1[0] + motion(i, 4),  baseRV1[1] + motion(i, 3)]  as [number,number],
-      rv_insertion_2: [baseRV2[0] + motion(i, 3),  baseRV2[1] + motion(i, 4)]  as [number,number],
-      apex:           [baseApex[0] + motion(i, 2),  baseApex[1] + motion(i, 2)] as [number,number],
-      basal_anterior: [baseBasalAnt[0] + motion(i, 3), baseBasalAnt[1] + motion(i, 2)] as [number,number],
-      basal_inferior: [100 + motion(i, 4), 195 + motion(i, 3)] as [number,number],
-      basal_lateral:  [200 + motion(i, 5), 128 + motion(i, 4)] as [number,number],
-      mid_anterior:   [128 + motion(i, 2), 110 + motion(i, 2)] as [number,number],
-    }),
-  );
+  const mo = (frame: number, amp: number) =>
+    Math.round(Math.sin((frame / TOTAL_FRAMES) * 2 * Math.PI) * amp);
+
+  const predictions: FramePrediction[] = Array.from({ length: TOTAL_FRAMES }, (_, i) => ({
+    frame_id:       i,
+    rv_insertion_1: [basePositions.rv1[0]  + mo(i, 4), basePositions.rv1[1]  + mo(i, 3)] as LandmarkCoord,
+    rv_insertion_2: [basePositions.rv2[0]  + mo(i, 3), basePositions.rv2[1]  + mo(i, 4)] as LandmarkCoord,
+    apex:           [basePositions.apex[0] + mo(i, 2), basePositions.apex[1] + mo(i, 2)] as LandmarkCoord,
+    basal_anterior: [basePositions.bant[0] + mo(i, 3), basePositions.bant[1] + mo(i, 2)] as LandmarkCoord,
+    basal_inferior: [basePositions.binf[0] + mo(i, 4), basePositions.binf[1] + mo(i, 3)] as LandmarkCoord,
+    basal_lateral:  [basePositions.blat[0] + mo(i, 5), basePositions.blat[1] + mo(i, 4)] as LandmarkCoord,
+    mid_anterior:   [basePositions.mant[0] + mo(i, 2), basePositions.mant[1] + mo(i, 2)] as LandmarkCoord,
+  }));
 
   return {
     predictions,
@@ -202,3 +227,5 @@ async function mockInferenceResponse(file: File): Promise<LandmarkInferenceRespo
     image_dimensions: { width: W, height: H },
   };
 }
+
+export type { LandmarkInferenceResponse, FramePrediction };

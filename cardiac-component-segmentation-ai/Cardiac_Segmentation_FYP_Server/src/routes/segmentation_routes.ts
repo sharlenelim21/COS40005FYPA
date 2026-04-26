@@ -70,10 +70,10 @@ router.post("/start-segmentation/:projectId",
         }
 
         const segmentationModel = req.body?.segmentationModel || SegmentationModel.MEDSAM;
-        // DEVELOPER NOTE: deviceType parameter is optional and only used by the UNET API inference path.
-        // Supported values: "cpu" (default), "cuda" (for NVIDIA GPU), or "auto" (automatic selection).
-        // For MEDSAM (Cloud GPU), this parameter is ignored.
-        const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : undefined;
+        // DEVELOPER NOTE: deviceType is only used by the UNET API inference path.
+        // Supported values: "cpu", "cuda" (for NVIDIA GPU), or "auto" (GPU if available, else CPU).
+        // For MEDSAM, the local GPU service resolves its own runtime device.
+        const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : "auto";
         logger.info(`${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}`);
 
         try {
@@ -95,8 +95,8 @@ router.post("/start-segmentation/:projectId",
                 return res.status(400).json({ error: "Unknown segmentation model" });
             }
 
-            // DEVELOPER NOTE: MEDSAM remote Cloud GPU inference path (original implementation, unchanged)
-            // - Sends inference request to remote Cloud GPU server
+            // DEVELOPER NOTE: MEDSAM inference path
+            // - Sends inference request to the configured GPU service
             // - Requires valid gpuAuthToken (injected by injectGpuAuthToken middleware)
             // - Callback URL is used by GPU server to post results back
             // - deviceType parameter is ignored for MEDSAM (GPU type is managed by remote server)
