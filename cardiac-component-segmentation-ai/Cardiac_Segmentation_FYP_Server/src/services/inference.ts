@@ -293,7 +293,7 @@ const sendUnetInferenceRequestToApi = async (
                 uuid: inferenceData.uuid,
                 callback_url: inferenceData.callbackUrl,
                 segmentation_model: inferenceData.segmentationModel,
-                device: inferenceData.device || "cpu",
+                device: inferenceData.device || "auto",
                 checkpoint_path: inferenceData.checkpointPath,
             },
             {
@@ -437,7 +437,7 @@ export async function startModel2Inference(
                 uuid: jobUuid,
                 callbackUrl,
                 segmentationModel: SegmentationModel.UNET,
-                device: modelConfig?.deviceType || "cpu",
+                device: modelConfig?.deviceType || "auto",
                 checkpointPath: modelConfig?.checkpointPath,
             },
             gpuAuthToken

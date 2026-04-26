@@ -4,6 +4,7 @@ const nextConfig: NextConfig = {
   /* config options here */
   // Enable standalone output for Docker deployment
   output: 'standalone',
+  outputFileTracingRoot: process.cwd(),
   eslint: {
     // Warning: This allows production builds to successfully complete even if
     // your project has ESLint errors.

@@ -254,16 +254,18 @@ export const segmentationApi = {
   // Start segmentation for a project
   startSegmentation: async (
     projectId: string,
-    segmentationModel: "medsam" | "unet" = "medsam"
+    segmentationModel: "medsam" | "unet" = "medsam",
+    deviceType: "cpu" | "cuda" | "auto" = "auto"
   ) => {
     console.log("[API] startSegmentation request:", {
       projectId,
       segmentationModel,
+      deviceType,
     });
 
     const response = await api.post(
       `/segmentation/start-segmentation/${projectId}`,
-      { segmentationModel }
+      { segmentationModel, deviceType }
     );
 
     return response.data;

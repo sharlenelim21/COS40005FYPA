@@ -20,6 +20,7 @@ import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export type SegmentationModelId = "medsam" | "unet";
 
@@ -114,7 +115,8 @@ export default function SegmentationResultsPage() {
 
   useEffect(() => {
     try {
-      const storedModel = sessionStorage.getItem(modelSessionKey);
+      const storedModel =
+        localStorage.getItem(modelSessionKey) ?? sessionStorage.getItem(modelSessionKey);
 
       if (isValidModel(storedModel)) {
         setSelectedModel(storedModel);
@@ -126,11 +128,17 @@ export default function SegmentationResultsPage() {
 
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
     setSelectedModel(value);
+    try {
+      localStorage.setItem(modelSessionKey, value);
+      sessionStorage.setItem(modelSessionKey, value);
+    } catch {
+      // ignore storage write errors
+    }
     setRunSegmentationError(null);
     setRunSegmentationSuccess(
       `${MODEL_OPTIONS.find((o) => o.value === value)?.label} selected successfully.`
     );
-  }, []);
+  }, [modelSessionKey]);
 
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
@@ -177,7 +185,14 @@ export default function SegmentationResultsPage() {
     setRunSegmentationSuccess(null);
 
     try {
-      const response = await segmentationApi.startSegmentation(projectId, selectedModel);
+      try {
+        localStorage.setItem(modelSessionKey, selectedModel);
+        sessionStorage.setItem(modelSessionKey, selectedModel);
+      } catch {
+        // ignore storage write errors
+      }
+
+      const response = await segmentationApi.startSegmentation(projectId, selectedModel, "auto");
 
       setRunSegmentationSuccess(
         `${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} segmentation started successfully.`
@@ -203,7 +218,7 @@ export default function SegmentationResultsPage() {
     } finally {
       setRunSegmentationLoading(false);
     }
-  }, [projectId, selectedModel, runSegmentationLoading]);
+  }, [projectId, selectedModel, runSegmentationLoading, modelSessionKey]);
 
   const {
     currentHistory,
@@ -517,23 +532,29 @@ export default function SegmentationResultsPage() {
         </div>
 
         {/* Dropdown */}
-        <div className="relative">
-          <select
+        <Select
             value={selectedModel}
-            onChange={(e) => handleModelSelect(e.target.value as SegmentationModelId)}
-            className="text-sm border border-border rounded-md pl-3 pr-8 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-ring cursor-pointer appearance-none min-w-[160px]"
+          onValueChange={(value: string) => handleModelSelect(value as SegmentationModelId)}
           >
+          <SelectTrigger
+            size="sm"
+            className="min-w-[160px] rounded-xl bg-background px-3 text-sm shadow-sm hover:bg-muted/40"
+            aria-label="Select segmentation model"
+          >
+            <SelectValue placeholder="Select model" />
+          </SelectTrigger>
+          <SelectContent className="rounded-xl p-1.5 shadow-lg">
             {MODEL_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
+              <SelectItem
+                key={opt.value}
+                value={opt.value}
+                className="rounded-lg py-2"
+              >
+                {opt.label}
+              </SelectItem>
             ))}
-          </select>
-          {/* chevron */}
-          <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
-            <svg className="h-3.5 w-3.5 text-muted-foreground" fill="none" viewBox="0 0 10 10" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M2 3.5 5 6.5l3-3" />
-            </svg>
-          </div>
-        </div>
+          </SelectContent>
+        </Select>
 
         {/* Status badge */}
         <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">
@@ -552,7 +573,7 @@ export default function SegmentationResultsPage() {
         <button
           onClick={handleRunSegmentation}
           disabled={runSegmentationLoading}
-          className="ml-auto px-3 py-1.5 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+          className="ml-auto px-3 py-1.5 text-sm font-medium rounded-md bg-black text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 dark:bg-white dark:text-black dark:hover:bg-white/90"
         >
           {runSegmentationLoading ? (
             <>
@@ -649,6 +670,8 @@ export default function SegmentationResultsPage() {
             onReset={handleReset}
             selectedModel={selectedModel}
             onModelChange={handleModelSelect}
+            isModelActive={hasMasks}
+            isModelRunning={runSegmentationLoading}
           />
         </div>
       </div>
@@ -760,6 +783,8 @@ export default function SegmentationResultsPage() {
                 onReset={handleReset}
                 selectedModel={selectedModel}
                 onModelChange={handleModelSelect}
+                isModelActive={hasMasks}
+                isModelRunning={runSegmentationLoading}
               />
             </div>
           </ResizablePanel>

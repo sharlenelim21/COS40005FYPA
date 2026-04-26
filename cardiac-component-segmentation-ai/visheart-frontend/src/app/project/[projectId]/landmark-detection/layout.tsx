@@ -1,88 +1,74 @@
 /**
  * src/app/project/[projectId]/landmark-detection/layout.tsx
- * VisHeart — Landmark Detection route layout
+ * VisHeart — Landmark Detection route layout (passthrough)
  *
- * The project/[projectId] segment already has a layout.tsx that provides
- * the ProjectContext (useProject). This layout wraps the landmark detection
- * page with the same context so we get projectData, hasReconstructions, etc.
- *
- * If your existing project/[projectId]/layout.tsx already wraps all child
- * routes in ProjectProvider, you do NOT need this file — delete it.
- * Keep it only if the landmark route is at a different nesting level.
+ * Next.js inherits the parent ProjectProvider from
+ * src/app/project/[projectId]/layout.tsx automatically.
+ * This file is a no-op unless you need landmark-specific providers.
  */
 
 import type { ReactNode } from "react";
 
-/**
- * Passthrough layout — inherits ProjectProvider from
- * src/app/project/[projectId]/layout.tsx automatically via Next.js nesting.
- *
- * Add any landmark-page-specific providers here if needed in future sprints.
- */
 export default function LandmarkDetectionLayout({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/*
- * ──────────────────────────────────────────────────────────────────────────────
- * NAVIGATION INTEGRATION
- * ──────────────────────────────────────────────────────────────────────────────
- *
- * Sprint 2 Task 1 — Make /landmark-detection reachable from navigation.
+/**
+ * ════════════════════════════════════════════════════════════════
+ *  NAVIGATION INTEGRATION GUIDE
+ * ════════════════════════════════════════════════════════════════
  *
  * The page is automatically routed by Next.js App Router at:
  *   /project/[projectId]/landmark-detection
  *
- * To add a nav link, find where your segmentation link is defined.
- * Based on the project structure, this is likely in one of:
- *   • src/components/project/ProjectNav.tsx
- *   • src/ui/header/header.tsx
- *   • src/app/project/[projectId]/layout.tsx (sidebar nav)
+ * ── Step 1: Add to project navigation ────────────────────────────
  *
- * ADD this entry alongside the existing "Segmentation" link:
- * ─────────────────────────────────────────────────────────
+ * Find your project nav component (likely in one of these files):
+ *   • src/components/project/ProjectNav.tsx
+ *   • src/app/project/[projectId]/layout.tsx
+ *   • src/ui/header/header.tsx
+ *
+ * Add a link in the same style as the Segmentation link:
  *
  *   import { Crosshair } from "lucide-react";
  *
  *   // In your nav items array:
  *   {
- *     href: `/project/${projectId}/landmark-detection`,
+ *     href:  `/project/${projectId}/landmark-detection`,
  *     label: "Landmarks",
- *     icon: Crosshair,
- *   },
+ *     icon:  Crosshair,
+ *   }
  *
- * ─────────────────────────────────────────────────────────
+ * ── Step 2: "Continue to Landmarks" button on Segmentation page ──
  *
- * ALSO ADD a "Proceed to Landmark Detection" button at the bottom of the
- * segmentation page's sidebar action area (src/components/segmentation/
- * segmentation-sidebar.tsx), after the existing Save button block:
+ * Add this at the bottom of SegmentationSidebar's action area,
+ * below the Save / Reset buttons (in segmentation-sidebar.tsx):
  *
- *   import { useRouter } from "next/navigation";
- *   import { useParams } from "next/navigation";
  *   import { Crosshair } from "lucide-react";
+ *   import { useRouter, useParams } from "next/navigation";
  *
  *   const router = useRouter();
- *   const { projectId } = useParams();
+ *   const { projectId } = useParams<{ projectId: string }>();
  *
  *   <Button
  *     variant="outline"
  *     size="sm"
- *     className="w-full text-xs gap-2 mt-2"
+ *     className="w-full text-xs gap-2 mt-1"
  *     onClick={() => router.push(`/project/${projectId}/landmark-detection`)}
  *   >
  *     <Crosshair className="h-3.5 w-3.5" />
  *     Landmark Detection ↗
  *   </Button>
  *
- * ─────────────────────────────────────────────────────────
+ * ── Step 3: .env.local variables ─────────────────────────────────
  *
- * ENVIRONMENT VARIABLES to add to .env.local:
- *
- *   # Set to "false" when real model endpoint is ready (Sprint 2 W2 D3)
+ *   # ⚠️  Set to "false" when Sharlene's model endpoint is ready
  *   NEXT_PUBLIC_LANDMARK_USE_STUB=true
  *
- *   # Real endpoint path (relative to NEXT_PUBLIC_API_URL)
+ *   # FastAPI route (relative to NEXT_PUBLIC_API_URL)
+ *   # Expected POST body:  { project_id: string, model: string }
+ *   # Expected response:   LandmarkInferenceResponse (see src/types/landmark.ts)
  *   NEXT_PUBLIC_LANDMARK_ENDPOINT=/landmark-detection/infer
  *
- * ──────────────────────────────────────────────────────────────────────────────
+ * ════════════════════════════════════════════════════════════════
  */

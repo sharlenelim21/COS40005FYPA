@@ -10,15 +10,18 @@ interface LandmarkSliceViewerProps {
   currentFrame: number;
   totalFrames: number;
   imageDimensions: { width: number; height: number };
-  /** ⚠️ INTEGRATION POINT: Pass real frame image URL here in Sprint 2 W2 D3 */
   frameImageUrl?: string | null;
   visibleLandmarks: Set<string>;
+  showLabels?: boolean;
   className?: string;
 }
 
-// Dot radius in canvas pixels
-const DOT_RADIUS = 6;
-const ACTIVE_RING_RADIUS = 10;
+const DOT_R       = 6;  
+const GLOW_R      = 12;   
+const CROSS_EXT   = 5;   
+const LABEL_FONT  = "11px/1 system-ui, sans-serif";
+const LABEL_PAD_X = 6;
+const LABEL_PAD_Y = 4;
 
 export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   prediction,
@@ -27,115 +30,101 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   imageDimensions,
   frameImageUrl,
   visibleLandmarks,
+  showLabels = true,
   className,
 }: LandmarkSliceViewerProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const imageRef = useRef<HTMLImageElement | null>(null);
+  const frameImgRef  = useRef<HTMLImageElement | null>(null);
 
-  const scaleCoord = useCallback(
-    (coord: [number, number], canvas: HTMLCanvasElement): [number, number] => {
-      const sx = canvas.width / imageDimensions.width;
-      const sy = canvas.height / imageDimensions.height;
+  const toCanvas = useCallback(
+    (coord: [number, number], cw: number, ch: number): [number, number] => {
+      const sx = cw / imageDimensions.width;
+      const sy = ch / imageDimensions.height;
       return [Math.round(coord[0] * sx), Math.round(coord[1] * sy)];
     },
     [imageDimensions],
   );
 
-  const drawFrame = useCallback(
-    (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const draw = useCallback(
+    (canvas: HTMLCanvasElement) => {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const { width: cw, height: ch } = canvas;
 
-      // Draw background 
-      if (imageRef.current) {
-        ctx.drawImage(imageRef.current, 0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, cw, ch);
+
+      if (frameImgRef.current) {
+        ctx.drawImage(frameImgRef.current, 0, 0, cw, ch);
       } else {
-        drawMockMri(ctx, canvas.width, canvas.height);
+        drawMockMri(ctx, cw, ch);
       }
 
-      // Draw landmarks 
       if (!prediction) return;
 
-      const sorted = [...LANDMARK_DEFINITIONS].sort(
-        (a, b) => b.priority - a.priority,
-      );
+      const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
 
       for (const def of sorted) {
         if (!visibleLandmarks.has(def.id)) continue;
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
 
-        const [cx, cy] = scaleCoord(coord, canvas);
-        drawLandmarkDot(ctx, cx, cy, def);
+        const [cx, cy] = toCanvas(coord, cw, ch);
+        drawDot(ctx, cx, cy, def, showLabels);
+      }
+
+      if (totalFrames > 0) {
+        drawFrameLabel(ctx, currentFrame, totalFrames);
       }
     },
-    [prediction, visibleLandmarks, scaleCoord],
+    [prediction, visibleLandmarks, showLabels, currentFrame, totalFrames, toCanvas],
   );
 
-  // Load real frame image when URL changes
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) draw(canvas);
+  }, [draw]);
+
   useEffect(() => {
     if (!frameImageUrl) {
-      imageRef.current = null;
+      frameImgRef.current = null;
       const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (canvas && ctx) drawFrame(ctx, canvas);
+      if (canvas) draw(canvas);
       return;
     }
     const img = new Image();
     img.onload = () => {
-      imageRef.current = img;
+      frameImgRef.current = img;
       const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      drawFrame(ctx, canvas);
+      if (canvas) draw(canvas);
     };
     img.onerror = () => {
-      console.error("[LandmarkSliceViewer] Failed to load frame image:", frameImageUrl);
-      imageRef.current = null;
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (canvas && ctx) drawFrame(ctx, canvas);
+      frameImgRef.current = null;
     };
     img.src = frameImageUrl;
-  }, [frameImageUrl, drawFrame]);
+  }, [frameImageUrl, draw]);
 
-  // Re-draw whenever prediction or visibility changes
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    drawFrame(ctx, canvas);
-  }, [drawFrame]);
-
-  // Resize canvas to fill container while maintaining aspect ratio
   useEffect(() => {
     const container = containerRef.current;
-    const canvas = canvasRef.current;
+    const canvas    = canvasRef.current;
     if (!container || !canvas) return;
 
-    const observer = new ResizeObserver(() => {
-      const { clientWidth, clientHeight } = container;
-      const aspectRatio = imageDimensions.width / imageDimensions.height;
+    const ro = new ResizeObserver(() => {
+      const { clientWidth: cw, clientHeight: ch } = container;
+      if (cw === 0 || ch === 0) return;
 
-      let w = clientWidth;
-      let h = w / aspectRatio;
-      if (h > clientHeight) {
-        h = clientHeight;
-        w = h * aspectRatio;
-      }
+      const aspect = imageDimensions.width / imageDimensions.height;
+      let w = cw, h = cw / aspect;
+      if (h > ch) { h = ch; w = h * aspect; }
 
-      canvas.width = Math.round(w);
+      canvas.width  = Math.round(w);
       canvas.height = Math.round(h);
-
-      const ctx = canvas.getContext("2d");
-      if (ctx) drawFrame(ctx, canvas);
+      draw(canvas);
     });
 
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, [imageDimensions, drawFrame]);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [imageDimensions, draw]);
 
   return (
     <div
@@ -147,127 +136,149 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     >
       <canvas
         ref={canvasRef}
-        className="block"
+        className="block max-w-full max-h-full"
         style={{ imageRendering: "pixelated" }}
+        aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
       />
-
-      {/* Frame info overlay */}
-      <div className="absolute bottom-2 left-2 flex items-center gap-2 pointer-events-none">
-        <span className="text-[10px] text-white/60 font-mono bg-black/40 px-1.5 py-0.5 rounded">
-          Frame {currentFrame + 1} / {totalFrames}
-        </span>
-      </div>
     </div>
   );
 });
 
-// Drawing helpers 
-
-function drawLandmarkDot(
+function drawDot(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
   def: LandmarkDefinition,
+  showLabel: boolean,
 ) {
-  // Outer glow ring
+  // Outer glow
   ctx.beginPath();
-  ctx.arc(cx, cy, ACTIVE_RING_RADIUS, 0, 2 * Math.PI);
-  ctx.fillStyle = def.color + "33"; // 20% opacity
+  ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
+  ctx.fillStyle = def.color + "2a";  // ~16% opacity
   ctx.fill();
 
-  // Filled dot
+  // Crosshair lines
   ctx.beginPath();
-  ctx.arc(cx, cy, DOT_RADIUS, 0, 2 * Math.PI);
+  ctx.moveTo(cx - DOT_R - CROSS_EXT, cy);
+  ctx.lineTo(cx + DOT_R + CROSS_EXT, cy);
+  ctx.moveTo(cx, cy - DOT_R - CROSS_EXT);
+  ctx.lineTo(cx, cy + DOT_R + CROSS_EXT);
+  ctx.strokeStyle = def.color + "88";  // 53% opacity
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  // Dot fill
+  ctx.beginPath();
+  ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
   ctx.fillStyle = def.color;
   ctx.fill();
 
   // White border
   ctx.beginPath();
-  ctx.arc(cx, cy, DOT_RADIUS, 0, 2 * Math.PI);
-  ctx.strokeStyle = "#ffffff";
+  ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Cross-hair lines
+  // Label pill
+  if (!showLabel) return;
+
+  ctx.font = LABEL_FONT;
+  const text  = def.label;
+  const tw    = ctx.measureText(text).width;
+  const bw    = tw + LABEL_PAD_X * 2;
+  const bh    = 16;
+  const lx    = cx + DOT_R + 4;
+  const ly    = cy - bh / 2;
+
+  // Pill background
   ctx.beginPath();
-  ctx.moveTo(cx - DOT_RADIUS - 3, cy);
-  ctx.lineTo(cx + DOT_RADIUS + 3, cy);
-  ctx.moveTo(cx, cy - DOT_RADIUS - 3);
-  ctx.lineTo(cx, cy + DOT_RADIUS + 3);
-  ctx.strokeStyle = def.color + "99";
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-}
-
-/**
- * ⚠️ Mock MRI background — replaces real frame until backend is wired.
- */
-function drawMockMri(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-) {
-  // Background
-  ctx.fillStyle = "#0a0a0a";
-  ctx.fillRect(0, 0, w, h);
-
-  const cx = w * 0.43, cy = h * 0.46;
-
-  // Chest body oval
-  ctx.beginPath();
-  ctx.ellipse(w / 2, h / 2, w * 0.44, h * 0.42, 0, 0, 2 * Math.PI);
-  ctx.fillStyle = "#1a1a1a";
+  ctx.roundRect(lx, ly, bw, bh, 3);
+  ctx.fillStyle = "rgba(0,0,0,0.65)";
   ctx.fill();
 
-  // LV myocardium ring
+  // Pill text
+  ctx.fillStyle = "#ffffff";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, lx + LABEL_PAD_X, cy);
+}
+
+function drawFrameLabel(
+  ctx: CanvasRenderingContext2D,
+  current: number,
+  total: number,
+) {
+  const text = `Frame ${current + 1} / ${total}`;
+  ctx.font = "10px/1 monospace";
+  const tw = ctx.measureText(text).width;
+
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
   ctx.beginPath();
-  ctx.ellipse(cx, cy, w * 0.187, h * 0.2, 0, 0, 2 * Math.PI);
-  ctx.lineWidth = Math.max(8, w * 0.048);
-  ctx.strokeStyle = "#4a4a4a";
+  ctx.roundRect(6, ctx.canvas.height - 20, tw + 12, 14, 3);
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 12, ctx.canvas.height - 13);
+}
+
+function drawMockMri(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  // Dark background
+  ctx.fillStyle = "#0b0b0b";
+  ctx.fillRect(0, 0, w, h);
+
+  // Chest body
+  ctx.beginPath();
+  ctx.ellipse(w * 0.5, h * 0.5, w * 0.44, h * 0.43, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#1c1c1c";
+  ctx.fill();
+
+  // Rib cage suggestion
+  for (let i = 0; i < 4; i++) {
+    const ry = h * (0.32 + i * 0.07);
+    ctx.beginPath();
+    ctx.ellipse(w * 0.5, ry, w * 0.28, h * 0.025, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = "#2a2a2a";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // LV myocardium ring
+  const lvCx = w * 0.43, lvCy = h * 0.46;
+  const myoRx = w * 0.185, myoRy = h * 0.2;
+  ctx.beginPath();
+  ctx.ellipse(lvCx, lvCy, myoRx, myoRy, 0, 0, Math.PI * 2);
+  ctx.strokeStyle = "#4d4d4d";
+  ctx.lineWidth = Math.max(6, w * 0.046);
   ctx.stroke();
 
   // LV cavity
   ctx.beginPath();
-  ctx.ellipse(cx, cy, w * 0.125, h * 0.141, 0, 0, 2 * Math.PI);
-  ctx.fillStyle = "#2a2a2a";
+  ctx.ellipse(lvCx, lvCy, w * 0.12, h * 0.135, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#2c2c2c";
   ctx.fill();
 
-  // RV
+  // RV (right ventricle)
   ctx.beginPath();
-  ctx.moveTo(cx + w * 0.187, cy - h * 0.05);
-  ctx.quadraticCurveTo(
-    cx + w * 0.3, cy - h * 0.1,
-    cx + w * 0.32, cy,
-  );
-  ctx.quadraticCurveTo(
-    cx + w * 0.3, cy + h * 0.12,
-    cx + w * 0.187, cy + h * 0.06,
-  );
-  ctx.fillStyle = "#222222";
+  ctx.moveTo(lvCx + myoRx, lvCy - h * 0.05);
+  ctx.quadraticCurveTo(lvCx + w * 0.31, lvCy - h * 0.09, lvCx + w * 0.32, lvCy);
+  ctx.quadraticCurveTo(lvCx + w * 0.3,  lvCy + h * 0.1,  lvCx + myoRx,   lvCy + h * 0.06);
+  ctx.fillStyle = "#232323";
   ctx.strokeStyle = "#3a3a3a";
   ctx.lineWidth = 0.8;
   ctx.fill();
   ctx.stroke();
 
-  // Spine ellipse
+  // Spine
   ctx.beginPath();
-  ctx.ellipse(w * 0.5, h * 0.79, w * 0.055, h * 0.046, 0, 0, 2 * Math.PI);
-  ctx.fillStyle = "#333333";
+  ctx.ellipse(w * 0.5, h * 0.79, w * 0.055, h * 0.046, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#323232";
   ctx.fill();
 
-  // Subtle grid lines
-  ctx.strokeStyle = "#ffffff08";
-  ctx.lineWidth = 0.5;
-  for (let x = 0; x < w; x += w / 8) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
-    ctx.stroke();
-  }
-  for (let y = 0; y < h; y += h / 8) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
+  // Subtle vignette
+  const grad = ctx.createRadialGradient(w / 2, h / 2, h * 0.3, w / 2, h / 2, h * 0.55);
+  grad.addColorStop(0, "rgba(0,0,0,0)");
+  grad.addColorStop(1, "rgba(0,0,0,0.35)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
 }
