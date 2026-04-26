@@ -1,5 +1,18 @@
 # Docker Compose for LOCAL Deployment - Combined Container Version
 
+x-gpu-environment: &gpu-env
+  JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
+  YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
+  MEDSAM_MODEL_NAME: medsam_vit_b.pth
+  FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
+  GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
+  SERVER_USERNAME: visheart-gpu-inference
+  ALLOWED_NODE_USERNAME: visheart-node-server
+  ENV_TYPE: development
+  GPU_SEMAPHORE_COUNT: 3
+  RECONSTRUCTION_USE_FIXED_SEED: "true"
+  RECONSTRUCTION_RANDOM_SEED: "42"
+
 services:
   # ============================================
   # Combined VisHeart Application
@@ -66,8 +79,7 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      gpu:
-        condition: service_started
+      # GPU dependency removed so profiles can boot dynamically without crashing
     networks:
       - visheart-network
     healthcheck:
@@ -96,7 +108,7 @@ services:
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD", "mongosh", "-u", "admin", "-p", "P@ssw0rd123!", "--authenticationDatabase", "admin", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -168,11 +180,12 @@ services:
       - visheart-network
 
   # ============================================
-  # GPU Inference Service
+  # GPU Inference Service (PROFILE: CPU)
   # ============================================
-  gpu:
+  gpu-cpu:
     image: sveltes/visheart-inference-gpu:faithful-latest
-    container_name: visheart-gpu
+    container_name: visheart-gpu-cpu
+    profiles: ["cpu"]
     restart: unless-stopped
     ports:
       - "8001:8001"
@@ -184,23 +197,39 @@ services:
               count: all
               capabilities: [gpu]
     environment:
-      USE_GPU: "true" # Set to "true" if GPU is available
-      UNET_INFERENCE_SCRIPT_PATH: /app/app/compat_unet_inference.py
-      JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
-      YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
-      MEDSAM_MODEL_NAME: medsam_vit_b.pth
-      FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
-      GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
-      SERVER_USERNAME: visheart-gpu-inference
-      ALLOWED_NODE_USERNAME: visheart-node-server
-      ENV_TYPE: development
-      GPU_SEMAPHORE_COUNT: 3
-      RECONSTRUCTION_USE_FIXED_SEED: "true"
-      RECONSTRUCTION_RANDOM_SEED: "42"
+      <<: *gpu-env
+      USE_GPU: "false" # Safely overrides for CPU
     volumes:
-      - ../Cardiac_Segmentation_FYP_Server/src/python/unet_inference.py:/app/app/compat_unet_inference.py:ro
+      - ../visheart-inference-gpu/app:/app/app
     networks:
-      - visheart-network
+      visheart-network:
+        aliases:
+          - gpu
+
+  # ============================================
+  # GPU Inference Service (PROFILE: NVIDIA)
+  # ============================================
+  gpu-nvidia:
+    image: sveltes/visheart-inference-gpu:faithful-latest
+    container_name: visheart-gpu-nvidia
+    profiles: ["gpu"]
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      <<: *gpu-env
+      USE_GPU: "true"
+    networks:
+      visheart-network:
+        aliases:
+          - gpu
 
 networks:
   visheart-network:

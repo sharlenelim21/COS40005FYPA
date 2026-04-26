@@ -323,6 +323,7 @@ export const segmentationApi = {
       name?: string;
       description?: string;
       frames?: any[];
+      model?: string;
     },
   ) => {
     try {
