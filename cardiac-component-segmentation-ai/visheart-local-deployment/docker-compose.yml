@@ -79,6 +79,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      #gpu:
+      #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
     networks:
       - visheart-network
