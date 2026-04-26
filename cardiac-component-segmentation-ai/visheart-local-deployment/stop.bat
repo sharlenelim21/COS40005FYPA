@@ -17,6 +17,7 @@ if %errorlevel% equ 0 (
 )
 
 docker-compose --profile %COMPOSE_PROFILES% down
+docker-compose down --remove-orphans
 
 if errorlevel 1 (
     echo.

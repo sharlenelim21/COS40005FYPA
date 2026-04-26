@@ -32,7 +32,7 @@ services:
       PORT: 5000
       
       # MongoDB Configuration
-      MONGODB_URI: "mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin"
+      MONGODB_URI: mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin
       
       # Redis Configuration
       REDIS_HOST: redis
@@ -79,6 +79,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      #gpu:
+      #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
     networks:
       - visheart-network
@@ -96,8 +98,6 @@ services:
     image: mongo:7.0
     container_name: visheart-mongodb
     restart: unless-stopped
-    ports:
-      - "27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: P@ssw0rd123!
@@ -108,11 +108,12 @@ services:
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "mongosh", "-u", "admin", "-p", "P@ssw0rd123!", "--authenticationDatabase", "admin", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD-SHELL", "mongosh -u \"admin\" -p \"P@ssw0rd123!\" --authenticationDatabase admin --quiet --eval \"quit(db.adminCommand('ping').ok ? 0 : 2)\""]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+
 
   # ============================================
   # Redis Cache & Session Store
@@ -121,8 +122,6 @@ services:
     image: redis:7-alpine
     container_name: visheart-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
@@ -189,13 +188,6 @@ services:
     restart: unless-stopped
     ports:
       - "8001:8001"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     environment:
       <<: *gpu-env
       USE_GPU: "false" # Safely overrides for CPU
