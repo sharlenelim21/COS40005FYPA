@@ -1,5 +1,6 @@
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 import { MetricData, S3Metrics, CostData } from "@/types/system-monitor";
+import { file } from "zod";
 
 // Create a pre-configured instance of axios.
 // This is a best practice for managing API calls in a structured way.
@@ -251,15 +252,23 @@ export const projectApi = {
 // Segmentation functions
 export const segmentationApi = {
   // Start segmentation for a project
-  startSegmentation: async (projectId: string) => {
-    try {
-      const response = await api.post(
-        `/segmentation/start-segmentation/${projectId}`,
-      );
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+  startSegmentation: async (
+    projectId: string,
+    segmentationModel: "medsam" | "unet" = "medsam",
+    deviceType: "cpu" | "cuda" | "auto" = "auto"
+  ) => {
+    console.log("[API] startSegmentation request:", {
+      projectId,
+      segmentationModel,
+      deviceType,
+    });
+
+    const response = await api.post(
+      `/segmentation/start-segmentation/${projectId}`,
+      { segmentationModel, deviceType }
+    );
+
+    return response.data;
   },
 
   // Get segmentation results for a project

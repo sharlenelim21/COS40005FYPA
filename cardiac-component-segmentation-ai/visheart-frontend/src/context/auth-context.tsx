@@ -74,7 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       // Only log unexpected errors (not authentication failures)
       const errorStatus = (err as any)?.response?.status;
-      if (errorStatus !== 401 && errorStatus !== 403) {
+      const isNetworkError = (err as any)?.code === "ERR_NETWORK" || (err as any)?.message === "Network Error";
+      if (errorStatus !== 401 && errorStatus !== 403 && !isNetworkError) {
         console.error("Auth check failed:", err);
       }
       setUser(null);
