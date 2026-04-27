@@ -20,16 +20,17 @@ import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-export type SegmentationModelId = "existing_model" | "model_2";
+export type SegmentationModelId = "medsam" | "unet";
 
 const MODEL_OPTIONS: { value: SegmentationModelId; label: string }[] = [
-  { value: "existing_model", label: "Existing Model" },
-  { value: "model_2",        label: "Model 2"        },
+  { value: "medsam", label: "MedSam" },
+  { value: "unet", label: "Unet" },
 ];
 
 const isValidModel = (v: string | null): v is SegmentationModelId =>
-  v === "existing_model" || v === "model_2";
+  v === "medsam" || v === "unet";
 
 const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas").then((mod) => mod.ImageCanvas), {
   ssr: false,
@@ -105,40 +106,39 @@ export default function SegmentationResultsPage() {
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [resetTrigger, setResetTrigger] = useState<number>(0);
   const [revertDialogOpen, setRevertDialogOpen] = useState(false);
-
+  const [runSegmentationLoading, setRunSegmentationLoading] = useState(false);
+  const [runSegmentationError, setRunSegmentationError] = useState<string | null>(null);
+  const [runSegmentationSuccess, setRunSegmentationSuccess] = useState<string | null>(null);
   const modelSessionKey = `selectedModel_${projectId}`;
 
-  const [selectedModel, setSelectedModel] = useState<SegmentationModelId>(() => {
-    try {
-      const stored = sessionStorage.getItem(`selectedModel_${projectId}`);
-      if (isValidModel(stored)) return stored;
-    } catch {
-
-    }
-    return "existing_model";
-  });
+  const [selectedModel, setSelectedModel] = useState<SegmentationModelId>("medsam");
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(modelSessionKey, selectedModel);
+      const storedModel =
+        localStorage.getItem(modelSessionKey) ?? sessionStorage.getItem(modelSessionKey);
+
+      if (isValidModel(storedModel)) {
+        setSelectedModel(storedModel);
+      }
     } catch {
-
+      // ignore sessionStorage read errors
     }
-  }, [selectedModel, modelSessionKey]);
-
-  const handleModelChange = useCallback((value: SegmentationModelId) => {
-    setSelectedModel(value);
-  }, []);
-
-  const [model2DialogOpen, setModel2DialogOpen] = useState(false);
+  }, [modelSessionKey]);
 
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
-    if (value === "model_2") {
-      setModel2DialogOpen(true);
-    } else {
-      setSelectedModel(value);
+    setSelectedModel(value);
+    try {
+      localStorage.setItem(modelSessionKey, value);
+      sessionStorage.setItem(modelSessionKey, value);
+    } catch {
+      // ignore storage write errors
     }
-  }, []);
+    setRunSegmentationError(null);
+    setRunSegmentationSuccess(
+      `${MODEL_OPTIONS.find((o) => o.value === value)?.label} selected successfully.`
+    );
+  }, [modelSessionKey]);
 
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
@@ -153,7 +153,7 @@ export default function SegmentationResultsPage() {
       setIsLoadingModel(true);
       try {
         console.log(`[Segmentation 3D] Loading model for frame ${currentFrame}...`);
-        const url = await getReconstructionGLB(currentFrame);
+        const url = await getReconstructionGLB(currentFrame + 1);
         if (url) {
           console.log(`[Segmentation 3D] ✅ Loaded model for frame ${currentFrame}`);
           setReconstructionModelUrl(url);
@@ -176,6 +176,49 @@ export default function SegmentationResultsPage() {
     setZoomLevel(1);
     setResetTrigger(prev => prev + 1);
   }, []);
+
+  const handleRunSegmentation = useCallback(async () => {
+    if (!projectId || runSegmentationLoading) return;
+
+    setRunSegmentationLoading(true);
+    setRunSegmentationError(null);
+    setRunSegmentationSuccess(null);
+
+    try {
+      try {
+        localStorage.setItem(modelSessionKey, selectedModel);
+        sessionStorage.setItem(modelSessionKey, selectedModel);
+      } catch {
+        // ignore storage write errors
+      }
+
+      const response = await segmentationApi.startSegmentation(projectId, selectedModel, "auto");
+
+      setRunSegmentationSuccess(
+        `${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} segmentation started successfully.`
+      );
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        "Failed to start segmentation";
+
+      console.error("[Segmentation] ❌ Full error:", error);
+      console.error("[Segmentation] ❌ Response data:", error?.response?.data);
+      console.error("[Segmentation] ❌ Status:", error?.response?.status);
+      console.error("[Segmentation] ❌ projectId:", projectId);
+      console.error("[Segmentation] ❌ selectedModel:", selectedModel);
+
+      setRunSegmentationError(errorMsg);
+    } finally {
+      setRunSegmentationLoading(false);
+    }
+  }, [projectId, selectedModel, runSegmentationLoading, modelSessionKey]);
 
   const {
     currentHistory,
@@ -333,11 +376,7 @@ export default function SegmentationResultsPage() {
 
   const handleSave = useCallback(async () => {
     if (!decodedMasks || !projectId || isSaving) return;
-    if (selectedModel === "model_2") {
-      setModel2DialogOpen(true);
-      return;
-    }
-
+    
     setIsSaving(true);
     try {
       const editableMasks = Object.entries(decodedMasks)
@@ -493,36 +532,35 @@ export default function SegmentationResultsPage() {
         </div>
 
         {/* Dropdown */}
-        <div className="relative">
-          <select
+        <Select
             value={selectedModel}
-            onChange={(e) => handleModelSelect(e.target.value as SegmentationModelId)}
-            className="text-sm border border-border rounded-md pl-3 pr-8 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-ring cursor-pointer appearance-none min-w-[160px]"
+          onValueChange={(value: string) => handleModelSelect(value as SegmentationModelId)}
           >
+          <SelectTrigger
+            size="sm"
+            className="min-w-[160px] rounded-xl bg-background px-3 text-sm shadow-sm hover:bg-muted/40"
+            aria-label="Select segmentation model"
+          >
+            <SelectValue placeholder="Select model" />
+          </SelectTrigger>
+          <SelectContent className="rounded-xl p-1.5 shadow-lg">
             {MODEL_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
+              <SelectItem
+                key={opt.value}
+                value={opt.value}
+                className="rounded-lg py-2"
+              >
+                {opt.label}
+              </SelectItem>
             ))}
-          </select>
-          {/* chevron */}
-          <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
-            <svg className="h-3.5 w-3.5 text-muted-foreground" fill="none" viewBox="0 0 10 10" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M2 3.5 5 6.5l3-3" />
-            </svg>
-          </div>
-        </div>
+          </SelectContent>
+        </Select>
 
         {/* Status badge */}
-        {selectedModel === "existing_model" ? (
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">
-            <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
-            Ready to segment
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 inline-block" />
-            Sprint 2 — UI only
-          </span>
-        )}
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">
+          <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
+          Ready to segment
+        </span>
 
         {/* Confirmation text */}
         <span className="text-xs text-muted-foreground">
@@ -530,6 +568,41 @@ export default function SegmentationResultsPage() {
             {MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label}
           </strong>
         </span>
+
+        {/* Run Segmentation Button */}
+        <button
+          onClick={handleRunSegmentation}
+          disabled={runSegmentationLoading}
+          className="ml-auto px-3 py-1.5 text-sm font-medium rounded-md bg-black text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 dark:bg-white dark:text-black dark:hover:bg-white/90"
+        >
+          {runSegmentationLoading ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Processing...
+            </>
+          ) : (
+            <>
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 0 1-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+              Run Segmentation
+            </>
+          )}
+        </button> 
+
+        {/* Error message */}
+        {runSegmentationError && (
+          <div className="text-xs text-red-600 dark:text-red-400 ml-auto">
+            {runSegmentationError}
+          </div>
+        )}
+
+        {/* Success message */}
+        {runSegmentationSuccess && (
+          <div className="w-full text-xs text-green-600 dark:text-green-400 mt-1">
+            {runSegmentationSuccess}
+          </div>
+        )}
       </div>
 
       {/* Main segmentation layout */}
@@ -597,6 +670,8 @@ export default function SegmentationResultsPage() {
             onReset={handleReset}
             selectedModel={selectedModel}
             onModelChange={handleModelSelect}
+            isModelActive={hasMasks}
+            isModelRunning={runSegmentationLoading}
           />
         </div>
       </div>
@@ -708,65 +783,13 @@ export default function SegmentationResultsPage() {
                 onReset={handleReset}
                 selectedModel={selectedModel}
                 onModelChange={handleModelSelect}
+                isModelActive={hasMasks}
+                isModelRunning={runSegmentationLoading}
               />
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
-
-      {/* Model 2 Acknowledgement Dialog */}
-      <AlertDialog open={model2DialogOpen} onOpenChange={setModel2DialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 16 16" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 2.5v7M8 12v1" />
-                </svg>
-              </span>
-              Model 2 — Sprint 1 Limitation
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-3">
-              <p>
-                Model 2 will only show acknowledgement in Sprint 1.{" "}
-                <strong>No segmentation API call will be made yet.</strong>
-              </p>
-              <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3">
-                <p className="text-sm text-amber-900 dark:text-amber-100">
-                  Full backend integration for Model 2 is scheduled for Sprint 2.
-                  You can still select it and your choice will be saved for when
-                  the integration is complete.
-                </p>
-              </div>
-              <div className="rounded-lg bg-muted p-3 font-mono text-xs space-y-0.5">
-                <p className="text-muted-foreground">{"// Request payload (Sprint 2)"}</p>
-                <p>{"{ "}<span className="text-blue-600 dark:text-blue-400">"model"</span>{": "}<span className="text-green-600 dark:text-green-400">"model_2"</span>{" }"}</p>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                if (selectedModel !== "model_2") {
-                  // already on existing_model
-                }
-                setModel2DialogOpen(false);
-              }}
-            >
-              Switch back to Existing Model
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setSelectedModel("model_2");
-                setModel2DialogOpen(false);
-              }}
-              className="bg-amber-600 text-white hover:bg-amber-700"
-            >
-              Understood, keep Model 2
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       {/* Revert to AI Confirmation Dialog */}
       <AlertDialog open={revertDialogOpen} onOpenChange={setRevertDialogOpen}>

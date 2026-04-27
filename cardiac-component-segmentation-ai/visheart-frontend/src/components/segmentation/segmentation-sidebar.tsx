@@ -437,11 +437,15 @@ export function SegmentationSidebar({
   zoomLevel,
   setZoomLevel,
   onReset,
-  selectedModel = "existing_model",
+  selectedModel = "medsam",
   onModelChange,
+  isModelActive = false,
+  isModelRunning = false,
 }: SegmentationSidebarProps & {
   selectedModel?: SegmentationModelId;
   onModelChange?: (value: SegmentationModelId) => void;
+  isModelActive?: boolean;
+  isModelRunning?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('tools');
 
@@ -489,19 +493,26 @@ export function SegmentationSidebar({
         <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] text-muted-foreground">Model:</span>
         <span className="text-[11px] font-semibold text-foreground truncate">
-          {selectedModel === "existing_model" ? "Existing Model" : "Model 2"}
+          {selectedModel === "medsam" ? "MedSam" : "Unet"}
         </span>
-        {selectedModel === "existing_model" ? (
-          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 shrink-0">
-            <span className="h-1 w-1 rounded-full bg-green-500 inline-block" />
-            Active
-          </span>
-        ) : (
-          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 shrink-0">
-            <span className="h-1 w-1 rounded-full bg-amber-500 inline-block" />
-            Sprint 2
-          </span>
-        )}
+        <span
+          className={cn(
+            "ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
+            isModelActive
+              ? "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400"
+              : isModelRunning
+              ? "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400"
+              : "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
+          )}
+        >
+          <span
+            className={cn(
+              "h-1 w-1 rounded-full inline-block",
+              isModelActive ? "bg-green-500" : isModelRunning ? "bg-blue-500 animate-pulse" : "bg-amber-500",
+            )}
+          />
+          {isModelActive ? "Active" : isModelRunning ? "Running" : "Pending"}
+        </span>
       </div>
 
       {/* Save Button - Moved to top for better accessibility */}

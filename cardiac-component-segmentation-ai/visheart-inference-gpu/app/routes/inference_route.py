@@ -298,13 +298,12 @@ async def queue_4d_reconstruction(
                 fourd_handler
             )
         )
-        
+
         return JobAcceptedResponse(uuid=request.uuid)
-        
+
     except Exception as e:
         print(f"Error queuing 4D reconstruction job {request.uuid}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to queue 4D reconstruction job: {str(e)}"
         )
-        

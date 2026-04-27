@@ -4,6 +4,7 @@ x-gpu-environment: &gpu-env
   JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
   YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
   MEDSAM_MODEL_NAME: medsam_vit_b.pth
+  # MEDSAM_MODEL_NAME: unet.pth
   FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
   GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
   SERVER_USERNAME: visheart-gpu-inference
@@ -19,7 +20,10 @@ services:
   # Frontend (Next.js) + Backend (Node.js)
   # ============================================
   visheart-app:
-    image: jesmineting/visheart-local:1.0.0
+    image: visheart-local:dev
+    build:
+      context: ..
+      dockerfile: visheart-local-deployment/Dockerfile
     container_name: visheart-local
     restart: unless-stopped
     ports:
