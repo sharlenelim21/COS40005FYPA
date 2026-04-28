@@ -2,9 +2,10 @@
 
 import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   Loader2,
+  ArrowLeft,
   Scan,
   AlertCircle,
   CheckCircle2,
@@ -53,6 +54,7 @@ type ModelId = typeof MODEL_OPTIONS[number]["value"];
 
 export default function LandmarkDetectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const router = useRouter();
 
   const {
     loading,
@@ -102,7 +104,11 @@ export default function LandmarkDetectionPage() {
   const handleToggleLandmark = useCallback((id: string) => {
     setVisibleLandmarks((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }, []);
@@ -120,7 +126,7 @@ export default function LandmarkDetectionPage() {
     const load = async () => {
       setIsLoadingModel(true);
       try {
-        const url = await getReconstructionGLB(state.currentFrame + 1);
+        const url = await getReconstructionGLB(state.currentFrame);
         if (!cancelled) setReconstructionModelUrl(url ?? null);
       } catch {
         if (!cancelled) setReconstructionModelUrl(null);
@@ -159,6 +165,15 @@ export default function LandmarkDetectionPage() {
   return (
     <div className="flex flex-col bg-background" style={{ height: "calc(100vh - 64px)" }}>
       <header className="flex items-center gap-3 px-4 py-2 border-b border-border bg-background flex-shrink-0 flex-wrap">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push(`/project/${projectId}`)}
+          className="gap-2 shrink-0"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Project
+        </Button>
 
         {/* Project name + badges */}
         <div className="flex items-center gap-2 min-w-0">
