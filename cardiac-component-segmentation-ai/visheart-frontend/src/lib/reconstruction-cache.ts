@@ -883,7 +883,7 @@ export class ReconstructionCache {
       return url;
     }
 
-    console.error(`[ReconstructionCache] ❌ Failed to get model URL - blob not found:`, {
+    console.warn(`[ReconstructionCache] ❌ Failed to get model URL - blob not found:`, {
       modelId,
       projectId,
       reconstructionId,

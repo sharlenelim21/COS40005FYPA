@@ -1,10 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Loader2, RefreshCw } from "lucide-react";
-import { useState, useCallback, useRef, useMemo } from "react";
+import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
+import { useState, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
+import axios from "axios";
 
 // Backend integration
 import { segmentationApi } from "@/lib/api";
@@ -21,6 +22,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 
 export type SegmentationModelId = "medsam" | "unet";
 
@@ -31,6 +33,11 @@ const MODEL_OPTIONS: { value: SegmentationModelId; label: string }[] = [
 
 const isValidModel = (v: string | null): v is SegmentationModelId =>
   v === "medsam" || v === "unet";
+
+interface SegmentationErrorResponse {
+  error?: string;
+  message?: string;
+}
 
 const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas").then((mod) => mod.ImageCanvas), {
   ssr: false,
@@ -153,7 +160,7 @@ export default function SegmentationResultsPage() {
       setIsLoadingModel(true);
       try {
         console.log(`[Segmentation 3D] Loading model for frame ${currentFrame}...`);
-        const url = await getReconstructionGLB(currentFrame + 1);
+        const url = await getReconstructionGLB(currentFrame);
         if (url) {
           console.log(`[Segmentation 3D] ✅ Loaded model for frame ${currentFrame}`);
           setReconstructionModelUrl(url);
@@ -192,7 +199,7 @@ export default function SegmentationResultsPage() {
         // ignore storage write errors
       }
 
-      const response = await segmentationApi.startSegmentation(projectId, selectedModel, "auto");
+      await segmentationApi.startSegmentation(projectId, selectedModel, "auto");
 
       setRunSegmentationSuccess(
         `${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} segmentation started successfully.`
@@ -201,16 +208,22 @@ export default function SegmentationResultsPage() {
       setTimeout(() => {
         window.location.reload();
       }, 1500);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const responseData = axios.isAxiosError<SegmentationErrorResponse>(error)
+        ? error.response?.data
+        : undefined;
       const errorMsg =
-        error?.response?.data?.error ||
-        error?.response?.data?.message ||
-        error?.message ||
+        responseData?.error ||
+        responseData?.message ||
+        (error instanceof Error ? error.message : undefined) ||
         "Failed to start segmentation";
 
       console.error("[Segmentation] ❌ Full error:", error);
-      console.error("[Segmentation] ❌ Response data:", error?.response?.data);
-      console.error("[Segmentation] ❌ Status:", error?.response?.status);
+      console.error("[Segmentation] Response data:", responseData);
+      console.error(
+        "[Segmentation] Status:",
+        axios.isAxiosError(error) ? error.response?.status : undefined,
+      );
       console.error("[Segmentation] ❌ projectId:", projectId);
       console.error("[Segmentation] ❌ selectedModel:", selectedModel);
 
@@ -423,7 +436,7 @@ export default function SegmentationResultsPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [decodedMasks, projectId, isSaving, updateContextMasks]);
+  }, [decodedMasks, projectId, isSaving, updateContextMasks, selectedModel]);
 
   const handleRevertToAI = useCallback(async () => {
     if (!projectId || isSaving || !undecodedMasks) return;
@@ -518,6 +531,16 @@ export default function SegmentationResultsPage() {
 
       {/* AI Model Selector Bar */}
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-background shrink-0 flex-wrap">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push(`/project/${projectId}`)}
+          className="gap-2 shrink-0"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Project
+        </Button>
+
         {/* Icon + label */}
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
