@@ -269,8 +269,94 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         const unetFrames = (gpuResult as any)?.frames;
         if (!Array.isArray(unetFrames)) {
           logger.warn(
-            `${serviceLocation}: UNET callback for job ${gpuJobId} does not contain a valid frames array. Skipping structured storage.`
+            `${serviceLocation}: UNET callback for job ${gpuJobId} does not contain a valid frames array. Falling back to filename-keyed parsing.`
           );
+
+          for (const [imageFilename, segmentationData] of Object.entries(
+            gpuResult as Record<string, any>
+          )) {
+            if (typeof segmentationData !== "object" || segmentationData === null) {
+              logger.warn(
+                `${serviceLocation}: Invalid segmentation data for ${imageFilename} in job ${gpuJobId}. Skipping.`
+              );
+              continue;
+            }
+
+            const filenameParts = imageFilename.replace(/\.jpg$/i, "").split("_");
+            let frameNumber: number | undefined;
+            let sliceNumber: number | undefined;
+
+            if (filenameParts.length >= 2) {
+              const potentialSlice = parseInt(
+                filenameParts[filenameParts.length - 1],
+                10
+              );
+              const potentialFrame = parseInt(
+                filenameParts[filenameParts.length - 2],
+                10
+              );
+              if (!isNaN(potentialSlice) && !isNaN(potentialFrame)) {
+                sliceNumber = potentialSlice;
+                frameNumber = potentialFrame;
+              } else {
+                logger.warn(
+                  `${serviceLocation}: Could not parse frame/slice numbers from filename parts for ${imageFilename} in job ${gpuJobId}`
+                );
+              }
+            }
+
+            if (frameNumber === undefined || sliceNumber === undefined) {
+              logger.warn(
+                `${serviceLocation}: Could not parse valid frame/slice from filename ${imageFilename} for job ${gpuJobId}. Skipping entry.`
+              );
+              continue;
+            }
+
+            if (!framesDataMap.has(frameNumber)) {
+              framesDataMap.set(frameNumber, {
+                frameindex: frameNumber,
+                frameinferred: true,
+                slices: new Map(),
+              });
+            }
+            const currentFrameData = framesDataMap.get(frameNumber)!;
+
+            if (!currentFrameData.slices.has(sliceNumber)) {
+              currentFrameData.slices.set(sliceNumber, {
+                sliceindex: sliceNumber,
+                componentboundingboxes: [],
+                segmentationmasks: [],
+              });
+            }
+            const currentSliceData = currentFrameData.slices.get(sliceNumber)!;
+
+            if (
+              segmentationData.masks &&
+              typeof segmentationData.masks === "object"
+            ) {
+              for (const [className, rleString] of Object.entries(
+                segmentationData.masks
+              )) {
+                if (typeof rleString === "string") {
+                  const mappedClass = mapGpuClassNameToEnum(className);
+                  if (mappedClass) {
+                    currentSliceData.segmentationmasks.push({
+                      class: mappedClass,
+                      segmentationmaskcontents: rleString,
+                    });
+                  } else {
+                    logger.warn(
+                      `${serviceLocation}: Skipping RLE mask for ${imageFilename} due to unmappable class "${className}" in job ${gpuJobId}.`
+                    );
+                  }
+                } else {
+                  logger.warn(
+                    `${serviceLocation}: Invalid RLE string for ${imageFilename}, class ${className} in job ${gpuJobId}. Skipping mask.`
+                  );
+                }
+              }
+            }
+          }
         } else {
           for (const frame of unetFrames) {
             const frameNumber = Number(

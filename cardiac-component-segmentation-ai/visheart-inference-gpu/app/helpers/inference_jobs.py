@@ -89,6 +89,74 @@ from app.helpers.inference_helpers import (
 # Import the new Pydantic models to be used for constructing the result
 from app.classes.pydantic_schema import ManualInputBox, ResultPerImageManual
 
+
+def normalize_unet_result_to_medsam_shape(raw_mask_payload: Any) -> Dict[str, Dict[str, Any]]:
+    """
+    Normalize UNET output payload to match MedSAM result shape:
+    {
+        "<filename>.jpg": {
+            "boxes": [...],
+            "masks": {"rv": "<rle>", ...}
+        }
+    }
+    """
+    if not isinstance(raw_mask_payload, dict):
+        return {}
+
+    # Already MedSAM-like: keep as-is and normalize order.
+    if all(
+        isinstance(value, dict) and "boxes" in value and "masks" in value
+        for value in raw_mask_payload.values()
+    ):
+        return sort_medsam_results(raw_mask_payload)
+
+    frames = raw_mask_payload.get("frames")
+    if not isinstance(frames, list):
+        return {}
+
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for frame in frames:
+        if not isinstance(frame, dict):
+            continue
+
+        frame_idx = frame.get("frameindex", frame.get("frame_index", 0))
+        try:
+            frame_idx = int(frame_idx)
+        except (TypeError, ValueError):
+            frame_idx = 0
+
+        slices = frame.get("slices")
+        if not isinstance(slices, list):
+            continue
+
+        for slice_item in slices:
+            if not isinstance(slice_item, dict):
+                continue
+
+            slice_idx = slice_item.get("sliceindex", slice_item.get("slice_index", 0))
+            try:
+                slice_idx = int(slice_idx)
+            except (TypeError, ValueError):
+                slice_idx = 0
+
+            masks_list = slice_item.get("segmentationmasks")
+            if not isinstance(masks_list, list):
+                masks_list = []
+
+            masks: Dict[str, str] = {}
+            for mask_item in masks_list:
+                if not isinstance(mask_item, dict):
+                    continue
+                class_name = mask_item.get("class")
+                rle_value = mask_item.get("segmentationmaskcontents")
+                if isinstance(class_name, str) and isinstance(rle_value, str):
+                    masks[class_name] = rle_value
+
+            image_key = f"unet_prediction_{frame_idx}_{slice_idx}.jpg"
+            normalized[image_key] = {"boxes": [], "masks": masks}
+
+    return sort_medsam_results(normalized)
+
 # Constants
 serviceLocation = "Inference Service"
 GPU_SEMAPHORE_COUNT = os.getenv("GPU_SEMAPHORE_COUNT", 1) # Default to 1 if not set
@@ -525,7 +593,7 @@ async def process_unet_job_with_semaphore(
     input_url: HttpUrl,
     uuid: UUID,
     callback_url: HttpUrl,
-    device: str = "cpu",
+    device: str = "auto",
     checkpoint_path: str | None = None,
 ):
     print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (unet)...")
@@ -543,7 +611,7 @@ async def _process_unet_job(
     input_url: HttpUrl,
     uuid: UUID,
     callback_url: HttpUrl,
-    device: str = "cpu",
+    device: str = "auto",
     checkpoint_path: str | None = None,
 ):
     print(f"[{serviceLocation}] Starting UNET job {uuid}")
@@ -579,9 +647,17 @@ async def _process_unet_job(
                 error_detail = (inference_output or {}).get("error", "UNET inference failed without detailed error.")
                 print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
             else:
-                result = inference_output.get("mask")
-                success = True
-                print(f"[{serviceLocation}] Successfully processed UNET job {uuid}")
+                normalized_result = normalize_unet_result_to_medsam_shape(
+                    inference_output.get("mask")
+                )
+
+                if not normalized_result:
+                    error_detail = "UNET inference returned no parsable masks in expected structure."
+                    print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                else:
+                    result = normalized_result
+                    success = True
+                    print(f"[{serviceLocation}] Successfully processed UNET job {uuid}")
 
     except Exception as e:
         error_details = traceback.format_exc()
