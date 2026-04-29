@@ -8,16 +8,11 @@ Architecture:
 - 4-class cardiac segmentation: RV (Right Ventricle), MYO (Myocardium), 
   LVC (Left Ventricular Chamber), Background
 
-Device Selection:
-- "cpu" (default): Ensures broad compatibility; recommended for CPU-only machines
-- "cuda": Uses NVIDIA GPU if available; raises error if no GPU found
-- "auto": Automatically detects GPU; falls back to CPU if unavailable
-
 Input: Path to a NIfTI file (.nii or .nii.gz) containing 4D cardiac imaging data
 Output: JSON with frame/slice/segmentation data identical to MedSAM format for database compatibility
 
 Key Features:
-- Preprocessing: min-max scaling [0,1]; handles NaN/inf values
+- Preprocessing: Min-max normalization to [0,1] range; handles NaN/inf values
 - Inference: Model runs at 256x256 resolution for speed; output resized to original dimensions
 - Encoding: RLE (Run-Length Encoding) for efficient mask storage
 - Schema: Output structure matches backend database expectations (frameinferred=True, etc.)"""
@@ -159,7 +154,7 @@ def resolve_device(preferred: str) -> torch.device:
 def normalize_slice(slice_2d: np.ndarray) -> np.ndarray:
     """DEVELOPER NOTE: Preprocessing - Intensity Normalization
     
-    Implements min-max normalization to prepare cardiac image slices for model inference:
+    Implements Z-score normalization to prepare cardiac image slices for model inference:
     
     1. Clean Invalid Values: Replace NaN, +inf, -inf with 0 (common in medical imaging)
     2. Min-Max Normalization: Scale distribution to [0,1] range
@@ -227,7 +222,7 @@ def extract_volume(nifti_path: str) -> np.ndarray:
 def run_model2_inference(
     nifti_path: str,
     checkpoint_path: str,
-    device: str = "auto",
+    device: str = "cpu",
 ) -> Dict[str, Any]:
     """DEVELOPER NOTE: Main Inference Pipeline
     
@@ -367,7 +362,7 @@ def main() -> int:
     
     Environment Variables:
     - MODEL2_CHECKPOINT_PATH: Path to UNet model weights file (required)
-    - MODEL2_DEVICE: Default device selection (default: "auto")
+    - MODEL2_DEVICE: Default device selection (default: "cpu")
     
     Command-line Arguments:
     - nifti_path: Required - input cardiac imaging file

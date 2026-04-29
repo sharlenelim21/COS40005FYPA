@@ -87,7 +87,7 @@ class UnetInferenceRequest(BaseModel):
     url: HttpUrl = Field(..., description="Presigned URL for input NIfTI file")
     uuid: UUID = Field(..., description="Unique identifier for this UNET inference request")
     callback_url: HttpUrl = Field(..., description="Callback URL for sending results")
-    device: Literal["cpu", "cuda", "auto"] = Field(default="cpu", description="Compute device: cpu, cuda, or auto")
+    device: Literal["cpu", "cuda", "auto"] = Field(default="auto", description="Compute device: cpu, cuda, or auto")
     checkpoint_path: str | None = Field(default=None, description="Optional checkpoint override path")
     segmentation_model: Literal["unet"] = Field(default="unet", description="Model tag used by webhook processing")
 

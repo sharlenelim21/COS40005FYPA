@@ -54,12 +54,6 @@ const resolvePythonScriptPath = (): string => {
  * DEVELOPER NOTE: Local UNet Inference Wrapper
  * 
  * This function serves as a TypeScript bridge to the Python UNet inference engine.
- * Key characteristics:
- * - Runs locally on the current machine (no Cloud GPU required)
- * - Defaults to CPU computation for broad machine compatibility
- * - Can utilize NVIDIA GPU if available (via deviceType: "cuda")
- * - Automatically selects optimal device (deviceType: "auto")
- * - Outputs data structure is identical to MedSAM for seamless database integration
  * 
  * Input: Path to a NIfTI cardiac imaging file
  * Output: MedSAM-compatible frame/slice/mask JSON structure
@@ -68,7 +62,7 @@ const resolvePythonScriptPath = (): string => {
  * @param projectId - Optional project ID for logging purposes
  * @param userId - Optional user ID for logging purposes
  * @param modelConfig - Device and checkpoint configuration:
- *   - deviceType: "cpu" (default), "cuda" (NVIDIA GPU), or "auto" (automatic selection)
+ *   - deviceType: "cpu" (cpu), "cuda" (NVIDIA GPU), or "auto" (automatic selection)
  *   - checkpointPath: Model weights file path (defaults to MODEL2_CHECKPOINT_PATH env var)
  * @returns Promise with inference result containing frame/slice/mask data or error details
  */
@@ -90,7 +84,6 @@ export async function inferModel2Mask(
   logger.info(
     `${serviceLocation}: Preparing UNet inference for NIfTI file ${niftiFilePath}${projectId ? ` (project ${projectId})` : ""}${userId ? ` by user ${userId}` : ""}`
   );
-
   if (!fs.existsSync(niftiFilePath)) {
     return {
       success: false,
