@@ -257,16 +257,14 @@ export const segmentationApi = {
     segmentationModel: "medsam" | "unet" = "medsam",
     deviceType: "cpu" | "cuda" | "auto" = "auto"
   ) => {
-    console.log("[API] startSegmentation request:", {
-      projectId,
-      segmentationModel,
-      deviceType,
+    const endpoint = `/segmentation/start-segmentation/${projectId}`;
+    const payload = { segmentationModel, deviceType };
+    console.log("[API] startSegmentation POST:", {
+      endpoint,
+      payload,
     });
 
-    const response = await api.post(
-      `/segmentation/start-segmentation/${projectId}`,
-      { segmentationModel, deviceType }
-    );
+    const response = await api.post(endpoint, payload);
 
     return response.data;
   },

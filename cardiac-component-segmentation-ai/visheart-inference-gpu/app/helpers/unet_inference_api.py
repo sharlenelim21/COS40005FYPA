@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import time
 from typing import Any, Dict, Optional
 
 
@@ -17,6 +18,14 @@ def _resolve_unet_script_path() -> str:
     if env_path:
         return env_path
 
+    # Prefer local script inside visheart-inference-gpu container/workspace.
+    local_script = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "external_unet_inference.py")
+    )
+    if os.path.exists(local_script):
+        return local_script
+
+    # Fallback to monorepo script path used in some development setups.
     current_dir = os.path.dirname(__file__)
     # app/helpers -> app -> visheart-inference-gpu -> cardiac-component-segmentation-ai
     monorepo_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
@@ -29,6 +38,7 @@ def _load_unet_module():
         return _cached_unet_module
 
     script_path = _resolve_unet_script_path()
+    print(f"[UNET API] Loading UNET module from script path: {script_path}")
     if not os.path.exists(script_path):
         raise FileNotFoundError(f"UNET inference script not found: {script_path}")
 
@@ -58,6 +68,11 @@ def run_unet_inference_from_nifti(
         resolved_checkpoint = os.path.join(os.path.dirname(__file__), "..", "models", "unet.pth")
         resolved_checkpoint = os.path.abspath(resolved_checkpoint)
 
+    print(
+        "[UNET API] Inference config: "
+        f"model=unet, device={device}, input_nifti={nifti_path}, checkpoint={resolved_checkpoint}"
+    )
+
     # Validate checkpoint exists before passing to inference function
     if not os.path.isfile(resolved_checkpoint):
         return {
@@ -67,8 +82,13 @@ def run_unet_inference_from_nifti(
                      f"Please follow the setup guide in visheart-inference-gpu/README.md"
         }
 
-    return module.run_model2_inference(
+    start_time = time.perf_counter()
+    print(f"[UNET API] Inference start: model=unet, device={device}")
+    result = module.run_model2_inference(
         nifti_path=nifti_path,
         checkpoint_path=resolved_checkpoint,
         device=device,
     )
+    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+    print(f"[UNET API] Inference end: model=unet, device={device}, elapsed_ms={elapsed_ms}")
+    return result

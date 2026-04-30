@@ -821,14 +821,24 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         // Filter jobs by current project ID
         const projectJobs = response.jobs.filter((job: ProjectTypes.UserJob) => job.projectId === projectId);
-        setJobs(projectJobs);
         console.log(`Found ${projectJobs.length} jobs for project ${projectId}:`, projectJobs);
 
-        // Check for logical errors: completed jobs should have masks
-        const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
-        if (completedJobs.length > 0 && !hasMasks) {
-          console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
-          setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
+        // If all returned jobs are failed and no masks exist, treat them as stale so users can re-run segmentation locally.
+        const onlyFailedJobs = projectJobs.length > 0 && projectJobs.every((j: ProjectTypes.UserJob) => j.status === ProjectTypes.JobStatus.FAILED);
+        if (onlyFailedJobs && !hasMasks) {
+          console.warn(`[ProjectContext] Detected only failed jobs for project ${projectId} and no masks. Treating as no active jobs to allow rerun.`);
+          setJobs([]);
+          // Keep a visible warning so developers can investigate server-side failures
+          setJobsError(`Previous segmentation attempts failed; you can re-run segmentation.`);
+        } else {
+          setJobs(projectJobs);
+
+          // Check for logical errors: completed jobs should have masks
+          const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
+          if (completedJobs.length > 0 && !hasMasks) {
+            console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
+            setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
+          }
         }
       })
       .catch((error: unknown) => {

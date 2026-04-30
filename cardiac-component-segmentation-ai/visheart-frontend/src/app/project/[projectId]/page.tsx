@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // API
 import { projectApi, segmentationApi } from "@/lib/api";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
 
 // UI Components
 import { Button } from "@/components/ui/button";
@@ -57,6 +58,7 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
   const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, refreshReconstructions } = useProject();
+  const { processingUnit } = useGpuStatus();
 
   // Update page title dynamically
   useEffect(() => {
@@ -341,15 +343,24 @@ export default function ProjectPage() {
     setSegmentationError(null);
 
     try {
-      // Get the last selected model from sessionStorage
-      const storedModel =
-        typeof window !== "undefined"
-          ? (sessionStorage.getItem(`selectedModel_${projectId}`) as "medsam" | "unet" | null)
-          : null;
+      console.log('[Project] Start segmentation button clicked - current jobs state:', { jobs });
+      console.log('[Project] jobsError:', jobsError);
+
+      // CPU-safe default: only choose MedSAM when GPU is explicitly online.
+      const detectedMode = processingUnit.gpuAvailable ? "gpu" : "cpu";
+      const selectedModel: "medsam" | "unet" =
+        detectedMode === "gpu" ? "medsam" : "unet";
+
+      console.log("[Project] Start AI Segmentation mode/model:", {
+        processingUnit,
+        detectedMode,
+        selectedModel,
+      });
 
       await segmentationApi.startSegmentation(
         projectId,
-        storedModel ?? "medsam"
+        selectedModel,
+        "auto"
       );
       
       // Wait a moment for the backend to create the job, then refresh

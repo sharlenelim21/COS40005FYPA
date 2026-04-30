@@ -44,7 +44,7 @@ export const generateAISegmentationForReconstruction = async (
 
         await fs.ensureDir(baseTempDir);
 
-        // 1. Validate editable segmentation masks exist
+        // 1. Validate segmentation masks exist
         const hasMasksResult = await readProjectSegmentationMask(projectId);
         if (!hasMasksResult.projectsegmentationmasks || hasMasksResult.projectsegmentationmasks.length === 0) {
             return { success: false, message: "No segmentation masks found. Run AI segmentation first for reconstruction." };
@@ -67,14 +67,28 @@ export const generateAISegmentationForReconstruction = async (
         const planeHeightForRLE = project.dimensions.height;
         const planeWidthForRLE = project.dimensions.width;
 
-        // 3. Select ONLY editable masks (user-refined segmentation) for reconstruction
-        let segmentationsToProcess: IProjectSegmentationMask[] = [];
-
-        // Select only editable masks for reconstruction accuracy
+        // 3. Select the best reconstruction mask set.
+        // Prefer the editable mask, but fall back to the AI mask if the editable export is missing myocardium labels.
         const editableMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === false);
-        if (editableMask) {
+        const aiMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === true);
+
+        const maskHasMyocardium = (mask?: IProjectSegmentationMask) =>
+            !!mask?.frames?.some(frame =>
+                frame.slices?.some(slice =>
+                    slice.segmentationmasks?.some(entry => String(entry.class).toLowerCase() === "myo")
+                )
+            );
+
+        let segmentationsToProcess: IProjectSegmentationMask[] = [];
+        if (editableMask && maskHasMyocardium(editableMask)) {
             segmentationsToProcess = [editableMask];
             logger.info(`${serviceLocation}: Using editable mask for reconstruction`);
+        } else if (aiMask && maskHasMyocardium(aiMask)) {
+            segmentationsToProcess = [aiMask];
+            logger.warn(`${serviceLocation}: Editable mask has no myocardium labels; falling back to AI mask for reconstruction`);
+        } else if (editableMask) {
+            logger.error(`${serviceLocation}: No myocardium (myo/label 2) found in editable or AI masks for project ${projectId}`);
+            return { success: false, message: "Reconstruction requires myocardium labels in the segmentation masks. Please re-run segmentation or verify the saved masks." };
         } else {
             logger.error(`${serviceLocation}: No editable mask found for project ${projectId}`);
             return { success: false, message: "No editable segmentation mask available for reconstruction. Please complete or refine segmentation first." };
@@ -155,7 +169,7 @@ export const generateAISegmentationForReconstruction = async (
             pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
         }
 
-        logger.info(`${serviceLocation}: Executing Python script for reconstruction NIfTI generation of project ${projectId}`);
+        logger.info(`${serviceLocation}: Saving output - executing Python script for reconstruction NIfTI generation of project ${projectId}`);
         logger.debug(`${serviceLocation}: Python command: ${pythonCommand}`);
 
         const pythonResult = await new Promise<{ success: boolean; stdout?: string; stderr?: string; error?: string }>((resolve) => {
@@ -209,7 +223,7 @@ export const generateAISegmentationForReconstruction = async (
             return { success: false, message: "Failed to extract S3 key after upload." };
         }
 
-        logger.info(`${serviceLocation}: Successfully uploaded reconstruction NIfTI to S3`);
+        logger.info(`${serviceLocation}: Saving output - successfully uploaded reconstruction NIfTI to S3`);
 
         // Generate presigned URL for GPU server access
         const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);

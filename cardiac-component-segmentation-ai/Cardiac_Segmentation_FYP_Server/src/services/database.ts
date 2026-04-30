@@ -720,6 +720,8 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is saved
   segmentationmaskRLE: { type: Boolean, required: false }, // RLE of the segmentation mask (e.g., S3 bucket URL)
   isMedSAMOutput: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is a MedSAM output
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model tag
+  model_used: { type: String, required: false }, // Compatibility field for external tools
   // Properties of extracted folder + location tracking
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
@@ -1240,6 +1242,10 @@ const createProjectSegmentationMask = async (
 ): Promise<ProjectSegmentationMaskCrudResult> => {
   const operation = CRUDOperation.CREATE;
   const psm = projectsegmentationmask;
+  // Backwards-compatibility: populate model_used from segmentationModel if not explicitly provided
+  if (!psm.model_used && psm.segmentationModel) {
+    psm.model_used = psm.segmentationModel as unknown as string;
+  }
   try {
     const projectid = projectsegmentationmask.projectid;
     const projectidexists = await projectModel.exists({ _id: projectid });
@@ -1866,6 +1872,7 @@ const jobSchema = new mongoose.Schema({
   segmentationDescription: { type: String, required: false }, // Optional user-defined description
   segmentationSouce: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
   segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model used for segmentation
+  model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
 }, { timestamps: true });
 const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 
@@ -1873,6 +1880,10 @@ const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 const createJob = async (job: IJob): Promise<JobCrudResult> => {
   const operation = CRUDOperation.CREATE;
   try {
+    // Backwards-compatibility: ensure model_used is set from segmentationModel when missing
+    if (!('model_used' in job) && job.segmentationModel) {
+      (job as any).model_used = job.segmentationModel as unknown as string;
+    }
     const newJob = new jobModel(job);
     const results = await newJob.save();
     if (results._id) {
