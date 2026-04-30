@@ -46,7 +46,7 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<void>;
   guestLogin: () => Promise<void>;
   logout: () => Promise<void>;
-  checkAuthStatus: () => Promise<void>;
+  checkAuthStatus: () => Promise<User | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -62,14 +62,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuthStatus();
   }, []);
 
-  const checkAuthStatus = async () => {
+  const checkAuthStatus = async (): Promise<User | null> => {
     setLoading(true);
     try {
       const response = await authApi.fetchUser();
       if (response.fetch && response.user) {
         setUser(response.user);
+        return response.user;
       } else {
         setUser(null);
+        return null;
       }
     } catch (err) {
       // Only log unexpected errors (not authentication failures)
@@ -79,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.error("Auth check failed:", err);
       }
       setUser(null);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -89,11 +92,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const response = await authApi.login(username, password);
-      if (response.login) {
-        await checkAuthStatus(); // Refresh user data
+      if (!response?.login) {
+        throw new Error("Login failed");
+      }
+
+      const authenticatedUser = await checkAuthStatus();
+      if (!authenticatedUser) {
+        throw new Error(
+          "Login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
+        );
       }
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || "Login failed";
+      const errorMessage =
+        err.response?.data?.message || err.message || "Login failed";
       setError(errorMessage);
       throw err;
     } finally {

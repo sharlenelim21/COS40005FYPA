@@ -188,7 +188,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         }
 
         // Generate segmentation NIfTI file directly (no HTTP call needed)
-        logger.info(`${serviceLocation}: Generating segmentation NIfTI for project ${projectId}`);
+        logger.info(`${serviceLocation}: Reconstruction started - generating segmentation NIfTI for project ${projectId}`);
         
         const segmentationResult = await generateAISegmentationForReconstruction(projectId, user?._id);
         
@@ -205,7 +205,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
             return { success: false, message: "Failed to prepare segmentation file for GPU access." };
         }
 
-        logger.info(`${serviceLocation}: Successfully generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
+        logger.info(`${serviceLocation}: Reconstruction saving output - generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
 
         // Generate job UUID
         const jobUuid = uuidv4();
@@ -256,7 +256,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         const reconstructionResult = await sendReconstructionRequestToCloudGpu(reconstructionPayload, gpuAuthToken);
 
         if (reconstructionResult.success && reconstructionResult.jobId) {
-            logger.info(`${serviceLocation}: Reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
+            logger.info(`${serviceLocation}: Callback sent - reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
 
             // Create job record AFTER successful GPU submission
             const jobData: Partial<IJob> = {

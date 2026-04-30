@@ -21,6 +21,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
 
 export type SegmentationModelId = "medsam" | "unet";
 
@@ -44,6 +45,8 @@ const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas
 export default function SegmentationResultsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+  const { processingUnit } = useGpuStatus();
+  const isGpuMode = processingUnit.gpuAvailable;
 
   const {
     loading,
@@ -126,7 +129,26 @@ export default function SegmentationResultsPage() {
     }
   }, [modelSessionKey]);
 
+  // Enforce CPU-safe model selection: MedSAM is only available in NVIDIA GPU mode.
+  useEffect(() => {
+    if (isGpuMode) return;
+    if (selectedModel !== "medsam") return;
+
+    setSelectedModel("unet");
+    try {
+      localStorage.setItem(modelSessionKey, "unet");
+      sessionStorage.setItem(modelSessionKey, "unet");
+    } catch {
+      // ignore storage write errors
+    }
+  }, [isGpuMode, selectedModel, modelSessionKey]);
+
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
+    if (!isGpuMode && value === "medsam") {
+      setRunSegmentationError("This model is only available with NVIDIA GPU.");
+      return;
+    }
+
     setSelectedModel(value);
     try {
       localStorage.setItem(modelSessionKey, value);
@@ -138,7 +160,7 @@ export default function SegmentationResultsPage() {
     setRunSegmentationSuccess(
       `${MODEL_OPTIONS.find((o) => o.value === value)?.label} selected successfully.`
     );
-  }, [modelSessionKey]);
+  }, [isGpuMode, modelSessionKey]);
 
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
@@ -185,17 +207,28 @@ export default function SegmentationResultsPage() {
     setRunSegmentationSuccess(null);
 
     try {
+      const detectedMode = isGpuMode ? "gpu" : "cpu";
+      const effectiveModel: SegmentationModelId = isGpuMode ? selectedModel : "unet";
+
       try {
-        localStorage.setItem(modelSessionKey, selectedModel);
-        sessionStorage.setItem(modelSessionKey, selectedModel);
+        localStorage.setItem(modelSessionKey, effectiveModel);
+        sessionStorage.setItem(modelSessionKey, effectiveModel);
       } catch {
         // ignore storage write errors
       }
 
-      const response = await segmentationApi.startSegmentation(projectId, selectedModel, "auto");
+      console.log("[Segmentation] Run request mode/model:", {
+        processingUnit,
+        detectedMode,
+        selectedModel,
+        effectiveModel,
+        requestPayload: { segmentationModel: effectiveModel, deviceType: "auto" },
+      });
+
+      const response = await segmentationApi.startSegmentation(projectId, effectiveModel, "auto");
 
       setRunSegmentationSuccess(
-        `${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} segmentation started successfully.`
+        `${MODEL_OPTIONS.find((o) => o.value === effectiveModel)?.label} segmentation started successfully.`
       );
 
       setTimeout(() => {
@@ -218,7 +251,7 @@ export default function SegmentationResultsPage() {
     } finally {
       setRunSegmentationLoading(false);
     }
-  }, [projectId, selectedModel, runSegmentationLoading, modelSessionKey]);
+  }, [projectId, selectedModel, runSegmentationLoading, modelSessionKey, isGpuMode, processingUnit]);
 
   const {
     currentHistory,
@@ -548,6 +581,7 @@ export default function SegmentationResultsPage() {
               <SelectItem
                 key={opt.value}
                 value={opt.value}
+                disabled={!isGpuMode && opt.value === "medsam"}
                 className="rounded-lg py-2"
               >
                 {opt.label}
@@ -555,6 +589,12 @@ export default function SegmentationResultsPage() {
             ))}
           </SelectContent>
         </Select>
+
+        {!isGpuMode && (
+          <span className="text-xs text-muted-foreground">
+            This model is only available with NVIDIA GPU.
+          </span>
+        )}
 
         {/* Status badge */}
         <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">

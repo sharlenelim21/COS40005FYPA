@@ -231,6 +231,7 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         segmentationmaskRLE: true,
         isMedSAMOutput: resolvedSegmentationModel === SegmentationModel.MEDSAM,
         segmentationModel: resolvedSegmentationModel,
+        model_used: resolvedSegmentationModel as unknown as string,
         frames: [],
       };
 
@@ -573,6 +574,8 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
               isSaved: false,
               segmentationmaskRLE: true,
               isMedSAMOutput: false,
+              segmentationModel: resolvedSegmentationModel,
+              model_used: resolvedSegmentationModel as unknown as string,
               frames: deepCopyFrames(
                 aiCreationResult.projectsegmentationmask.frames
               ),

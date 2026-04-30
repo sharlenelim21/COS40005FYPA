@@ -271,6 +271,7 @@ const sendUnetInferenceRequestToApi = async (
     },
     gpuAuthToken: string
 ): Promise<{ success: boolean; jobId?: string; status?: string; error?: string }> => {
+    const requestStart = Date.now();
     const unetBaseUrl = await resolveMedsamBaseUrl();
     if (!unetBaseUrl) {
         logger.error(`${serviceLocation}: UNET API server URL could not be resolved from local/remote configuration.`);
@@ -283,9 +284,15 @@ const sendUnetInferenceRequestToApi = async (
     }
 
     const endpoint = `${unetBaseUrl}/inference/v2/unet-inference`;
-    logger.warn(`[Inference Debug] Final UNET endpoint = ${endpoint}`);
+    logger.warn(
+        `[Inference Debug] Final UNET endpoint = ${endpoint}. model=${inferenceData.segmentationModel}, device=${inferenceData.device || "auto"}`
+    );
 
     try {
+        logger.info(
+            `${serviceLocation}: Submitting UNET inference job uuid=${inferenceData.uuid}, model=${inferenceData.segmentationModel}, device=${inferenceData.device || "auto"}, callback=${inferenceData.callbackUrl}`
+        );
+
         const response = await axios.post<UnetApiResponse>(
             endpoint,
             {
@@ -307,6 +314,9 @@ const sendUnetInferenceRequestToApi = async (
         );
 
         if (response.status === 202 && response.data) {
+            logger.info(
+                `${serviceLocation}: UNET submission accepted in ${Date.now() - requestStart}ms. uuid=${inferenceData.uuid}, remoteStatus=${response.data.status || "queued"}`
+            );
             return {
                 success: true,
                 jobId: response.data.job_id || response.data.uuid || inferenceData.uuid,
@@ -319,7 +329,10 @@ const sendUnetInferenceRequestToApi = async (
             error: response.data?.error || `UNET API returned unexpected response (status ${response.status}).`,
         };
     } catch (error: any) {
-        logger.error(`${serviceLocation}: Error sending UNET inference request to ${endpoint}: ${error.message}`, { error });
+        logger.error(
+            `${serviceLocation}: Error sending UNET inference request to ${endpoint} after ${Date.now() - requestStart}ms: ${error.message}`,
+            { error }
+        );
         let errorMessage = `Error communicating with UNET API: ${error.message}`;
         if (error.response?.status) {
             errorMessage += ` (Status: ${error.response.status})`;
