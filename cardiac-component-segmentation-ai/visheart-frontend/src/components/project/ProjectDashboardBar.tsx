@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { useProject } from "@/context/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,14 +18,12 @@ import {
   ChevronDown,
   Layers,
   Box,
-  Image as ImageIcon,
-  Crosshair
+  Image as ImageIcon
 } from "lucide-react";
 import { segmentationApi, reconstructionApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export function ProjectDashboardBar() {
-  const router = useRouter();
   const { 
     projectData, 
     loading, 
@@ -211,18 +208,6 @@ export function ProjectDashboardBar() {
 
               {/* Right - Action Buttons */}
               <div className="flex items-center gap-2">
-                {/* Sprint 2: Landmark Detection route */}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => router.push(`/project/${projectData.projectId}/landmark-detection`)}
-                  title="Open landmark detection page"
-                >
-                  <Crosshair className="h-3 w-3 mr-1.5" />
-                  Landmarks
-                </Button>
-
                 {/* Export Segmentation Masks */}
                 <Button 
                   variant="outline" 
