@@ -38,6 +38,7 @@ import {
   Layers, 
   Sparkles,
   Box,
+  Crosshair,
   ChevronRight,
   Trash2
 } from "lucide-react";
@@ -442,7 +443,7 @@ export default function ProjectPage() {
       
       // Poll for the job to appear - retry up to 5 times with 1 second delay
       console.log("[Project] 🔄 Polling for reconstruction job to appear...");
-      let jobFound = false;
+      const jobFound = false;
       for (let i = 0; i < 5 && !jobFound; i++) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         console.log(`[Project] 🔍 Polling attempt ${i + 1}/5...`);
@@ -970,6 +971,28 @@ export default function ProjectPage() {
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>Update masks to regenerate 3D models</p>
+                        </TooltipContent>
+                      </Tooltip>
+
+                      {/* Landmark Detection */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                            <Link href={`/project/${projectId}/landmark-detection`}>
+                              <div className="flex items-center gap-3 w-full">
+                                <Crosshair className="h-5 w-5 text-primary" />
+                                <div className="text-left flex-1">
+                                  <p className="font-semibold">Detect Landmarks</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Identify cardiac landmarks on MRI slices
+                                  </p>
+                                </div>
+                              </div>
+                            </Link>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Open landmark detection for this project</p>
                         </TooltipContent>
                       </Tooltip>
 
