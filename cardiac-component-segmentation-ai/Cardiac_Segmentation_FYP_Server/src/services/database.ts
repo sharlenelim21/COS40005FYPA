@@ -13,7 +13,7 @@ const serviceLocation = "Database"; // Service location for error logging
 
 // Import Types
 import { IUser, IUserDocument, IUserSafe, UserRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
-import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
+import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, IProjectLandmarkDetection, IProjectLandmarkDetectionDocument, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
 import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat } from "../types/database_types"; // Import the project reconstruction types
 import { JobStatus, IJob, IJobDocument, JobCrudResult, SegmentationModel } from "../types/database_types"; // Import the job types
 import { IGPUHost, IGPUHostDocument, GPUHostCrudResult } from "../types/database_types"; // Import the GPU host types
@@ -661,6 +661,9 @@ projectSchema.pre('deleteOne', { document: true, query: false }, async function 
     // Delete all masks associated with this project
     const maskDeleteResult = await projectSegmentationMaskModel.deleteMany({ projectid: this._id });
     logger.info(`${serviceLocation}: Deleted ${maskDeleteResult.deletedCount} segmentation masks for project ${this._id}`);
+
+    const landmarkDeleteResult = await projectLandmarkDetectionModel.deleteMany({ projectid: this._id });
+    logger.info(`${serviceLocation}: Deleted ${landmarkDeleteResult.deletedCount} landmark detections for project ${this._id}`);
     
     // Delete all inference jobs (segmentation/reconstruction) associated with this project
     const jobDeleteResult = await jobModel.deleteMany({ projectid: this._id });
@@ -739,6 +742,53 @@ const projectSegmentationMaskModel = model<IProjectSegmentationMask, Model<IProj
 
 // Add segmentation mask indexes after model creation  
 projectSegmentationMaskSchema.index({ projectid: 1 }); // Index on project ID for segmentation masks
+
+const landmarkCoordSchema = {
+  type: [Number],
+  required: false,
+  validate: {
+    validator: (value: number[]) => Array.isArray(value) && value.length === 2,
+    message: "Landmark coordinates must be [x, y]",
+  },
+};
+
+const projectLandmarkPredictionSchema = new Schema({
+  frame_id: { type: Number, required: true },
+  slice_id: { type: Number, required: false },
+  rv_insertion_1: { ...landmarkCoordSchema, required: true },
+  rv_insertion_2: { ...landmarkCoordSchema, required: true },
+  apex: landmarkCoordSchema,
+  basal_anterior: landmarkCoordSchema,
+  basal_inferior: landmarkCoordSchema,
+  basal_lateral: landmarkCoordSchema,
+  mid_anterior: landmarkCoordSchema,
+}, { _id: false });
+
+const projectLandmarkDetectionSchema = new Schema<IProjectLandmarkDetectionDocument>({
+  projectid: { type: String, required: true },
+  name: { type: String, required: true },
+  description: { type: String, required: false },
+  isSaved: { type: Boolean, required: true, default: false },
+  modelUsed: { type: String, required: true },
+  imageDimensions: {
+    width: { type: Number, required: true },
+    height: { type: Number, required: true },
+  },
+  totalFrames: { type: Number, required: true },
+  selectedSlice: { type: Number, required: false },
+  predictions: { type: [projectLandmarkPredictionSchema], required: true },
+}, { timestamps: true });
+
+projectLandmarkDetectionSchema.pre('save', async function (next) {
+  const projectExists = await projectModel.exists({ _id: this.projectid });
+  if (!projectExists) {
+    throw new Error('Referenced project does not exist');
+  }
+  next();
+});
+
+const projectLandmarkDetectionModel = model<IProjectLandmarkDetectionDocument, Model<IProjectLandmarkDetectionDocument>>("Landmark Detections", projectLandmarkDetectionSchema);
+projectLandmarkDetectionSchema.index({ projectid: 1, createdAt: -1 });
 
 // Project Reconstruction Collection
 // Create simplified Project 4D Reconstruction schema for AI SDF-based reconstruction
@@ -2153,7 +2203,7 @@ const updateGPUHost = async (updates: Partial<IGPUHost>): Promise<GPUHostCrudRes
 // Using ES modules instead of CommonJS which is module.exports = {connectToDatabase, User};
 // ONLY unit tests should use userModel, fileModel directly, otherwise use the created functions to create users/files.
 export {
-  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, 
+  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, IProjectLandmarkDetection, IProjectLandmarkDetectionDocument, projectModel, projectSegmentationMaskModel, projectLandmarkDetectionModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, 
   // Project Reconstruction exports
   IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, projectReconstructionModel, createProjectReconstruction, readProjectReconstruction, updateProjectReconstruction, deleteProjectReconstruction,
   // Job and GPU Host exports

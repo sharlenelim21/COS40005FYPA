@@ -34,6 +34,7 @@ from app.helpers.inference_jobs import (
     execute_medsam_manual_job_synchronously,
     process_fourd_reconstruction_job_with_semaphore,
     process_unet_job_with_semaphore,
+    process_landmark_job_with_semaphore,
 )
 
 from app.helpers.inference_helpers import (
@@ -100,6 +101,23 @@ class UnetInferenceRequest(BaseModel):
             raise ValueError(
                 f"Invalid device '{v}'. Must be one of: {', '.join(allowed_devices)}"
             )
+        return v
+
+
+class LandmarkInferenceRequest(BaseModel):
+    url: HttpUrl = Field(..., description="Presigned URL for input NIfTI file")
+    uuid: UUID = Field(..., description="Unique identifier for this landmark inference request")
+    callback_url: HttpUrl = Field(..., description="Callback URL for sending results")
+    model: str = Field(default="unetresnet34-landmark", description="Landmark model tag")
+    device: Literal["cpu", "cuda", "auto"] = Field(default="auto", description="Compute device: cpu, cuda, or auto")
+    checkpoint_path: str | None = Field(default=None, description="Optional checkpoint override path")
+
+    @field_validator('device')
+    @classmethod
+    def validate_device(cls, v: str) -> str:
+        allowed_devices = {"cpu", "cuda", "auto"}
+        if v not in allowed_devices:
+            raise ValueError(f"Invalid device '{v}'. Must be one of: {', '.join(allowed_devices)}")
         return v
 
 
@@ -183,6 +201,33 @@ async def unet_inference_async(
     print(f"[{request.uuid}] UNET async task added.")
     response_data = JobAcceptedResponse(uuid=request.uuid)
     return response_data
+
+
+@router.post(
+    "/landmark-detection",
+    status_code=202,
+    response_model=JobAcceptedResponse,
+    summary="Asynchronous landmark detection for NIfTI input",
+)
+async def landmark_detection_async(
+    token_payload: Annotated[TokenPayLoad, Depends(conditional_verify_jwt)],
+    request: LandmarkInferenceRequest,
+    background_tasks: BackgroundTasks,
+):
+    client_id = token_payload.sub
+    print(f"Received landmark detection job {request.uuid} from client {client_id}")
+
+    background_tasks.add_task(
+        process_landmark_job_with_semaphore,
+        input_url=request.url,
+        uuid=request.uuid,
+        callback_url=request.callback_url,
+        device=request.device,
+        checkpoint_path=request.checkpoint_path,
+    )
+
+    print(f"[{request.uuid}] Landmark async task added.")
+    return JobAcceptedResponse(uuid=request.uuid)
 
 
 # --- MODIFIED Synchronous MedSAM Manual Inference Endpoint ---

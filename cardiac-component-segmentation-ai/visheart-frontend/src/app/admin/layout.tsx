@@ -236,7 +236,25 @@ export default function AdminLayout({
   const pathname = usePathname();
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const [hiddenCardHrefs, setHiddenCardHrefs] = useState<string[]>([]);
+  const [hiddenCardHrefs, setHiddenCardHrefs] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+
+    const savedHiddenCards = window.localStorage.getItem(
+      "visheart-admin-hidden-cards",
+    );
+
+    if (!savedHiddenCards) return [];
+
+    try {
+      const parsedCards = JSON.parse(savedHiddenCards);
+      return Array.isArray(parsedCards)
+        ? parsedCards.filter((href): href is string => typeof href === "string")
+        : [];
+    } catch (error) {
+      console.error("Failed to parse hidden admin cards:", error);
+      return [];
+    }
+  });
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     open: false,
     x: 0,
@@ -247,22 +265,6 @@ export default function AdminLayout({
 
   const breadcrumbs = generateBreadcrumbs(pathname);
   const isAdminRoot = pathname === "/admin";
-
-  useEffect(() => {
-    const savedHiddenCards = localStorage.getItem("visheart-admin-hidden-cards");
-
-    if (savedHiddenCards) {
-      try {
-        const parsedCards = JSON.parse(savedHiddenCards);
-
-        if (Array.isArray(parsedCards)) {
-          setHiddenCardHrefs(parsedCards);
-        }
-      } catch (error) {
-        console.error("Failed to parse hidden admin cards:", error);
-      }
-    }
-  }, []);
 
   useEffect(() => {
     localStorage.setItem(

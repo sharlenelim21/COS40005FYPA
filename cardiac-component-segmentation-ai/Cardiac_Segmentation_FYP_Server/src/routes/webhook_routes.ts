@@ -18,6 +18,7 @@ import {
   createProjectSegmentationMask,
   createProjectReconstruction,
   readProject,
+  projectLandmarkDetectionModel,
 } from "../services/database"; // Import database function to update job status
 import {
   JobStatus,
@@ -86,6 +87,63 @@ const deepCopyFrames = (
 ): IProjectSegmentationMaskDocument["frames"] => {
   return JSON.parse(JSON.stringify(frames));
 };
+
+router.post("/landmark-callback", async (req: Request, res: Response) => {
+  const gpuJobId = req.headers["x-job-id"] as string | undefined;
+  if (!gpuJobId) {
+    return res.status(400).json({ message: "Missing Cloud GPU Job ID in headers" });
+  }
+
+  const { status, result, error } = req.body;
+  const jobReadResult = await readJob(gpuJobId);
+  if (!jobReadResult.success || !jobReadResult.job) {
+    return res.status(404).json({ message: `Job with GPU Job ID ${gpuJobId} not found` });
+  }
+
+  const jobStatus =
+    status === "completed" || status === "success"
+      ? JobStatus.COMPLETED
+      : status === "failed"
+      ? JobStatus.FAILED
+      : status === "processing"
+      ? JobStatus.IN_PROGRESS
+      : JobStatus.PENDING;
+
+  const jobMessage = error
+    ? typeof error === "string"
+      ? error
+      : JSON.stringify(error)
+    : undefined;
+
+  const updateResult = await updateJob(gpuJobId, {
+    status: jobStatus,
+    result: result ? JSON.stringify(result) : undefined,
+    message: jobMessage,
+  });
+
+  if (!updateResult.success || !updateResult.job) {
+    return res.status(500).json({ message: "Failed to update landmark job" });
+  }
+
+  if (jobStatus === JobStatus.COMPLETED && result && typeof result === "object") {
+    const predictions = Array.isArray(result.predictions) ? result.predictions : [];
+    if (predictions.length > 0) {
+      await projectLandmarkDetectionModel.create({
+        projectid: updateResult.job.projectid,
+        name: `Landmark Detection - Job ${gpuJobId.substring(0, 8)}`,
+        description: `Landmark detection results from job ${gpuJobId}`,
+        isSaved: false,
+        modelUsed: result.model_used || result.modelUsed || "UNetResNet34 Landmark",
+        imageDimensions: result.image_dimensions || result.imageDimensions || { width: 256, height: 256 },
+        totalFrames: result.total_frames || result.totalFrames || predictions.length,
+        selectedSlice: result.selected_slice ?? result.selectedSlice,
+        predictions,
+      });
+    }
+  }
+
+  return res.status(200).json({ message: "Landmark callback processed." });
+});
 
 router.post("/gpu-callback", async (req: Request, res: Response) => {
   logger.info(

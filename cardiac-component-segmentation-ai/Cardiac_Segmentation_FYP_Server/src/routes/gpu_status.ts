@@ -12,6 +12,12 @@ const router = express.Router();
 
 const serviceLocation = "API (GPU Status Route)";
 
+const resolveGpuStatusAddress = async (): Promise<string | null> => {
+  const envAddress = process.env.GPU_API_URL?.replace(/\/$/, "");
+  if (envAddress) return envAddress;
+  return getFreshGPUServerAddress();
+};
+
 // Define a type guard for checking axios errors
 interface AxiosErrorLike {
   isAxiosError?: boolean;
@@ -35,7 +41,7 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     // Make authenticated request to the GPU server
     try {
-      const serverAddress = await getFreshGPUServerAddress();
+      const serverAddress = await resolveGpuStatusAddress();
       if (!serverAddress) {
         logger.error(`${serviceLocation}: GPU server address is not configured`);
         res.status(503).json({
@@ -62,6 +68,7 @@ router.get(
           message: "GPU is available.",
           status: "online",
           details: response.data,
+          checkedAddress: fullAddress,
         });
       } else {
         logger.warn(
@@ -71,6 +78,7 @@ router.get(
           message: `GPU returned status ${response.status}`,
           status: "degraded",
           details: response.data,
+          checkedAddress: fullAddress,
         });
       }
     } catch (error: unknown) {
@@ -79,7 +87,7 @@ router.get(
       let statusCode = 503;
       let errorDetails: Record<string, unknown> = {};
 
-      const serverAddress = await getFreshGPUServerAddress();
+      const serverAddress = await resolveGpuStatusAddress();
 
       if (isAxiosErrorLike(error)) {
         // Handle specific axios errors
@@ -140,6 +148,7 @@ router.get(
         message: errorMessage,
         status: "offline",
         details: errorDetails,
+        checkedAddress: serverAddress ? `${serverAddress}/status/gpu` : null,
       });
     }
   }
@@ -150,7 +159,7 @@ router.get(
   "/gpu-system-status",
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const serverAddress = await getFreshGPUServerAddress();
+      const serverAddress = await resolveGpuStatusAddress();
       if (!serverAddress) {
         logger.error(`${serviceLocation}: GPU server address is not configured`);
         res.status(503).json({
