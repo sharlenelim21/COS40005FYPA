@@ -164,9 +164,22 @@ export function useLandmarkDetection(
       landmarkApi.invalidateCache(projectId);
       setState((s) => ({ ...s, status: "idle", predictions: [], error: null }));
       // Re-run after state flush
-      setTimeout(() => handleRunDetection(model), 0);
+      setTimeout(async () => {
+        stopPlayback();
+        setState((s) => ({ ...s, status: "running", error: null }));
+        try {
+          const result = await landmarkApi.runDetectionByProject(projectId, model, true);
+          applyResult(result);
+        } catch (err) {
+          const msg =
+            err instanceof LandmarkApiError
+              ? err.message
+              : "Landmark detection failed. Please try again.";
+          setState((s) => ({ ...s, status: "error", error: msg }));
+        }
+      }, 0);
     },
-    [projectId, handleRunDetection],
+    [projectId, stopPlayback, applyResult],
   );
 
   const handleFileSelect = useCallback(

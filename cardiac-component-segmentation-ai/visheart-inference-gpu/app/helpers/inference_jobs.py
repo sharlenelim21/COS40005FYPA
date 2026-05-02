@@ -78,6 +78,7 @@ def obj_to_npz_base64(obj_file_path: str) -> str:
     return base64_data
 from app.classes.medsam_handler import MedSamHandler
 from app.dependencies.model_init import get_medsam_model
+from app.helpers.landmark_inference_api import run_landmark_inference_from_nifti
 from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
 from app.dependencies.model_init import get_fourd_reconstruction_model
 from app.helpers.unet_inference_api import run_unet_inference_from_nifti
@@ -595,6 +596,78 @@ async def _process_unet_job(
     finally:
         print(f"[{serviceLocation}] Sending final callback for UNET job {uuid} with success={success}")
         await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
+
+
+async def process_landmark_job_with_semaphore(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "auto",
+    checkpoint_path: str | None = None,
+):
+    print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (landmark)...")
+    async with gpu_semaphore:
+        print(f"[{serviceLocation}] Job {uuid} acquired GPU access (landmark)")
+        log_gpu_status(uuid, "start-landmark")
+        try:
+            await _process_landmark_job(input_url, uuid, callback_url, device, checkpoint_path)
+        finally:
+            log_gpu_status(uuid, "end-landmark")
+            print(f"[{serviceLocation}] Job {uuid} released GPU access (landmark)")
+
+
+async def _process_landmark_job(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "auto",
+    checkpoint_path: str | None = None,
+):
+    print(f"[{serviceLocation}] Starting landmark job {uuid}")
+    result = None
+    error_detail = None
+    success = False
+    parsed_url = urlparse(str(input_url))
+
+    if not all([parsed_url.scheme, parsed_url.netloc]):
+        error_detail = "Invalid URL provided. Please check the URL format."
+        await send_callback(callback_url, uuid, success, result, error_detail)
+        return
+
+    try:
+        async with FileFetchHandler(str(input_url)) as handler:
+            file_path = handler.get_file_path()
+            if not file_path or not os.path.isfile(file_path):
+                error_detail = "No valid NIfTI file was found at the provided URL"
+                await send_callback(callback_url, uuid, success, result, error_detail)
+                return
+
+            inference_output = await asyncio.to_thread(
+                run_landmark_inference_from_nifti,
+                file_path,
+                device,
+                checkpoint_path,
+            )
+
+            if not isinstance(inference_output, dict) or not inference_output.get("success"):
+                error_detail = (inference_output or {}).get("error", "Landmark inference failed without detailed error.")
+            else:
+                result = inference_output.get("landmarks")
+                success = True
+                print(f"[{serviceLocation}] Successfully processed landmark job {uuid}")
+
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[{serviceLocation}] Error in landmark job {uuid}: {error_details}")
+        if "403" in str(e):
+            error_detail = "Access denied (403). Presigned URL invalid/expired."
+        elif "download" in str(e).lower() or "extraction" in str(e).lower():
+            error_detail = f"Error downloading/extracting file: {str(e)}"
+        else:
+            error_detail = f"Error during landmark inference: {str(e)}"
+    finally:
+        print(f"[{serviceLocation}] Sending final callback for landmark job {uuid} with success={success}")
+        await send_callback(callback_url, uuid, success, result, error_detail)
 
 # --- MedSAM Manual Job (existing async callback version) ---
 async def process_medsam_manual_job_with_semaphore(

@@ -19,6 +19,19 @@ const USE_STUB =
 const ENDPOINT =
   process.env.NEXT_PUBLIC_LANDMARK_ENDPOINT ?? "/landmark-detection/infer";
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function normaliseStoredResult(data: any): LandmarkInferenceResponse | null {
+  const result = data?.result ?? data;
+  if (!result?.predictions?.length) return null;
+  return {
+    predictions: result.predictions,
+    total_frames: result.totalFrames ?? result.total_frames ?? result.predictions.length,
+    model_used: result.modelUsed ?? result.model_used ?? "UNetResNet34 Landmark",
+    image_dimensions: result.imageDimensions ?? result.image_dimensions ?? { width: 256, height: 256 },
+  };
+}
+
 const predictionCache = new Map<string, LandmarkInferenceResponse>();
 
 
@@ -30,8 +43,9 @@ export const landmarkApi = {
   runDetectionByProject: async (
     projectId: string,
     model = "hrnet-lv",
+    forceNew = false,
   ): Promise<LandmarkInferenceResponse> => {
-    if (predictionCache.has(projectId)) {
+    if (!forceNew && predictionCache.has(projectId)) {
       if (process.env.NODE_ENV === "development") {
         console.log("[landmarkApi] ✅ Cache hit for project", projectId);
       }
@@ -50,20 +64,34 @@ export const landmarkApi = {
     }
 
     try {
-      const response = await api.post<LandmarkInferenceResponse>(ENDPOINT, {
-        project_id: projectId,
-        model,
-      });
-
-      if (!response.data.predictions?.length) {
-        throw new LandmarkApiError(
-          "empty_predictions",
-          "The model returned no landmark predictions for this project.",
-        );
+      if (!forceNew) {
+        const existing = await api.get(`/landmark-detection/results/${projectId}`);
+        const existingResult = normaliseStoredResult(existing.data);
+        if (existingResult) {
+          predictionCache.set(projectId, existingResult);
+          return existingResult;
+        }
       }
 
-      predictionCache.set(projectId, response.data);
-      return response.data;
+      await api.post(`/landmark-detection/start/${projectId}`, {
+        model,
+        deviceType: "auto",
+      });
+
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        await sleep(2000);
+        const response = await api.get(`/landmark-detection/results/${projectId}`);
+        const result = normaliseStoredResult(response.data);
+        if (result) {
+          predictionCache.set(projectId, result);
+          return result;
+        }
+      }
+
+      throw new LandmarkApiError(
+        "timeout",
+        "Landmark detection is still running. Please try again in a moment.",
+      );
     } catch (err) {
       if (err instanceof LandmarkApiError) throw err;
       return handleAxiosError(err as AxiosError);
