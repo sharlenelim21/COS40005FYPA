@@ -16,6 +16,7 @@ from app.classes.yolo_handler import YoloHandler
 from app.routes.inference_route import router as inference_router
 from app.routes.status_routes import router as status_router
 from app.routes.inference_route_old import router as inference_router_old
+from app.routes.bullseye_route import router as bullseye_router
 
 # Import the lifespans (custom dependencies)
 # Import the combined lifespan manager
@@ -55,6 +56,7 @@ models_info = {
 log_startup_banner(env_type, models_info)
 
 app.include_router(inference_router, prefix="/inference/v2")
+app.include_router(bullseye_router, prefix="/bullseye")
 app.include_router(status_router, prefix="/status")
 # Kept for script compatibility
 if env_type == "development":
