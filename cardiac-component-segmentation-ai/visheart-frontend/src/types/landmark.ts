@@ -60,6 +60,7 @@ export interface LandmarkPageState {
   imageDimensions: { width: number; height: number };
   currentFrame: number;   
   isPlaying: boolean;
+  playbackSpeed: number;
   error: string | null;
   modelUsed: string;
   replacementFile: File | null;

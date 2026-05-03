@@ -62,17 +62,21 @@ def _load_landmark_module():
     return module
 
 
-def _select_slice(volume: np.ndarray) -> int:
-    variances = [float(volume[:, :, i].var()) for i in range(volume.shape[2])]
-    return int(np.argmax(variances)) if variances else 0
-
-
 def _normalise_device(device: str | None) -> torch.device:
     if device == "cuda":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device == "cpu":
         return torch.device("cpu")
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _use_tta(torch_device: torch.device) -> bool:
+    configured = os.getenv("LANDMARK_USE_TTA", "").strip().lower()
+    if configured in ("1", "true", "yes", "on"):
+        return True
+    if configured in ("0", "false", "no", "off"):
+        return False
+    return torch_device.type == "cuda"
 
 
 def run_landmark_inference_from_nifti(
@@ -83,30 +87,38 @@ def run_landmark_inference_from_nifti(
     module = _load_landmark_module()
     checkpoint = _resolve_checkpoint(checkpoint_path)
     torch_device = _normalise_device(device)
+    use_tta = _use_tta(torch_device)
     model = module.load_model(str(checkpoint), torch_device)
 
     nii = nib.load(nifti_path)
     data = nii.get_fdata().astype(np.float32)
 
+    frame_slices: List[tuple[int, int, np.ndarray]] = []
     if data.ndim == 4:
-      total_frames = data.shape[3]
-      slice_id = _select_slice(data[:, :, :, 0])
-      frame_slices = [data[:, :, slice_id, frame] for frame in range(total_frames)]
+        input_frames = data.shape[3]
+        input_slices = data.shape[2]
+        for frame_id in range(input_frames):
+            for slice_id in range(input_slices):
+                frame_slices.append((frame_id, slice_id, data[:, :, slice_id, frame_id]))
     elif data.ndim == 3:
-      total_frames = 1
-      slice_id = _select_slice(data)
-      frame_slices = [data[:, :, slice_id]]
+        input_frames = 1
+        input_slices = data.shape[2]
+        for slice_id in range(input_slices):
+            frame_slices.append((0, slice_id, data[:, :, slice_id]))
     else:
-      raise ValueError(f"Unsupported NIfTI shape for landmark detection: {data.shape}")
+        raise ValueError(f"Unsupported NIfTI shape for landmark detection: {data.shape}")
+
+    if not frame_slices:
+        raise ValueError(f"No frames/slices found for landmark detection: {data.shape}")
 
     predictions: List[Dict[str, Any]] = []
-    height, width = frame_slices[0].shape
-    for frame_id, image_2d in enumerate(frame_slices):
+    height, width = frame_slices[0][2].shape
+    for frame_id, slice_id, image_2d in frame_slices:
         coords, _ = module.predict_landmarks(
             image_2d,
             model=model,
             device=torch_device,
-            use_tta=True,
+            use_tta=use_tta,
         )
         predictions.append({
             "frame_id": frame_id,
@@ -119,8 +131,10 @@ def run_landmark_inference_from_nifti(
         "success": True,
         "landmarks": {
             "predictions": predictions,
-            "total_frames": total_frames,
-            "selected_slice": slice_id,
+            "total_frames": len(predictions),
+            "input_frames": int(input_frames),
+            "total_slices": int(input_slices),
+            "selected_slice": None,
             "model_used": "UNetResNet34 Landmark",
             "image_dimensions": {
                 "width": int(width),

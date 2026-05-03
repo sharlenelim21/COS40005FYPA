@@ -128,17 +128,21 @@ router.post("/landmark-callback", async (req: Request, res: Response) => {
   if (jobStatus === JobStatus.COMPLETED && result && typeof result === "object") {
     const predictions = Array.isArray(result.predictions) ? result.predictions : [];
     if (predictions.length > 0) {
-      await projectLandmarkDetectionModel.create({
-        projectid: updateResult.job.projectid,
-        name: `Landmark Detection - Job ${gpuJobId.substring(0, 8)}`,
-        description: `Landmark detection results from job ${gpuJobId}`,
-        isSaved: false,
-        modelUsed: result.model_used || result.modelUsed || "UNetResNet34 Landmark",
-        imageDimensions: result.image_dimensions || result.imageDimensions || { width: 256, height: 256 },
-        totalFrames: result.total_frames || result.totalFrames || predictions.length,
-        selectedSlice: result.selected_slice ?? result.selectedSlice,
-        predictions,
-      });
+      try {
+        await projectLandmarkDetectionModel.create({
+          projectid: updateResult.job.projectid,
+          name: `Landmark Detection - Job ${gpuJobId.substring(0, 8)}`,
+          description: `Landmark detection results from job ${gpuJobId}`,
+          isSaved: false,
+          modelUsed: result.model_used || result.modelUsed || "UNetResNet34 Landmark",
+          imageDimensions: result.image_dimensions || result.imageDimensions || { width: 256, height: 256 },
+          totalFrames: result.total_frames || result.totalFrames || predictions.length,
+          selectedSlice: result.selected_slice ?? result.selectedSlice,
+          predictions,
+        });
+      } catch (saveError) {
+        logger.error(`${serviceLocation}: Failed to save landmark detection result for job ${gpuJobId}`, saveError);
+      }
     }
   }
 

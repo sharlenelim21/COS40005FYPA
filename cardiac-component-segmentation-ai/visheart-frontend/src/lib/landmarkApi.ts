@@ -20,6 +20,8 @@ const ENDPOINT =
   process.env.NEXT_PUBLIC_LANDMARK_ENDPOINT ?? "/landmark-detection/infer";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const POLL_INTERVAL_MS = 3000;
+const MAX_POLL_ATTEMPTS = 300; // 15 minutes for CPU-backed local inference.
 
 function normaliseStoredResult(data: any): LandmarkInferenceResponse | null {
   const result = data?.result ?? data;
@@ -42,9 +44,15 @@ export const landmarkApi = {
    */
   runDetectionByProject: async (
     projectId: string,
-    model = "hrnet-lv",
+    model = "unetresnet34-landmark",
     forceNew = false,
+    minPredictions = 1,
   ): Promise<LandmarkInferenceResponse> => {
+    const cachedPrediction = predictionCache.get(projectId);
+    if (!forceNew && cachedPrediction && cachedPrediction.predictions.length < minPredictions) {
+      predictionCache.delete(projectId);
+    }
+
     if (!forceNew && predictionCache.has(projectId)) {
       if (process.env.NODE_ENV === "development") {
         console.log("[landmarkApi] ✅ Cache hit for project", projectId);
@@ -67,22 +75,25 @@ export const landmarkApi = {
       if (!forceNew) {
         const existing = await api.get(`/landmark-detection/results/${projectId}`);
         const existingResult = normaliseStoredResult(existing.data);
-        if (existingResult) {
+        if (existingResult && existingResult.predictions.length >= minPredictions) {
           predictionCache.set(projectId, existingResult);
           return existingResult;
         }
       }
 
-      await api.post(`/landmark-detection/start/${projectId}`, {
+      const startResponse = await api.post(`/landmark-detection/start/${projectId}`, {
         model,
         deviceType: "auto",
       });
+      const jobUuid = startResponse.data?.uuid;
 
-      for (let attempt = 0; attempt < 90; attempt += 1) {
-        await sleep(2000);
-        const response = await api.get(`/landmark-detection/results/${projectId}`);
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+        await sleep(POLL_INTERVAL_MS);
+        const response = await api.get(`/landmark-detection/results/${projectId}`, {
+          params: jobUuid ? { jobUuid } : undefined,
+        });
         const result = normaliseStoredResult(response.data);
-        if (result) {
+        if (result && result.predictions.length >= minPredictions) {
           predictionCache.set(projectId, result);
           return result;
         }
@@ -90,7 +101,7 @@ export const landmarkApi = {
 
       throw new LandmarkApiError(
         "timeout",
-        "Landmark detection is still running. Please try again in a moment.",
+        "Landmark detection is taking longer than expected. It may still finish in the background, especially when running on CPU.",
       );
     } catch (err) {
       if (err instanceof LandmarkApiError) throw err;
@@ -107,7 +118,7 @@ export const landmarkApi = {
   runDetectionWithFile: async (
     projectId: string,
     file: File,
-    model = "hrnet-lv",
+    model = "unetresnet34-landmark",
     onProgress?: (pct: number) => void,
   ): Promise<LandmarkInferenceResponse> => {
     const key = `${projectId}::${file.name}`;
@@ -135,7 +146,6 @@ export const landmarkApi = {
         `${ENDPOINT}/upload`,
         formData,
         {
-          headers: { "Content-Type": "multipart/form-data" },
           onUploadProgress: (evt) => {
             if (onProgress && evt.total) {
               onProgress(Math.round((evt.loaded / evt.total) * 100));
@@ -208,9 +218,15 @@ function handleAxiosError(err: AxiosError): never {
     );
   }
   if (status >= 500) {
+    const data = err.response.data as any;
+    const message =
+      data?.message ||
+      data?.detail ||
+      data?.error ||
+      `Inference server error (HTTP ${status}). Please try again or contact support.`;
     throw new LandmarkApiError(
       "server_error",
-      `Inference server error (HTTP ${status}). Please try again or contact support.`,
+      typeof message === "string" ? message : JSON.stringify(message),
     );
   }
   throw new LandmarkApiError("unknown", `Unexpected error (HTTP ${status}). Please try again.`);
@@ -251,7 +267,7 @@ async function mockInferenceResponse(projectId: string): Promise<LandmarkInferen
   return {
     predictions,
     total_frames: TOTAL_FRAMES,
-    model_used: "HRNet-LV (stub)",
+    model_used: "UNetResNet34 Landmark (stub)",
     image_dimensions: { width: W, height: H },
   };
 }

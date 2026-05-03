@@ -52,10 +52,11 @@ let currentGPUConfig: GPUConfig | null = null;
 async function loadGPUConfig(): Promise<GPUConfig> {
   logger.info(`${serviceLocation}: Loading GPU configuration...`);
 
-  // TEMP FIX: if env says not localhost, force env config first
-  if ((process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() === "false") {
+  // In local development, prefer the explicit local GPU URL from .env.
+  // The database stores a GPU host too, but it can be stale from Docker/cloud setups.
+  if ((process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() === "true") {
     logger.info(
-      `${serviceLocation}: MEDSAM_USE_LOCALHOST=false, forcing GPU config from environment variables`
+      `${serviceLocation}: MEDSAM_USE_LOCALHOST=true, forcing GPU config from environment variables`
     );
     return loadConfigFromEnvironment();
   }
@@ -108,19 +109,58 @@ async function loadGPUConfig(): Promise<GPUConfig> {
  * @returns {GPUConfig} The configuration loaded from environment variables
  * @throws {Error} If critical environment variables are missing
  */
+function parseGPUApiUrl(): { host: string; port: number; isHTTPS: boolean; url: string } | null {
+  const gpuApiUrlRaw = process.env.GPU_API_URL?.replace(/\/$/, "");
+  if (!gpuApiUrlRaw) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(gpuApiUrlRaw);
+    const host = parsedUrl.hostname;
+    const port = parsedUrl.port
+      ? parseInt(parsedUrl.port, 10)
+      : parsedUrl.protocol === "https:"
+      ? 443
+      : 80;
+    const isHTTPS = parsedUrl.protocol === "https:";
+
+    return {
+      host,
+      port,
+      isHTTPS,
+      url: gpuApiUrlRaw,
+    };
+  } catch (error: unknown) {
+    logger.warn(
+      `${serviceLocation}: Could not parse GPU_API_URL='${gpuApiUrlRaw}', falling back to GPU_SERVER_URL/GPU_SERVER_PORT`,
+      { error }
+    );
+    return null;
+  }
+}
+
 function loadConfigFromEnvironment(): GPUConfig {
   logger.info(
     `${serviceLocation}: Loading GPU configuration from environment variables (fallback)`
   );
 
   // Load with defaults matching the database schema defaults
-  const host = process.env.GPU_SERVER_URL || "localhost";
-  const port = parseInt(process.env.GPU_SERVER_PORT || "8001", 10);
-  const isHTTPS = process.env.GPU_SERVER_SSL === "true";
+  const parsedFromApiUrl = parseGPUApiUrl();
+
+  const host = parsedFromApiUrl
+    ? parsedFromApiUrl.host
+    : process.env.GPU_SERVER_URL || "localhost";
+  const port = parsedFromApiUrl
+    ? parsedFromApiUrl.port
+    : parseInt(process.env.GPU_SERVER_PORT || "8001", 10);
+  const isHTTPS = parsedFromApiUrl
+    ? parsedFromApiUrl.isHTTPS
+    : process.env.GPU_SERVER_SSL === "true";
   const gpuServerAuthJwtSecret =
     process.env.GPU_SERVER_AUTH_JWT_SECRET || "change-this";
   const serverIdForGpuServer =
-    process.env.SERVER_ID_FOR_GPU_SERVER || "default-server-id";
+    process.env.GPU_SERVER_ID_FOR_GPU_SERVER || "default-server-id";
   const gpuServerIdentity =
     process.env.GPU_SERVER_IDENTITY || "default-gpu-server-identity";
   const jwtRefreshInterval = parseInt(
@@ -139,8 +179,9 @@ function loadConfigFromEnvironment(): GPUConfig {
     );
   }
 
-  const protocol = isHTTPS ? "https" : "http";
-  const fullAddress = `${protocol}://${host}:${port}`;
+  const fullAddress = parsedFromApiUrl
+    ? parsedFromApiUrl.url
+    : `${isHTTPS ? "https" : "http"}://${host}:${port}`;
 
   const config: GPUConfig = {
     host,

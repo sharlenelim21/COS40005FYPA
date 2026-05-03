@@ -248,9 +248,11 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
       );
 
       if (!result.success) {
+        const message = result?.message || "An unknown error occurred.";
         return res.status(500).json({
           success: false,
-          error: result?.message || "An unknown error occurred.",
+          message,
+          error: message,
         });
       }
 

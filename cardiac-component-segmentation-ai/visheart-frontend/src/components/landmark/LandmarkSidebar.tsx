@@ -4,6 +4,7 @@ import React, { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   CartesianGrid,
   Line,
@@ -57,6 +58,14 @@ const STRAIN_CURVE_DATA = [
   { frame: 10, strain: -3.2 },
 ];
 
+const PLAYBACK_SPEED_OPTIONS = [
+  { value: "0.25", label: "0.25x" },
+  { value: "0.5", label: "0.5x" },
+  { value: "1", label: "1x" },
+  { value: "1.5", label: "1.5x" },
+  { value: "2", label: "2x" },
+] as const;
+
 // Props 
 export interface LandmarkSidebarProps {
   state: LandmarkPageState;
@@ -69,6 +78,7 @@ export interface LandmarkSidebarProps {
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (frame: number) => void;
+  onPlaybackSpeedChange: (speed: number) => void;
   onRerun: () => void;
   onReset: () => void;
   onApplyAlignment: () => void;
@@ -88,6 +98,7 @@ export function LandmarkSidebar({
   onNextFrame,
   onPrevFrame,
   onSliderChange,
+  onPlaybackSpeedChange,
   onRerun,
   onReset,
   onApplyAlignment,
@@ -135,7 +146,7 @@ export function LandmarkSidebar({
         <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] text-muted-foreground">Model:</span>
         <span className="text-[11px] font-semibold text-foreground truncate">
-          {state.modelUsed || "HRNet-LV"}
+          {state.modelUsed || "UNetResNet34 Landmark"}
         </span>
         <span
           className={cn(
@@ -163,10 +174,12 @@ export function LandmarkSidebar({
           currentFrame={state.currentFrame}
           totalFrames={state.totalFrames}
           isPlaying={state.isPlaying}
+          playbackSpeed={state.playbackSpeed}
           onTogglePlay={onTogglePlay}
           onNextFrame={onNextFrame}
           onPrevFrame={onPrevFrame}
           onSliderChange={onSliderChange}
+          onPlaybackSpeedChange={onPlaybackSpeedChange}
         />
       )}
 
@@ -203,7 +216,7 @@ export function LandmarkSidebar({
             hasPredictions={hasPredictions}
             onRerun={onRerun}
             onReset={onReset}
-            modelUsed={state.modelUsed || "HRNet-LV"}
+            modelUsed={state.modelUsed || "UNetResNet34 Landmark"}
             totalFrames={state.totalFrames}
           />
         )}
@@ -236,18 +249,22 @@ function PlaybackBar({
   currentFrame,
   totalFrames,
   isPlaying,
+  playbackSpeed,
   onTogglePlay,
   onNextFrame,
   onPrevFrame,
   onSliderChange,
+  onPlaybackSpeedChange,
 }: {
   currentFrame: number;
   totalFrames: number;
   isPlaying: boolean;
+  playbackSpeed: number;
   onTogglePlay: () => void;
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (f: number) => void;
+  onPlaybackSpeedChange: (speed: number) => void;
 }) {
   return (
     <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-2 flex-shrink-0">
@@ -301,6 +318,29 @@ function PlaybackBar({
         className="w-full h-1.5 accent-primary cursor-pointer"
         aria-label="Frame scrubber"
       />
+
+      <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+        <span className="font-medium">Speed</span>
+        <Select
+          value={String(playbackSpeed)}
+          onValueChange={(value: string) => onPlaybackSpeedChange(Number(value))}
+        >
+          <SelectTrigger
+            size="sm"
+            className="h-7 w-[92px] rounded-xl bg-background px-2 text-[11px] font-medium text-foreground shadow-sm hover:bg-muted/40"
+            aria-label="Playback speed"
+          >
+            <SelectValue placeholder="1x" />
+          </SelectTrigger>
+          <SelectContent align="end" className="min-w-[92px] rounded-xl p-1.5 shadow-lg">
+            {PLAYBACK_SPEED_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value} className="rounded-lg py-2 text-xs">
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   );
 }
@@ -380,7 +420,8 @@ function LandmarksTab({
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-foreground">Detected Landmarks</h3>
         <span className="text-xs text-muted-foreground tabular-nums">
-          Frame {currentFrame + 1}
+          Item {currentFrame + 1}
+          {prediction ? ` · F ${prediction.frame_id + 1} · S ${(prediction.slice_id ?? 0) + 1}` : ""}
         </span>
       </div>
 

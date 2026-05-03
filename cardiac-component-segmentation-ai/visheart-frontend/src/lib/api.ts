@@ -182,11 +182,7 @@ export const projectApi = {
   // Upload new project
   uploadProject: async (formData: FormData) => {
     try {
-      const response = await api.put("/project/upload-new-project", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      const response = await api.put("/project/upload-new-project", formData);
       return response.data;
     } catch (error) {
       throw error;
