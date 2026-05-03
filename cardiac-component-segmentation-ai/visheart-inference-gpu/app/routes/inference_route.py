@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, Field, field_validator
-import os, asyncio, traceback
+import os, asyncio, traceback, logging
 from uuid import UUID
 from typing import (
     Dict,
@@ -54,6 +54,7 @@ from app.classes.pydantic_schema import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("visheart")
 
 
 # Sample route (remains the same)
@@ -169,18 +170,30 @@ async def unet_inference_async(
     background_tasks: BackgroundTasks,
 ):
     client_id = token_payload.sub
-    print(f"Received UNET inference job {request.uuid} from client {client_id}")
-
-    background_tasks.add_task(
-        process_unet_job_with_semaphore,
-        input_url=request.url,
-        uuid=request.uuid,
-        callback_url=request.callback_url,
-        device=request.device,
-        checkpoint_path=request.checkpoint_path,
+    logger.info(
+        f"[UNET ROUTE] received request uuid={request.uuid} client={client_id} "
+        f"device={request.device} callback_url={request.callback_url}"
     )
+    print(f"Received UNET inference job {request.uuid} from client {client_id}", flush=True)
 
-    print(f"[{request.uuid}] UNET async task added.")
+    try:
+        background_tasks.add_task(
+            process_unet_job_with_semaphore,
+            input_url=request.url,
+            uuid=request.uuid,
+            callback_url=request.callback_url,
+            device=request.device,
+            checkpoint_path=request.checkpoint_path,
+        )
+    except Exception as exc:
+        logger.error(
+            f"[UNET ROUTE] failed before task creation uuid={request.uuid}: {exc}",
+            exc_info=True,
+        )
+        raise
+
+    logger.info(f"[UNET ROUTE] task created uuid={request.uuid}")
+    print(f"[{request.uuid}] UNET async task added.", flush=True)
     response_data = JobAcceptedResponse(uuid=request.uuid)
     return response_data
 

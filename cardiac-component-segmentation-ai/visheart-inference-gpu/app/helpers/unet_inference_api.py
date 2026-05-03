@@ -12,20 +12,32 @@ def _resolve_unet_script_path() -> str:
     Resolve UNET inference script path.
     Priority:
     1) UNET_INFERENCE_SCRIPT_PATH env override
-    2) Monorepo default path to Cardiac_Segmentation_FYP_Server/src/python/unet_inference.py
+    2) Local script at /app/external_unet_inference.py (standard container path)
+    3) Local script at /app/app/external_unet_inference.py (docker-compose volume mount path)
+    4) Relative path from helpers directory
     """
     env_path = os.getenv("UNET_INFERENCE_SCRIPT_PATH", "").strip()
     if env_path:
         return env_path
 
-    # Prefer local script inside visheart-inference-gpu container/workspace.
+    # Try standard container path first
+    standard_path = "/app/external_unet_inference.py"
+    if os.path.exists(standard_path):
+        return standard_path
+
+    # Try docker-compose volume mount path (visheart-inference-gpu/app mounted to /app/app)
+    mount_path = "/app/app/external_unet_inference.py"
+    if os.path.exists(mount_path):
+        return mount_path
+
+    # Try relative path from helpers directory (for local development)
     local_script = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "external_unet_inference.py")
     )
     if os.path.exists(local_script):
         return local_script
 
-    # Fallback to monorepo script path used in some development setups.
+    # Fallback to monorepo script path (legacy, should not be needed in container)
     current_dir = os.path.dirname(__file__)
     # app/helpers -> app -> visheart-inference-gpu -> cardiac-component-segmentation-ai
     monorepo_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
