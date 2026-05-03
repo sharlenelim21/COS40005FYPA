@@ -133,6 +133,22 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
   // const job = jobReadResult.job; // Get the full job object // Not directly used, currentJob is used later
 
   const { status, result: gpuResult, error: gpuErrorDetail, segmentation_model: callbackSegmentationModelRaw } = req.body;
+  const callbackResultSummary =
+    gpuResult && typeof gpuResult === "object"
+      ? {
+          topLevelKeys: Object.keys(gpuResult).slice(0, 10),
+          topLevelCount: Object.keys(gpuResult).length,
+          hasFrames: Array.isArray((gpuResult as any).frames),
+          framesCount: Array.isArray((gpuResult as any).frames)
+            ? (gpuResult as any).frames.length
+            : undefined,
+        }
+      : {
+          type: gpuResult === null ? "null" : typeof gpuResult,
+        };
+  logger.info(
+    `${serviceLocation}: GPU callback body summary for job ${gpuJobId}: status=${status}, segmentation_model=${callbackSegmentationModelRaw}, error=${gpuErrorDetail ? JSON.stringify(gpuErrorDetail) : "none"}, result=${JSON.stringify(callbackResultSummary)}`
+  );
 
   if (!status) {
     logger.error(
@@ -188,6 +204,12 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
     logger.info(
       `${serviceLocation}: Successfully updated job with GPU Job ID ${gpuJobId} to status ${jobStatus}.`
     );
+
+    if (jobStatus === JobStatus.FAILED) {
+      logger.error(
+        `${serviceLocation}: GPU callback marked job ${gpuJobId} as failed. Hidden callback error: ${jobMessage || "No error detail provided"}`
+      );
+    }
 
     if (
       jobStatus === JobStatus.COMPLETED &&
@@ -266,6 +288,32 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         return undefined;
       };
 
+      const addSegmentationMask = (
+        currentSliceData: {
+          sliceindex: number;
+          componentboundingboxes: any[];
+          segmentationmasks: any[];
+        },
+        className: unknown,
+        rleValue: unknown,
+        context: string
+      ) => {
+        const mappedClass = mapGpuClassNameToEnum(
+          typeof className === "string" ? className : undefined
+        );
+        if (mappedClass && typeof rleValue === "string") {
+          currentSliceData.segmentationmasks.push({
+            class: mappedClass,
+            segmentationmaskcontents: rleValue,
+          });
+          return;
+        }
+
+        logger.warn(
+          `${serviceLocation}: Invalid segmentation mask entry for job ${gpuJobId} at ${context}. class='${String(className)}', rleType='${typeof rleValue}'.`
+        );
+      };
+
       if (resolvedSegmentationModel === SegmentationModel.UNET) {
         const unetFrames = (gpuResult as any)?.frames;
         if (!Array.isArray(unetFrames)) {
@@ -338,24 +386,26 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
               for (const [className, rleString] of Object.entries(
                 segmentationData.masks
               )) {
-                if (typeof rleString === "string") {
-                  const mappedClass = mapGpuClassNameToEnum(className);
-                  if (mappedClass) {
-                    currentSliceData.segmentationmasks.push({
-                      class: mappedClass,
-                      segmentationmaskcontents: rleString,
-                    });
-                  } else {
-                    logger.warn(
-                      `${serviceLocation}: Skipping RLE mask for ${imageFilename} due to unmappable class "${className}" in job ${gpuJobId}.`
-                    );
-                  }
-                } else {
-                  logger.warn(
-                    `${serviceLocation}: Invalid RLE string for ${imageFilename}, class ${className} in job ${gpuJobId}. Skipping mask.`
-                  );
-                }
+                addSegmentationMask(
+                  currentSliceData,
+                  className,
+                  rleString,
+                  imageFilename
+                );
               }
+            } else if (Array.isArray((segmentationData as any).segmentationmasks)) {
+              for (const mask of (segmentationData as any).segmentationmasks) {
+                addSegmentationMask(
+                  currentSliceData,
+                  (mask as any)?.class,
+                  (mask as any)?.segmentationmaskcontents,
+                  imageFilename
+                );
+              }
+            } else {
+              logger.warn(
+                `${serviceLocation}: UNET filename-keyed result for ${imageFilename} has no masks object or segmentationmasks array in job ${gpuJobId}. Keys: ${Object.keys(segmentationData).join(", ")}`
+              );
             }
           }
         } else {
@@ -407,18 +457,12 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
                 : [];
 
               for (const mask of unetMasks) {
-                const mappedClass = mapGpuClassNameToEnum((mask as any)?.class);
-                const rleString = (mask as any)?.segmentationmaskcontents;
-                if (mappedClass && typeof rleString === "string") {
-                  currentSliceData.segmentationmasks.push({
-                    class: mappedClass,
-                    segmentationmaskcontents: rleString,
-                  });
-                } else {
-                  logger.warn(
-                    `${serviceLocation}: Invalid UNET mask entry in job ${gpuJobId}. class='${(mask as any)?.class}'.`
-                  );
-                }
+                addSegmentationMask(
+                  currentSliceData,
+                  (mask as any)?.class,
+                  (mask as any)?.segmentationmaskcontents,
+                  `frame ${frameNumber}, slice ${sliceNumber}`
+                );
               }
             }
           }
@@ -553,7 +597,25 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         }))
         .sort((a, b) => a.frameindex - b.frameindex);
 
-      if (aiSegmentationSet.frames.length > 0) {
+      const parsedSliceCount = aiSegmentationSet.frames.reduce(
+        (total, frame) => total + (frame.slices?.length || 0),
+        0
+      );
+      const parsedMaskCount = aiSegmentationSet.frames.reduce(
+        (total, frame) =>
+          total +
+          (frame.slices || []).reduce(
+            (sliceTotal, slice) =>
+              sliceTotal + (slice.segmentationmasks?.length || 0),
+            0
+          ),
+        0
+      );
+      logger.info(
+        `${serviceLocation}: Parsed segmentation payload for job ${gpuJobId}: frames=${aiSegmentationSet.frames.length}, slices=${parsedSliceCount}, masks=${parsedMaskCount}, model=${resolvedSegmentationModel}`
+      );
+
+      if (aiSegmentationSet.frames.length > 0 && parsedMaskCount > 0) {
         const aiCreationResult = await createProjectSegmentationMask(
           aiSegmentationSet as IProjectSegmentationMask
         );
@@ -599,12 +661,12 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
           }
         } else {
           logger.error(
-            `${serviceLocation}: Failed to create AI segmentation mask document for job ${gpuJobId}. Reason: ${aiCreationResult.message}`
+            `${serviceLocation}: Failed to create AI segmentation mask document for job ${gpuJobId}. Reason: ${aiCreationResult.message}. Parsed frames=${aiSegmentationSet.frames.length}, slices=${parsedSliceCount}, masks=${parsedMaskCount}`
           );
         }
       } else {
         logger.warn(
-          `${serviceLocation}: No parsable frame/slice data found in GPU result for job ${gpuJobId}. Skipping structured segmentation storage.`
+          `${serviceLocation}: No parsable segmentation masks found in GPU result for job ${gpuJobId}. Skipping structured segmentation storage. Parsed frames=${aiSegmentationSet.frames.length}, slices=${parsedSliceCount}, masks=${parsedMaskCount}. Result summary=${JSON.stringify(callbackResultSummary)}`
         );
       }
     }

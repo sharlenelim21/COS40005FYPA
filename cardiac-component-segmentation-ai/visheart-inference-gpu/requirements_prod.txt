@@ -21,6 +21,6 @@ pyrender==0.1.45
 scikit-image==0.25.2
 scikit-learn==1.7.1
 # UNet inference dependencies 
-nibabel
+nibabel>=5.0.0
 numpy
 timm

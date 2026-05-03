@@ -1,3 +1,164 @@
+param(
+    [int]$WaitRetries = 12,
+    [int]$WaitIntervalSec = 5
+)
+
+function Write-Log {
+    param([string]$Msg)
+    $ts = (Get-Date).ToString('u')
+    Write-Host "[$ts] $Msg"
+}
+
+function Test-DockerAvailable {
+    try {
+        docker version > $null 2>&1
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-DockerGpuAvailable {
+    # First, try to detect 'nvidia' runtime from docker info
+    try {
+        $runtimes = docker info --format '{{json .Runtimes}}' 2>$null
+        if ($runtimes) {
+            try {
+                $obj = $runtimes | ConvertFrom-Json -ErrorAction Stop
+                if ($obj.PSObject.Properties.Name -contains 'nvidia') {
+                    Write-Log "Detected 'nvidia' runtime in 'docker info'."
+                    return $true
+                }
+            } catch {
+                # ignore parse errors and fallback
+            }
+        }
+    } catch {
+        # ignore
+    }
+
+    # Fallback: attempt to run an nvidia/cuda container and execute nvidia-smi
+    Write-Log "Attempting container-level GPU check (this may pull an image)."
+    $img = 'nvidia/cuda:12.4.1-base-ubuntu22.04'
+    try {
+        & docker run --rm --gpus all $img nvidia-smi > $null 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log 'Container-level GPU check succeeded.'
+            return $true
+        } else {
+            Write-Log 'Container-level GPU check failed (non-zero exit).' 
+            return $false
+        }
+    } catch {
+        Write-Log 'Container-level GPU check failed (exception).' 
+        return $false
+    }
+}
+
+function Test-Url {
+    param([string]$url)
+    try {
+        $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 6 -Method GET -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+try {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+    Set-Location $scriptDir
+    Write-Log 'Starting VisHeart startup helper...'
+
+    if (-not (Test-DockerAvailable)) {
+        Write-Log 'Docker not available. Please start Docker Desktop and try again.'
+        exit 2
+    }
+
+    $gpuAvailable = Test-DockerGpuAvailable
+
+    if ($gpuAvailable) {
+        $profile = 'gpu'
+        $inferenceContainer = 'visheart-gpu-nvidia'
+        $medsamBaseUrl = 'http://gpu:8001'
+        $unetBaseUrl = 'http://gpu:8001'
+    } else {
+        $profile = 'cpu'
+        $inferenceContainer = 'visheart-gpu-cpu'
+        $medsamBaseUrl = 'http://gpu:8001'
+        $unetBaseUrl = 'http://gpu:8001'
+    }
+
+    # Generate env file for docker compose to ensure runtime routing (avoids hardcoding localhost)
+    $envFile = Join-Path $scriptDir '.env.start'
+    @(
+        "MEDSAM_USE_LOCALHOST=false",
+        "MEDSAM_LOCAL_BASE_URL=$medsamBaseUrl",
+        "GPU_API_URL=$medsamBaseUrl",
+        "GPU_SERVER_URL=gpu",
+        "GPU_SERVER_PORT=8001"
+    ) | Out-File -FilePath $envFile -Encoding UTF8
+
+    Write-Log "Selected profile: $profile"
+    Write-Log "Selected inference container: $inferenceContainer"
+    Write-Log "Selected MedSAM base URL: $medsamBaseUrl"
+    Write-Log "Selected UNet base URL: $unetBaseUrl"
+
+    if (-not $gpuAvailable) {
+        Write-Log 'WARNING: NVIDIA GPU not detected for Docker. Starting CPU profile. MedSAM may not function if it requires CUDA.'
+    }
+
+    # Start compose with the chosen profile and the generated env file
+    Write-Log "Running: docker compose --env-file $envFile --profile $profile up -d"
+    $startCmd = "docker compose --env-file `"$envFile`" --profile $profile up -d"
+    Write-Log "Starting containers..."
+    iex $startCmd
+
+    # Create python symlink (minimal fix for backend python execution)
+    Write-Log "Creating python symlink in backend container..."
+    docker exec visheart-local sh -c "ln -sf /usr/bin/python3 /usr/bin/python" > $null 2>&1
+
+    # Health checks
+    $backendUrl = 'http://localhost:5000/'
+    $frontendUrl = 'http://localhost:3000/'
+    $inferenceStatusUrl = 'http://localhost:8001/status/server'
+    $inferenceGpuUrl = 'http://localhost:8001/status/gpu'
+
+    Write-Log 'Waiting for services to respond (this may take a minute)...'
+    $backendOk = $false; $frontendOk = $false; $inferenceOk = $false; $inferenceGpuOk = $false
+
+    for ($i = 0; $i -lt $WaitRetries; $i++) {
+        if (-not $backendOk) { $backendOk = Test-Url $backendUrl }
+        if (-not $frontendOk) { $frontendOk = Test-Url $frontendUrl }
+        if (-not $inferenceOk) { $inferenceOk = Test-Url $inferenceStatusUrl }
+        if ($gpuAvailable -and -not $inferenceGpuOk) { $inferenceGpuOk = Test-Url $inferenceGpuUrl }
+
+        Write-Log "Health check iteration $($i+1): backend=$backendOk frontend=$frontendOk inference=$inferenceOk gpuStatus=$inferenceGpuOk"
+        if ($backendOk -and $frontendOk -and $inferenceOk -and ((-not $gpuAvailable) -or $inferenceGpuOk)) { break }
+        Start-Sleep -Seconds $WaitIntervalSec
+    }
+
+    Write-Log 'Health check summary:'
+    Write-Log "  Backend (http://localhost:5000/) => $backendOk"
+    Write-Log "  Frontend (http://localhost:3000/) => $frontendOk"
+    Write-Log "  Inference /status/server (http://localhost:8001/status/server) => $inferenceOk"
+    if ($gpuAvailable) { Write-Log "  Inference /status/gpu (http://localhost:8001/status/gpu) => $inferenceGpuOk" }
+
+    if ($backendOk -and $frontendOk -and $inferenceOk -and ((-not $gpuAvailable) -or $inferenceGpuOk)) {
+        Write-Log 'Startup successful.'
+        exit 0
+    } else {
+        Write-Log 'Startup completed with warnings or failures.'
+        if (-not $backendOk) { Write-Log 'ERROR: Backend did not respond.' }
+        if (-not $frontendOk) { Write-Log 'ERROR: Frontend did not respond.' }
+        if (-not $inferenceOk) { Write-Log 'ERROR: Inference service /status/server did not respond.' }
+        if ($gpuAvailable -and -not $inferenceGpuOk) { Write-Log 'ERROR: Inference GPU status (/status/gpu) not responding though profile is GPU.' }
+        exit 3
+    }
+} catch {
+    Write-Log "Unexpected error: $($_.Exception.Message)"
+    exit 4
+}
 # Quick Start Script for Combined Container Deployment
 # This version uses a single container for both frontend and backend
 

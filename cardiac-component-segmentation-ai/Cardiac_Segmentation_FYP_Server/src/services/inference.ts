@@ -17,42 +17,18 @@ const serviceLocation = "Inference";
  *
  * Default behavior is local-first to reduce cloud GPU cost:
  * - MEDSAM_USE_LOCALHOST is "true" by default
- * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8001
+ * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8000
  *
  * Set MEDSAM_USE_LOCALHOST="false" to use database-configured remote GPU host.
  */
 const resolveMedsamBaseUrl = async (): Promise<string | null> => {
-  logger.warn("[Inference Debug] Env snapshot", {
-    GPU_API_URL: process.env.GPU_API_URL,
-    MEDSAM_USE_LOCALHOST: process.env.MEDSAM_USE_LOCALHOST,
-    MEDSAM_LOCAL_BASE_URL: process.env.MEDSAM_LOCAL_BASE_URL,
-    GPU_SERVER_URL: process.env.GPU_SERVER_URL,
-    GPU_SERVER_PORT: process.env.GPU_SERVER_PORT,
-    CALLBACK_URL: process.env.CALLBACK_URL,
-  });
+    const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
+    if (useLocalhost) {
+        return (process.env.MEDSAM_LOCAL_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+    }
 
-  const directGpuApiUrl = process.env.GPU_API_URL?.replace(/\/$/, "");
-  if (directGpuApiUrl) {
-    logger.warn(`[Inference Debug] Using GPU_API_URL: ${directGpuApiUrl}`);
-    return directGpuApiUrl;
-  }
-
-  const useLocalhost =
-    (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
-
-  if (useLocalhost) {
-    const localUrl = (
-      process.env.MEDSAM_LOCAL_BASE_URL ||
-      `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
-    ).replace(/\/$/, "");
-
-    logger.warn(`[Inference Debug] Using localhost-style URL: ${localUrl}`);
-    return localUrl;
-  }
-
-  const remoteBaseUrl = await getFreshGPUServerAddress();
-  logger.warn(`[Inference Debug] Using remote GPU URL: ${remoteBaseUrl}`);
-  return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
+    const remoteBaseUrl = await getFreshGPUServerAddress();
+    return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
 };
 
 // Interface for the expected GPU response for direct manual segmentation
@@ -95,8 +71,7 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
     }
 
     const inferenceEndpoint = `${medsamBaseUrl}/inference/v2/medsam-inference`;
-    logger.warn(`[Inference Debug] Final endpoint = ${inferenceEndpoint}`);
-    
+
     try {
         const response = await axios.post(inferenceEndpoint, inferenceData, {
             headers: {
@@ -203,10 +178,7 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         }
 
         const dataUrlForGpu = await generatePresignedGetUrl(s3BucketName, objectKeyForTar);
-        logger.error("[MedSAM Debug] s3BucketName =", s3BucketName);
-        logger.error("[MedSAM Debug] extractedfolderpath =", s3HttpsUrlForTar);
-        logger.error("[MedSAM Debug] objectKeyForTar =", objectKeyForTar);
-                
+
         if (!dataUrlForGpu) {
             logger.error(`${serviceLocation}: Failed to generate presigned S3 URL for project ${projectId}, TAR S3 Key: ${objectKeyForTar}`);
             return { success: false, message: "Failed to prepare TAR file URL for inference." };
@@ -271,7 +243,6 @@ const sendUnetInferenceRequestToApi = async (
     },
     gpuAuthToken: string
 ): Promise<{ success: boolean; jobId?: string; status?: string; error?: string }> => {
-    const requestStart = Date.now();
     const unetBaseUrl = await resolveMedsamBaseUrl();
     if (!unetBaseUrl) {
         logger.error(`${serviceLocation}: UNET API server URL could not be resolved from local/remote configuration.`);
@@ -284,15 +255,7 @@ const sendUnetInferenceRequestToApi = async (
     }
 
     const endpoint = `${unetBaseUrl}/inference/v2/unet-inference`;
-    logger.warn(
-        `[Inference Debug] Final UNET endpoint = ${endpoint}. model=${inferenceData.segmentationModel}, device=${inferenceData.device || "auto"}`
-    );
-
     try {
-        logger.info(
-            `${serviceLocation}: Submitting UNET inference job uuid=${inferenceData.uuid}, model=${inferenceData.segmentationModel}, device=${inferenceData.device || "auto"}, callback=${inferenceData.callbackUrl}`
-        );
-
         const response = await axios.post<UnetApiResponse>(
             endpoint,
             {
@@ -314,9 +277,6 @@ const sendUnetInferenceRequestToApi = async (
         );
 
         if (response.status === 202 && response.data) {
-            logger.info(
-                `${serviceLocation}: UNET submission accepted in ${Date.now() - requestStart}ms. uuid=${inferenceData.uuid}, remoteStatus=${response.data.status || "queued"}`
-            );
             return {
                 success: true,
                 jobId: response.data.job_id || response.data.uuid || inferenceData.uuid,
@@ -329,10 +289,7 @@ const sendUnetInferenceRequestToApi = async (
             error: response.data?.error || `UNET API returned unexpected response (status ${response.status}).`,
         };
     } catch (error: any) {
-        logger.error(
-            `${serviceLocation}: Error sending UNET inference request to ${endpoint} after ${Date.now() - requestStart}ms: ${error.message}`,
-            { error }
-        );
+        logger.error(`${serviceLocation}: Error sending UNET inference request to ${endpoint}: ${error.message}`, { error });
         let errorMessage = `Error communicating with UNET API: ${error.message}`;
         if (error.response?.status) {
             errorMessage += ` (Status: ${error.response.status})`;
@@ -413,8 +370,6 @@ export async function startModel2Inference(
         }
 
         const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
-        logger.info("[UNET Debug] niftiPresignedUrl prepared", { projectId, s3Key });
-        
         if (!niftiPresignedUrl) {
             logger.error(`${serviceLocation}: Failed to generate presigned NIfTI URL for UNET inference on project ${projectId}.`);
             return { success: false, message: "Failed to prepare NIfTI URL for UNET inference." };
@@ -450,7 +405,7 @@ export async function startModel2Inference(
                 uuid: jobUuid,
                 callbackUrl,
                 segmentationModel: SegmentationModel.UNET,
-                device: modelConfig?.deviceType || "auto",
+                device: modelConfig?.deviceType || "cpu",
                 checkpointPath: modelConfig?.checkpointPath,
             },
             gpuAuthToken

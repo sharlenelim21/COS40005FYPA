@@ -28,6 +28,25 @@ function isAxiosErrorLike(error: unknown): error is AxiosErrorLike {
   return error !== null && typeof error === "object" && "isAxiosError" in error;
 }
 
+function resolveGpuAvailability(data: any): { gpuAvailable: boolean; mode: string } {
+  const backend = typeof data?.backend === "string" ? data.backend.toLowerCase() : "";
+  const nestedBackend =
+    typeof data?.gpu?.backend === "string" ? data.gpu.backend.toLowerCase() : "";
+  const status = typeof data?.status === "string" ? data.status.toLowerCase() : "";
+  const gpuStatus =
+    typeof data?.gpu?.status === "string" ? data.gpu.status.toLowerCase() : "";
+  const mode = data?.mode || backend || nestedBackend || "unknown";
+  const gpuAvailable =
+    Boolean(data?.gpuAvailable) ||
+    (status === "ok" && (backend === "cuda" || nestedBackend === "cuda")) ||
+    gpuStatus === "ok";
+
+  return {
+    gpuAvailable,
+    mode: gpuAvailable ? "gpu" : mode === "unknown" ? "cpu" : mode,
+  };
+}
+
 // Returns if Cloud GPU is available
 router.get(
   "/gpu-status",
@@ -57,9 +76,10 @@ router.get(
       });
 
       if (response.status === 200) {
-        logger.info(`${serviceLocation}: GPU is available`);
-        const gpuAvailable = Boolean(response.data?.gpuAvailable);
-        const mode = response.data?.mode || (gpuAvailable ? "gpu" : "cpu");
+        const { gpuAvailable, mode } = resolveGpuAvailability(response.data);
+        logger.info(
+          `${serviceLocation}: GPU status mapped. gpuAvailable=${gpuAvailable}, mode=${mode}, backend=${response.data?.backend}, gpuStatus=${response.data?.gpu?.status}`
+        );
         res.status(200).json({
           message: gpuAvailable ? "NVIDIA GPU is available." : "CPU mode is active.",
           status: "online",
@@ -76,8 +96,7 @@ router.get(
           message: `GPU returned status ${response.status}`,
           status: "degraded",
           serviceOnline: true,
-          gpuAvailable: Boolean(response.data?.gpuAvailable),
-          mode: response.data?.mode || "unknown",
+          ...resolveGpuAvailability(response.data),
           details: response.data,
         });
       }
