@@ -197,6 +197,40 @@ class FourDReconstructionJobRequest(BaseModel):
         description="Directory path for saving debug files (only used if debug_save is true)"
     )
 
+# --- Bullseye AHA 17-Segment Analysis Models ---
+
+class BullseyeS3Request(BaseModel):
+    """Request model for bullseye analysis via S3 presigned URL."""
+    s3_url: HttpUrl = Field(..., description="Presigned S3 URL for the NIfTI mask file (.nii or .nii.gz)")
+    request_id: Optional[str] = Field(None, description="Optional client-provided request identifier")
+
+
+class BullseyeSegmentMeta(BaseModel):
+    """Metadata for a single AHA segment."""
+    idx: int = Field(..., description="AHA segment index (1–17)")
+    name: str = Field(..., description="Anatomical segment name")
+    ring: str = Field(..., description="Ring name: Basal | Mid-cavity | Apical | Apex")
+    value: float = Field(..., description="Mean wall thickness in pixels (NaN if no data)")
+
+
+class BullseyeStats(BaseModel):
+    """Summary statistics across all 17 segments."""
+    min: float
+    max: float
+    mean: float
+    n_nan: int = Field(..., description="Number of segments with NaN (no valid slices)")
+
+
+class BullseyeAnalysisResult(BaseModel):
+    """Response model for AHA 17-segment wall-thickness analysis."""
+    request_id: Optional[str] = Field(None, description="Echo of the client-provided request_id, if any")
+    segment_values: List[float] = Field(..., description="Wall thickness per AHA segment, index 0 = segment 1")
+    segment_metadata: List[Dict[str, Any]] = Field(..., description="Per-segment name, ring, and value")
+    stats: Dict[str, Any] = Field(..., description="min / max / mean / n_nan across all segments")
+    input_shape: List[int] = Field(..., description="Shape of the input mask [H, W, N_slices]")
+    slice_labels: List[str] = Field(..., description="Label per slice: basal | mid | apical | apex | none")
+
+
 class FourDReconstructionResult(BaseModel):
     """Result model for 4D reconstruction job."""
     # For backward compatibility, keep single mesh fields for 3D cases
