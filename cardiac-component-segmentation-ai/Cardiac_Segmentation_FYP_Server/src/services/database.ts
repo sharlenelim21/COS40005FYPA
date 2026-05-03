@@ -2048,17 +2048,39 @@ const seedGPUHost = async (): Promise<void> => {
       throw new Error('Admin user not found. Cannot create GPU host configuration.');
     }
     // Create a new GPU host configuration with default values
+    const parsedGpuApiUrl = (() => {
+      const gpuApiUrlRaw = process.env.GPU_API_URL?.replace(/\/$/, "");
+      if (!gpuApiUrlRaw) {
+        return null;
+      }
+
+      try {
+        const parsedUrl = new URL(gpuApiUrlRaw);
+        return {
+          host: parsedUrl.hostname,
+          port: parsedUrl.port ? parseInt(parsedUrl.port, 10) : parsedUrl.protocol === 'https:' ? 443 : 80,
+          isHTTPS: parsedUrl.protocol === 'https:',
+        };
+      } catch (parseError) {
+        logger.warn(
+          `${serviceLocation}: Could not parse GPU_API_URL='${gpuApiUrlRaw}' for GPU host seeding. Falling back to GPU_SERVER_URL/GPU_SERVER_PORT.`,
+          { error: parseError }
+        );
+        return null;
+      }
+    })();
+
     const newGpuHostConfig: IGPUHost = {
-      host: process.env.GPU_SERVER_URL || 'localhost',
-      port: parseInt(process.env.GPU_SERVER_PORT || '8001', 10),
-      isHTTPS: process.env.GPU_SERVER_SSL === 'true',
+      host: parsedGpuApiUrl?.host || process.env.GPU_SERVER_URL || 'localhost',
+      port: parsedGpuApiUrl?.port || parseInt(process.env.GPU_SERVER_PORT || '8001', 10),
+      isHTTPS: parsedGpuApiUrl?.isHTTPS || process.env.GPU_SERVER_SSL === 'true',
       gpuServerAuthJwtSecret: process.env.GPU_SERVER_AUTH_JWT_SECRET || 'change-this',
       serverIdForGpuServer: process.env.GPU_SERVER_ID_FOR_GPU_SERVER || 'default-server-id',
       gpuServerIdentity: process.env.GPU_SERVER_IDENTITY || 'default-gpu-server-identity',
       jwtRefreshInterval: parseInt(process.env.GPU_SERVER_JWT_REFRESH_INTERVAL || '480000', 10), // Default to 8 minutes
       jwtLifetimeSeconds: parseInt(process.env.GPU_SERVER_JWT_LIFETIME_SECONDS || '600', 10), // Default to 10 minutes
       description: 'Default GPU host configuration - change environment variables if required.',
-      setBy: String(adminUser._id) // This should be the ID of the admin who created the GPU host
+      setBy: String(adminUser._id), // This should be the ID of the admin who created the GPU host
     };
     const newGPUHost = new gpuHostModel(newGpuHostConfig);
     await newGPUHost.save();

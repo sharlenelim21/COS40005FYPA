@@ -160,7 +160,11 @@ export default function SegmentationResultsPage() {
       setIsLoadingModel(true);
       try {
         console.log(`[Segmentation 3D] Loading model for frame ${currentFrame}...`);
-        const url = await getReconstructionGLB(currentFrame);
+        let url = await getReconstructionGLB(currentFrame);
+        if (!url && currentFrame !== 0) {
+          console.warn(`[Segmentation 3D] No model for frame ${currentFrame}; falling back to frame 0`);
+          url = await getReconstructionGLB(0);
+        }
         if (url) {
           console.log(`[Segmentation 3D] ✅ Loaded model for frame ${currentFrame}`);
           setReconstructionModelUrl(url);

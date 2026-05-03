@@ -167,28 +167,34 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   // Tar cache methods - NEW - Memoized for performance
   const getMRIImage = useCallback(
     async (frame: number, slice: number): Promise<string | null> => {
-      if (!projectId) return null;
+      if (!projectId || !tarCacheReady) return null;
       try {
         return await tarImageCache.getImageURL(projectId, frame, slice);
       } catch (error) {
-        console.error("[ProjectContext] Failed to get MRI image:", error);
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("TarImageCache not initialized")) {
+          console.error("[ProjectContext] Failed to get MRI image:", error);
+        }
         return null;
       }
     },
-    [projectId],
+    [projectId, tarCacheReady],
   );
 
   const getMRIImageFilename = useCallback(
     async (frame: number, slice: number): Promise<string | null> => {
-      if (!projectId) return null;
+      if (!projectId || !tarCacheReady) return null;
       try {
         return await tarImageCache.getImageFilename(projectId, frame, slice);
       } catch (error) {
-        console.error("[ProjectContext] Failed to get MRI image filename:", error);
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("TarImageCache not initialized")) {
+          console.error("[ProjectContext] Failed to get MRI image filename:", error);
+        }
         return null;
       }
     },
-    [projectId],
+    [projectId, tarCacheReady],
   );
 
   const preloadMRIImages = useCallback(async (): Promise<void> => {

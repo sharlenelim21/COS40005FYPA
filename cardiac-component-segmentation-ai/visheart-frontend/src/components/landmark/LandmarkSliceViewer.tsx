@@ -64,7 +64,8 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawMockMri(ctx, cw, ch);
       }
 
-      drawSegmentationMasks(ctx, decodedMasks, currentFrame, currentSlice, imageDimensions, cw, ch);
+      const maskFrame = prediction?.frame_id ?? currentFrame;
+      drawSegmentationMasks(ctx, decodedMasks, maskFrame, currentSlice, imageDimensions, cw, ch);
 
       if (!prediction) return;
 
@@ -80,7 +81,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       }
 
       if (totalFrames > 0) {
-        drawFrameLabel(ctx, currentFrame, totalFrames);
+        drawFrameLabel(ctx, currentFrame, totalFrames, prediction);
       }
     },
     [prediction, visibleLandmarks, showLabels, currentFrame, currentSlice, totalFrames, toCanvas, decodedMasks, imageDimensions],
@@ -257,8 +258,12 @@ function drawFrameLabel(
   ctx: CanvasRenderingContext2D,
   current: number,
   total: number,
+  prediction: FramePrediction | null,
 ) {
-  const text = `Frame ${current + 1} / ${total}`;
+  const location = prediction
+    ? ` · F ${prediction.frame_id + 1} · S ${(prediction.slice_id ?? 0) + 1}`
+    : "";
+  const text = `Item ${current + 1} / ${total}${location}`;
   ctx.font = "10px/1 monospace";
   const tw = ctx.measureText(text).width;
 

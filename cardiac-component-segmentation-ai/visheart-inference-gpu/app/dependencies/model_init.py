@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import os
 import logging
 from fastapi import FastAPI
+from fastapi import HTTPException
 
 # Import your model handlers
 from app.classes.yolo_handler import YoloHandler
@@ -175,5 +176,12 @@ def get_fourd_reconstruction_model():
         RuntimeError: If the model hasn't been initialized.
     """
     if fourd_reconstruction_model is None:
-        raise RuntimeError("4D Reconstruction model is not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "4D Reconstruction model is not initialized. Restart the local "
+                "inference server and make sure SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD=false "
+                "and FOURD_RECONSTRUCTION_MODEL_NAME points to an existing .pth file."
+            ),
+        )
     return fourd_reconstruction_model

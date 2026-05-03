@@ -42,7 +42,7 @@ const LandmarkSliceViewer = dynamic(
 );
 
 const MODEL_OPTIONS = [
-  { value: "hrnet-lv", label: "HRNet-LV" },
+  { value: "unetresnet34-landmark", label: "UNetResNet34 Model" },
 ] as const;
 
 type ModelId = typeof MODEL_OPTIONS[number]["value"];
@@ -57,6 +57,7 @@ export default function LandmarkDetectionPage() {
     projectData,
     decodedMasks,
     getMRIImage,
+    tarCacheReady,
   } = useProject();
 
   useEffect(() => {
@@ -67,7 +68,7 @@ export default function LandmarkDetectionPage() {
     return () => { document.title = "VisHeart"; };
   }, [projectData?.name]);
 
-  const [selectedModel, setSelectedModel] = useState<ModelId>("hrnet-lv");
+  const [selectedModel, setSelectedModel] = useState<ModelId>("unetresnet34-landmark");
 
   const {
     state,
@@ -81,12 +82,15 @@ export default function LandmarkDetectionPage() {
     handleNextFrame,
     handlePrevFrame,
     handleSliderChange,
+    handlePlaybackSpeedChange,
     handleReset,
   } = useLandmarkDetection(
     projectId,
     {
       width:  projectData?.dimensions?.width,
       height: projectData?.dimensions?.height,
+      frames: projectData?.dimensions?.frames,
+      slices: projectData?.dimensions?.slices,
     },
   );
 
@@ -118,12 +122,17 @@ export default function LandmarkDetectionPage() {
   const [frameImageUrl, setFrameImageUrl] = useState<string | null>(null);
 
   const currentSlice = currentPrediction?.slice_id ?? Math.floor((projectData?.dimensions?.slices ?? 1) / 2);
+  const currentImageFrame = currentPrediction?.frame_id ?? state.currentFrame;
+  const usesSlicePlayback = (projectData?.dimensions?.frames ?? 0) <= 1 && (projectData?.dimensions?.slices ?? 0) > 1;
 
   useEffect(() => {
     let cancelled = false;
-    if (!projectData) return;
+    if (!projectData || !tarCacheReady) {
+      setFrameImageUrl(null);
+      return;
+    }
 
-    getMRIImage(state.currentFrame, currentSlice)
+    getMRIImage(currentImageFrame, currentSlice)
       .then((url) => {
         if (!cancelled) setFrameImageUrl(url);
       })
@@ -134,7 +143,7 @@ export default function LandmarkDetectionPage() {
     return () => {
       cancelled = true;
     };
-  }, [getMRIImage, state.currentFrame, currentSlice, projectData]);
+  }, [getMRIImage, currentImageFrame, currentSlice, projectData, tarCacheReady]);
 
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
@@ -186,8 +195,12 @@ export default function LandmarkDetectionPage() {
             value={`${projectData.dimensions?.width ?? 256}×${projectData.dimensions?.height ?? 256}`}
           />
           <InfoPill
-            label="Frames"
-            value={hasPredictions ? String(state.totalFrames) : String(projectData.dimensions?.frames ?? "—")}
+            label={usesSlicePlayback ? "Slices" : "Frames"}
+            value={
+              hasPredictions
+                ? String(state.totalFrames)
+                : String(usesSlicePlayback ? projectData.dimensions?.slices ?? "—" : projectData.dimensions?.frames ?? "—")
+            }
           />
           {hasPredictions && (
             <InfoPill label="Model" value={state.modelUsed} />
@@ -225,7 +238,10 @@ export default function LandmarkDetectionPage() {
         <Button
           size="sm"
           className="text-xs gap-1.5 shrink-0"
-          onClick={() => handleRunDetection(selectedModel)}
+          onClick={() => {
+            if (hasPredictions) handleRerunDetection(selectedModel);
+            else handleRunDetection(selectedModel);
+          }}
           disabled={isRunning}
         >
           {isRunning ? (
@@ -300,6 +316,7 @@ export default function LandmarkDetectionPage() {
             onNextFrame={handleNextFrame}
             onPrevFrame={handlePrevFrame}
             onSliderChange={handleSliderChange}
+            onPlaybackSpeedChange={handlePlaybackSpeedChange}
             onRerun={() => handleRerunDetection(selectedModel)}
             onReset={handleReset}
             onApplyAlignment={handleApplyAlignment}
@@ -420,6 +437,7 @@ export default function LandmarkDetectionPage() {
                 onNextFrame={handleNextFrame}
                 onPrevFrame={handlePrevFrame}
                 onSliderChange={handleSliderChange}
+                onPlaybackSpeedChange={handlePlaybackSpeedChange}
                 onRerun={() => handleRerunDetection(selectedModel)}
                 onReset={handleReset}
                 onApplyAlignment={handleApplyAlignment}
