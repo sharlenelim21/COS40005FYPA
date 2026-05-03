@@ -16,3 +16,4 @@ pyjwt
 onnx
 onnxslim
 onnxruntime-gpu
+nibabel
