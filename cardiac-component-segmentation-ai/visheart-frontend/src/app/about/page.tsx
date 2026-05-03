@@ -4,11 +4,10 @@ import Image, { StaticImageData } from "next/image";
 // Import images for about page
 import dr_miko_image from "../../../public/images/about/miko.jpg";
 import ms_kathy_image from "../../../public/images/about/kathy.jpg";
-import james_image from "../../../public/images/about/pfp-james.jpg";
-import clarissa_image from "../../../public/images/about/pfp-cla.jpg";
-import jesmine_image from "../../../public/images/about/pfp-jes.jpg";
-import qh_image from "../../../public/images/about/pfp-qh.jpg";
-import zia_image from "../../../public/images/about/pfp-zia.jpg";
+import sharlene_image from "../../../public/images/about/pfp-shar.jpg";
+import shihuey_image from "../../../public/images/about/pfp-shi.jpg";
+import jiayi_image from "../../../public/images/about/pfp-jia.jpg";
+import meiqi_image from "../../../public/images/about/pfp-mei.jpg";
 
 interface MemberCardProps {
   name: string;
@@ -62,26 +61,54 @@ const AboutPage = () => {
 
   const team = [
     {
-      name: "James",
-      role: "Lead Developer",
-      imageUrl: james_image,
+      name: "Sharlene",
+      role: "Team Leader",
+      imageUrl: sharlene_image,
       description:
-        "Architecting the backend, pioneering the architecture choice and integrating machine learning models.",
+        "Leading the team’s direction, overseeing technical decisions, and supporting system development with a focus on overall project coordination.",
     },
     {
-      name: "Clarissa",
-      role: "Backend Developer",
-      imageUrl: clarissa_image,
+      name: "Shi Huey",
+      role: "Developer",
+      imageUrl: shihuey_image,
       description:
-        "Building the server-side logic and database infrastructure for robust performance.",
+        "Supporting system development and implementation, with a focus on ensuring functionality, stability, and integration across components.",
     },
     {
-      name: "Jesmine",
-      role: "AWS Developer",
-      imageUrl: jesmine_image,
+      name: "Jia Yi",
+      role: "Product Owner",
+      imageUrl: jiayi_image,
       description:
-        "Managing cloud infrastructure and deployment on AWS to ensure scalability and reliability.",
+        "Managing product requirements, prioritizing features, and ensuring alignment between client expectations and system development.",
     },
+    {
+      name: "Mei Qi",
+      role: "Scrum Master",
+      imageUrl: meiqi_image,
+      description:
+        "Coordinating the team’s workflow, managing sprint progress, and ensuring smooth communication while contributing to frontend development and system integration.",
+    },
+    // {
+    //   name: "James",
+    //   role: "Lead Developer",  
+    //   imageUrl: james_image,
+    //   description:
+    //     "Architecting the backend, pioneering the architecture choice and integrating machine learning models.",
+    // },
+    // {
+    //   name: "Clarissa",
+    //   role: "Backend Developer",
+    //   imageUrl: clarissa_image,
+    //   description:
+    //     "Building the server-side logic and database infrastructure for robust performance.",
+    // },
+    // {
+    //   name: "Jesmine",
+    //   role: "AWS Developer",
+    //   imageUrl: jesmine_image,
+    //   description:
+    //     "Managing cloud infrastructure and deployment on AWS to ensure scalability and reliability.",
+    // },
     // {
     //   name: "Qian Hui",
     //   role: "Frontend Developer",

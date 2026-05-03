@@ -12,6 +12,79 @@ const router = express.Router();
 
 const serviceLocation = "API (GPU Status Route)";
 
+const uniqueAddresses = (addresses: Array<string | null | undefined>): string[] => {
+  const seen = new Set<string>();
+
+  return addresses
+    .filter((address): address is string => Boolean(address))
+    .map((address) => address.replace(/\/$/, ""))
+    .filter((address) => {
+      if (seen.has(address)) {
+        return false;
+      }
+
+      seen.add(address);
+      return true;
+    });
+};
+
+const resolveGpuStatusAddress = async (): Promise<string | null> => {
+  logger.info(`${serviceLocation}: Resolving GPU status address for GPU status route`);
+  const freshAddress = await getFreshGPUServerAddress();
+  if (freshAddress) {
+    logger.info(
+      `${serviceLocation}: Using GPU address from auth client config: ${freshAddress}`
+    );
+    return freshAddress;
+  }
+
+  const envAddress = process.env.GPU_API_URL?.replace(/\/$/, "");
+  logger.warn(
+    `${serviceLocation}: Fresh GPU address unavailable, falling back to GPU_API_URL: ${envAddress}`
+  );
+  return envAddress || null;
+};
+
+const resolveGpuStatusAddressCandidates = async (): Promise<string[]> => {
+  const configuredAddress = await resolveGpuStatusAddress();
+
+  return uniqueAddresses([
+    process.env.GPU_STATUS_URL,
+    configuredAddress,
+    process.env.GPU_API_URL,
+    process.env.MEDSAM_LOCAL_BASE_URL,
+    "http://host.docker.internal:8011",
+    "http://127.0.0.1:8011",
+  ]);
+};
+
+const getFromFirstAvailableGpuAddress = async (
+  endpoint: "/status/gpu" | "/status/server",
+  headers?: Record<string, string>
+) => {
+  const addresses = await resolveGpuStatusAddressCandidates();
+  let lastError: unknown = null;
+
+  for (const address of addresses) {
+    const fullAddress = `${address}${endpoint}`;
+
+    try {
+      logger.info(`${serviceLocation}: Checking GPU status candidate at ${fullAddress}`);
+      const response = await axios.get(fullAddress, {
+        headers,
+        timeout: 5000,
+      });
+
+      return { response, fullAddress };
+    } catch (error: unknown) {
+      lastError = error;
+      logger.warn(`${serviceLocation}: GPU status candidate failed at ${fullAddress}`);
+    }
+  }
+
+  throw lastError || new Error("No GPU status address candidates are available.");
+};
+
 // Define a type guard for checking axios errors
 interface AxiosErrorLike {
   isAxiosError?: boolean;
@@ -35,8 +108,8 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     // Make authenticated request to the GPU server
     try {
-      const serverAddress = await getFreshGPUServerAddress();
-      if (!serverAddress) {
+      const addresses = await resolveGpuStatusAddressCandidates();
+      if (addresses.length === 0) {
         logger.error(`${serviceLocation}: GPU server address is not configured`);
         res.status(503).json({
           message: "GPU server address is not configured",
@@ -46,15 +119,12 @@ router.get(
         return;
       }
 
-      const fullAddress = `${serverAddress}/status/gpu`;
-      logger.info(`${serviceLocation}: Checking GPU status at ${fullAddress}`);
-
-      const response = await axios.get(fullAddress, {
-        headers: {
+      const { response, fullAddress } = await getFromFirstAvailableGpuAddress(
+        "/status/gpu",
+        {
           Authorization: `Bearer ${res.locals.gpuAuthToken}`,
-        },
-        timeout: 10000, // Add a 10-second timeout
-      });
+        }
+      );
 
       if (response.status === 200) {
         logger.info(`${serviceLocation}: GPU is available`);
@@ -62,6 +132,7 @@ router.get(
           message: "GPU is available.",
           status: "online",
           details: response.data,
+          checkedAddress: fullAddress,
         });
       } else {
         logger.warn(
@@ -71,6 +142,7 @@ router.get(
           message: `GPU returned status ${response.status}`,
           status: "degraded",
           details: response.data,
+          checkedAddress: fullAddress,
         });
       }
     } catch (error: unknown) {
@@ -79,7 +151,7 @@ router.get(
       let statusCode = 503;
       let errorDetails: Record<string, unknown> = {};
 
-      const serverAddress = await getFreshGPUServerAddress();
+      const serverAddress = await resolveGpuStatusAddress();
 
       if (isAxiosErrorLike(error)) {
         // Handle specific axios errors
@@ -140,6 +212,7 @@ router.get(
         message: errorMessage,
         status: "offline",
         details: errorDetails,
+        checkedAddress: serverAddress ? `${serverAddress}/status/gpu` : null,
       });
     }
   }
@@ -150,8 +223,8 @@ router.get(
   "/gpu-system-status",
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const serverAddress = await getFreshGPUServerAddress();
-      if (!serverAddress) {
+      const addresses = await resolveGpuStatusAddressCandidates();
+      if (addresses.length === 0) {
         logger.error(`${serviceLocation}: GPU server address is not configured`);
         res.status(503).json({
           message: "GPU server address is not configured",
@@ -161,14 +234,7 @@ router.get(
         return;
       }
 
-      const fullAddress = `${serverAddress}/status/server`;
-      logger.info(
-        `${serviceLocation}: Fetching GPU system status from ${fullAddress}`
-      );
-
-      const response = await axios.get(fullAddress, {
-        timeout: 10000, // Add a 10-second timeout
-      });
+      const { response } = await getFromFirstAvailableGpuAddress("/status/server");
 
       if (response.status === 200) {
         logger.info(

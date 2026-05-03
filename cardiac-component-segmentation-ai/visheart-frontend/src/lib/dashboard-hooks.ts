@@ -73,7 +73,7 @@ export function useUserProjects() {
       setProjects(response.projects || []);
     } catch (error) {
       console.error("Error fetching projects:", error);
-      setProjects([]);
+      // Preserve the current project list on transient failures instead of clearing it.
     } finally {
       setIsLoading(false);
     }
