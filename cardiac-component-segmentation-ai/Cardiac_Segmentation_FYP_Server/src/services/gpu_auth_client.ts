@@ -50,10 +50,18 @@ let currentGPUConfig: GPUConfig | null = null;
  * @throws {Error} If both database and environment variable loading fail
  */
 async function loadGPUConfig(): Promise<GPUConfig> {
-  logger.info(`${serviceLocation}: Fetching GPU configuration from database.`);
+  logger.info(`${serviceLocation}: Loading GPU configuration...`);
+
+  // In local development, prefer the explicit local GPU URL from .env.
+  // The database stores a GPU host too, but it can be stale from Docker/cloud setups.
+  if ((process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() === "true") {
+    logger.info(
+      `${serviceLocation}: MEDSAM_USE_LOCALHOST=true, forcing GPU config from environment variables`
+    );
+    return loadConfigFromEnvironment();
+  }
 
   try {
-    // Try to load from database first
     const dbResult = await readGPUHost();
 
     if (dbResult.success && dbResult.gpuHost) {
@@ -61,7 +69,6 @@ async function loadGPUConfig(): Promise<GPUConfig> {
       const protocol = gpuHost.isHTTPS ? "https" : "http";
       const fullAddress = `${protocol}://${gpuHost.host}:${gpuHost.port}`;
 
-      // Extract plain object properties from the Mongoose document
       const config: GPUConfig = {
         host: gpuHost.host,
         port: gpuHost.port,
@@ -76,44 +83,12 @@ async function loadGPUConfig(): Promise<GPUConfig> {
         setBy: gpuHost.setBy,
       };
 
-      logger.info(
-        `${serviceLocation}: Successfully loaded GPU configuration from database`
-      );
+      logger.info(`${serviceLocation}: Successfully loaded GPU configuration from database`);
       logger.info(`${serviceLocation}: GPU Server Address: ${fullAddress}`);
-
-      // Debug: Log the configuration to see what we got from database
-      logger.info(`${serviceLocation}: GPU configuration details:`);
-      logger.info(`${serviceLocation}: - Host: ${config.host}`);
-      logger.info(`${serviceLocation}: - Port: ${config.port}`);
-      logger.info(`${serviceLocation}: - Is HTTPS: ${config.isHTTPS}`);
-      logger.info(
-        `${serviceLocation}: - Has JWT Secret: ${!!config.gpuServerAuthJwtSecret}`
-      );
-      logger.info(
-        `${serviceLocation}: - JWT Secret: ${config.gpuServerAuthJwtSecret}`
-      ); // Temporary debug
-      logger.info(
-        `${serviceLocation}: - Server ID for GPU Server: ${config.serverIdForGpuServer}`
-      );
-      logger.info(
-        `${serviceLocation}: - GPU Server Identity: ${config.gpuServerIdentity}`
-      );
-      logger.info(
-        `${serviceLocation}: - JWT Refresh Interval: ${config.jwtRefreshInterval}ms`
-      );
-      logger.info(
-        `${serviceLocation}: - JWT Lifetime Seconds: ${config.jwtLifetimeSeconds}s`
-      );
-
       return config;
-    } else {
-      logger.warn(
-        `${serviceLocation}: Failed to load GPU configuration from database: ${dbResult.message}`
-      );
-      throw new Error(
-        `Database configuration load failed: ${dbResult.message}`
-      );
     }
+
+    throw new Error(`Database configuration load failed: ${dbResult.message}`);
   } catch (error: unknown) {
     logger.warn(
       `${serviceLocation}: Database configuration load failed, falling back to environment variables`
@@ -123,8 +98,6 @@ async function loadGPUConfig(): Promise<GPUConfig> {
       serviceLocation,
       `Error fetching GPU configuration from database`
     );
-
-    // Fallback to environment variables
     return loadConfigFromEnvironment();
   }
 }
@@ -136,19 +109,58 @@ async function loadGPUConfig(): Promise<GPUConfig> {
  * @returns {GPUConfig} The configuration loaded from environment variables
  * @throws {Error} If critical environment variables are missing
  */
+function parseGPUApiUrl(): { host: string; port: number; isHTTPS: boolean; url: string } | null {
+  const gpuApiUrlRaw = process.env.GPU_API_URL?.replace(/\/$/, "");
+  if (!gpuApiUrlRaw) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(gpuApiUrlRaw);
+    const host = parsedUrl.hostname;
+    const port = parsedUrl.port
+      ? parseInt(parsedUrl.port, 10)
+      : parsedUrl.protocol === "https:"
+      ? 443
+      : 80;
+    const isHTTPS = parsedUrl.protocol === "https:";
+
+    return {
+      host,
+      port,
+      isHTTPS,
+      url: gpuApiUrlRaw,
+    };
+  } catch (error: unknown) {
+    logger.warn(
+      `${serviceLocation}: Could not parse GPU_API_URL='${gpuApiUrlRaw}', falling back to GPU_SERVER_URL/GPU_SERVER_PORT`,
+      { error }
+    );
+    return null;
+  }
+}
+
 function loadConfigFromEnvironment(): GPUConfig {
   logger.info(
     `${serviceLocation}: Loading GPU configuration from environment variables (fallback)`
   );
 
   // Load with defaults matching the database schema defaults
-  const host = process.env.GPU_SERVER_URL || "localhost";
-  const port = parseInt(process.env.GPU_SERVER_PORT || "8000", 10);
-  const isHTTPS = process.env.GPU_SERVER_SSL === "true";
+  const parsedFromApiUrl = parseGPUApiUrl();
+
+  const host = parsedFromApiUrl
+    ? parsedFromApiUrl.host
+    : process.env.GPU_SERVER_URL || "localhost";
+  const port = parsedFromApiUrl
+    ? parsedFromApiUrl.port
+    : parseInt(process.env.GPU_SERVER_PORT || "8001", 10);
+  const isHTTPS = parsedFromApiUrl
+    ? parsedFromApiUrl.isHTTPS
+    : process.env.GPU_SERVER_SSL === "true";
   const gpuServerAuthJwtSecret =
     process.env.GPU_SERVER_AUTH_JWT_SECRET || "change-this";
   const serverIdForGpuServer =
-    process.env.SERVER_ID_FOR_GPU_SERVER || "default-server-id";
+    process.env.GPU_SERVER_ID_FOR_GPU_SERVER || "default-server-id";
   const gpuServerIdentity =
     process.env.GPU_SERVER_IDENTITY || "default-gpu-server-identity";
   const jwtRefreshInterval = parseInt(
@@ -167,8 +179,9 @@ function loadConfigFromEnvironment(): GPUConfig {
     );
   }
 
-  const protocol = isHTTPS ? "https" : "http";
-  const fullAddress = `${protocol}://${host}:${port}`;
+  const fullAddress = parsedFromApiUrl
+    ? parsedFromApiUrl.url
+    : `${isHTTPS ? "https" : "http"}://${host}:${port}`;
 
   const config: GPUConfig = {
     host,

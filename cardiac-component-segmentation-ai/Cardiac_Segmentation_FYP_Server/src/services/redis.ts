@@ -3,12 +3,13 @@ import path from "path";
 import dotenv from "dotenv";
 import logger from "./logger";
 import LogError from "../utils/error_logger";
+import { loadEnvFromKnownLocations } from "../utils/env";
 
 const serviceLocation = "Redis";
 
 // Load environment variables
 try {
-  dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
+  loadEnvFromKnownLocations(__dirname);
 } catch (error: unknown) {
   logger.error(
     `${serviceLocation}: Failed to load environment variables. Error: ${error instanceof Error ? error.message : "Unknown error"}`
@@ -94,10 +95,12 @@ const connectRedis = async (): Promise<void> => {
       logger.info(`${serviceLocation}: Redis client connected successfully.`);
     }
   } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
     logger.error(
-      `${serviceLocation}: Failed to connect to Redis. Error: ${error instanceof Error ? error.message : "Unknown error"}`
+      `${serviceLocation}: Failed to connect to Redis. Error: ${message}`
     );
     LogError(error as Error, serviceLocation, "Redis connection error.");
+    throw new Error(`Redis connection failed: ${message}`);
   }
 };
 

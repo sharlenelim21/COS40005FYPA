@@ -22,12 +22,15 @@ import LogError from "../utils/error_logger"; // Import error logging utility
 const serviceLocation = "API(Upload)";
 const router = express.Router();
 
+const toSingleString = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value;
+
 // Get project information route
 router.get(
   "/get-project-info/:projectId",
   isAuth,
   async (req: Request, res: Response) => {
-    const { projectId } = req.params;
+    const projectId = toSingleString(req.params.projectId);
     const userId = (req.user as any)?._id;
 
     if (!projectId) {
@@ -516,7 +519,7 @@ router.delete(
   "/user-delete-project/:projectId",
   isAuthAndNotGuest,
   async (req: Request, res: Response) => {
-    const { projectId } = req.params;
+    const projectId = toSingleString(req.params.projectId);
     const userId = req.user?._id;
 
     logger.info(
@@ -660,7 +663,7 @@ router.delete(
   "/admin-delete-project/:projectId",
   isAuthAndAdmin,
   async (req: Request, res: Response) => {
-    const { projectId } = req.params;
+    const projectId = toSingleString(req.params.projectId);
     const adminUserId = req.user?._id; // For logging who performed the action
 
     logger.info(

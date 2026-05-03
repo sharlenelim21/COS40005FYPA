@@ -3,12 +3,13 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Brush, History, Save, Eye, EyeOff, Loader2, RefreshCw } from 'lucide-react';
+import { Brush, History, Save, Eye, EyeOff, Loader2, RefreshCw, Brain } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Import shared types and constants
 import type { SegmentationSidebarProps, AnatomicalLabel } from "@/types/segmentation";
 import { LABEL_COLORS, LABEL_NAMES, ANATOMICAL_LABELS } from "@/types/segmentation";
+import type { SegmentationModelId } from "@/app/project/[projectId]/segmentation/page";
 import { DrawingPanel } from './drawing-panel';
 import { HistoryPanel } from './history-panel';
 import { useMaskStats } from '@/hooks/useMaskStats';
@@ -436,7 +437,16 @@ export function SegmentationSidebar({
   zoomLevel,
   setZoomLevel,
   onReset,
-}: SegmentationSidebarProps) {
+  selectedModel = "medsam",
+  onModelChange,
+  isModelActive = false,
+  isModelRunning = false,
+}: SegmentationSidebarProps & {
+  selectedModel?: SegmentationModelId;
+  onModelChange?: (value: SegmentationModelId) => void;
+  isModelActive?: boolean;
+  isModelRunning?: boolean;
+}) {
   const [activeTab, setActiveTab] = useState<TabKey>('tools');
 
   // Memoized tab change handler
@@ -473,6 +483,36 @@ export function SegmentationSidebar({
             <span className="text-xs font-medium">{label}</span>
           </button>
         ))}
+      </div>
+
+      {/* ── Active model indicator ───────────────────────────────────────────
+          Read-only strip that shows which AI model is currently selected.
+          The dropdown to change it lives in the top bar of the page.
+      ──────────────────────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--sidebar-border)] bg-[var(--sidebar-primary)]/50">
+        <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-[11px] text-muted-foreground">Model:</span>
+        <span className="text-[11px] font-semibold text-foreground truncate">
+          {selectedModel === "medsam" ? "MedSam" : "Unet"}
+        </span>
+        <span
+          className={cn(
+            "ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
+            isModelActive
+              ? "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400"
+              : isModelRunning
+              ? "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400"
+              : "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
+          )}
+        >
+          <span
+            className={cn(
+              "h-1 w-1 rounded-full inline-block",
+              isModelActive ? "bg-green-500" : isModelRunning ? "bg-blue-500 animate-pulse" : "bg-amber-500",
+            )}
+          />
+          {isModelActive ? "Active" : isModelRunning ? "Running" : "Pending"}
+        </span>
       </div>
 
       {/* Save Button - Moved to top for better accessibility */}

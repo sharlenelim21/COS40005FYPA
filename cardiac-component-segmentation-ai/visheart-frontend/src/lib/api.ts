@@ -1,5 +1,6 @@
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 import { MetricData, S3Metrics, CostData } from "@/types/system-monitor";
+import { file } from "zod";
 
 // Create a pre-configured instance of axios.
 // This is a best practice for managing API calls in a structured way.
@@ -181,11 +182,7 @@ export const projectApi = {
   // Upload new project
   uploadProject: async (formData: FormData) => {
     try {
-      const response = await api.put("/project/upload-new-project", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      const response = await api.put("/project/upload-new-project", formData);
       return response.data;
     } catch (error) {
       throw error;
@@ -251,15 +248,23 @@ export const projectApi = {
 // Segmentation functions
 export const segmentationApi = {
   // Start segmentation for a project
-  startSegmentation: async (projectId: string) => {
-    try {
-      const response = await api.post(
-        `/segmentation/start-segmentation/${projectId}`,
-      );
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+  startSegmentation: async (
+    projectId: string,
+    segmentationModel: "medsam" | "unet" = "medsam",
+    deviceType: "cpu" | "cuda" | "auto" = "auto"
+  ) => {
+    console.log("[API] startSegmentation request:", {
+      projectId,
+      segmentationModel,
+      deviceType,
+    });
+
+    const response = await api.post(
+      `/segmentation/start-segmentation/${projectId}`,
+      { segmentationModel, deviceType }
+    );
+
+    return response.data;
   },
 
   // Get segmentation results for a project
@@ -323,6 +328,7 @@ export const segmentationApi = {
       name?: string;
       description?: string;
       frames?: any[];
+      model?: string;
     },
   ) => {
     try {
@@ -604,6 +610,14 @@ export const statusApi = {
       const response = await api.get("/status/gpu-status");
       return response.data;
     } catch (error) {
+      const axiosError = error as AxiosError<any>;
+      if (axiosError.response?.status === 503) {
+        return {
+          message: axiosError.response.data?.message || "GPU server is offline.",
+          status: "offline",
+          details: axiosError.response.data?.details || {},
+        };
+      }
       throw error;
     }
   },
@@ -616,6 +630,31 @@ export const statusApi = {
     } catch (error) {
       throw error;
     }
+  },
+};
+
+export interface DocumentationSearchResult {
+  tab: string;
+  title: string;
+  excerpt: string;
+  keywords: string[];
+}
+
+export const supportApi = {
+  searchDocumentation: async (query: string): Promise<DocumentationSearchResult[]> => {
+    const response = await api.get("/support/docs/search", {
+      params: { q: query },
+    });
+
+    return response.data.results ?? [];
+  },
+
+  sendFaqMessage: async (data: {
+    message: string;
+    senderEmail?: string;
+  }): Promise<{ success: boolean; message: string; adminEmail?: string }> => {
+    const response = await api.post("/support/faq-message", data);
+    return response.data;
   },
 };
 

@@ -32,7 +32,7 @@ services:
       PORT: 5000
       
       # MongoDB Configuration
-      MONGODB_URI: "mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin"
+      MONGODB_URI: mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin
       
       # Redis Configuration
       REDIS_HOST: redis
@@ -55,14 +55,17 @@ services:
       S3_FORCE_PATH_STYLE: "true"
       
       # GPU Service Configuration
-      GPU_API_URL: http://gpu:8001
-      GPU_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
-      GPU_SERVER_URL: gpu
-      GPU_SERVER_PORT: 8001
+      GPU_API_URL: http://host.docker.internal:8011
+      LOCAL_GPU_API_URL: http://host.docker.internal:8011
+      MEDSAM_USE_LOCALHOST: "true"
+      MEDSAM_LOCAL_BASE_URL: http://host.docker.internal:8011
+      GPU_JWT_SECRET: dev-gpu-secret
+      GPU_SERVER_URL: host.docker.internal
+      GPU_SERVER_PORT: 8011
       GPU_SERVER_SSL: "false"
-      GPU_SERVER_AUTH_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
-      GPU_SERVER_ID_FOR_GPU_SERVER: default-server-id
-      GPU_SERVER_IDENTITY: default-gpu-server-identity
+      GPU_SERVER_AUTH_JWT_SECRET: dev-gpu-secret
+      GPU_SERVER_ID_FOR_GPU_SERVER: visheart-node
+      GPU_SERVER_IDENTITY: visheart-gpu
       GPU_SERVER_JWT_REFRESH_INTERVAL: 480000
       GPU_SERVER_JWT_LIFETIME_SECONDS: 600
 
@@ -79,7 +82,18 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      #gpu:
+      #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
+    volumes:
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/webhook_routes.js:/app/backend/dist/routes/webhook_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/gpu_status.js:/app/backend/dist/routes/gpu_status.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/landmark_routes.js:/app/backend/dist/routes/landmark_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/support_routes.js:/app/backend/dist/routes/support_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/express_app.js:/app/backend/dist/services/express_app.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/inference.js:/app/backend/dist/services/inference.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/reconstruction.js:/app/backend/dist/services/reconstruction.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/landmark_inference.js:/app/backend/dist/services/landmark_inference.js:ro
     networks:
       - visheart-network
     healthcheck:
@@ -96,8 +110,6 @@ services:
     image: mongo:7.0
     container_name: visheart-mongodb
     restart: unless-stopped
-    ports:
-      - "27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: P@ssw0rd123!
@@ -108,11 +120,12 @@ services:
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "mongosh", "-u", "admin", "-p", "P@ssw0rd123!", "--authenticationDatabase", "admin", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD-SHELL", "mongosh -u \"admin\" -p \"P@ssw0rd123!\" --authenticationDatabase admin --quiet --eval \"quit(db.adminCommand('ping').ok ? 0 : 2)\""]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+
 
   # ============================================
   # Redis Cache & Session Store
@@ -121,8 +134,6 @@ services:
     image: redis:7-alpine
     container_name: visheart-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
@@ -219,6 +230,16 @@ services:
     environment:
       <<: *gpu-env
       USE_GPU: "true"
+      UNET_INFERENCE_SCRIPT_PATH: /app/app/external_unet_inference.py
+    command: >
+      bash -lc 'python -c "import nibabel, timm" ||
+      pip install --no-cache-dir "nibabel>=5.0.0" timm;
+      exec bash ./docker/scripts/start.sh'
+    volumes:
+      - ../visheart-inference-gpu/app/external_unet_inference.py:/app/app/external_unet_inference.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route.py:/app/app/routes/inference_route.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
+      - ../visheart-inference-gpu/app/models:/app/app/models:ro
     networks:
       visheart-network:
         aliases:
