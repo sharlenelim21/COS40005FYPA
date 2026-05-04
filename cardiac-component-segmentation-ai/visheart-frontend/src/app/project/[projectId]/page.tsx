@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // API
 import { projectApi, segmentationApi } from "@/lib/api";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
 
 // UI Components
 import { Button } from "@/components/ui/button";
@@ -38,7 +39,6 @@ import {
   Layers, 
   Sparkles,
   Box,
-  Crosshair,
   ChevronRight,
   Trash2
 } from "lucide-react";
@@ -58,6 +58,7 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
   const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, refreshReconstructions } = useProject();
+  const { processingUnit } = useGpuStatus();
 
   // Update page title dynamically
   useEffect(() => {
@@ -342,15 +343,24 @@ export default function ProjectPage() {
     setSegmentationError(null);
 
     try {
-      // Get the last selected model from sessionStorage
-      const storedModel =
-        typeof window !== "undefined"
-          ? (sessionStorage.getItem(`selectedModel_${projectId}`) as "medsam" | "unet" | null)
-          : null;
+      console.log('[Project] Start segmentation button clicked - current jobs state:', { jobs });
+      console.log('[Project] jobsError:', jobsError);
+
+      // CPU-safe default: only choose MedSAM when GPU is explicitly online.
+      const detectedMode = processingUnit.gpuAvailable ? "gpu" : "cpu";
+      const selectedModel: "medsam" | "unet" =
+        detectedMode === "gpu" ? "medsam" : "unet";
+
+      console.log("[Project] Start AI Segmentation mode/model:", {
+        processingUnit,
+        detectedMode,
+        selectedModel,
+      });
 
       await segmentationApi.startSegmentation(
         projectId,
-        storedModel ?? "medsam"
+        selectedModel,
+        "auto"
       );
       
       // Wait a moment for the backend to create the job, then refresh
@@ -443,7 +453,7 @@ export default function ProjectPage() {
       
       // Poll for the job to appear - retry up to 5 times with 1 second delay
       console.log("[Project] 🔄 Polling for reconstruction job to appear...");
-      const jobFound = false;
+      let jobFound = false;
       for (let i = 0; i < 5 && !jobFound; i++) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         console.log(`[Project] 🔍 Polling attempt ${i + 1}/5...`);
@@ -971,28 +981,6 @@ export default function ProjectPage() {
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>Update masks to regenerate 3D models</p>
-                        </TooltipContent>
-                      </Tooltip>
-
-                      {/* Landmark Detection */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
-                            <Link href={`/project/${projectId}/landmark-detection`}>
-                              <div className="flex items-center gap-3 w-full">
-                                <Crosshair className="h-5 w-5 text-primary" />
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">Detect Landmarks</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Identify cardiac landmarks on MRI slices
-                                  </p>
-                                </div>
-                              </div>
-                            </Link>
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Open landmark detection for this project</p>
                         </TooltipContent>
                       </Tooltip>
 

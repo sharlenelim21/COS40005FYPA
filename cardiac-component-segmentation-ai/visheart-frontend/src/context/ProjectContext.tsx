@@ -167,34 +167,28 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   // Tar cache methods - NEW - Memoized for performance
   const getMRIImage = useCallback(
     async (frame: number, slice: number): Promise<string | null> => {
-      if (!projectId || !tarCacheReady) return null;
+      if (!projectId) return null;
       try {
         return await tarImageCache.getImageURL(projectId, frame, slice);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes("TarImageCache not initialized")) {
-          console.error("[ProjectContext] Failed to get MRI image:", error);
-        }
+        console.error("[ProjectContext] Failed to get MRI image:", error);
         return null;
       }
     },
-    [projectId, tarCacheReady],
+    [projectId],
   );
 
   const getMRIImageFilename = useCallback(
     async (frame: number, slice: number): Promise<string | null> => {
-      if (!projectId || !tarCacheReady) return null;
+      if (!projectId) return null;
       try {
         return await tarImageCache.getImageFilename(projectId, frame, slice);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes("TarImageCache not initialized")) {
-          console.error("[ProjectContext] Failed to get MRI image filename:", error);
-        }
+        console.error("[ProjectContext] Failed to get MRI image filename:", error);
         return null;
       }
     },
-    [projectId, tarCacheReady],
+    [projectId],
   );
 
   const preloadMRIImages = useCallback(async (): Promise<void> => {
@@ -827,14 +821,24 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         // Filter jobs by current project ID
         const projectJobs = response.jobs.filter((job: ProjectTypes.UserJob) => job.projectId === projectId);
-        setJobs(projectJobs);
         console.log(`Found ${projectJobs.length} jobs for project ${projectId}:`, projectJobs);
 
-        // Check for logical errors: completed jobs should have masks
-        const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
-        if (completedJobs.length > 0 && !hasMasks) {
-          console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
-          setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
+        // If all returned jobs are failed and no masks exist, treat them as stale so users can re-run segmentation locally.
+        const onlyFailedJobs = projectJobs.length > 0 && projectJobs.every((j: ProjectTypes.UserJob) => j.status === ProjectTypes.JobStatus.FAILED);
+        if (onlyFailedJobs && !hasMasks) {
+          console.warn(`[ProjectContext] Detected only failed jobs for project ${projectId} and no masks. Treating as no active jobs to allow rerun.`);
+          setJobs([]);
+          // Keep a visible warning so developers can investigate server-side failures
+          setJobsError(`Previous segmentation attempts failed; you can re-run segmentation.`);
+        } else {
+          setJobs(projectJobs);
+
+          // Check for logical errors: completed jobs should have masks
+          const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
+          if (completedJobs.length > 0 && !hasMasks) {
+            console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
+            setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
+          }
         }
       })
       .catch((error: unknown) => {

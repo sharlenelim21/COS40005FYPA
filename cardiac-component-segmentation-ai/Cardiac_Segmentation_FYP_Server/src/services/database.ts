@@ -13,7 +13,7 @@ const serviceLocation = "Database"; // Service location for error logging
 
 // Import Types
 import { IUser, IUserDocument, IUserSafe, UserRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
-import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, IProjectLandmarkDetection, IProjectLandmarkDetectionDocument, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
+import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
 import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat } from "../types/database_types"; // Import the project reconstruction types
 import { JobStatus, IJob, IJobDocument, JobCrudResult, SegmentationModel } from "../types/database_types"; // Import the job types
 import { IGPUHost, IGPUHostDocument, GPUHostCrudResult } from "../types/database_types"; // Import the GPU host types
@@ -661,9 +661,6 @@ projectSchema.pre('deleteOne', { document: true, query: false }, async function 
     // Delete all masks associated with this project
     const maskDeleteResult = await projectSegmentationMaskModel.deleteMany({ projectid: this._id });
     logger.info(`${serviceLocation}: Deleted ${maskDeleteResult.deletedCount} segmentation masks for project ${this._id}`);
-
-    const landmarkDeleteResult = await projectLandmarkDetectionModel.deleteMany({ projectid: this._id });
-    logger.info(`${serviceLocation}: Deleted ${landmarkDeleteResult.deletedCount} landmark detections for project ${this._id}`);
     
     // Delete all inference jobs (segmentation/reconstruction) associated with this project
     const jobDeleteResult = await jobModel.deleteMany({ projectid: this._id });
@@ -723,6 +720,8 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is saved
   segmentationmaskRLE: { type: Boolean, required: false }, // RLE of the segmentation mask (e.g., S3 bucket URL)
   isMedSAMOutput: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is a MedSAM output
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model tag
+  model_used: { type: String, required: false }, // Compatibility field for external tools
   // Properties of extracted folder + location tracking
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
@@ -742,53 +741,6 @@ const projectSegmentationMaskModel = model<IProjectSegmentationMask, Model<IProj
 
 // Add segmentation mask indexes after model creation  
 projectSegmentationMaskSchema.index({ projectid: 1 }); // Index on project ID for segmentation masks
-
-const landmarkCoordSchema = {
-  type: [Number],
-  required: false,
-  validate: {
-    validator: (value: number[]) => Array.isArray(value) && value.length === 2,
-    message: "Landmark coordinates must be [x, y]",
-  },
-};
-
-const projectLandmarkPredictionSchema = new Schema({
-  frame_id: { type: Number, required: true },
-  slice_id: { type: Number, required: false },
-  rv_insertion_1: { ...landmarkCoordSchema, required: true },
-  rv_insertion_2: { ...landmarkCoordSchema, required: true },
-  apex: landmarkCoordSchema,
-  basal_anterior: landmarkCoordSchema,
-  basal_inferior: landmarkCoordSchema,
-  basal_lateral: landmarkCoordSchema,
-  mid_anterior: landmarkCoordSchema,
-}, { _id: false });
-
-const projectLandmarkDetectionSchema = new Schema<IProjectLandmarkDetectionDocument>({
-  projectid: { type: String, required: true },
-  name: { type: String, required: true },
-  description: { type: String, required: false },
-  isSaved: { type: Boolean, required: true, default: false },
-  modelUsed: { type: String, required: true },
-  imageDimensions: {
-    width: { type: Number, required: true },
-    height: { type: Number, required: true },
-  },
-  totalFrames: { type: Number, required: true },
-  selectedSlice: { type: Number, required: false },
-  predictions: { type: [projectLandmarkPredictionSchema], required: true },
-}, { timestamps: true });
-
-projectLandmarkDetectionSchema.pre('save', async function (next) {
-  const projectExists = await projectModel.exists({ _id: this.projectid });
-  if (!projectExists) {
-    throw new Error('Referenced project does not exist');
-  }
-  next();
-});
-
-const projectLandmarkDetectionModel = model<IProjectLandmarkDetectionDocument, Model<IProjectLandmarkDetectionDocument>>("Landmark Detections", projectLandmarkDetectionSchema);
-projectLandmarkDetectionSchema.index({ projectid: 1, createdAt: -1 });
 
 // Project Reconstruction Collection
 // Create simplified Project 4D Reconstruction schema for AI SDF-based reconstruction
@@ -1290,6 +1242,10 @@ const createProjectSegmentationMask = async (
 ): Promise<ProjectSegmentationMaskCrudResult> => {
   const operation = CRUDOperation.CREATE;
   const psm = projectsegmentationmask;
+  // Backwards-compatibility: populate model_used from segmentationModel if not explicitly provided
+  if (!psm.model_used && psm.segmentationModel) {
+    psm.model_used = psm.segmentationModel as unknown as string;
+  }
   try {
     const projectid = projectsegmentationmask.projectid;
     const projectidexists = await projectModel.exists({ _id: projectid });
@@ -1916,6 +1872,7 @@ const jobSchema = new mongoose.Schema({
   segmentationDescription: { type: String, required: false }, // Optional user-defined description
   segmentationSouce: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
   segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model used for segmentation
+  model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
 }, { timestamps: true });
 const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 
@@ -1923,6 +1880,10 @@ const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 const createJob = async (job: IJob): Promise<JobCrudResult> => {
   const operation = CRUDOperation.CREATE;
   try {
+    // Backwards-compatibility: ensure model_used is set from segmentationModel when missing
+    if (!('model_used' in job) && job.segmentationModel) {
+      (job as any).model_used = job.segmentationModel as unknown as string;
+    }
     const newJob = new jobModel(job);
     const results = await newJob.save();
     if (results._id) {
@@ -2048,39 +2009,17 @@ const seedGPUHost = async (): Promise<void> => {
       throw new Error('Admin user not found. Cannot create GPU host configuration.');
     }
     // Create a new GPU host configuration with default values
-    const parsedGpuApiUrl = (() => {
-      const gpuApiUrlRaw = process.env.GPU_API_URL?.replace(/\/$/, "");
-      if (!gpuApiUrlRaw) {
-        return null;
-      }
-
-      try {
-        const parsedUrl = new URL(gpuApiUrlRaw);
-        return {
-          host: parsedUrl.hostname,
-          port: parsedUrl.port ? parseInt(parsedUrl.port, 10) : parsedUrl.protocol === 'https:' ? 443 : 80,
-          isHTTPS: parsedUrl.protocol === 'https:',
-        };
-      } catch (parseError) {
-        logger.warn(
-          `${serviceLocation}: Could not parse GPU_API_URL='${gpuApiUrlRaw}' for GPU host seeding. Falling back to GPU_SERVER_URL/GPU_SERVER_PORT.`,
-          { error: parseError }
-        );
-        return null;
-      }
-    })();
-
     const newGpuHostConfig: IGPUHost = {
-      host: parsedGpuApiUrl?.host || process.env.GPU_SERVER_URL || 'localhost',
-      port: parsedGpuApiUrl?.port || parseInt(process.env.GPU_SERVER_PORT || '8001', 10),
-      isHTTPS: parsedGpuApiUrl?.isHTTPS || process.env.GPU_SERVER_SSL === 'true',
+      host: process.env.GPU_SERVER_URL || 'localhost',
+      port: parseInt(process.env.GPU_SERVER_PORT || '8001', 10),
+      isHTTPS: process.env.GPU_SERVER_SSL === 'true',
       gpuServerAuthJwtSecret: process.env.GPU_SERVER_AUTH_JWT_SECRET || 'change-this',
       serverIdForGpuServer: process.env.GPU_SERVER_ID_FOR_GPU_SERVER || 'default-server-id',
       gpuServerIdentity: process.env.GPU_SERVER_IDENTITY || 'default-gpu-server-identity',
       jwtRefreshInterval: parseInt(process.env.GPU_SERVER_JWT_REFRESH_INTERVAL || '480000', 10), // Default to 8 minutes
       jwtLifetimeSeconds: parseInt(process.env.GPU_SERVER_JWT_LIFETIME_SECONDS || '600', 10), // Default to 10 minutes
       description: 'Default GPU host configuration - change environment variables if required.',
-      setBy: String(adminUser._id), // This should be the ID of the admin who created the GPU host
+      setBy: String(adminUser._id) // This should be the ID of the admin who created the GPU host
     };
     const newGPUHost = new gpuHostModel(newGpuHostConfig);
     await newGPUHost.save();
@@ -2225,7 +2164,7 @@ const updateGPUHost = async (updates: Partial<IGPUHost>): Promise<GPUHostCrudRes
 // Using ES modules instead of CommonJS which is module.exports = {connectToDatabase, User};
 // ONLY unit tests should use userModel, fileModel directly, otherwise use the created functions to create users/files.
 export {
-  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, IProjectLandmarkDetection, IProjectLandmarkDetectionDocument, projectModel, projectSegmentationMaskModel, projectLandmarkDetectionModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, 
+  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, 
   // Project Reconstruction exports
   IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, projectReconstructionModel, createProjectReconstruction, readProjectReconstruction, updateProjectReconstruction, deleteProjectReconstruction,
   // Job and GPU Host exports

@@ -11,8 +11,6 @@ interface LandmarkSliceViewerProps {
   totalFrames: number;
   imageDimensions: { width: number; height: number };
   frameImageUrl?: string | null;
-  decodedMasks?: Record<string, Uint8Array> | null;
-  currentSlice?: number;
   visibleLandmarks: Set<string>;
   showLabels?: boolean;
   className?: string;
@@ -31,8 +29,6 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   totalFrames,
   imageDimensions,
   frameImageUrl,
-  decodedMasks,
-  currentSlice = 0,
   visibleLandmarks,
   showLabels = true,
   className,
@@ -64,9 +60,6 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawMockMri(ctx, cw, ch);
       }
 
-      const maskFrame = prediction?.frame_id ?? currentFrame;
-      drawSegmentationMasks(ctx, decodedMasks, maskFrame, currentSlice, imageDimensions, cw, ch);
-
       if (!prediction) return;
 
       const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
@@ -81,10 +74,10 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       }
 
       if (totalFrames > 0) {
-        drawFrameLabel(ctx, currentFrame, totalFrames, prediction);
+        drawFrameLabel(ctx, currentFrame, totalFrames);
       }
     },
-    [prediction, visibleLandmarks, showLabels, currentFrame, currentSlice, totalFrames, toCanvas, decodedMasks, imageDimensions],
+    [prediction, visibleLandmarks, showLabels, currentFrame, totalFrames, toCanvas],
   );
 
   useEffect(() => {
@@ -210,60 +203,12 @@ function drawDot(
   ctx.fillText(text, lx + LABEL_PAD_X, cy);
 }
 
-function drawSegmentationMasks(
-  ctx: CanvasRenderingContext2D,
-  decodedMasks: Record<string, Uint8Array> | null | undefined,
-  frame: number,
-  slice: number,
-  imageDimensions: { width: number; height: number },
-  canvasWidth: number,
-  canvasHeight: number,
-) {
-  if (!decodedMasks) return;
-
-  const labels = [
-    { id: "lvc", color: [239, 68, 68] },
-    { id: "rv", color: [34, 197, 94] },
-    { id: "myo", color: [59, 130, 246] },
-  ] as const;
-
-  const overlay = document.createElement("canvas");
-  overlay.width = imageDimensions.width;
-  overlay.height = imageDimensions.height;
-  const overlayCtx = overlay.getContext("2d");
-  if (!overlayCtx) return;
-
-  const imageData = overlayCtx.createImageData(imageDimensions.width, imageDimensions.height);
-  for (const label of labels) {
-    const mask =
-      decodedMasks[`editable_frame_${frame}_slice_${slice}_${label.id}`] ??
-      decodedMasks[`medSamOutput_frame_${frame}_slice_${slice}_${label.id}`];
-    if (!mask) continue;
-
-    for (let i = 0; i < mask.length; i += 1) {
-      if (!mask[i]) continue;
-      const p = i * 4;
-      imageData.data[p] = Math.max(imageData.data[p], label.color[0]);
-      imageData.data[p + 1] = Math.max(imageData.data[p + 1], label.color[1]);
-      imageData.data[p + 2] = Math.max(imageData.data[p + 2], label.color[2]);
-      imageData.data[p + 3] = 95;
-    }
-  }
-
-  overlayCtx.putImageData(imageData, 0, 0);
-  ctx.drawImage(overlay, 0, 0, canvasWidth, canvasHeight);
-}
-
 function drawFrameLabel(
   ctx: CanvasRenderingContext2D,
   current: number,
   total: number,
-  prediction: FramePrediction | null,
 ) {
-  const location = prediction
-    ? ` · F ${prediction.frame_id + 1} · S ${(prediction.slice_id ?? 0) + 1}`
-    : "";
-  const text = `Item ${current + 1} / ${total}${location}`;
+  const text = `Frame ${current + 1} / ${total}`;
   ctx.font = "10px/1 monospace";
   const tw = ctx.measureText(text).width;
 

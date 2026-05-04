@@ -1,5 +1,5 @@
 // File: src/services/reconstruction.ts
-// Description: Service layer for initiating local 4D reconstruction inference.
+// Description: Service layer for initiating 4D reconstruction process, including Cloud GPU communication.
 
 import { IUserSafe, ProjectCrudResult } from "../types/database_types";
 import logger from "./logger";
@@ -14,59 +14,15 @@ import { generateAISegmentationForReconstruction } from "./segmentation_export";
 
 const serviceLocation = 'Reconstruction';
 
-const uniqueBaseUrls = (urls: Array<string | null | undefined>): string[] => {
-    const seen = new Set<string>();
-
-    return urls
-        .filter((url): url is string => Boolean(url))
-        .map((url) => url.replace(/\/$/, ""))
-        .filter((url) => {
-            if (seen.has(url)) {
-                return false;
-            }
-
-            seen.add(url);
-            return true;
-        });
-};
-
-const resolveLocalGpuBaseUrlCandidates = async (): Promise<string[]> => {
-    const configuredBaseUrl = await getFreshGPUServerAddress();
-    const isDockerGpuAlias = (url?: string | null): boolean =>
-        Boolean(url && /^https?:\/\/gpu(?::|\/|$)/i.test(url));
-
-    return uniqueBaseUrls([
-        process.env.LOCAL_GPU_API_URL,
-        "http://host.docker.internal:8011",
-        isDockerGpuAlias(process.env.GPU_API_URL) ? null : process.env.GPU_API_URL,
-        isDockerGpuAlias(process.env.MEDSAM_LOCAL_BASE_URL) ? null : process.env.MEDSAM_LOCAL_BASE_URL,
-        isDockerGpuAlias(configuredBaseUrl) ? null : configuredBaseUrl,
-    ]);
-};
-
-const buildLocalCallbackUrl = (pathName: string): string | null => {
-    const configuredCallbackUrl = process.env.CALLBACK_URL;
-    if (!configuredCallbackUrl) {
-        return null;
-    }
-
-    const callbackBaseUrl =
-        process.env.LOCAL_CALLBACK_URL ||
-        (
-            configuredCallbackUrl.includes("visheart-app") ||
-            configuredCallbackUrl.includes("://backend") ||
-            configuredCallbackUrl.includes("://api")
-                ? "http://localhost:5000"
-                : configuredCallbackUrl
-        );
-
-    return `${callbackBaseUrl.replace(/\/$/, "")}${pathName}`;
-};
-
 /**
- * Sends 4D reconstruction request to the local GPU inference server.
+ * Sends 4D reconstruction request to Cloud GPU server
+ * Communicates with GPU inference server to start cardiac reconstruction processing
+ * 
+ * @param reconstructionData - Reconstruction parameters and data URLs
+ * @param gpuAuthToken - JWT token for GPU server authentication
+ * @returns Promise with success status and GPU job ID
  */
-const sendReconstructionRequestToLocalGpu = async (
+const sendReconstructionRequestToCloudGpu = async (
     reconstructionData: {
         url: string;  
         uuid: string;
@@ -80,82 +36,66 @@ const sendReconstructionRequestToLocalGpu = async (
     },
     gpuAuthToken: string
 ): Promise<{ success: boolean; jobId?: string; error?: string }> => {
-    const gpuBaseUrls = await resolveLocalGpuBaseUrlCandidates();
-    if (gpuBaseUrls.length === 0) {
+    // Get GPU server configuration from database
+    const cloudGpuBaseUrl = await getFreshGPUServerAddress();
+    if (!cloudGpuBaseUrl) {
         logger.error(`${serviceLocation}: GPU server configuration not available`);
-        return { success: false, error: "Local GPU URL not configured." };
+        return { success: false, error: "Cloud GPU URL not configured." };
     }
 
     // Validate GPU authentication token
     if (!gpuAuthToken) {
-        logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send 4D reconstruction request to local GPU.`);
-        return { success: false, error: "Authentication token for local GPU is missing." };
+        logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send 4D reconstruction request to Cloud GPU.`);
+        return { success: false, error: "Authentication token for Cloud GPU is missing." };
     }
 
-    let lastErrorMessage = "";
+    const reconstructionEndpoint = `${cloudGpuBaseUrl}/inference/v2/4d-reconstruction`;
 
-    for (const gpuBaseUrl of gpuBaseUrls) {
-        const reconstructionEndpoint = `${gpuBaseUrl}/inference/v2/4d-reconstruction`;
+    try {
+        const response = await axios.post(reconstructionEndpoint, reconstructionData, {
+            headers: {
+                Authorization: `Bearer ${gpuAuthToken}`,
+                'Content-Type': 'application/json',
+                'X-Job-ID': reconstructionData.uuid
+            },
+            timeout: 120000, // 2 minute timeout for request submission
+        });
 
-        try {
-            const response = await axios.post(reconstructionEndpoint, reconstructionData, {
-                headers: {
-                    Authorization: `Bearer ${gpuAuthToken}`,
-                    'Content-Type': 'application/json',
-                    'X-Job-ID': reconstructionData.uuid
-                },
-                timeout: 120000, // 2 minute timeout for request submission
-            });
+        // Extract job ID from GPU response
+        logger.info(`${serviceLocation}: Received response from GPU for UUID ${reconstructionData.uuid}, Status: ${response.status}`);
 
-            // Extract job ID from GPU response
-            logger.info(`${serviceLocation}: Received response from local GPU for UUID ${reconstructionData.uuid}, Status: ${response.status}`);
-
-            // Attempt to extract a job ID from common response fields
-            interface ReconstructionResponse {
-                job_id?: string;
-                jobId?: string;
-                uuid?: string;
-                [key: string]: any; // Allow additional properties if needed
-            }
-
-            const responseData = response.data as ReconstructionResponse;
-            const returnedJobId = responseData.job_id || responseData.jobId || responseData.uuid;
-
-            if (response.status === 202 && response.data) {
-                if (returnedJobId) {
-                    logger.info(`${serviceLocation}: Local GPU accepted reconstruction job: ${returnedJobId}`);
-                    return { success: true, jobId: returnedJobId };
-                } else {
-                    logger.warn(`${serviceLocation}: Local GPU accepted request but no Job ID returned, using UUID fallback`);
-                    return { success: true, jobId: reconstructionData.uuid };
-                }
-            } else {
-                const gpuError = response.data?.error || `Local GPU responded with status ${response.status}.`;
-                logger.error(`${serviceLocation}: Error from local GPU: ${gpuError}`, response.data);
-                return { success: false, error: `Local GPU error: ${gpuError}` };
-            }
-        } catch (error: any) {
-            const responseData = error.response?.data;
-            logger.error(`${serviceLocation}: Error sending 4D reconstruction request to ${reconstructionEndpoint}: ${error.message}`, {
-                responseStatus: error.response?.status,
-                responseData,
-                error,
-            });
-            lastErrorMessage = `Error communicating with local GPU: ${error.message}`;
-            if (error.response?.status) {
-                lastErrorMessage += ` (Status: ${error.response.status})`;
-            }
-            const gpuDetail =
-                typeof responseData === "string"
-                    ? responseData
-                    : responseData?.detail || responseData?.error || responseData?.message;
-            if (gpuDetail) {
-                lastErrorMessage += ` - ${typeof gpuDetail === "string" ? gpuDetail : JSON.stringify(gpuDetail)}`;
-            }
+        // Attempt to extract a job ID from common response fields
+        interface ReconstructionResponse {
+            job_id?: string;
+            jobId?: string;
+            uuid?: string;
+            [key: string]: any; // Allow additional properties if needed
         }
-    }
 
-    return { success: false, error: lastErrorMessage || "No local GPU endpoint accepted the reconstruction request." };
+        const responseData = response.data as ReconstructionResponse;
+        const returnedJobId = responseData.job_id || responseData.jobId || responseData.uuid;
+
+        if (response.status === 202 && response.data) {
+            if (returnedJobId) {
+                logger.info(`${serviceLocation}: GPU accepted reconstruction job: ${returnedJobId}`);
+                return { success: true, jobId: returnedJobId };
+            } else {
+                logger.warn(`${serviceLocation}: GPU accepted request but no Job ID returned, using UUID fallback`);
+                return { success: true, jobId: reconstructionData.uuid };
+            }
+        } else {
+            const gpuError = response.data?.error || `Cloud GPU responded with status ${response.status}.`;
+            logger.error(`${serviceLocation}: Error from Cloud GPU: ${gpuError}`, response.data);
+            return { success: false, error: `Cloud GPU error: ${gpuError}` };
+        }
+    } catch (error: any) {
+        logger.error(`${serviceLocation}: Error sending 4D reconstruction request to ${reconstructionEndpoint}: ${error.message}`, { error });
+        let errorMessage = `Error communicating with Cloud GPU: ${error.message}`;
+        if (error.response?.status) {
+            errorMessage += ` (Status: ${error.response.status})`;
+        }
+        return { success: false, error: errorMessage };
+    }
 };
 
 /**
@@ -182,11 +122,12 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
     }
     
     // Build full callback URL by appending reconstruction webhook path to base URL
-    const callback_url = buildLocalCallbackUrl("/webhook/gpu-reconstruction-callback");
-    if (!callback_url) {
+    const callback_base_url = process.env.CALLBACK_URL;
+    if (!callback_base_url) {
         logger.error(`${serviceLocation}: CALLBACK_URL is not set in environment variables. Cannot start reconstruction for project ${projectId}.`);
         return { success: false, message: "Callback URL not configured for reconstruction." };
     }
+    const callback_url = `${callback_base_url.replace(/\/$/, '')}/webhook/gpu-reconstruction-callback`;
 
     const s3BucketName = process.env.AWS_BUCKET_NAME;
     if (!s3BucketName) {
@@ -247,7 +188,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         }
 
         // Generate segmentation NIfTI file directly (no HTTP call needed)
-        logger.info(`${serviceLocation}: Generating segmentation NIfTI for project ${projectId}`);
+        logger.info(`${serviceLocation}: Reconstruction started - generating segmentation NIfTI for project ${projectId}`);
         
         const segmentationResult = await generateAISegmentationForReconstruction(projectId, user?._id);
         
@@ -264,7 +205,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
             return { success: false, message: "Failed to prepare segmentation file for GPU access." };
         }
 
-        logger.info(`${serviceLocation}: Successfully generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
+        logger.info(`${serviceLocation}: Reconstruction saving output - generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
 
         // Generate job UUID
         const jobUuid = uuidv4();
@@ -312,10 +253,10 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         });
 
         // Send reconstruction request to GPU server BEFORE creating job record
-        const reconstructionResult = await sendReconstructionRequestToLocalGpu(reconstructionPayload, gpuAuthToken);
+        const reconstructionResult = await sendReconstructionRequestToCloudGpu(reconstructionPayload, gpuAuthToken);
 
         if (reconstructionResult.success && reconstructionResult.jobId) {
-            logger.info(`${serviceLocation}: Reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
+            logger.info(`${serviceLocation}: Callback sent - reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
 
             // Create job record AFTER successful GPU submission
             const jobData: Partial<IJob> = {

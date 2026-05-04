@@ -1,11 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
-import { useState, useCallback, useMemo } from "react";
+import { Loader2, RefreshCw } from "lucide-react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import axios from "axios";
 
 // Backend integration
 import { segmentationApi } from "@/lib/api";
@@ -22,7 +21,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
 
 export type SegmentationModelId = "medsam" | "unet";
 
@@ -33,11 +32,6 @@ const MODEL_OPTIONS: { value: SegmentationModelId; label: string }[] = [
 
 const isValidModel = (v: string | null): v is SegmentationModelId =>
   v === "medsam" || v === "unet";
-
-interface SegmentationErrorResponse {
-  error?: string;
-  message?: string;
-}
 
 const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas").then((mod) => mod.ImageCanvas), {
   ssr: false,
@@ -51,6 +45,8 @@ const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas
 export default function SegmentationResultsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+  const { processingUnit } = useGpuStatus();
+  const isGpuMode = processingUnit.gpuAvailable;
 
   const {
     loading,
@@ -133,7 +129,26 @@ export default function SegmentationResultsPage() {
     }
   }, [modelSessionKey]);
 
+  // Enforce CPU-safe model selection: MedSAM is only available in NVIDIA GPU mode.
+  useEffect(() => {
+    if (isGpuMode) return;
+    if (selectedModel !== "medsam") return;
+
+    setSelectedModel("unet");
+    try {
+      localStorage.setItem(modelSessionKey, "unet");
+      sessionStorage.setItem(modelSessionKey, "unet");
+    } catch {
+      // ignore storage write errors
+    }
+  }, [isGpuMode, selectedModel, modelSessionKey]);
+
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
+    if (!isGpuMode && value === "medsam") {
+      setRunSegmentationError("This model is only available with NVIDIA GPU.");
+      return;
+    }
+
     setSelectedModel(value);
     try {
       localStorage.setItem(modelSessionKey, value);
@@ -145,7 +160,7 @@ export default function SegmentationResultsPage() {
     setRunSegmentationSuccess(
       `${MODEL_OPTIONS.find((o) => o.value === value)?.label} selected successfully.`
     );
-  }, [modelSessionKey]);
+  }, [isGpuMode, modelSessionKey]);
 
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
@@ -160,11 +175,7 @@ export default function SegmentationResultsPage() {
       setIsLoadingModel(true);
       try {
         console.log(`[Segmentation 3D] Loading model for frame ${currentFrame}...`);
-        let url = await getReconstructionGLB(currentFrame);
-        if (!url && currentFrame !== 0) {
-          console.warn(`[Segmentation 3D] No model for frame ${currentFrame}; falling back to frame 0`);
-          url = await getReconstructionGLB(0);
-        }
+        const url = await getReconstructionGLB(currentFrame + 1);
         if (url) {
           console.log(`[Segmentation 3D] ✅ Loaded model for frame ${currentFrame}`);
           setReconstructionModelUrl(url);
@@ -196,38 +207,43 @@ export default function SegmentationResultsPage() {
     setRunSegmentationSuccess(null);
 
     try {
+      const detectedMode = isGpuMode ? "gpu" : "cpu";
+      const effectiveModel: SegmentationModelId = isGpuMode ? selectedModel : "unet";
+
       try {
-        localStorage.setItem(modelSessionKey, selectedModel);
-        sessionStorage.setItem(modelSessionKey, selectedModel);
+        localStorage.setItem(modelSessionKey, effectiveModel);
+        sessionStorage.setItem(modelSessionKey, effectiveModel);
       } catch {
         // ignore storage write errors
       }
 
-      await segmentationApi.startSegmentation(projectId, selectedModel, "auto");
+      console.log("[Segmentation] Run request mode/model:", {
+        processingUnit,
+        detectedMode,
+        selectedModel,
+        effectiveModel,
+        requestPayload: { segmentationModel: effectiveModel, deviceType: "auto" },
+      });
+
+      const response = await segmentationApi.startSegmentation(projectId, effectiveModel, "auto");
 
       setRunSegmentationSuccess(
-        `${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} segmentation started successfully.`
+        `${MODEL_OPTIONS.find((o) => o.value === effectiveModel)?.label} segmentation started successfully.`
       );
 
       setTimeout(() => {
         window.location.reload();
       }, 1500);
-    } catch (error: unknown) {
-      const responseData = axios.isAxiosError<SegmentationErrorResponse>(error)
-        ? error.response?.data
-        : undefined;
+    } catch (error: any) {
       const errorMsg =
-        responseData?.error ||
-        responseData?.message ||
-        (error instanceof Error ? error.message : undefined) ||
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
         "Failed to start segmentation";
 
       console.error("[Segmentation] ❌ Full error:", error);
-      console.error("[Segmentation] Response data:", responseData);
-      console.error(
-        "[Segmentation] Status:",
-        axios.isAxiosError(error) ? error.response?.status : undefined,
-      );
+      console.error("[Segmentation] ❌ Response data:", error?.response?.data);
+      console.error("[Segmentation] ❌ Status:", error?.response?.status);
       console.error("[Segmentation] ❌ projectId:", projectId);
       console.error("[Segmentation] ❌ selectedModel:", selectedModel);
 
@@ -235,7 +251,7 @@ export default function SegmentationResultsPage() {
     } finally {
       setRunSegmentationLoading(false);
     }
-  }, [projectId, selectedModel, runSegmentationLoading, modelSessionKey]);
+  }, [projectId, selectedModel, runSegmentationLoading, modelSessionKey, isGpuMode, processingUnit]);
 
   const {
     currentHistory,
@@ -440,7 +456,7 @@ export default function SegmentationResultsPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [decodedMasks, projectId, isSaving, updateContextMasks, selectedModel]);
+  }, [decodedMasks, projectId, isSaving, updateContextMasks]);
 
   const handleRevertToAI = useCallback(async () => {
     if (!projectId || isSaving || !undecodedMasks) return;
@@ -535,16 +551,6 @@ export default function SegmentationResultsPage() {
 
       {/* AI Model Selector Bar */}
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-background shrink-0 flex-wrap">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push(`/project/${projectId}`)}
-          className="gap-2 shrink-0"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Project
-        </Button>
-
         {/* Icon + label */}
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
@@ -575,6 +581,7 @@ export default function SegmentationResultsPage() {
               <SelectItem
                 key={opt.value}
                 value={opt.value}
+                disabled={!isGpuMode && opt.value === "medsam"}
                 className="rounded-lg py-2"
               >
                 {opt.label}
@@ -582,6 +589,12 @@ export default function SegmentationResultsPage() {
             ))}
           </SelectContent>
         </Select>
+
+        {!isGpuMode && (
+          <span className="text-xs text-muted-foreground">
+            This model is only available with NVIDIA GPU.
+          </span>
+        )}
 
         {/* Status badge */}
         <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">
