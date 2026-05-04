@@ -79,6 +79,7 @@ export const generateAISegmentationForReconstruction = async (
                 )
             );
 
+<<<<<<< Updated upstream
         let selectedMask: IProjectSegmentationMask;
         let segmentationsToProcess: IProjectSegmentationMask[] = [];
         if (editableMask && maskHasMyocardium(editableMask)) {
@@ -87,6 +88,13 @@ export const generateAISegmentationForReconstruction = async (
             logger.info(`${serviceLocation}: Using editable mask for reconstruction`);
         } else if (aiMask && maskHasMyocardium(aiMask)) {
             selectedMask = aiMask;
+=======
+        let segmentationsToProcess: IProjectSegmentationMask[] = [];
+        if (editableMask && maskHasMyocardium(editableMask)) {
+            segmentationsToProcess = [editableMask];
+            logger.info(`${serviceLocation}: Using editable mask for reconstruction`);
+        } else if (aiMask && maskHasMyocardium(aiMask)) {
+>>>>>>> Stashed changes
             segmentationsToProcess = [aiMask];
             logger.warn(`${serviceLocation}: Editable mask has no myocardium labels; falling back to AI mask for reconstruction`);
         } else if (editableMask) {
