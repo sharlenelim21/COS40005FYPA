@@ -25,8 +25,18 @@ def _resolve_checkpoint(checkpoint_path: str | None) -> Path:
         checkpoint_path,
         os.getenv("LANDMARK_CHECKPOINT_PATH"),
         str(_resolve_unetresnet34_dir() / "checkpoints" / "best_model.pth"),
-        str(_resolve_unetresnet34_dir() / "checkpoints" / "2026-04-30_11-06-15" / "best_model.pth"),
-        str(Path(__file__).resolve().parents[1] / "models" / "landmark" / "best_model.pth"),
+        str(
+            _resolve_unetresnet34_dir()
+            / "checkpoints"
+            / "2026-04-30_11-06-15"
+            / "best_model.pth"
+        ),
+        str(
+            Path(__file__).resolve().parents[1]
+            / "models"
+            / "landmark"
+            / "best_model.pth"
+        ),
     ]
     for candidate in candidates:
         if candidate and Path(candidate).exists():
@@ -39,7 +49,8 @@ def _resolve_checkpoint(checkpoint_path: str | None) -> Path:
     if nested_matches:
         return nested_matches[0].resolve()
     raise FileNotFoundError(
-        "Could not find landmark checkpoint. Set LANDMARK_CHECKPOINT_PATH or place best_model.pth in UNETRESNET34/checkpoints/."
+        "Could not find landmark checkpoint. Set LANDMARK_CHECKPOINT_PATH or place "
+        "best_model.pth in UNETRESNET34/checkpoints/."
     )
 
 
@@ -53,7 +64,9 @@ def _load_landmark_module():
     if repo_str not in sys.path:
         sys.path.insert(0, repo_str)
 
-    spec = importlib.util.spec_from_file_location("visheart_unetresnet34_landmark", inference_path)
+    spec = importlib.util.spec_from_file_location(
+        "visheart_unetresnet34_landmark", inference_path
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load landmark inference module from {inference_path}")
 
@@ -120,12 +133,14 @@ def run_landmark_inference_from_nifti(
             device=torch_device,
             use_tta=use_tta,
         )
-        predictions.append({
-            "frame_id": frame_id,
-            "slice_id": slice_id,
-            "rv_insertion_1": [float(coords[0]), float(coords[1])],
-            "rv_insertion_2": [float(coords[2]), float(coords[3])],
-        })
+        predictions.append(
+            {
+                "frame_id": frame_id,
+                "slice_id": slice_id,
+                "rv_insertion_1": [float(coords[0]), float(coords[1])],
+                "rv_insertion_2": [float(coords[2]), float(coords[3])],
+            }
+        )
 
     return {
         "success": True,

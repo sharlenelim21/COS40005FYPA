@@ -2,10 +2,9 @@
 
 import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import {
   Loader2,
-  ArrowLeft,
   Scan,
   AlertCircle,
   CheckCircle2,
@@ -41,23 +40,27 @@ const LandmarkSliceViewer = dynamic(
   },
 );
 
+const ReconstructionGLBViewer = dynamic(
+  () => import("@/components/reconstruction/ReconstructionGLBViewer").then((m) => m.ReconstructionGLBViewer),
+  { ssr: false },
+);
+
 const MODEL_OPTIONS = [
-  { value: "unetresnet34-landmark", label: "UNetResNet34 Model" },
+  { value: "hrnet-lv", label: "HRNet-LV" },
 ] as const;
 
 type ModelId = typeof MODEL_OPTIONS[number]["value"];
 
 export default function LandmarkDetectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const router = useRouter();
 
   const {
     loading,
     error,
     projectData,
-    decodedMasks,
-    getMRIImage,
-    tarCacheReady,
+    hasReconstructions,
+    reconstructionCacheReady,
+    getReconstructionGLB,
   } = useProject();
 
   useEffect(() => {
@@ -68,7 +71,7 @@ export default function LandmarkDetectionPage() {
     return () => { document.title = "VisHeart"; };
   }, [projectData?.name]);
 
-  const [selectedModel, setSelectedModel] = useState<ModelId>("unetresnet34-landmark");
+  const [selectedModel, setSelectedModel] = useState<ModelId>("hrnet-lv");
 
   const {
     state,
@@ -82,15 +85,12 @@ export default function LandmarkDetectionPage() {
     handleNextFrame,
     handlePrevFrame,
     handleSliderChange,
-    handlePlaybackSpeedChange,
     handleReset,
   } = useLandmarkDetection(
     projectId,
     {
       width:  projectData?.dimensions?.width,
       height: projectData?.dimensions?.height,
-      frames: projectData?.dimensions?.frames,
-      slices: projectData?.dimensions?.slices,
     },
   );
 
@@ -102,14 +102,35 @@ export default function LandmarkDetectionPage() {
   const handleToggleLandmark = useCallback((id: string) => {
     setVisibleLandmarks((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   }, []);
+
+  // 3D model loading (mirrors segmentation page exactly) 
+  const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
+  const [isLoadingModel, setIsLoadingModel] = useState(false);
+
+  useEffect(() => {
+    if (!hasReconstructions || !reconstructionCacheReady) {
+      setReconstructionModelUrl(null);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setIsLoadingModel(true);
+      try {
+        const url = await getReconstructionGLB(state.currentFrame + 1);
+        if (!cancelled) setReconstructionModelUrl(url ?? null);
+      } catch {
+        if (!cancelled) setReconstructionModelUrl(null);
+      } finally {
+        if (!cancelled) setIsLoadingModel(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [state.currentFrame, hasReconstructions, reconstructionCacheReady, getReconstructionGLB]);
 
   // AHA alignment 
   const handleApplyAlignment = useCallback(() => {
@@ -119,31 +140,6 @@ export default function LandmarkDetectionPage() {
   }, []);
 
   const [showLabels, setShowLabels] = useState(true);
-  const [frameImageUrl, setFrameImageUrl] = useState<string | null>(null);
-
-  const currentSlice = currentPrediction?.slice_id ?? Math.floor((projectData?.dimensions?.slices ?? 1) / 2);
-  const currentImageFrame = currentPrediction?.frame_id ?? state.currentFrame;
-  const usesSlicePlayback = (projectData?.dimensions?.frames ?? 0) <= 1 && (projectData?.dimensions?.slices ?? 0) > 1;
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!projectData || !tarCacheReady) {
-      setFrameImageUrl(null);
-      return;
-    }
-
-    getMRIImage(currentImageFrame, currentSlice)
-      .then((url) => {
-        if (!cancelled) setFrameImageUrl(url);
-      })
-      .catch(() => {
-        if (!cancelled) setFrameImageUrl(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [getMRIImage, currentImageFrame, currentSlice, projectData, tarCacheReady]);
 
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
@@ -163,15 +159,6 @@ export default function LandmarkDetectionPage() {
   return (
     <div className="flex flex-col bg-background" style={{ height: "calc(100vh - 64px)" }}>
       <header className="flex items-center gap-3 px-4 py-2 border-b border-border bg-background flex-shrink-0 flex-wrap">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push(`/project/${projectId}`)}
-          className="gap-2 shrink-0"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Project
-        </Button>
 
         {/* Project name + badges */}
         <div className="flex items-center gap-2 min-w-0">
@@ -195,12 +182,8 @@ export default function LandmarkDetectionPage() {
             value={`${projectData.dimensions?.width ?? 256}×${projectData.dimensions?.height ?? 256}`}
           />
           <InfoPill
-            label={usesSlicePlayback ? "Slices" : "Frames"}
-            value={
-              hasPredictions
-                ? String(state.totalFrames)
-                : String(usesSlicePlayback ? projectData.dimensions?.slices ?? "—" : projectData.dimensions?.frames ?? "—")
-            }
+            label="Frames"
+            value={hasPredictions ? String(state.totalFrames) : String(projectData.dimensions?.frames ?? "—")}
           />
           {hasPredictions && (
             <InfoPill label="Model" value={state.modelUsed} />
@@ -238,10 +221,7 @@ export default function LandmarkDetectionPage() {
         <Button
           size="sm"
           className="text-xs gap-1.5 shrink-0"
-          onClick={() => {
-            if (hasPredictions) handleRerunDetection(selectedModel);
-            else handleRunDetection(selectedModel);
-          }}
+          onClick={() => handleRunDetection(selectedModel)}
           disabled={isRunning}
         >
           {isRunning ? (
@@ -288,9 +268,6 @@ export default function LandmarkDetectionPage() {
             currentFrame={state.currentFrame}
             totalFrames={state.totalFrames || projectData.dimensions?.frames || 1}
             imageDimensions={imageDimensions}
-            frameImageUrl={frameImageUrl}
-            decodedMasks={decodedMasks}
-            currentSlice={currentSlice}
             visibleLandmarks={visibleLandmarks}
             showLabels={showLabels}
           />
@@ -316,7 +293,6 @@ export default function LandmarkDetectionPage() {
             onNextFrame={handleNextFrame}
             onPrevFrame={handlePrevFrame}
             onSliderChange={handleSliderChange}
-            onPlaybackSpeedChange={handlePlaybackSpeedChange}
             onRerun={() => handleRerunDetection(selectedModel)}
             onReset={handleReset}
             onApplyAlignment={handleApplyAlignment}
@@ -338,11 +314,21 @@ export default function LandmarkDetectionPage() {
             <div className="w-full bg-background p-4 flex flex-col" style={{ height: "calc(100vh - 120px)" }}>
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <h3 className="text-sm font-semibold text-foreground">
-                  AHA 17-Segment Bullseye
+                  3D Cardiac Landmark Detection
                 </h3>
+                {isLoadingModel && (
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading…
+                  </span>
+                )}
               </div>
-              <div className="flex-1 min-h-0 rounded-lg border bg-muted/20 p-4">
-                <AhaBullseyeChart />
+              <div className="flex-1 min-h-0">
+                <ReconstructionGLBViewer
+                  modelUrl={reconstructionModelUrl}
+                  frame={state.currentFrame + 1}
+                  className="w-full h-full"
+                />
               </div>
             </div>
           </ResizablePanel>
@@ -391,9 +377,6 @@ export default function LandmarkDetectionPage() {
                   currentFrame={state.currentFrame}
                   totalFrames={state.totalFrames || projectData.dimensions?.frames || 1}
                   imageDimensions={imageDimensions}
-                  frameImageUrl={frameImageUrl}
-                  decodedMasks={decodedMasks}
-                  currentSlice={currentSlice}
                   visibleLandmarks={visibleLandmarks}
                   showLabels={showLabels}
                 />
@@ -437,7 +420,6 @@ export default function LandmarkDetectionPage() {
                 onNextFrame={handleNextFrame}
                 onPrevFrame={handlePrevFrame}
                 onSliderChange={handleSliderChange}
-                onPlaybackSpeedChange={handlePlaybackSpeedChange}
                 onRerun={() => handleRerunDetection(selectedModel)}
                 onReset={handleReset}
                 onApplyAlignment={handleApplyAlignment}
@@ -456,128 +438,6 @@ export default function LandmarkDetectionPage() {
 }
 
 // Local sub-components  
-
-const AHA_SEGMENTS = [
-  "Basal Anterior",
-  "Basal Anteroseptal",
-  "Basal Inferoseptal",
-  "Basal Inferior",
-  "Basal Inferolateral",
-  "Basal Anterolateral",
-  "Mid Anterior",
-  "Mid Anteroseptal",
-  "Mid Inferoseptal",
-  "Mid Inferior",
-  "Mid Inferolateral",
-  "Mid Anterolateral",
-  "Apical Anterior",
-  "Apical Septal",
-  "Apical Inferior",
-  "Apical Lateral",
-  "Apex",
-] as const;
-
-const AHA_COLORS = [
-  "#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6",
-  "#f43f5e", "#fb923c", "#facc15", "#4ade80", "#2dd4bf", "#60a5fa",
-  "#e11d48", "#ea580c", "#ca8a04", "#16a34a", "#0d9488",
-] as const;
-
-function AhaBullseyeChart() {
-  const cx = 180;
-  const cy = 180;
-  const rings = [
-    { inner: 122, outer: 160, count: 6, offset: -90, start: 0 },
-    { inner: 84, outer: 122, count: 6, offset: -90, start: 6 },
-    { inner: 42, outer: 84, count: 4, offset: -45, start: 12 },
-  ];
-
-  return (
-    <div className="flex h-full min-h-[360px] flex-col">
-      <div className="flex flex-1 items-center justify-center">
-        <svg viewBox="0 0 360 360" role="img" aria-label="AHA 17-segment bullseye chart" className="h-full max-h-[520px] w-full">
-          {rings.flatMap((ring) =>
-            Array.from({ length: ring.count }, (_, index) => {
-              const startAngle = ring.offset + (360 / ring.count) * index;
-              const endAngle = startAngle + 360 / ring.count;
-              const segmentIndex = ring.start + index;
-              const labelAngle = ((startAngle + endAngle) / 2) * (Math.PI / 180);
-              const labelRadius = (ring.inner + ring.outer) / 2;
-
-              return (
-                <g key={segmentIndex}>
-                  <path
-                    d={describeArcSegment(cx, cy, ring.inner, ring.outer, startAngle, endAngle)}
-                    fill={AHA_COLORS[segmentIndex]}
-                    stroke="hsl(var(--background))"
-                    strokeWidth="2"
-                  />
-                  <text
-                    x={cx + labelRadius * Math.cos(labelAngle)}
-                    y={cy + labelRadius * Math.sin(labelAngle)}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="fill-white text-[13px] font-semibold"
-                  >
-                    {segmentIndex + 1}
-                  </text>
-                  <title>{`${segmentIndex + 1}. ${AHA_SEGMENTS[segmentIndex]}`}</title>
-                </g>
-              );
-            }),
-          )}
-          <circle cx={cx} cy={cy} r="42" fill={AHA_COLORS[16]} stroke="hsl(var(--background))" strokeWidth="2" />
-          <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" className="fill-white text-[14px] font-semibold">17</text>
-          <title>17. Apex</title>
-          <text x={cx} y="26" textAnchor="middle" className="fill-muted-foreground text-[12px] font-medium">Anterior</text>
-          <text x={cx} y="346" textAnchor="middle" className="fill-muted-foreground text-[12px] font-medium">Inferior</text>
-          <text x="28" y={cy} textAnchor="middle" dominantBaseline="middle" className="fill-muted-foreground text-[12px] font-medium">Septal</text>
-          <text x="332" y={cy} textAnchor="middle" dominantBaseline="middle" className="fill-muted-foreground text-[12px] font-medium">Lateral</text>
-        </svg>
-      </div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-        {AHA_SEGMENTS.map((segment, index) => (
-          <div key={segment} className="flex min-w-0 items-center gap-1.5">
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: AHA_COLORS[index] }} />
-            <span className="truncate">{index + 1}. {segment}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function describeArcSegment(
-  cx: number,
-  cy: number,
-  innerRadius: number,
-  outerRadius: number,
-  startAngle: number,
-  endAngle: number,
-) {
-  const startOuter = polarToCartesian(cx, cy, outerRadius, endAngle);
-  const endOuter = polarToCartesian(cx, cy, outerRadius, startAngle);
-  const startInner = polarToCartesian(cx, cy, innerRadius, startAngle);
-  const endInner = polarToCartesian(cx, cy, innerRadius, endAngle);
-  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-
-  return [
-    "M", startOuter.x, startOuter.y,
-    "A", outerRadius, outerRadius, 0, largeArcFlag, 0, endOuter.x, endOuter.y,
-    "L", startInner.x, startInner.y,
-    "A", innerRadius, innerRadius, 0, largeArcFlag, 1, endInner.x, endInner.y,
-    "Z",
-  ].join(" ");
-}
-
-function polarToCartesian(cx: number, cy: number, radius: number, angleInDegrees: number) {
-  const angleInRadians = angleInDegrees * (Math.PI / 180);
-
-  return {
-    x: cx + radius * Math.cos(angleInRadians),
-    y: cy + radius * Math.sin(angleInRadians),
-  };
-}
 
 function StatusBadge({ status }: { status: LandmarkPageState["status"] }) {
   const map = {

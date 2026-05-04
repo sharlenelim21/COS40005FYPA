@@ -95,12 +95,10 @@ const connectRedis = async (): Promise<void> => {
       logger.info(`${serviceLocation}: Redis client connected successfully.`);
     }
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Unknown error";
     logger.error(
-      `${serviceLocation}: Failed to connect to Redis. Error: ${message}`
+      `${serviceLocation}: Failed to connect to Redis. Error: ${error instanceof Error ? error.message : "Unknown error"}`
     );
     LogError(error as Error, serviceLocation, "Redis connection error.");
-    throw new Error(`Redis connection failed: ${message}`);
   }
 };
 

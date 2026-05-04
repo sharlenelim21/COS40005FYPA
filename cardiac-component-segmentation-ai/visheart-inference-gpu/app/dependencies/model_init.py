@@ -2,7 +2,6 @@ from contextlib import asynccontextmanager
 import os
 import logging
 from fastapi import FastAPI
-from fastapi import HTTPException
 
 # Import your model handlers
 from app.classes.yolo_handler import YoloHandler
@@ -21,10 +20,6 @@ medsam_model = None
 fourd_reconstruction_model = None
 
 
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 @asynccontextmanager
 async def yolo_model_lifespan(app: FastAPI):
     """
@@ -37,11 +32,6 @@ async def yolo_model_lifespan(app: FastAPI):
         None: The main application runs during the yield statement.
     """
     global yolo_model
-
-    if _env_flag("SKIP_YOLO_MODEL_LOAD"):
-        logging.getLogger("visheart").warning("Skipping YOLO model load because SKIP_YOLO_MODEL_LOAD is enabled")
-        yield
-        return
 
     # Get model name from environment variable with default fallback
     model_name = os.environ.get(
@@ -75,11 +65,6 @@ async def medsam_model_lifespan(app: FastAPI):
         None: The main application runs during the yield statement.
     """
     global medsam_model
-
-    if _env_flag("SKIP_MEDSAM_MODEL_LOAD"):
-        logging.getLogger("visheart").warning("Skipping MedSAM model load because SKIP_MEDSAM_MODEL_LOAD is enabled")
-        yield
-        return
 
     # Get model name from environment variable with default fallback
     model_name = os.environ.get("MEDSAM_MODEL_NAME", "medsam_vit_b.pth")
@@ -142,11 +127,6 @@ async def fourd_reconstruction_model_lifespan(app: FastAPI):
     """
     global fourd_reconstruction_model
 
-    if _env_flag("SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD"):
-        logging.getLogger("visheart").warning("Skipping 4D Reconstruction model load because SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD is enabled")
-        yield
-        return
-
     # Get model name from environment variable with default fallback
     model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "fourd_model_epoch_250.pth")
 
@@ -176,12 +156,5 @@ def get_fourd_reconstruction_model():
         RuntimeError: If the model hasn't been initialized.
     """
     if fourd_reconstruction_model is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "4D Reconstruction model is not initialized. Restart the local "
-                "inference server and make sure SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD=false "
-                "and FOURD_RECONSTRUCTION_MODEL_NAME points to an existing .pth file."
-            ),
-        )
+        raise RuntimeError("4D Reconstruction model is not initialized")
     return fourd_reconstruction_model

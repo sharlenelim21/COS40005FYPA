@@ -85,6 +85,7 @@ export default function Header() {
                     height={32}
                     alt="VisHeart Logo"
                     className={cn("transition-transform duration-200 ease-in-out", isScrolled ? "scale-90" : "scale-100")}
+                    priority // Since it's above fold
                   />
                 </div>
                 <span className="bg-gradient-to-r from-red-500 to-pink-500 bg-clip-text text-xl font-bold whitespace-nowrap text-transparent">VisHeart</span>

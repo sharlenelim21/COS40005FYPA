@@ -17,7 +17,7 @@ Input: Path to a NIfTI file (.nii or .nii.gz) containing 4D cardiac imaging data
 Output: JSON with frame/slice/segmentation data identical to MedSAM format for database compatibility
 
 Key Features:
-- Preprocessing: Z-score normalization to [0,1] range; handles NaN/inf values
+- Preprocessing: min-max scaling [0,1]; handles NaN/inf values
 - Inference: Model runs at 256x256 resolution for speed; output resized to original dimensions
 - Encoding: RLE (Run-Length Encoding) for efficient mask storage
 - Schema: Output structure matches backend database expectations (frameinferred=True, etc.)"""
@@ -146,7 +146,7 @@ def resolve_device(preferred: str) -> torch.device:
     
     This ensures inference works on any machine, even without GPU support.
     """
-    mode = (preferred or "cpu").strip().lower()
+    mode = (preferred or "auto").strip().lower()
     if mode == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if mode == "cuda":
@@ -159,7 +159,7 @@ def resolve_device(preferred: str) -> torch.device:
 def normalize_slice(slice_2d: np.ndarray) -> np.ndarray:
     """DEVELOPER NOTE: Preprocessing - Intensity Normalization
     
-    Implements Z-score normalization to prepare cardiac image slices for model inference:
+    Implements min-max normalization to prepare cardiac image slices for model inference:
     
     1. Clean Invalid Values: Replace NaN, +inf, -inf with 0 (common in medical imaging)
     2. Min-Max Normalization: Scale distribution to [0,1] range
@@ -227,7 +227,7 @@ def extract_volume(nifti_path: str) -> np.ndarray:
 def run_model2_inference(
     nifti_path: str,
     checkpoint_path: str,
-    device: str = "cpu",
+    device: str = "auto",
 ) -> Dict[str, Any]:
     """DEVELOPER NOTE: Main Inference Pipeline
     
@@ -367,7 +367,7 @@ def main() -> int:
     
     Environment Variables:
     - MODEL2_CHECKPOINT_PATH: Path to UNet model weights file (required)
-    - MODEL2_DEVICE: Default device selection (default: "cpu")
+    - MODEL2_DEVICE: Default device selection (default: "auto")
     
     Command-line Arguments:
     - nifti_path: Required - input cardiac imaging file
@@ -381,7 +381,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run local UNet inference on a NIfTI cardiac imaging file.")
     parser.add_argument("nifti_path", help="Path to the input NIfTI file")
     parser.add_argument("--checkpoint-path", default=os.getenv("MODEL2_CHECKPOINT_PATH", ""), help="Path to the UNet model checkpoint weights")
-    parser.add_argument("--device", default=os.getenv("MODEL2_DEVICE", "cpu"), choices=["auto", "cpu", "cuda"], help="Compute device: auto (GPU if available), cpu, or cuda (GPU required)")
+    parser.add_argument("--device", default=os.getenv("MODEL2_DEVICE", "auto"), choices=["auto", "cpu", "cuda"], help="Compute device: auto (GPU if available), cpu, or cuda (GPU required)")
     args = parser.parse_args()
 
     try:
