@@ -24,7 +24,7 @@ UNETRESNET34/bullseye_17seg.ipynb — do not redefine here.
 
 from __future__ import annotations
 import numpy as np
-import cv2
+import cv2       
 
 # ── AHA 17-Segment Definitions ───────────────────────────────────────────────
 # Copied verbatim from UNETRESNET34/bullseye_17seg.ipynb.

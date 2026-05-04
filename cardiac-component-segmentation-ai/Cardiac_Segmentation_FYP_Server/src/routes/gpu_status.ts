@@ -53,8 +53,8 @@ const resolveGpuStatusAddressCandidates = async (): Promise<string[]> => {
     configuredAddress,
     process.env.GPU_API_URL,
     process.env.MEDSAM_LOCAL_BASE_URL,
-    "http://host.docker.internal:8011",
-    "http://127.0.0.1:8011",
+    "http://host.docker.internal:8001",
+    "http://127.0.0.1:8001",
   ]);
 };
 
