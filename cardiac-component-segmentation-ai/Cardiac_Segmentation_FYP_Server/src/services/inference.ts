@@ -78,7 +78,7 @@ const resolveMedsamBaseUrlCandidates = async (): Promise<string[]> => {
 
   return uniqueBaseUrls([
     process.env.LOCAL_GPU_API_URL,
-    "http://host.docker.internal:8011",
+    "http://host.docker.internal:8001",
     isDockerGpuAlias(process.env.GPU_API_URL) ? null : process.env.GPU_API_URL,
     isDockerGpuAlias(process.env.MEDSAM_LOCAL_BASE_URL) ? null : process.env.MEDSAM_LOCAL_BASE_URL,
     isDockerGpuAlias(configuredBaseUrl) ? null : configuredBaseUrl,

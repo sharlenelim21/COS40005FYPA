@@ -11,8 +11,8 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8011,
+        port=8001,
         workers=1,
         limit_concurrency=100,
-        reload=False  # Windows/Python 3.14 can hang with the reloader subprocess
+        reload=False
     )
