@@ -16,19 +16,19 @@ except ImportError:
     from typing_extensions import Annotated
 
 # Import handlers and dependencies
-from classes.file_fetch_handler import FileFetchHandler
-from classes.yolo_handler import YoloHandler
-from dependencies.model_init import get_yolo_model
-from classes.medsam_handler import MedSamHandler
-from dependencies.model_init import get_medsam_model
-from classes.fourdreconstruction_handler import FourDReconstructionHandler
-from dependencies.model_init import get_fourd_reconstruction_model
+from app.classes.file_fetch_handler import FileFetchHandler
+from app.classes.yolo_handler import YoloHandler
+from app.dependencies.model_init import get_yolo_model
+from app.classes.medsam_handler import MedSamHandler
+from app.dependencies.model_init import get_medsam_model
+from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
+from app.dependencies.model_init import get_fourd_reconstruction_model
 
 # Import the verification dependency and the payload model
-from security.backend_authentication import conditional_verify_jwt, TokenPayLoad
+from app.security.backend_authentication import conditional_verify_jwt, TokenPayLoad
 
 # Import inference jobs
-from helpers.inference_jobs import (
+from app.helpers.inference_jobs import (
     process_bbox_job_with_semaphore,
     process_medsam_job_with_semaphore,
     execute_medsam_manual_job_synchronously,
@@ -37,14 +37,14 @@ from helpers.inference_jobs import (
     process_landmark_job_with_semaphore,
 )
 
-from helpers.inference_helpers import (
+from app.helpers.inference_helpers import (
     filter_detections,
     encode_and_name_masks,
     sort_medsam_results,
 )
 
 # Import the request and response models
-from classes.pydantic_schema import (
+from app.classes.pydantic_schema import (
     JobAcceptedResponse,
     SynchronousManualBboxRequest,
     MedSamManualSynchronousResult,  # Updated model

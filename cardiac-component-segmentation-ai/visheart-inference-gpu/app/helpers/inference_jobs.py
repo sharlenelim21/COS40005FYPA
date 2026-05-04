@@ -15,7 +15,7 @@ from typing import Dict, List, Union, Tuple, Any, TYPE_CHECKING
 
 from fastapi import HTTPException # <-- Add HTTPException
 
-from classes.device_runtime import (
+from app.classes.device_runtime import (
     get_backend,
     safe_empty_cache,
     safe_memory_stats,
@@ -27,14 +27,14 @@ def _extract_frame_index_from_filename(filename: str) -> int | None:
     return int(match.group(1)) if match else None
 
 if TYPE_CHECKING:
-    from classes.pydantic_schema import FourDReconstructionJobRequest
+    from app.classes.pydantic_schema import FourDReconstructionJobRequest
 
 # File handler (now needs async usage)
-from classes.file_fetch_handler import FileFetchHandler
+from app.classes.file_fetch_handler import FileFetchHandler
 
 # Model handlers (methods are now async)
-from classes.yolo_handler import YoloHandler
-from dependencies.model_init import get_yolo_model
+from app.classes.yolo_handler import YoloHandler
+from app.dependencies.model_init import get_yolo_model
 
 def obj_to_npz_base64(obj_file_path: str) -> str:
     """
@@ -76,19 +76,19 @@ def obj_to_npz_base64(obj_file_path: str) -> str:
     base64_data = base64.b64encode(npz_data).decode('utf-8')
     
     return base64_data
-from classes.medsam_handler import MedSamHandler
-from dependencies.model_init import get_medsam_model
-from helpers.landmark_inference_api import run_landmark_inference_from_nifti
-from classes.fourdreconstruction_handler import FourDReconstructionHandler
-from dependencies.model_init import get_fourd_reconstruction_model
-from helpers.unet_inference_api import run_unet_inference_from_nifti
+from app.classes.medsam_handler import MedSamHandler
+from app.dependencies.model_init import get_medsam_model
+from app.helpers.landmark_inference_api import run_landmark_inference_from_nifti
+from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
+from app.dependencies.model_init import get_fourd_reconstruction_model
+from app.helpers.unet_inference_api import run_unet_inference_from_nifti
 
-from helpers.inference_helpers import (
+from app.helpers.inference_helpers import (
     filter_detections, encode_and_name_masks, sort_medsam_results,
 )
 
 # Import the new Pydantic models to be used for constructing the result
-from classes.pydantic_schema import ManualInputBox, ResultPerImageManual
+from app.classes.pydantic_schema import ManualInputBox, ResultPerImageManual
 
 # Constants
 serviceLocation = "Inference Service"
