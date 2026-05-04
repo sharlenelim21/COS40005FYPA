@@ -40,7 +40,7 @@ const resolveGpuBaseUrlCandidates = async (): Promise<string[]> => {
   const remoteBaseUrl = await getFreshGPUServerAddress();
   return uniqueBaseUrls([
     process.env.LOCAL_GPU_API_URL,
-    "http://host.docker.internal:8001",
+    "http://host.docker.internal:8011",
     isDockerGpuAlias(directGpuApiUrl) ? null : directGpuApiUrl,
     isDockerGpuAlias(localhostUrl) ? null : localhostUrl,
     isDockerGpuAlias(remoteBaseUrl) ? null : remoteBaseUrl,
