@@ -79,6 +79,7 @@ router.post("/start-segmentation/:projectId",
             `${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}. model=${segmentationModel}, device=${modelDevice}`
         );
 =======
+>>>>>>>>> Temporary merge branch 2
         // Supported values: "cpu" (default), "cuda" (for NVIDIA GPU), or "auto" (automatic selection).
         const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : undefined;
         logger.info(`${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}`);
