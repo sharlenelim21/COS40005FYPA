@@ -44,7 +44,7 @@ def _load_unet_module():
 
 def run_unet_inference_from_nifti(
     nifti_path: str,
-    device: str = "cpu",
+    device: str = "auto",
     checkpoint_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
