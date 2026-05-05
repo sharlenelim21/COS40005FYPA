@@ -166,7 +166,7 @@ const createAdminUser = async (): Promise<void> => {
       const admin: IUserDocument = new userModel({
         username: "admin",
         password: hashedPassword,
-        email: "admin@example.com",
+        email: "meiqiliew334@gmail.com",
         phone: "1234567890",
         role: UserRole.Admin,
       });
@@ -1870,7 +1870,7 @@ const jobSchema = new mongoose.Schema({
   message: { type: String, required: false }, // Message related to the job
   segmentationName: { type: String, required: false }, // Optional user-defined name
   segmentationDescription: { type: String, required: false }, // Optional user-defined description
-  segmentationSouce: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
+  segmentationSource: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
   segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model used for segmentation
   model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
 }, { timestamps: true });

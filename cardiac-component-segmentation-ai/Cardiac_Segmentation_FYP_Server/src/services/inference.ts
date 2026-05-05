@@ -235,7 +235,7 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
                 userid: user?._id?.toString() || 'unknown',
                 projectid: projectId,
                 uuid: trackedJobUuid,
-                status: JobStatus.PENDING,
+                status: JobStatus.IN_PROGRESS,
                 segmentationSource: segmentationSource.AI_INFERENCE
             };
             const jobCreationResult = await createJob(jobData);
@@ -466,6 +466,11 @@ export async function startModel2Inference(
                 message: `UNET inference failed: ${inferenceResult.error || 'Unknown error'}`,
             };
         }
+
+        await updateJob(jobUuid, {
+            status: JobStatus.IN_PROGRESS,
+            message: `UNET inference accepted by GPU service (${inferenceResult.status || "queued"}).`,
+        });
 
         return {
             success: true,

@@ -4,6 +4,12 @@ import React, { useRef, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { FramePrediction, LandmarkDefinition } from "@/types/landmark";
 import { LANDMARK_DEFINITIONS, getLandmarkCoord } from "@/types/landmark";
+import { LABEL_COLORS, type AnatomicalLabel } from "@/types/segmentation";
+
+export interface LandmarkMaskOverlay {
+  label: AnatomicalLabel;
+  mask: Uint8Array;
+}
 
 interface LandmarkSliceViewerProps {
   prediction: FramePrediction | null;
@@ -11,6 +17,7 @@ interface LandmarkSliceViewerProps {
   totalFrames: number;
   imageDimensions: { width: number; height: number };
   frameImageUrl?: string | null;
+  maskOverlays?: LandmarkMaskOverlay[];
   visibleLandmarks: Set<string>;
   showLabels?: boolean;
   className?: string;
@@ -29,6 +36,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   totalFrames,
   imageDimensions,
   frameImageUrl,
+  maskOverlays = [],
   visibleLandmarks,
   showLabels = true,
   className,
@@ -60,6 +68,10 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawMockMri(ctx, cw, ch);
       }
 
+      for (const overlay of maskOverlays) {
+        drawMaskOverlay(ctx, overlay, imageDimensions.width, imageDimensions.height, cw, ch);
+      }
+
       if (!prediction) return;
 
       const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
@@ -77,7 +89,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawFrameLabel(ctx, currentFrame, totalFrames);
       }
     },
-    [prediction, visibleLandmarks, showLabels, currentFrame, totalFrames, toCanvas],
+    [prediction, visibleLandmarks, showLabels, currentFrame, totalFrames, toCanvas, maskOverlays, imageDimensions],
   );
 
   useEffect(() => {
@@ -93,6 +105,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       return;
     }
     const img = new Image();
+    frameImgRef.current = null;
     img.onload = () => {
       frameImgRef.current = img;
       const canvas = canvasRef.current;
@@ -100,6 +113,8 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     };
     img.onerror = () => {
       frameImgRef.current = null;
+      const canvas = canvasRef.current;
+      if (canvas) draw(canvas);
     };
     img.src = frameImageUrl;
   }, [frameImageUrl, draw]);
@@ -201,6 +216,50 @@ function drawDot(
   ctx.fillStyle = "#ffffff";
   ctx.textBaseline = "middle";
   ctx.fillText(text, lx + LABEL_PAD_X, cy);
+}
+
+function drawMaskOverlay(
+  ctx: CanvasRenderingContext2D,
+  overlay: LandmarkMaskOverlay,
+  sourceWidth: number,
+  sourceHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+) {
+  if (!overlay.mask.length || sourceWidth <= 0 || sourceHeight <= 0) return;
+
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = sourceWidth;
+  maskCanvas.height = sourceHeight;
+
+  const maskCtx = maskCanvas.getContext("2d");
+  if (!maskCtx) return;
+
+  const imageData = maskCtx.createImageData(sourceWidth, sourceHeight);
+  const color = LABEL_COLORS[overlay.label] ?? "#ffffff";
+  const [r, g, b] = hexToRgb(color);
+  const maxPixels = Math.min(overlay.mask.length, sourceWidth * sourceHeight);
+
+  for (let i = 0; i < maxPixels; i += 1) {
+    if (overlay.mask[i] <= 0) continue;
+    const offset = i * 4;
+    imageData.data[offset] = r;
+    imageData.data[offset + 1] = g;
+    imageData.data[offset + 2] = b;
+    imageData.data[offset + 3] = 92;
+  }
+
+  maskCtx.putImageData(imageData, 0, 0);
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.drawImage(maskCanvas, 0, 0, canvasWidth, canvasHeight);
+  ctx.restore();
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!match) return [255, 255, 255];
+  return [parseInt(match[1], 16), parseInt(match[2], 16), parseInt(match[3], 16)];
 }
 
 function drawFrameLabel(

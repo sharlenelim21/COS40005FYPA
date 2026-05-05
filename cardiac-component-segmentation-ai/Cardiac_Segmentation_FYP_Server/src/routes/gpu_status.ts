@@ -58,7 +58,9 @@ router.get(
 
       if (response.status === 200) {
         logger.info(`${serviceLocation}: GPU is available`);
-        const gpuAvailable = Boolean(response.data?.gpuAvailable);
+        const gpuAvailable = Boolean(
+          response.data?.gpuAvailable ?? response.data?.gpu?.gpu_name
+        );
         const mode = response.data?.mode || (gpuAvailable ? "gpu" : "cpu");
         res.status(200).json({
           message: gpuAvailable ? "NVIDIA GPU is available." : "CPU mode is active.",
@@ -76,7 +78,9 @@ router.get(
           message: `GPU returned status ${response.status}`,
           status: "degraded",
           serviceOnline: true,
-          gpuAvailable: Boolean(response.data?.gpuAvailable),
+          gpuAvailable: Boolean(
+            response.data?.gpuAvailable ?? response.data?.gpu?.gpu_name
+          ),
           mode: response.data?.mode || "unknown",
           details: response.data,
         });

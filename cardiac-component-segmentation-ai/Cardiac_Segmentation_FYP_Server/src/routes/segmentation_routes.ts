@@ -353,7 +353,11 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     jobId: job.uuid,
                     projectId: job.projectid,
                     status: job.status,
-                    queuePosition: queuePosition
+                    queuePosition: queuePosition,
+                    message: job.message || "",
+                    segmentationModel: job.segmentationModel || job.model_used || null,
+                    createdAt: (job as any).createdAt?.toISOString?.() || null,
+                    updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };
             })
         });
