@@ -136,8 +136,8 @@ WORKDIR /app
 COPY . .
 
 # Check if the models exist (and make script executable)
-RUN chmod +x docker/scripts/docker_requisite_check.sh && \
-    docker/scripts/docker_requisite_check.sh
+RUN chmod +x ./docker/scripts/docker_requisite_check.sh && \
+    bash ./docker/scripts/docker_requisite_check.sh
 
 # Make the start script executable
 RUN chmod +x docker/scripts/start.sh
