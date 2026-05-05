@@ -276,6 +276,10 @@ export interface UserJob {
     projectId: string;
     status: JobStatus;
     queuePosition: number | null;
+    message?: string;
+    segmentationModel?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
 }
 
 /**
