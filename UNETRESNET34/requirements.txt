@@ -1,0 +1,16 @@
+torch
+torchvision
+monai
+nibabel
+scipy
+opencv-python
+tensorboard
+pandas
+matplotlib
+numpy
+tqdm
+scikit-learn
+scikit-image
+simpleitk
+einops
+huggingface_hub

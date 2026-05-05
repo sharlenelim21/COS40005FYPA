@@ -82,7 +82,7 @@ export function ReconstructionConfigDialog({
             <Label htmlFor="format">Export Format</Label>
             <Select
               value={exportFormat}
-              onValueChange={(value) => setExportFormat(value as "obj" | "glb")}
+              onValueChange={(value: string) => setExportFormat(value as "obj" | "glb")}
             >
               <SelectTrigger id="format">
                 <SelectValue placeholder="Select format" />

@@ -821,14 +821,24 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         // Filter jobs by current project ID
         const projectJobs = response.jobs.filter((job: ProjectTypes.UserJob) => job.projectId === projectId);
-        setJobs(projectJobs);
         console.log(`Found ${projectJobs.length} jobs for project ${projectId}:`, projectJobs);
 
-        // Check for logical errors: completed jobs should have masks
-        const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
-        if (completedJobs.length > 0 && !hasMasks) {
-          console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
-          setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
+        // If all returned jobs are failed and no masks exist, treat them as stale so users can re-run segmentation locally.
+        const onlyFailedJobs = projectJobs.length > 0 && projectJobs.every((j: ProjectTypes.UserJob) => j.status === ProjectTypes.JobStatus.FAILED);
+        if (onlyFailedJobs && !hasMasks) {
+          console.warn(`[ProjectContext] Detected only failed jobs for project ${projectId} and no masks. Treating as no active jobs to allow rerun.`);
+          setJobs([]);
+          // Keep a visible warning so developers can investigate server-side failures
+          setJobsError(`Previous segmentation attempts failed; you can re-run segmentation.`);
+        } else {
+          setJobs(projectJobs);
+
+          // Check for logical errors: completed jobs should have masks
+          const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
+          if (completedJobs.length > 0 && !hasMasks) {
+            console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
+            setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
+          }
         }
       })
       .catch((error: unknown) => {
@@ -976,6 +986,14 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
   // 4b. Fetch reconstruction metadata when project is loaded - NEW
   useEffect(() => {
+    if (shouldSkipReconstructionPreload) {
+      setHasReconstructions(false);
+      setReconstructionMetadata(null);
+      setReconstructionCacheReady(false);
+      setReconstructionCacheError(null);
+      return;
+    }
+
     if (!projectId || !projectData) {
       setHasReconstructions(false);
       setReconstructionMetadata(null);
@@ -1006,10 +1024,16 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     };
 
     fetchReconstructionMetadata();
-  }, [projectId, projectData]);
+  }, [projectId, projectData, shouldSkipReconstructionPreload]);
 
   // 4c. Initialize reconstruction cache when reconstruction metadata is available - NEW
   useEffect(() => {
+    if (shouldSkipReconstructionPreload) {
+      setReconstructionCacheReady(false);
+      setReconstructionCacheError(null);
+      return;
+    }
+
     if (!projectId || !reconstructionMetadata || !reconstructionMetadata.reconstructionId) {
       setReconstructionCacheReady(false);
       setReconstructionCacheError(null);
@@ -1087,10 +1111,14 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       console.log(`[ProjectContext] 🧹 Cleaning up reconstruction cache for project ${projectId}`);
       reconstructionCache.clearProjectModels(projectId).catch((error) => console.warn(`[ProjectContext] ⚠️ Reconstruction cleanup error:`, error));
     };
-  }, [projectId, reconstructionMetadata, preloadReconstructionModels]);
+  }, [projectId, reconstructionMetadata, preloadReconstructionModels, shouldSkipReconstructionPreload]);
 
   // 4d. Auto-preload ALL models (URLs + Three.js cache) when reconstruction cache is ready - ZERO-LAG SYSTEM
   useEffect(() => {
+    if (shouldSkipReconstructionPreload) {
+      return;
+    }
+
     if (!reconstructionCacheReady || isPreloading || isThreeJSPreloading) {
       return;
     }
@@ -1123,7 +1151,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     const timeoutId = setTimeout(autoPreloadComplete, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [reconstructionCacheReady, isPreloading, isThreeJSPreloading, projectId, reconstructionMetadata, preloadAllModelURLs, preloadAllThreeJSModels]);
+  }, [reconstructionCacheReady, isPreloading, isThreeJSPreloading, projectId, reconstructionMetadata, preloadAllModelURLs, preloadAllThreeJSModels, shouldSkipReconstructionPreload]);
 
   // 5. Optimized final loading state management - set to done when all components are ready or there's an error
   useEffect(() => {

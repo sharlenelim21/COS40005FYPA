@@ -1,5 +1,6 @@
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 import { MetricData, S3Metrics, CostData } from "@/types/system-monitor";
+import { file } from "zod";
 
 // Create a pre-configured instance of axios.
 // This is a best practice for managing API calls in a structured way.
@@ -251,15 +252,21 @@ export const projectApi = {
 // Segmentation functions
 export const segmentationApi = {
   // Start segmentation for a project
-  startSegmentation: async (projectId: string) => {
-    try {
-      const response = await api.post(
-        `/segmentation/start-segmentation/${projectId}`,
-      );
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+  startSegmentation: async (
+    projectId: string,
+    segmentationModel: "medsam" | "unet" = "medsam",
+    deviceType: "cpu" | "cuda" | "auto" = "auto"
+  ) => {
+    const endpoint = `/segmentation/start-segmentation/${projectId}`;
+    const payload = { segmentationModel, deviceType };
+    console.log("[API] startSegmentation POST:", {
+      endpoint,
+      payload,
+    });
+
+    const response = await api.post(endpoint, payload);
+
+    return response.data;
   },
 
   // Get segmentation results for a project
@@ -602,20 +609,35 @@ export const statusApi = {
   // Get GPU status
   getGpuStatus: async () => {
     try {
-      const response = await api.get("/status/gpu-status");
+      const response = await api.get("/status/gpu-status", {
+        validateStatus: () => true,
+      });
       return response.data;
     } catch (error) {
-      throw error;
+      return {
+        message: error instanceof Error ? error.message : "Processing unit status unavailable",
+        status: "offline",
+        serviceOnline: false,
+        gpuAvailable: false,
+        mode: "unknown",
+        details: error,
+      };
     }
   },
 
   // Get GPU system status (CPU, RAM, Disk)
   getGpuSystemStatus: async () => {
     try {
-      const response = await api.get("/status/gpu-system-status");
+      const response = await api.get("/status/gpu-system-status", {
+        validateStatus: () => true,
+      });
       return response.data;
     } catch (error) {
-      throw error;
+      return {
+        message: error instanceof Error ? error.message : "GPU system status unavailable",
+        status: "offline",
+        details: error,
+      };
     }
   },
 };

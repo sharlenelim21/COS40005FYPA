@@ -5,6 +5,7 @@ import path from "path";
 import dotenv from "dotenv";
 import logger from "./logger";
 import * as bcrypt from "bcrypt";
+import { loadEnvFromKnownLocations } from "../utils/env";
 
 // Import utility functions
 import LogError from "../utils/error_logger"; // Import the error logging utility
@@ -20,7 +21,7 @@ import { IGPUHost, IGPUHostDocument, GPUHostCrudResult } from "../types/database
 // Load environment variables from .env file
 try {
   // override: true allows to override cached environment variables
-  dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
+  loadEnvFromKnownLocations(__dirname);
 } catch (error: unknown) {
   LogError(error as Error, serviceLocation, "Error loading .env file.");
 };
@@ -165,7 +166,7 @@ const createAdminUser = async (): Promise<void> => {
       const admin: IUserDocument = new userModel({
         username: "admin",
         password: hashedPassword,
-        email: "admin@example.com",
+        email: "meiqiliew334@gmail.com",
         phone: "1234567890",
         role: UserRole.Admin,
       });
@@ -719,6 +720,8 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is saved
   segmentationmaskRLE: { type: Boolean, required: false }, // RLE of the segmentation mask (e.g., S3 bucket URL)
   isMedSAMOutput: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is a MedSAM output
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model tag
+  model_used: { type: String, required: false }, // Compatibility field for external tools
   // Properties of extracted folder + location tracking
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
@@ -1239,6 +1242,10 @@ const createProjectSegmentationMask = async (
 ): Promise<ProjectSegmentationMaskCrudResult> => {
   const operation = CRUDOperation.CREATE;
   const psm = projectsegmentationmask;
+  // Backwards-compatibility: populate model_used from segmentationModel if not explicitly provided
+  if (!psm.model_used && psm.segmentationModel) {
+    psm.model_used = psm.segmentationModel as unknown as string;
+  }
   try {
     const projectid = projectsegmentationmask.projectid;
     const projectidexists = await projectModel.exists({ _id: projectid });
@@ -1863,8 +1870,9 @@ const jobSchema = new mongoose.Schema({
   message: { type: String, required: false }, // Message related to the job
   segmentationName: { type: String, required: false }, // Optional user-defined name
   segmentationDescription: { type: String, required: false }, // Optional user-defined description
-  segmentationSouce: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
+  segmentationSource: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
   segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model used for segmentation
+  model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
 }, { timestamps: true });
 const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 
@@ -1872,6 +1880,10 @@ const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 const createJob = async (job: IJob): Promise<JobCrudResult> => {
   const operation = CRUDOperation.CREATE;
   try {
+    // Backwards-compatibility: ensure model_used is set from segmentationModel when missing
+    if (!('model_used' in job) && job.segmentationModel) {
+      (job as any).model_used = job.segmentationModel as unknown as string;
+    }
     const newJob = new jobModel(job);
     const results = await newJob.save();
     if (results._id) {
@@ -1999,7 +2011,7 @@ const seedGPUHost = async (): Promise<void> => {
     // Create a new GPU host configuration with default values
     const newGpuHostConfig: IGPUHost = {
       host: process.env.GPU_SERVER_URL || 'localhost',
-      port: parseInt(process.env.GPU_SERVER_PORT || '8000', 10),
+      port: parseInt(process.env.GPU_SERVER_PORT || '8001', 10),
       isHTTPS: process.env.GPU_SERVER_SSL === 'true',
       gpuServerAuthJwtSecret: process.env.GPU_SERVER_AUTH_JWT_SECRET || 'change-this',
       serverIdForGpuServer: process.env.GPU_SERVER_ID_FOR_GPU_SERVER || 'default-server-id',
