@@ -57,4 +57,3 @@ Once the application is running (wait a few minutes for it to start), you can ac
 - **AI/GPU not working**: Ensure you have installed the NVIDIA drivers for WSL linked above. To check use the ` docker run --rm -it --gpus=all nvcr.io/nvidia/k8s/cuda-sample:nbody nbody -gpu -benchmark` command or refer to [GPU support in Docker Desktop for Windows](https://docs.docker.com/desktop/features/gpu/) for more details.
 
 For advanced issues, please refer to the [Official Docker Documentation](https://docs.docker.com/).
-

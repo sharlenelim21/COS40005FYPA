@@ -12,6 +12,8 @@ x-gpu-environment: &gpu-env
   GPU_SEMAPHORE_COUNT: 3
   RECONSTRUCTION_USE_FIXED_SEED: "true"
   RECONSTRUCTION_RANDOM_SEED: "42"
+  LANDMARK_REPO_PATH: /app/UNETRESNET34
+  LANDMARK_CHECKPOINT_PATH: /app/UNETRESNET34/checkpoints/best_model.pth
 
 services:
   # ============================================
@@ -55,23 +57,38 @@ services:
       S3_FORCE_PATH_STYLE: "true"
       
       # GPU Service Configuration
-      GPU_API_URL: http://gpu:8001
-      GPU_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
-      GPU_SERVER_URL: gpu
-      GPU_SERVER_PORT: 8001
+      GPU_API_URL: http://host.docker.internal:8011
+      LOCAL_GPU_API_URL: http://host.docker.internal:8011
+      MEDSAM_USE_LOCALHOST: "true"
+      MEDSAM_LOCAL_BASE_URL: http://host.docker.internal:8011
+      GPU_JWT_SECRET: dev-gpu-secret
+      GPU_SERVER_URL: host.docker.internal
+      GPU_SERVER_PORT: 8011
       GPU_SERVER_SSL: "false"
-      GPU_SERVER_AUTH_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
-      GPU_SERVER_ID_FOR_GPU_SERVER: default-server-id
-      GPU_SERVER_IDENTITY: default-gpu-server-identity
+      GPU_SERVER_AUTH_JWT_SECRET: dev-gpu-secret
+      GPU_SERVER_ID_FOR_GPU_SERVER: visheart-node
+      GPU_SERVER_IDENTITY: visheart-gpu
       GPU_SERVER_JWT_REFRESH_INTERVAL: 480000
       GPU_SERVER_JWT_LIFETIME_SECONDS: 600
 
       # Callback URL Configuration
-      CALLBACK_URL: http://visheart-app:5000
+      # Backend submits inference to the host-side GPU service on port 8011,
+      # so callbacks must use an address that the host process can resolve.
+      CALLBACK_URL: http://host.docker.internal:5000
       
       # ========== Frontend Configuration ==========
       NEXT_PUBLIC_API_URL: http://localhost:5000
       NEXT_PUBLIC_ENV: development
+      NEXT_PUBLIC_LANDMARK_USE_STUB: "false"
+      NEXT_PUBLIC_LANDMARK_ENDPOINT: /landmark-detection
+      # Leave ADMIN_SUPPORT_EMAIL empty to use the admin user's email from MongoDB.
+      ADMIN_SUPPORT_EMAIL: ""
+      SMTP_FROM: meiqiliew334@gmail.com
+      SMTP_HOST: "smtp.gmail.com"
+      SMTP_PORT: "465"
+      SMTP_SECURE: "true"
+      SMTP_USER: "meiqiliew334@gmail.com"
+      SMTP_PASS: "ekqd vdiq bvwg kldk"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -82,6 +99,17 @@ services:
       #gpu:
       #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
+    volumes:
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/webhook_routes.js:/app/backend/dist/routes/webhook_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/gpu_status.js:/app/backend/dist/routes/gpu_status.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/landmark_routes.js:/app/backend/dist/routes/landmark_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/reconstruction_routes.js:/app/backend/dist/routes/reconstruction_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/support_routes.js:/app/backend/dist/routes/support_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/express_app.js:/app/backend/dist/services/express_app.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/gpu_auth_client.js:/app/backend/dist/services/gpu_auth_client.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/inference.js:/app/backend/dist/services/inference.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/reconstruction.js:/app/backend/dist/services/reconstruction.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/landmark_inference.js:/app/backend/dist/services/landmark_inference.js:ro
     networks:
       - visheart-network
     healthcheck:
@@ -193,6 +221,7 @@ services:
       USE_GPU: "false" # Safely overrides for CPU
     volumes:
       - ../visheart-inference-gpu/app:/app/app
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:
@@ -218,6 +247,20 @@ services:
     environment:
       <<: *gpu-env
       USE_GPU: "true"
+      UNET_INFERENCE_SCRIPT_PATH: /app/app/external_unet_inference.py
+    command: >
+      bash -lc 'python -c "import nibabel, timm" ||
+      pip install --no-cache-dir "nibabel>=5.0.0" timm;
+      exec bash ./docker/scripts/start.sh'
+    volumes:
+      - ../visheart-inference-gpu/app/external_unet_inference.py:/app/app/external_unet_inference.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route.py:/app/app/routes/inference_route.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
+      - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
+      - ../visheart-inference-gpu/app/helpers/unet_inference_api.py:/app/app/helpers/unet_inference_api.py:ro
+      - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
+      - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:

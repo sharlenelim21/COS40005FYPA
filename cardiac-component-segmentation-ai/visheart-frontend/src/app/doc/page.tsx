@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { FormEvent, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -13,10 +13,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { BookOpen, Zap, Info, Users, Play, Menu } from "lucide-react";
+import { BookOpen, Zap, Info, Users, Play, Menu, Loader2, Send, X } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+interface DocSearchResult {
+  tab: string;
+  title: string;
+  excerpt: string;
+  keywords: string[];
+}
+
+interface FaqItem {
+  question: string;
+  answer: string;
+}
 
 interface DocImageProps {
   src: string;
@@ -59,6 +74,16 @@ const DocPage = () => {
   const [docSearch, setDocSearch] = useState("");
   const [faqSearch, setFaqSearch] = useState("");
   const [activeTab, setActiveTab] = useState("introduction");
+  const [docResults, setDocResults] = useState<DocSearchResult[]>([]);
+  const [docSearchLoading, setDocSearchLoading] = useState(false);
+  const [docSearchError, setDocSearchError] = useState<string | null>(null);
+  const [faqItems, setFaqItems] = useState<FaqItem[]>([]);
+  const [faqSenderName, setFaqSenderName] = useState("");
+  const [faqSenderEmail, setFaqSenderEmail] = useState("");
+  const [faqMessage, setFaqMessage] = useState("");
+  const [faqSendStatus, setFaqSendStatus] = useState<string | null>(null);
+  const [faqSendError, setFaqSendError] = useState<string | null>(null);
+  const [faqSending, setFaqSending] = useState(false);
 
   const navigationItems = [
     { value: "introduction", icon: Info, label: "Introduction" },
@@ -72,100 +97,101 @@ const DocPage = () => {
     },
   ];
 
-  const docSearchData = [
-    {
-      tab: "introduction",
-      title: "Introduction to VisHeart",
-      keywords: [
-        "introduction",
-        "visheart",
-        "ai-powered analysis",
-        "3d visualization",
-        "fast processing",
-      ],
-    },
-    {
-      tab: "getting-started",
-      title: "Getting Started with VisHeart",
-      keywords: [
-        "getting started",
-        "quick start",
-        "create account",
-        "upload medical images",
-        "run segmentation",
-        "view results",
-        "nifti",
-        "system requirements",
-      ],
-    },
-    {
-      tab: "accounts",
-      title: "Account Types",
-      keywords: [
-        "accounts",
-        "guest account",
-        "user account",
-        "feature comparison",
-        "file upload",
-        "cloud storage",
-        "project management",
-      ],
-    },
-    {
-      tab: "how-it-works",
-      title: "How the Segmentation System Works",
-      keywords: [
-        "segmentation",
-        "mri viewer",
-        "segmentation viewer",
-        "manual editing",
-        "upload",
-        "project overview",
-        "workflow summary",
-      ],
-    },
-    {
-      tab: "reconstruction",
-      title: "3D/4D Reconstruction",
-      keywords: [
-        "reconstruction",
-        "3d",
-        "4d",
-        "reference frame",
-        "download results",
-        "gpu inference",
-      ],
-    },
-  ];
+  useEffect(() => {
+    const query = docSearch.trim();
+    if (!query) {
+      setDocResults([]);
+      setDocSearchError(null);
+      setDocSearchLoading(false);
+      return;
+    }
 
-  const filteredDocs = docSearchData.filter((item) => {
-    const query = docSearch.toLowerCase();
-    return (
-      item.title.toLowerCase().includes(query) ||
-      item.keywords.some((keyword) => keyword.toLowerCase().includes(query))
-    );
-  });
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setDocSearchLoading(true);
+      setDocSearchError(null);
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/support/docs/search?q=${encodeURIComponent(query)}`,
+          { credentials: "include", signal: controller.signal },
+        );
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Documentation search failed.");
+        }
+        setDocResults(Array.isArray(data.results) ? data.results : []);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setDocSearchError(error instanceof Error ? error.message : "Documentation search failed.");
+          setDocResults([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) setDocSearchLoading(false);
+      }
+    }, 200);
 
-  const faqData = [
-    {
-      question: "What file format is supported?",
-      answer: "The system supports NIfTI (.nii.gz) files.",
-    },
-    {
-      question: "What does segmentation do?",
-      answer: "Segmentation identifies cardiac structures from MRI images.",
-    },
-    {
-      question: "How do I start?",
-      answer:
-        "Create a project, upload MRI file, select model, and run segmentation.",
-    },
-  ];
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [docSearch]);
 
-  const filteredFAQ = faqData.filter((item) =>
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFaqs() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/support/faq`, { credentials: "include" });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "FAQ loading failed.");
+        }
+        if (!cancelled) setFaqItems(Array.isArray(data.faqs) ? data.faqs : []);
+      } catch {
+        if (!cancelled) setFaqItems([]);
+      }
+    }
+
+    loadFaqs();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredFAQ = faqItems.filter((item) =>
     item.question.toLowerCase().includes(faqSearch.toLowerCase()) ||
     item.answer.toLowerCase().includes(faqSearch.toLowerCase())
   );
+
+  const handleFaqSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFaqSendStatus(null);
+    setFaqSendError(null);
+    setFaqSending(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/support/faq-message`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          senderName: faqSenderName,
+          senderEmail: faqSenderEmail,
+          message: faqMessage,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Could not send your FAQ message.");
+      }
+      setFaqSendStatus(data.message || "Your message has been sent to the admin.");
+      setFaqMessage("");
+    } catch (error) {
+      setFaqSendError(error instanceof Error ? error.message : "Could not send your FAQ message.");
+    } finally {
+      setFaqSending(false);
+    }
+  };
 
   const NavigationContent = ({
     onItemClick,
@@ -201,7 +227,7 @@ const DocPage = () => {
   );
 
   return (
-    <div className="flex flex-col md:flex-row h-screen">
+    <div className="flex h-[calc(100dvh-4rem)] flex-col md:flex-row">
       <Tabs
         value={activeTab}
         onValueChange={setActiveTab}
@@ -249,10 +275,15 @@ const DocPage = () => {
 
           {docSearch.trim() && (
             <div className="p-4 border-b bg-background space-y-2">
-              <p className="text-sm font-medium">Search Results</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">Search Results</p>
+                {docSearchLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              </div>
 
-              {filteredDocs.length > 0 ? (
-                filteredDocs.map((item) => (
+              {docSearchError ? (
+                <p className="text-sm text-destructive">{docSearchError}</p>
+              ) : docResults.length > 0 ? (
+                docResults.map((item) => (
                   <button
                     key={item.tab}
                     onClick={() => {
@@ -263,22 +294,22 @@ const DocPage = () => {
                   >
                     <p className="font-medium">{item.title}</p>
                     <p className="text-sm text-muted-foreground">
-                      Go to {item.title}
+                      {item.excerpt}
                     </p>
                   </button>
                 ))
-              ) : (
+              ) : !docSearchLoading ? (
                 <p className="text-sm text-muted-foreground">
                   No matching documentation found.
                 </p>
-              )}
+              ) : null}
             </div>
           )}
 
           {/* ── INTRODUCTION ── */}
           <TabsContent value="introduction" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -401,7 +432,7 @@ const DocPage = () => {
           {/* ── GETTING STARTED ── */}
           <TabsContent value="getting-started" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -501,7 +532,7 @@ const DocPage = () => {
           {/* ── ACCOUNTS ── */}
           <TabsContent value="accounts" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -616,7 +647,7 @@ const DocPage = () => {
           {/* ── HOW SEGMENTATION WORKS ── */}
           <TabsContent value="how-it-works" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 md:space-y-8 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -1012,7 +1043,7 @@ const DocPage = () => {
           {/* ── RECONSTRUCTION ── */}
           <TabsContent value="reconstruction" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 md:space-y-8 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -1345,27 +1376,77 @@ const DocPage = () => {
         </Button>
 
         {showFAQ && (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-            <div className="bg-background p-6 rounded-lg w-[500px] max-h-[80vh] overflow-y-auto">
-              <h2 className="text-xl font-bold mb-4">FAQ</h2>
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-background rounded-lg w-full max-w-[640px] max-h-[86vh] overflow-y-auto border shadow-lg">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-6 py-4">
+                <div>
+                  <h2 className="text-xl font-bold">FAQ</h2>
+                  <p className="text-sm text-muted-foreground">Search answers or send a question to the admin.</p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setShowFAQ(false)} aria-label="Close FAQ">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="space-y-5 p-6">
               <Input
                 placeholder="Search FAQ."
                 value={faqSearch}
                 onChange={(e) => setFaqSearch(e.target.value)}
-                className="mb-4"
               />
               <div className="space-y-3">
-                {filteredFAQ.map((item, index) => (
+                {filteredFAQ.length > 0 ? filteredFAQ.map((item, index) => (
                   <div key={index}>
                     <p className="font-medium">{item.question}</p>
                     <p className="text-sm text-muted-foreground">
                       {item.answer}
                     </p>
                   </div>
-                ))}
+                )) : (
+                  <p className="text-sm text-muted-foreground">
+                    No matching FAQ found.
+                  </p>
+                )}
               </div>
-              <div className="mt-4 flex justify-end">
-                <Button onClick={() => setShowFAQ(false)}>Close</Button>
+
+              <form className="space-y-3 rounded-lg border bg-muted/20 p-4" onSubmit={handleFaqSubmit}>
+                <div>
+                  <h3 className="text-sm font-semibold">Ask the admin</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Your message will be sent through the Docker-configured backend support endpoint.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    placeholder="Your name"
+                    value={faqSenderName}
+                    onChange={(e) => setFaqSenderName(e.target.value)}
+                  />
+                  <Input
+                    type="email"
+                    placeholder="Your email"
+                    value={faqSenderEmail}
+                    onChange={(e) => setFaqSenderEmail(e.target.value)}
+                  />
+                </div>
+                <Textarea
+                  placeholder="Write your question..."
+                  value={faqMessage}
+                  onChange={(e) => setFaqMessage(e.target.value)}
+                  rows={5}
+                  required
+                />
+                {faqSendError && <p className="text-sm text-destructive">{faqSendError}</p>}
+                {faqSendStatus && <p className="text-sm text-green-600">{faqSendStatus}</p>}
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={() => setShowFAQ(false)}>
+                    Close
+                  </Button>
+                  <Button type="submit" disabled={faqSending || faqMessage.trim().length < 5} className="gap-1.5">
+                    {faqSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    Send
+                  </Button>
+                </div>
+              </form>
               </div>
             </div>
           </div>
