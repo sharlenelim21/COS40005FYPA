@@ -243,15 +243,27 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
 
       const aiSegmentationSet: Partial<IProjectSegmentationMask> = {
         projectid: projectId,
+        // Always include the model identifier ("MEDSAM" or "UNET") in the
+        // AI doc name. Previously the MedSAM branch produced just
+        // "AI Output - Job ..." with no model word, which left frontend
+        // model resolvers unable to identify the doc when the explicit
+        // `segmentationModel` field was missing from the API response.
         name:
           currentJob.segmentationName ||
-          `${resolvedSegmentationModel === SegmentationModel.UNET ? "UNET" : "AI"} Output - Job ${gpuJobId.substring(0, 8)}`,
+          `${resolvedSegmentationModel === SegmentationModel.UNET ? "UNET" : "MEDSAM"} Output - Job ${gpuJobId.substring(0, 8)}`,
         description:
           currentJob.segmentationDescription ||
           `${resolvedSegmentationModel.toUpperCase()} segmentation results from job ${gpuJobId}`,
         isSaved: false,
         segmentationmaskRLE: true,
-        isMedSAMOutput: resolvedSegmentationModel === SegmentationModel.MEDSAM,
+        // The `isMedSAMOutput` field is now used as a "preserved AI output"
+        // flag regardless of which model produced it: true == the immutable
+        // raw model output (used for revert-to-AI), false == the editable
+        // manual copy. We always set it to `true` here so both MedSAM and
+        // UNET get a preservable AI doc, with a separate Manual editable
+        // doc created below. Pairing this with `segmentationModel` lets the
+        // frontend filter masks per model deterministically.
+        isMedSAMOutput: true,
         segmentationModel: resolvedSegmentationModel,
         model_used: resolvedSegmentationModel as unknown as string,
         frames: [],
@@ -627,37 +639,42 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
             `${serviceLocation}: Successfully created AI segmentation mask document for job ${gpuJobId}, project ${projectId}. Mask ID: ${aiCreationResult.projectsegmentationmask._id}`
           );
 
-          if (resolvedSegmentationModel === SegmentationModel.MEDSAM) {
-            // Keep existing MedSAM behavior: create a second editable manual mask.
-            const manualSegmentationSet: IProjectSegmentationMask = {
-              projectid: projectId,
-              name: `Manual Edit - ${currentJob.segmentationName || `Job ${gpuJobId.substring(0, 8)}`}`,
-              description: `Editable manual segmentation, based on AI output from job ${gpuJobId}`,
-              isSaved: false,
-              segmentationmaskRLE: true,
-              isMedSAMOutput: false,
-              segmentationModel: resolvedSegmentationModel,
-              model_used: resolvedSegmentationModel as unknown as string,
-              frames: deepCopyFrames(
-                aiCreationResult.projectsegmentationmask.frames
-              ),
-            };
+          // Always create a Manual editable copy, regardless of which model
+          // produced the AI output. Previously this branch was MedSAM-only,
+          // which left UNET runs without a target for `save-manual` and
+          // forced the frontend to render the raw AI doc directly.
+          // Per-model Manual docs let the user brush+save edits for each
+          // model independently and preserve the original AI output for
+          // revert. The Manual doc inherits the model tag so it can be
+          // looked up deterministically.
+          const manualSegmentationSet: IProjectSegmentationMask = {
+            projectid: projectId,
+            name: `Manual Edit (${resolvedSegmentationModel.toUpperCase()}) - ${currentJob.segmentationName || `Job ${gpuJobId.substring(0, 8)}`}`,
+            description: `Editable manual segmentation, based on ${resolvedSegmentationModel.toUpperCase()} output from job ${gpuJobId}`,
+            isSaved: false,
+            segmentationmaskRLE: true,
+            isMedSAMOutput: false,
+            segmentationModel: resolvedSegmentationModel,
+            model_used: resolvedSegmentationModel as unknown as string,
+            frames: deepCopyFrames(
+              aiCreationResult.projectsegmentationmask.frames
+            ),
+          };
 
-            const manualCreationResult = await createProjectSegmentationMask(
-              manualSegmentationSet
+          const manualCreationResult = await createProjectSegmentationMask(
+            manualSegmentationSet
+          );
+          if (
+            manualCreationResult.success &&
+            manualCreationResult.projectsegmentationmask
+          ) {
+            logger.info(
+              `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}). AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
             );
-            if (
-              manualCreationResult.success &&
-              manualCreationResult.projectsegmentationmask
-            ) {
-              logger.info(
-                `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId}. AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
-              );
-            } else {
-              logger.error(
-                `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} after AI mask creation. Reason: ${manualCreationResult.message}`
-              );
-            }
+          } else {
+            logger.error(
+              `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}) after AI mask creation. Reason: ${manualCreationResult.message}`
+            );
           }
         } else {
           logger.error(

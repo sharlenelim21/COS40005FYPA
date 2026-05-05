@@ -8,7 +8,7 @@ import { useEffect } from "react";
 
 // Backend integration
 import { segmentationApi } from "@/lib/api";
-import { createFramesStructureFromEditableMasks } from "@/lib/decode-RLE";
+import { createFramesStructureFromEditableMasks, decodeSegmentationMasks } from "@/lib/decode-RLE";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { SegmentationSidebar } from "@/components/segmentation/segmentation-sidebar";
@@ -55,6 +55,7 @@ export default function SegmentationResultsPage() {
     decodedMasks: contextDecodedMasks,
     undecodedMasks,
     hasMasks,
+    maskFetchDone,
     segmentationError,
     tarCacheReady,
     tarCacheError,
@@ -79,23 +80,20 @@ export default function SegmentationResultsPage() {
   const [masksInitialized, setMasksInitialized] = useState(false);
   const [localDecodedMasks, setLocalDecodedMasks] = useState<Record<string, Uint8Array> | null>(null);
 
-  const decodedMasks = localDecodedMasks || contextDecodedMasks;
+  // `setDecodedMasks` is the writer used by brush/save/history flows.
   const setDecodedMasks = setLocalDecodedMasks;
-
-  const safeDecodedMasks = decodedMasks || {};
 
   useEffect(() => {
     if (process.env.NODE_ENV === 'development') {
       console.log("[Segmentation Debug] Data flow check:", {
         contextMasks: contextDecodedMasks ? Object.keys(contextDecodedMasks).length : 0,
         localMasks: localDecodedMasks ? Object.keys(localDecodedMasks).length : 0,
-        finalMasks: decodedMasks ? Object.keys(decodedMasks).length : 0,
         masksInitialized,
         tarCacheReady,
         tarCacheError
       });
     }
-  }, [contextDecodedMasks, localDecodedMasks, decodedMasks, masksInitialized, tarCacheReady, tarCacheError]);
+  }, [contextDecodedMasks, localDecodedMasks, masksInitialized, tarCacheReady, tarCacheError]);
 
   // UI state
   const [activeLabel, setActiveLabel] = useState<AnatomicalLabel>("lvc");
@@ -109,39 +107,311 @@ export default function SegmentationResultsPage() {
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [resetTrigger, setResetTrigger] = useState<number>(0);
   const [revertDialogOpen, setRevertDialogOpen] = useState(false);
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [runSegmentationLoading, setRunSegmentationLoading] = useState(false);
   const [runSegmentationError, setRunSegmentationError] = useState<string | null>(null);
   const [runSegmentationSuccess, setRunSegmentationSuccess] = useState<string | null>(null);
   const modelSessionKey = `selectedModel_${projectId}`;
 
+  // Default to MedSAM on first render. The auto-pick effect below will
+  // override this once `undecodedMasks` arrives (latest project mask wins),
+  // and the CPU-guard effect further down forces "unet" when GPU is absent.
+  // We deliberately do NOT seed from localStorage — that caused the dropdown
+  // to "stick" on whatever the previous test session wrote.
   const [selectedModel, setSelectedModel] = useState<SegmentationModelId>("medsam");
 
-  useEffect(() => {
-    try {
-      const storedModel =
-        localStorage.getItem(modelSessionKey) ?? sessionStorage.getItem(modelSessionKey);
+  // Locked once the user has explicitly chosen a model (clicked dropdown or
+  // clicked Run Segmentation), or once the auto-pick has fired. Prevents
+  // auto-pick from overriding a manual selection.
+  const autoPickLockedRef = useRef(false);
 
-      if (isValidModel(storedModel)) {
-        setSelectedModel(storedModel);
+  // Auto-pick the dropdown from the project's actual mask history.
+  // Priority order:
+  //   1. latest segmentation mask actually stored under this project
+  //   2. environment default — GPU => "medsam", CPU => "unet"
+  // Runs once after the unscoped mask fetch completes; locked off after
+  // the user manually picks a model or clicks Run Segmentation.
+  useEffect(() => {
+    if (autoPickLockedRef.current) return;
+    // Wait for the unscoped mask fetch to finish so we know whether the
+    // project has any masks yet (otherwise we may pick the env default
+    // before the latest-mask data has arrived).
+    if (!maskFetchDone) return;
+
+    // Priority 0: explicit user choice from this tab session. Both
+    // `handleModelSelect` and `handleRunSegmentation` write the user's
+    // chosen model into sessionStorage. sessionStorage survives the
+    // `window.location.reload()` triggered by Run-Segmentation, so the
+    // toggle stays on UNet after a UNet run regardless of how the
+    // backend timestamps the new docs. Cleared on tab close.
+    let explicitPreference: SegmentationModelId | null = null;
+    try {
+      const stored = sessionStorage.getItem(modelSessionKey);
+      if (stored === "medsam" || stored === "unet") {
+        explicitPreference = stored as SegmentationModelId;
       }
     } catch {
-      // ignore sessionStorage read errors
+      // ignore storage read errors
     }
-  }, [modelSessionKey]);
 
-  // Enforce CPU-safe model selection: MedSAM is only available in NVIDIA GPU mode.
+    if (explicitPreference) {
+      // Trust the stored choice as-is. `handleModelSelect` already
+      // validates GPU availability before letting the user pick MedSAM,
+      // so anything in sessionStorage is a previously-validated selection.
+      // Re-checking `isGpuMode` here was racy: the GPU probe transiently
+      // returns `false` on first render and again while the GPU is
+      // saturated by an in-flight job, which silently flipped the toggle
+      // back to UNet after a MedSAM Run-Segmentation reload.
+      autoPickLockedRef.current = true;
+      if (explicitPreference !== selectedModel) {
+        setSelectedModel(explicitPreference);
+      }
+      return;
+    }
+
+    const masks = undecodedMasks ?? [];
+
+    // Extract a robust "creation timestamp" for each tagged mask. We try, in
+    // order: explicit `createdAt`, then the timestamp encoded in the Mongo
+    // `_id` ObjectId (first 8 hex chars = unix seconds), then the array
+    // index (backend returns natural insertion order, so larger index =
+    // newer). This means we still pick the latest mask even on responses
+    // where `createdAt` is absent or stripped.
+    const tagged = masks
+      .map((m, idx) => {
+        const raw = m as unknown as {
+          _id?: string;
+          segmentationModel?: string;
+          model_used?: string;
+          createdAt?: string | number | Date;
+        };
+        const modelStr = (raw.segmentationModel || raw.model_used || "")
+          .toString()
+          .toLowerCase();
+        const model: SegmentationModelId | undefined =
+          modelStr === "medsam" || modelStr === "unet"
+            ? (modelStr as SegmentationModelId)
+            : undefined;
+
+        let ts = 0;
+        if (raw.createdAt) {
+          ts = new Date(raw.createdAt).getTime() || 0;
+        }
+        if (!ts && typeof raw._id === "string" && raw._id.length >= 8) {
+          // Mongo ObjectId: first 4 bytes (8 hex chars) is unix seconds.
+          const seconds = parseInt(raw._id.substring(0, 8), 16);
+          if (!Number.isNaN(seconds)) ts = seconds * 1000;
+        }
+        return { model, ts, idx };
+      })
+      .filter(
+        (x): x is { model: SegmentationModelId; ts: number; idx: number } => !!x.model
+      );
+
+    if (tagged.length > 0) {
+      // We have evidence from real mask documents — pick the latest and lock
+      // so future re-renders don't second-guess the user's actual data.
+      tagged.sort((a, b) => (b.ts - a.ts) || (b.idx - a.idx));
+      let resolvedModel = tagged[0].model;
+      // CPU mode must never auto-pick MedSAM (GPU-only model).
+      if (!isGpuMode && resolvedModel === "medsam") {
+        resolvedModel = "unet";
+      }
+      autoPickLockedRef.current = true;
+      if (resolvedModel !== selectedModel) {
+        setSelectedModel(resolvedModel);
+        try {
+          localStorage.setItem(modelSessionKey, resolvedModel);
+          sessionStorage.setItem(modelSessionKey, resolvedModel);
+        } catch {
+          // ignore storage write errors
+        }
+      }
+    } else {
+      // No tagged masks → fall back to the environment default, but DO NOT
+      // lock. `useGpuStatus` returns `false` on first render before the
+      // actual GPU probe resolves; if we locked here we'd permanently
+      // freeze the dropdown on "unet" even on GPU machines. By leaving the
+      // ref unlocked, this effect re-runs the moment `isGpuMode` flips
+      // true, and the dropdown corrects itself to "medsam".
+      const resolvedModel: SegmentationModelId = isGpuMode ? "medsam" : "unet";
+      if (resolvedModel !== selectedModel) {
+        setSelectedModel(resolvedModel);
+      }
+    }
+  }, [maskFetchDone, undecodedMasks, isGpuMode, selectedModel, modelSessionKey]);
+
+  // NOTE: The previous "CPU-guard" effect that eagerly forced unet whenever
+  // !isGpuMode has been removed. `useGpuStatus` returns `false` on first
+  // render before the GPU check resolves, which caused the guard to fire
+  // immediately and lock the dropdown to UNet on GPU machines too.
+  // CPU enforcement still happens in two places that are safe:
+  //   - `handleModelSelect` rejects MedSAM clicks when !isGpuMode.
+  //   - `handleRunSegmentation` falls back to "unet" via
+  //       `effectiveModel = isGpuMode ? selectedModel : "unet"`.
+  // Plus the auto-pick effect above already maps the env default through
+  // `isGpuMode` once `maskFetchDone` is true, by which point GPU status
+  // has had a chance to resolve.
+
+  // Decode ONLY the currently-selected-model's mask documents.
+  // The committed `decodeSegmentationMasks` builds keys without a model prefix
+  // (e.g. `editable_frame_0_slice_0_lvc`), so a MedSAM and a UNet doc would
+  // collide on the same key if both were decoded together. By filtering
+  // `undecodedMasks` down to a single model first, we sidestep the collision
+  // entirely without changing the decoder, the renderer, or the brush/save
+  // key formats. Switching the dropdown re-runs this memo and the canvas
+  // re-renders with the correct model's masks.
+  const modelScopedDecodedMasks = useMemo(() => {
+    // `null` means "data not loaded yet" — caller may fall back to
+    // `contextDecodedMasks` while waiting. Once data is loaded we always
+    // return an object (possibly empty) so the caller's `||` chain
+    // short-circuits here and DOES NOT leak the unfiltered set.
+    if (!undecodedMasks || undecodedMasks.length === 0) return null;
+    if (!projectData?.dimensions?.width || !projectData?.dimensions?.height) return null;
+
+    // Robust per-doc model resolver. Order of trust:
+    //   1. Explicit `segmentationModel` / `model_used` field if present.
+    //   2. Name-based hint — the webhook stamps the model name into
+    //      the doc's `name` (e.g. `"UNET Output - Job ..."`,
+    //      `"Manual Edit (UNET) - ..."`, `"MedSAM AI Output ..."`).
+    //      We only accept this when the explicit tag is missing, and we
+    //      only accept exact "medsam" / "unet" substrings — never a
+    //      free-text guess.
+    // Returns `null` for "no signal at all" so the caller can decide
+    // legacy-fallback policy without us silently casting untagged data
+    // into the current model.
+    const inferDocModel = (m: unknown): "medsam" | "unet" | null => {
+      const raw = m as {
+        segmentationModel?: string;
+        model_used?: string;
+        name?: string;
+      };
+      const tag = (raw.segmentationModel || raw.model_used || "")
+        .toString()
+        .toLowerCase();
+      if (tag === "medsam" || tag === "unet") return tag;
+      const name = (raw.name || "").toString().toLowerCase();
+      // UNet first because its names always contain the literal word.
+      if (name.includes("unet")) return "unet";
+      if (name.includes("medsam")) return "medsam";
+      // Webhook AI-doc name templates produced by the MedSAM path:
+      //   "AI Output - Job <id>"      (no model word, the literal "AI")
+      // — they're MedSAM by construction (UNet's AI doc is "UNET Output …",
+      // already caught above). Recognising this template lets us
+      // resolve a MedSAM AI doc whose explicit `segmentationModel`
+      // field somehow didn't survive into the API response.
+      if (name.startsWith("ai output")) return "medsam";
+      // Pre-Option-2 Manual editable docs: "Manual Edit - <something>".
+      // That code path only ever ran for MedSAM, so we can resolve them
+      // safely here. New code stamps "Manual Edit (MEDSAM)" /
+      // "(UNET)" which the includes-check above already handles.
+      if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+      return null;
+    };
+
+    // Pass 1 — match docs whose resolved model equals the toggle.
+    const exact = undecodedMasks.filter((m) => inferDocModel(m) === selectedModel);
+
+    if (exact.length > 0) {
+      return decodeSegmentationMasks(
+        exact,
+        projectData.dimensions.width,
+        projectData.dimensions.height,
+      ).masks;
+    }
+
+    // No doc resolves to the current model. Decide whether the project
+    // is still pure-legacy or whether other tagged docs already live
+    // here (in which case we MUST NOT silently surface untagged docs
+    // under the current toggle — that's the leak).
+    const anyDocResolves = undecodedMasks.some((m) => inferDocModel(m) !== null);
+
+    if (anyDocResolves) {
+      // The project has docs we can identify, but none are for the
+      // current model. Paint empty rather than leaking the other model.
+      return {};
+    }
+
+    // Pure-legacy project: no doc has a tag or a name hint. Treat
+    // the whole set as MedSAM-only (codebase's pre-UNet history).
+    if (selectedModel === "medsam") {
+      return decodeSegmentationMasks(
+        undecodedMasks,
+        projectData.dimensions.width,
+        projectData.dimensions.height,
+      ).masks;
+    }
+    return {};
+  }, [undecodedMasks, selectedModel, projectData?.dimensions?.width, projectData?.dimensions?.height]);
+
+  // One-shot diagnostic so the actual tag/name distribution is
+  // observable in the browser console. This makes future "why did the
+  // toggle not see my docs" questions answerable in seconds without
+  // having to read the DB.
   useEffect(() => {
-    if (isGpuMode) return;
-    if (selectedModel !== "medsam") return;
+    if (!undecodedMasks || undecodedMasks.length === 0) return;
+    const summary = undecodedMasks.map((m) => {
+      const raw = m as unknown as {
+        _id?: any;
+        name?: string;
+        segmentationModel?: string;
+        model_used?: string;
+        isMedSAMOutput?: boolean;
+      };
+      return {
+        id: raw._id ? raw._id.toString() : "(no id)",
+        name: raw.name,
+        segmentationModel: raw.segmentationModel,
+        model_used: raw.model_used,
+        isMedSAMOutput: raw.isMedSAMOutput,
+      };
+    });
+    console.log(
+      "[Segmentation] undecodedMasks tag summary (selectedModel=" +
+        selectedModel +
+        "):",
+      summary
+    );
+  }, [undecodedMasks, selectedModel]);
 
-    setSelectedModel("unet");
-    try {
-      localStorage.setItem(modelSessionKey, "unet");
-      sessionStorage.setItem(modelSessionKey, "unet");
-    } catch {
-      // ignore storage write errors
+  // `decodedMasks` priority:
+  //   1. localDecodedMasks       — user's in-progress brush edits.
+  //   2. modelScopedDecodedMasks — strictly model-scoped data. When
+  //                                undecodedMasks is loaded but the
+  //                                current model has no docs (and the
+  //                                project has docs for the OTHER model),
+  //                                this is `{}` — truthy — so the chain
+  //                                short-circuits HERE and we paint
+  //                                empty rather than leaking the other
+  //                                model via the contextDecodedMasks
+  //                                fallback.
+  //   3. contextDecodedMasks     — last-resort fallback ONLY when
+  //                                modelScopedDecodedMasks is `null`
+  //                                (data not loaded yet).
+  const decodedMasks = localDecodedMasks || modelScopedDecodedMasks || contextDecodedMasks;
+  const safeDecodedMasks = decodedMasks || {};
+
+  // Cached-result detection: bound to the SAME strictly model-scoped
+  // source the canvas paints from (`modelScopedDecodedMasks`). We
+  // deliberately do NOT peek into `localDecodedMasks` (in-progress
+  // brush edits aren't a persisted AI cache) or `contextDecodedMasks`
+  // (the unfiltered set — would falsely report "cached MedSAM" when
+  // only UNet docs exist, and vice-versa). Result: badge truthfully
+  // reports the cache state of the currently selected model only.
+  const hasCachedResultForSelected = useMemo(() => {
+    if (!modelScopedDecodedMasks) return false;
+    for (const key in modelScopedDecodedMasks) {
+      const value = modelScopedDecodedMasks[key];
+      if (
+        (key.startsWith("editable_") || key.startsWith("medSamOutput_")) &&
+        value &&
+        value.length > 0
+      ) {
+        return true;
+      }
     }
-  }, [isGpuMode, selectedModel, modelSessionKey]);
+    return false;
+  }, [modelScopedDecodedMasks]);
 
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
     if (!isGpuMode && value === "medsam") {
@@ -150,6 +420,11 @@ export default function SegmentationResultsPage() {
     }
 
     setSelectedModel(value);
+    autoPickLockedRef.current = true; // user took over; auto-pick must back off
+    // Drop any in-memory editing state for the previous model so the canvas
+    // re-renders from the newly selected model's stored masks.
+    setLocalDecodedMasks(null);
+    setHasUnsavedChanges(false);
     try {
       localStorage.setItem(modelSessionKey, value);
       sessionStorage.setItem(modelSessionKey, value);
@@ -199,7 +474,71 @@ export default function SegmentationResultsPage() {
     setResetTrigger(prev => prev + 1);
   }, []);
 
-  const handleRunSegmentation = useCallback(async () => {
+  // Poll `/segmentation-results/:projectId` for a new mask doc whose
+  // `segmentationModel` matches `expectedModel` and whose `_id` is not in
+  // `preIds`. Returns true as soon as a new doc is seen; false on
+  // timeout. Caller decides what to do with the timeout — the new policy
+  // is to reload anyway (no error popup), matching the original
+  // 1500ms-then-reload behaviour but without the race when results
+  // arrive sooner. Interval is 1s and we do a synchronous first check
+  // (no 2s dead time before the first probe) so fast jobs reload
+  // promptly. Match relaxed: if any new doc lands at all (regardless of
+  // tag) we treat it as ready, because some legacy webhook paths don't
+  // stamp `segmentationModel` and we'd otherwise miss the reload window.
+  const pollForNewMaskDoc = useCallback(
+    async (expectedModel: SegmentationModelId, preIds: Set<string>) => {
+      const intervalMs = 1000;
+      const maxAttempts = 30; // ~30s, then caller reloads regardless
+      const probe = async (): Promise<boolean> => {
+        try {
+          const result = await segmentationApi.getSegmentationResults(projectId!);
+          const segs: any[] = Array.isArray(result?.segmentations)
+            ? result.segmentations
+            : [];
+          // Strong match first: matching model tag + new _id
+          const strong = segs.find((m) => {
+            const tag = (m?.segmentationModel || m?.model_used || "")
+              .toString()
+              .toLowerCase();
+            const id = m?._id ? m._id.toString() : "";
+            return tag === expectedModel && id && !preIds.has(id);
+          });
+          if (strong) return true;
+          // Weak match: ANY new doc (covers legacy/untagged webhook paths)
+          const weak = segs.find((m) => {
+            const id = m?._id ? m._id.toString() : "";
+            return id && !preIds.has(id);
+          });
+          return !!weak;
+        } catch (err) {
+          console.warn("[Segmentation] Poll probe failed:", err);
+          return false;
+        }
+      };
+
+      // Synchronous first check — covers the "result already landed
+      // before we started polling" case (rare but possible if the
+      // webhook fires very fast).
+      if (await probe()) return true;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        if (await probe()) {
+          console.log(
+            `[Segmentation] Poll detected new mask doc for ${expectedModel} after ${attempt + 1}s.`
+          );
+          return true;
+        }
+      }
+      return false;
+    },
+    [projectId]
+  );
+
+  // The actual dispatch path. Called either directly (cache miss, no
+  // existing result) or from the Re-run confirm dialog (cache hit and
+  // user explicitly chose to regenerate).
+  const dispatchRunSegmentation = useCallback(async () => {
     if (!projectId || runSegmentationLoading) return;
 
     setRunSegmentationLoading(true);
@@ -208,32 +547,58 @@ export default function SegmentationResultsPage() {
 
     try {
       const detectedMode = isGpuMode ? "gpu" : "cpu";
-      const effectiveModel: SegmentationModelId = isGpuMode ? selectedModel : "unet";
+      const effectiveModel: SegmentationModelId = selectedModel;
 
       try {
         localStorage.setItem(modelSessionKey, effectiveModel);
         sessionStorage.setItem(modelSessionKey, effectiveModel);
+        autoPickLockedRef.current = true;
       } catch {
         // ignore storage write errors
       }
+
+      // Snapshot the existing mask `_id`s BEFORE dispatch so the poller
+      // below can detect when a NEW doc for `effectiveModel` lands. This
+      // is more reliable than timestamp comparisons across timezones.
+      const preIds = new Set<string>(
+        (undecodedMasks ?? [])
+          .map((m) => {
+            const raw = m as unknown as { _id?: any };
+            return raw._id ? raw._id.toString() : "";
+          })
+          .filter((id) => id.length > 0)
+      );
 
       console.log("[Segmentation] Run request mode/model:", {
         processingUnit,
         detectedMode,
         selectedModel,
         effectiveModel,
+        preIdCount: preIds.size,
         requestPayload: { segmentationModel: effectiveModel, deviceType: "auto" },
       });
 
-      const response = await segmentationApi.startSegmentation(projectId, effectiveModel, "auto");
+      await segmentationApi.startSegmentation(projectId, effectiveModel, "auto");
 
+      const modelLabel =
+        MODEL_OPTIONS.find((o) => o.value === effectiveModel)?.label || effectiveModel;
       setRunSegmentationSuccess(
-        `${MODEL_OPTIONS.find((o) => o.value === effectiveModel)?.label} segmentation started successfully.`
+        `${modelLabel} segmentation started. Waiting for result…`
       );
 
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
+      const arrived = await pollForNewMaskDoc(effectiveModel, preIds);
+      // Reload regardless of detection. If `arrived` is true the new
+      // doc is in the DB and will render after reload. If it timed
+      // out, we still reload (the page may refetch and the user sees
+      // current state without a confusing "taking longer" error). This
+      // matches the original 1500ms-then-reload pipeline UX, just
+      // without the race when results land sooner than the timeout.
+      setRunSegmentationSuccess(
+        arrived
+          ? `${modelLabel} result ready. Reloading…`
+          : `Reloading to fetch latest ${modelLabel} state…`
+      );
+      window.location.reload();
     } catch (error: any) {
       const errorMsg =
         error?.response?.data?.error ||
@@ -248,10 +613,40 @@ export default function SegmentationResultsPage() {
       console.error("[Segmentation] ❌ selectedModel:", selectedModel);
 
       setRunSegmentationError(errorMsg);
-    } finally {
       setRunSegmentationLoading(false);
     }
-  }, [projectId, selectedModel, runSegmentationLoading, modelSessionKey, isGpuMode, processingUnit]);
+    // NOTE: we deliberately do NOT clear loading in a `finally` when the
+    // poller succeeded — the page is about to reload, so leaving the
+    // button disabled prevents a double-click.
+  }, [
+    projectId,
+    selectedModel,
+    runSegmentationLoading,
+    modelSessionKey,
+    isGpuMode,
+    processingUnit,
+    undecodedMasks,
+    pollForNewMaskDoc,
+  ]);
+
+  // Top-level button handler: cache-aware gate. If the selected model
+  // already has at least one persisted mask doc, we DO NOT auto-dispatch.
+  // The user must explicitly confirm via the Re-run dialog so MedSAM in
+  // particular doesn't get re-fired on every accidental click.
+  const handleRunSegmentation = useCallback(() => {
+    if (!projectId || runSegmentationLoading) return;
+    if (hasCachedResultForSelected) {
+      setRunSegmentationError(null);
+      setRerunDialogOpen(true);
+      return;
+    }
+    dispatchRunSegmentation();
+  }, [projectId, runSegmentationLoading, hasCachedResultForSelected, dispatchRunSegmentation]);
+
+  const handleConfirmRerun = useCallback(() => {
+    setRerunDialogOpen(false);
+    dispatchRunSegmentation();
+  }, [dispatchRunSegmentation]);
 
   const {
     currentHistory,
@@ -596,11 +991,18 @@ export default function SegmentationResultsPage() {
           </span>
         )}
 
-        {/* Status badge */}
-        <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">
-          <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
-          Ready to segment
-        </span>
+        {/* Status badge: cached vs. empty */}
+        {hasCachedResultForSelected ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 border border-green-200 dark:border-green-800">
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
+            Cached result available
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 inline-block" />
+            No result yet
+          </span>
+        )}
 
         {/* Confirmation text */}
         <span className="text-xs text-muted-foreground">
@@ -609,7 +1011,7 @@ export default function SegmentationResultsPage() {
           </strong>
         </span>
 
-        {/* Run Segmentation Button */}
+        {/* Run / Re-run Segmentation Button (cache-aware) */}
         <button
           onClick={handleRunSegmentation}
           disabled={runSegmentationLoading}
@@ -620,6 +1022,11 @@ export default function SegmentationResultsPage() {
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               Processing...
             </>
+          ) : hasCachedResultForSelected ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5" />
+              Re-run {MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label}
+            </>
           ) : (
             <>
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -628,7 +1035,7 @@ export default function SegmentationResultsPage() {
               Run Segmentation
             </>
           )}
-        </button> 
+        </button>
 
         {/* Error message */}
         {runSegmentationError && (
@@ -830,6 +1237,51 @@ export default function SegmentationResultsPage() {
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
+
+      {/* Re-run Segmentation Confirmation Dialog */}
+      <AlertDialog open={rerunDialogOpen} onOpenChange={setRerunDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Re-run {MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} Segmentation?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p>
+                A cached <strong>{MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label}</strong> result already exists for &quot;{projectData?.name}&quot;.
+              </p>
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                <p className="text-sm text-amber-900 dark:text-amber-100">
+                  Re-running will dispatch a new GPU job and create a new mask document for this model. The other model&apos;s result is unaffected. Existing manual edits for this model will not be deleted, but the new AI output will appear alongside them.
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {selectedModel === "medsam"
+                  ? "MedSAM requires GPU and may take 30–60 seconds."
+                  : "UNet may run on CPU or GPU and typically completes in under a minute."}
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={runSegmentationLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmRerun}
+              disabled={runSegmentationLoading}
+            >
+              {runSegmentationLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Dispatching…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Yes, Re-run
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Revert to AI Confirmation Dialog */}
       <AlertDialog open={revertDialogOpen} onOpenChange={setRevertDialogOpen}>
