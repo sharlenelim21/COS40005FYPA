@@ -95,13 +95,31 @@ if ($gpuDetected) {
 }
 Write-Host ""
 
+# Remove stale container from opposite profile to avoid 8001 port conflicts
+Write-Host "Checking for stale inference containers..." -ForegroundColor Yellow
+if ($env:COMPOSE_PROFILES -eq "cpu") {
+    $staleGpu = docker ps -aq --filter "name=visheart-gpu-nvidia"
+    if ($staleGpu) {
+        docker rm -f $staleGpu 2>$null | Out-Null
+    }
+} else {
+    $staleCpu = docker ps -aq --filter "name=visheart-gpu-cpu"
+    if ($staleCpu) {
+        docker rm -f $staleCpu 2>$null | Out-Null
+    }
+}
+
+# Remove stale non-running core containers so Compose can recreate with current config
+Write-Host "Checking for stale core containers..." -ForegroundColor Yellow
+$coreContainers = @("visheart-local", "visheart-mongodb", "visheart-redis", "visheart-minio", "visheart-minio-setup")
+docker rm -f $coreContainers 2>$null | Out-Null
+
 # Start services
 Write-Host "Starting VisHeart services..." -ForegroundColor Yellow
 Write-Host "This may take a few minutes on first run..." -ForegroundColor Gray  
 Write-Host ""
 
-# Provide the profile dynamically via the COMPOSE_PROFILES env var
-docker-compose --profile $env:COMPOSE_PROFILES up -d
+docker-compose up -d
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
