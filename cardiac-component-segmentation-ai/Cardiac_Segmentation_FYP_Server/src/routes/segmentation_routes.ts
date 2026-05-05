@@ -70,7 +70,6 @@ router.post("/start-segmentation/:projectId",
         }
 
         const segmentationModel = req.body?.segmentationModel || SegmentationModel.MEDSAM;
-<<<<<<< Updated upstream
         // DEVELOPER NOTE: deviceType is only us..0ed by the UNET API inference path.
         // Supported values: "cpu", "cuda" (for NVIDIA GPU), or "auto" (GPU if available, else CPU).
         // For MEDSAM, the local GPU service resolves its own runtime device.
@@ -78,11 +77,6 @@ router.post("/start-segmentation/:projectId",
         logger.info(
             `${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}. model=${segmentationModel}, device=${modelDevice}`
         );
-=======
-        // Supported values: "cpu" (default), "cuda" (for NVIDIA GPU), or "auto" (automatic selection).
-        const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : undefined;
-        logger.info(`${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}`);
->>>>>>> Stashed changes
 
         try {
             if (segmentationModel === SegmentationModel.UNET) {
