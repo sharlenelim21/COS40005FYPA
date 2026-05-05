@@ -61,8 +61,20 @@ def _load_landmark_module():
         raise FileNotFoundError(f"UNETRESNET34 inference.py not found at {inference_path}")
 
     repo_str = str(repo_dir)
-    if repo_str not in sys.path:
-        sys.path.insert(0, repo_str)
+    sys.path = [path for path in sys.path if path != repo_str]
+    sys.path.insert(0, repo_str)
+
+    for module_name in ("models", "utils"):
+        cached = sys.modules.get(module_name)
+        cached_file = getattr(cached, "__file__", "") if cached is not None else ""
+        cached_paths = getattr(cached, "__path__", []) if cached is not None else []
+        cached_locations = [str(cached_file), *(str(path) for path in cached_paths)]
+        if cached is not None and not any(
+            location.startswith(repo_str) for location in cached_locations
+        ):
+            for loaded_name in list(sys.modules):
+                if loaded_name == module_name or loaded_name.startswith(f"{module_name}."):
+                    sys.modules.pop(loaded_name, None)
 
     spec = importlib.util.spec_from_file_location(
         "visheart_unetresnet34_landmark", inference_path

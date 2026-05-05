@@ -114,7 +114,19 @@ export default function SegmentationResultsPage() {
   const [runSegmentationSuccess, setRunSegmentationSuccess] = useState<string | null>(null);
   const modelSessionKey = `selectedModel_${projectId}`;
 
-  const [selectedModel, setSelectedModel] = useState<SegmentationModelId>("medsam");
+  const [selectedModel, setSelectedModel] = useState<SegmentationModelId>(() => {
+    if (typeof window === "undefined") return "medsam";
+
+    try {
+      const storedModel =
+        window.localStorage.getItem(`selectedModel_${projectId}`) ??
+        window.sessionStorage.getItem(`selectedModel_${projectId}`);
+
+      return isValidModel(storedModel) ? storedModel : "medsam";
+    } catch {
+      return "medsam";
+    }
+  });
 
   useEffect(() => {
     try {
@@ -129,26 +141,7 @@ export default function SegmentationResultsPage() {
     }
   }, [modelSessionKey]);
 
-  // Enforce CPU-safe model selection: MedSAM is only available in NVIDIA GPU mode.
-  useEffect(() => {
-    if (isGpuMode) return;
-    if (selectedModel !== "medsam") return;
-
-    setSelectedModel("unet");
-    try {
-      localStorage.setItem(modelSessionKey, "unet");
-      sessionStorage.setItem(modelSessionKey, "unet");
-    } catch {
-      // ignore storage write errors
-    }
-  }, [isGpuMode, selectedModel, modelSessionKey]);
-
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
-    if (!isGpuMode && value === "medsam") {
-      setRunSegmentationError("This model is only available with NVIDIA GPU.");
-      return;
-    }
-
     setSelectedModel(value);
     try {
       localStorage.setItem(modelSessionKey, value);
@@ -160,7 +153,7 @@ export default function SegmentationResultsPage() {
     setRunSegmentationSuccess(
       `${MODEL_OPTIONS.find((o) => o.value === value)?.label} selected successfully.`
     );
-  }, [isGpuMode, modelSessionKey]);
+  }, [modelSessionKey]);
 
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
@@ -208,7 +201,12 @@ export default function SegmentationResultsPage() {
 
     try {
       const detectedMode = isGpuMode ? "gpu" : "cpu";
-      const effectiveModel: SegmentationModelId = isGpuMode ? selectedModel : "unet";
+      const effectiveModel: SegmentationModelId = selectedModel;
+
+      if (!isGpuMode && effectiveModel === "medsam") {
+        setRunSegmentationError("MedSam requires NVIDIA GPU mode. Select Unet or start the GPU service first.");
+        return;
+      }
 
       try {
         localStorage.setItem(modelSessionKey, effectiveModel);
@@ -581,7 +579,6 @@ export default function SegmentationResultsPage() {
               <SelectItem
                 key={opt.value}
                 value={opt.value}
-                disabled={!isGpuMode && opt.value === "medsam"}
                 className="rounded-lg py-2"
               >
                 {opt.label}

@@ -8,8 +8,8 @@ import type {
   LandmarkInferenceResponse,
 } from "@/types/landmark";
 
-const TARGET_FPS = 8; 
-const FRAME_DURATION_MS = 1000 / TARGET_FPS;
+const DEFAULT_PLAYBACK_FPS = 2;
+const DEFAULT_LANDMARK_MODEL = "unetresnet34-landmark";
 
 const INITIAL_STATE: LandmarkPageState = {
   status: "idle",
@@ -18,6 +18,7 @@ const INITIAL_STATE: LandmarkPageState = {
   imageDimensions: { width: 256, height: 256 },
   currentFrame: 0,
   isPlaying: false,
+  playbackFps: DEFAULT_PLAYBACK_FPS,
   error: null,
   modelUsed: "",
   replacementFile: null,
@@ -50,6 +51,7 @@ export function useLandmarkDetection(
   const rafRef       = useRef<number | null>(null);
   const lastTickRef  = useRef<number>(0);
   const isPlayingRef = useRef<boolean>(false);   
+  const playbackFpsRef = useRef<number>(DEFAULT_PLAYBACK_FPS);
 
   const startPlaybackLoop = useCallback(() => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -57,7 +59,8 @@ export function useLandmarkDetection(
     const tick = (now: number) => {
       if (!isPlayingRef.current) return;
 
-      if (now - lastTickRef.current >= FRAME_DURATION_MS) {
+      const frameDurationMs = 1000 / Math.max(playbackFpsRef.current, 1);
+      if (now - lastTickRef.current >= frameDurationMs) {
         lastTickRef.current = now;
         setState((s) => {
           if (!s.isPlaying || s.totalFrames < 2) return s;
@@ -108,14 +111,14 @@ export function useLandmarkDetection(
     if (!projectId) return;
     if (landmarkApi.hasCached(projectId)) {
       // Re-run (sync path via cache — effectively instant)
-      landmarkApi.runDetectionByProject(projectId).then(applyResult).catch(() => {
+      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL).then(applyResult).catch(() => {
         // If somehow cache returns an error, silently ignore and stay idle
       });
     }
   }, [projectId]); 
   
   const handleRunDetection = useCallback(
-    async (model = "hrnet-lv") => {
+    async (model = DEFAULT_LANDMARK_MODEL) => {
       if (state.status === "running") return;
 
       stopPlayback();
@@ -160,7 +163,7 @@ export function useLandmarkDetection(
 
   /** Force a fresh run, bypassing cache. */
   const handleRerunDetection = useCallback(
-    (model = "hrnet-lv") => {
+    (model = DEFAULT_LANDMARK_MODEL) => {
       landmarkApi.invalidateCache(projectId);
       setState((s) => ({ ...s, status: "idle", predictions: [], error: null }));
       // Re-run after state flush
@@ -197,7 +200,7 @@ export function useLandmarkDetection(
     setState((s) => ({ ...s, replacementFile: null, status: "idle", error: null }));
     setReplacementFileError(null);
     if (landmarkApi.hasCached(projectId)) {
-      landmarkApi.runDetectionByProject(projectId).then(applyResult).catch(() => {});
+      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL).then(applyResult).catch(() => {});
     }
   }, [projectId, applyResult]);
 
@@ -243,6 +246,13 @@ export function useLandmarkDetection(
     [stopPlayback],
   );
 
+  const handlePlaybackSpeedChange = useCallback((fps: number) => {
+    const nextFps = Math.max(0.5, Math.min(fps, 24));
+    playbackFpsRef.current = nextFps;
+    lastTickRef.current = 0;
+    setState((s) => ({ ...s, playbackFps: nextFps }));
+  }, []);
+
   const handleReset = useCallback(() => {
     stopPlayback();
     landmarkApi.invalidateCache(projectId);
@@ -268,6 +278,7 @@ export function useLandmarkDetection(
     handleNextFrame,
     handlePrevFrame,
     handleSliderChange,
+    handlePlaybackSpeedChange,
 
     handleReset,
   };

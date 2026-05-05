@@ -2,6 +2,7 @@ export type LandmarkCoord = [number, number];
 
 export interface FramePrediction {
   frame_id: number;                   // 0-indexed cardiac phase frame
+  slice_id?: number;                  // 0-indexed MRI slice, when returned by the backend
   rv_insertion_1: LandmarkCoord;      // RV insertion point A  [x, y]
   rv_insertion_2: LandmarkCoord;      // RV insertion point B  [x, y]
   apex?: LandmarkCoord;
@@ -59,6 +60,7 @@ export interface LandmarkPageState {
   imageDimensions: { width: number; height: number };
   currentFrame: number;   
   isPlaying: boolean;
+  playbackFps: number;
   error: string | null;
   modelUsed: string;
   replacementFile: File | null;
