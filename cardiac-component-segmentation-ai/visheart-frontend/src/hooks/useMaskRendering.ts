@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import type { AnatomicalLabel, DrawingTool } from '@/types/segmentation';
 import { LABEL_COLORS, isValidAnatomicalLabel, generateFrameSlicePrefix } from '@/types/segmentation';
 
@@ -17,7 +17,11 @@ interface UseMaskRenderingProps {
 
 interface MaskRenderData {
   label: string;
-  image: HTMLImageElement;
+  // We hand react-konva an HTMLCanvasElement (not an Image) so the mask paints
+  // synchronously on first render. Previously we used `new Image()` whose
+  // `src = canvas.toDataURL(...)` loads asynchronously, which meant Konva drew
+  // nothing on first paint and only refreshed after a brush+undo cycle.
+  image: HTMLCanvasElement;
   color: string;
 }
 
@@ -53,10 +57,7 @@ export function useMaskRendering({
   tool,
   visibleLabelSet
 }: UseMaskRenderingProps) {
-  
-  // Ref for canvas reuse to avoid creating new canvases
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  
+
   // Memoize frame slice prefix
   const frameSlicePrefix = useMemo(() => 
     generateFrameSlicePrefix(currentFrame, currentSlice), 
@@ -95,26 +96,14 @@ export function useMaskRendering({
     if (currentFrameMasks.length === 0 || width === 0 || height === 0) {
       return [];
     }
-    
+
     const maskElements: MaskRenderData[] = [];
-    
-    // Reuse canvas if possible
-    let canvas = canvasRef.current;
-    if (!canvas || canvas.width !== width || canvas.height !== height) {
-      canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvasRef.current = canvas;
-    }
-    
-    const ctx = canvas.getContext('2d')!;
     const imageDataBuffer = new ImageData(width, height);
-    
-    for (const [maskKey, maskData, label] of currentFrameMasks) {
+
+    for (const [, maskData, label] of currentFrameMasks) {
       const isVisible = visibilitySet.has(label);
-      
       if (!isVisible) continue;
-      
+
       // Skip empty masks
       let hasPixels = false;
       for (let i = 0; i < maskData.length; i++) {
@@ -124,17 +113,17 @@ export function useMaskRendering({
         }
       }
       if (!hasPixels) continue;
-      
+
       const color = LABEL_COLORS[label];
       const [r, g, b] = hexToRgb(color);
-      
+
       // Clear image data
       imageDataBuffer.data.fill(0);
-      
+
       // Optimized pixel writing
       const maxPixels = Math.min(maskData.length, width * height);
       const alphaValue = Math.round(255 * opacity);
-      
+
       for (let i = 0; i < maxPixels; i++) {
         if (maskData[i] > 0) {
           const pixelIndex = i * 4;
@@ -144,17 +133,21 @@ export function useMaskRendering({
           imageDataBuffer.data[pixelIndex + 3] = alphaValue;
         }
       }
-      
-      ctx.putImageData(imageDataBuffer, 0, 0);
-      
-      // Create image with proper loading handling
-      const img = new Image();
-      img.src = canvas.toDataURL('image/png');
-      
+
+      // Each mask gets its OWN offscreen canvas so we can hand it directly to
+      // KonvaImage without round-tripping through `new Image() + dataURL`,
+      // which loads asynchronously and caused the "mask invisible until
+      // brush+undo" symptom.
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = width;
+      maskCanvas.height = height;
+      const maskCtx = maskCanvas.getContext('2d')!;
+      maskCtx.putImageData(imageDataBuffer, 0, 0);
+
       maskElements.push({
         label,
-        image: img,
-        color
+        image: maskCanvas,
+        color,
       });
     }
 
