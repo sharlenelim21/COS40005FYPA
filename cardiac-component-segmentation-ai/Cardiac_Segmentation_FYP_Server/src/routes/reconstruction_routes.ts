@@ -159,10 +159,22 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
     logger.info(`${serviceLocation}: Fetching all reconstruction jobs for user ${req.user?.username}`);
     
     try {
-        const jobs = await jobModel.find({ userid: userId }).sort({ createdAt: -1 }).limit(20);
-        const pendingJobs = await jobModel.find({ status: JobStatus.PENDING }).sort({ createdAt: 1 });
-        const activeJobCount = await jobModel.countDocuments({
+        const reconstructionJobFilter = {
             userid: userId,
+            $or: [
+                { model_used: "4d_reconstruction" },
+                { segmentationName: /^4D Reconstruction/i },
+                { message: /4D reconstruction/i },
+                { result: /GPU Job ID/i }
+            ]
+        };
+        const jobs = await jobModel.find(reconstructionJobFilter).sort({ createdAt: -1 }).limit(20);
+        const pendingJobs = await jobModel.find({
+            ...reconstructionJobFilter,
+            status: JobStatus.PENDING
+        }).sort({ createdAt: 1 });
+        const activeJobCount = await jobModel.countDocuments({
+            ...reconstructionJobFilter,
             status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] }
         });
         
@@ -181,7 +193,10 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     status: job.status,
                     name: job.segmentationName,
                     description: job.segmentationDescription,
-                    queuePosition: queuePosition
+                    queuePosition: queuePosition,
+                    message: job.message || "",
+                    createdAt: (job as any).createdAt?.toISOString?.() || null,
+                    updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };
             })
         });

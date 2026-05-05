@@ -30,7 +30,10 @@ const serviceLocation = "SegmentationRoutes";
 const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
     const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
     if (useLocalhost) {
-        return (process.env.MEDSAM_LOCAL_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+        return (
+            process.env.MEDSAM_LOCAL_BASE_URL ||
+            `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
+        ).replace(/\/$/, "");
     }
 
     const remoteBaseUrl = await getFreshGPUServerAddress();
@@ -60,15 +63,26 @@ router.post("/start-segmentation/:projectId",
     isAuth,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
+        console.log("=== LOCAL BACKEND HIT /start-segmentation ===");
         const projectId = toSingleString(req.params.projectId);
         if (!projectId) {
             return res.status(400).json({ message: "Project ID is required." });
         }
 
         const segmentationModel = req.body?.segmentationModel || SegmentationModel.MEDSAM;
+<<<<<<< Updated upstream
+        // DEVELOPER NOTE: deviceType is only us..0ed by the UNET API inference path.
+        // Supported values: "cpu", "cuda" (for NVIDIA GPU), or "auto" (GPU if available, else CPU).
+        // For MEDSAM, the local GPU service resolves its own runtime device.
+        const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : "auto";
+        logger.info(
+            `${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}. model=${segmentationModel}, device=${modelDevice}`
+        );
+=======
         // Supported values: "cpu" (default), "cuda" (for NVIDIA GPU), or "auto" (automatic selection).
         const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : undefined;
         logger.info(`${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}`);
+>>>>>>> Stashed changes
 
         try {
             if (segmentationModel === SegmentationModel.UNET) {
@@ -89,8 +103,8 @@ router.post("/start-segmentation/:projectId",
                 return res.status(400).json({ error: "Unknown segmentation model" });
             }
 
-            // DEVELOPER NOTE: MEDSAM remote Cloud GPU inference path (original implementation, unchanged)
-            // - Sends inference request to remote Cloud GPU server
+            // DEVELOPER NOTE: MEDSAM inference path
+            // - Sends inference request to the configured GPU service
             // - Requires valid gpuAuthToken (injected by injectGpuAuthToken middleware)
             // - Callback URL is used by GPU server to post results back
             // - deviceType parameter is ignored for MEDSAM (GPU type is managed by remote server)
@@ -345,7 +359,11 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     jobId: job.uuid,
                     projectId: job.projectid,
                     status: job.status,
-                    queuePosition: queuePosition
+                    queuePosition: queuePosition,
+                    message: job.message || "",
+                    segmentationModel: job.segmentationModel || job.model_used || null,
+                    createdAt: (job as any).createdAt?.toISOString?.() || null,
+                    updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };
             })
         });
@@ -565,7 +583,7 @@ router.put("/save-manual-segmentation/:projectId",
 
             logger.info(`${serviceLocation}: Found editable segmentation mask with ID ${editableMask._id} for project ${projectId}.`);
 
-            const updatePayload: Partial<IProjectSegmentationMaskDocument> = {
+            const updatePayload: Partial<IProjectSegmentationMask> & { model?: string } = {
                 isSaved: true,
             };
 
@@ -596,7 +614,10 @@ router.put("/save-manual-segmentation/:projectId",
                 updatePayload.frames = editableMask.frames;
             }
 
-            const segmentationDbUpdateResult = await updateProjectSegmentationMask(editableMask._id.toString(), updatePayload);
+            const segmentationDbUpdateResult = await updateProjectSegmentationMask(
+                editableMask._id.toString(),
+                updatePayload as Partial<IProjectSegmentationMaskDocument>
+            );
 
             if (!segmentationDbUpdateResult.success || !segmentationDbUpdateResult.projectsegmentationmask) {
                 logger.error(`${serviceLocation}: Failed to update manual segmentation mask ${editableMask._id} in database. Message: ${segmentationDbUpdateResult.message}`);

@@ -80,6 +80,55 @@ const handleMulterError = (error: any, req: Request, res: Response, next: NextFu
   next();
 };
 
+router.post("/landmark-callback", async (req: Request, res: Response): Promise<void> => {
+  const gpuJobId =
+    String(req.headers["x-job-id"] || req.body?.uuid || req.body?.job_id || "").trim();
+
+  if (!gpuJobId) {
+    res.status(400).json({ message: "Missing landmark job UUID." });
+    return;
+  }
+
+  try {
+    const status = req.body?.status;
+    const success =
+      status === "completed" ||
+      status === "success" ||
+      status === "landmark_completed";
+
+    if (!success) {
+      await updateJob(gpuJobId, {
+        status: JobStatus.FAILED,
+        message: req.body?.error || `Landmark detection failed with status: ${status || "unknown"}`,
+      });
+      res.status(200).json({ message: "Landmark callback processed as failed." });
+      return;
+    }
+
+    const result = req.body?.result;
+    if (!result?.predictions?.length) {
+      await updateJob(gpuJobId, {
+        status: JobStatus.FAILED,
+        message: "Landmark callback did not include predictions.",
+      });
+      res.status(200).json({ message: "Landmark callback missing predictions." });
+      return;
+    }
+
+    await updateJob(gpuJobId, {
+      status: JobStatus.COMPLETED,
+      result,
+      message: "Landmark detection completed.",
+      model_used: result.model_used || "UNetResNet34 Landmark",
+    });
+
+    res.status(200).json({ message: "Landmark callback processed." });
+  } catch (error) {
+    LogError(error as Error, serviceLocation, `Error processing landmark callback ${gpuJobId}`);
+    res.status(500).json({ message: "Failed to process landmark callback." });
+  }
+});
+
 // Helper function for deep copying frames data
 const deepCopyFrames = (
   frames: IProjectSegmentationMaskDocument["frames"]
@@ -231,6 +280,7 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         segmentationmaskRLE: true,
         isMedSAMOutput: resolvedSegmentationModel === SegmentationModel.MEDSAM,
         segmentationModel: resolvedSegmentationModel,
+        model_used: resolvedSegmentationModel as unknown as string,
         frames: [],
       };
 
@@ -573,6 +623,8 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
               isSaved: false,
               segmentationmaskRLE: true,
               isMedSAMOutput: false,
+              segmentationModel: resolvedSegmentationModel,
+              model_used: resolvedSegmentationModel as unknown as string,
               frames: deepCopyFrames(
                 aiCreationResult.projectsegmentationmask.frames
               ),

@@ -119,7 +119,7 @@ Write-Host "Starting VisHeart services..." -ForegroundColor Yellow
 Write-Host "This may take a few minutes on first run..." -ForegroundColor Gray  
 Write-Host ""
 
-docker-compose up -d
+docker-compose up -d --build
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

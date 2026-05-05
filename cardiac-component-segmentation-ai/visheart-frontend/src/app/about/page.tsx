@@ -8,11 +8,6 @@ import sharlene_image from "../../../public/images/about/pfp-shar.jpg";
 import shihuey_image from "../../../public/images/about/pfp-shi.jpg";
 import jiayi_image from "../../../public/images/about/pfp-jia.jpg";
 import meiqi_image from "../../../public/images/about/pfp-mei.jpg";
-import james_image from "../../../public/images/about/pfp-james.jpg";
-import clarissa_image from "../../../public/images/about/pfp-cla.jpg";
-import jesmine_image from "../../../public/images/about/pfp-jes.jpg";
-import qh_image from "../../../public/images/about/pfp-qh.jpg";
-import zia_image from "../../../public/images/about/pfp-zia.jpg";
 
 interface MemberCardProps {
   name: string;
