@@ -1,5 +1,5 @@
 // File: src/services/reconstruction.ts
-// Description: Service layer for initiating 4D reconstruction process, including Cloud GPU communication.
+// Description: Service layer for initiating 4D reconstruction process, including GPU service communication.
 
 import { IUserSafe, ProjectCrudResult } from "../types/database_types";
 import logger from "./logger";
@@ -15,7 +15,7 @@ import { generateAISegmentationForReconstruction } from "./segmentation_export";
 const serviceLocation = 'Reconstruction';
 
 /**
- * Sends 4D reconstruction request to Cloud GPU server
+ * Sends 4D reconstruction request to the configured GPU server
  * Communicates with GPU inference server to start cardiac reconstruction processing
  * 
  * @param reconstructionData - Reconstruction parameters and data URLs
@@ -36,17 +36,17 @@ const sendReconstructionRequestToCloudGpu = async (
     },
     gpuAuthToken: string
 ): Promise<{ success: boolean; jobId?: string; error?: string }> => {
-    // Get GPU server configuration from database
+    // Get GPU server configuration
     const cloudGpuBaseUrl = await getFreshGPUServerAddress();
     if (!cloudGpuBaseUrl) {
         logger.error(`${serviceLocation}: GPU server configuration not available`);
-        return { success: false, error: "Cloud GPU URL not configured." };
+        return { success: false, error: "GPU service URL not configured." };
     }
 
     // Validate GPU authentication token
     if (!gpuAuthToken) {
-        logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send 4D reconstruction request to Cloud GPU.`);
-        return { success: false, error: "Authentication token for Cloud GPU is missing." };
+        logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send 4D reconstruction request to GPU service.`);
+        return { success: false, error: "Authentication token for GPU service is missing." };
     }
 
     const reconstructionEndpoint = `${cloudGpuBaseUrl}/inference/v2/4d-reconstruction`;
@@ -84,13 +84,13 @@ const sendReconstructionRequestToCloudGpu = async (
                 return { success: true, jobId: reconstructionData.uuid };
             }
         } else {
-            const gpuError = response.data?.error || `Cloud GPU responded with status ${response.status}.`;
-            logger.error(`${serviceLocation}: Error from Cloud GPU: ${gpuError}`, response.data);
-            return { success: false, error: `Cloud GPU error: ${gpuError}` };
+            const gpuError = response.data?.error || `GPU service responded with status ${response.status}.`;
+            logger.error(`${serviceLocation}: Error from GPU service: ${gpuError}`, response.data);
+            return { success: false, error: `GPU service error: ${gpuError}` };
         }
     } catch (error: any) {
         logger.error(`${serviceLocation}: Error sending 4D reconstruction request to ${reconstructionEndpoint}: ${error.message}`, { error });
-        let errorMessage = `Error communicating with Cloud GPU: ${error.message}`;
+        let errorMessage = `Error communicating with GPU service: ${error.message}`;
         if (error.response?.status) {
             errorMessage += ` (Status: ${error.response.status})`;
         }
@@ -188,7 +188,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         }
 
         // Generate segmentation NIfTI file directly (no HTTP call needed)
-        logger.info(`${serviceLocation}: Generating segmentation NIfTI for project ${projectId}`);
+        logger.info(`${serviceLocation}: Reconstruction started - generating segmentation NIfTI for project ${projectId}`);
         
         const segmentationResult = await generateAISegmentationForReconstruction(projectId, user?._id);
         
@@ -205,7 +205,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
             return { success: false, message: "Failed to prepare segmentation file for GPU access." };
         }
 
-        logger.info(`${serviceLocation}: Successfully generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
+        logger.info(`${serviceLocation}: Reconstruction saving output - generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
 
         // Generate job UUID
         const jobUuid = uuidv4();
@@ -256,7 +256,7 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         const reconstructionResult = await sendReconstructionRequestToCloudGpu(reconstructionPayload, gpuAuthToken);
 
         if (reconstructionResult.success && reconstructionResult.jobId) {
-            logger.info(`${serviceLocation}: Reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
+            logger.info(`${serviceLocation}: Callback sent - reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
 
             // Create job record AFTER successful GPU submission
             const jobData: Partial<IJob> = {
@@ -267,7 +267,8 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
                 result: `GPU Job ID: ${reconstructionResult.jobId}${maskId ? `, Mask ID: ${maskId}` : ''}`,
                 message: "4D reconstruction submitted to GPU server",
                 segmentationName: reconstructionName || `4D Reconstruction - ${new Date().toISOString()}`,
-                segmentationDescription: reconstructionDescription || "4D cardiac reconstruction using SDF model"
+                segmentationDescription: reconstructionDescription || "4D cardiac reconstruction using SDF model",
+                model_used: "4d_reconstruction"
             };
 
             const jobCreationResult = await createJob(jobData as IJob);

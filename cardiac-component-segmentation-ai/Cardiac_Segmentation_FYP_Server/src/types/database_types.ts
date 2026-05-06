@@ -236,6 +236,7 @@ export interface IProjectSegmentationMask {
   segmentationmaskRLE: boolean; // Indicates if the mask is in RLE format
   isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (kept for backward compatibility)
   segmentationModel?: SegmentationModel; // Optional model tag for future extensibility
+  model_used?: string; // Compatibility field: stores model name as string (e.g., 'medsam' or 'unet')
   // Properties of the bounding box coordinates used to input into MedSAM for segmentation
   // If the segmentation mask is a single frame, there will be only one entry in the frames array
   frames: {
@@ -262,7 +263,7 @@ export interface IProjectSegmentationMask {
 // Segmentation Mask Model Interface (single segmentation mask document in the database)
 export interface IProjectSegmentationMaskDocument
   extends IProjectSegmentationMask,
-    Document {
+    Omit<Document, "model"> {
   _id: any; // Ensure _id is part of the document type
 }
 
@@ -394,6 +395,7 @@ export interface IJob {
   segmentationDescription?: string; // Optional user-defined description for the resulting segmentation
   segmentationSource?: segmentationSource; // Source of the image for segmentation
   segmentationModel?: SegmentationModel; // Track which model was used
+  model_used?: string; // Compatibility field mirrored to DB for external tools (string)
 }
 export interface IJobDocument extends IJob, Document {}
 

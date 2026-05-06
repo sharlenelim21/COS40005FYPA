@@ -4,6 +4,7 @@ import os
 import subprocess
 
 from app.classes.device_runtime import get_backend
+from app.dependencies import model_init
 
 router = APIRouter()
 
@@ -228,3 +229,28 @@ def environment_status():
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+@router.get("/models")
+def model_status():
+    """
+    Endpoint to check whether each inference model is loaded in memory.
+    """
+    return {
+        "status": "ok",
+        "models": {
+            "yolo": model_init.yolo_model is not None,
+            "medsam": model_init.medsam_model is not None,
+            "fourd_reconstruction": model_init.fourd_reconstruction_model is not None,
+        },
+        "skip_flags": {
+            "yolo": os.getenv("SKIP_YOLO_MODEL_LOAD", "false"),
+            "medsam": os.getenv("SKIP_MEDSAM_MODEL_LOAD", "false"),
+            "fourd_reconstruction": os.getenv("SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD", "false"),
+        },
+        "model_files": {
+            "yolo": os.getenv("YOLO_MODEL_NAME", "not_set"),
+            "medsam": os.getenv("MEDSAM_MODEL_NAME", "not_set"),
+            "fourd_reconstruction": os.getenv("FOURD_RECONSTRUCTION_MODEL_NAME", "not_set"),
+        },
+    }

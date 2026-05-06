@@ -4,7 +4,7 @@
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
 import { readProject, readProjectSegmentationMask } from "./database";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
-import { uploadMaskToS3, downloadFromS3, extractS3KeyFromUrl } from "./s3_handler";
+import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import logger from "./logger";
 import fs from 'fs-extra';
 import path from 'path';
@@ -36,7 +36,9 @@ export const generateAISegmentationForReconstruction = async (
     const segmentationsJsonPath = path.join(baseTempDir, 'segmentations.json');
     const localOutputSegmentationNiftiPath = path.join(baseTempDir, `reconstruction_${tempExportId}.nii.gz`);
 
-        logger.info(`${serviceLocation}: Generating AI segmentation NIfTI for project ${projectId}`);    try {
+    logger.info(`${serviceLocation}: Generating AI segmentation NIfTI for project ${projectId}`);
+
+    try {
         const s3BucketName = process.env.AWS_BUCKET_NAME;
         if (!s3BucketName) {
             return { success: false, message: "AWS S3 bucket configuration is missing." };
@@ -44,7 +46,7 @@ export const generateAISegmentationForReconstruction = async (
 
         await fs.ensureDir(baseTempDir);
 
-        // 1. Validate editable segmentation masks exist
+        // 1. Validate segmentation masks exist
         const hasMasksResult = await readProjectSegmentationMask(projectId);
         if (!hasMasksResult.projectsegmentationmasks || hasMasksResult.projectsegmentationmasks.length === 0) {
             return { success: false, message: "No segmentation masks found. Run AI segmentation first for reconstruction." };
@@ -67,17 +69,38 @@ export const generateAISegmentationForReconstruction = async (
         const planeHeightForRLE = project.dimensions.height;
         const planeWidthForRLE = project.dimensions.width;
 
-        // 3. Select ONLY editable masks (user-refined segmentation) for reconstruction
-        let segmentationsToProcess: IProjectSegmentationMask[] = [];
-
-        // Select only editable masks for reconstruction accuracy
+        // 3. Select the best reconstruction mask set.
+        // Prefer the editable mask, but fall back to the AI mask if the editable export is missing myocardium labels.
         const editableMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === false);
-        if (editableMask) {
+        const aiMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === true);
+
+        const maskHasMyocardium = (mask?: IProjectSegmentationMask) =>
+            !!mask?.frames?.some(frame =>
+                frame.slices?.some(slice =>
+                    slice.segmentationmasks?.some(entry => String(entry.class).toLowerCase() === "myo")
+                )
+            );
+
+        let segmentationsToProcess: IProjectSegmentationMask[] = [];
+        let exportMask: IProjectSegmentationMask | undefined;
+        if (editableMask && maskHasMyocardium(editableMask)) {
             segmentationsToProcess = [editableMask];
+            exportMask = editableMask;
             logger.info(`${serviceLocation}: Using editable mask for reconstruction`);
+        } else if (aiMask && maskHasMyocardium(aiMask)) {
+            segmentationsToProcess = [aiMask];
+            exportMask = aiMask;
+            logger.warn(`${serviceLocation}: Editable mask has no myocardium labels; falling back to AI mask for reconstruction`);
+        } else if (editableMask) {
+            logger.error(`${serviceLocation}: No myocardium (myo/label 2) found in editable or AI masks for project ${projectId}`);
+            return { success: false, message: "Reconstruction requires myocardium labels in the segmentation masks. Please re-run segmentation or verify the saved masks." };
         } else {
             logger.error(`${serviceLocation}: No editable mask found for project ${projectId}`);
             return { success: false, message: "No editable segmentation mask available for reconstruction. Please complete or refine segmentation first." };
+        }
+
+        if (!exportMask) {
+            throw new Error("Editable mask not found for this segmentation export");
         }
 
         // Write segmentation data for Python processing
@@ -85,18 +108,18 @@ export const generateAISegmentationForReconstruction = async (
         
         // Log segmentation data being processed
         const maskStructure = {
-            maskId: editableMask._id,
-            frameCount: editableMask.frames?.length || 0,
-            isMedSAMOutput: editableMask.isMedSAMOutput,
-            firstFrameIndex: editableMask.frames?.[0]?.frameindex,
-            lastFrameIndex: editableMask.frames?.[editableMask.frames.length - 1]?.frameindex
+            maskId: exportMask._id,
+            frameCount: exportMask.frames?.length || 0,
+            isMedSAMOutput: exportMask.isMedSAMOutput,
+            firstFrameIndex: exportMask.frames?.[0]?.frameindex,
+            lastFrameIndex: exportMask.frames?.[exportMask.frames.length - 1]?.frameindex
         };
         logger.info(`${serviceLocation}: Segmentation mask structure for project ${projectId}: ${JSON.stringify(maskStructure)}`);
         
         // Log detailed class distribution across frames for debugging
         const classDistribution: Record<string, number> = {};
         let totalMasks = 0;
-        editableMask.frames?.forEach(frame => {
+        exportMask.frames?.forEach(frame => {
             frame.slices?.forEach(slice => {
                 slice.segmentationmasks?.forEach(mask => {
                     const className = mask.class || 'unknown';
@@ -140,7 +163,7 @@ export const generateAISegmentationForReconstruction = async (
             };
             logger.info(`${serviceLocation}: NIfTI generation parameters for project ${projectId}: ${JSON.stringify(niftiParams)}`);
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
+            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
         } else {
             // Use download and extract approach (legacy)
             logger.info(`${serviceLocation}: No stored affine matrix found for reconstruction of project ${projectId}. Using download approach.`);
@@ -152,10 +175,10 @@ export const generateAISegmentationForReconstruction = async (
                 return { success: false, message: "Project has no associated S3 file path." };
             }
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
+            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
         }
 
-        logger.info(`${serviceLocation}: Executing Python script for reconstruction NIfTI generation of project ${projectId}`);
+        logger.info(`${serviceLocation}: Saving output - executing Python script for reconstruction NIfTI generation of project ${projectId}`);
         logger.debug(`${serviceLocation}: Python command: ${pythonCommand}`);
 
         const pythonResult = await new Promise<{ success: boolean; stdout?: string; stderr?: string; error?: string }>((resolve) => {
@@ -209,7 +232,7 @@ export const generateAISegmentationForReconstruction = async (
             return { success: false, message: "Failed to extract S3 key after upload." };
         }
 
-        logger.info(`${serviceLocation}: Successfully uploaded reconstruction NIfTI to S3`);
+        logger.info(`${serviceLocation}: Saving output - successfully uploaded reconstruction NIfTI to S3`);
 
         // Generate presigned URL for GPU server access
         const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);

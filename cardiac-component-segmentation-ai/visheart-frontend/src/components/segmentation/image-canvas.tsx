@@ -17,10 +17,9 @@ import { useMaskRendering } from "@/hooks/useMaskRendering";
 
 // Import shared types and constants
 import type { ImageCanvasProps, AnatomicalLabel } from "@/types/segmentation";
-import { 
-  LABEL_COLORS, 
+import {
+  LABEL_COLORS,
   LABEL_NAMES,
-  PERFORMANCE_CONSTANTS 
 } from "@/types/segmentation";
 
 // Import tar cache for background images
@@ -544,7 +543,18 @@ export function ImageCanvas({
       if (isInitialLoad || !image) {
         setImageStatus("loading");
       }
-      
+
+      // Tar cache is the only working image source. The API fallback below
+      // points at a route that doesn't exist on this backend, so triggering
+      // it before the tar cache has had a chance to extract just locks the
+      // canvas into the "error" state. Wait until the tar cache reports
+      // either ready or a hard error before deciding to load.
+      if (!tarCacheReady && !tarCacheError) {
+        // Effect deps include tarCacheReady/tarCacheError — when those flip
+        // this effect will re-run automatically.
+        return;
+      }
+
       let imageLoaded = false;
 
       // Method 1: Try loading from tar cache (if ready and available)
@@ -593,37 +603,18 @@ export function ImageCanvas({
         console.log(`[ImageCanvas] Tar cache not ready yet (${tarCacheReady}), falling back to API`);
       }
 
-      // Method 2: Fallback to API loading (if tar cache failed or not available)
+      // Method 2 (REMOVED): The previous API fallback pointed at a route
+      // (`/api/projects/{id}/images/frame_X_slice_Y.jpeg`) that does not
+      // exist on this backend, so it always errored and produced the
+      // "Both tar cache and API loading failed" console.error. The tar
+      // cache is the only working image source, so if it didn't yield a
+      // URL we just mark the image as unavailable and let the user retry.
       if (!imageLoaded) {
-        try {
-          console.log(`[ImageCanvas] Loading from API: frame ${currentFrame}, slice ${currentSlice}`);
-          const img = new window.Image();
-          img.crossOrigin = "use-credentials"; // For API images
-          img.src = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/api/projects/${projectData.projectId}/images/frame_${currentFrame}_slice_${currentSlice}.jpeg`;
-          
-          await new Promise<void>((resolve, reject) => {
-            const timeoutId = setTimeout(() => reject("API timeout"), PERFORMANCE_CONSTANTS?.IMAGE_LOAD_TIMEOUT_MS || 10000);
-            
-            img.onload = () => {
-              clearTimeout(timeoutId);
-              setImage(img);
-              setImageStatus("loaded");
-              setImageLoadMethod("api");
-              setIsInitialLoad(false); // Mark initial load as complete
-              console.log(`[ImageCanvas] Successfully loaded from API: frame ${currentFrame}, slice ${currentSlice}`);
-              resolve();
-            };
-            
-            img.onerror = () => {
-              clearTimeout(timeoutId);
-              reject("API load failed");
-            };
-          });
-        } catch (error) {
-          console.error(`[ImageCanvas] Both tar cache and API loading failed:`, error);
-          setImageStatus("error");
-          setImageLoadMethod(null);
-        }
+        console.log(
+          `[ImageCanvas] Tar cache had no image for frame ${currentFrame}, slice ${currentSlice}; no usable fallback. Showing empty canvas.`
+        );
+        setImageStatus(tarCacheError ? "error" : "loading");
+        setImageLoadMethod(null);
       }
     };
 
@@ -889,7 +880,7 @@ export function ImageCanvas({
     const boundingBox = bbox || finalBoundingBox;
     const useFrame = frameOverride ?? currentFrame;
     const useSlice = sliceOverride ?? currentSlice;
-    
+   
     if (!boundingBox || !projectData.projectId) {
       console.error('No bounding box or project ID available');
       alert('No bounding box or project ID available');
@@ -903,13 +894,37 @@ export function ImageCanvas({
       return;
     }
 
-    // Ensure coordinates are positive and within bounds
-    const [x_min, y_min, x_max, y_max] = boundingBox;
-    if (x_min < 0 || y_min < 0 || x_max <= x_min || y_max <= y_min) {
-      console.error('Invalid bounding box coordinates:', boundingBox);
-      alert('Invalid bounding box coordinates');
+    const [rawXMin, rawYMin, rawXMax, rawYMax] = boundingBox;
+    const x_min = Math.max(0, Math.min(rawXMin, width - 1));
+    const y_min = Math.max(0, Math.min(rawYMin, height - 1));
+    const x_max = Math.max(0, Math.min(rawXMax, width - 1));
+    const y_max = Math.max(0, Math.min(rawYMax, height - 1));
+    const clampedBoundingBox: [number, number, number, number] = [
+      Math.min(x_min, x_max),
+      Math.min(y_min, y_max),
+      Math.max(x_min, x_max),
+      Math.max(y_min, y_max),
+    ];
+
+    // Final validation after clamping
+    if (
+      clampedBoundingBox[2] <= clampedBoundingBox[0] ||
+      clampedBoundingBox[3] <= clampedBoundingBox[1]
+    ) {
+      console.error("[Segmentation] Invalid bounding box after clamping:", {
+        original: boundingBox,
+        clamped: clampedBoundingBox,
+        width,
+        height,
+      });
+      alert("Invalid bounding box coordinates");
       return;
     }
+
+    console.log("[Segmentation] Bounding box accepted:", {
+      original: boundingBox,
+      clamped: clampedBoundingBox,
+    });
 
     try {
       setIsSegmentationLoading(true);
@@ -940,15 +955,15 @@ export function ImageCanvas({
         imageName = `image_${useFrame}_${useSlice}.jpg`;
         console.log('- Tar cache not ready, using fallback filename:', imageName);
       }
-      
+            
       const requestData = {
         image_name: imageName,
-        bbox: boundingBox,
+        bbox: clampedBoundingBox,
         segmentationName: `Manual ${LABEL_NAMES[selectedLabel]} - Frame ${useFrame + 1}, Slice ${useSlice + 1}`,
         segmentationDescription: `User-drawn bounding box segmentation for ${LABEL_NAMES[selectedLabel]}`
       };
       
-      console.log('Request data:', requestData);
+      console.log("[Segmentation] Request payload:", requestData);
       console.log('Making API call to startManualSegmentation...');
       console.log(`Filename format check: "${imageName}" should parse to frame=${useFrame}, slice=${useSlice}`);
       
@@ -1123,7 +1138,6 @@ export function ImageCanvas({
             <div className="bg-background/80 backdrop-blur-md rounded-xl px-10 py-8 shadow-2xl border flex flex-col items-center gap-6">
               <Loader2 className="h-10 w-10 text-primary animate-spin" />
               <div className="text-base font-semibold text-primary">Processing segmentation...</div>
-              <div className="text-xs text-muted-foreground">AI is analyzing the selected region</div>
             </div>
           </div>
         )}

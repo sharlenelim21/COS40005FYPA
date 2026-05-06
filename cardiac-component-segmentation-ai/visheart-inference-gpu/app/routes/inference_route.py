@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, Field, field_validator
-import os, asyncio, traceback
+import os, asyncio, traceback, logging
 from uuid import UUID
 from typing import (
     Dict,
@@ -34,6 +34,7 @@ from app.helpers.inference_jobs import (
     execute_medsam_manual_job_synchronously,
     process_fourd_reconstruction_job_with_semaphore,
     process_unet_job_with_semaphore,
+    process_landmark_job_with_semaphore,
 )
 
 from app.helpers.inference_helpers import (
@@ -54,6 +55,7 @@ from app.classes.pydantic_schema import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("visheart")
 
 
 # Sample route (remains the same)
@@ -87,7 +89,7 @@ class UnetInferenceRequest(BaseModel):
     url: HttpUrl = Field(..., description="Presigned URL for input NIfTI file")
     uuid: UUID = Field(..., description="Unique identifier for this UNET inference request")
     callback_url: HttpUrl = Field(..., description="Callback URL for sending results")
-    device: Literal["cpu", "cuda", "auto"] = Field(default="cpu", description="Compute device: cpu, cuda, or auto")
+    device: Literal["cpu", "cuda", "auto"] = Field(default="auto", description="Compute device: cpu, cuda, or auto")
     checkpoint_path: str | None = Field(default=None, description="Optional checkpoint override path")
     segmentation_model: Literal["unet"] = Field(default="unet", description="Model tag used by webhook processing")
 
@@ -100,6 +102,23 @@ class UnetInferenceRequest(BaseModel):
             raise ValueError(
                 f"Invalid device '{v}'. Must be one of: {', '.join(allowed_devices)}"
             )
+        return v
+
+
+class LandmarkInferenceRequest(BaseModel):
+    url: HttpUrl = Field(..., description="Presigned URL for input NIfTI file")
+    uuid: UUID = Field(..., description="Unique identifier for this landmark inference request")
+    callback_url: HttpUrl = Field(..., description="Callback URL for sending results")
+    model: str = Field(default="unetresnet34-landmark", description="Landmark model tag")
+    device: Literal["cpu", "cuda", "auto"] = Field(default="auto", description="Compute device: cpu, cuda, or auto")
+    checkpoint_path: str | None = Field(default=None, description="Optional checkpoint override path")
+
+    @field_validator('device')
+    @classmethod
+    def validate_device(cls, v: str) -> str:
+        allowed_devices = {"cpu", "cuda", "auto"}
+        if v not in allowed_devices:
+            raise ValueError(f"Invalid device '{v}'. Must be one of: {', '.join(allowed_devices)}")
         return v
 
 
@@ -169,10 +188,50 @@ async def unet_inference_async(
     background_tasks: BackgroundTasks,
 ):
     client_id = token_payload.sub
-    print(f"Received UNET inference job {request.uuid} from client {client_id}")
+    logger.info(
+        f"[UNET ROUTE] received request uuid={request.uuid} client={client_id} "
+        f"device={request.device} callback_url={request.callback_url}"
+    )
+    print(f"Received UNET inference job {request.uuid} from client {client_id}", flush=True)
+
+    try:
+        background_tasks.add_task(
+            process_unet_job_with_semaphore,
+            input_url=request.url,
+            uuid=request.uuid,
+            callback_url=request.callback_url,
+            device=request.device,
+            checkpoint_path=request.checkpoint_path,
+        )
+    except Exception as exc:
+        logger.error(
+            f"[UNET ROUTE] failed before task creation uuid={request.uuid}: {exc}",
+            exc_info=True,
+        )
+        raise
+
+    logger.info(f"[UNET ROUTE] task created uuid={request.uuid}")
+    print(f"[{request.uuid}] UNET async task added.", flush=True)
+    response_data = JobAcceptedResponse(uuid=request.uuid)
+    return response_data
+
+
+@router.post(
+    "/landmark-detection",
+    status_code=202,
+    response_model=JobAcceptedResponse,
+    summary="Asynchronous landmark detection for NIfTI input",
+)
+async def landmark_detection_async(
+    token_payload: Annotated[TokenPayLoad, Depends(conditional_verify_jwt)],
+    request: LandmarkInferenceRequest,
+    background_tasks: BackgroundTasks,
+):
+    client_id = token_payload.sub
+    print(f"Received landmark detection job {request.uuid} from client {client_id}")
 
     background_tasks.add_task(
-        process_unet_job_with_semaphore,
+        process_landmark_job_with_semaphore,
         input_url=request.url,
         uuid=request.uuid,
         callback_url=request.callback_url,
@@ -180,9 +239,8 @@ async def unet_inference_async(
         checkpoint_path=request.checkpoint_path,
     )
 
-    print(f"[{request.uuid}] UNET async task added.")
-    response_data = JobAcceptedResponse(uuid=request.uuid)
-    return response_data
+    print(f"[{request.uuid}] Landmark async task added.")
+    return JobAcceptedResponse(uuid=request.uuid)
 
 
 # --- MODIFIED Synchronous MedSAM Manual Inference Endpoint ---
@@ -298,13 +356,12 @@ async def queue_4d_reconstruction(
                 fourd_handler
             )
         )
-        
+
         return JobAcceptedResponse(uuid=request.uuid)
-        
+
     except Exception as e:
         print(f"Error queuing 4D reconstruction job {request.uuid}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to queue 4D reconstruction job: {str(e)}"
         )
-        
