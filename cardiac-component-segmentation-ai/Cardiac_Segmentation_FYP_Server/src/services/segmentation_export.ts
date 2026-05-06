@@ -4,7 +4,7 @@
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
 import { readProject, readProjectSegmentationMask } from "./database";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
-import { uploadMaskToS3, downloadFromS3, extractS3KeyFromUrl } from "./s3_handler";
+import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import logger from "./logger";
 import fs from 'fs-extra';
 import path from 'path';
@@ -36,7 +36,9 @@ export const generateAISegmentationForReconstruction = async (
     const segmentationsJsonPath = path.join(baseTempDir, 'segmentations.json');
     const localOutputSegmentationNiftiPath = path.join(baseTempDir, `reconstruction_${tempExportId}.nii.gz`);
 
-        logger.info(`${serviceLocation}: Generating AI segmentation NIfTI for project ${projectId}`);    try {
+    logger.info(`${serviceLocation}: Generating AI segmentation NIfTI for project ${projectId}`);
+
+    try {
         const s3BucketName = process.env.AWS_BUCKET_NAME;
         if (!s3BucketName) {
             return { success: false, message: "AWS S3 bucket configuration is missing." };

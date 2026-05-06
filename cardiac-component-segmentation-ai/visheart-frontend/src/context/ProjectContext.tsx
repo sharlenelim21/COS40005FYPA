@@ -986,6 +986,14 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
   // 4b. Fetch reconstruction metadata when project is loaded - NEW
   useEffect(() => {
+    if (shouldSkipReconstructionPreload) {
+      setHasReconstructions(false);
+      setReconstructionMetadata(null);
+      setReconstructionCacheReady(false);
+      setReconstructionCacheError(null);
+      return;
+    }
+
     if (!projectId || !projectData) {
       setHasReconstructions(false);
       setReconstructionMetadata(null);
@@ -1016,10 +1024,16 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     };
 
     fetchReconstructionMetadata();
-  }, [projectId, projectData]);
+  }, [projectId, projectData, shouldSkipReconstructionPreload]);
 
   // 4c. Initialize reconstruction cache when reconstruction metadata is available - NEW
   useEffect(() => {
+    if (shouldSkipReconstructionPreload) {
+      setReconstructionCacheReady(false);
+      setReconstructionCacheError(null);
+      return;
+    }
+
     if (!projectId || !reconstructionMetadata || !reconstructionMetadata.reconstructionId) {
       setReconstructionCacheReady(false);
       setReconstructionCacheError(null);
@@ -1097,10 +1111,14 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       console.log(`[ProjectContext] 🧹 Cleaning up reconstruction cache for project ${projectId}`);
       reconstructionCache.clearProjectModels(projectId).catch((error) => console.warn(`[ProjectContext] ⚠️ Reconstruction cleanup error:`, error));
     };
-  }, [projectId, reconstructionMetadata, preloadReconstructionModels]);
+  }, [projectId, reconstructionMetadata, preloadReconstructionModels, shouldSkipReconstructionPreload]);
 
   // 4d. Auto-preload ALL models (URLs + Three.js cache) when reconstruction cache is ready - ZERO-LAG SYSTEM
   useEffect(() => {
+    if (shouldSkipReconstructionPreload) {
+      return;
+    }
+
     if (!reconstructionCacheReady || isPreloading || isThreeJSPreloading) {
       return;
     }
@@ -1133,7 +1151,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     const timeoutId = setTimeout(autoPreloadComplete, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [reconstructionCacheReady, isPreloading, isThreeJSPreloading, projectId, reconstructionMetadata, preloadAllModelURLs, preloadAllThreeJSModels]);
+  }, [reconstructionCacheReady, isPreloading, isThreeJSPreloading, projectId, reconstructionMetadata, preloadAllModelURLs, preloadAllThreeJSModels, shouldSkipReconstructionPreload]);
 
   // 5. Optimized final loading state management - set to done when all components are ready or there's an error
   useEffect(() => {

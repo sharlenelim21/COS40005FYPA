@@ -69,6 +69,7 @@ export interface LandmarkSidebarProps {
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (frame: number) => void;
+  onPlaybackSpeedChange: (fps: number) => void;
   onRerun: () => void;
   onReset: () => void;
   onApplyAlignment: () => void;
@@ -88,6 +89,7 @@ export function LandmarkSidebar({
   onNextFrame,
   onPrevFrame,
   onSliderChange,
+  onPlaybackSpeedChange,
   onRerun,
   onReset,
   onApplyAlignment,
@@ -135,7 +137,7 @@ export function LandmarkSidebar({
         <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] text-muted-foreground">Model:</span>
         <span className="text-[11px] font-semibold text-foreground truncate">
-          {state.modelUsed || "HRNet-LV"}
+          {state.modelUsed || "UNetResNet34 Landmark"}
         </span>
         <span
           className={cn(
@@ -163,10 +165,12 @@ export function LandmarkSidebar({
           currentFrame={state.currentFrame}
           totalFrames={state.totalFrames}
           isPlaying={state.isPlaying}
+          playbackFps={state.playbackFps}
           onTogglePlay={onTogglePlay}
           onNextFrame={onNextFrame}
           onPrevFrame={onPrevFrame}
           onSliderChange={onSliderChange}
+          onPlaybackSpeedChange={onPlaybackSpeedChange}
         />
       )}
 
@@ -203,7 +207,7 @@ export function LandmarkSidebar({
             hasPredictions={hasPredictions}
             onRerun={onRerun}
             onReset={onReset}
-            modelUsed={state.modelUsed || "HRNet-LV"}
+            modelUsed={state.modelUsed || "UNetResNet34 Landmark"}
             totalFrames={state.totalFrames}
           />
         )}
@@ -236,19 +240,25 @@ function PlaybackBar({
   currentFrame,
   totalFrames,
   isPlaying,
+  playbackFps,
   onTogglePlay,
   onNextFrame,
   onPrevFrame,
   onSliderChange,
+  onPlaybackSpeedChange,
 }: {
   currentFrame: number;
   totalFrames: number;
   isPlaying: boolean;
+  playbackFps: number;
   onTogglePlay: () => void;
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (f: number) => void;
+  onPlaybackSpeedChange: (fps: number) => void;
 }) {
+  const speedOptions = [0.5, 1, 2, 4];
+
   return (
     <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-2 flex-shrink-0">
       <div className="flex items-center gap-2">
@@ -301,8 +311,36 @@ function PlaybackBar({
         className="w-full h-1.5 accent-primary cursor-pointer"
         aria-label="Frame scrubber"
       />
+
+      <div className="flex items-center justify-between gap-2 pt-1">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Speed
+        </span>
+        <div className="grid grid-cols-4 gap-1 rounded-lg border border-border bg-background p-1">
+          {speedOptions.map((fps) => (
+            <button
+              key={fps}
+              type="button"
+              onClick={() => onPlaybackSpeedChange(fps)}
+              className={cn(
+                "min-w-10 rounded-md px-1.5 py-1 text-[10px] font-medium tabular-nums transition-colors",
+                stateSpeedClass(fps, playbackFps),
+              )}
+              aria-label={`Set playback speed to ${fps} frames per second`}
+            >
+              {fps} fps
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
+}
+
+function stateSpeedClass(fps: number, currentFps?: number) {
+  return currentFps === fps
+    ? "bg-primary text-primary-foreground"
+    : "text-muted-foreground hover:bg-muted hover:text-foreground";
 }
 
 // Landmarks tab
