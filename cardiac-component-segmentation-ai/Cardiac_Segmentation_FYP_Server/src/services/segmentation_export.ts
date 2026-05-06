@@ -21,13 +21,43 @@ const serviceLocation = 'SegmentationExport';
  * @param userId - The user ID (for access validation)
  * @returns Promise with success status, S3 URL, and metadata
  */
+/**
+ * Resolve a mask doc to a model. Mirrors the frontend `inferDocModel`
+ * and the backend reconstruction.ts copy so behaviour is consistent
+ * across all three call sites. Returns null when there's no signal —
+ * never guesses a model.
+ */
+const inferMaskModelForExport = (mask: IProjectSegmentationMask): "medsam" | "unet" | null => {
+    const tag = (
+        (mask as any).segmentationModel ||
+        (mask as any).model_used ||
+        ""
+    )
+        .toString()
+        .toLowerCase();
+    if (tag === "medsam" || tag === "unet") return tag;
+    const name = (mask.name || "").toString().toLowerCase();
+    if (name.includes("unet")) return "unet";
+    if (name.includes("medsam")) return "medsam";
+    if (name.startsWith("ai output")) return "medsam";
+    if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+    return null;
+};
+
 export const generateAISegmentationForReconstruction = async (
-    projectId: string, 
-    userId?: string
-): Promise<{ 
-    success: boolean; 
-    message?: string; 
-    s3Url?: string; 
+    projectId: string,
+    userId?: string,
+    /**
+     * Optional segmentation-model scope. When set to "medsam" or "unet",
+     * the function will only consider masks resolving to that model and
+     * fail explicitly if none are available. When omitted, behaviour
+     * matches the original (model-agnostic) implementation.
+     */
+    segmentationModel?: "medsam" | "unet"
+): Promise<{
+    success: boolean;
+    message?: string;
+    s3Url?: string;
     fileSizeBytes?: number;
     s3Key?: string;
 }> => {
@@ -71,8 +101,32 @@ export const generateAISegmentationForReconstruction = async (
 
         // 3. Select the best reconstruction mask set.
         // Prefer the editable mask, but fall back to the AI mask if the editable export is missing myocardium labels.
-        const editableMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === false);
-        const aiMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === true);
+        // When `segmentationModel` is provided, candidates are restricted
+        // to that model so MedSAM and UNet results never leak into each
+        // other. When omitted, original (legacy) behaviour is preserved.
+        const candidatePool = segmentationModel
+            ? hasMasksResult.projectsegmentationmasks!.filter(
+                  m => inferMaskModelForExport(m) === segmentationModel
+              )
+            : hasMasksResult.projectsegmentationmasks!;
+
+        if (segmentationModel) {
+            logger.info(
+                `${serviceLocation}: Scoped to segmentationModel=${segmentationModel} for project ${projectId}. Pool size: ${candidatePool.length}/${hasMasksResult.projectsegmentationmasks!.length}.`
+            );
+            if (candidatePool.length === 0) {
+                logger.error(
+                    `${serviceLocation}: No mask docs resolve to segmentationModel=${segmentationModel} for project ${projectId}.`
+                );
+                return {
+                    success: false,
+                    message: `No ${segmentationModel.toUpperCase()} segmentation masks found for reconstruction. Run ${segmentationModel.toUpperCase()} segmentation first.`,
+                };
+            }
+        }
+
+        const editableMask = candidatePool.find(mask => mask.isMedSAMOutput === false);
+        const aiMask = candidatePool.find(mask => mask.isMedSAMOutput === true);
 
         const maskHasMyocardium = (mask?: IProjectSegmentationMask) =>
             !!mask?.frames?.some(frame =>

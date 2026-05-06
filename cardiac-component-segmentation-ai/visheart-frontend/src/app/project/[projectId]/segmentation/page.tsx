@@ -7,7 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 // Backend integration
-import { segmentationApi } from "@/lib/api";
+import { segmentationApi, reconstructionApi } from "@/lib/api";
 import { createFramesStructureFromEditableMasks, decodeSegmentationMasks } from "@/lib/decode-RLE";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
@@ -439,9 +439,56 @@ export default function SegmentationResultsPage() {
 
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
+  const [reconstructionMetadataForModel, setReconstructionMetadataForModel] = useState<any>(null);
 
+  // Refresh reconstruction metadata when selectedModel changes
+  // This ensures we're showing reconstructions from the correct segmentation model
   useEffect(() => {
-    if (!hasReconstructions || !reconstructionCacheReady) {
+    if (!projectId) return;
+
+    const refreshReconstructionsForModel = async () => {
+      try {
+        console.log(`[Segmentation 3D] Refreshing reconstructions for model: ${selectedModel}`);
+        const response = await reconstructionApi.getReconstructionResults(projectId);
+
+        if (response.success && response.reconstructions && response.reconstructions.length > 0) {
+          // Filter reconstructions by segmentation model
+          // If no segmentationModel field exists (legacy), show the latest one anyway
+          const modelReconstructions = response.reconstructions.filter((recon: any) => {
+            // If reconstruction has explicit segmentationModel field, match it
+            if (recon.segmentationModel) {
+              return recon.segmentationModel.toLowerCase() === selectedModel.toLowerCase();
+            }
+            // Legacy: reconstructions without segmentationModel tag
+            // Only show for medsam (assume medsam was the original/legacy model)
+            return selectedModel === "medsam";
+          });
+
+          if (modelReconstructions.length > 0) {
+            const latestReconstruction = modelReconstructions[0];
+            setReconstructionMetadataForModel(latestReconstruction);
+            console.log(`[Segmentation 3D] Found ${modelReconstructions.length} reconstruction(s) for model ${selectedModel}:`, latestReconstruction.name);
+          } else {
+            console.log(`[Segmentation 3D] No reconstructions found for model ${selectedModel}`);
+            setReconstructionMetadataForModel(null);
+          }
+        } else {
+          console.log("[Segmentation 3D] No reconstructions available");
+          setReconstructionMetadataForModel(null);
+        }
+      } catch (error) {
+        console.error("[Segmentation 3D] Failed to fetch reconstructions:", error);
+        setReconstructionMetadataForModel(null);
+      }
+    };
+
+    refreshReconstructionsForModel();
+  }, [projectId, selectedModel]);
+
+  // Load GLB model when frame or model-specific reconstruction changes
+  // This depends on reconstructionMetadataForModel instead of the generic hasReconstructions
+  useEffect(() => {
+    if (!reconstructionMetadataForModel) {
       setReconstructionModelUrl(null);
       return;
     }
@@ -449,7 +496,7 @@ export default function SegmentationResultsPage() {
     const loadModel = async () => {
       setIsLoadingModel(true);
       try {
-        console.log(`[Segmentation 3D] Loading model for frame ${currentFrame}...`);
+        console.log(`[Segmentation 3D] Loading model for frame ${currentFrame} from ${reconstructionMetadataForModel.name}...`);
         const url = await getReconstructionGLB(currentFrame + 1);
         if (url) {
           console.log(`[Segmentation 3D] ✅ Loaded model for frame ${currentFrame}`);
@@ -467,7 +514,7 @@ export default function SegmentationResultsPage() {
     };
 
     loadModel();
-  }, [currentFrame, hasReconstructions, reconstructionCacheReady, getReconstructionGLB]);
+  }, [currentFrame, reconstructionMetadataForModel, getReconstructionGLB]);
 
   const handleReset = useCallback(() => {
     setZoomLevel(1);

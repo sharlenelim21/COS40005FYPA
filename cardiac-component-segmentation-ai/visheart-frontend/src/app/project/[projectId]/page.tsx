@@ -81,7 +81,7 @@ const isActiveReconstructionJob = isActiveRecentJob;
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
-  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, refreshReconstructions } = useProject();
+  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions } = useProject();
   const { processingUnit } = useGpuStatus();
 
   // Update page title dynamically
@@ -118,6 +118,57 @@ export default function ProjectPage() {
   const [reconstructionError, setReconstructionError] = useState<string | null>(null);
   const [isDeletingReconstruction, setIsDeletingReconstruction] = useState(false);
   const [deleteReconstructionDialogOpen, setDeleteReconstructionDialogOpen] = useState(false);
+
+  // Per-model reconstruction state
+  const [selectedModelForCreation, setSelectedModelForCreation] = useState<"medsam" | "unet" | null>(null);
+  const [selectedReconstructionForDeletion, setSelectedReconstructionForDeletion] = useState<any | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const [deleteModelDialogOpen, setDeleteModelDialogOpen] = useState(false);
+
+  // Reconstruction-source model availability — mirrors the segmentation
+  // page's `inferDocModel` so a doc whose explicit `segmentationModel`
+  // field was lost still resolves via name pattern. Only EDITABLE
+  // (`isMedSAMOutput === false`) docs count, because reconstruction
+  // consumes user-refined masks. Returns up to two entries — one per
+  // model that has a usable editable mask in this project.
+  const availableReconstructionModels = useMemo<Array<"medsam" | "unet">>(() => {
+    if (!undecodedMasks || undecodedMasks.length === 0) return [];
+    const inferDocModel = (m: any): "medsam" | "unet" | null => {
+      const tag = ((m?.segmentationModel || m?.model_used || "") + "").toLowerCase();
+      if (tag === "medsam" || tag === "unet") return tag;
+      const name = ((m?.name || "") + "").toLowerCase();
+      if (name.includes("unet")) return "unet";
+      if (name.includes("medsam")) return "medsam";
+      if (name.startsWith("ai output")) return "medsam";
+      if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+      return null;
+    };
+    const found = new Set<"medsam" | "unet">();
+    for (const m of undecodedMasks) {
+      if ((m as any).isMedSAMOutput !== false) continue; // editable only
+      const resolved = inferDocModel(m);
+      if (resolved) found.add(resolved);
+    }
+    return Array.from(found);
+  }, [undecodedMasks]);
+
+  // Default the dialog's model selection to whatever the user picked
+  // most recently on the segmentation page (sessionStorage), but only
+  // if that model actually has a cached editable mask. Otherwise fall
+  // back to the first available model (handled in the dialog itself).
+  const defaultReconstructionModel = useMemo<"medsam" | "unet" | undefined>(() => {
+    if (!projectId) return undefined;
+    let stored: string | null = null;
+    try {
+      stored = sessionStorage.getItem(`selectedModel_${projectId}`);
+    } catch {
+      // ignore storage read errors
+    }
+    const candidate = stored === "medsam" || stored === "unet" ? stored : undefined;
+    if (candidate && availableReconstructionModels.includes(candidate)) {
+      return candidate;
+    }
+    return availableReconstructionModels[0];
+  }, [projectId, availableReconstructionModels]);
 
   // Delete state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -186,9 +237,9 @@ export default function ProjectPage() {
 
   // Helper function to check if we should poll for reconstructions
   const shouldPollForReconstructions = useCallback((): boolean => {
-    // Poll if: no reconstructions exist AND there is a current reconstruction job still running
-    return !hasReconstructions && reconstructionJobs !== null && reconstructionJobs.some(isActiveReconstructionJob) && loading === "done";
-  }, [hasReconstructions, reconstructionJobs, loading]);
+    // Poll while any active reconstruction job exists, even if one model already has a reconstruction.
+    return reconstructionJobs !== null && reconstructionJobs.some(isActiveReconstructionJob) && loading === "done";
+  }, [reconstructionJobs, loading]);
 
   // Polling effect - check for reconstructions every 1 minute when conditions are met
   useEffect(() => {
@@ -274,38 +325,58 @@ export default function ProjectPage() {
     });
   }, [reconstructionJobs, hasActiveReconstructionJobs, isStartingReconstruction]);
 
-  const goToReconstructionViewer = useCallback(() => {
-    router.push(`/project/${projectId}/standalone-4d-viewer`);
+  // Refresh reconstruction metadata when active reconstruction jobs finish.
+  const prevHadActiveReconstructionJobsRef = useRef<boolean>(false);
+  useEffect(() => {
+    const prev = prevHadActiveReconstructionJobsRef.current;
+    if (prev && !hasActiveReconstructionJobs) {
+      refreshReconstructions().catch((err) => {
+        console.warn("[Project] Failed to refresh reconstructions after job completion:", err);
+      });
+    }
+    prevHadActiveReconstructionJobsRef.current = hasActiveReconstructionJobs;
+  }, [hasActiveReconstructionJobs, refreshReconstructions]);
+
+  const goToReconstructionViewer = useCallback((model?: "medsam" | "unet" | "unknown", reconstructionId?: string) => {
+    const params = new URLSearchParams();
+    if (model) {
+      params.set("model", model);
+    }
+    if (reconstructionId) {
+      params.set("reconstructionId", reconstructionId);
+    }
+    const query = params.toString();
+    router.push(`/project/${projectId}/standalone-4d-viewer${query ? `?${query}` : ""}`);
   }, [projectId, router]);
 
-  const handleOpenReconstruction = useCallback(async () => {
+  const handleOpenReconstruction = useCallback(() => {
     setReconstructionError(null);
-
-    if (hasReconstructions || reconstructionMetadata) {
-      goToReconstructionViewer();
-      return;
-    }
-
-    try {
-      const response = await reconstructionApi.getReconstructionResults(projectId);
-      if (response.success && response.reconstructions && response.reconstructions.length > 0) {
-        await refreshReconstructions();
-        goToReconstructionViewer();
-        return;
-      }
-    } catch (error) {
-      console.warn("[Project] Could not check existing reconstruction before opening wizard:", error);
-    }
-
+    setSelectedModelForCreation(null);
     setShowReconstructionDialog(true);
-  }, [goToReconstructionViewer, hasReconstructions, projectId, reconstructionMetadata, refreshReconstructions]);
+  }, []);
 
-  useEffect(() => {
-    if (showReconstructionDialog && (hasReconstructions || reconstructionMetadata)) {
-      setShowReconstructionDialog(false);
-      goToReconstructionViewer();
+  const reconstructionRows = useMemo(() => {
+    const rowsSource =
+      reconstructionResults && reconstructionResults.length > 0
+        ? reconstructionResults
+        : Object.values(reconstructionsByModel || {});
+    const rows = rowsSource.filter(
+      (recon: any) => !!recon?.reconstructionId // eslint-disable-line @typescript-eslint/no-explicit-any
+    ) as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    if (rows.length === 0 && reconstructionMetadata?.reconstructionId) {
+      rows.push({
+        ...reconstructionMetadata,
+        segmentationModel: reconstructionMetadata.segmentationModel || "unknown",
+      });
     }
-  }, [goToReconstructionViewer, hasReconstructions, reconstructionMetadata, showReconstructionDialog]);
+
+    return rows.sort((a, b) => {
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [reconstructionMetadata, reconstructionResults, reconstructionsByModel]);
 
   // Missing projectId handling
   if (!projectId) return <NoProjectFound message="Project ID is missing." />;
@@ -486,21 +557,19 @@ export default function ProjectPage() {
   const handleStartReconstruction = async (config: ReconstructionConfig) => {
     console.log("[Project] Starting 4D reconstruction with config:", config);
 
-    if (hasReconstructions || reconstructionMetadata) {
-      setShowReconstructionDialog(false);
-      goToReconstructionViewer();
-      return;
-    }
+    setSelectedModelForCreation(config.segmentationModel);
 
     setIsStartingReconstruction(true);
     setReconstructionError(null);
 
     try {
       await reconstructionApi.startReconstruction(projectId, {
-        reconstructionName: `4D Cardiac Reconstruction - ${projectData.name}`,
-        reconstructionDescription: "Generated via configuration wizard",
+        reconstructionName: `4D Cardiac Reconstruction (${config.segmentationModel.toUpperCase()}) - ${projectData.name}`,
+        reconstructionDescription: `Generated via configuration wizard from ${config.segmentationModel.toUpperCase()} segmentation`,
         ed_frame: config.edFrame, // Pass 1-based ED frame from user selection
         export_format: config.exportFormat, // Pass user's format choice to backend
+        // Tell the backend exactly which model's editable mask to consume.
+        segmentationModel: config.segmentationModel,
         parameters: {
           num_iterations: config.numIterations,
           resolution: config.resolution,
@@ -512,7 +581,7 @@ export default function ProjectPage() {
       
       // Close dialog
       setShowReconstructionDialog(false);
-      goToReconstructionViewer();
+      goToReconstructionViewer(config.segmentationModel);
       
       // Poll for the job to appear - retry up to 5 times with 1 second delay
       console.log("[Project] 🔄 Polling for reconstruction job to appear...");
@@ -575,6 +644,33 @@ export default function ProjectPage() {
     }
   };
 
+  const handleDeleteModelReconstruction = async () => {
+    if (!selectedReconstructionForDeletion?.reconstructionId) return;
+
+    console.log("[Project] Deleting reconstruction:", selectedReconstructionForDeletion.reconstructionId);
+    setIsDeletingReconstruction(true);
+
+    try {
+      const result = await reconstructionApi.deleteReconstruction(
+        projectId,
+        selectedReconstructionForDeletion.reconstructionId
+      );
+
+      console.log("[Project] Reconstruction deleted successfully:", result);
+      setDeleteModelDialogOpen(false);
+      setSelectedReconstructionForDeletion(null);
+      await refreshReconstructions();
+    } catch (error: unknown) {
+      console.error("[Project] ❌ Error deleting model reconstruction:", error);
+      alert(
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        "Failed to delete reconstruction. Please try again."
+      );
+    } finally {
+      setIsDeletingReconstruction(false);
+    }
+  };
+
   // Get job statistics
   const jobCounts = (jobs || []).reduce(
     (acc, job) => {
@@ -591,6 +687,25 @@ export default function ProjectPage() {
   // Use local state if available (for optimistic updates), otherwise use project data
   const currentProjectName = localProjectName !== null ? localProjectName : projectData.name;
   const currentProjectDescription = localProjectDescription !== null ? localProjectDescription : projectData.description || "";
+
+  const formatReconstructionModel = (model: unknown) => {
+    const normalized = (model ?? "").toString().toLowerCase();
+    if (normalized === "medsam") return "MedSAM";
+    if (normalized === "unet") return "UNet";
+    return "Legacy / Unknown";
+  };
+
+  const formatDateTime = (value?: string) => {
+    if (!value) return "N/A";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "N/A";
+    return date.toLocaleString();
+  };
+
+  const formatFileSize = (value?: number) => {
+    if (!value) return "N/A";
+    return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -960,10 +1075,10 @@ export default function ProjectPage() {
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
-                              onClick={handleOpenReconstruction}
+                              onClick={() => handleOpenReconstruction()}
                               size="lg"
                               className="justify-start h-auto py-4"
-                              disabled={hasReconstructions || isStartingReconstruction}
+                              disabled={isStartingReconstruction}
                             >
                               <div className="flex items-center gap-3 w-full">
                                 {isStartingReconstruction ? (
@@ -975,25 +1090,17 @@ export default function ProjectPage() {
                                   <p className="font-semibold">
                                     {isStartingReconstruction 
                                       ? 'Starting Reconstruction...' 
-                                      : hasReconstructions 
-                                      ? 'Reconstruction Exists' 
                                       : 'Create 4D Reconstruction'}
                                   </p>
                                   <p className="text-xs opacity-90">
-                                    {hasReconstructions 
-                                      ? 'Delete existing reconstruction to create a new one' 
-                                      : 'Generate 3D mesh models from segmentation'}
+                                    Generate model-scoped 4D meshes from segmentation
                                   </p>
                                 </div>
                               </div>
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>
-                              {hasReconstructions 
-                                ? 'Only one reconstruction allowed - delete the existing one first' 
-                                : 'Build animated 4D cardiac models for visualization and analysis'}
-                            </p>
+                            <p>Build animated 4D cardiac models for visualization and analysis</p>
                           </TooltipContent>
                         </Tooltip>
                       )}
@@ -1091,28 +1198,32 @@ export default function ProjectPage() {
                         </TooltipContent>
                       </Tooltip>
 
-                      {/* View Reconstruction - Link to standalone 4D viewer */}
+                      {/* Start Reconstruction */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button 
-                            size="lg" 
+                          <Button
+                            onClick={() => handleOpenReconstruction()}
+                            size="lg"
                             className="justify-start h-auto py-4"
-                            asChild
+                            disabled={isStartingReconstruction}
                           >
-                            <Link href={`/project/${projectId}/standalone-4d-viewer`}>
-                              <div className="flex items-center gap-3 w-full">
-                                <Box className="h-5 w-5" />
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">View 4D Model</p>
-                                  <p className="text-xs opacity-90">Explore your 3D cardiac reconstruction</p>
-                                </div>
-                                <ChevronRight className="h-4 w-4" />
+                            <div className="flex items-center gap-3 w-full">
+                              {isStartingReconstruction ? (
+                                <RefreshCw className="h-5 w-5 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-5 w-5" />
+                              )}
+                              <div className="text-left flex-1">
+                                <p className="font-semibold">
+                                  {isStartingReconstruction ? "Starting Reconstruction..." : "Create 4D Reconstruction"}
+                                </p>
+                                <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
                               </div>
-                            </Link>
+                            </div>
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Interactive 3D viewer with animation controls</p>
+                          <p>Build animated 4D cardiac models for visualization and analysis</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>
@@ -1253,104 +1364,114 @@ export default function ProjectPage() {
               </CardContent>
             </Card>
 
-            {/* Reconstruction Details Section - NEW */}
-            {hasReconstructions && reconstructionMetadata && (
+            {/* Reconstruction Details Section - result/history only */}
+            {hasReconstructions && reconstructionRows.length > 0 && (
               <Card>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Box className="h-4 w-4" />
                       4D Reconstruction
                     </CardTitle>
-                    <Badge variant="default">Available</Badge>
+                    <Badge variant="default">{reconstructionRows.length} Available</Badge>
                   </div>
                 </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {/* Status Indicator */}
-                    <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800">
-                      <Sparkles className="h-5 w-5 text-blue-600 flex-shrink-0" />
-                      <div className="flex-1">
-                        <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">Model Ready</p>
-                        <p className="text-xs text-muted-foreground">4D cardiac reconstruction available</p>
-                      </div>
-                      {/* Delete Button */}
-                      <ShowForRegisteredUser>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
+                <CardContent className="space-y-3">
+                  {reconstructionRows.map((recon) => {
+                    const model = (recon.segmentationModel || "unknown").toString().toLowerCase();
+                    const viewModel = model === "medsam" || model === "unet" ? model : "unknown";
+                    const edFrame = recon.metadata?.edFrameIndex ?? recon.ed_frame ?? 1;
+                    const resolution = recon.metadata?.resolution;
+                    const iterations = recon.metadata?.numIterations;
+                    const processingTime = recon.metadata?.reconstructionTime;
+
+                    return (
+                      <div key={recon.reconstructionId} className="rounded-lg border p-4 space-y-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold truncate">{recon.name || "4D Reconstruction"}</p>
+                              <Badge variant="outline">{formatReconstructionModel(model)}</Badge>
+                              <Badge variant="secondary">{recon.status || "Ready"}</Badge>
+                            </div>
+                            <div className="grid gap-3 text-sm sm:grid-cols-2">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Segmentation Model Used</p>
+                                <p>{formatReconstructionModel(model)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Updated</p>
+                                <p>{formatDateTime(recon.updatedAt || recon.createdAt)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">ED Frame</p>
+                                <p className="font-mono">Frame {edFrame}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Export Format</p>
+                                <p className="font-mono uppercase">{recon.meshFormat || "GLB"}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Size</p>
+                                <p>{formatFileSize(recon.meshFileSize)}</p>
+                              </div>
+                              {(resolution || iterations) && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Resolution / Iterations</p>
+                                  <p className="font-mono">
+                                    {resolution ? `${resolution}^3` : "N/A"} / {iterations ?? "N/A"}
+                                  </p>
+                                </div>
+                              )}
+                              {processingTime && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Processing Time</p>
+                                  <p>{processingTime.toFixed(1)}s</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 lg:justify-end">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => goToReconstructionViewer(viewModel, recon.reconstructionId)}
+                                  >
+                                    <Eye className="h-4 w-4 mr-2" />
+                                    View 4D
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Interactive 3D viewer with animation controls</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                            <ShowForRegisteredUser>
                               <Button
-                                variant="ghost"
                                 size="sm"
-                                onClick={() => setDeleteReconstructionDialogOpen(true)}
-                                className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                variant="ghost"
+                                onClick={() => {
+                                  setSelectedReconstructionForDeletion(recon);
+                                  setDeleteModelDialogOpen(true);
+                                }}
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
                               >
-                                <Trash2 className="h-4 w-4" />
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete
                               </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Delete reconstruction to create a new one</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </ShowForRegisteredUser>
-                    </div>
-
-                    {/* Reconstruction Parameters Grid */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">ED Frame</p>
-                        <p className="text-sm font-mono font-semibold">
-                          Frame {reconstructionMetadata.metadata?.edFrameIndex || 1}
-                        </p>
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Mesh Format</p>
-                        <p className="text-sm font-mono font-semibold uppercase">
-                          {reconstructionMetadata.meshFormat || 'GLB'}
-                        </p>
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Resolution</p>
-                        <p className="text-sm font-mono">
-                          {reconstructionMetadata.metadata?.resolution || 32}³
-                        </p>
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Iterations</p>
-                        <p className="text-sm font-mono">
-                          {reconstructionMetadata.metadata?.numIterations || 30}
-                        </p>
-                      </div>
-                      
-                      <div className="space-y-1 col-span-2">
-                        <p className="text-xs text-muted-foreground">Mesh Size</p>
-                        <p className="text-sm font-semibold">
-                          {reconstructionMetadata.meshFileSize 
-                            ? `${(reconstructionMetadata.meshFileSize / 1024 / 1024).toFixed(2)} MB`
-                            : 'N/A'}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Processing Time (if available) */}
-                    {reconstructionMetadata.metadata?.reconstructionTime && (
-                      <div className="pt-2 border-t">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">Processing Time</span>
-                          <span className="font-mono font-medium">
-                            {reconstructionMetadata.metadata.reconstructionTime.toFixed(1)}s
-                          </span>
+                            </ShowForRegisteredUser>
+                          </div>
                         </div>
                       </div>
-                    )}
-                  </div>
+                    );
+                  })}
                 </CardContent>
               </Card>
             )}
+
 
             {/* Jobs Section - Redesigned */}
             <Card>
@@ -1473,7 +1594,51 @@ export default function ProjectPage() {
         onStart={handleStartReconstruction}
         isLoading={isStartingReconstruction}
         totalFrames={projectData?.dimensions?.frames || 1}
+        availableModels={availableReconstructionModels}
+        defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
       />
+
+      {/* Delete Model Reconstruction Confirmation Dialog */}
+      <AlertDialog open={deleteModelDialogOpen} onOpenChange={setDeleteModelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete 4D Reconstruction
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p>
+                Are you sure you want to delete &quot;{selectedReconstructionForDeletion?.name || "this 4D reconstruction"}&quot; for &quot;{currentProjectName}&quot;?
+              </p>
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                <p className="text-sm text-amber-900 dark:text-amber-100">
+                  <strong>Note:</strong> This will permanently delete only this selected 4D result. Other reconstruction results, if present, will remain unchanged.
+                </p>
+              </div>
+              <p className="font-semibold text-sm">This action cannot be undone.</p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingReconstruction}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteModelReconstruction}
+              disabled={isDeletingReconstruction || !selectedReconstructionForDeletion?.reconstructionId}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeletingReconstruction ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete Reconstruction Confirmation Dialog */}
       <AlertDialog open={deleteReconstructionDialogOpen} onOpenChange={setDeleteReconstructionDialogOpen}>
