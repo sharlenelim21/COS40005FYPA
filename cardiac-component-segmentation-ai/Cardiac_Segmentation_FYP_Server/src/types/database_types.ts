@@ -334,6 +334,7 @@ export interface IProjectReconstruction {
   isSaved: boolean; // Indicates if the 4D reconstruction is saved in the database
   isAIGenerated: boolean; // Indicates if the reconstruction is AI-generated (should not delete if it's AI output)
   meshFormat: MeshFormat; // Format of the 4D mesh file
+  segmentationModel?: string; // Which segmentation model was used to generate this reconstruction (medsam or unet)
   
   // File properties 
   filename: string; // Server-generated reconstruction filename (e.g., projectid_reconstructionid_4d)
@@ -387,6 +388,7 @@ export enum segmentationSource {
 export interface IJob {
   userid: string; // ID of the user who created the job
   projectid: string; // ID of the project associated with the job
+  maskId?: string; // ID of the segmentation mask selected for the job
   uuid: string; // UUID of the job (for tracking purposes)
   status: JobStatus; // Current status of the job (e.g., pending, in_progress, completed, failed)
   result?: string; // Result of the job (e.g., path to the output file, success message, etc.)

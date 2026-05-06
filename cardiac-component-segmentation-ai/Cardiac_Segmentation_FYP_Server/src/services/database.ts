@@ -756,6 +756,7 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the reconstruction is saved
   isAIGenerated: { type: Boolean, required: true, default: false }, // Indicates if the reconstruction is AI generated
   meshFormat: { type: String, required: true, enum: Object.values(MeshFormat) }, // Format of the mesh file
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional source model for the reconstruction
   
   // File properties
   filename: { type: String, required: true }, // Server-generated unique filename
@@ -1705,7 +1706,7 @@ const readProjectReconstruction = async (
       }
       
       // Find reconstructions based on query
-      const reconstructions = await projectReconstructionModel.find(query);
+      const reconstructions = await projectReconstructionModel.find(query).sort({ createdAt: -1, updatedAt: -1 });
       
       if (reconstructions.length === 0) {
         const searchDesc = maskid ? `project ${projectid} and mask ${maskid}` : `project ${projectid}`;
@@ -1861,6 +1862,7 @@ const deleteProjectReconstruction = async (reconstructionid: string): Promise<Pr
 const jobSchema = new mongoose.Schema({
   userid: { type: String, required: true },
   projectid: { type: String, required: true },
+  maskId: { type: String, required: false },
   uuid: { type: String, required: true, unique: true }, // Unique identifier for the job
   status: { type: String, required: true, enum: Object.values(JobStatus) },
   result: {

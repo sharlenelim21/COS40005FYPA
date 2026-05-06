@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -24,13 +24,18 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronDown, Settings, Sparkles } from "lucide-react";
+import { ChevronDown, Settings, Sparkles, AlertTriangle } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+export type ReconstructionSegmentationModel = "medsam" | "unet";
 
 export interface ReconstructionConfig {
   exportFormat: "obj" | "glb";
   edFrame: number; // 1-based frame index for user selection
   numIterations: number;
   resolution: number;
+  // Which segmentation result this reconstruction should consume.
+  segmentationModel: ReconstructionSegmentationModel;
 }
 
 interface ReconstructionConfigDialogProps {
@@ -39,7 +44,32 @@ interface ReconstructionConfigDialogProps {
   onStart: (config: ReconstructionConfig) => void;
   isLoading?: boolean;
   totalFrames?: number; // Total number of frames in the project
+  /**
+   * Models that have a usable cached editable/manual segmentation
+   * for this project. Anything not in the set is rendered disabled
+   * with an explanatory tooltip. If the set is empty, Start is
+   * disabled and a banner tells the user to run segmentation first.
+   */
+  availableModels?: ReconstructionSegmentationModel[];
+  /**
+   * Initial selection. Caller should pass the segmentation toggle's
+   * current model (so the dialog defaults to whatever the user is
+   * currently viewing). Falls back to the first available model if
+   * the requested default is unavailable.
+   */
+  defaultSelectedModel?: ReconstructionSegmentationModel;
 }
+
+const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
+  medsam: {
+    label: "MedSAM",
+    description: "GPU-accelerated bounding-box segmentation",
+  },
+  unet: {
+    label: "UNet",
+    description: "End-to-end neural segmentation, runs on CPU or GPU",
+  },
+};
 
 export function ReconstructionConfigDialog({
   open,
@@ -47,6 +77,8 @@ export function ReconstructionConfigDialog({
   onStart,
   isLoading = false,
   totalFrames = 1,
+  availableModels,
+  defaultSelectedModel,
 }: ReconstructionConfigDialogProps) {
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
@@ -54,12 +86,47 @@ export function ReconstructionConfigDialog({
   const [resolution, setResolution] = useState(32);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Derive a stable Set for membership checks.
+  const availableSet = useMemo(
+    () => new Set<ReconstructionSegmentationModel>(availableModels ?? []),
+    [availableModels]
+  );
+
+  // Choose an initial model: prefer the caller's default if available,
+  // otherwise fall back to whichever model is available, otherwise the
+  // canonical MedSAM (the dialog will still show the empty-state banner
+  // and Start will be disabled).
+  const initialModel: ReconstructionSegmentationModel = useMemo(() => {
+    if (defaultSelectedModel && availableSet.has(defaultSelectedModel)) {
+      return defaultSelectedModel;
+    }
+    if (availableSet.has("medsam")) return "medsam";
+    if (availableSet.has("unet")) return "unet";
+    return defaultSelectedModel ?? "medsam";
+  }, [availableSet, defaultSelectedModel]);
+
+  const [selectedModel, setSelectedModel] =
+    useState<ReconstructionSegmentationModel>(initialModel);
+
+  // Re-sync the model selection whenever the dialog re-opens or the
+  // available set changes (e.g. user just finished a UNet run while
+  // the dialog was closed).
+  useEffect(() => {
+    if (!open) return;
+    setSelectedModel(initialModel);
+  }, [open, initialModel]);
+
+  const noModelsAvailable = availableSet.size === 0;
+  const startDisabled = isLoading || noModelsAvailable || !availableSet.has(selectedModel);
+
   const handleStart = () => {
+    if (startDisabled) return;
     onStart({
       exportFormat,
       edFrame,
       numIterations,
       resolution,
+      segmentationModel: selectedModel,
     });
   };
 
@@ -77,6 +144,81 @@ export function ReconstructionConfigDialog({
         </DialogHeader>
 
         <div className="space-y-6 py-4">
+          {/* Segmentation source (model) — choose which cached segmentation
+              the reconstruction will consume. Disabled cards represent
+              models with no editable mask available for this project. */}
+          <div className="space-y-2">
+            <Label>Segmentation source</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {(["medsam", "unet"] as ReconstructionSegmentationModel[]).map((m) => {
+                const isAvailable = availableSet.has(m);
+                const isSelected = selectedModel === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => isAvailable && setSelectedModel(m)}
+                    disabled={!isAvailable || isLoading}
+                    aria-pressed={isSelected}
+                    title={
+                      isAvailable
+                        ? `Use cached ${MODEL_META[m].label} segmentation as input`
+                        : `No cached segmentation found for ${MODEL_META[m].label}. Run ${MODEL_META[m].label} segmentation first.`
+                    }
+                    className={cn(
+                      "rounded-lg border px-3 py-3 text-left transition-colors",
+                      isAvailable
+                        ? "hover:bg-muted/40"
+                        : "opacity-50 cursor-not-allowed",
+                      isSelected && isAvailable
+                        ? "border-primary ring-2 ring-primary/30 bg-primary/5"
+                        : "border-border"
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{MODEL_META[m].label}</span>
+                      {!isAvailable && (
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Unavailable
+                        </span>
+                      )}
+                      {isAvailable && isSelected && (
+                        <span className="text-[10px] uppercase tracking-wide text-primary">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {MODEL_META[m].description}
+                    </div>
+                    {!isAvailable && (
+                      <div className="text-[11px] text-muted-foreground mt-1.5">
+                        No cached segmentation
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {noModelsAvailable ? (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="text-xs text-amber-900 dark:text-amber-100">
+                  <p className="font-medium">No segmentation result available</p>
+                  <p className="mt-1">
+                    Run MedSAM or UNet segmentation on this project first, then
+                    return here to start a reconstruction.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Reconstruction will only use the editable mask for the selected
+                model. The other model&apos;s data is ignored.
+              </p>
+            )}
+          </div>
+
           {/* Export Format Selection */}
           <div className="space-y-2">
             <Label htmlFor="format">Export Format</Label>
@@ -222,8 +364,24 @@ export function ReconstructionConfigDialog({
           >
             Cancel
           </Button>
-          <Button onClick={handleStart} disabled={isLoading}>
-            {isLoading ? "Starting..." : "Start Reconstruction"}
+          <Button
+            onClick={handleStart}
+            disabled={startDisabled}
+            title={
+              noModelsAvailable
+                ? "No segmentation result available — run MedSAM or UNet first"
+                : !availableSet.has(selectedModel)
+                ? `No cached ${MODEL_META[selectedModel].label} segmentation. Pick an available model.`
+                : undefined
+            }
+          >
+            {isLoading
+              ? "Starting..."
+              : `Start Reconstruction${
+                  availableSet.has(selectedModel)
+                    ? ` (${MODEL_META[selectedModel].label})`
+                    : ""
+                }`}
           </Button>
         </DialogFooter>
       </DialogContent>
