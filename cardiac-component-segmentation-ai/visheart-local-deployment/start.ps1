@@ -280,7 +280,8 @@ Write-Host "Starting VisHeart services..." -ForegroundColor Yellow
 Write-Host "This may take a few minutes on first run..." -ForegroundColor Gray  
 Write-Host ""
 
-docker-compose up -d
+# Provide the profile dynamically via the COMPOSE_PROFILES env var
+docker-compose --profile $env:COMPOSE_PROFILES up -d --build
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

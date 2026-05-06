@@ -549,6 +549,11 @@ export default function SegmentationResultsPage() {
       const detectedMode = isGpuMode ? "gpu" : "cpu";
       const effectiveModel: SegmentationModelId = selectedModel;
 
+      if (!isGpuMode && effectiveModel === "medsam") {
+        setRunSegmentationError("MedSam requires NVIDIA GPU mode. Select Unet or start the GPU service first.");
+        return;
+      }
+
       try {
         localStorage.setItem(modelSessionKey, effectiveModel);
         sessionStorage.setItem(modelSessionKey, effectiveModel);

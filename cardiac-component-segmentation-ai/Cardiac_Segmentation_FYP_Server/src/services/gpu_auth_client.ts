@@ -52,10 +52,10 @@ let currentGPUConfig: GPUConfig | null = null;
 async function loadGPUConfig(): Promise<GPUConfig> {
   logger.info(`${serviceLocation}: Loading GPU configuration...`);
 
-  // TEMP FIX: if env says not localhost, force env config first
-  if ((process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() === "false") {
+  // Local deployments should use the configured local GPU URL from the environment.
+  if ((process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false") {
     logger.info(
-      `${serviceLocation}: MEDSAM_USE_LOCALHOST=false, forcing GPU config from environment variables`
+      `${serviceLocation}: Local GPU mode enabled, forcing GPU config from environment variables`
     );
     return loadConfigFromEnvironment();
   }
