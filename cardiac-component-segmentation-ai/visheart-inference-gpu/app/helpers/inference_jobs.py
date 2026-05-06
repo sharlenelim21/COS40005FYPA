@@ -3,6 +3,7 @@ import asyncio
 import httpx
 import os, traceback, time, json, tempfile
 import re
+import logging
 from enum import Enum
 from functools import wraps
 from uuid import UUID
@@ -160,6 +161,7 @@ def normalize_unet_result_to_medsam_shape(raw_mask_payload: Any) -> Dict[str, Di
 
 # Constants
 serviceLocation = "Inference Service"
+logger = logging.getLogger("visheart")
 GPU_SEMAPHORE_COUNT = os.getenv("GPU_SEMAPHORE_COUNT", 1) # Default to 1 if not set
 # Ensure GPU_SEMAPHORE_COUNT is an int, handle potential ValueError
 try:
@@ -286,10 +288,27 @@ async def send_callback(
     parsed_url = urlparse(str(callback_url))
     host = parsed_url.hostname
     port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
-    print(f"[{serviceLocation}] Attempting callback to {host}:{port} for job {uuid}")
+    logger.info(f"[{serviceLocation}] Attempting callback to {host}:{port} for job {uuid}")
+    print(f"[{serviceLocation}] Attempting callback to {host}:{port} for job {uuid}", flush=True)
     try:
         payload_size = len(json.dumps(callback_payload))
-        print(f"[{serviceLocation}] Callback payload size: {payload_size} bytes")
+        logger.info(f"[{serviceLocation}] Callback payload size: {payload_size} bytes")
+        print(f"[{serviceLocation}] Callback payload size: {payload_size} bytes", flush=True)
+        result_summary = None
+        if isinstance(result, dict):
+            result_summary = {
+                "top_level_keys": list(result.keys())[:10],
+                "top_level_count": len(result),
+                "has_frames": isinstance(result.get("frames"), list),
+                "frames_count": len(result.get("frames", [])) if isinstance(result.get("frames"), list) else None,
+            }
+        callback_summary = (
+            f"[{serviceLocation}] Callback payload summary for job {uuid}: "
+            f"status={callback_payload['status']}, model={segmentation_model}, "
+            f"success={success}, error={error_detail}, result_summary={result_summary}"
+        )
+        logger.info(callback_summary)
+        print(callback_summary, flush=True)
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "VisHeart-GPU-Service/1.0",
@@ -297,7 +316,11 @@ async def send_callback(
         }
         async with httpx.AsyncClient() as client:
             start_time = time.time()
-            print(f"[{serviceLocation}] Sending callback to {callback_url}")
+            logger.info(
+                f"[{serviceLocation}] Sending callback to {callback_url} "
+                f"for job {uuid} status={callback_payload['status']} error={error_detail}"
+            )
+            print(f"[{serviceLocation}] Sending callback to {callback_url}", flush=True)
             response = await client.post(
                 str(callback_url), json=callback_payload, headers=headers
             )
@@ -597,15 +620,18 @@ async def process_unet_job_with_semaphore(
     device: str = "auto",
     checkpoint_path: str | None = None,
 ):
-    print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (unet)...")
+    logger.info(f"[{serviceLocation}] Job {uuid} waiting for GPU access (unet)...")
+    print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (unet)...", flush=True)
     async with gpu_semaphore:
-        print(f"[{serviceLocation}] Job {uuid} acquired GPU access (unet)")
+        logger.info(f"[{serviceLocation}] Job {uuid} acquired GPU access (unet)")
+        print(f"[{serviceLocation}] Job {uuid} acquired GPU access (unet)", flush=True)
         log_gpu_status(uuid, "start-unet")
         try:
             await _process_unet_job(input_url, uuid, callback_url, device, checkpoint_path)
         finally:
             log_gpu_status(uuid, "end-unet")
-            print(f"[{serviceLocation}] Job {uuid} released GPU access (unet)")
+            logger.info(f"[{serviceLocation}] Job {uuid} released GPU access (unet)")
+            print(f"[{serviceLocation}] Job {uuid} released GPU access (unet)", flush=True)
 
 
 async def _process_unet_job(
@@ -615,7 +641,8 @@ async def _process_unet_job(
     device: str = "auto",
     checkpoint_path: str | None = None,
 ):
-    print(f"[{serviceLocation}] Starting UNET job {uuid}")
+    logger.info(f"[{serviceLocation}] Starting UNET job {uuid}")
+    print(f"[{serviceLocation}] Starting UNET job {uuid}", flush=True)
     result = None
     error_detail = None
     success = False
@@ -623,17 +650,20 @@ async def _process_unet_job(
 
     if not all([parsed_url.scheme, parsed_url.netloc]):
         error_detail = "Invalid URL provided. Please check the URL format."
-        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+        logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
         await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
         return
 
     try:
         async with FileFetchHandler(str(input_url)) as handler:
             file_path = handler.get_file_path()
+            print(f"[{serviceLocation}] UNET job {uuid} downloaded input path: {file_path}")
 
             if not file_path or not os.path.isfile(file_path):
                 error_detail = "No valid NIfTI file was found at the provided URL"
-                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
                 await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
                 return
 
@@ -643,10 +673,31 @@ async def _process_unet_job(
                 device,
                 checkpoint_path,
             )
+            if isinstance(inference_output, dict):
+                mask_payload = inference_output.get("mask")
+                frames_payload = (
+                    mask_payload.get("frames")
+                    if isinstance(mask_payload, dict)
+                    else inference_output.get("frames")
+                )
+                print(
+                    f"[{serviceLocation}] UNET inference output summary for job {uuid}: "
+                    f"success={inference_output.get('success')}, "
+                    f"keys={list(inference_output.keys())}, "
+                    f"error={inference_output.get('error')}, "
+                    f"mask_type={type(mask_payload).__name__}, "
+                    f"frames_count={len(frames_payload) if isinstance(frames_payload, list) else None}"
+                )
+            else:
+                print(
+                    f"[{serviceLocation}] UNET inference output for job {uuid} was not a dict: "
+                    f"type={type(inference_output).__name__}"
+                )
 
             if not isinstance(inference_output, dict) or not inference_output.get("success"):
                 error_detail = (inference_output or {}).get("error", "UNET inference failed without detailed error.")
-                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
             else:
                 normalized_result = normalize_unet_result_to_medsam_shape(
                     inference_output.get("mask")
@@ -654,15 +705,20 @@ async def _process_unet_job(
 
                 if not normalized_result:
                     error_detail = "UNET inference returned no parsable masks in expected structure."
-                    print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                    logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                    print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
                 else:
                     result = normalized_result
                     success = True
-                    print(f"[{serviceLocation}] Successfully processed UNET job {uuid}")
+                    print(
+                        f"[{serviceLocation}] Successfully processed UNET job {uuid}; "
+                        f"normalized_entries={len(normalized_result)}"
+                    )
 
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_details}")
+        logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_details}")
+        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_details}", flush=True)
         if "403" in str(e):
             error_detail = "Access denied (403). Presigned URL invalid/expired."
         elif "download" in str(e).lower() or "extraction" in str(e).lower():
@@ -670,7 +726,11 @@ async def _process_unet_job(
         else:
             error_detail = f"Error during UNET inference: {str(e)}"
     finally:
-        print(f"[{serviceLocation}] Sending final callback for UNET job {uuid} with success={success}")
+        logger.info(
+            f"[{serviceLocation}] Sending final callback for UNET job {uuid} "
+            f"with success={success} error={error_detail}"
+        )
+        print(f"[{serviceLocation}] Sending final callback for UNET job {uuid} with success={success}", flush=True)
         await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
 
 

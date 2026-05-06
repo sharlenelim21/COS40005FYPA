@@ -81,15 +81,15 @@ export const generateAISegmentationForReconstruction = async (
                 )
             );
 
-        let selectedMask: IProjectSegmentationMask;
         let segmentationsToProcess: IProjectSegmentationMask[] = [];
+        let exportMask: IProjectSegmentationMask | undefined;
         if (editableMask && maskHasMyocardium(editableMask)) {
-            selectedMask = editableMask;
             segmentationsToProcess = [editableMask];
+            exportMask = editableMask;
             logger.info(`${serviceLocation}: Using editable mask for reconstruction`);
         } else if (aiMask && maskHasMyocardium(aiMask)) {
-            selectedMask = aiMask;
             segmentationsToProcess = [aiMask];
+            exportMask = aiMask;
             logger.warn(`${serviceLocation}: Editable mask has no myocardium labels; falling back to AI mask for reconstruction`);
         } else if (editableMask) {
             logger.error(`${serviceLocation}: No myocardium (myo/label 2) found in editable or AI masks for project ${projectId}`);
@@ -99,23 +99,27 @@ export const generateAISegmentationForReconstruction = async (
             return { success: false, message: "No editable segmentation mask available for reconstruction. Please complete or refine segmentation first." };
         }
 
+        if (!exportMask) {
+            throw new Error("Editable mask not found for this segmentation export");
+        }
+
         // Write segmentation data for Python processing
         await fs.writeJson(segmentationsJsonPath, segmentationsToProcess, { spaces: 2 });
         
         // Log segmentation data being processed
         const maskStructure = {
-            maskId: selectedMask._id,
-            frameCount: selectedMask.frames?.length || 0,
-            isMedSAMOutput: selectedMask.isMedSAMOutput,
-            firstFrameIndex: selectedMask.frames?.[0]?.frameindex,
-            lastFrameIndex: selectedMask.frames?.[selectedMask.frames.length - 1]?.frameindex
+            maskId: exportMask._id,
+            frameCount: exportMask.frames?.length || 0,
+            isMedSAMOutput: exportMask.isMedSAMOutput,
+            firstFrameIndex: exportMask.frames?.[0]?.frameindex,
+            lastFrameIndex: exportMask.frames?.[exportMask.frames.length - 1]?.frameindex
         };
         logger.info(`${serviceLocation}: Segmentation mask structure for project ${projectId}: ${JSON.stringify(maskStructure)}`);
         
         // Log detailed class distribution across frames for debugging
         const classDistribution: Record<string, number> = {};
         let totalMasks = 0;
-        selectedMask.frames?.forEach(frame => {
+        exportMask.frames?.forEach(frame => {
             frame.slices?.forEach(slice => {
                 slice.segmentationmasks?.forEach(mask => {
                     const className = mask.class || 'unknown';
@@ -159,7 +163,7 @@ export const generateAISegmentationForReconstruction = async (
             };
             logger.info(`${serviceLocation}: NIfTI generation parameters for project ${projectId}: ${JSON.stringify(niftiParams)}`);
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
+            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
         } else {
             // Use download and extract approach (legacy)
             logger.info(`${serviceLocation}: No stored affine matrix found for reconstruction of project ${projectId}. Using download approach.`);
@@ -171,7 +175,7 @@ export const generateAISegmentationForReconstruction = async (
                 return { success: false, message: "Project has no associated S3 file path." };
             }
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
+            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
         }
 
         logger.info(`${serviceLocation}: Saving output - executing Python script for reconstruction NIfTI generation of project ${projectId}`);
