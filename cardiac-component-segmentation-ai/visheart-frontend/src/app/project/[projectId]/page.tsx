@@ -6,7 +6,8 @@ import { useProject } from "@/context/ProjectContext";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // API
-import { projectApi, segmentationApi } from "@/lib/api";
+import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
 
 // UI Components
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ import {
   Layers, 
   Sparkles,
   Box,
+  Crosshair,
   ChevronRight,
   Trash2
 } from "lucide-react";
@@ -53,10 +55,34 @@ import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/r
 // Types
 import * as ProjectTypes from "@/types/project";
 
+const ACTIVE_JOB_STALE_MS = 30 * 60 * 1000;
+
+const isActiveRecentJob = (job: ProjectTypes.UserJob): boolean => {
+  if (job.status !== ProjectTypes.JobStatus.PENDING && job.status !== ProjectTypes.JobStatus.IN_PROGRESS) {
+    return false;
+  }
+
+  const lastUpdate = job.updatedAt || job.createdAt;
+  if (!lastUpdate) {
+    return true;
+  }
+
+  const lastUpdateTime = new Date(lastUpdate).getTime();
+  if (Number.isNaN(lastUpdateTime)) {
+    return true;
+  }
+
+  return Date.now() - lastUpdateTime < ACTIVE_JOB_STALE_MS;
+};
+
+const isActiveSegmentationJob = isActiveRecentJob;
+const isActiveReconstructionJob = isActiveRecentJob;
+
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
   const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, refreshReconstructions } = useProject();
+  const { processingUnit } = useGpuStatus();
 
   // Update page title dynamically
   useEffect(() => {
@@ -160,8 +186,8 @@ export default function ProjectPage() {
 
   // Helper function to check if we should poll for reconstructions
   const shouldPollForReconstructions = useCallback((): boolean => {
-    // Poll if: no reconstructions exist AND there are reconstruction jobs (indicating reconstruction might be in progress)
-    return !hasReconstructions && reconstructionJobs !== null && reconstructionJobs.length > 0 && loading === "done";
+    // Poll if: no reconstructions exist AND there is a current reconstruction job still running
+    return !hasReconstructions && reconstructionJobs !== null && reconstructionJobs.some(isActiveReconstructionJob) && loading === "done";
   }, [hasReconstructions, reconstructionJobs, loading]);
 
   // Polling effect - check for reconstructions every 1 minute when conditions are met
@@ -213,13 +239,13 @@ export default function ProjectPage() {
 
   // Check if there are any active jobs (memoized for use in effects)
   const hasActiveJobs = useMemo(() => 
-    (jobs || []).some((job) => job.status === ProjectTypes.JobStatus.PENDING || job.status === ProjectTypes.JobStatus.IN_PROGRESS),
+    (jobs || []).some(isActiveSegmentationJob),
     [jobs]
   );
 
   // Check if there are any active reconstruction jobs (memoized for use in effects)
   const hasActiveReconstructionJobs = useMemo(() => 
-    (reconstructionJobs || []).some((job) => job.status === ProjectTypes.JobStatus.PENDING || job.status === ProjectTypes.JobStatus.IN_PROGRESS),
+    (reconstructionJobs || []).some(isActiveReconstructionJob),
     [reconstructionJobs]
   );
 
@@ -247,6 +273,39 @@ export default function ProjectPage() {
       isStartingReconstruction
     });
   }, [reconstructionJobs, hasActiveReconstructionJobs, isStartingReconstruction]);
+
+  const goToReconstructionViewer = useCallback(() => {
+    router.push(`/project/${projectId}/standalone-4d-viewer`);
+  }, [projectId, router]);
+
+  const handleOpenReconstruction = useCallback(async () => {
+    setReconstructionError(null);
+
+    if (hasReconstructions || reconstructionMetadata) {
+      goToReconstructionViewer();
+      return;
+    }
+
+    try {
+      const response = await reconstructionApi.getReconstructionResults(projectId);
+      if (response.success && response.reconstructions && response.reconstructions.length > 0) {
+        await refreshReconstructions();
+        goToReconstructionViewer();
+        return;
+      }
+    } catch (error) {
+      console.warn("[Project] Could not check existing reconstruction before opening wizard:", error);
+    }
+
+    setShowReconstructionDialog(true);
+  }, [goToReconstructionViewer, hasReconstructions, projectId, reconstructionMetadata, refreshReconstructions]);
+
+  useEffect(() => {
+    if (showReconstructionDialog && (hasReconstructions || reconstructionMetadata)) {
+      setShowReconstructionDialog(false);
+      goToReconstructionViewer();
+    }
+  }, [goToReconstructionViewer, hasReconstructions, reconstructionMetadata, showReconstructionDialog]);
 
   // Missing projectId handling
   if (!projectId) return <NoProjectFound message="Project ID is missing." />;
@@ -341,7 +400,25 @@ export default function ProjectPage() {
     setSegmentationError(null);
 
     try {
-      await segmentationApi.startSegmentation(projectId);
+      console.log('[Project] Start segmentation button clicked - current jobs state:', { jobs });
+      console.log('[Project] jobsError:', jobsError);
+
+      // CPU-safe default: only choose MedSAM when GPU is explicitly online.
+      const detectedMode = processingUnit.gpuAvailable ? "gpu" : "cpu";
+      const selectedModel: "medsam" | "unet" =
+        detectedMode === "gpu" ? "medsam" : "unet";
+
+      console.log("[Project] Start AI Segmentation mode/model:", {
+        processingUnit,
+        detectedMode,
+        selectedModel,
+      });
+
+      await segmentationApi.startSegmentation(
+        projectId,
+        selectedModel,
+        "auto"
+      );
       
       // Wait a moment for the backend to create the job, then refresh
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -408,12 +485,17 @@ export default function ProjectPage() {
   // Handle start reconstruction
   const handleStartReconstruction = async (config: ReconstructionConfig) => {
     console.log("[Project] Starting 4D reconstruction with config:", config);
+
+    if (hasReconstructions || reconstructionMetadata) {
+      setShowReconstructionDialog(false);
+      goToReconstructionViewer();
+      return;
+    }
+
     setIsStartingReconstruction(true);
     setReconstructionError(null);
 
     try {
-      const reconstructionApi = await import("@/lib/api").then(m => m.reconstructionApi);
-      
       await reconstructionApi.startReconstruction(projectId, {
         reconstructionName: `4D Cardiac Reconstruction - ${projectData.name}`,
         reconstructionDescription: "Generated via configuration wizard",
@@ -430,6 +512,7 @@ export default function ProjectPage() {
       
       // Close dialog
       setShowReconstructionDialog(false);
+      goToReconstructionViewer();
       
       // Poll for the job to appear - retry up to 5 times with 1 second delay
       console.log("[Project] 🔄 Polling for reconstruction job to appear...");
@@ -840,6 +923,28 @@ export default function ProjectPage() {
                         </TooltipContent>
                       </Tooltip>
 
+                      {/* Landmark Detection */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                            <Link href={`/project/${projectId}/landmark-detection`}>
+                              <div className="flex items-center gap-3 w-full">
+                                <Crosshair className="h-5 w-5 text-primary" />
+                                <div className="text-left flex-1">
+                                  <p className="font-semibold">Landmark Detection</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Detect cardiac landmarks with UNetResNet34
+                                  </p>
+                                </div>
+                              </div>
+                            </Link>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Run UNetResNet34 landmark detection for this project</p>
+                        </TooltipContent>
+                      </Tooltip>
+
                       {/* Start Reconstruction */}
                       {hasActiveReconstructionJobs ? (
                         <Button disabled variant="secondary" size="lg" className="justify-start h-auto py-4">
@@ -855,7 +960,7 @@ export default function ProjectPage() {
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
-                              onClick={() => setShowReconstructionDialog(true)}
+                              onClick={handleOpenReconstruction}
                               size="lg"
                               className="justify-start h-auto py-4"
                               disabled={hasReconstructions || isStartingReconstruction}
@@ -961,6 +1066,28 @@ export default function ProjectPage() {
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>Update masks to regenerate 3D models</p>
+                        </TooltipContent>
+                      </Tooltip>
+
+                      {/* Landmark Detection */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                            <Link href={`/project/${projectId}/landmark-detection`}>
+                              <div className="flex items-center gap-3 w-full">
+                                <Crosshair className="h-5 w-5 text-primary" />
+                                <div className="text-left flex-1">
+                                  <p className="font-semibold">Landmark Detection</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Detect cardiac landmarks with UNetResNet34
+                                  </p>
+                                </div>
+                              </div>
+                            </Link>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Run UNetResNet34 landmark detection for this project</p>
                         </TooltipContent>
                       </Tooltip>
 

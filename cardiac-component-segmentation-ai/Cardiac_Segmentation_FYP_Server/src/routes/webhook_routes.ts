@@ -80,6 +80,55 @@ const handleMulterError = (error: any, req: Request, res: Response, next: NextFu
   next();
 };
 
+router.post("/landmark-callback", async (req: Request, res: Response): Promise<void> => {
+  const gpuJobId =
+    String(req.headers["x-job-id"] || req.body?.uuid || req.body?.job_id || "").trim();
+
+  if (!gpuJobId) {
+    res.status(400).json({ message: "Missing landmark job UUID." });
+    return;
+  }
+
+  try {
+    const status = req.body?.status;
+    const success =
+      status === "completed" ||
+      status === "success" ||
+      status === "landmark_completed";
+
+    if (!success) {
+      await updateJob(gpuJobId, {
+        status: JobStatus.FAILED,
+        message: req.body?.error || `Landmark detection failed with status: ${status || "unknown"}`,
+      });
+      res.status(200).json({ message: "Landmark callback processed as failed." });
+      return;
+    }
+
+    const result = req.body?.result;
+    if (!result?.predictions?.length) {
+      await updateJob(gpuJobId, {
+        status: JobStatus.FAILED,
+        message: "Landmark callback did not include predictions.",
+      });
+      res.status(200).json({ message: "Landmark callback missing predictions." });
+      return;
+    }
+
+    await updateJob(gpuJobId, {
+      status: JobStatus.COMPLETED,
+      result,
+      message: "Landmark detection completed.",
+      model_used: result.model_used || "UNetResNet34 Landmark",
+    });
+
+    res.status(200).json({ message: "Landmark callback processed." });
+  } catch (error) {
+    LogError(error as Error, serviceLocation, `Error processing landmark callback ${gpuJobId}`);
+    res.status(500).json({ message: "Failed to process landmark callback." });
+  }
+});
+
 // Helper function for deep copying frames data
 const deepCopyFrames = (
   frames: IProjectSegmentationMaskDocument["frames"]
@@ -133,6 +182,22 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
   // const job = jobReadResult.job; // Get the full job object // Not directly used, currentJob is used later
 
   const { status, result: gpuResult, error: gpuErrorDetail, segmentation_model: callbackSegmentationModelRaw } = req.body;
+  const callbackResultSummary =
+    gpuResult && typeof gpuResult === "object"
+      ? {
+          topLevelKeys: Object.keys(gpuResult).slice(0, 10),
+          topLevelCount: Object.keys(gpuResult).length,
+          hasFrames: Array.isArray((gpuResult as any).frames),
+          framesCount: Array.isArray((gpuResult as any).frames)
+            ? (gpuResult as any).frames.length
+            : undefined,
+        }
+      : {
+          type: gpuResult === null ? "null" : typeof gpuResult,
+        };
+  logger.info(
+    `${serviceLocation}: GPU callback body summary for job ${gpuJobId}: status=${status}, segmentation_model=${callbackSegmentationModelRaw}, error=${gpuErrorDetail ? JSON.stringify(gpuErrorDetail) : "none"}, result=${JSON.stringify(callbackResultSummary)}`
+  );
 
   if (!status) {
     logger.error(
@@ -189,6 +254,12 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
       `${serviceLocation}: Successfully updated job with GPU Job ID ${gpuJobId} to status ${jobStatus}.`
     );
 
+    if (jobStatus === JobStatus.FAILED) {
+      logger.error(
+        `${serviceLocation}: GPU callback marked job ${gpuJobId} as failed. Hidden callback error: ${jobMessage || "No error detail provided"}`
+      );
+    }
+
     if (
       jobStatus === JobStatus.COMPLETED &&
       gpuResult &&
@@ -221,16 +292,29 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
 
       const aiSegmentationSet: Partial<IProjectSegmentationMask> = {
         projectid: projectId,
+        // Always include the model identifier ("MEDSAM" or "UNET") in the
+        // AI doc name. Previously the MedSAM branch produced just
+        // "AI Output - Job ..." with no model word, which left frontend
+        // model resolvers unable to identify the doc when the explicit
+        // `segmentationModel` field was missing from the API response.
         name:
           currentJob.segmentationName ||
-          `${resolvedSegmentationModel === SegmentationModel.UNET ? "UNET" : "AI"} Output - Job ${gpuJobId.substring(0, 8)}`,
+          `${resolvedSegmentationModel === SegmentationModel.UNET ? "UNET" : "MEDSAM"} Output - Job ${gpuJobId.substring(0, 8)}`,
         description:
           currentJob.segmentationDescription ||
           `${resolvedSegmentationModel.toUpperCase()} segmentation results from job ${gpuJobId}`,
         isSaved: false,
         segmentationmaskRLE: true,
-        isMedSAMOutput: resolvedSegmentationModel === SegmentationModel.MEDSAM,
+        // The `isMedSAMOutput` field is now used as a "preserved AI output"
+        // flag regardless of which model produced it: true == the immutable
+        // raw model output (used for revert-to-AI), false == the editable
+        // manual copy. We always set it to `true` here so both MedSAM and
+        // UNET get a preservable AI doc, with a separate Manual editable
+        // doc created below. Pairing this with `segmentationModel` lets the
+        // frontend filter masks per model deterministically.
+        isMedSAMOutput: true,
         segmentationModel: resolvedSegmentationModel,
+        model_used: resolvedSegmentationModel as unknown as string,
         frames: [],
       };
 
@@ -265,12 +349,126 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         return undefined;
       };
 
+      const addSegmentationMask = (
+        currentSliceData: {
+          sliceindex: number;
+          componentboundingboxes: any[];
+          segmentationmasks: any[];
+        },
+        className: unknown,
+        rleValue: unknown,
+        context: string
+      ) => {
+        const mappedClass = mapGpuClassNameToEnum(
+          typeof className === "string" ? className : undefined
+        );
+        if (mappedClass && typeof rleValue === "string") {
+          currentSliceData.segmentationmasks.push({
+            class: mappedClass,
+            segmentationmaskcontents: rleValue,
+          });
+          return;
+        }
+
+        logger.warn(
+          `${serviceLocation}: Invalid segmentation mask entry for job ${gpuJobId} at ${context}. class='${String(className)}', rleType='${typeof rleValue}'.`
+        );
+      };
+
       if (resolvedSegmentationModel === SegmentationModel.UNET) {
         const unetFrames = (gpuResult as any)?.frames;
         if (!Array.isArray(unetFrames)) {
           logger.warn(
-            `${serviceLocation}: UNET callback for job ${gpuJobId} does not contain a valid frames array. Skipping structured storage.`
+            `${serviceLocation}: UNET callback for job ${gpuJobId} does not contain a valid frames array. Falling back to filename-keyed parsing.`
           );
+
+          for (const [imageFilename, segmentationData] of Object.entries(
+            gpuResult as Record<string, any>
+          )) {
+            if (typeof segmentationData !== "object" || segmentationData === null) {
+              logger.warn(
+                `${serviceLocation}: Invalid segmentation data for ${imageFilename} in job ${gpuJobId}. Skipping.`
+              );
+              continue;
+            }
+
+            const filenameParts = imageFilename.replace(/\.jpg$/i, "").split("_");
+            let frameNumber: number | undefined;
+            let sliceNumber: number | undefined;
+
+            if (filenameParts.length >= 2) {
+              const potentialSlice = parseInt(
+                filenameParts[filenameParts.length - 1],
+                10
+              );
+              const potentialFrame = parseInt(
+                filenameParts[filenameParts.length - 2],
+                10
+              );
+              if (!isNaN(potentialSlice) && !isNaN(potentialFrame)) {
+                sliceNumber = potentialSlice;
+                frameNumber = potentialFrame;
+              } else {
+                logger.warn(
+                  `${serviceLocation}: Could not parse frame/slice numbers from filename parts for ${imageFilename} in job ${gpuJobId}`
+                );
+              }
+            }
+
+            if (frameNumber === undefined || sliceNumber === undefined) {
+              logger.warn(
+                `${serviceLocation}: Could not parse valid frame/slice from filename ${imageFilename} for job ${gpuJobId}. Skipping entry.`
+              );
+              continue;
+            }
+
+            if (!framesDataMap.has(frameNumber)) {
+              framesDataMap.set(frameNumber, {
+                frameindex: frameNumber,
+                frameinferred: true,
+                slices: new Map(),
+              });
+            }
+            const currentFrameData = framesDataMap.get(frameNumber)!;
+
+            if (!currentFrameData.slices.has(sliceNumber)) {
+              currentFrameData.slices.set(sliceNumber, {
+                sliceindex: sliceNumber,
+                componentboundingboxes: [],
+                segmentationmasks: [],
+              });
+            }
+            const currentSliceData = currentFrameData.slices.get(sliceNumber)!;
+
+            if (
+              segmentationData.masks &&
+              typeof segmentationData.masks === "object"
+            ) {
+              for (const [className, rleString] of Object.entries(
+                segmentationData.masks
+              )) {
+                addSegmentationMask(
+                  currentSliceData,
+                  className,
+                  rleString,
+                  imageFilename
+                );
+              }
+            } else if (Array.isArray((segmentationData as any).segmentationmasks)) {
+              for (const mask of (segmentationData as any).segmentationmasks) {
+                addSegmentationMask(
+                  currentSliceData,
+                  (mask as any)?.class,
+                  (mask as any)?.segmentationmaskcontents,
+                  imageFilename
+                );
+              }
+            } else {
+              logger.warn(
+                `${serviceLocation}: UNET filename-keyed result for ${imageFilename} has no masks object or segmentationmasks array in job ${gpuJobId}. Keys: ${Object.keys(segmentationData).join(", ")}`
+              );
+            }
+          }
         } else {
           for (const frame of unetFrames) {
             const frameNumber = Number(
@@ -320,18 +518,12 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
                 : [];
 
               for (const mask of unetMasks) {
-                const mappedClass = mapGpuClassNameToEnum((mask as any)?.class);
-                const rleString = (mask as any)?.segmentationmaskcontents;
-                if (mappedClass && typeof rleString === "string") {
-                  currentSliceData.segmentationmasks.push({
-                    class: mappedClass,
-                    segmentationmaskcontents: rleString,
-                  });
-                } else {
-                  logger.warn(
-                    `${serviceLocation}: Invalid UNET mask entry in job ${gpuJobId}. class='${(mask as any)?.class}'.`
-                  );
-                }
+                addSegmentationMask(
+                  currentSliceData,
+                  (mask as any)?.class,
+                  (mask as any)?.segmentationmaskcontents,
+                  `frame ${frameNumber}, slice ${sliceNumber}`
+                );
               }
             }
           }
@@ -466,7 +658,25 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
         }))
         .sort((a, b) => a.frameindex - b.frameindex);
 
-      if (aiSegmentationSet.frames.length > 0) {
+      const parsedSliceCount = aiSegmentationSet.frames.reduce(
+        (total, frame) => total + (frame.slices?.length || 0),
+        0
+      );
+      const parsedMaskCount = aiSegmentationSet.frames.reduce(
+        (total, frame) =>
+          total +
+          (frame.slices || []).reduce(
+            (sliceTotal, slice) =>
+              sliceTotal + (slice.segmentationmasks?.length || 0),
+            0
+          ),
+        0
+      );
+      logger.info(
+        `${serviceLocation}: Parsed segmentation payload for job ${gpuJobId}: frames=${aiSegmentationSet.frames.length}, slices=${parsedSliceCount}, masks=${parsedMaskCount}, model=${resolvedSegmentationModel}`
+      );
+
+      if (aiSegmentationSet.frames.length > 0 && parsedMaskCount > 0) {
         const aiCreationResult = await createProjectSegmentationMask(
           aiSegmentationSet as IProjectSegmentationMask
         );
@@ -478,44 +688,51 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
             `${serviceLocation}: Successfully created AI segmentation mask document for job ${gpuJobId}, project ${projectId}. Mask ID: ${aiCreationResult.projectsegmentationmask._id}`
           );
 
-          if (resolvedSegmentationModel === SegmentationModel.MEDSAM) {
-            // Keep existing MedSAM behavior: create a second editable manual mask.
-            const manualSegmentationSet: IProjectSegmentationMask = {
-              projectid: projectId,
-              name: `Manual Edit - ${currentJob.segmentationName || `Job ${gpuJobId.substring(0, 8)}`}`,
-              description: `Editable manual segmentation, based on AI output from job ${gpuJobId}`,
-              isSaved: false,
-              segmentationmaskRLE: true,
-              isMedSAMOutput: false,
-              frames: deepCopyFrames(
-                aiCreationResult.projectsegmentationmask.frames
-              ),
-            };
+          // Always create a Manual editable copy, regardless of which model
+          // produced the AI output. Previously this branch was MedSAM-only,
+          // which left UNET runs without a target for `save-manual` and
+          // forced the frontend to render the raw AI doc directly.
+          // Per-model Manual docs let the user brush+save edits for each
+          // model independently and preserve the original AI output for
+          // revert. The Manual doc inherits the model tag so it can be
+          // looked up deterministically.
+          const manualSegmentationSet: IProjectSegmentationMask = {
+            projectid: projectId,
+            name: `Manual Edit (${resolvedSegmentationModel.toUpperCase()}) - ${currentJob.segmentationName || `Job ${gpuJobId.substring(0, 8)}`}`,
+            description: `Editable manual segmentation, based on ${resolvedSegmentationModel.toUpperCase()} output from job ${gpuJobId}`,
+            isSaved: false,
+            segmentationmaskRLE: true,
+            isMedSAMOutput: false,
+            segmentationModel: resolvedSegmentationModel,
+            model_used: resolvedSegmentationModel as unknown as string,
+            frames: deepCopyFrames(
+              aiCreationResult.projectsegmentationmask.frames
+            ),
+          };
 
-            const manualCreationResult = await createProjectSegmentationMask(
-              manualSegmentationSet
+          const manualCreationResult = await createProjectSegmentationMask(
+            manualSegmentationSet
+          );
+          if (
+            manualCreationResult.success &&
+            manualCreationResult.projectsegmentationmask
+          ) {
+            logger.info(
+              `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}). AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
             );
-            if (
-              manualCreationResult.success &&
-              manualCreationResult.projectsegmentationmask
-            ) {
-              logger.info(
-                `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId}. AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
-              );
-            } else {
-              logger.error(
-                `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} after AI mask creation. Reason: ${manualCreationResult.message}`
-              );
-            }
+          } else {
+            logger.error(
+              `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}) after AI mask creation. Reason: ${manualCreationResult.message}`
+            );
           }
         } else {
           logger.error(
-            `${serviceLocation}: Failed to create AI segmentation mask document for job ${gpuJobId}. Reason: ${aiCreationResult.message}`
+            `${serviceLocation}: Failed to create AI segmentation mask document for job ${gpuJobId}. Reason: ${aiCreationResult.message}. Parsed frames=${aiSegmentationSet.frames.length}, slices=${parsedSliceCount}, masks=${parsedMaskCount}`
           );
         }
       } else {
         logger.warn(
-          `${serviceLocation}: No parsable frame/slice data found in GPU result for job ${gpuJobId}. Skipping structured segmentation storage.`
+          `${serviceLocation}: No parsable segmentation masks found in GPU result for job ${gpuJobId}. Skipping structured segmentation storage. Parsed frames=${aiSegmentationSet.frames.length}, slices=${parsedSliceCount}, masks=${parsedMaskCount}. Result summary=${JSON.stringify(callbackResultSummary)}`
         );
       }
     }

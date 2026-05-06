@@ -483,7 +483,7 @@ export function ReconstructionGLBViewer({
               <Label className="text-white text-xs">Model Color</Label>
               <Select
                 value={settings.modelColor}
-                onValueChange={(value) => setSettings({ ...settings, modelColor: value })}
+                onValueChange={(value: string) => setSettings({ ...settings, modelColor: value })}
               >
                 <SelectTrigger className="w-full bg-white/10 border-white/20 text-white text-xs h-8">
                   <SelectValue />
@@ -512,7 +512,7 @@ export function ReconstructionGLBViewer({
               <Label className="text-white text-xs">Background</Label>
               <Select
                 value={settings.background}
-                onValueChange={(value) => setSettings({ ...settings, background: value as ViewerSettings['background'] })}
+                onValueChange={(value: string) => setSettings({ ...settings, background: value as ViewerSettings['background'] })}
               >
                 <SelectTrigger className="w-full bg-white/10 border-white/20 text-white text-xs h-8">
                   <SelectValue />

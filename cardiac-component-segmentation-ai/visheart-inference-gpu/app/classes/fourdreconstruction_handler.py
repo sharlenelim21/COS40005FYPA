@@ -930,6 +930,7 @@ class FourDReconstructionHandler:
             verbose_logging = kwargs.get('verbose_logging', False)
             
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
+            print("[4D Reconstruction] Reconstruction started")
             print(f"ED frame index: {ed_frame_index}, Process all frames: {process_all_frames}")
             print(f"Export format: {export_format.upper()}")
             print(f"Optimization config: iterations={num_iterations}, reg_lambda={code_reg_lambda}")
@@ -1138,6 +1139,7 @@ class FourDReconstructionHandler:
                 output_file = os.path.join(output_dir, f"{input_filename}_4D_ED{ed_frame_index:02d}.{file_extension}")
                 
                 primary_mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+                print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
                 mesh_files = [primary_mesh_file]
                 processed_frame_indices = [ed_frame_index]
             
