@@ -57,13 +57,22 @@ services:
       S3_FORCE_PATH_STYLE: "true"
       
       # GPU Service Configuration
-      GPU_API_URL: http://host.docker.internal:8011
-      LOCAL_GPU_API_URL: http://host.docker.internal:8011
+      # The inference service runs as `gpu-cpu` or `gpu-nvidia` in this
+      # same compose file. Both share the docker-network alias `gpu`.
+      # The prebuilt image `sveltes/visheart-inference-gpu:faithful-latest`
+      # bakes a copy of start_server.py that binds uvicorn on **port
+      # 8001**, so the backend addresses it at http://gpu:8001. (The
+      # local source's start_server.py uses 8011, but that file is not
+      # what the prebuilt image runs.) If you ever rebuild the GPU image
+      # from local source, update this port + the gpu-* services'
+      # `ports:` mapping in lockstep.
+      GPU_API_URL: http://gpu:8001
+      LOCAL_GPU_API_URL: http://gpu:8001
       MEDSAM_USE_LOCALHOST: "true"
-      MEDSAM_LOCAL_BASE_URL: http://host.docker.internal:8011
+      MEDSAM_LOCAL_BASE_URL: http://gpu:8001
       GPU_JWT_SECRET: dev-gpu-secret
-      GPU_SERVER_URL: host.docker.internal
-      GPU_SERVER_PORT: 8011
+      GPU_SERVER_URL: gpu
+      GPU_SERVER_PORT: 8001
       GPU_SERVER_SSL: "false"
       GPU_SERVER_AUTH_JWT_SECRET: dev-gpu-secret
       GPU_SERVER_ID_FOR_GPU_SERVER: visheart-node
@@ -215,6 +224,9 @@ services:
     profiles: ["cpu"]
     restart: unless-stopped
     ports:
+      # The prebuilt image's start_server.py binds uvicorn on port 8001.
+      # If you rebuild the GPU image from local source (which uses 8011),
+      # bump both this mapping and the visheart-app env block in lockstep.
       - "8001:8001"
     environment:
       <<: *gpu-env
@@ -236,6 +248,7 @@ services:
     profiles: ["gpu"]
     restart: unless-stopped
     ports:
+      # See gpu-cpu service for the 8001-vs-8011 explanation.
       - "8001:8001"
     deploy:
       resources:
