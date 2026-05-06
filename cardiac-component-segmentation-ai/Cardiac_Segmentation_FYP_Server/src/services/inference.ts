@@ -115,9 +115,21 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
         }
     } catch (error: any) {
         logger.error(`${serviceLocation}: Error sending inference request to ${inferenceEndpoint}: ${error.message}`, { error });
-        let errorMessage = `Error communicating with Cloud GPU: ${error.message}`;
-        if (error.response?.status) {
-            errorMessage += ` (Status: ${error.response.status})`;
+        // Cloud GPU is no longer used — all inference goes to the local
+        // visheart-inference-gpu service. Use a clear, actionable error
+        // message so users know to start the local GPU server, not chase
+        // a cloud config that does not exist.
+        const isConnRefused = error.code === "ECONNREFUSED" || /ECONNREFUSED/.test(error.message || "");
+        let errorMessage: string;
+        if (isConnRefused) {
+            errorMessage =
+                `Local GPU server is not reachable at ${inferenceEndpoint}. ` +
+                `Start visheart-inference-gpu on the host (default port 8011) and retry.`;
+        } else {
+            errorMessage = `Error communicating with local GPU server at ${inferenceEndpoint}: ${error.message}`;
+            if (error.response?.status) {
+                errorMessage += ` (Status: ${error.response.status})`;
+            }
         }
         return { success: false, error: errorMessage };
     }
@@ -301,9 +313,17 @@ const sendUnetInferenceRequestToApi = async (
             `${serviceLocation}: Error sending UNET inference request to ${endpoint} after ${Date.now() - requestStart}ms: ${error.message}`,
             { error }
         );
-        let errorMessage = `Error communicating with UNET API: ${error.message}`;
-        if (error.response?.status) {
-            errorMessage += ` (Status: ${error.response.status})`;
+        const isConnRefused = error.code === "ECONNREFUSED" || /ECONNREFUSED/.test(error.message || "");
+        let errorMessage: string;
+        if (isConnRefused) {
+            errorMessage =
+                `Local GPU server is not reachable at ${endpoint}. ` +
+                `Start visheart-inference-gpu on the host (default port 8011) and retry.`;
+        } else {
+            errorMessage = `Error communicating with local UNET API at ${endpoint}: ${error.message}`;
+            if (error.response?.status) {
+                errorMessage += ` (Status: ${error.response.status})`;
+            }
         }
         return { success: false, error: errorMessage };
     }
