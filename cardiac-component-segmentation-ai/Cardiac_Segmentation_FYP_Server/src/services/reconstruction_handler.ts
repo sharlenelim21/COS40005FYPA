@@ -202,10 +202,12 @@ export async function processReconstructionCallback(
 
     // Upload TAR to S3 using same structure as project files
     let reconstructionFileS3Url: string;
+    let reconstructionObjectKey = "";
     let tarStream: fsSync.ReadStream | null = null;
     try {
       tarStream = fsSync.createReadStream(tarResult.tarPath!);
-      const s3KeyPrefix = `source_nifti/${userId}/`;  // Same as project files
+      const uploadedTarFilename = path.basename(tarResult.tarPath!);
+      reconstructionObjectKey = `reconstructions/${projectId}/${gpuJobId}/${uploadedTarFilename}`;
 
       // Add error handler to stream
       tarStream.on('error', (streamError) => {
@@ -216,11 +218,12 @@ export async function processReconstructionCallback(
         tarStream,
         userId,
         filehash,
-        '_mesh.tar',
-        s3KeyPrefix
+        '.tar',
+        '',
+        reconstructionObjectKey
       );
 
-      logger.info(`${serviceLocation}: Uploaded reconstruction TAR to S3`);
+      logger.info(`${serviceLocation}: Uploaded reconstruction TAR to S3 at key ${reconstructionObjectKey}`);
     } catch (error) {
       logger.error(`${serviceLocation}: S3 upload failed: ${(error as Error).message}`);
 
@@ -275,6 +278,7 @@ export async function processReconstructionCallback(
           processedFiles,
           tarResult.tarSize!,
           reconstructionFileS3Url,
+          reconstructionObjectKey,
           maskId,
           segmentationModel
         );
@@ -703,6 +707,7 @@ async function createReconstructionRecord(
   processedFiles: ProcessedObjFile[],
   tarSize: number,
   reconstructionFileS3Url: string,
+  reconstructionObjectKey: string,
   maskId?: string,
   segmentationModel?: string
 ): Promise<{ success: boolean; message: string; reconstructionId?: string }> {
@@ -745,7 +750,7 @@ async function createReconstructionRecord(
     // Generate reconstruction metadata
     const reconstructionName = `4D Reconstruction - Job ${gpuJobId.substring(0, 8)}`;
     const reconstructionDescription = `4D cardiac reconstruction: ${processedFiles.length} frames, ED frame ${edFrameIndex + 1}`;
-    const finalFilename = `${userId}_${filehash}_mesh.tar`;
+    const finalFilename = path.posix.basename(reconstructionObjectKey);
 
     // Detect mesh format from uploaded files
     const firstMeshFile = processedFiles[0];
@@ -753,8 +758,8 @@ async function createReconstructionRecord(
     logger.info(`${serviceLocation}: Detected mesh format: ${detectedFormat}`);
 
     // Generate basepath following same pattern as projects
-    const s3KeyPrefix = `source_nifti/${userId}/`;
-    const basepath = `s3://${process.env.AWS_BUCKET_NAME}/${s3KeyPrefix}`;
+    const reconstructionDir = path.posix.dirname(reconstructionObjectKey);
+    const basepath = `s3://${process.env.AWS_BUCKET_NAME}/${reconstructionDir}`;
 
     const reconstructionData: Partial<IProjectReconstruction> = {
       projectid: projectId,

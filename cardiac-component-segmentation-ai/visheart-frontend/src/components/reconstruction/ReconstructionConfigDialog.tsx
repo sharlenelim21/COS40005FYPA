@@ -52,6 +52,12 @@ interface ReconstructionConfigDialogProps {
    */
   availableModels?: ReconstructionSegmentationModel[];
   /**
+   * Models whose 4D reconstruction slot is already occupied by an
+   * existing result. These remain visible but cannot be selected again
+   * until the existing result is deleted.
+   */
+  blockedModels?: ReconstructionSegmentationModel[];
+  /**
    * Initial selection. Caller should pass the segmentation toggle's
    * current model (so the dialog defaults to whatever the user is
    * currently viewing). Falls back to the first available model if
@@ -78,6 +84,7 @@ export function ReconstructionConfigDialog({
   isLoading = false,
   totalFrames = 1,
   availableModels,
+  blockedModels,
   defaultSelectedModel,
 }: ReconstructionConfigDialogProps) {
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
@@ -91,19 +98,23 @@ export function ReconstructionConfigDialog({
     () => new Set<ReconstructionSegmentationModel>(availableModels ?? []),
     [availableModels]
   );
+  const blockedSet = useMemo(
+    () => new Set<ReconstructionSegmentationModel>(blockedModels ?? []),
+    [blockedModels]
+  );
 
   // Choose an initial model: prefer the caller's default if available,
   // otherwise fall back to whichever model is available, otherwise the
   // canonical MedSAM (the dialog will still show the empty-state banner
   // and Start will be disabled).
   const initialModel: ReconstructionSegmentationModel = useMemo(() => {
-    if (defaultSelectedModel && availableSet.has(defaultSelectedModel)) {
+    if (defaultSelectedModel && availableSet.has(defaultSelectedModel) && !blockedSet.has(defaultSelectedModel)) {
       return defaultSelectedModel;
     }
-    if (availableSet.has("medsam")) return "medsam";
-    if (availableSet.has("unet")) return "unet";
+    if (availableSet.has("medsam") && !blockedSet.has("medsam")) return "medsam";
+    if (availableSet.has("unet") && !blockedSet.has("unet")) return "unet";
     return defaultSelectedModel ?? "medsam";
-  }, [availableSet, defaultSelectedModel]);
+  }, [availableSet, blockedSet, defaultSelectedModel]);
 
   const [selectedModel, setSelectedModel] =
     useState<ReconstructionSegmentationModel>(initialModel);
@@ -117,7 +128,11 @@ export function ReconstructionConfigDialog({
   }, [open, initialModel]);
 
   const noModelsAvailable = availableSet.size === 0;
-  const startDisabled = isLoading || noModelsAvailable || !availableSet.has(selectedModel);
+  const noCreatableModels = (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
+    (model) => !availableSet.has(model) || blockedSet.has(model),
+  );
+  const startDisabled =
+    isLoading || noModelsAvailable || noCreatableModels || !availableSet.has(selectedModel) || blockedSet.has(selectedModel);
 
   const handleStart = () => {
     if (startDisabled) return;
@@ -151,7 +166,9 @@ export function ReconstructionConfigDialog({
             <Label>Segmentation source</Label>
             <div className="grid grid-cols-2 gap-2">
               {(["medsam", "unet"] as ReconstructionSegmentationModel[]).map((m) => {
-                const isAvailable = availableSet.has(m);
+                const hasSegmentation = availableSet.has(m);
+                const isBlocked = blockedSet.has(m);
+                const isAvailable = hasSegmentation && !isBlocked;
                 const isSelected = selectedModel === m;
                 return (
                   <button
@@ -161,7 +178,9 @@ export function ReconstructionConfigDialog({
                     disabled={!isAvailable || isLoading}
                     aria-pressed={isSelected}
                     title={
-                      isAvailable
+                      isBlocked
+                        ? `A 4D reconstruction already exists for ${MODEL_META[m].label}. Delete the existing result before creating a new one.`
+                        : isAvailable
                         ? `Use cached ${MODEL_META[m].label} segmentation as input`
                         : `No cached segmentation found for ${MODEL_META[m].label}. Run ${MODEL_META[m].label} segmentation first.`
                     }
@@ -177,7 +196,12 @@ export function ReconstructionConfigDialog({
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-medium">{MODEL_META[m].label}</span>
-                      {!isAvailable && (
+                      {isBlocked && (
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          In Use
+                        </span>
+                      )}
+                      {!hasSegmentation && (
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                           Unavailable
                         </span>
@@ -191,7 +215,12 @@ export function ReconstructionConfigDialog({
                     <div className="text-xs text-muted-foreground mt-1">
                       {MODEL_META[m].description}
                     </div>
-                    {!isAvailable && (
+                    {isBlocked && (
+                      <div className="text-[11px] text-muted-foreground mt-1.5">
+                        Delete existing 4D result first
+                      </div>
+                    )}
+                    {!hasSegmentation && (
                       <div className="text-[11px] text-muted-foreground mt-1.5">
                         No cached segmentation
                       </div>
@@ -208,6 +237,16 @@ export function ReconstructionConfigDialog({
                   <p className="mt-1">
                     Run MedSAM or UNet segmentation on this project first, then
                     return here to start a reconstruction.
+                  </p>
+                </div>
+              </div>
+            ) : noCreatableModels ? (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="text-xs text-amber-900 dark:text-amber-100">
+                  <p className="font-medium">All 4D reconstruction slots are in use</p>
+                  <p className="mt-1">
+                    A 4D reconstruction already exists for this model. Delete the existing result before creating a new one.
                   </p>
                 </div>
               </div>
@@ -370,6 +409,10 @@ export function ReconstructionConfigDialog({
             title={
               noModelsAvailable
                 ? "No segmentation result available — run MedSAM or UNet first"
+                : blockedSet.has(selectedModel)
+                ? `A 4D reconstruction already exists for ${MODEL_META[selectedModel].label}. Delete it before creating a new one.`
+                : noCreatableModels
+                ? "All 4D reconstruction slots are already in use"
                 : !availableSet.has(selectedModel)
                 ? `No cached ${MODEL_META[selectedModel].label} segmentation. Pick an available model.`
                 : undefined

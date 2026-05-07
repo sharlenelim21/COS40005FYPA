@@ -78,7 +78,7 @@ router.post("/start-reconstruction/:projectId",
             if (result.success) {
                 res.status(200).json({ message: result.message, uuid: result.uuid });
             } else {
-                res.status(500).json({ message: result.message });
+                res.status(result.statusCode || 500).json({ message: result.message });
             }
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, "Error starting 4D reconstruction");
@@ -134,6 +134,9 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
         const reconstructionsWithUrls = await Promise.all(
             result.projectreconstructions.map(async (recon) => {
                 let downloadUrl = null;
+                const outputKey = recon.reconstructedMesh?.path
+                    ? extractS3KeyFromUrl(recon.reconstructedMesh.path)
+                    : null;
                 const maskDoc = recon.maskId ? masksById.get(String(recon.maskId)) : undefined;
                 const maskName = (maskDoc?.name || "").toLowerCase();
                 const inferredModel =
@@ -146,7 +149,7 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                 // Generate presigned URL if mesh file exists
                 if (recon.reconstructedMesh?.path) {
                     try {
-                        const s3Key = extractS3KeyFromUrl(recon.reconstructedMesh.path);
+                        const s3Key = outputKey;
                         if (s3Key) {
                             const awsBucketName = process.env.AWS_BUCKET_NAME;
                             if (awsBucketName) {
@@ -173,7 +176,12 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                     meshFormat: recon.meshFormat,
                     meshFileSize: recon.reconstructedMesh?.filesize,
                     reconstructedMeshPath: recon.reconstructedMesh?.path || null,
+                    outputPath: recon.reconstructedMesh?.path || null,
+                    outputKey,
+                    tarPath: recon.reconstructedMesh?.path || null,
+                    tarKey: outputKey,
                     downloadUrl, // Presigned URL for download
+                    tarUrl: downloadUrl,
                     segmentationModel: inferredModel, // Model used for this reconstruction (medsam, unet, etc)
                     metadata: {
                         edFrameIndex: recon.ed_frame,

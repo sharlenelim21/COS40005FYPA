@@ -378,6 +378,17 @@ export default function ProjectPage() {
     });
   }, [reconstructionMetadata, reconstructionResults, reconstructionsByModel]);
 
+  const existing4DModels = useMemo(() => {
+    const models = new Set<"medsam" | "unet">();
+    for (const reconstruction of reconstructionRows) {
+      const normalized = ((reconstruction?.segmentationModel || "") + "").toLowerCase();
+      if (normalized === "medsam" || normalized === "unet") {
+        models.add(normalized);
+      }
+    }
+    return models;
+  }, [reconstructionRows]);
+
   // Missing projectId handling
   if (!projectId) return <NoProjectFound message="Project ID is missing." />;
 
@@ -556,6 +567,12 @@ export default function ProjectPage() {
   // Handle start reconstruction
   const handleStartReconstruction = async (config: ReconstructionConfig) => {
     console.log("[Project] Starting 4D reconstruction with config:", config);
+
+    if (existing4DModels.has(config.segmentationModel)) {
+      const modelLabel = config.segmentationModel === "medsam" ? "MedSAM" : "UNet";
+      setReconstructionError(`A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`);
+      return;
+    }
 
     setSelectedModelForCreation(config.segmentationModel);
 
@@ -1595,6 +1612,7 @@ export default function ProjectPage() {
         isLoading={isStartingReconstruction}
         totalFrames={projectData?.dimensions?.frames || 1}
         availableModels={availableReconstructionModels}
+        blockedModels={Array.from(existing4DModels)}
         defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
       />
 
