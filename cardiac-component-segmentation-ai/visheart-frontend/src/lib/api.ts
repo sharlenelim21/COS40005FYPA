@@ -427,6 +427,10 @@ export const reconstructionApi = {
       reconstructionDescription?: string;
       ed_frame?: number;
       export_format?: 'obj' | 'glb'; // User's choice for mesh export format
+      // Which segmentation result the reconstruction should consume.
+      // Backend strictly scopes the editable-mask lookup to this model;
+      // omit to preserve legacy (model-agnostic) behaviour.
+      segmentationModel?: 'medsam' | 'unet';
       parameters?: {
         num_iterations?: number;
         resolution?: number;
@@ -501,6 +505,37 @@ export const reconstructionApi = {
       return response.data;
     } catch (error) {
       console.error('[API] Delete reconstructions error:', error);
+      throw error;
+    }
+  },
+
+  // Delete one reconstruction result by ID
+  deleteReconstruction: async (projectId: string, reconstructionId: string) => {
+    console.log('[API] Deleting reconstruction:', { projectId, reconstructionId });
+    try {
+      const response = await api.delete(
+        `/reconstruction/delete-reconstruction/${projectId}/${reconstructionId}`
+      );
+      console.log('[API] Delete reconstruction response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('[API] Delete reconstruction error:', error);
+      throw error;
+    }
+  },
+
+  // Delete reconstruction for a specific segmentation model (medsam or unet)
+  deleteModelReconstruction: async (projectId: string, segmentationModel: 'medsam' | 'unet') => {
+    console.log('[API] Deleting reconstruction for model:', { projectId, segmentationModel });
+    try {
+      const response = await api.delete(
+        `/reconstruction/delete-model-reconstruction/${projectId}`,
+        { params: { segmentationModel } }
+      );
+      console.log('[API] Delete model reconstruction response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('[API] Delete model reconstruction error:', error);
       throw error;
     }
   },

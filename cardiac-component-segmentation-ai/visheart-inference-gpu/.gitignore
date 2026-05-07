@@ -14,3 +14,4 @@ cardiac-component-segmentation-ai/visheart-inference-gpu/.venv311/
 venv/
 mamba-unet-env/
 unet.pth
+mamba-unet-env/
