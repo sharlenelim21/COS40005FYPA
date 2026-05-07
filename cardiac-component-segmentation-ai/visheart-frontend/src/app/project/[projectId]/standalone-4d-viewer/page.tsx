@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,10 @@ import {
 export default function Standalone4DViewerPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const modelParam = searchParams.get("model");
+  const selectedModel = modelParam === "medsam" || modelParam === "unet" ? modelParam : null;
+  const reconstructionIdParam = searchParams.get("reconstructionId");
 
   // Get data from ProjectContext
   const {
@@ -35,11 +39,19 @@ export default function Standalone4DViewerPage() {
     error,
     projectData,
     hasReconstructions,
-    reconstructionCacheReady,
     reconstructionCacheError,
     getReconstructionGLB,
     reconstructionMetadata,
+    getReconstructionForModel,
+    getReconstructionById,
   } = useProject();
+
+  const activeReconstruction = reconstructionIdParam
+    ? getReconstructionById(reconstructionIdParam) ||
+      (reconstructionMetadata?.reconstructionId === reconstructionIdParam ? reconstructionMetadata : null)
+    : selectedModel
+    ? getReconstructionForModel(selectedModel)
+    : reconstructionMetadata;
 
   // Update page title dynamically
   useEffect(() => {
@@ -62,11 +74,16 @@ export default function Standalone4DViewerPage() {
   const [playbackSpeed, setPlaybackSpeed] = useState(500); // ms per frame
 
   // Get total frames from reconstruction metadata (more reliable than project dimensions for reconstructions)
-  const totalFrames = reconstructionMetadata?.totalFrames || projectData?.dimensions?.frames || 0;
+  const totalFrames = activeReconstruction?.totalFrames || projectData?.dimensions?.frames || 0;
 
   // Load 3D reconstruction model when frame changes
   useEffect(() => {
-    if (!hasReconstructions || !reconstructionCacheReady) {
+    if (!hasReconstructions) {
+      setReconstructionModelUrl(null);
+      return;
+    }
+
+    if (selectedModel && !activeReconstruction) {
       setReconstructionModelUrl(null);
       return;
     }
@@ -75,7 +92,7 @@ export default function Standalone4DViewerPage() {
       setIsLoadingModel(true);
       try {
         console.log(`[Standalone4DViewer] Loading model for frame ${currentFrame}...`);
-        const url = await getReconstructionGLB(currentFrame);
+        const url = await getReconstructionGLB(currentFrame, selectedModel || undefined, reconstructionIdParam || undefined);
         if (url) {
           console.log(`[Standalone4DViewer] ✅ Loaded model for frame ${currentFrame}`);
           setReconstructionModelUrl(url);
@@ -92,7 +109,7 @@ export default function Standalone4DViewerPage() {
     };
 
     loadModel();
-  }, [currentFrame, hasReconstructions, reconstructionCacheReady, getReconstructionGLB]);
+  }, [activeReconstruction, currentFrame, getReconstructionGLB, hasReconstructions, reconstructionIdParam, selectedModel]);
 
   // Playback animation
   useEffect(() => {
@@ -157,7 +174,7 @@ export default function Standalone4DViewerPage() {
   }
 
   // No reconstruction data
-  if (!hasReconstructions) {
+  if (!hasReconstructions || (selectedModel && !activeReconstruction)) {
     return (
       <div className="container mx-auto p-6 max-w-4xl">
         <Button 
@@ -175,7 +192,9 @@ export default function Standalone4DViewerPage() {
               <AlertCircle className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold mb-2">No 4D Reconstruction Available</h3>
               <p className="text-sm text-muted-foreground mb-4">
-                This project does not have a 4D reconstruction yet.
+                {selectedModel
+                  ? `This project does not have a ${selectedModel.toUpperCase()} 4D reconstruction yet.`
+                  : "This project does not have a 4D reconstruction yet."}
               </p>
               <Button onClick={() => router.push(`/project/${projectId}`)}>
                 Return to Project
@@ -364,7 +383,7 @@ export default function Standalone4DViewerPage() {
                 </div>
 
                 {/* Reconstruction Info */}
-                {reconstructionMetadata && (
+                {activeReconstruction && (
                   <div className="pt-4 border-t space-y-3">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                       Reconstruction Info
@@ -373,25 +392,25 @@ export default function Standalone4DViewerPage() {
                       <div>
                         <p className="text-muted-foreground">ED Frame</p>
                         <p className="font-mono font-semibold">
-                          Frame {reconstructionMetadata.metadata?.edFrameIndex || 1}
+                          Frame {activeReconstruction.metadata?.edFrameIndex || 1}
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Format</p>
                         <p className="font-mono font-semibold uppercase">
-                          {reconstructionMetadata.meshFormat || 'GLB'}
+                          {activeReconstruction.meshFormat || 'GLB'}
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Resolution</p>
                         <p className="font-mono">
-                          {reconstructionMetadata.metadata?.resolution || 32}³
+                          {activeReconstruction.metadata?.resolution || 32}³
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Iterations</p>
                         <p className="font-mono">
-                          {reconstructionMetadata.metadata?.numIterations || 30}
+                          {activeReconstruction.metadata?.numIterations || 30}
                         </p>
                       </div>
                     </div>

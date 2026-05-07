@@ -6,6 +6,7 @@ import {
     jobModel,
     JobStatus,
     readProjectReconstruction,
+    readProjectSegmentationMask,
     projectReconstructionModel,
     readProject,
     IProjectDocument,
@@ -22,10 +23,18 @@ const serviceLocation = "ReconstructionRoutes";
 const toSingleString = (value: string | string[] | undefined): string | undefined =>
     Array.isArray(value) ? value[0] : value;
 
+const normalizeSegmentationModel = (value: unknown): "medsam" | "unet" | null => {
+    const normalized = (value ?? "").toString().toLowerCase();
+    if (normalized === "medsam" || normalized === "unet") {
+        return normalized;
+    }
+    return null;
+};
+
 /**
  * Start 4D cardiac reconstruction job
  * Follows the same pattern as segmentation routes - delegates to service layer
- * 
+ *
  * @route POST /reconstruction/start-4d/:projectId
  * @access Private (authenticated users only)
  */
@@ -38,16 +47,38 @@ router.post("/start-reconstruction/:projectId",
         if (!projectId) {
             return res.status(400).json({ message: "Project ID is required." });
         }
-        const { reconstructionName, reconstructionDescription, parameters, ed_frame, export_format } = req.body;
-        
-        logger.info(`${serviceLocation}: Received start 4D reconstruction request for project ${projectId} with ed_frame ${ed_frame}, export_format ${export_format || 'default'} by user ${req.user?.username} with id ${req.user?._id}`);
-        
+        const {
+            reconstructionName,
+            reconstructionDescription,
+            parameters,
+            ed_frame,
+            export_format,
+            // segmentationModel: which segmentation result to reconstruct from.
+            // Accepted values: "medsam" | "unet" | undefined.
+            // Backward-compat: when omitted, the service falls back to the
+            // legacy (model-agnostic) selection so older frontends keep working.
+            segmentationModel,
+        } = req.body;
+
+        logger.info(
+            `${serviceLocation}: Received start 4D reconstruction request for project ${projectId} with ed_frame ${ed_frame}, export_format ${export_format || 'default'}, segmentationModel ${segmentationModel || '<none — legacy>'} by user ${req.user?.username} with id ${req.user?._id}`
+        );
+
         try {
-            const result = await startReconstruction(projectId, req.user, reconstructionName, reconstructionDescription, parameters, ed_frame, export_format);
+            const result = await startReconstruction(
+                projectId,
+                req.user,
+                reconstructionName,
+                reconstructionDescription,
+                parameters,
+                ed_frame,
+                export_format,
+                segmentationModel
+            );
             if (result.success) {
                 res.status(200).json({ message: result.message, uuid: result.uuid });
             } else {
-                res.status(500).json({ message: result.message });
+                res.status(result.statusCode || 500).json({ message: result.message });
             }
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, "Error starting 4D reconstruction");
@@ -60,7 +91,7 @@ router.post("/start-reconstruction/:projectId",
 /**
  * Get reconstruction results for a project
  * Follows the exact pattern of /segmentation/segmentation-results/:projectId
- * 
+ *
  * @route GET /reconstruction/reconstruction-results/:projectId
  * @access Private (authenticated users only)
  */
@@ -92,20 +123,39 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
         }
 
         // Generate presigned URLs for each reconstruction's mesh.tar file
+        const masksResult = await readProjectSegmentationMask(projectId);
+        const masksById = new Map<string, { segmentationModel?: string; model_used?: string; name?: string }>();
+        if (masksResult.success && masksResult.projectsegmentationmasks) {
+            for (const mask of masksResult.projectsegmentationmasks as any[]) {
+                masksById.set(String(mask._id), mask);
+            }
+        }
+
         const reconstructionsWithUrls = await Promise.all(
             result.projectreconstructions.map(async (recon) => {
                 let downloadUrl = null;
-                
+                const outputKey = recon.reconstructedMesh?.path
+                    ? extractS3KeyFromUrl(recon.reconstructedMesh.path)
+                    : null;
+                const maskDoc = recon.maskId ? masksById.get(String(recon.maskId)) : undefined;
+                const maskName = (maskDoc?.name || "").toLowerCase();
+                const inferredModel =
+                    normalizeSegmentationModel(recon.segmentationModel) ||
+                    normalizeSegmentationModel(maskDoc?.segmentationModel) ||
+                    normalizeSegmentationModel(maskDoc?.model_used) ||
+                    normalizeSegmentationModel(maskName.includes("unet") ? "unet" : maskName.includes("medsam") ? "medsam" : undefined) ||
+                    "unknown";
+
                 // Generate presigned URL if mesh file exists
                 if (recon.reconstructedMesh?.path) {
                     try {
-                        const s3Key = extractS3KeyFromUrl(recon.reconstructedMesh.path);
+                        const s3Key = outputKey;
                         if (s3Key) {
                             const awsBucketName = process.env.AWS_BUCKET_NAME;
                             if (awsBucketName) {
                                 downloadUrl = await generatePresignedGetUrl(
-                                    awsBucketName, 
-                                    s3Key, 
+                                    awsBucketName,
+                                    s3Key,
                                     3600 // 1 hour expiry
                                 );
                             }
@@ -116,14 +166,23 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                 }
 
                 return {
-                    reconstructionId: recon._id,
+                    reconstructionId: String(recon._id),
+                    maskId: recon.maskId ? String(recon.maskId) : null,
                     name: recon.name,
                     description: recon.description,
+                    status: "completed",
                     isSaved: recon.isSaved,
                     isAIGenerated: recon.isAIGenerated,
                     meshFormat: recon.meshFormat,
                     meshFileSize: recon.reconstructedMesh?.filesize,
+                    reconstructedMeshPath: recon.reconstructedMesh?.path || null,
+                    outputPath: recon.reconstructedMesh?.path || null,
+                    outputKey,
+                    tarPath: recon.reconstructedMesh?.path || null,
+                    tarKey: outputKey,
                     downloadUrl, // Presigned URL for download
+                    tarUrl: downloadUrl,
+                    segmentationModel: inferredModel, // Model used for this reconstruction (medsam, unet, etc)
                     metadata: {
                         edFrameIndex: recon.ed_frame,
                         reconstructionTime: recon.reconstructedMesh?.reconstructionTime,
@@ -150,14 +209,14 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
 /**
  * Check all reconstruction jobs for current user
  * Matches segmentation pattern: /segmentation/user-check-jobs
- * 
+ *
  * @route GET /reconstruction/user-check-jobs
  * @access Private (authenticated users only)
  */
 router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
     const userId = req.user?._id;
     logger.info(`${serviceLocation}: Fetching all reconstruction jobs for user ${req.user?.username}`);
-    
+
     try {
         const reconstructionJobFilter = {
             userid: userId,
@@ -177,7 +236,7 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
             ...reconstructionJobFilter,
             status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] }
         });
-        
+
         return res.status(200).json({
             success: true,
             activeJobCount,
@@ -190,6 +249,8 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                 return {
                     jobId: job.uuid,
                     projectId: job.projectid,
+                    maskId: (job as any).maskId || null,
+                    segmentationModel: (job as any).segmentationModel || null,
                     status: job.status,
                     name: job.segmentationName,
                     description: job.segmentationDescription,
@@ -212,7 +273,7 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
 /**
  * Batch endpoint for checking reconstruction status of multiple projects
  * Matches segmentation pattern: /segmentation/batch-segmentation-status
- * 
+ *
  * @route POST /reconstruction/batch-reconstruction-status
  * @access Private (authenticated users only)
  */
@@ -321,7 +382,7 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
  * Delete all reconstructions for a project
  * Designed for workflow where masks are re-edited - only keep 1 reconstruction at a time
  * Deletes both database records and S3 mesh files
- * 
+ *
  * @route DELETE /reconstruction/delete-project-reconstructions/:projectId
  * @access Private (authenticated users only, project owner)
  */
@@ -425,6 +486,223 @@ router.delete("/delete-project-reconstructions/:projectId",
             return res.status(500).json({
                 success: false,
                 message: "An error occurred while deleting reconstructions."
+            });
+        }
+    });
+
+/**
+ * Delete one reconstruction result by ID.
+ *
+ * @route DELETE /reconstruction/delete-reconstruction/:projectId/:reconstructionId
+ * @access Private (authenticated users only, project owner)
+ */
+router.delete("/delete-reconstruction/:projectId/:reconstructionId",
+    isAuth,
+    isAuthAndNotGuest,
+    async (req: Request, res: Response) => {
+        const projectId = toSingleString(req.params.projectId);
+        const reconstructionId = toSingleString(req.params.reconstructionId);
+        const userId = (req.user as any)?._id?.toString();
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required."
+            });
+        }
+
+        if (!projectId || !reconstructionId) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID and reconstruction ID are required."
+            });
+        }
+
+        try {
+            const projectResult = await readProject(projectId, userId);
+            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+                logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
+                return res.status(403).json({
+                    success: false,
+                    message: "Access denied or project not found."
+                });
+            }
+
+            const reconstructionsResult = await readProjectReconstruction(projectId);
+            const reconstruction = reconstructionsResult.projectreconstructions?.find(
+                (recon) => recon._id?.toString() === reconstructionId
+            );
+
+            if (!reconstruction) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Reconstruction not found for this project."
+                });
+            }
+
+            if (reconstruction.reconstructedMesh?.path) {
+                const s3Key = extractS3KeyFromUrl(reconstruction.reconstructedMesh.path);
+                if (s3Key) {
+                    const deleteSuccess = await deleteFromS3(s3Key);
+                    if (!deleteSuccess) {
+                        logger.warn(`${serviceLocation}: Failed to delete S3 file ${s3Key} for reconstruction ${reconstructionId}`);
+                    }
+                }
+            }
+
+            const deleteResult = await deleteProjectReconstruction(reconstructionId);
+            if (!deleteResult.success) {
+                return res.status(500).json({
+                    success: false,
+                    message: deleteResult.message || "Failed to delete reconstruction."
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: "Reconstruction deleted successfully.",
+                deletedCount: 1
+            });
+        } catch (error: unknown) {
+            LogError(error as Error, serviceLocation, `Error deleting reconstruction ${reconstructionId} for project ${projectId}`);
+            return res.status(500).json({
+                success: false,
+                message: "An error occurred while deleting reconstruction."
+            });
+        }
+    });
+
+/**
+ * Delete reconstruction for a specific segmentation model
+ * Allows deleting MedSAM or UNet reconstruction independently
+ *
+ * @route DELETE /reconstruction/delete-model-reconstruction/:projectId
+ * @query segmentationModel - The model to delete (medsam|unet)
+ * @access Private (authenticated users only, project owner)
+ */
+router.delete("/delete-model-reconstruction/:projectId",
+    isAuth,
+    isAuthAndNotGuest,
+    async (req: Request, res: Response) => {
+        const projectId = toSingleString(req.params.projectId);
+        const segmentationModel = toSingleString(req.query.segmentationModel as string | string[]);
+        const userId = (req.user as any)?._id?.toString();
+
+        logger.info(`${serviceLocation}: Received request to delete ${segmentationModel} reconstruction for project ${projectId} by user ${req.user?.username}`);
+
+        if (!userId) {
+            logger.warn(`${serviceLocation}: User ID not found in request.`);
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required."
+            });
+        }
+
+        if (!projectId) {
+            logger.warn(`${serviceLocation}: Project ID is required to delete reconstruction.`);
+            return res.status(400).json({
+                success: false,
+                message: "Project ID is required."
+            });
+        }
+
+        if (!segmentationModel || (segmentationModel !== 'medsam' && segmentationModel !== 'unet')) {
+            logger.warn(`${serviceLocation}: Invalid segmentationModel parameter: ${segmentationModel}`);
+            return res.status(400).json({
+                success: false,
+                message: "Invalid segmentationModel. Must be 'medsam' or 'unet'."
+            });
+        }
+
+        try {
+            // 1. Verify user owns the project
+            const projectResult = await readProject(projectId, userId);
+            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+                logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
+                return res.status(403).json({
+                    success: false,
+                    message: "Access denied or project not found."
+                });
+            }
+
+            // 2. Get all reconstructions and filter by model
+            const reconstructionsResult = await readProjectReconstruction(projectId);
+            if (!reconstructionsResult.success || !reconstructionsResult.projectreconstructions) {
+                logger.info(`${serviceLocation}: No reconstructions found for project ${projectId}.`);
+                return res.status(200).json({
+                    success: true,
+                    message: `No ${segmentationModel} reconstructions to delete.`,
+                    deletedCount: 0
+                });
+            }
+
+            // Filter reconstructions to only those matching the requested model
+            const modelReconstructions = reconstructionsResult.projectreconstructions.filter(recon => {
+                const reconModel = (recon.segmentationModel || 'unknown').toLowerCase();
+                return reconModel === segmentationModel;
+            });
+
+            if (modelReconstructions.length === 0) {
+                logger.info(`${serviceLocation}: No ${segmentationModel} reconstructions found for project ${projectId}.`);
+                return res.status(200).json({
+                    success: true,
+                    message: `No ${segmentationModel} reconstructions to delete.`,
+                    deletedCount: 0
+                });
+            }
+
+            logger.info(`${serviceLocation}: Found ${modelReconstructions.length} ${segmentationModel} reconstruction(s) to delete for project ${projectId}.`);
+
+            // 3. Delete S3 files first (mesh tar files)
+            const s3DeletePromises = modelReconstructions.map(async (recon) => {
+                if (recon.reconstructedMesh?.path) {
+                    const s3Key = extractS3KeyFromUrl(recon.reconstructedMesh.path);
+                    if (s3Key) {
+                        logger.info(`${serviceLocation}: Deleting S3 mesh file for ${segmentationModel}: ${s3Key}`);
+                        const deleteSuccess = await deleteFromS3(s3Key);
+                        if (!deleteSuccess) {
+                            logger.warn(`${serviceLocation}: Failed to delete S3 file ${s3Key} for reconstruction ${recon._id}`);
+                        }
+                        return deleteSuccess;
+                    }
+                }
+                return true;
+            });
+
+            await Promise.all(s3DeletePromises);
+
+            // 4. Delete database records
+            let deletedCount = 0;
+            const dbDeletePromises = modelReconstructions.map(async (recon) => {
+                const reconstructionId = recon._id?.toString();
+                if (reconstructionId) {
+                    const deleteResult = await deleteProjectReconstruction(reconstructionId);
+                    if (deleteResult.success) {
+                        deletedCount++;
+                        logger.info(`${serviceLocation}: Deleted ${segmentationModel} reconstruction ${reconstructionId} from database.`);
+                    } else {
+                        logger.warn(`${serviceLocation}: Failed to delete reconstruction ${reconstructionId}: ${deleteResult.message}`);
+                    }
+                    return deleteResult.success;
+                }
+                return false;
+            });
+
+            await Promise.all(dbDeletePromises);
+
+            logger.info(`${serviceLocation}: Successfully deleted ${deletedCount} ${segmentationModel} reconstruction(s) for project ${projectId}.`);
+
+            return res.status(200).json({
+                success: true,
+                message: `Successfully deleted ${deletedCount} ${segmentationModel} reconstruction(s).`,
+                deletedCount
+            });
+
+        } catch (error: unknown) {
+            LogError(error as Error, serviceLocation, `Error deleting ${segmentationModel} reconstructions for project ${projectId}`);
+            return res.status(500).json({
+                success: false,
+                message: "An error occurred while deleting reconstruction."
             });
         }
     });
