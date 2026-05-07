@@ -883,12 +883,7 @@ export class ReconstructionCache {
       return url;
     }
 
-    console.error(`[ReconstructionCache] ❌ Failed to get model URL - blob not found:`, {
-      modelId,
-      projectId,
-      reconstructionId,
-      frame
-    });
+    console.warn(`[ReconstructionCache] No blob found for model ${modelId} — reconstruction may not exist yet`);
 
     return null; // Model not found in cache
   }

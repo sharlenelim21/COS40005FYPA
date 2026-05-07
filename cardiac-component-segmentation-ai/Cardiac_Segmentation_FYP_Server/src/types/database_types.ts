@@ -259,6 +259,12 @@ export interface IProjectSegmentationMask {
       }[];
     }[];
   }[];
+  bullseye?: {
+    segment_values: number[];
+    segment_metadata: { idx: number; name: string; ring: string; value: number }[];
+    stats: { min: number; max: number; mean: number; n_nan: number };
+    computed_at: string;
+  };
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)
 export interface IProjectSegmentationMaskDocument

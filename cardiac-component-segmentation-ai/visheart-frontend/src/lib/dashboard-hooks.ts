@@ -8,12 +8,14 @@ export function useGpuStatus() {
   const [processingUnit, setProcessingUnit] = useState<{
     serviceOnline: boolean;
     gpuAvailable: boolean;
+    gpuName: string | null;
     mode: "gpu" | "cpu" | "unknown";
     status: "online" | "offline" | "degraded" | "timeout" | "unknown";
     message: string;
   }>({
     serviceOnline: false,
     gpuAvailable: false,
+    gpuName: null,
     mode: "unknown",
     status: "unknown",
     message: "Checking processing unit...",
@@ -28,9 +30,35 @@ export function useGpuStatus() {
       const response = await statusApi.getGpuStatus();
       console.log("✅ [useGpuStatus] Processing unit status response:", response);
 
-      const serviceOnline = Boolean(response.serviceOnline ?? response.status === "online");
-      const gpuAvailable = Boolean(response.gpuAvailable ?? response.details?.gpuAvailable);
-      const mode = (response.mode ?? (gpuAvailable ? "gpu" : "cpu")) as "gpu" | "cpu" | "unknown";
+      const serviceOnline = Boolean(
+        response.serviceOnline ?? response.status === "online"
+      );
+
+      // The compiled backend dist omits gpuAvailable/mode — derive them from
+      // the raw Python GPU response forwarded under response.details.
+      const details = response.details ?? {};
+      const detailsBackend: string =
+        (typeof details.backend === "string" ? details.backend : "") ||
+        (typeof details.gpu?.backend === "string" ? details.gpu.backend : "");
+      const detailsGpuStatus: string =
+        typeof details.gpu?.status === "string" ? details.gpu.status : "";
+      const detailsGpuName: string | null =
+        typeof details.gpu?.gpu_name === "string" ? details.gpu.gpu_name : null;
+
+      const gpuAvailable =
+        Boolean(response.gpuAvailable) ||
+        Boolean(response.details?.gpuAvailable) ||
+        detailsBackend === "cuda" ||
+        detailsGpuStatus === "ok" ||
+        detailsGpuStatus === "busy";
+
+      const mode = (
+        response.mode ??
+        (gpuAvailable ? "gpu" : detailsBackend || "cpu")
+      ) as "gpu" | "cpu" | "unknown";
+
+      // Extract short GPU name for display (e.g. "RTX 3060" from full nvidia-smi string)
+      const gpuName = detailsGpuName;
 
       let finalStatus: "online" | "offline" | "degraded" | "timeout" = "offline";
 
@@ -56,25 +84,28 @@ export function useGpuStatus() {
       console.log("📊 [useGpuStatus] Final processing unit state:", {
         serviceOnline,
         gpuAvailable,
+        gpuName,
         mode,
         status: finalStatus,
       });
       setProcessingUnit({
         serviceOnline,
         gpuAvailable,
+        gpuName,
         mode,
         status: finalStatus,
         message: response.message || "Processing unit status updated",
       });
     } catch (error: any) {
       console.error("❌ [useGpuStatus] Error fetching processing unit status:", error);
-      
+
       // Check if the error itself indicates a timeout
       if (error?.code === "ETIMEDOUT" || error?.message?.toLowerCase?.().includes?.("timeout")) {
         console.log("⏰ [useGpuStatus] Network timeout detected in catch block");
         setProcessingUnit({
           serviceOnline: false,
           gpuAvailable: false,
+          gpuName: null,
           mode: "unknown",
           status: "timeout",
           message: "Processing unit status request timed out",
@@ -84,6 +115,7 @@ export function useGpuStatus() {
         setProcessingUnit({
           serviceOnline: false,
           gpuAvailable: false,
+          gpuName: null,
           mode: "unknown",
           status: "offline",
           message: "Processing unit status unavailable",

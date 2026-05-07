@@ -2,7 +2,7 @@
 // Description: Service layer for segmentation NIfTI export functionality - extracted from routes for reuse.
 
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
-import { readProject, readProjectSegmentationMask } from "./database";
+import { readProject, readProjectSegmentationMask, projectSegmentationMaskModel } from "./database";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import logger from "./logger";
@@ -10,8 +10,71 @@ import fs from 'fs-extra';
 import path from 'path';
 import { exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
+import axios from 'axios';
+import FormData from 'form-data';
+import { getFreshGPUServerAddress, getCurrentToken } from "./gpu_auth_client";
 
 const serviceLocation = 'SegmentationExport';
+
+/**
+ * Non-blocking: POSTs the NIfTI file at niftiPath to the GPU /bullseye/analyze endpoint,
+ * then stores the result in MongoDB on the segmentation mask document.
+ */
+export const computeBullseyeAndStore = async (
+    niftiPath: string,
+    maskId: string,
+    projectId: string,
+): Promise<void> => {
+    try {
+        const gpuBaseUrl = await getFreshGPUServerAddress();
+        const token = getCurrentToken();
+        if (!gpuBaseUrl || !token) {
+            logger.warn(`${serviceLocation}: [Bullseye] GPU address or token unavailable — skipping bullseye for mask ${maskId}`);
+            return;
+        }
+
+        const fileExists = await fs.pathExists(niftiPath);
+        if (!fileExists) {
+            logger.warn(`${serviceLocation}: [Bullseye] NIfTI file not found at ${niftiPath} — skipping bullseye for mask ${maskId}`);
+            return;
+        }
+
+        logger.info(`${serviceLocation}: [Bullseye] Sending NIfTI to GPU for mask ${maskId} (project ${projectId})`);
+
+        const form = new FormData();
+        form.append('file', fs.createReadStream(niftiPath), {
+            filename: path.basename(niftiPath),
+            contentType: 'application/gzip',
+        });
+
+        const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
+            headers: {
+                ...form.getHeaders(),
+                Authorization: `Bearer ${token}`,
+            },
+            timeout: 120000,
+        });
+
+        if (response.status !== 200 || !response.data) {
+            logger.warn(`${serviceLocation}: [Bullseye] GPU returned status ${response.status} for mask ${maskId} — skipping store`);
+            return;
+        }
+
+        const bullseyeData = response.data;
+        bullseyeData.computed_at = new Date().toISOString();
+
+        // Use findOneAndUpdate with $set to bypass the Mongoose frame validation in updateProjectSegmentationMask
+        await projectSegmentationMaskModel.findByIdAndUpdate(
+            maskId,
+            { $set: { bullseye: bullseyeData } },
+            { new: false },
+        );
+
+        logger.info(`${serviceLocation}: [Bullseye] Stored bullseye result for mask ${maskId} — stats: ${JSON.stringify(bullseyeData.stats)}`);
+    } catch (err: any) {
+        logger.warn(`${serviceLocation}: [Bullseye] Failed to compute/store bullseye for mask ${maskId}: ${err?.message}`);
+    }
+};
 
 /**
  * Generates a segmentation NIfTI file specifically for 4D reconstruction
@@ -22,12 +85,12 @@ const serviceLocation = 'SegmentationExport';
  * @returns Promise with success status, S3 URL, and metadata
  */
 export const generateAISegmentationForReconstruction = async (
-    projectId: string, 
+    projectId: string,
     userId?: string
-): Promise<{ 
-    success: boolean; 
-    message?: string; 
-    s3Url?: string; 
+): Promise<{
+    success: boolean;
+    message?: string;
+    s3Url?: string;
     fileSizeBytes?: number;
     s3Key?: string;
 }> => {
@@ -236,13 +299,37 @@ export const generateAISegmentationForReconstruction = async (
 
         // Generate presigned URL for GPU server access
         const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);
-        
+
+        // Fire bullseye analysis non-blocking.
+        // Copy the NIfTI to a path OUTSIDE baseTempDir so it survives the finally cleanup.
+        const bullseyeMaskId = exportMask._id?.toString();
+        if (bullseyeMaskId) {
+            const bullseyeTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_${bullseyeMaskId}_${tempExportId}`);
+            const bullseyeCopyPath = path.join(bullseyeTempDir, 'input.nii.gz');
+            try {
+                await fs.ensureDir(bullseyeTempDir);
+                await fs.copy(localOutputSegmentationNiftiPath, bullseyeCopyPath);
+                // Launch async — intentionally not awaited; cleans up its own temp dir
+                (async () => {
+                    try {
+                        await computeBullseyeAndStore(bullseyeCopyPath, bullseyeMaskId, projectId);
+                    } finally {
+                        try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
+                    }
+                })();
+                logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId}`);
+            } catch (bullseyeCopyErr: any) {
+                logger.warn(`${serviceLocation}: [Bullseye] Failed to copy NIfTI for bullseye — skipping: ${bullseyeCopyErr?.message}`);
+                try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
+            }
+        }
+
         return {
             success: true,
             message: "AI segmentation NIfTI generated successfully for reconstruction.",
             s3Key: s3Key,
             s3Url: presignedUrl || undefined,
-            fileSizeBytes: fileStats.size
+            fileSizeBytes: fileStats.size,
         };
 
     } catch (error: any) {
@@ -255,3 +342,4 @@ export const generateAISegmentationForReconstruction = async (
         }
     }
 };
+

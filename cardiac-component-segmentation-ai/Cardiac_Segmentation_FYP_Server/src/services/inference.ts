@@ -143,8 +143,9 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         return { success: false, message: "GPU authentication token is missing. Cannot start inference." };
     }
 
-    // Build full callback URL by appending segmentation webhook path to base URL
-    const callback_base_url = process.env.CALLBACK_URL;
+    // Build full callback URL — prefer LOCAL_CALLBACK_URL so Docker-internal hostnames
+    // (visheart-app) are used when the GPU container calls back, not host.docker.internal
+    const callback_base_url = process.env.LOCAL_CALLBACK_URL || process.env.CALLBACK_URL;
     if (!callback_base_url) {
         logger.error(`${serviceLocation}: CALLBACK_URL is not set in environment variables. Cannot start inference for project ${projectId}.`);
         return { success: false, message: "Callback URL not configured for inference." };
