@@ -169,6 +169,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   // Refs to track if jobs have been fetched (prevents redundant API calls during polling)
   const jobsFetchedRef = useRef<boolean>(false);
   const reconstructionJobsFetchedRef = useRef<boolean>(false);
+  const lastReconstructionInitKeyRef = useRef<string | null>(null);
+  const lastAutoPreloadKeyRef = useRef<string | null>(null);
 
   // Update refs when state changes
   useEffect(() => {
@@ -228,6 +230,34 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     reconstructionsByModel,
     viewerSelectedModel,
     viewerSelectedReconstructionId,
+  ]);
+
+  const activeReconstructionCacheKey = useMemo(() => {
+    if (!projectId || !activeReconstructionTarget?.reconstructionId) {
+      return null;
+    }
+
+    const outputIdentity =
+      activeReconstructionTarget.outputKey ||
+      activeReconstructionTarget.tarKey ||
+      activeReconstructionTarget.reconstructedMeshPath ||
+      activeReconstructionTarget.outputPath ||
+      activeReconstructionTarget.downloadUrl ||
+      activeReconstructionTarget.updatedAt ||
+      activeReconstructionTarget.createdAt ||
+      "no-output";
+
+    return `${projectId}:${activeReconstructionTarget.reconstructionId}:${outputIdentity}`;
+  }, [
+    activeReconstructionTarget?.createdAt,
+    activeReconstructionTarget?.downloadUrl,
+    activeReconstructionTarget?.outputKey,
+    activeReconstructionTarget?.outputPath,
+    activeReconstructionTarget?.reconstructedMeshPath,
+    activeReconstructionTarget?.reconstructionId,
+    activeReconstructionTarget?.tarKey,
+    activeReconstructionTarget?.updatedAt,
+    projectId,
   ]);
 
   // Tar cache methods - NEW - Memoized for performance
@@ -343,29 +373,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         if (cachedUrl) return cachedUrl;
 
         // Cache miss for this reconstruction; lazily fetch/extract this model-specific TAR and retry once.
-        const getPresignedUrl = async (pid: string, rid: string) => {
-          const response = await reconstructionApi.getReconstructionResults(pid);
-          if (!response.success || !response.reconstructions || response.reconstructions.length === 0) {
-            return {
-              success: false,
-              message: response.message || "No reconstructions found",
-            };
-          }
-
-          const reconstruction = response.reconstructions.find((r: any) => r.reconstructionId === rid); // eslint-disable-line @typescript-eslint/no-explicit-any
-          if (!reconstruction || !reconstruction.downloadUrl) {
-            return {
-              success: false,
-              message: "Reconstruction not found or no presigned URL available",
-            };
-          }
-
-          return {
-            success: true,
-            presignedUrl: reconstruction.downloadUrl,
-            expiresAt: Date.now() + 3600000,
-          };
-        };
+        const getPresignedUrl = async (pid: string, rid: string) =>
+          resolveReconstructionDownload(pid, rid, targetRecon);
 
         await reconstructionCache.fetchAndExtractProjectModels(
           projectId,
@@ -379,7 +388,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         return null;
       }
     },
-    [activeReconstructionTarget, getReconstructionById, projectId, reconstructionMetadata, reconstructionsByModel],
+    [activeReconstructionTarget, getReconstructionById, projectId, reconstructionMetadata, reconstructionsByModel, resolveReconstructionDownload],
   );
 
   const getReconstructionForModel = useCallback(
@@ -389,6 +398,54 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     },
     [reconstructionsByModel],
   );
+
+  async function resolveReconstructionDownload(
+    pid: string,
+    rid: string,
+    preferredReconstruction?: any, // eslint-disable-line @typescript-eslint/no-explicit-any
+  ): Promise<
+    | { success: true; presignedUrl: string; expiresAt: number }
+    | { success: false; message: string }
+  > {
+    if (preferredReconstruction?.downloadUrl) {
+      return {
+        success: true,
+        presignedUrl: preferredReconstruction.downloadUrl,
+        expiresAt: Date.now() + 3600000,
+      };
+    }
+
+    const response = await reconstructionApi.getReconstructionResults(pid);
+    if (!response.success || !response.reconstructions || response.reconstructions.length === 0) {
+      return {
+        success: false,
+        message: response.message || "No reconstructions found",
+      };
+    }
+
+    const reconstruction = response.reconstructions.find(
+      (r: any) => String(r.reconstructionId) === String(rid), // eslint-disable-line @typescript-eslint/no-explicit-any
+    );
+    if (!reconstruction?.downloadUrl) {
+      const outputKey =
+        reconstruction?.outputKey ||
+        reconstruction?.tarKey ||
+        reconstruction?.reconstructedMeshPath ||
+        reconstruction?.outputPath;
+      return {
+        success: false,
+        message: outputKey
+          ? `Reconstruction output is unavailable for ${rid} (${outputKey})`
+          : `Reconstruction not found or no presigned URL available for ${rid}`,
+      };
+    }
+
+    return {
+      success: true,
+      presignedUrl: reconstruction.downloadUrl,
+      expiresAt: Date.now() + 3600000,
+    };
+  }
 
   const preloadReconstructionModels = useCallback(async (): Promise<void> => {
     if (!projectId || !activeReconstructionTarget?.reconstructionId) {
@@ -441,11 +498,21 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         };
       };
 
+      const selectedGetPresignedUrl = async (pid: string, rid: string) => {
+        console.log(`[ProjectContext] Fetching presigned URL from selected reconstruction...`);
+        const result = await resolveReconstructionDownload(pid, rid, activeReconstructionTarget);
+        if (!result.success) {
+          console.error(`[ProjectContext] Failed to get presigned URL: ${result.message}`);
+          return result;
+        }
+        return result;
+      };
+
       console.log(`[ProjectContext] 📦 Initiating TAR download and extraction...`);
       const result = await reconstructionCache.fetchAndExtractProjectModels(
         projectId,
         activeReconstructionTarget.reconstructionId,
-        getPresignedUrl,
+        selectedGetPresignedUrl,
         activeReconstructionTarget.segmentationModel
       );
 
@@ -494,7 +561,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       });
       setReconstructionCacheError(errorMessage);
     }
-  }, [activeReconstructionTarget, projectId]);
+  }, [activeReconstructionTarget, projectId, resolveReconstructionDownload]);
 
   const fetchAndExtractProjectModels = useCallback(async (): Promise<{ success: boolean; extractedModels: number; totalModels: number; errors: string[] }> => {
     if (!projectId || !activeReconstructionTarget?.reconstructionId) {
@@ -528,10 +595,13 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         };
       };
 
+      const selectedGetPresignedUrl = async (pid: string, rid: string) =>
+        resolveReconstructionDownload(pid, rid, activeReconstructionTarget);
+
       const result = await reconstructionCache.fetchAndExtractProjectModels(
         projectId,
         activeReconstructionTarget.reconstructionId,
-        getPresignedUrl,
+        selectedGetPresignedUrl,
         activeReconstructionTarget.segmentationModel
       );
 
@@ -548,7 +618,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       console.error("[ProjectContext] Extraction error:", error);
       return { success: false, extractedModels: 0, totalModels: 0, errors: [errorMessage] };
     }
-  }, [activeReconstructionTarget, projectId]);
+  }, [activeReconstructionTarget, projectId, resolveReconstructionDownload]);
 
   const clearReconstructionCache = useCallback(async (): Promise<void> => {
     if (!projectId) return;
@@ -1157,16 +1227,27 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   // 4c. Initialize reconstruction cache when reconstruction metadata is available - NEW
   useEffect(() => {
     if (shouldSkipReconstructionPreload) {
+      lastReconstructionInitKeyRef.current = null;
+      lastAutoPreloadKeyRef.current = null;
       setReconstructionCacheReady(false);
       setReconstructionCacheError(null);
       return;
     }
 
-    if (!projectId || !activeReconstructionTarget || !activeReconstructionTarget.reconstructionId) {
+    if (!projectId || !activeReconstructionTarget || !activeReconstructionTarget.reconstructionId || !activeReconstructionCacheKey) {
+      lastReconstructionInitKeyRef.current = null;
+      lastAutoPreloadKeyRef.current = null;
       setReconstructionCacheReady(false);
       setReconstructionCacheError(null);
       return;
     }
+
+    if (lastReconstructionInitKeyRef.current === activeReconstructionCacheKey) {
+      return;
+    }
+
+    lastReconstructionInitKeyRef.current = activeReconstructionCacheKey;
+    lastAutoPreloadKeyRef.current = null;
 
     // Set loading stage to reconstruction-cache
     setLoading("reconstruction-cache");
@@ -1240,21 +1321,28 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       console.log(`[ProjectContext] 🧹 Cleaning up reconstruction cache for project ${projectId}`);
       reconstructionCache.clearProjectModels(projectId).catch((error) => console.warn(`[ProjectContext] ⚠️ Reconstruction cleanup error:`, error));
     };
-  }, [activeReconstructionTarget, projectId, preloadReconstructionModels, shouldSkipReconstructionPreload]);
+  }, [activeReconstructionCacheKey, activeReconstructionTarget, projectId, preloadReconstructionModels, shouldSkipReconstructionPreload]);
 
   // 4d. Auto-preload ALL models (URLs + Three.js cache) when reconstruction cache is ready - ZERO-LAG SYSTEM
   useEffect(() => {
     if (shouldSkipReconstructionPreload) {
+      lastAutoPreloadKeyRef.current = null;
       return;
     }
 
-    if (!reconstructionCacheReady || isPreloading || isThreeJSPreloading) {
+    if (!reconstructionCacheReady) {
       return;
     }
 
-    if (!projectId || !activeReconstructionTarget?.reconstructionId) {
+    if (!projectId || !activeReconstructionTarget?.reconstructionId || !activeReconstructionCacheKey) {
       return;
     }
+
+    if (lastAutoPreloadKeyRef.current === activeReconstructionCacheKey) {
+      return;
+    }
+
+    lastAutoPreloadKeyRef.current = activeReconstructionCacheKey;
 
     // Auto-preload everything for instant, zero-lag frame switching
     const autoPreloadComplete = async () => {
@@ -1280,7 +1368,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     const timeoutId = setTimeout(autoPreloadComplete, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [activeReconstructionTarget, reconstructionCacheReady, isPreloading, isThreeJSPreloading, projectId, preloadAllModelURLs, preloadAllThreeJSModels, shouldSkipReconstructionPreload]);
+  }, [activeReconstructionCacheKey, activeReconstructionTarget, projectId, preloadAllModelURLs, preloadAllThreeJSModels, reconstructionCacheReady, shouldSkipReconstructionPreload]);
 
   // 5. Optimized final loading state management - set to done when all components are ready or there's an error
   useEffect(() => {

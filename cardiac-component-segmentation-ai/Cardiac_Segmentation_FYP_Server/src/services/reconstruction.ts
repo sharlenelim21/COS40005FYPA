@@ -3,7 +3,7 @@
 
 import { IUserSafe, ProjectCrudResult, IProjectSegmentationMask, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
-import { readProject, readProjectSegmentationMask } from "./database";
+import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
@@ -39,6 +39,14 @@ const inferMaskModel = (
     if (name.includes("medsam")) return "medsam";
     if (name.startsWith("ai output")) return "medsam";
     if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+    return null;
+};
+
+const normalizeStoredModel = (value: unknown): "medsam" | "unet" | null => {
+    const normalized = (value ?? "").toString().toLowerCase();
+    if (normalized === "medsam" || normalized === "unet") {
+        return normalized;
+    }
     return null;
 };
 
@@ -148,7 +156,7 @@ export const startReconstruction = async (
     ed_frame?: number,
     export_format?: string,
     segmentationModel?: string
-): Promise<{ success: boolean; message: string; uuid?: string }> => {
+): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number }> => {
     // Normalise the requested segmentation model. Allowed values:
     //   "medsam" — only MedSAM-tagged editable masks
     //   "unet"   — only UNet-tagged editable masks
@@ -201,6 +209,43 @@ export const startReconstruction = async (
         if (projectData.userid !== user?._id) {
             logger.warn(`${serviceLocation}: User ${user?._id} denied access to project ${projectId} for 4D reconstruction.`);
             return { success: false, message: "Access denied to this project" };
+        }
+
+        if (requestedModel) {
+            const existingReconstructions = await readProjectReconstruction(projectId);
+            if (existingReconstructions.success && existingReconstructions.projectreconstructions) {
+                const matchingReconstruction = existingReconstructions.projectreconstructions.find(
+                    (reconstruction) =>
+                        normalizeStoredModel(reconstruction.segmentationModel) === requestedModel,
+                );
+
+                if (matchingReconstruction) {
+                    const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
+                    return {
+                        success: false,
+                        statusCode: 409,
+                        message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
+                    };
+                }
+            }
+
+            const blockingJob = await jobModel.findOne({
+                projectid: projectId,
+                segmentationModel: requestedModel === "medsam"
+                    ? SegmentationModel.MEDSAM
+                    : SegmentationModel.UNET,
+                status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
+                model_used: "4d_reconstruction",
+            }).lean();
+
+            if (blockingJob) {
+                const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
+                return {
+                    success: false,
+                    statusCode: 409,
+                    message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
+                };
+            }
         }
 
         // Validate that project has segmentation masks (required for 4D reconstruction)
