@@ -12,6 +12,8 @@ x-gpu-environment: &gpu-env
   GPU_SEMAPHORE_COUNT: 3
   RECONSTRUCTION_USE_FIXED_SEED: "true"
   RECONSTRUCTION_RANDOM_SEED: "42"
+  LANDMARK_REPO_PATH: /app/UNETRESNET34
+  LANDMARK_CHECKPOINT_PATH: /app/UNETRESNET34/checkpoints/best_model.pth
 
 services:
   # ============================================
@@ -55,12 +57,21 @@ services:
       S3_FORCE_PATH_STYLE: "true"
       
       # GPU Service Configuration
-      GPU_API_URL: http://host.docker.internal:8001
-      LOCAL_GPU_API_URL: http://host.docker.internal:8001
+      # The inference service runs as `gpu-cpu` or `gpu-nvidia` in this
+      # same compose file. Both share the docker-network alias `gpu`.
+      # The prebuilt image `sveltes/visheart-inference-gpu:faithful-latest`
+      # bakes a copy of start_server.py that binds uvicorn on **port
+      # 8001**, so the backend addresses it at http://gpu:8001. (The
+      # local source's start_server.py uses 8011, but that file is not
+      # what the prebuilt image runs.) If you ever rebuild the GPU image
+      # from local source, update this port + the gpu-* services'
+      # `ports:` mapping in lockstep.
+      GPU_API_URL: http://gpu:8001
+      LOCAL_GPU_API_URL: http://gpu:8001
       MEDSAM_USE_LOCALHOST: "true"
-      MEDSAM_LOCAL_BASE_URL: http://host.docker.internal:8001
+      MEDSAM_LOCAL_BASE_URL: http://gpu:8001
       GPU_JWT_SECRET: dev-gpu-secret
-      GPU_SERVER_URL: host.docker.internal
+      GPU_SERVER_URL: gpu
       GPU_SERVER_PORT: 8001
       GPU_SERVER_SSL: "false"
       GPU_SERVER_AUTH_JWT_SECRET: dev-gpu-secret
@@ -70,12 +81,23 @@ services:
       GPU_SERVER_JWT_LIFETIME_SECONDS: 600
 
       # Callback URL Configuration
-      CALLBACK_URL: http://visheart-app:5000
-      LOCAL_CALLBACK_URL: http://visheart-app:5000
+      # Backend submits inference to the host-side GPU service on port 8011,
+      # so callbacks must use an address that the host process can resolve.
+      CALLBACK_URL: http://host.docker.internal:5000
       
       # ========== Frontend Configuration ==========
       NEXT_PUBLIC_API_URL: http://localhost:5000
       NEXT_PUBLIC_ENV: development
+      NEXT_PUBLIC_LANDMARK_USE_STUB: "false"
+      NEXT_PUBLIC_LANDMARK_ENDPOINT: /landmark-detection
+      # Leave ADMIN_SUPPORT_EMAIL empty to use the admin user's email from MongoDB.
+      ADMIN_SUPPORT_EMAIL: ""
+      SMTP_FROM: meiqiliew334@gmail.com
+      SMTP_HOST: "smtp.gmail.com"
+      SMTP_PORT: "465"
+      SMTP_SECURE: "true"
+      SMTP_USER: "meiqiliew334@gmail.com"
+      SMTP_PASS: "ekqd vdiq bvwg kldk"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -90,8 +112,10 @@ services:
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/webhook_routes.js:/app/backend/dist/routes/webhook_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/gpu_status.js:/app/backend/dist/routes/gpu_status.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/landmark_routes.js:/app/backend/dist/routes/landmark_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/reconstruction_routes.js:/app/backend/dist/routes/reconstruction_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/support_routes.js:/app/backend/dist/routes/support_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/express_app.js:/app/backend/dist/services/express_app.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/gpu_auth_client.js:/app/backend/dist/services/gpu_auth_client.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/inference.js:/app/backend/dist/services/inference.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/reconstruction.js:/app/backend/dist/services/reconstruction.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/landmark_inference.js:/app/backend/dist/services/landmark_inference.js:ro
@@ -115,8 +139,6 @@ services:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: P@ssw0rd123!
       MONGO_INITDB_DATABASE: visheart
-    ports:
-      - "27017:27017"
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
@@ -138,8 +160,6 @@ services:
     container_name: visheart-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -204,12 +224,16 @@ services:
     profiles: ["cpu"]
     restart: unless-stopped
     ports:
+      # The prebuilt image's start_server.py binds uvicorn on port 8001.
+      # If you rebuild the GPU image from local source (which uses 8011),
+      # bump both this mapping and the visheart-app env block in lockstep.
       - "8001:8001"
     environment:
       <<: *gpu-env
       USE_GPU: "false" # Safely overrides for CPU
     volumes:
       - ../visheart-inference-gpu/app:/app/app
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:
@@ -224,6 +248,7 @@ services:
     profiles: ["gpu"]
     restart: unless-stopped
     ports:
+      # See gpu-cpu service for the 8001-vs-8011 explanation.
       - "8001:8001"
     deploy:
       resources:
@@ -236,7 +261,6 @@ services:
       <<: *gpu-env
       USE_GPU: "true"
       UNET_INFERENCE_SCRIPT_PATH: /app/app/external_unet_inference.py
-      LANDMARK_REPO_PATH: /opt/UNETRESNET34
     command: >
       bash -lc 'python -c "import nibabel, timm" ||
       pip install --no-cache-dir "nibabel>=5.0.0" timm;
@@ -249,8 +273,7 @@ services:
       - ../visheart-inference-gpu/app/helpers/unet_inference_api.py:/app/app/helpers/unet_inference_api.py:ro
       - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
-      - ../../UNETRESNET34:/opt/UNETRESNET34:ro
-      - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:

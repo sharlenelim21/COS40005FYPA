@@ -182,7 +182,11 @@ export const projectApi = {
   // Upload new project
   uploadProject: async (formData: FormData) => {
     try {
-      const response = await api.put("/project/upload-new-project", formData);
+      const response = await api.put("/project/upload-new-project", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
       return response.data;
     } catch (error) {
       throw error;
@@ -253,16 +257,14 @@ export const segmentationApi = {
     segmentationModel: "medsam" | "unet" = "medsam",
     deviceType: "cpu" | "cuda" | "auto" = "auto"
   ) => {
-    console.log("[API] startSegmentation request:", {
-      projectId,
-      segmentationModel,
-      deviceType,
+    const endpoint = `/segmentation/start-segmentation/${projectId}`;
+    const payload = { segmentationModel, deviceType };
+    console.log("[API] startSegmentation POST:", {
+      endpoint,
+      payload,
     });
 
-    const response = await api.post(
-      `/segmentation/start-segmentation/${projectId}`,
-      { segmentationModel, deviceType }
-    );
+    const response = await api.post(endpoint, payload);
 
     return response.data;
   },
@@ -607,54 +609,36 @@ export const statusApi = {
   // Get GPU status
   getGpuStatus: async () => {
     try {
-      const response = await api.get("/status/gpu-status");
+      const response = await api.get("/status/gpu-status", {
+        validateStatus: () => true,
+      });
       return response.data;
     } catch (error) {
-      const axiosError = error as AxiosError<any>;
-      if (axiosError.response?.status === 503) {
-        return {
-          message: axiosError.response.data?.message || "GPU server is offline.",
-          status: "offline",
-          details: axiosError.response.data?.details || {},
-        };
-      }
-      throw error;
+      return {
+        message: error instanceof Error ? error.message : "Processing unit status unavailable",
+        status: "offline",
+        serviceOnline: false,
+        gpuAvailable: false,
+        mode: "unknown",
+        details: error,
+      };
     }
   },
 
   // Get GPU system status (CPU, RAM, Disk)
   getGpuSystemStatus: async () => {
     try {
-      const response = await api.get("/status/gpu-system-status");
+      const response = await api.get("/status/gpu-system-status", {
+        validateStatus: () => true,
+      });
       return response.data;
     } catch (error) {
-      throw error;
+      return {
+        message: error instanceof Error ? error.message : "GPU system status unavailable",
+        status: "offline",
+        details: error,
+      };
     }
-  },
-};
-
-export interface DocumentationSearchResult {
-  tab: string;
-  title: string;
-  excerpt: string;
-  keywords: string[];
-}
-
-export const supportApi = {
-  searchDocumentation: async (query: string): Promise<DocumentationSearchResult[]> => {
-    const response = await api.get("/support/docs/search", {
-      params: { q: query },
-    });
-
-    return response.data.results ?? [];
-  },
-
-  sendFaqMessage: async (data: {
-    message: string;
-    senderEmail?: string;
-  }): Promise<{ success: boolean; message: string; adminEmail?: string }> => {
-    const response = await api.post("/support/faq-message", data);
-    return response.data;
   },
 };
 

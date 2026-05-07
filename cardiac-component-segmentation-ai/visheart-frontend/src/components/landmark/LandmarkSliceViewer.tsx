@@ -4,6 +4,12 @@ import React, { useRef, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { FramePrediction, LandmarkDefinition } from "@/types/landmark";
 import { LANDMARK_DEFINITIONS, getLandmarkCoord } from "@/types/landmark";
+import { LABEL_COLORS, type AnatomicalLabel } from "@/types/segmentation";
+
+export interface LandmarkMaskOverlay {
+  label: AnatomicalLabel;
+  mask: Uint8Array;
+}
 
 interface LandmarkSliceViewerProps {
   prediction: FramePrediction | null;
@@ -11,8 +17,7 @@ interface LandmarkSliceViewerProps {
   totalFrames: number;
   imageDimensions: { width: number; height: number };
   frameImageUrl?: string | null;
-  decodedMasks?: Record<string, Uint8Array> | null;
-  currentSlice?: number;
+  maskOverlays?: LandmarkMaskOverlay[];
   visibleLandmarks: Set<string>;
   showLabels?: boolean;
   className?: string;
@@ -31,8 +36,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   totalFrames,
   imageDimensions,
   frameImageUrl,
-  decodedMasks,
-  currentSlice = 0,
+  maskOverlays = [],
   visibleLandmarks,
   showLabels = true,
   className,
@@ -64,8 +68,9 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawMockMri(ctx, cw, ch);
       }
 
-      const maskFrame = prediction?.frame_id ?? currentFrame;
-      drawSegmentationMasks(ctx, decodedMasks, maskFrame, currentSlice, imageDimensions, cw, ch);
+      for (const overlay of maskOverlays) {
+        drawMaskOverlay(ctx, overlay, imageDimensions.width, imageDimensions.height, cw, ch);
+      }
 
       if (!prediction) return;
 
@@ -81,10 +86,10 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       }
 
       if (totalFrames > 0) {
-        drawFrameLabel(ctx, currentFrame, totalFrames, prediction);
+        drawFrameLabel(ctx, currentFrame, totalFrames);
       }
     },
-    [prediction, visibleLandmarks, showLabels, currentFrame, currentSlice, totalFrames, toCanvas, decodedMasks, imageDimensions],
+    [prediction, visibleLandmarks, showLabels, currentFrame, totalFrames, toCanvas, maskOverlays, imageDimensions],
   );
 
   useEffect(() => {
@@ -100,6 +105,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       return;
     }
     const img = new Image();
+    frameImgRef.current = null;
     img.onload = () => {
       frameImgRef.current = img;
       const canvas = canvasRef.current;
@@ -107,6 +113,8 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     };
     img.onerror = () => {
       frameImgRef.current = null;
+      const canvas = canvasRef.current;
+      if (canvas) draw(canvas);
     };
     img.src = frameImageUrl;
   }, [frameImageUrl, draw]);
@@ -210,60 +218,56 @@ function drawDot(
   ctx.fillText(text, lx + LABEL_PAD_X, cy);
 }
 
-function drawSegmentationMasks(
+function drawMaskOverlay(
   ctx: CanvasRenderingContext2D,
-  decodedMasks: Record<string, Uint8Array> | null | undefined,
-  frame: number,
-  slice: number,
-  imageDimensions: { width: number; height: number },
+  overlay: LandmarkMaskOverlay,
+  sourceWidth: number,
+  sourceHeight: number,
   canvasWidth: number,
   canvasHeight: number,
 ) {
-  if (!decodedMasks) return;
+  if (!overlay.mask.length || sourceWidth <= 0 || sourceHeight <= 0) return;
 
-  const labels = [
-    { id: "lvc", color: [239, 68, 68] },
-    { id: "rv", color: [34, 197, 94] },
-    { id: "myo", color: [59, 130, 246] },
-  ] as const;
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = sourceWidth;
+  maskCanvas.height = sourceHeight;
 
-  const overlay = document.createElement("canvas");
-  overlay.width = imageDimensions.width;
-  overlay.height = imageDimensions.height;
-  const overlayCtx = overlay.getContext("2d");
-  if (!overlayCtx) return;
+  const maskCtx = maskCanvas.getContext("2d");
+  if (!maskCtx) return;
 
-  const imageData = overlayCtx.createImageData(imageDimensions.width, imageDimensions.height);
-  for (const label of labels) {
-    const mask =
-      decodedMasks[`editable_frame_${frame}_slice_${slice}_${label.id}`] ??
-      decodedMasks[`medSamOutput_frame_${frame}_slice_${slice}_${label.id}`];
-    if (!mask) continue;
+  const imageData = maskCtx.createImageData(sourceWidth, sourceHeight);
+  const color = LABEL_COLORS[overlay.label] ?? "#ffffff";
+  const [r, g, b] = hexToRgb(color);
+  const maxPixels = Math.min(overlay.mask.length, sourceWidth * sourceHeight);
 
-    for (let i = 0; i < mask.length; i += 1) {
-      if (!mask[i]) continue;
-      const p = i * 4;
-      imageData.data[p] = Math.max(imageData.data[p], label.color[0]);
-      imageData.data[p + 1] = Math.max(imageData.data[p + 1], label.color[1]);
-      imageData.data[p + 2] = Math.max(imageData.data[p + 2], label.color[2]);
-      imageData.data[p + 3] = 95;
-    }
+  for (let i = 0; i < maxPixels; i += 1) {
+    if (overlay.mask[i] <= 0) continue;
+    const offset = i * 4;
+    imageData.data[offset] = r;
+    imageData.data[offset + 1] = g;
+    imageData.data[offset + 2] = b;
+    imageData.data[offset + 3] = 92;
   }
 
-  overlayCtx.putImageData(imageData, 0, 0);
-  ctx.drawImage(overlay, 0, 0, canvasWidth, canvasHeight);
+  maskCtx.putImageData(imageData, 0, 0);
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.drawImage(maskCanvas, 0, 0, canvasWidth, canvasHeight);
+  ctx.restore();
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!match) return [255, 255, 255];
+  return [parseInt(match[1], 16), parseInt(match[2], 16), parseInt(match[3], 16)];
 }
 
 function drawFrameLabel(
   ctx: CanvasRenderingContext2D,
   current: number,
   total: number,
-  prediction: FramePrediction | null,
 ) {
-  const location = prediction
-    ? ` · F ${prediction.frame_id + 1} · S ${(prediction.slice_id ?? 0) + 1}`
-    : "";
-  const text = `Item ${current + 1} / ${total}${location}`;
+  const text = `Frame ${current + 1} / ${total}`;
   ctx.font = "10px/1 monospace";
   const tw = ctx.measureText(text).width;
 

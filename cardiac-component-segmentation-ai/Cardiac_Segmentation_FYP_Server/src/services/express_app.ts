@@ -8,9 +8,10 @@ import projectRoute from '../routes/project_routes';
 import webhookRoute from '../routes/webhook_routes';
 import debugRoute from '../routes/debug_routes';
 import segmentationRoutes from '../routes/segmentation_routes';
-import landmarkRoutes from '../routes/landmark_routes';
 import reconstructionRoutes from '../routes/reconstruction_routes';
+import landmarkRoutes from '../routes/landmark_routes';
 import gpuStatusRoute from '../routes/gpu_status';
+import supportRoutes from '../routes/support_routes';
 import adminToolsRoute from '../routes/admin_tools';
 import sampleNiftiRoute from '../routes/sample_nifti';
 import cpuMetricsRoute from '../routes/cpu_metrics';
@@ -19,7 +20,6 @@ import s3MetricsRoute from '../routes/s3_metrics';
 import albMetricsRoute from '../routes/alb_metrics';
 import billingMetricsRoute from '../routes/billing_metrics';
 import asgMetricsRoute from '../routes/asg_metrics';
-import supportRoute from '../routes/support_routes';
 import logger from './logger';
 import cors from 'cors';
 import path from 'path';
@@ -142,14 +142,17 @@ if (envType === 'development') {
 // Segmentation Data Routes
 app.use('/segmentation', segmentationRoutes); // Mount the segmentation routes
 
-// Landmark Detection Routes
-app.use('/landmark-detection', landmarkRoutes);
-
 // 4D Reconstruction Routes
 app.use('/reconstruction', reconstructionRoutes); // Mount the 4D reconstruction routes
 
+// Landmark Detection Routes
+app.use('/landmark-detection', landmarkRoutes);
+
 // Status Routes (mount under '/status')
 app.use('/status', gpuStatusRoute); // Mount GPU status routes
+
+// Support and documentation routes
+app.use('/support', supportRoutes);
 
 // Admin Tool Routes
 app.use('/admintools', adminToolsRoute);
@@ -174,9 +177,6 @@ app.use('/metrics', cpuMetricsRoute);
 
 // Sample NIfTI Routes
 app.use('/sample-nifti', sampleNiftiRoute);
-
-// Documentation search and FAQ support routes
-app.use('/support', supportRoute);
 
 // Return simple server status when accessing the root path
 app.get('/', (req: Request, res: Response) => {
