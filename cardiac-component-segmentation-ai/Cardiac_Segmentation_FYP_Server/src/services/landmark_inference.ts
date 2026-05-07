@@ -1,13 +1,27 @@
 import axios from "axios";
 import { URL } from "url";
 import { v4 as uuidv4 } from "uuid";
-import { IUserSafe, segmentationSource } from "../types/database_types";
-import { createJob, IJob, JobStatus, readProject, updateJob } from "./database";
-import logger from "./logger";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import { getFreshGPUServerAddress } from "./gpu_auth_client";
+import {
+  createJob,
+  IJob,
+  JobStatus,
+  readProject,
+  updateJob,
+} from "./database";
+import {
+  segmentationSource,
+} from "../types/database_types";
+import logger from "./logger";
 
 const serviceLocation = "LandmarkInference";
+
+interface LandmarkModelConfig {
+  model?: string;
+  deviceType?: "cpu" | "cuda" | "auto";
+  checkpointPath?: string;
+}
 
 const uniqueBaseUrls = (urls: Array<string | null | undefined>): string[] => {
   const seen = new Set<string>();
@@ -21,67 +35,51 @@ const uniqueBaseUrls = (urls: Array<string | null | undefined>): string[] => {
     });
 };
 
-const isDockerGpuAlias = (url?: string | null): boolean =>
-  Boolean(url && /^https?:\/\/gpu(?::|\/|$)/i.test(url));
-
 const resolveGpuBaseUrlCandidates = async (): Promise<string[]> => {
   const directGpuApiUrl = process.env.GPU_API_URL?.replace(/\/$/, "");
-
   const useLocalhost =
     (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
-
   const localhostUrl = useLocalhost
     ? (
-      process.env.MEDSAM_LOCAL_BASE_URL ||
-      `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
-    ).replace(/\/$/, "")
+        process.env.MEDSAM_LOCAL_BASE_URL ||
+        `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
+      ).replace(/\/$/, "")
     : null;
-
   const remoteBaseUrl = await getFreshGPUServerAddress();
+
   return uniqueBaseUrls([
+    remoteBaseUrl,
+    "http://gpu:8001",
     process.env.LOCAL_GPU_API_URL,
+    directGpuApiUrl,
+    localhostUrl,
     "http://host.docker.internal:8001",
-    isDockerGpuAlias(directGpuApiUrl) ? null : directGpuApiUrl,
-    isDockerGpuAlias(localhostUrl) ? null : localhostUrl,
-    isDockerGpuAlias(remoteBaseUrl) ? null : remoteBaseUrl,
+    "http://host.docker.internal:8011",
   ]);
 };
 
-const buildLocalCallbackUrl = (): string | null => {
+const buildCallbackUrl = (): string | null => {
   const configuredCallbackUrl = process.env.CALLBACK_URL;
   if (!configuredCallbackUrl) return null;
-
-  const callbackBaseUrl =
-    process.env.LOCAL_CALLBACK_URL ||
-    (
-      configuredCallbackUrl.includes("visheart-app") ||
-      configuredCallbackUrl.includes("://backend") ||
-      configuredCallbackUrl.includes("://api")
-        ? "http://localhost:5000"
-        : configuredCallbackUrl
-    );
-
-  return `${callbackBaseUrl.replace(/\/$/, "")}/webhook/landmark-callback`;
+  return `${configuredCallbackUrl.replace(/\/$/, "")}/webhook/landmark-callback`;
 };
 
 export async function startLandmarkInference(
   projectId: string,
-  user?: IUserSafe,
-  gpuAuthToken?: string,
-  modelConfig?: {
-    model?: string;
-    deviceType?: "cpu" | "cuda" | "auto";
-    checkpointPath?: string;
-  }
+  user: any,
+  gpuAuthToken: string,
+  modelConfig?: LandmarkModelConfig,
 ): Promise<{ success: boolean; message: string; uuid?: string }> {
   if (!gpuAuthToken) {
-    return { success: false, message: "GPU authentication token is missing. Cannot start landmark detection." };
+    return {
+      success: false,
+      message: "GPU authentication token is missing. Cannot start landmark detection.",
+    };
   }
 
   const s3BucketName = process.env.AWS_BUCKET_NAME;
-  const callbackBaseUrl = process.env.CALLBACK_URL;
-  if (!s3BucketName || !callbackBaseUrl) {
-    return { success: false, message: "S3 bucket or callback URL is missing." };
+  if (!s3BucketName) {
+    return { success: false, message: "S3 bucket is missing." };
   }
 
   const projectResult = await readProject(projectId);
@@ -90,6 +88,10 @@ export async function startLandmarkInference(
   }
 
   const project = projectResult.projects[0];
+  if (project.userid?.toString() !== user?._id?.toString()) {
+    return { success: false, message: "Project not found." };
+  }
+
   if (!project.originalfilepath) {
     return { success: false, message: "Project original NIfTI file is missing." };
   }
@@ -97,19 +99,29 @@ export async function startLandmarkInference(
   let s3Key = "";
   try {
     const parsedUrl = new URL(project.originalfilepath);
-    s3Key = parsedUrl.pathname.startsWith("/") ? parsedUrl.pathname.substring(1) : parsedUrl.pathname;
+    s3Key = parsedUrl.pathname.startsWith("/")
+      ? parsedUrl.pathname.substring(1)
+      : parsedUrl.pathname;
   } catch (error: any) {
     return { success: false, message: `Invalid NIfTI source URL: ${error.message}` };
   }
 
   const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
   if (!niftiPresignedUrl) {
-    return { success: false, message: "Failed to prepare NIfTI URL for landmark detection." };
+    return {
+      success: false,
+      message: "Failed to prepare NIfTI URL for landmark detection.",
+    };
   }
 
   const gpuBaseUrls = await resolveGpuBaseUrlCandidates();
   if (!gpuBaseUrls.length) {
     return { success: false, message: "GPU API URL is not configured." };
+  }
+
+  const callbackUrl = buildCallbackUrl();
+  if (!callbackUrl) {
+    return { success: false, message: "Callback URL is missing." };
   }
 
   const jobUuid = uuidv4();
@@ -119,54 +131,67 @@ export async function startLandmarkInference(
     uuid: jobUuid,
     status: JobStatus.PENDING,
     segmentationSource: segmentationSource.AI_INFERENCE,
+    model_used: modelConfig?.model || "unetresnet34-landmark",
   };
 
   const jobCreationResult = await createJob(jobData);
   if (!jobCreationResult.success) {
-    return { success: false, message: `Failed to create landmark job: ${jobCreationResult.message || "Unknown error"}` };
-  }
-
-  const callbackUrl = buildLocalCallbackUrl();
-  if (!callbackUrl) {
-    return { success: false, message: "Callback URL is missing." };
+    return {
+      success: false,
+      message: `Failed to create landmark job: ${jobCreationResult.message || "Unknown error"}`,
+    };
   }
 
   let lastErrorMessage = "";
   for (const gpuBaseUrl of gpuBaseUrls) {
     const endpoint = `${gpuBaseUrl}/inference/v2/landmark-detection`;
     try {
-    const response = await axios.post(
-      endpoint,
-      {
-        url: niftiPresignedUrl,
-        uuid: jobUuid,
-        callback_url: callbackUrl,
-        model: modelConfig?.model || "unetresnet34-landmark",
-        device: modelConfig?.deviceType || "auto",
-        checkpoint_path: modelConfig?.checkpointPath || process.env.LANDMARK_CHECKPOINT_PATH,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${gpuAuthToken}`,
-          "Content-Type": "application/json",
+      const response = await axios.post(
+        endpoint,
+        {
+          url: niftiPresignedUrl,
+          uuid: jobUuid,
+          callback_url: callbackUrl,
+          model: modelConfig?.model || "unetresnet34-landmark",
+          device: modelConfig?.deviceType || "auto",
+          checkpoint_path:
+            modelConfig?.checkpointPath || process.env.LANDMARK_CHECKPOINT_PATH,
         },
-        timeout: 30 * 1000,
+        {
+          headers: {
+            Authorization: `Bearer ${gpuAuthToken}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30_000,
+        },
+      );
+
+      if (response.status !== 202) {
+        await updateJob(jobUuid, {
+          status: JobStatus.FAILED,
+          message: `GPU returned status ${response.status}`,
+        });
+        return {
+          success: false,
+          message: `Landmark GPU API returned status ${response.status}.`,
+        };
       }
-    );
 
-    if (response.status !== 202) {
-      await updateJob(jobUuid, { status: JobStatus.FAILED, message: `GPU returned status ${response.status}` });
-      return { success: false, message: `Landmark GPU API returned status ${response.status}.` };
-    }
-
-    return { success: true, message: "Landmark detection job accepted.", uuid: jobUuid };
-  } catch (error: any) {
+      await updateJob(jobUuid, {
+        status: JobStatus.IN_PROGRESS,
+        message: "Landmark detection is running.",
+      });
+      return {
+        success: true,
+        message: "Landmark detection job accepted.",
+        uuid: jobUuid,
+      };
+    } catch (error: any) {
       const responseData = error.response?.data;
       const gpuDetail =
         typeof responseData === "string"
           ? responseData
           : responseData?.detail || responseData?.error || responseData?.message;
-
       lastErrorMessage = `Landmark detection failed to start via ${endpoint}: ${error.message}`;
       if (error.response?.status) {
         lastErrorMessage += ` (Status: ${error.response.status})`;
@@ -174,7 +199,6 @@ export async function startLandmarkInference(
       if (gpuDetail) {
         lastErrorMessage += ` - ${typeof gpuDetail === "string" ? gpuDetail : JSON.stringify(gpuDetail)}`;
       }
-
       logger.error(`${serviceLocation}: Failed to start landmark detection`, {
         endpoint,
         responseStatus: error.response?.status,
@@ -184,6 +208,13 @@ export async function startLandmarkInference(
     }
   }
 
-  await updateJob(jobUuid, { status: JobStatus.FAILED, message: lastErrorMessage });
-  return { success: false, message: lastErrorMessage || "No local GPU endpoint accepted the landmark detection request." };
+  await updateJob(jobUuid, {
+    status: JobStatus.FAILED,
+    message: lastErrorMessage,
+  });
+  return {
+    success: false,
+    message:
+      lastErrorMessage || "No GPU endpoint accepted the landmark detection request.",
+  };
 }

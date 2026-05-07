@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { FormEvent, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -13,12 +13,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { BookOpen, Zap, Info, Users, Play, Menu, Loader2, Send } from "lucide-react";
+import { BookOpen, Zap, Info, Users, Play, Menu, Loader2, Send, X } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { supportApi, type DocumentationSearchResult } from "@/lib/api";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+interface DocSearchResult {
+  tab: string;
+  title: string;
+  excerpt: string;
+  keywords: string[];
+}
+
+interface FaqItem {
+  question: string;
+  answer: string;
+}
 
 interface DocImageProps {
   src: string;
@@ -60,14 +73,17 @@ const DocPage = () => {
   const [showFAQ, setShowFAQ] = useState(false);
   const [docSearch, setDocSearch] = useState("");
   const [faqSearch, setFaqSearch] = useState("");
-  const [docResults, setDocResults] = useState<DocumentationSearchResult[]>([]);
-  const [isSearchingDocs, setIsSearchingDocs] = useState(false);
-  const [docSearchError, setDocSearchError] = useState("");
-  const [faqMessage, setFaqMessage] = useState("");
-  const [faqSenderEmail, setFaqSenderEmail] = useState("");
-  const [isSendingFaq, setIsSendingFaq] = useState(false);
-  const [faqSendStatus, setFaqSendStatus] = useState("");
   const [activeTab, setActiveTab] = useState("introduction");
+  const [docResults, setDocResults] = useState<DocSearchResult[]>([]);
+  const [docSearchLoading, setDocSearchLoading] = useState(false);
+  const [docSearchError, setDocSearchError] = useState<string | null>(null);
+  const [faqItems, setFaqItems] = useState<FaqItem[]>([]);
+  const [faqSenderName, setFaqSenderName] = useState("");
+  const [faqSenderEmail, setFaqSenderEmail] = useState("");
+  const [faqMessage, setFaqMessage] = useState("");
+  const [faqSendStatus, setFaqSendStatus] = useState<string | null>(null);
+  const [faqSendError, setFaqSendError] = useState<string | null>(null);
+  const [faqSending, setFaqSending] = useState(false);
 
   const navigationItems = [
     { value: "introduction", icon: Info, label: "Introduction" },
@@ -83,72 +99,97 @@ const DocPage = () => {
 
   useEffect(() => {
     const query = docSearch.trim();
-
     if (!query) {
       setDocResults([]);
-      setDocSearchError("");
-      setIsSearchingDocs(false);
+      setDocSearchError(null);
+      setDocSearchLoading(false);
       return;
     }
 
-    const timeoutId = window.setTimeout(async () => {
-      setIsSearchingDocs(true);
-      setDocSearchError("");
-
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setDocSearchLoading(true);
+      setDocSearchError(null);
       try {
-        const results = await supportApi.searchDocumentation(query);
-        setDocResults(results);
+        const response = await fetch(
+          `${API_BASE_URL}/support/docs/search?q=${encodeURIComponent(query)}`,
+          { credentials: "include", signal: controller.signal },
+        );
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Documentation search failed.");
+        }
+        setDocResults(Array.isArray(data.results) ? data.results : []);
       } catch (error) {
-        console.error("Documentation search failed:", error);
-        setDocResults([]);
-        setDocSearchError("Search is temporarily unavailable. Please try again.");
+        if (!controller.signal.aborted) {
+          setDocSearchError(error instanceof Error ? error.message : "Documentation search failed.");
+          setDocResults([]);
+        }
       } finally {
-        setIsSearchingDocs(false);
+        if (!controller.signal.aborted) setDocSearchLoading(false);
       }
-    }, 250);
+    }, 200);
 
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
   }, [docSearch]);
 
-  const faqData = [
-    {
-      question: "What file format is supported?",
-      answer: "The system supports NIfTI (.nii.gz) files.",
-    },
-    {
-      question: "What does segmentation do?",
-      answer: "Segmentation identifies cardiac structures from MRI images.",
-    },
-    {
-      question: "How do I start?",
-      answer:
-        "Create a project, upload MRI file, select model, and run segmentation.",
-    },
-  ];
+  useEffect(() => {
+    let cancelled = false;
 
-  const filteredFAQ = faqData.filter((item) =>
+    async function loadFaqs() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/support/faq`, { credentials: "include" });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "FAQ loading failed.");
+        }
+        if (!cancelled) setFaqItems(Array.isArray(data.faqs) ? data.faqs : []);
+      } catch {
+        if (!cancelled) setFaqItems([]);
+      }
+    }
+
+    loadFaqs();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredFAQ = faqItems.filter((item) =>
     item.question.toLowerCase().includes(faqSearch.toLowerCase()) ||
     item.answer.toLowerCase().includes(faqSearch.toLowerCase())
   );
 
-  const handleSendFaqMessage = async () => {
-    setFaqSendStatus("");
-    setIsSendingFaq(true);
+  const handleFaqSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFaqSendStatus(null);
+    setFaqSendError(null);
+    setFaqSending(true);
 
     try {
-      const result = await supportApi.sendFaqMessage({
-        message: faqMessage,
-        senderEmail: faqSenderEmail || undefined,
+      const response = await fetch(`${API_BASE_URL}/support/faq-message`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          senderName: faqSenderName,
+          senderEmail: faqSenderEmail,
+          message: faqMessage,
+        }),
       });
-      setFaqSendStatus(result.message);
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Could not send your FAQ message.");
+      }
+      setFaqSendStatus(data.message || "Your message has been sent to the admin.");
       setFaqMessage("");
-      setFaqSenderEmail("");
-    } catch (error: any) {
-      setFaqSendStatus(
-        error?.response?.data?.message ?? "Could not send your FAQ message. Please try again.",
-      );
+    } catch (error) {
+      setFaqSendError(error instanceof Error ? error.message : "Could not send your FAQ message.");
     } finally {
-      setIsSendingFaq(false);
+      setFaqSending(false);
     }
   };
 
@@ -186,12 +227,12 @@ const DocPage = () => {
   );
 
   return (
-    <div className="flex min-h-0 flex-col md:flex-row" style={{ height: "calc(100vh - 64px)" }}>
+    <div className="flex h-[calc(100dvh-4rem)] flex-col md:flex-row">
       <Tabs
         value={activeTab}
         onValueChange={setActiveTab}
         orientation="vertical"
-        className="flex min-h-0 w-full flex-col md:flex-row"
+        className="w-full flex flex-col md:flex-row"
       >
         {/* Mobile Header with Menu Button */}
         <div className="md:hidden border-b bg-background sticky top-0 z-50">
@@ -224,23 +265,20 @@ const DocPage = () => {
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="shrink-0 border-b bg-background p-4">
-            <div className="relative">
-              <Input
-                placeholder="Search help..."
-                value={docSearch}
-                onChange={(e) => setDocSearch(e.target.value)}
-                className="pr-10"
-              />
-              {isSearchingDocs && (
-                <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-              )}
-            </div>
+          <div className="p-4 border-b bg-background">
+            <Input
+              placeholder="Search help..."
+              value={docSearch}
+              onChange={(e) => setDocSearch(e.target.value)}
+            />
           </div>
 
           {docSearch.trim() && (
-            <div className="shrink-0 border-b bg-background p-4 space-y-2">
-              <p className="text-sm font-medium">Search Results</p>
+            <div className="p-4 border-b bg-background space-y-2">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">Search Results</p>
+                {docSearchLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              </div>
 
               {docSearchError ? (
                 <p className="text-sm text-destructive">{docSearchError}</p>
@@ -260,22 +298,18 @@ const DocPage = () => {
                     </p>
                   </button>
                 ))
-              ) : isSearchingDocs ? (
-                <p className="text-sm text-muted-foreground">
-                  Searching documentation...
-                </p>
-              ) : (
+              ) : !docSearchLoading ? (
                 <p className="text-sm text-muted-foreground">
                   No matching documentation found.
                 </p>
-              )}
+              ) : null}
             </div>
           )}
 
           {/* ── INTRODUCTION ── */}
           <TabsContent value="introduction" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -398,7 +432,7 @@ const DocPage = () => {
           {/* ── GETTING STARTED ── */}
           <TabsContent value="getting-started" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -498,7 +532,7 @@ const DocPage = () => {
           {/* ── ACCOUNTS ── */}
           <TabsContent value="accounts" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -613,7 +647,7 @@ const DocPage = () => {
           {/* ── HOW SEGMENTATION WORKS ── */}
           <TabsContent value="how-it-works" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 md:space-y-8 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -1009,7 +1043,7 @@ const DocPage = () => {
           {/* ── RECONSTRUCTION ── */}
           <TabsContent value="reconstruction" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
-              <div className="p-4 md:p-8 w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
                 <div className="space-y-6 md:space-y-8 max-w-none">
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">
@@ -1342,65 +1376,77 @@ const DocPage = () => {
         </Button>
 
         {showFAQ && (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-            <div className="bg-background p-6 rounded-lg w-[min(92vw,560px)] max-h-[86vh] overflow-y-auto">
-              <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-background rounded-lg w-full max-w-[640px] max-h-[86vh] overflow-y-auto border shadow-lg">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-6 py-4">
                 <div>
                   <h2 className="text-xl font-bold">FAQ</h2>
-                  <p className="text-sm text-muted-foreground">
-                    Browse common questions or send a new one to the admin.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Search answers or send a question to the admin.</p>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => setShowFAQ(false)}>
-                  Close
+                <Button variant="ghost" size="icon" onClick={() => setShowFAQ(false)} aria-label="Close FAQ">
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
+              <div className="space-y-5 p-6">
               <Input
                 placeholder="Search FAQ."
                 value={faqSearch}
                 onChange={(e) => setFaqSearch(e.target.value)}
-                className="mb-4"
               />
               <div className="space-y-3">
-                {filteredFAQ.map((item, index) => (
-                  <div key={index} className="rounded-md border p-3">
+                {filteredFAQ.length > 0 ? filteredFAQ.map((item, index) => (
+                  <div key={index}>
                     <p className="font-medium">{item.question}</p>
                     <p className="text-sm text-muted-foreground">
                       {item.answer}
                     </p>
                   </div>
-                ))}
+                )) : (
+                  <p className="text-sm text-muted-foreground">
+                    No matching FAQ found.
+                  </p>
+                )}
               </div>
-              <div className="mt-5 space-y-3 border-t pt-4">
-                <Input
-                  type="email"
-                  placeholder="Your email (optional)"
-                  value={faqSenderEmail}
-                  onChange={(e) => setFaqSenderEmail(e.target.value)}
-                />
+
+              <form className="space-y-3 rounded-lg border bg-muted/20 p-4" onSubmit={handleFaqSubmit}>
+                <div>
+                  <h3 className="text-sm font-semibold">Ask the admin</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Your message will be sent through the Docker-configured backend support endpoint.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    placeholder="Your name"
+                    value={faqSenderName}
+                    onChange={(e) => setFaqSenderName(e.target.value)}
+                  />
+                  <Input
+                    type="email"
+                    placeholder="Your email"
+                    value={faqSenderEmail}
+                    onChange={(e) => setFaqSenderEmail(e.target.value)}
+                  />
+                </div>
                 <Textarea
-                  placeholder="Type your question for the admin..."
+                  placeholder="Write your question..."
                   value={faqMessage}
                   onChange={(e) => setFaqMessage(e.target.value)}
-                  className="min-h-28"
+                  rows={5}
+                  required
                 />
-                {faqSendStatus && (
-                  <p className="text-sm text-muted-foreground">{faqSendStatus}</p>
-                )}
-                <div className="flex justify-end">
-                  <Button
-                    onClick={handleSendFaqMessage}
-                    disabled={isSendingFaq || faqMessage.trim().length < 5}
-                    className="gap-2"
-                  >
-                    {isSendingFaq ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
+                {faqSendError && <p className="text-sm text-destructive">{faqSendError}</p>}
+                {faqSendStatus && <p className="text-sm text-green-600">{faqSendStatus}</p>}
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={() => setShowFAQ(false)}>
+                    Close
+                  </Button>
+                  <Button type="submit" disabled={faqSending || faqMessage.trim().length < 5} className="gap-1.5">
+                    {faqSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     Send
                   </Button>
                 </div>
+              </form>
               </div>
             </div>
           </div>

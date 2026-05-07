@@ -4,7 +4,6 @@ import React, { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   CartesianGrid,
   Line,
@@ -58,14 +57,6 @@ const STRAIN_CURVE_DATA = [
   { frame: 10, strain: -3.2 },
 ];
 
-const PLAYBACK_SPEED_OPTIONS = [
-  { value: "0.25", label: "0.25x" },
-  { value: "0.5", label: "0.5x" },
-  { value: "1", label: "1x" },
-  { value: "1.5", label: "1.5x" },
-  { value: "2", label: "2x" },
-] as const;
-
 // Props 
 export interface LandmarkSidebarProps {
   state: LandmarkPageState;
@@ -78,7 +69,7 @@ export interface LandmarkSidebarProps {
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (frame: number) => void;
-  onPlaybackSpeedChange: (speed: number) => void;
+  onPlaybackSpeedChange: (fps: number) => void;
   onRerun: () => void;
   onReset: () => void;
   onApplyAlignment: () => void;
@@ -174,7 +165,7 @@ export function LandmarkSidebar({
           currentFrame={state.currentFrame}
           totalFrames={state.totalFrames}
           isPlaying={state.isPlaying}
-          playbackSpeed={state.playbackSpeed}
+          playbackFps={state.playbackFps}
           onTogglePlay={onTogglePlay}
           onNextFrame={onNextFrame}
           onPrevFrame={onPrevFrame}
@@ -249,7 +240,7 @@ function PlaybackBar({
   currentFrame,
   totalFrames,
   isPlaying,
-  playbackSpeed,
+  playbackFps,
   onTogglePlay,
   onNextFrame,
   onPrevFrame,
@@ -259,13 +250,15 @@ function PlaybackBar({
   currentFrame: number;
   totalFrames: number;
   isPlaying: boolean;
-  playbackSpeed: number;
+  playbackFps: number;
   onTogglePlay: () => void;
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (f: number) => void;
-  onPlaybackSpeedChange: (speed: number) => void;
+  onPlaybackSpeedChange: (fps: number) => void;
 }) {
+  const speedOptions = [0.5, 1, 2, 4];
+
   return (
     <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-2 flex-shrink-0">
       <div className="flex items-center gap-2">
@@ -319,30 +312,35 @@ function PlaybackBar({
         aria-label="Frame scrubber"
       />
 
-      <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-        <span className="font-medium">Speed</span>
-        <Select
-          value={String(playbackSpeed)}
-          onValueChange={(value: string) => onPlaybackSpeedChange(Number(value))}
-        >
-          <SelectTrigger
-            size="sm"
-            className="h-7 w-[92px] rounded-xl bg-background px-2 text-[11px] font-medium text-foreground shadow-sm hover:bg-muted/40"
-            aria-label="Playback speed"
-          >
-            <SelectValue placeholder="1x" />
-          </SelectTrigger>
-          <SelectContent align="end" className="min-w-[92px] rounded-xl p-1.5 shadow-lg">
-            {PLAYBACK_SPEED_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value} className="rounded-lg py-2 text-xs">
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="flex items-center justify-between gap-2 pt-1">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Speed
+        </span>
+        <div className="grid grid-cols-4 gap-1 rounded-lg border border-border bg-background p-1">
+          {speedOptions.map((fps) => (
+            <button
+              key={fps}
+              type="button"
+              onClick={() => onPlaybackSpeedChange(fps)}
+              className={cn(
+                "min-w-10 rounded-md px-1.5 py-1 text-[10px] font-medium tabular-nums transition-colors",
+                stateSpeedClass(fps, playbackFps),
+              )}
+              aria-label={`Set playback speed to ${fps} frames per second`}
+            >
+              {fps} fps
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
+}
+
+function stateSpeedClass(fps: number, currentFps?: number) {
+  return currentFps === fps
+    ? "bg-primary text-primary-foreground"
+    : "text-muted-foreground hover:bg-muted hover:text-foreground";
 }
 
 // Landmarks tab
@@ -420,8 +418,7 @@ function LandmarksTab({
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-foreground">Detected Landmarks</h3>
         <span className="text-xs text-muted-foreground tabular-nums">
-          Item {currentFrame + 1}
-          {prediction ? ` · F ${prediction.frame_id + 1} · S ${(prediction.slice_id ?? 0) + 1}` : ""}
+          Frame {currentFrame + 1}
         </span>
       </div>
 

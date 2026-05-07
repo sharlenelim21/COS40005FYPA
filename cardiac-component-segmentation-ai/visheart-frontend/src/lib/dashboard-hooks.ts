@@ -5,21 +5,34 @@ import { projectApi, segmentationApi, adminApi, statusApi } from "@/lib/api";
 import { Project, Job, SystemStats, UserStats } from "@/types/dashboard";
 
 export function useGpuStatus() {
-  const [gpuStatus, setGpuStatus] = useState<
-    "online" | "offline" | "unknown" | "timeout"
-  >("unknown");
+  const [processingUnit, setProcessingUnit] = useState<{
+    serviceOnline: boolean;
+    gpuAvailable: boolean;
+    mode: "gpu" | "cpu" | "unknown";
+    status: "online" | "offline" | "degraded" | "timeout" | "unknown";
+    message: string;
+  }>({
+    serviceOnline: false,
+    gpuAvailable: false,
+    mode: "unknown",
+    status: "unknown",
+    message: "Checking processing unit...",
+  });
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchGpuStatus = useCallback(async () => {
-    console.log("🔄 [useGpuStatus] Starting GPU status fetch...");
+    console.log("🔄 [useGpuStatus] Starting processing unit status fetch...");
     setIsLoading(true);
 
     try {
       const response = await statusApi.getGpuStatus();
-      console.log("✅ [useGpuStatus] GPU status response:", response);
+      console.log("✅ [useGpuStatus] Processing unit status response:", response);
 
-      // Parse backend response to determine actual status
-      let finalStatus: "online" | "offline" | "timeout" = "offline";
+      const serviceOnline = Boolean(response.serviceOnline ?? response.status === "online");
+      const gpuAvailable = Boolean(response.gpuAvailable ?? response.details?.gpuAvailable);
+      const mode = (response.mode ?? (gpuAvailable ? "gpu" : "cpu")) as "gpu" | "cpu" | "unknown";
+
+      let finalStatus: "online" | "offline" | "degraded" | "timeout" = "offline";
 
       // Check for timeout indicators in response
       const hasTimeoutCode = response.details?.code === "ETIMEDOUT";
@@ -29,26 +42,52 @@ export function useGpuStatus() {
       if (hasTimeoutCode || hasTimeoutMessage) {
         console.log("⏰ [useGpuStatus] Backend reported timeout - code:", response.details?.code, "message:", response.message);
         finalStatus = "timeout";
-      } else if (response.status === "online") {
-        console.log("✅ [useGpuStatus] GPU is online");
+      } else if (serviceOnline && gpuAvailable) {
+        console.log("✅ [useGpuStatus] NVIDIA GPU is available");
         finalStatus = "online";
+      } else if (serviceOnline) {
+        console.log("🟡 [useGpuStatus] Processing service online, CPU mode active");
+        finalStatus = "degraded";
       } else {
-        console.log("❌ [useGpuStatus] GPU is offline - status:", response.status);
+        console.log("❌ [useGpuStatus] Processing service offline - status:", response.status);
         finalStatus = "offline";
       }
       
-      console.log("📊 [useGpuStatus] Final status set to:", finalStatus);
-      setGpuStatus(finalStatus);
+      console.log("📊 [useGpuStatus] Final processing unit state:", {
+        serviceOnline,
+        gpuAvailable,
+        mode,
+        status: finalStatus,
+      });
+      setProcessingUnit({
+        serviceOnline,
+        gpuAvailable,
+        mode,
+        status: finalStatus,
+        message: response.message || "Processing unit status updated",
+      });
     } catch (error: any) {
-      console.error("❌ [useGpuStatus] Error fetching GPU status:", error);
+      console.error("❌ [useGpuStatus] Error fetching processing unit status:", error);
       
       // Check if the error itself indicates a timeout
       if (error?.code === "ETIMEDOUT" || error?.message?.toLowerCase?.().includes?.("timeout")) {
         console.log("⏰ [useGpuStatus] Network timeout detected in catch block");
-        setGpuStatus("timeout");
+        setProcessingUnit({
+          serviceOnline: false,
+          gpuAvailable: false,
+          mode: "unknown",
+          status: "timeout",
+          message: "Processing unit status request timed out",
+        });
       } else {
         console.log("💀 [useGpuStatus] Setting status to offline due to error");
-        setGpuStatus("offline");
+        setProcessingUnit({
+          serviceOnline: false,
+          gpuAvailable: false,
+          mode: "unknown",
+          status: "offline",
+          message: "Processing unit status unavailable",
+        });
       }
     } finally {
       setIsLoading(false);
@@ -59,25 +98,34 @@ export function useGpuStatus() {
     fetchGpuStatus();
   }, [fetchGpuStatus]);
 
-  return { gpuStatus, isLoading, refresh: fetchGpuStatus };
+  return { processingUnit, isLoading, refresh: fetchGpuStatus };
 }
 
-export function useUserProjects() {
+export function useUserProjects(enabled = true) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchProjects = useCallback(async () => {
+    if (!enabled) {
+      setProjects([]);
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     try {
       const response = await projectApi.getProjects();
       setProjects(response.projects || []);
-    } catch (error) {
-      console.error("Error fetching projects:", error);
-      // Preserve the current project list on transient failures instead of clearing it.
+    } catch (error: any) {
+      const isUnauthorized = error?.response?.status === 401;
+      if (!isUnauthorized) {
+        console.error("Error fetching projects:", error);
+      }
+      setProjects([]);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
     fetchProjects();
@@ -86,22 +134,31 @@ export function useUserProjects() {
   return { projects, isLoading, refresh: fetchProjects };
 }
 
-export function useUserJobs() {
+export function useUserJobs(enabled = true) {
   const [recentJobs, setRecentJobs] = useState<Job[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchJobs = useCallback(async () => {
+    if (!enabled) {
+      setRecentJobs([]);
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     try {
       const response = await segmentationApi.getUserJobs();
       setRecentJobs(response.jobs?.slice(0, 5) || []);
-    } catch (error) {
-      console.error("Error fetching jobs:", error);
+    } catch (error: any) {
+      const isUnauthorized = error?.response?.status === 401;
+      if (!isUnauthorized) {
+        console.error("Error fetching jobs:", error);
+      }
       setRecentJobs([]);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
     fetchJobs();
