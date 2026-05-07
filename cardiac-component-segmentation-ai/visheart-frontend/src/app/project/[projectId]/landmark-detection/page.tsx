@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import {
   Loader2,
@@ -29,6 +29,8 @@ import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceVie
 import { AHA_SEGMENT_COLORS, LANDMARK_DEFINITIONS } from "@/types/landmark";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
+import { segmentationApi } from "@/lib/api";
+import type { BullseyeData } from "@/types/project";
 
 const LandmarkSliceViewer = dynamic(
   () => import("@/components/landmark/LandmarkSliceViewer").then((m) => m.LandmarkSliceViewer),
@@ -111,6 +113,28 @@ export default function LandmarkDetectionPage() {
     },
   );
 
+  // Bullseye data
+  const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
+  const [bullseyeLoading, setBullseyeLoading] = useState(true);
+
+  const fetchBullseye = useCallback(async () => {
+    setBullseyeLoading(true);
+    try {
+      const res = await segmentationApi.getSegmentationResults(projectId);
+      const mask = (res.segmentations as Array<{ isMedSAMOutput: boolean; bullseye?: BullseyeData }>)
+        ?.find((m) => !m.isMedSAMOutput);
+      setBullseyeData(mask?.bullseye ?? null);
+    } catch {
+      setBullseyeData(null);
+    } finally {
+      setBullseyeLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchBullseye();
+  }, [fetchBullseye]);
+
   // Landmark dot visibility
   const [visibleLandmarks, setVisibleLandmarks] = useState<Set<string>>(
     () => new Set(LANDMARK_DEFINITIONS.map((d) => d.id)),
@@ -124,11 +148,51 @@ export default function LandmarkDetectionPage() {
     });
   }, []);
 
-  // AHA alignment 
-  const handleApplyAlignment = useCallback(() => {
-    if (process.env.NODE_ENV === "development") {
-      console.log("[LandmarkPage] AHA-17 alignment — Sprint 2 W2 D3 integration point");
+  // AHA alignment
+  const [ahaAlignmentAngle, setAhaAlignmentAngle] = useState<number | null>(null);
+
+  // Refetch bullseye after detection finishes; clear alignment on new run
+  const prevStatus = useRef(state.status);
+  useEffect(() => {
+    if (prevStatus.current !== state.status) {
+      if (state.status === "running") {
+        setAhaAlignmentAngle(null);
+      }
+      if (prevStatus.current === "running" && state.status === "done") {
+        fetchBullseye();
+      }
     }
+    prevStatus.current = state.status;
+  }, [state.status, fetchBullseye]);
+
+  const handleApplyAlignment = useCallback(() => {
+    if (!currentPrediction) return;
+    const { rv_insertion_1, rv_insertion_2 } = currentPrediction;
+    if (!rv_insertion_1 || !rv_insertion_2) return;
+
+    const rvMidX = (rv_insertion_1[0] + rv_insertion_2[0]) / 2;
+    const rvMidY = (rv_insertion_1[1] + rv_insertion_2[1]) / 2;
+
+    const dims =
+      state.imageDimensions.width > 0
+        ? state.imageDimensions
+        : { width: projectData?.dimensions?.width ?? 256, height: projectData?.dimensions?.height ?? 256 };
+    const cx = dims.width / 2;
+    const cy = dims.height / 2;
+
+    // Angle from LV centroid to RV midpoint = Septal direction.
+    // SVG Y-axis is flipped, so negate dy to get standard math coords.
+    const septalAngleDeg = (Math.atan2(-(rvMidY - cy), rvMidX - cx) * 180) / Math.PI;
+
+    // Anterior is 90° CCW from Septal in standard CMR convention.
+    // The chart default has Anterior at -90° (top), so the offset is
+    // (septalAngleDeg + 90) relative to that default top position.
+    const offset = septalAngleDeg + 90;
+    setAhaAlignmentAngle(offset);
+  }, [currentPrediction, state.imageDimensions, projectData?.dimensions]);
+
+  const handleResetAlignment = useCallback(() => {
+    setAhaAlignmentAngle(null);
   }, []);
 
   const [showLabels, setShowLabels] = useState(true);
@@ -361,11 +425,40 @@ export default function LandmarkDetectionPage() {
           <ResizablePanel defaultSize={28} minSize={0} maxSize={55}>
             <div className="w-full bg-background p-4 flex flex-col" style={{ height: "calc(100vh - 120px)" }}>
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                <h3 className="text-sm font-semibold text-foreground">
-                  AHA 17-Segment Bullseye
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-foreground">
+                    AHA 17-Segment Bullseye
+                  </h3>
+                  {ahaAlignmentAngle !== null && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
+                      <span className="h-1 w-1 rounded-full bg-emerald-500 inline-block" />
+                      AHA Aligned
+                    </span>
+                  )}
+                </div>
+                {ahaAlignmentAngle !== null && (
+                  <button
+                    type="button"
+                    onClick={handleResetAlignment}
+                    className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors shrink-0"
+                  >
+                    Reset Orientation
+                  </button>
+                )}
               </div>
-              <AhaBullseyePanel />
+              <AhaBullseyePanel
+                bullseyeData={bullseyeData}
+                loading={bullseyeLoading}
+                referenceAngleDeg={ahaAlignmentAngle ?? 0}
+                frameCount={
+                  (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
+                    ? projectData.dimensions.frames
+                    : (projectData?.dimensions?.slices && projectData.dimensions.slices > 0)
+                    ? projectData.dimensions.slices
+                    : 1
+                }
+                isAligned={ahaAlignmentAngle !== null}
+              />
             </div>
           </ResizablePanel>
 
@@ -476,24 +569,151 @@ export default function LandmarkDetectionPage() {
   );
 }
 
-// Local sub-components  
+// Local sub-components
 
-function AhaBullseyePanel() {
+function rdYlGn(t: number): string {
+  // Red (0) → Yellow (0.5) → Green (1)
+  const r = t < 0.5 ? 1 : 1 - (t - 0.5) * 2;
+  const g = t < 0.5 ? t * 2 : 1;
+  const ri = Math.round(r * 255);
+  const gi = Math.round(g * 255);
+  return `rgb(${ri},${gi},0)`;
+}
+
+function segmentColor(value: number, min: number, max: number): string {
+  if (max === min) return AHA_SEGMENT_COLORS[0];
+  const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  return rdYlGn(t);
+}
+
+function AhaBullseyePanel({
+  bullseyeData,
+  loading,
+  referenceAngleDeg = 0,
+  frameCount = 1,
+  isAligned = false,
+}: {
+  bullseyeData: BullseyeData | null | undefined;
+  loading: boolean;
+  referenceAngleDeg?: number;
+  frameCount?: number;
+  isAligned?: boolean;
+}) {
   return (
-    <div className="flex-1 min-h-0 rounded-lg border border-border bg-background p-3 overflow-y-auto">
-      <div className="min-h-[420px] flex items-center justify-center">
-        <AhaBullseyeChart />
-      </div>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-4 gap-y-2 pt-3">
-        {AHA_SEGMENTS.map((label, index) => (
-          <div key={label} className="flex items-center gap-2 min-w-0 text-[11px] text-muted-foreground">
-            <span
-              className="h-2 w-2 rounded-full shrink-0"
-              style={{ backgroundColor: AHA_SEGMENT_COLORS[index] }}
+    <div className="flex-1 min-h-0 rounded-lg border border-border bg-background p-3 flex flex-col overflow-hidden">
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <span className="text-xs">Loading bullseye…</span>
+          </div>
+        </div>
+      ) : !isAligned ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-4">
+          <Heart className="h-8 w-8 text-muted-foreground opacity-25" />
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Apply AHA-17 Alignment to view polar maps
+          </p>
+          <div className="w-full pt-3 border-t border-border">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-4 gap-y-2">
+              {AHA_SEGMENTS.map((label, index) => (
+                <div key={label} className="flex items-center gap-2 min-w-0 text-[11px] text-muted-foreground">
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: AHA_SEGMENT_COLORS[index] }} />
+                  <span className="truncate">{index + 1}. {label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : !bullseyeData ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
+          <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
+          <p className="text-xs text-muted-foreground">
+            Run reconstruction first to generate bullseye data
+          </p>
+        </div>
+      ) : (
+        <>
+          <p className="text-[10px] text-muted-foreground mb-2 flex-shrink-0">
+            {frameCount} frame{frameCount !== 1 ? "s" : ""}
+          </p>
+          <BullseyeFrameGrid
+            bullseyeData={bullseyeData}
+            frameCount={frameCount}
+            referenceAngleDeg={referenceAngleDeg}
+          />
+          {/* Shared color scale legend */}
+          <div className="flex-shrink-0 pt-2 border-t border-border mt-2 space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground tabular-nums">{bullseyeData.stats.min.toFixed(1)}</span>
+              <div
+                className="flex-1 h-3 rounded-full"
+                style={{
+                  background: "linear-gradient(to right, #d73027, #fc8d59, #fee08b, #d9ef8b, #91cf60, #1a9850)",
+                  border: "1px solid rgba(255,255,255,0.15)",
+                }}
+              />
+              <span className="text-[10px] text-muted-foreground tabular-nums">{bullseyeData.stats.max.toFixed(1)}</span>
+            </div>
+            <p className="text-center text-[10px] text-muted-foreground">Wall Thickness (px)</p>
+          </div>
+          {/* Stats row */}
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 pb-1 flex-shrink-0">
+            <span>Min: <span className="font-mono font-semibold text-white">{bullseyeData.stats.min.toFixed(2)}</span></span>
+            <span className="text-zinc-600">|</span>
+            <span>Mean: <span className="font-mono font-semibold text-white">{bullseyeData.stats.mean.toFixed(2)}</span></span>
+            <span className="text-zinc-600">|</span>
+            <span>Max: <span className="font-mono font-semibold text-white">{bullseyeData.stats.max.toFixed(2)}</span></span>
+          </div>
+          {bullseyeData.stats.n_nan > 0 && (
+            <p className="text-[10px] text-amber-600 dark:text-amber-400 pb-1 flex-shrink-0">
+              ⚠ {bullseyeData.stats.n_nan} segment{bullseyeData.stats.n_nan > 1 ? "s" : ""} missing data
+            </p>
+          )}
+          {/* Segment legend */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-4 gap-y-1 pt-1 flex-shrink-0">
+            {bullseyeData.segment_metadata.map((seg) => (
+              <div key={seg.idx} className="flex items-center gap-2 min-w-0 text-[11px] text-muted-foreground">
+                <span
+                  className="h-2 w-2 rounded-full shrink-0"
+                  style={{ backgroundColor: segmentColor(seg.value, bullseyeData.stats.min, bullseyeData.stats.max) }}
+                />
+                <span className="truncate" title={`${seg.name}: ${seg.value.toFixed(2)} px`}>
+                  {seg.idx}. {seg.name}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function BullseyeFrameGrid({
+  bullseyeData,
+  frameCount,
+  referenceAngleDeg,
+}: {
+  bullseyeData: BullseyeData;
+  frameCount: number;
+  referenceAngleDeg: number;
+}) {
+  return (
+    <div className="flex-1 overflow-y-auto min-h-0 bg-zinc-900/30 rounded-lg p-2">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 pb-1">
+        {Array.from({ length: frameCount }, (_, i) => (
+          <div key={i} className="flex flex-col items-center p-2 rounded-xl bg-zinc-800/40 border border-zinc-700/30">
+            <div className="flex items-center justify-center mb-1">
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-zinc-700/80 text-zinc-100 border border-zinc-600">
+                Frame {i + 1}
+              </span>
+            </div>
+            <AhaBullseyeChart
+              bullseyeData={bullseyeData}
+              referenceAngleDeg={referenceAngleDeg}
+              size={240}
             />
-            <span className="truncate">
-              {index + 1}. {label}
-            </span>
           </div>
         ))}
       </div>
@@ -501,30 +721,46 @@ function AhaBullseyePanel() {
   );
 }
 
-function AhaBullseyeChart() {
+function AhaBullseyeChart({
+  bullseyeData,
+  referenceAngleDeg = 0,
+  size = 300,
+}: {
+  bullseyeData: BullseyeData;
+  referenceAngleDeg?: number;
+  size?: number;
+}) {
   const center = 150;
   const basalOuter = 118;
   const basalInner = 88;
   const midInner = 58;
   const apicalInner = 30;
+  const { segment_values, stats, segment_metadata } = bullseyeData;
+
+  // Cardinal label positions rotate with the reference angle.
+  const anteriorPt  = polarPoint(center, 135, -90 + referenceAngleDeg);
+  const septalPt    = polarPoint(center, 135,   0 + referenceAngleDeg);
+  const lateralPt   = polarPoint(center, 135, 180 + referenceAngleDeg);
+  const inferiorPt  = polarPoint(center, 135,  90 + referenceAngleDeg);
 
   return (
     <svg
       viewBox="0 0 300 300"
       role="img"
       aria-label="AHA 17-segment bullseye chart"
-      className="h-auto w-full max-w-[340px]"
+      style={{ width: size, height: size }}
+      className="h-auto w-full"
     >
-      <text x={center} y="20" textAnchor="middle" className="fill-muted-foreground text-[10px]">
+      <text x={anteriorPt.x} y={anteriorPt.y} textAnchor="middle" fontSize="11" fontWeight="600" fill="rgba(255,255,255,0.85)">
         Anterior
       </text>
-      <text x="20" y={center + 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+      <text x={septalPt.x} y={septalPt.y} textAnchor="middle" fontSize="11" fontWeight="600" fill="rgba(255,255,255,0.85)">
         Septal
       </text>
-      <text x="280" y={center + 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+      <text x={lateralPt.x} y={lateralPt.y} textAnchor="middle" fontSize="11" fontWeight="600" fill="rgba(255,255,255,0.85)">
         Lateral
       </text>
-      <text x={center} y="286" textAnchor="middle" className="fill-muted-foreground text-[10px]">
+      <text x={inferiorPt.x} y={inferiorPt.y} textAnchor="middle" fontSize="11" fontWeight="600" fill="rgba(255,255,255,0.85)">
         Inferior
       </text>
 
@@ -535,8 +771,12 @@ function AhaBullseyeChart() {
           center={center}
           innerRadius={basalInner}
           outerRadius={basalOuter}
-          startAngle={-90 + index * 60}
-          endAngle={-90 + (index + 1) * 60}
+          startAngle={-90 + index * 60 + referenceAngleDeg}
+          endAngle={-90 + (index + 1) * 60 + referenceAngleDeg}
+          value={segment_values[index]}
+          tooltip={segment_metadata[index]}
+          min={stats.min}
+          max={stats.max}
         />
       ))}
       {Array.from({ length: 6 }, (_, index) => (
@@ -546,8 +786,12 @@ function AhaBullseyeChart() {
           center={center}
           innerRadius={midInner}
           outerRadius={basalInner}
-          startAngle={-90 + index * 60}
-          endAngle={-90 + (index + 1) * 60}
+          startAngle={-90 + index * 60 + referenceAngleDeg}
+          endAngle={-90 + (index + 1) * 60 + referenceAngleDeg}
+          value={segment_values[index + 6]}
+          tooltip={segment_metadata[index + 6]}
+          min={stats.min}
+          max={stats.max}
         />
       ))}
       {Array.from({ length: 4 }, (_, index) => (
@@ -557,25 +801,47 @@ function AhaBullseyeChart() {
           center={center}
           innerRadius={apicalInner}
           outerRadius={midInner}
-          startAngle={-90 + index * 90}
-          endAngle={-90 + (index + 1) * 90}
+          startAngle={-90 + index * 90 + referenceAngleDeg}
+          endAngle={-90 + (index + 1) * 90 + referenceAngleDeg}
+          value={segment_values[index + 12]}
+          tooltip={segment_metadata[index + 12]}
+          min={stats.min}
+          max={stats.max}
         />
       ))}
       <circle
         cx={center}
         cy={center}
         r={apicalInner}
-        fill={AHA_SEGMENT_COLORS[16]}
-        stroke="hsl(var(--background))"
-        strokeWidth="1"
-      />
+        fill={segmentColor(segment_values[16], stats.min, stats.max)}
+        stroke="rgba(255,255,255,0.5)"
+        strokeWidth="0.8"
+      >
+        <title>{segment_metadata[16]?.name}: {segment_values[16]?.toFixed(2)} px</title>
+      </circle>
       <text
         x={center}
-        y={center + 4}
+        y={center - 2}
         textAnchor="middle"
-        className="fill-white text-[11px] font-semibold"
+        dominantBaseline="auto"
+        fontSize="9"
+        fontWeight="600"
+        fill="white"
+        style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.9))" }}
       >
         17
+      </text>
+      <text
+        x={center}
+        y={center + 9}
+        textAnchor="middle"
+        dominantBaseline="auto"
+        fontSize="8"
+        fontWeight="600"
+        fill="white"
+        style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.9))" }}
+      >
+        {segment_values[16].toFixed(1)}
       </text>
     </svg>
   );
@@ -588,6 +854,10 @@ function BullseyeSegment({
   outerRadius,
   startAngle,
   endAngle,
+  value,
+  tooltip,
+  min,
+  max,
 }: {
   index: number;
   center: number;
@@ -595,27 +865,57 @@ function BullseyeSegment({
   outerRadius: number;
   startAngle: number;
   endAngle: number;
+  value: number;
+  tooltip: { name: string; value: number } | undefined;
+  min: number;
+  max: number;
 }) {
   const midAngle = (startAngle + endAngle) / 2;
   const labelRadius = (innerRadius + outerRadius) / 2;
   const label = polarPoint(center, labelRadius, midAngle);
+  const fill = segmentColor(value, min, max);
+
+  const radialWidth = outerRadius - innerRadius;
+  const showValue = radialWidth >= 20;
 
   return (
     <g>
       <path
         d={annularSectorPath(center, innerRadius, outerRadius, startAngle, endAngle)}
-        fill={AHA_SEGMENT_COLORS[index]}
-        stroke="hsl(var(--background))"
-        strokeWidth="1"
-      />
+        fill={fill}
+        stroke="rgba(255,255,255,0.5)"
+        strokeWidth="0.8"
+      >
+        {tooltip && (
+          <title>{tooltip.name}: {tooltip.value.toFixed(2)} px</title>
+        )}
+      </path>
       <text
         x={label.x}
-        y={label.y + 4}
+        y={label.y + (showValue ? 0 : 4)}
         textAnchor="middle"
-        className="fill-white text-[10px] font-semibold"
+        dominantBaseline="auto"
+        fontSize="9"
+        fontWeight="600"
+        fill="white"
+        style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.9))" }}
       >
         {index + 1}
       </text>
+      {showValue && (
+        <text
+          x={label.x}
+          y={label.y + 11}
+          textAnchor="middle"
+          dominantBaseline="auto"
+          fontSize="8"
+          fontWeight="600"
+          fill="white"
+          style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.9))" }}
+        >
+          {value.toFixed(1)}
+        </text>
+      )}
     </g>
   );
 }

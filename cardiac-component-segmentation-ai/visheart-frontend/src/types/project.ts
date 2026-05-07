@@ -163,6 +163,7 @@ export interface BaseSegmentationMask {
     segmentationmaskRLE: boolean;
     isMedSAMOutput: boolean;
     frames: FrameData[];
+    bullseye?: BullseyeData;
 }
 
 /**
@@ -199,6 +200,31 @@ interface DecodedMaskSliceData {
     class: ComponentBoundingBoxesClass;
     mask: Uint8Array; // Decoded mask as a Uint8Array
 }
+
+/*==================================== Bullseye Section begins here ========================================*/
+
+export interface BullseyeSegmentMeta {
+    idx: number;
+    name: string;
+    ring: string;
+    value: number;
+}
+
+export interface BullseyeStats {
+    min: number;
+    max: number;
+    mean: number;
+    n_nan: number;
+}
+
+export interface BullseyeData {
+    segment_values: number[];
+    segment_metadata: BullseyeSegmentMeta[];
+    stats: BullseyeStats;
+    computed_at: string;
+}
+
+/*==================================== Bullseye Section ends here ==========================================*/
 
 /*==================================== Job Section begins here =============================================*/
 /**

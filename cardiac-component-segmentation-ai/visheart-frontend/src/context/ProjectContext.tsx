@@ -522,6 +522,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           reconstructionMetadata.reconstructionId
         );
 
+        if (!modelURLs || modelURLs.length === 0) {
+          console.warn('[ProjectContext] No reconstruction models to preload yet');
+          setIsThreeJSPreloading(false);
+          return 0;
+        }
+
         const total = modelURLs.length;
         let loaded = 0;
 

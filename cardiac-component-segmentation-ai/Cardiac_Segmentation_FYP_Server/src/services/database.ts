@@ -725,6 +725,7 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   // Properties of extracted folder + location tracking
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
+  bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Create the model with proper typing
