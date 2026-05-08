@@ -121,8 +121,9 @@ export default function LandmarkDetectionPage() {
     setBullseyeLoading(true);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
-      const mask = (res.segmentations as Array<{ isMedSAMOutput: boolean; bullseye?: BullseyeData }>)
-        ?.find((m) => !m.isMedSAMOutput);
+      const segmentations = res.segmentations as Array<{ isMedSAMOutput: boolean; bullseye?: BullseyeData }>;
+      const mask = segmentations?.find((m) => m.bullseye != null)
+        ?? segmentations?.find((m) => !m.isMedSAMOutput);
       setBullseyeData(mask?.bullseye ?? null);
     } catch {
       setBullseyeData(null);
