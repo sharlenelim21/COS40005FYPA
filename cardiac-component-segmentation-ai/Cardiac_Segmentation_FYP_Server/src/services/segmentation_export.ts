@@ -109,7 +109,6 @@ const inferMaskModelForExport = (mask: IProjectSegmentationMask): "medsam" | "un
 
 export const generateAISegmentationForReconstruction = async (
     projectId: string,
-    userId?: string
     userId?: string,
     /**
      * Optional segmentation-model scope. When set to "medsam" or "unet",
