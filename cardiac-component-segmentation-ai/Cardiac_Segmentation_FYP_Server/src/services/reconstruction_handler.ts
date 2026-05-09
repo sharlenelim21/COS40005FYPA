@@ -29,14 +29,14 @@ const withTransaction = async <T>(
   operationName: string
 ): Promise<T> => {
   const session = await mongoose.startSession();
-  
+
   try {
     let result: T;
-    
+
     await session.withTransaction(async () => {
       result = await operation(session);
     });
-    
+
     logger.info(`${serviceLocation}: Database transaction completed successfully: ${operationName}`);
     return result!;
   } catch (error) {
@@ -48,6 +48,14 @@ const withTransaction = async <T>(
 };
 
 const serviceLocation = "ReconstructionHandler";
+
+const normalizeSegmentationModel = (value: unknown): "medsam" | "unet" | undefined => {
+  const normalized = (value ?? "").toString().toLowerCase();
+  if (normalized === "medsam" || normalized === "unet") {
+    return normalized;
+  }
+  return undefined;
+};
 
 export interface ProcessedObjFile {
   filename: string;
@@ -67,7 +75,7 @@ export interface ReconstructionCallbackResult {
 /**
  * Processes 4D reconstruction callback from GPU server
  * Handles OBJ file validation, TAR creation, S3 upload, and database record creation
- * 
+ *
  * @param gpuJobId - GPU job identifier for tracking
  * @param uploadedFiles - Array of OBJ mesh files from GPU processing
  * @param callbackMetadata - GPU result metadata including status and processing info
@@ -93,12 +101,12 @@ export async function processReconstructionCallback(
     // Extract GPU metadata and validate status
     const safeUploadedFiles = uploadedFiles || [];
     const { status, result: gpuResult, error: gpuErrorDetail } = callbackMetadata;
-    
+
     logger.info(`${serviceLocation}: Processing reconstruction callback - Job: ${gpuJobId}, Files: ${safeUploadedFiles.length}, Status: ${status}`);
 
     if (status !== "completed" && status !== "success" && status !== "reconstruction_completed") {
       logger.warn(`${serviceLocation}: GPU job ${gpuJobId} failed with status: ${status}`);
-      
+
       // Update job status to failed
       await updateJob(gpuJobId, {
         status: JobStatus.FAILED,
@@ -117,26 +125,26 @@ export async function processReconstructionCallback(
     const metadataValidation = validateMetadata(validationTarget, gpuJobId);
     if (!metadataValidation.success) {
       logger.error(`${serviceLocation}: Metadata validation failed: ${metadataValidation.message}`);
-      
+
       // Update job status to failed
       await updateJob(gpuJobId, {
         status: JobStatus.FAILED,
         message: `Metadata validation failed: ${metadataValidation.message}`
       });
-      
+
       return metadataValidation;
     }
 
     const validationResult = validateObjFiles(safeUploadedFiles, gpuJobId);
     if (!validationResult.success) {
       logger.error(`${serviceLocation}: File validation failed: ${validationResult.message}`);
-      
+
       // Update job status to failed
       await updateJob(gpuJobId, {
         status: JobStatus.FAILED,
         message: `File validation failed: ${validationResult.message}`
       });
-      
+
       // Cleanup any uploaded files even on validation failure
       if (safeUploadedFiles.length > 0) {
         try {
@@ -146,14 +154,37 @@ export async function processReconstructionCallback(
           logger.warn(`${serviceLocation}: Failed to cleanup files after validation failure: ${(cleanupError as Error).message}`);
         }
       }
-      
+
       return validationResult;
     }
 
     // Process OBJ mesh files and extract project information
     const processedFiles = await processObjFiles(safeUploadedFiles, gpuJobId);
     const { userId, filehash, projectId, maskId } = await getProjectDetails(gpuJobId);
-    
+
+    // Determine segmentation model: prefer explicit field stored on the Job record,
+    // fall back to parsing the job.result text for older jobs.
+    let segmentationModel: "medsam" | "unet" | undefined;
+    try {
+      if (existingJob.success && existingJob.job) {
+        const storedModel = normalizeSegmentationModel((existingJob.job as any).segmentationModel);
+        if (storedModel) {
+          segmentationModel = storedModel;
+          logger.info(`${serviceLocation}: Using segmentationModel from Job record: ${segmentationModel}`);
+        } else if (existingJob.job.result) {
+          const jobResult = existingJob.job.result as string;
+          const modelMatch = jobResult.match(/Segmentation Model: (\w+)/);
+          const parsedModel = normalizeSegmentationModel(modelMatch?.[1]);
+          if (parsedModel) {
+            segmentationModel = parsedModel;
+            logger.info(`${serviceLocation}: Extracted segmentation model from job result: ${segmentationModel}`);
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn(`${serviceLocation}: Failed to determine segmentation model from job: ${(error as Error).message}`);
+    }
+
     // Create TAR archive containing all mesh frames
     const tarResult = await createReconstructionTar(processedFiles, userId, filehash, gpuJobId);
     if (!tarResult.success) {
@@ -162,51 +193,54 @@ export async function processReconstructionCallback(
         status: JobStatus.FAILED,
         message: `TAR creation failed: ${tarResult.message}`
       });
-      
+
       // Cleanup processed files even on TAR creation failure
       await cleanupTempFiles(processedFiles, '');
-      
+
       return tarResult;
     }
 
     // Upload TAR to S3 using same structure as project files
     let reconstructionFileS3Url: string;
+    let reconstructionObjectKey = "";
     let tarStream: fsSync.ReadStream | null = null;
     try {
       tarStream = fsSync.createReadStream(tarResult.tarPath!);
-      const s3KeyPrefix = `source_nifti/${userId}/`;  // Same as project files
-      
+      const uploadedTarFilename = path.basename(tarResult.tarPath!);
+      reconstructionObjectKey = `reconstructions/${projectId}/${gpuJobId}/${uploadedTarFilename}`;
+
       // Add error handler to stream
       tarStream.on('error', (streamError) => {
         logger.error(`${serviceLocation}: Stream error during S3 upload: ${streamError.message}`);
       });
-      
+
       reconstructionFileS3Url = await uploadToS3(
         tarStream,
         userId,
         filehash,
-        '_mesh.tar',
-        s3KeyPrefix
+        '.tar',
+        '',
+        reconstructionObjectKey
       );
-      
-      logger.info(`${serviceLocation}: Uploaded reconstruction TAR to S3`);
+
+      logger.info(`${serviceLocation}: Uploaded reconstruction TAR to S3 at key ${reconstructionObjectKey}`);
     } catch (error) {
       logger.error(`${serviceLocation}: S3 upload failed: ${(error as Error).message}`);
-      
+
       // Update job status to failed
       await updateJob(gpuJobId, {
         status: JobStatus.FAILED,
         message: `S3 upload failed: ${(error as Error).message}`
       });
-      
+
       // Ensure stream is properly closed
       if (tarStream && !tarStream.destroyed) {
         tarStream.destroy();
       }
-      
+
       // Clean up temporary files and TAR file on S3 upload failure
       await cleanupTempFiles(processedFiles, tarResult.tarPath!);
-      
+
       return {
         success: false,
         message: `S3 upload failed: ${(error as Error).message}`
@@ -220,7 +254,7 @@ export async function processReconstructionCallback(
 
     // Create database reconstruction record with atomic transaction
     let dbResult: { success: boolean; message: string; reconstructionId?: string } = { success: false, message: "" };
-    
+
     try {
       // Perform all database operations in a single atomic transaction
       dbResult = await withTransaction(async (session) => {
@@ -229,11 +263,11 @@ export async function processReconstructionCallback(
           status: JobStatus.IN_PROGRESS,
           message: "Creating reconstruction record"
         });
-        
+
         if (!jobUpdateResult.success) {
           throw new Error(`Failed to update job status: ${jobUpdateResult.message}`);
         }
-        
+
         // 2. Create reconstruction record
         const reconstructionResult = await createReconstructionRecord(
           gpuJobId,
@@ -244,13 +278,15 @@ export async function processReconstructionCallback(
           processedFiles,
           tarResult.tarSize!,
           reconstructionFileS3Url,
-          maskId
+          reconstructionObjectKey,
+          maskId,
+          segmentationModel
         );
-        
+
         if (!reconstructionResult.success) {
           throw new Error(`Failed to create reconstruction record: ${reconstructionResult.message}`);
         }
-        
+
         // 3. Update job status to completed
         const completionResult = await updateJob(gpuJobId, {
           status: JobStatus.COMPLETED,
@@ -262,17 +298,17 @@ export async function processReconstructionCallback(
           }),
           message: "4D reconstruction processed successfully"
         });
-        
+
         if (!completionResult.success) {
           throw new Error(`Failed to update job completion: ${completionResult.message}`);
         }
-        
+
         return reconstructionResult;
       }, `Reconstruction creation for job ${gpuJobId}`);
-      
+
     } catch (transactionError) {
       logger.error(`${serviceLocation}: Atomic transaction failed for job ${gpuJobId}: ${(transactionError as Error).message}`);
-      
+
       // Rollback S3 upload since database transaction failed
       try {
         const { deleteFromS3 } = await import("./s3_handler");
@@ -282,7 +318,7 @@ export async function processReconstructionCallback(
       } catch (rollbackError) {
         logger.error(`${serviceLocation}: Failed to rollback S3 upload: ${(rollbackError as Error).message}`);
       }
-      
+
       // Mark job as failed
       try {
         await updateJob(gpuJobId, {
@@ -292,10 +328,10 @@ export async function processReconstructionCallback(
       } catch (jobUpdateError) {
         logger.error(`${serviceLocation}: Failed to mark job as failed: ${(jobUpdateError as Error).message}`);
       }
-      
+
       // Cleanup temporary files even on database transaction failure
       await cleanupTempFiles(processedFiles, tarResult.tarPath!);
-      
+
       return {
         success: false,
         message: `Database transaction failed: ${(transactionError as Error).message}`
@@ -381,11 +417,11 @@ function validateMetadata(
         logger.warn(`${serviceLocation}: Missing required field ${field} in metadata for job ${gpuJobId}`);
       }
     }
-    
+
     // Check if metadata indicates mesh files should be present
     const totalMeshFiles = metadata?.total_mesh_files || metadata?.result?.total_mesh_files;
     const totalMeshSize = metadata?.total_mesh_size || metadata?.result?.total_mesh_size;
-    
+
     if (typeof totalMeshFiles === 'number' && totalMeshFiles === 0) {
       logger.warn(`${serviceLocation}: No mesh files generated for job ${gpuJobId}`);
       return {
@@ -393,9 +429,9 @@ function validateMetadata(
         message: "Reconstruction completed but generated no mesh files. This may indicate insufficient input data or processing failure."
       };
     }
-    
+
     return { success: true, message: "Metadata validation successful" };
-    
+
   } catch (error) {
     logger.error(`${serviceLocation}: Error validating metadata for job ${gpuJobId}:`, error);
     return {
@@ -415,21 +451,21 @@ function validateObjFiles(
 ): ReconstructionCallbackResult {
   // Ensure uploadedFiles is always an array to prevent undefined errors
   const safeFiles = uploadedFiles || [];
-  
+
   // Filter files by type for validation - support both OBJ and GLB
   const meshFiles = safeFiles.filter(file => {
     const filename = file.originalname.toLowerCase();
     return filename.endsWith('.obj') || filename.endsWith('.glb');
   });
-  
-  const jsonFiles = safeFiles.filter(file => 
+
+  const jsonFiles = safeFiles.filter(file =>
     file.originalname.toLowerCase().endsWith('.json')
   );
-  
+
   const otherFiles = safeFiles.filter(file => {
     const filename = file.originalname.toLowerCase();
-    return !filename.endsWith('.obj') && 
-           !filename.endsWith('.glb') && 
+    return !filename.endsWith('.obj') &&
+           !filename.endsWith('.glb') &&
            !filename.endsWith('.json');
   });
 
@@ -440,7 +476,7 @@ function validateObjFiles(
       message: "No mesh files received in reconstruction callback. The reconstruction may have failed to generate mesh output or encountered an error during processing."
     };
   }
-  
+
   if (otherFiles.length > 0) {
     logger.error(`${serviceLocation}: Unexpected file formats for job ${gpuJobId}: ${otherFiles.map(f => f.originalname).join(', ')}`);
     return {
@@ -452,7 +488,7 @@ function validateObjFiles(
   const totalMeshSize = meshFiles.reduce((sum, f) => sum + f.size, 0);
   const meshFormat = meshFiles[0].originalname.toLowerCase().endsWith('.glb') ? 'GLB' : 'OBJ';
   logger.info(`${serviceLocation}: Validated ${meshFiles.length} ${meshFormat} files (${Math.round(totalMeshSize / 1024 / 1024)} MB total)`);
-  
+
   return { success: true, message: "Files validated successfully" };
 }
 
@@ -464,20 +500,20 @@ async function processObjFiles(
   gpuJobId: string
 ): Promise<ProcessedObjFile[]> {
   const processedFiles: ProcessedObjFile[] = [];
-  
+
   // Create job-specific directory for file isolation
   const jobTempDir = path.join("src/temp_mesh/", `job_${gpuJobId}`);
   await fs.mkdir(jobTempDir, { recursive: true });
-  
+
   for (const file of uploadedFiles) {
     // Extract frame index from filename if present (e.g., frame_001.obj, heart_frame_2.obj)
     const frameMatch = file.originalname.match(/frame[_-]?(\d+)/i);
     const frameIndex = frameMatch ? parseInt(frameMatch[1], 10) : undefined;
-    
+
     // Move file to job-specific directory
     const isolatedPath = path.join(jobTempDir, file.filename);
     await fs.rename(file.path, isolatedPath);
-    
+
     processedFiles.push({
       filename: file.filename,
       originalName: file.originalname,
@@ -486,7 +522,7 @@ async function processObjFiles(
       frameIndex: frameIndex,
     });
   }
-  
+
   logger.info(`${serviceLocation}: Processed ${processedFiles.length} OBJ files for job ${gpuJobId} in isolated directory`);
   return processedFiles;
 }
@@ -494,7 +530,7 @@ async function processObjFiles(
 /**
  * Extracts project details and mask ID from job record
  * Retrieves userId, filehash, projectId from database and extracts maskId from job result
- * 
+ *
  * @param gpuJobId - GPU job identifier
  * @returns Promise with project details including extracted mask ID
  */
@@ -502,22 +538,22 @@ async function getProjectDetails(gpuJobId: string): Promise<{ userId: string; fi
   // Get job details first
   const { readJob } = await import("./database");
   const jobResult = await readJob(gpuJobId);
-  
+
   if (!jobResult.success || !jobResult.job) {
     throw new Error(`Job ${gpuJobId} not found`);
   }
-  
+
   const projectId = jobResult.job.projectid;
-  
+
   // Extract mask ID from job result if present
-  let maskId: string | undefined;
-  if (jobResult.job.result) {
+  let maskId: string | undefined = (jobResult.job as any).maskId;
+  if (!maskId && jobResult.job.result) {
     const maskIdMatch = jobResult.job.result.match(/Mask ID: ([a-fA-F0-9]{24})/);
     if (maskIdMatch) {
       maskId = maskIdMatch[1];
     }
   }
-  
+
   // Get project details - readProject returns projects (plural), not project (singular)
   const projectResult = await readProject(projectId);
   if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
@@ -551,26 +587,26 @@ async function createReconstructionTar(
     const tarFilename = `${userId}_${filehash}_${gpuJobId.substring(0, 8)}_${timestamp}_mesh.tar`;
     const tarPath = path.join("src/temp_mesh/", tarFilename);
     const tempTarPath = `${tarPath}.tmp`; // Atomic creation using temp file
-    
+
     const meshFormat = processedFiles[0]?.tempPath?.toLowerCase().endsWith('.glb') ? 'GLB' : 'OBJ';
     logger.info(`${serviceLocation}: Creating TAR bundle with ${processedFiles.length} ${meshFormat} files`);
-    
+
     // Comprehensive mesh file validation (OBJ or GLB)
     for (const file of processedFiles) {
       if (!fsSync.existsSync(file.tempPath)) {
         throw new Error(`Mesh file not found: ${file.tempPath}`);
       }
-      
+
       // Validate file is not empty
       const stats = await fs.stat(file.tempPath);
       if (stats.size === 0) {
         throw new Error(`Mesh file is empty: ${file.tempPath}`);
       }
-      
+
       // Format-specific validation
       const isGlb = file.tempPath.toLowerCase().endsWith('.glb');
       const isObj = file.tempPath.toLowerCase().endsWith('.obj');
-      
+
       if (isObj) {
         // OBJ format validation: check for vertices and faces
         const fileContent = await fs.readFile(file.tempPath, 'utf-8');
@@ -591,15 +627,15 @@ async function createReconstructionTar(
         throw new Error(`Unknown mesh file format: ${file.tempPath}`);
       }
     }
-    
+
     // Build TAR command with all mesh files from job-specific directory - create temp file first for atomicity
     const meshFileNames = processedFiles.map(f => path.basename(f.tempPath));
     const jobTempDir = path.dirname(processedFiles[0].tempPath); // All files should be in same job dir
     const tarCommand = `tar -cf "${tempTarPath}" -C "${jobTempDir}" ${meshFileNames.map(name => `"${name}"`).join(' ')}`;
-    
+
     try {
       execSync(tarCommand, { stdio: 'pipe' });
-      
+
       // Atomically move temp file to final location
       await fs.rename(tempTarPath, tarPath);
     } catch (cmdError) {
@@ -610,28 +646,28 @@ async function createReconstructionTar(
       logger.error(`${serviceLocation}: TAR command failed for job ${gpuJobId}:`, cmdError);
       throw new Error(`TAR command execution failed: ${(cmdError as Error).message}`);
     }
-    
+
     // Get TAR file size and validate
     if (!fsSync.existsSync(tarPath)) {
       throw new Error('TAR file was not created');
     }
-    
+
     const tarBuffer = await fs.readFile(tarPath);
     const tarSize = tarBuffer.length;
-    
+
     if (tarSize === 0) {
       throw new Error('TAR file created but is empty (0 bytes)');
     }
-    
+
     logger.info(`${serviceLocation}: TAR bundle created: ${Math.round(tarSize / 1024 / 1024)} MB`);
-    
+
     return {
       success: true,
       message: "TAR bundle created successfully",
       tarPath,
       tarSize
     };
-    
+
   } catch (error) {
     logger.error(`${serviceLocation}: Failed to create TAR bundle for job ${gpuJobId}:`, {
       error: error,
@@ -650,7 +686,7 @@ async function createReconstructionTar(
 /**
  * Creates database record for completed 4D reconstruction
  * Extracts metadata from GPU result and creates comprehensive reconstruction record
- * 
+ *
  * @param gpuJobId - GPU job identifier for tracking
  * @param projectId - Database project ID
  * @param userId - User who initiated the reconstruction
@@ -671,18 +707,21 @@ async function createReconstructionRecord(
   processedFiles: ProcessedObjFile[],
   tarSize: number,
   reconstructionFileS3Url: string,
-  maskId?: string
+  reconstructionObjectKey: string,
+  maskId?: string,
+  segmentationModel?: string
 ): Promise<{ success: boolean; message: string; reconstructionId?: string }> {
   try {
+    const normalizedSegmentationModel = normalizeSegmentationModel(segmentationModel);
     // Check for existing reconstruction from this GPU job to prevent duplicates
     const { readProjectReconstruction } = await import("./database");
     const existingRecons = await readProjectReconstruction(projectId);
-    
+
     if (existingRecons.success && existingRecons.projectreconstructions) {
-      const duplicateRecon = existingRecons.projectreconstructions.find(recon => 
+      const duplicateRecon = existingRecons.projectreconstructions.find(recon =>
         recon.description?.includes(gpuJobId.substring(0, 8))
       );
-      
+
       if (duplicateRecon) {
         logger.warn(`${serviceLocation}: Reconstruction already exists for job ${gpuJobId}: ${duplicateRecon._id}`);
         return {
@@ -694,7 +733,7 @@ async function createReconstructionRecord(
     // Extract and validate GPU metadata
     const rawEdFrameIndex = gpuResult.ed_frame_index !== undefined ? gpuResult.ed_frame_index : 0;
     const totalFrames = gpuResult.total_frames || processedFiles.length || 1;
-    
+
     // Validate and correct frame index bounds
     let edFrameIndex = rawEdFrameIndex;
     if (typeof rawEdFrameIndex !== 'number' || rawEdFrameIndex < 0) {
@@ -707,24 +746,24 @@ async function createReconstructionRecord(
       logger.warn(`${serviceLocation}: ED frame index exceeds total frames, using last frame`);
       edFrameIndex = Math.max(0, totalFrames - 1);
     }
-    
+
     // Generate reconstruction metadata
     const reconstructionName = `4D Reconstruction - Job ${gpuJobId.substring(0, 8)}`;
     const reconstructionDescription = `4D cardiac reconstruction: ${processedFiles.length} frames, ED frame ${edFrameIndex + 1}`;
-    const finalFilename = `${userId}_${filehash}_mesh.tar`;
-    
+    const finalFilename = path.posix.basename(reconstructionObjectKey);
+
     // Detect mesh format from uploaded files
     const firstMeshFile = processedFiles[0];
     const detectedFormat = firstMeshFile.originalName.toLowerCase().endsWith('.glb') ? MeshFormat.GLB : MeshFormat.OBJ;
     logger.info(`${serviceLocation}: Detected mesh format: ${detectedFormat}`);
-    
+
     // Generate basepath following same pattern as projects
-    const s3KeyPrefix = `source_nifti/${userId}/`;
-    const basepath = `s3://${process.env.AWS_BUCKET_NAME}/${s3KeyPrefix}`;
-    
+    const reconstructionDir = path.posix.dirname(reconstructionObjectKey);
+    const basepath = `s3://${process.env.AWS_BUCKET_NAME}/${reconstructionDir}`;
+
     const reconstructionData: Partial<IProjectReconstruction> = {
       projectid: projectId,
-      maskId: maskId, 
+      maskId: maskId,
       name: reconstructionName,
       description: reconstructionDescription,
       ed_frame: edFrameIndex + 1,
@@ -736,6 +775,7 @@ async function createReconstructionRecord(
       filehash: filehash,
       basepath: basepath,
       reconstructionfolderpath: reconstructionFileS3Url,
+      segmentationModel: normalizedSegmentationModel,
       reconstructedMesh: {
         path: reconstructionFileS3Url,
         filename: finalFilename,
@@ -747,6 +787,19 @@ async function createReconstructionRecord(
         resolution: gpuResult.resolution
       },
     };
+
+    // If possible, prefer the segmentationModel that is stored on the Job document
+    try {
+      const { readJob } = await import("./database");
+      const jobResult = await readJob(gpuJobId);
+      const jobModel = normalizeSegmentationModel((jobResult.job as any)?.segmentationModel);
+      if (jobResult.success && jobResult.job && jobModel) {
+        reconstructionData.segmentationModel = jobModel;
+        logger.info(`${serviceLocation}: Overriding reconstruction segmentationModel from Job record: ${reconstructionData.segmentationModel}`);
+      }
+    } catch (err) {
+      logger.warn(`${serviceLocation}: Failed to read Job when resolving segmentationModel: ${(err as Error).message}`);
+    }
 
     const createResult = await createProjectReconstruction(reconstructionData as IProjectReconstruction);
 
@@ -776,7 +829,7 @@ async function createReconstructionRecord(
 /**
  * Cleans up temporary OBJ files and TAR archive after processing
  * Removes individual mesh files and TAR bundle from temp directories
- * 
+ *
  * @param processedFiles - Array of processed OBJ files to clean up
  * @param tarPath - Path to TAR archive file to remove
  */
@@ -791,7 +844,7 @@ async function cleanupTempFiles(processedFiles: ProcessedObjFile[], tarPath: str
         logger.info(`${serviceLocation}: Cleaned up job directory: ${jobTempDir}`);
       } catch (dirError) {
         logger.warn(`${serviceLocation}: Failed to remove job directory: ${jobTempDir}`);
-        
+
         // Fallback: clean up individual OBJ files
         for (const objFile of processedFiles) {
           try {
@@ -802,7 +855,7 @@ async function cleanupTempFiles(processedFiles: ProcessedObjFile[], tarPath: str
         }
       }
     }
-    
+
     // Clean up TAR file
     if (tarPath) {
       try {

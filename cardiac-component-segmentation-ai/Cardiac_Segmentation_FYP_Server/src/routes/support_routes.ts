@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import net from 'net';
 import tls from 'tls';
 import logger from '../services/logger';
+import { userModel, UserRole } from '../services/database';
 
 const router = express.Router();
 const serviceLocation = 'SupportRoutes';
@@ -39,23 +40,37 @@ const docs = [
   },
 ];
 
-router.get('/docs/search', (req: Request, res: Response) => {
+const faqs = [
+  {
+    question: 'What file format is supported?',
+    answer: 'The system supports NIfTI files, including .nii and .nii.gz.',
+  },
+  {
+    question: 'What does segmentation do?',
+    answer: 'Segmentation identifies cardiac structures from MRI images and prepares masks for review or reconstruction.',
+  },
+  {
+    question: 'How do I start?',
+    answer: 'Create a project, upload an MRI file, select a model, and run segmentation.',
+  },
+  {
+    question: 'Who receives FAQ messages?',
+    answer: 'FAQ messages are sent to the configured admin support email for this Docker deployment.',
+  },
+];
+
+router.get('/docs/search', (req: Request, res: Response): void => {
   const query = String(req.query.q ?? '').trim().toLowerCase();
-
-  if (!query) {
-    res.status(200).json({ success: true, results: [] });
-    return;
-  }
-
   const results = docs
     .map((item) => {
       const haystack = [item.title, item.excerpt, ...item.keywords].join(' ').toLowerCase();
-      const score = haystack.includes(query)
-        ? item.title.toLowerCase().includes(query)
-          ? 2
-          : 1
-        : 0;
-
+      const score = !query
+        ? 1
+        : item.title.toLowerCase().includes(query)
+          ? 3
+          : haystack.includes(query)
+            ? 1
+            : 0;
       return { ...item, score };
     })
     .filter((item) => item.score > 0)
@@ -65,10 +80,14 @@ router.get('/docs/search', (req: Request, res: Response) => {
   res.status(200).json({ success: true, results });
 });
 
-router.post('/faq-message', async (req: Request, res: Response) => {
+router.get('/faq', (_req: Request, res: Response): void => {
+  res.status(200).json({ success: true, faqs });
+});
+
+router.post('/faq-message', async (req: Request, res: Response): Promise<void> => {
   const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
   const senderEmail = typeof req.body?.senderEmail === 'string' ? req.body.senderEmail.trim() : '';
-  const adminEmail = process.env.ADMIN_SUPPORT_EMAIL || process.env.ADMIN_EMAIL || 'admin@example.com';
+  const senderName = typeof req.body?.senderName === 'string' ? req.body.senderName.trim() : '';
 
   if (message.length < 5) {
     res.status(400).json({ success: false, message: 'Please enter a question before sending.' });
@@ -76,15 +95,18 @@ router.post('/faq-message', async (req: Request, res: Response) => {
   }
 
   try {
+    const adminEmail = await resolveAdminEmail();
     const delivery = await sendFaqEmail({
       to: adminEmail,
-      from: process.env.SMTP_FROM || adminEmail,
+      from: process.env.SMTP_FROM?.trim() || process.env.ADMIN_SUPPORT_EMAIL?.trim() || adminEmail,
       replyTo: senderEmail,
+      senderName,
       message,
     });
 
     logger.info(`${serviceLocation}: FAQ message for ${adminEmail}`, {
       senderEmail: senderEmail || 'anonymous',
+      senderName: senderName || 'anonymous',
       delivery,
     });
 
@@ -94,6 +116,7 @@ router.post('/faq-message', async (req: Request, res: Response) => {
         ? `FAQ message sent to ${adminEmail}.`
         : `FAQ message saved for ${adminEmail}. Configure SMTP_HOST to send it as email.`,
       adminEmail,
+      delivery,
     });
   } catch (error) {
     logger.error(`${serviceLocation}: Failed to send FAQ message`, error);
@@ -101,25 +124,35 @@ router.post('/faq-message', async (req: Request, res: Response) => {
   }
 });
 
-export default router;
+async function resolveAdminEmail(): Promise<string> {
+  const supportEmail = process.env.ADMIN_SUPPORT_EMAIL?.trim();
+  const adminEmail = process.env.ADMIN_EMAIL?.trim();
+  if (supportEmail) return supportEmail;
+  if (adminEmail) return adminEmail;
+
+  const admin = await userModel.findOne({ role: UserRole.Admin }).sort({ createdAt: 1 }).lean();
+  return admin?.email || 'meiqiliew334@gmail.com';
+}
 
 async function sendFaqEmail({
   to,
   from,
   replyTo,
+  senderName,
   message,
 }: {
   to: string;
   from: string;
   replyTo?: string;
+  senderName?: string;
   message: string;
 }): Promise<'email' | 'logged'> {
-  const host = process.env.SMTP_HOST;
-
+  const host = process.env.SMTP_HOST?.trim();
   if (!host) {
     logger.warn(`${serviceLocation}: SMTP_HOST is not configured; FAQ message logged only.`, {
       to,
       replyTo: replyTo || 'anonymous',
+      senderName: senderName || 'anonymous',
       message,
     });
     return 'logged';
@@ -127,8 +160,8 @@ async function sendFaqEmail({
 
   const port = Number(process.env.SMTP_PORT || '465');
   const secure = process.env.SMTP_SECURE !== 'false';
-  const username = process.env.SMTP_USER;
-  const password = process.env.SMTP_PASS;
+  const username = process.env.SMTP_USER?.trim();
+  const password = process.env.SMTP_PASS?.replace(/\s+/g, '');
   const socket = secure
     ? tls.connect({ host, port, servername: host })
     : net.connect({ host, port });
@@ -156,26 +189,34 @@ async function sendFaqEmail({
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=UTF-8',
     '',
-    `Sender: ${replyTo || 'Anonymous'}`,
+    `Sender name: ${senderName || 'Anonymous'}`,
+    `Sender email: ${replyTo || 'Anonymous'}`,
     '',
-    message,
+    message.replace(/\r?\n\./g, '\n..'),
     '.',
   ].filter(Boolean).join('\r\n');
 
   await smtpCommand(socket, body);
   await smtpCommand(socket, 'QUIT');
   socket.end();
-
   return 'email';
 }
 
 function waitForReady(socket: net.Socket | tls.TLSSocket): Promise<void> {
   return new Promise((resolve, reject) => {
+    const cleanup = () => socket.off('error', reject);
     socket.once('error', reject);
-    socket.once('connect', () => resolve());
     if (socket instanceof tls.TLSSocket) {
-      socket.once('secureConnect', () => resolve());
+      socket.once('secureConnect', () => {
+        cleanup();
+        resolve();
+      });
+      return;
     }
+    socket.once('connect', () => {
+      cleanup();
+      resolve();
+    });
   });
 }
 
@@ -186,11 +227,9 @@ function readSmtpResponse(socket: net.Socket | tls.TLSSocket): Promise<string> {
       data += chunk.toString('utf8');
       const lines = data.trimEnd().split(/\r?\n/);
       const lastLine = lines[lines.length - 1] || '';
-
       if (/^\d{3} /.test(lastLine)) {
         socket.off('data', onData);
         socket.off('error', reject);
-
         if (/^[45]\d{2}/.test(lastLine)) {
           reject(new Error(lastLine));
         } else {
@@ -198,7 +237,6 @@ function readSmtpResponse(socket: net.Socket | tls.TLSSocket): Promise<string> {
         }
       }
     };
-
     socket.on('data', onData);
     socket.once('error', reject);
   });
@@ -208,3 +246,5 @@ async function smtpCommand(socket: net.Socket | tls.TLSSocket, command: string):
   socket.write(`${command}\r\n`);
   return readSmtpResponse(socket);
 }
+
+export default router;

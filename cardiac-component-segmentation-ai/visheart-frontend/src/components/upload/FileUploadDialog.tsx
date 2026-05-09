@@ -1,8 +1,6 @@
 "use client";
 
 import React, { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
-import axios from "axios";
 import {
   Dialog,
   DialogContent,
@@ -19,8 +17,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Upload,
   File,
-  X,
   FolderOpen,
+  X,
+  CheckCircle,
   AlertCircle,
   Loader2,
 } from "lucide-react";
@@ -40,29 +39,16 @@ interface FileDetails {
   lastModified: Date;
 }
 
-interface DuplicateProject {
-  id: string;
-  name: string;
-}
-
-interface UploadErrorResponse {
-  message?: string;
-  existingProject?: DuplicateProject;
-}
-
 export function FileUploadDialog({
   open,
   onOpenChange,
   onUploadSuccess,
 }: FileUploadDialogProps) {
-  const router = useRouter();
   const [selectedFile, setSelectedFile] = useState<FileDetails | null>(null);
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [duplicateProject, setDuplicateProject] =
-    useState<DuplicateProject | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -107,12 +93,10 @@ export function FileUploadDialog({
     const error = validateFile(file);
     if (error) {
       setUploadError(error);
-      setDuplicateProject(null);
       return;
     }
 
     setUploadError(null);
-    setDuplicateProject(null);
     setSelectedFile({
       file,
       name: file.name,
@@ -174,7 +158,6 @@ export function FileUploadDialog({
 
     setIsUploading(true);
     setUploadError(null);
-    setDuplicateProject(null);
 
     try {
       const formData = new FormData();
@@ -194,33 +177,19 @@ export function FileUploadDialog({
       // Close dialog and trigger refresh
       onOpenChange(false);
       onUploadSuccess?.();
-    } catch (error: unknown) {
-      if (axios.isAxiosError<UploadErrorResponse>(error)) {
-        const responseData = error.response?.data;
+    } catch (error: any) {
+      console.error("Upload error:", error);
 
-        if (error.response?.status === 409) {
-          const existingProject = responseData?.existingProject;
-          setDuplicateProject(existingProject ?? null);
-          setUploadError(
-            existingProject?.name
-              ? `This file already exists in "${existingProject.name}".`
-              : "This file already exists in another project.",
-          );
-          return;
-        }
-
-        console.error("Upload error:", error);
+      // Handle specific error cases
+      if (error.response?.status === 409) {
         setUploadError(
-          responseData?.message ||
-            error.message ||
-            "Failed to upload file. Please try again.",
+          "An existing project with an identical file already exists. Please edit that project or delete it before uploading a new one to prevent server overload.",
         );
       } else {
-        console.error("Upload error:", error);
         setUploadError(
-          error instanceof Error
-            ? error.message
-            : "Failed to upload file. Please try again.",
+          error.response?.data?.message ||
+            error.message ||
+            "Failed to upload file. Please try again.",
         );
       }
     } finally {
@@ -233,7 +202,6 @@ export function FileUploadDialog({
     setProjectName("");
     setDescription("");
     setUploadError(null);
-    setDuplicateProject(null);
     setIsUploading(false);
     onOpenChange(false);
   };
@@ -241,17 +209,9 @@ export function FileUploadDialog({
   const removeSelectedFile = () => {
     setSelectedFile(null);
     setUploadError(null);
-    setDuplicateProject(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-  };
-
-  const handleOpenExistingProject = () => {
-    if (!duplicateProject?.id) return;
-
-    onOpenChange(false);
-    router.push(`/project/${duplicateProject.id}`);
   };
 
   return (
@@ -374,24 +334,9 @@ export function FileUploadDialog({
 
           {/* Error Alert */}
           {uploadError && (
-            <Alert variant={duplicateProject ? "default" : "destructive"}>
+            <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                <div className="space-y-3">
-                  <p>{uploadError}</p>
-                  {duplicateProject && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={handleOpenExistingProject}
-                    >
-                      <FolderOpen className="mr-2 h-4 w-4" />
-                      Open Existing Project
-                    </Button>
-                  )}
-                </div>
-              </AlertDescription>
+              <AlertDescription>{uploadError}</AlertDescription>
             </Alert>
           )}
         </div>

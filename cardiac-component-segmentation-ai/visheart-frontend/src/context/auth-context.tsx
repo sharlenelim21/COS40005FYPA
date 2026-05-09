@@ -46,7 +46,7 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<void>;
   guestLogin: () => Promise<void>;
   logout: () => Promise<void>;
-  checkAuthStatus: () => Promise<boolean>;
+  checkAuthStatus: () => Promise<User | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -62,25 +62,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuthStatus();
   }, []);
 
-  const checkAuthStatus = async (): Promise<boolean> => {
-    setLoading(true);
+  const fetchUserData = async (): Promise<User | null> => {
     try {
       const response = await authApi.fetchUser();
       if (response.fetch && response.user) {
         setUser(response.user);
-        return true;
+        return response.user;
+      } else {
+        setUser(null);
+        return null;
       }
-      setUser(null);
-      return false;
     } catch (err) {
-      // Only log unexpected errors (not authentication failures)
       const errorStatus = (err as any)?.response?.status;
       const isNetworkError = (err as any)?.code === "ERR_NETWORK" || (err as any)?.message === "Network Error";
       if (errorStatus !== 401 && errorStatus !== 403 && !isNetworkError) {
         console.error("Auth check failed:", err);
       }
       setUser(null);
-      return false;
+      return null;
+    }
+  };
+
+  const checkAuthStatus = async (): Promise<User | null> => {
+    setLoading(true);
+    try {
+      return await fetchUserData();
     } finally {
       setLoading(false);
     }
@@ -91,16 +97,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const response = await authApi.login(username, password);
-      if (response.login) {
-        const authenticated = await checkAuthStatus();
-        if (!authenticated) {
-          const errorMessage = "Login succeeded, but your session was not established. Please refresh and try again.";
-          setError(errorMessage);
-          throw new Error(errorMessage);
-        }
+      if (!response?.login) {
+        throw new Error("Login failed");
+      }
+
+      const authenticatedUser = await fetchUserData();
+      if (!authenticatedUser) {
+        throw new Error(
+          "Login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
+        );
       }
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || "Login failed";
+      const errorMessage =
+        err.response?.data?.message || err.message || "Login failed";
       setError(errorMessage);
       throw err;
     } finally {
@@ -112,17 +121,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const response = await authApi.guestLogin();
-      if (response && response.guest) {
-        const authenticated = await checkAuthStatus();
-        if (!authenticated) {
-          const errorMessage = "Guest session started, but your session was not established. Please refresh and try again.";
-          setError(errorMessage);
-          throw new Error(errorMessage);
-        }
-      }
+      await authApi.guestLogin();
+      await fetchUserData();
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || "Guest login failed";
+      const errorMessage = err.response?.data?.message || "Guest login failed";
       setError(errorMessage);
       throw err;
     } finally {

@@ -61,6 +61,9 @@ def _load_nifti_bytes(data: bytes) -> np.ndarray:
                 detail=f"Failed to parse NIfTI data: {exc}. File may be corrupt or not a valid NIfTI."
             )
         arr = np.asarray(img.dataobj)
+        if arr.ndim == 4:
+            # 4D NIfTI (H×W×slices×frames): collapse frames by taking max label per voxel
+            arr = arr.max(axis=-1)
         if arr.ndim != 3:
             raise HTTPException(
                 status_code=422,

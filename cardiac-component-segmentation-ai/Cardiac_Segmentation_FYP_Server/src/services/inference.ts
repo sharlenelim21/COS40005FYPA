@@ -1,5 +1,5 @@
 // File: src/services/inference.ts
-// Description: Service layer for initiating local GPU inference.
+// Description: Service layer for initiating the inference process, including Cloud GPU communication.
 
 import { IUserSafe, ProjectCrudResult, segmentationSource, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
@@ -12,96 +12,23 @@ import { getFreshGPUServerAddress } from "./gpu_auth_client"; // Import fresh GP
 
 const serviceLocation = "Inference";
 
-const uniqueBaseUrls = (urls: Array<string | null | undefined>): string[] => {
-  const seen = new Set<string>();
-
-  return urls
-    .filter((url): url is string => Boolean(url))
-    .map((url) => url.replace(/\/$/, ""))
-    .filter((url) => {
-      if (seen.has(url)) {
-        return false;
-      }
-
-      seen.add(url);
-      return true;
-    });
-};
-
 /**
  * Resolve the MedSAM server base URL.
  *
  * Default behavior is local-first to reduce cloud GPU cost:
  * - MEDSAM_USE_LOCALHOST is "true" by default
- * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8001
+ * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8000
  *
  * Set MEDSAM_USE_LOCALHOST="false" to use database-configured remote GPU host.
  */
 const resolveMedsamBaseUrl = async (): Promise<string | null> => {
-  logger.warn("[Inference Debug] Env snapshot", {
-    GPU_API_URL: process.env.GPU_API_URL,
-    MEDSAM_USE_LOCALHOST: process.env.MEDSAM_USE_LOCALHOST,
-    MEDSAM_LOCAL_BASE_URL: process.env.MEDSAM_LOCAL_BASE_URL,
-    GPU_SERVER_URL: process.env.GPU_SERVER_URL,
-    GPU_SERVER_PORT: process.env.GPU_SERVER_PORT,
-    CALLBACK_URL: process.env.CALLBACK_URL,
-  });
+    const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
+    if (useLocalhost) {
+        return (process.env.MEDSAM_LOCAL_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+    }
 
-  const directGpuApiUrl = process.env.GPU_API_URL?.replace(/\/$/, "");
-  if (directGpuApiUrl) {
-    logger.warn(`[Inference Debug] Using GPU_API_URL: ${directGpuApiUrl}`);
-    return directGpuApiUrl;
-  }
-
-  const useLocalhost =
-    (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
-
-  if (useLocalhost) {
-    const localUrl = (
-      process.env.MEDSAM_LOCAL_BASE_URL ||
-      `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
-    ).replace(/\/$/, "");
-
-    logger.warn(`[Inference Debug] Using localhost-style URL: ${localUrl}`);
-    return localUrl;
-  }
-
-  const remoteBaseUrl = await getFreshGPUServerAddress();
-  logger.warn(`[Inference Debug] Using remote GPU URL: ${remoteBaseUrl}`);
-  return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
-};
-
-const resolveMedsamBaseUrlCandidates = async (): Promise<string[]> => {
-  const configuredBaseUrl = await resolveMedsamBaseUrl();
-  const isDockerGpuAlias = (url?: string | null): boolean =>
-    Boolean(url && /^https?:\/\/gpu(?::|\/|$)/i.test(url));
-
-  return uniqueBaseUrls([
-    process.env.LOCAL_GPU_API_URL,
-    "http://host.docker.internal:8011",
-    isDockerGpuAlias(process.env.GPU_API_URL) ? null : process.env.GPU_API_URL,
-    isDockerGpuAlias(process.env.MEDSAM_LOCAL_BASE_URL) ? null : process.env.MEDSAM_LOCAL_BASE_URL,
-    isDockerGpuAlias(configuredBaseUrl) ? null : configuredBaseUrl,
-  ]);
-};
-
-const buildCallbackUrl = (pathName: string): string | null => {
-  const configuredCallbackUrl = process.env.CALLBACK_URL;
-  if (!configuredCallbackUrl) {
-    return null;
-  }
-
-  const callbackBaseUrl =
-    process.env.LOCAL_CALLBACK_URL ||
-    (
-      configuredCallbackUrl.includes("visheart-app") ||
-      configuredCallbackUrl.includes("://backend") ||
-      configuredCallbackUrl.includes("://api")
-        ? "http://localhost:5000"
-        : configuredCallbackUrl
-    );
-
-  return `${callbackBaseUrl.replace(/\/$/, "")}${pathName}`;
+    const remoteBaseUrl = await getFreshGPUServerAddress();
+    return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
 };
 
 // Interface for the expected GPU response for direct manual segmentation
@@ -129,8 +56,8 @@ interface UnetApiResponse {
 }
 
 const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: string): Promise<{ success: boolean; jobId?: string; error?: string }> => {
-    const medsamBaseUrls = await resolveMedsamBaseUrlCandidates();
-    if (medsamBaseUrls.length === 0) {
+    const medsamBaseUrl = await resolveMedsamBaseUrl();
+    if (!medsamBaseUrl) {
         logger.error(`${serviceLocation}: MedSAM server URL could not be resolved from local/remote configuration.`);
         return { success: false, error: "MedSAM server URL is not configured." };
     }
@@ -139,67 +66,73 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
     logger.debug(`${serviceLocation}: Attempting to send inference request. Token (first 10 chars): ${gpuAuthToken ? gpuAuthToken.substring(0, 10) + "..." : "undefined"}`);
 
     if (!gpuAuthToken) {
-        logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send inference request to local GPU.`);
-        return { success: false, error: "Authentication token for local GPU is missing." };
+        logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send inference request to Cloud GPU.`);
+        return { success: false, error: "Authentication token for Cloud GPU is missing." };
     }
 
-    let lastErrorMessage = "";
+    const inferenceEndpoint = `${medsamBaseUrl}/inference/v2/medsam-inference`;
 
-    for (const medsamBaseUrl of medsamBaseUrls) {
-        const inferenceEndpoint = `${medsamBaseUrl}/inference/v2/medsam-inference`;
-        logger.warn(`[Inference Debug] Final endpoint candidate = ${inferenceEndpoint}`);
+    try {
+        const response = await axios.post(inferenceEndpoint, inferenceData, {
+            headers: {
+                Authorization: `Bearer ${gpuAuthToken}`,
+                'Content-Type': 'application/json',
+            },
+            timeout: 120000, // e.g., 2 minutes, adjust as needed
+        });
 
-        try {
-            const response = await axios.post(inferenceEndpoint, inferenceData, {
-                headers: {
-                    Authorization: `Bearer ${gpuAuthToken}`,
-                    'Content-Type': 'application/json',
-                },
-                timeout: 120000, // e.g., 2 minutes, adjust as needed
-            });
+        // **** THIS IS WHERE YOU LOG THE GPU SERVER'S RESPONSE DATA ****
+        // The existing logger.info call here should already be doing this.
+        // We log the full response.data object.
+        logger.info(`${serviceLocation}: Successfully received response from Cloud GPU for UUID ${inferenceData.uuid}. Status: ${response.status}, Full Response Data:`, response.data);
 
-            // **** THIS IS WHERE YOU LOG THE GPU SERVER'S RESPONSE DATA ****
-            // The existing logger.info call here should already be doing this.
-            // We log the full response.data object.
-            logger.info(`${serviceLocation}: Successfully received response from local GPU for UUID ${inferenceData.uuid}. Status: ${response.status}, Full Response Data:`, response.data);
+        // Attempt to extract a job ID from common fields
+        // Adjust these fields (job_id, jobId, uuid) based on what your GPU server actually returns
+        interface InferenceResponse {
+            job_id?: string;
+            jobId?: string;
+            uuid?: string;
+            [key: string]: any; // Allow additional properties if needed
+        }
 
-            // Attempt to extract a job ID from common fields
-            // Adjust these fields (job_id, jobId, uuid) based on what your GPU server actually returns
-            interface InferenceResponse {
-                job_id?: string;
-                jobId?: string;
-                uuid?: string;
-                [key: string]: any; // Allow additional properties if needed
-            }
+        const responseData = response.data as InferenceResponse;
+        const returnedJobId = responseData.job_id || responseData.jobId || responseData.uuid;
 
-            const responseData = response.data as InferenceResponse;
-            const returnedJobId = responseData.job_id || responseData.jobId || responseData.uuid;
-
-            if (response.status === 202 && response.data) { // Or other success statuses like 200, 201
-                if (returnedJobId) {
-                    logger.info(`${serviceLocation}: GPU Job ID identified: ${returnedJobId} for local UUID ${inferenceData.uuid}.`);
-                    return { success: true, jobId: returnedJobId };
-                } else {
-                    logger.warn(`${serviceLocation}: GPU request successful (Status ${response.status}) for UUID ${inferenceData.uuid}, but no clear Job ID found in response. Response data logged above.`);
-                    // Decide if this is still a success for your workflow.
-                    // You might still return success and use your internal UUID if the GPU doesn't provide one.
-                    return { success: true, jobId: inferenceData.uuid }; // Fallback to internal UUID if no external one
-                }
+        if (response.status === 202 && response.data) { // Or other success statuses like 200, 201
+            if (returnedJobId) {
+                logger.info(`${serviceLocation}: GPU Job ID identified: ${returnedJobId} for local UUID ${inferenceData.uuid}.`);
+                return { success: true, jobId: returnedJobId };
             } else {
-                // Handle cases where status might be 2xx but data is not as expected, or status is not 202
-                logger.error(`${serviceLocation}: Unexpected successful response from local GPU for UUID ${inferenceData.uuid}. Status: ${response.status}, Data:`, response.data);
-                return { success: false, error: `Local GPU responded with status ${response.status} but data was unexpected: ${JSON.stringify(response.data)}` };
+                logger.warn(`${serviceLocation}: GPU request successful (Status ${response.status}) for UUID ${inferenceData.uuid}, but no clear Job ID found in response. Response data logged above.`);
+                // Decide if this is still a success for your workflow.
+                // You might still return success and use your internal UUID if the GPU doesn't provide one.
+                return { success: true, jobId: inferenceData.uuid }; // Fallback to internal UUID if no external one
             }
-        } catch (error: any) {
-            logger.error(`${serviceLocation}: Error sending inference request to ${inferenceEndpoint}: ${error.message}`, { error });
-            lastErrorMessage = `Error communicating with local GPU: ${error.message}`;
+        } else {
+            // Handle cases where status might be 2xx but data is not as expected, or status is not 202
+            logger.error(`${serviceLocation}: Unexpected successful response from Cloud GPU for UUID ${inferenceData.uuid}. Status: ${response.status}, Data:`, response.data);
+            return { success: false, error: `Cloud GPU responded with status ${response.status} but data was unexpected: ${JSON.stringify(response.data)}` };
+        }
+    } catch (error: any) {
+        logger.error(`${serviceLocation}: Error sending inference request to ${inferenceEndpoint}: ${error.message}`, { error });
+        // Cloud GPU is no longer used — all inference goes to the local
+        // visheart-inference-gpu service. Use a clear, actionable error
+        // message so users know to start the local GPU server, not chase
+        // a cloud config that does not exist.
+        const isConnRefused = error.code === "ECONNREFUSED" || /ECONNREFUSED/.test(error.message || "");
+        let errorMessage: string;
+        if (isConnRefused) {
+            errorMessage =
+                `Local GPU server is not reachable at ${inferenceEndpoint}. ` +
+                `Start visheart-inference-gpu on the host (default port 8011) and retry.`;
+        } else {
+            errorMessage = `Error communicating with local GPU server at ${inferenceEndpoint}: ${error.message}`;
             if (error.response?.status) {
-                lastErrorMessage += ` (Status: ${error.response.status})`;
+                errorMessage += ` (Status: ${error.response.status})`;
             }
         }
+        return { success: false, error: errorMessage };
     }
-
-    return { success: false, error: lastErrorMessage || "No GPU endpoint accepted the inference request." };
 };
 
 export const startInference = async (projectId: string, user?: IUserSafe, gpuAuthToken?: string): Promise<{ success: boolean; message: string; uuid?: string }> => {
@@ -210,12 +143,14 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         return { success: false, message: "GPU authentication token is missing. Cannot start inference." };
     }
 
-    // Build full callback URL by appending segmentation webhook path to base URL
-    const callback_url = buildCallbackUrl("/webhook/gpu-callback");
-    if (!callback_url) {
+    // Build full callback URL — prefer LOCAL_CALLBACK_URL so Docker-internal hostnames
+    // (visheart-app) are used when the GPU container calls back, not host.docker.internal
+    const callback_base_url = process.env.LOCAL_CALLBACK_URL || process.env.CALLBACK_URL;
+    if (!callback_base_url) {
         logger.error(`${serviceLocation}: CALLBACK_URL is not set in environment variables. Cannot start inference for project ${projectId}.`);
         return { success: false, message: "Callback URL not configured for inference." };
     }
+    const callback_url = `${callback_base_url.replace(/\/$/, '')}/webhook/gpu-callback`;
 
     const s3BucketName = process.env.AWS_BUCKET_NAME; // Or S3_BUCKET_NAME
     if (!s3BucketName) {
@@ -256,10 +191,7 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         }
 
         const dataUrlForGpu = await generatePresignedGetUrl(s3BucketName, objectKeyForTar);
-        logger.error("[MedSAM Debug] s3BucketName =", s3BucketName);
-        logger.error("[MedSAM Debug] extractedfolderpath =", s3HttpsUrlForTar);
-        logger.error("[MedSAM Debug] objectKeyForTar =", objectKeyForTar);
-                
+
         if (!dataUrlForGpu) {
             logger.error(`${serviceLocation}: Failed to generate presigned S3 URL for project ${projectId}, TAR S3 Key: ${objectKeyForTar}`);
             return { success: false, message: "Failed to prepare TAR file URL for inference." };
@@ -288,7 +220,7 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
                 userid: user?._id?.toString() || 'unknown',
                 projectid: projectId,
                 uuid: trackedJobUuid,
-                status: JobStatus.PENDING,
+                status: JobStatus.IN_PROGRESS,
                 segmentationSource: segmentationSource.AI_INFERENCE
             };
             const jobCreationResult = await createJob(jobData);
@@ -324,8 +256,9 @@ const sendUnetInferenceRequestToApi = async (
     },
     gpuAuthToken: string
 ): Promise<{ success: boolean; jobId?: string; status?: string; error?: string }> => {
-    const unetBaseUrls = await resolveMedsamBaseUrlCandidates();
-    if (unetBaseUrls.length === 0) {
+    const requestStart = Date.now();
+    const unetBaseUrl = await resolveMedsamBaseUrl();
+    if (!unetBaseUrl) {
         logger.error(`${serviceLocation}: UNET API server URL could not be resolved from local/remote configuration.`);
         return { success: false, error: "UNET API server URL is not configured." };
     }
@@ -335,14 +268,13 @@ const sendUnetInferenceRequestToApi = async (
         return { success: false, error: "Authentication token for UNET API is missing." };
     }
 
-    let lastErrorMessage = "";
+    const endpoint = `${unetBaseUrl}/inference/v2/unet-inference`;
+    try {
+        logger.info(
+            `${serviceLocation}: Submitting UNET inference job uuid=${inferenceData.uuid}, model=${inferenceData.segmentationModel}, device=${inferenceData.device || "auto"}, callback=${inferenceData.callbackUrl}`
+        );
 
-    for (const unetBaseUrl of unetBaseUrls) {
-      const endpoint = `${unetBaseUrl}/inference/v2/unet-inference`;
-      logger.warn(`[Inference Debug] Final UNET endpoint candidate = ${endpoint}`);
-
-      try {
-          const response = await axios.post<UnetApiResponse>(
+        const response = await axios.post<UnetApiResponse>(
             endpoint,
             {
                 url: inferenceData.url,
@@ -360,30 +292,42 @@ const sendUnetInferenceRequestToApi = async (
                 // Submission call only; processing happens asynchronously in GPU service.
                 timeout: 30 * 1000,
             }
-          );
+        );
 
-          if (response.status === 202 && response.data) {
-              return {
-                  success: true,
-                  jobId: response.data.job_id || response.data.uuid || inferenceData.uuid,
-                  status: response.data.status || "queued",
-              };
-          }
+        if (response.status === 202 && response.data) {
+            logger.info(
+                `${serviceLocation}: UNET submission accepted in ${Date.now() - requestStart}ms. uuid=${inferenceData.uuid}, remoteStatus=${response.data.status || "queued"}`
+            );
+            return {
+                success: true,
+                jobId: response.data.job_id || response.data.uuid || inferenceData.uuid,
+                status: response.data.status || "queued",
+            };
+        }
 
-          return {
-              success: false,
-              error: response.data?.error || `UNET API returned unexpected response (status ${response.status}).`,
-          };
-      } catch (error: any) {
-          logger.error(`${serviceLocation}: Error sending UNET inference request to ${endpoint}: ${error.message}`, { error });
-          lastErrorMessage = `Error communicating with UNET API: ${error.message}`;
-          if (error.response?.status) {
-              lastErrorMessage += ` (Status: ${error.response.status})`;
-          }
-      }
+        return {
+            success: false,
+            error: response.data?.error || `UNET API returned unexpected response (status ${response.status}).`,
+        };
+    } catch (error: any) {
+        logger.error(
+            `${serviceLocation}: Error sending UNET inference request to ${endpoint} after ${Date.now() - requestStart}ms: ${error.message}`,
+            { error }
+        );
+        const isConnRefused = error.code === "ECONNREFUSED" || /ECONNREFUSED/.test(error.message || "");
+        let errorMessage: string;
+        if (isConnRefused) {
+            errorMessage =
+                `Local GPU server is not reachable at ${endpoint}. ` +
+                `Start visheart-inference-gpu on the host (default port 8011) and retry.`;
+        } else {
+            errorMessage = `Error communicating with local UNET API at ${endpoint}: ${error.message}`;
+            if (error.response?.status) {
+                errorMessage += ` (Status: ${error.response.status})`;
+            }
+        }
+        return { success: false, error: errorMessage };
     }
-
-    return { success: false, error: lastErrorMessage || "No UNET API endpoint accepted the inference request." };
 };
 
 /**
@@ -458,17 +402,12 @@ export async function startModel2Inference(
         }
 
         const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
-        logger.info("[UNET Debug] niftiPresignedUrl prepared", { projectId, s3Key });
-        
         if (!niftiPresignedUrl) {
             logger.error(`${serviceLocation}: Failed to generate presigned NIfTI URL for UNET inference on project ${projectId}.`);
             return { success: false, message: "Failed to prepare NIfTI URL for UNET inference." };
         }
 
-        const callbackUrl = buildCallbackUrl("/webhook/gpu-callback");
-        if (!callbackUrl) {
-            return { success: false, message: "Callback URL not configured for UNET inference." };
-        }
+        const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/webhook/gpu-callback`;
 
         // DEVELOPER NOTE: Create job record for tracking (identical to MedSAM pattern)
         // This allows both segmentation models to be tracked in the same job system
@@ -498,7 +437,7 @@ export async function startModel2Inference(
                 uuid: jobUuid,
                 callbackUrl,
                 segmentationModel: SegmentationModel.UNET,
-                device: modelConfig?.deviceType || "auto",
+                device: modelConfig?.deviceType || "cpu",
                 checkpointPath: modelConfig?.checkpointPath,
             },
             gpuAuthToken
@@ -514,6 +453,11 @@ export async function startModel2Inference(
                 message: `UNET inference failed: ${inferenceResult.error || 'Unknown error'}`,
             };
         }
+
+        await updateJob(jobUuid, {
+            status: JobStatus.IN_PROGRESS,
+            message: `UNET inference accepted by GPU service (${inferenceResult.status || "queued"}).`,
+        });
 
         return {
             success: true,
@@ -570,7 +514,7 @@ const getDirectGpuManualPrediction = async (
             timeout: 60000,
         });
 
-        logger.debug(`${serviceLocationDirectGpu}: Received response from local GPU. Status: ${response.status}, Data:`, response.data);
+        logger.debug(`${serviceLocationDirectGpu}: Received response from Cloud GPU. Status: ${response.status}, Data:`, response.data);
 
         if (response.status === 200 && response.data && response.data.result) {
             const resultKeys = Object.keys(response.data.result);
@@ -604,13 +548,13 @@ const getDirectGpuManualPrediction = async (
             return { success: true, data: { imageNameFromGpu, rleString, bboxFromGpu, confidenceFromGpu } };
 
         } else {
-            const gpuError = response.data?.error || `Local GPU responded with status ${response.status}.`;
-            logger.error(`${serviceLocationDirectGpu}: Error from local GPU: ${gpuError}`, response.data);
-            return { success: false, error: `Local GPU error: ${gpuError}` };
+            const gpuError = response.data?.error || `Cloud GPU responded with status ${response.status}.`;
+            logger.error(`${serviceLocationDirectGpu}: Error from Cloud GPU: ${gpuError}`, response.data);
+            return { success: false, error: `Cloud GPU error: ${gpuError}` };
         }
     } catch (error: any) {
         logger.error(`${serviceLocationDirectGpu}: Error sending direct prediction request to ${inferenceEndpoint}: ${error.message}`, { errorDetail: error });
-        let errorMessage = `Error communicating with local GPU: ${error.message}`;
+        let errorMessage = `Error communicating with Cloud GPU: ${error.message}`;
         if (error.response && error.response.status) {
             errorMessage += ` (Status: ${error.response.status})`;
         }
