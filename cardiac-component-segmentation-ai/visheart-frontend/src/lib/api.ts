@@ -182,7 +182,11 @@ export const projectApi = {
   // Upload new project
   uploadProject: async (formData: FormData) => {
     try {
-      const response = await api.put("/project/upload-new-project", formData);
+      const response = await api.put("/project/upload-new-project", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
       return response.data;
     } catch (error) {
       throw error;
@@ -253,16 +257,14 @@ export const segmentationApi = {
     segmentationModel: "medsam" | "unet" = "medsam",
     deviceType: "cpu" | "cuda" | "auto" = "auto"
   ) => {
-    console.log("[API] startSegmentation request:", {
-      projectId,
-      segmentationModel,
-      deviceType,
+    const endpoint = `/segmentation/start-segmentation/${projectId}`;
+    const payload = { segmentationModel, deviceType };
+    console.log("[API] startSegmentation POST:", {
+      endpoint,
+      payload,
     });
 
-    const response = await api.post(
-      `/segmentation/start-segmentation/${projectId}`,
-      { segmentationModel, deviceType }
-    );
+    const response = await api.post(endpoint, payload);
 
     return response.data;
   },
@@ -425,6 +427,10 @@ export const reconstructionApi = {
       reconstructionDescription?: string;
       ed_frame?: number;
       export_format?: 'obj' | 'glb'; // User's choice for mesh export format
+      // Which segmentation result the reconstruction should consume.
+      // Backend strictly scopes the editable-mask lookup to this model;
+      // omit to preserve legacy (model-agnostic) behaviour.
+      segmentationModel?: 'medsam' | 'unet';
       parameters?: {
         num_iterations?: number;
         resolution?: number;
@@ -499,6 +505,37 @@ export const reconstructionApi = {
       return response.data;
     } catch (error) {
       console.error('[API] Delete reconstructions error:', error);
+      throw error;
+    }
+  },
+
+  // Delete one reconstruction result by ID
+  deleteReconstruction: async (projectId: string, reconstructionId: string) => {
+    console.log('[API] Deleting reconstruction:', { projectId, reconstructionId });
+    try {
+      const response = await api.delete(
+        `/reconstruction/delete-reconstruction/${projectId}/${reconstructionId}`
+      );
+      console.log('[API] Delete reconstruction response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('[API] Delete reconstruction error:', error);
+      throw error;
+    }
+  },
+
+  // Delete reconstruction for a specific segmentation model (medsam or unet)
+  deleteModelReconstruction: async (projectId: string, segmentationModel: 'medsam' | 'unet') => {
+    console.log('[API] Deleting reconstruction for model:', { projectId, segmentationModel });
+    try {
+      const response = await api.delete(
+        `/reconstruction/delete-model-reconstruction/${projectId}`,
+        { params: { segmentationModel } }
+      );
+      console.log('[API] Delete model reconstruction response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('[API] Delete model reconstruction error:', error);
       throw error;
     }
   },
@@ -607,54 +644,36 @@ export const statusApi = {
   // Get GPU status
   getGpuStatus: async () => {
     try {
-      const response = await api.get("/status/gpu-status");
+      const response = await api.get("/status/gpu-status", {
+        validateStatus: () => true,
+      });
       return response.data;
     } catch (error) {
-      const axiosError = error as AxiosError<any>;
-      if (axiosError.response?.status === 503) {
-        return {
-          message: axiosError.response.data?.message || "GPU server is offline.",
-          status: "offline",
-          details: axiosError.response.data?.details || {},
-        };
-      }
-      throw error;
+      return {
+        message: error instanceof Error ? error.message : "Processing unit status unavailable",
+        status: "offline",
+        serviceOnline: false,
+        gpuAvailable: false,
+        mode: "unknown",
+        details: error,
+      };
     }
   },
 
   // Get GPU system status (CPU, RAM, Disk)
   getGpuSystemStatus: async () => {
     try {
-      const response = await api.get("/status/gpu-system-status");
+      const response = await api.get("/status/gpu-system-status", {
+        validateStatus: () => true,
+      });
       return response.data;
     } catch (error) {
-      throw error;
+      return {
+        message: error instanceof Error ? error.message : "GPU system status unavailable",
+        status: "offline",
+        details: error,
+      };
     }
-  },
-};
-
-export interface DocumentationSearchResult {
-  tab: string;
-  title: string;
-  excerpt: string;
-  keywords: string[];
-}
-
-export const supportApi = {
-  searchDocumentation: async (query: string): Promise<DocumentationSearchResult[]> => {
-    const response = await api.get("/support/docs/search", {
-      params: { q: query },
-    });
-
-    return response.data.results ?? [];
-  },
-
-  sendFaqMessage: async (data: {
-    message: string;
-    senderEmail?: string;
-  }): Promise<{ success: boolean; message: string; adminEmail?: string }> => {
-    const response = await api.post("/support/faq-message", data);
-    return response.data;
   },
 };
 

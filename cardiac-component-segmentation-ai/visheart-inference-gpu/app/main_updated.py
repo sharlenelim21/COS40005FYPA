@@ -19,7 +19,8 @@ from routes.inference_route_old import router as inference_router_old
 from routes.bullseye_route import router as bullseye_router
 
 # Import the lifespans (custom dependencies)
-from dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan
+# Import the combined lifespan manager
+from dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan # Updated import
 
 # Import additional logging functions
 from utils.logging_config import log_startup_complete
@@ -55,8 +56,8 @@ models_info = {
 log_startup_banner(env_type, models_info)
 
 app.include_router(inference_router, prefix="/inference/v2")
-app.include_router(bullseye_router, prefix="/bullseye")
 app.include_router(status_router, prefix="/status")
+app.include_router(bullseye_router, prefix="/bullseye")
 # Kept for script compatibility
 if env_type == "development":
     logger.info("🔧 Development mode: Including legacy inference routes")
