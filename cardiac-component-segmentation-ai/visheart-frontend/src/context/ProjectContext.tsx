@@ -1104,11 +1104,9 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         setReconstructionJobs(projectJobs);
         console.log(`Found ${projectJobs.length} reconstruction jobs for project ${projectId}:`, projectJobs);
 
-        // Check for logical errors: completed jobs should have reconstructions.
-        // Only flag a real problem if the reconstruction fetch has finished AND still reports none —
-        // otherwise this is a benign race between the jobs fetch and the reconstructions fetch.
+        // Check for logical errors: completed jobs should have reconstructions
         const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
-        if (completedJobs.length > 0 && reconstructionFetchDone && !hasReconstructions) {
+        if (completedJobs.length > 0 && !hasReconstructions) {
           console.warn(`Warning: Found ${completedJobs.length} completed reconstruction job(s) but no reconstructions for project ${projectId}. This may indicate a server-side issue.`);
           setReconstructionJobsError(`Found completed reconstruction job(s) but no results. Please contact support or try re-creating the reconstruction.`);
         }
@@ -1126,7 +1124,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     return () => {
       abortController.abort();
     };
-  }, [hasReconstructions, projectData, projectId, reconstructionJobsError, reconstructionFetchDone]);
+  }, [hasReconstructions, projectData, projectId, reconstructionJobsError]);
 
   // 4. Initialize tar cache when project data is available and mask fetch is done - NEW
   useEffect(() => {
