@@ -303,6 +303,11 @@ function extractIndicesFromFilename(filename: string): { frame: number; slice: n
   return { frame: Math.abs(hash) % 100, slice: Math.abs(hash >> 16) % 100 };
 }
 
+// Module-level set that survives React unmounts for the entire browser session.
+// Tracks which projectIds have images confirmed in IndexedDB so re-entering a
+// project page skips the tar download entirely.
+const _projectReadySet = new Set<string>();
+
 /**
  * Main cache management class with URL optimization and debug capabilities
  * Coordinates between IndexedDB storage and in-memory URL caching for optimal performance
@@ -541,11 +546,16 @@ export class TarImageCache {
       this.debugInfo.cacheErrors.push(...errors);
 
       const cacheSize = await this.db.getCacheSize();
+      const success = storedCount > 0;
 
       console.log(`[TarImageCache] Successfully stored ${storedCount}/${imageFiles.length} images`);
 
+      if (success) {
+        this.markProjectReady(projectId);
+      }
+
       return {
-        success: storedCount > 0,
+        success,
         totalImages: imageFiles.length,
         extractedImages: storedCount,
         errors,
@@ -649,33 +659,39 @@ export class TarImageCache {
   }
 
   /**
-   * Clear all cached images and URLs for a specific project
-   * Essential for memory management and preventing URL leaks
-   * 
-   * Process:
-   * 1. Find all cached URLs for the project
-   * 2. Revoke object URLs to free memory
-   * 3. Remove entries from in-memory URL cache
-   * 4. Delete images from IndexedDB storage
-   * 
-   * @param projectId - Project identifier to clear
+   * Returns true if this project's images were already extracted and stored in
+   * IndexedDB during this browser session. Checked before any network request so
+   * re-entering a project page is instant.
+   */
+  isProjectReady(projectId: string): boolean {
+    return _projectReadySet.has(projectId);
+  }
+
+  /** Called internally after a successful extraction to record readiness. */
+  markProjectReady(projectId: string): void {
+    _projectReadySet.add(projectId);
+  }
+
+  /**
+   * Clear all cached images and URLs for a specific project.
+   * Also evicts the project from the session-level ready set so the next visit
+   * triggers a fresh download (used after new segmentation or explicit reset).
    */
   async clearProjectCache(projectId: string): Promise<void> {
     this.checkInitialization();
 
-    // First pass: collect URLs that need to be revoked
+    // Remove from session-level ready set so next visit re-fetches
+    _projectReadySet.delete(projectId);
+
+    // Collect and revoke object URLs to free browser memory
     const urlsToRevoke: string[] = [];
     for (const [key, url] of this.urlCache.entries()) {
       if (key.startsWith(projectId)) {
         urlsToRevoke.push(url);
-        this.urlCache.delete(key); // Remove from cache
+        this.urlCache.delete(key);
       }
     }
-
-    // Revoke object URLs to free browser memory
-    urlsToRevoke.forEach(url => {
-      URL.revokeObjectURL(url);
-    });
+    urlsToRevoke.forEach(url => URL.revokeObjectURL(url));
 
     // Clear images from persistent IndexedDB storage
     await this.db.clearProject(projectId);

@@ -81,13 +81,10 @@ services:
       GPU_SERVER_JWT_LIFETIME_SECONDS: 600
 
       # Callback URL Configuration
-      # Backend submits inference to the host-side GPU service on port 8011,
-      # so callbacks must use an address that the host process can resolve.
-      CALLBACK_URL: http://visheart-app:5000
-      LOCAL_CALLBACK_URL: http://visheart-app:5000
       # GPU container calls back to the backend; host.docker.internal:5000
       # is the host-side port mapping for the visheart-local container.
       CALLBACK_URL: http://host.docker.internal:5000
+      LOCAL_CALLBACK_URL: http://visheart-app:5000
       
       # ========== Frontend Configuration ==========
       NEXT_PUBLIC_API_URL: http://localhost:5000

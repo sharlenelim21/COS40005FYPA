@@ -366,6 +366,16 @@ export const segmentationApi = {
     }
   },
 
+  // Trigger server-side bullseye computation for a mask (async, non-blocking)
+  triggerBullseye: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-bullseye/${maskId}`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
   // Export project data
   exportProjectData: async (projectId: string) => {
     try {
