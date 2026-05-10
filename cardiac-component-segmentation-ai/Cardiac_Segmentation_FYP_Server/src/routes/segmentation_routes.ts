@@ -987,4 +987,153 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
     }
 });
 
+// Trigger bullseye analysis on demand for an existing project
+router.post("/trigger-bullseye/:projectId", isAuth, async (req: Request, res: Response) => {
+    const projectId = toSingleString(req.params.projectId);
+    const userId = req.user?._id;
+
+    if (!projectId) {
+        return res.status(400).json({ success: false, message: "Project ID is required." });
+    }
+
+    try {
+        const projectResult = await readProject(projectId, userId?.toString());
+        if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            return res.status(404).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        const project = projectResult.projects[0];
+        const originalFilepath = project.originalfilepath;
+        if (!originalFilepath) {
+            return res.status(400).json({ success: false, message: "Project has no source NIfTI file." });
+        }
+
+        const masksResult = await readProjectSegmentationMask(projectId);
+        if (!masksResult.success || !masksResult.projectsegmentationmasks || masksResult.projectsegmentationmasks.length === 0) {
+            return res.status(404).json({ success: false, message: "No segmentation masks found for this project." });
+        }
+
+        // Prefer the editable (non-MedSAM) mask; fall back to whatever is available
+        const targetMask =
+            masksResult.projectsegmentationmasks.find((m) => !m.isMedSAMOutput) ??
+            masksResult.projectsegmentationmasks[0];
+        const maskId = (targetMask as any)._id?.toString();
+        if (!maskId) {
+            return res.status(500).json({ success: false, message: "Could not resolve mask ID." });
+        }
+
+        // Respond immediately so the client is not blocked while the GPU works
+        res.status(202).json({ success: true, message: "Bullseye analysis triggered.", maskId });
+
+        // Run asynchronously after response is sent
+        (async () => {
+            const bullseyeNiftiPath = `/tmp/bullseye_trigger_${projectId}_${Date.now()}.nii.gz`;
+            try {
+                let s3Key: string;
+                try {
+                    const parsed = new URL(originalFilepath);
+                    const parts = parsed.pathname.replace(/^\//, "").split("/");
+                    s3Key = parts.slice(1).join("/");
+                } catch {
+                    s3Key = originalFilepath;
+                }
+
+                const bucketName = process.env.AWS_BUCKET_NAME;
+                if (!bucketName || !s3Key) {
+                    logger.warn(`${serviceLocation}: [Bullseye Trigger] Missing bucket or S3 key for project ${projectId}`);
+                    return;
+                }
+
+                await downloadFromS3(bucketName, s3Key, bullseyeNiftiPath);
+                const { computeBullseyeAndStore } = await import("../services/segmentation_export");
+                await computeBullseyeAndStore(bullseyeNiftiPath, maskId, projectId);
+                logger.info(`${serviceLocation}: [Bullseye Trigger] Computed bullseye for mask ${maskId} (project ${projectId})`);
+            } catch (err: any) {
+                logger.warn(`${serviceLocation}: [Bullseye Trigger] Failed for project ${projectId}: ${err?.message}`);
+            } finally {
+                try { await fs.remove(bullseyeNiftiPath); } catch { /* ignore */ }
+            }
+        })();
+
+    } catch (error: unknown) {
+        LogError(
+            error instanceof Error ? error : new Error(String(error)),
+            serviceLocation,
+            `Error triggering bullseye for project ${projectId}`
+        );
+        return res.status(500).json({ success: false, message: "Failed to trigger bullseye analysis." });
+    }
+});
+
+// Get segmentation results (masks) for a specific project
+router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res: Response) => {
+    const projectId = toSingleString(req.params.projectId);
+    const userId = req.user?._id;
+
+    logger.info(`${serviceLocation}: Fetching segmentation results for project ${projectId} by user ${userId}`);
+
+    if (!projectId) {
+        return res.status(400).json({ 
+            success: false, 
+            message: "Project ID is required." 
+        });
+    }
+
+    try {
+        // Verify project ownership
+        const projectResult = await readProject(projectId, userId?.toString());
+        if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            logger.warn(`${serviceLocation}: Project ${projectId} not found or user ${userId} does not have access.`);
+            return res.status(404).json({ 
+                success: false, 
+                message: "Project not found or access denied." 
+            });
+        }
+
+        // Get all segmentation masks for this project
+        const masksResult = await readProjectSegmentationMask(projectId);
+        
+        if (!masksResult.success || !masksResult.projectsegmentationmasks) {
+            logger.info(`${serviceLocation}: No segmentation masks found for project ${projectId}.`);
+            return res.status(200).json({
+                success: true,
+                projectId: projectId,
+                segmentations: []
+            });
+        }
+
+        // Return all masks with their bullseye data (if available)
+        const segmentations = masksResult.projectsegmentationmasks.map((mask: IProjectSegmentationMaskDocument) => ({
+            _id: mask._id,
+            projectid: mask.projectid,
+            name: mask.name,
+            description: mask.description,
+            isSaved: mask.isSaved,
+            isMedSAMOutput: mask.isMedSAMOutput,
+            segmentationmaskRLE: mask.segmentationmaskRLE,
+            frames: mask.frames,
+            bullseye: (mask as any).bullseye || undefined  // Include bullseye if it exists
+        }));
+
+        logger.info(`${serviceLocation}: Successfully retrieved ${segmentations.length} segmentation mask(s) for project ${projectId}.`);
+        
+        return res.status(200).json({
+            success: true,
+            projectId: projectId,
+            segmentations: segmentations
+        });
+
+    } catch (error: unknown) {
+        LogError(
+            error instanceof Error ? error : new Error(String(error)),
+            serviceLocation,
+            `Error fetching segmentation results for project ${projectId}`
+        );
+        return res.status(500).json({
+            success: false,
+            message: "An error occurred while fetching segmentation results."
+        });
+    }
+});
+
 export default router;
