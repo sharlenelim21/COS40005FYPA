@@ -269,6 +269,17 @@ export const segmentationApi = {
     return response.data;
   },
 
+  // Trigger bullseye analysis on demand (fires async on server, returns 202)
+  triggerBullseye: async (projectId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-bullseye/${projectId}`);
+      return response.data;
+    } catch (error: unknown) {
+      console.error("[API] triggerBullseye error:", error);
+      return { success: false };
+    }
+  },
+
   // Get segmentation results for a project
   getSegmentationResults: async (projectId: string) => {
     try {
@@ -276,7 +287,11 @@ export const segmentationApi = {
         `/segmentation/segmentation-results/${projectId}`,
       );
       return response.data;
-    } catch (error) {
+    } catch (error: unknown) {
+      // 404 means no masks exist yet — return empty result instead of throwing
+      if ((error as { response?: { status?: number } })?.response?.status === 404) {
+        return { segmentations: [], success: true };
+      }
       throw error;
     }
   },

@@ -8,6 +8,7 @@
  */
 import express, { Request, Response, NextFunction } from "express";
 import fs from "fs/promises";
+import fsExtra from "fs-extra";
 import path from "path";
 import crypto from "crypto";
 import multer from "multer";
@@ -34,6 +35,7 @@ import LogError from "../utils/error_logger";
 import { v4 as uuidv4 } from "uuid"; // For generating new _id for the manual mask
 import { gpuObjUploadFilter } from "../middleware/uploadmiddleware";
 import { processReconstructionCallback } from "../services/reconstruction_handler";
+import { computeBullseyeAndStore } from "../services/segmentation_export";
 
 const serviceLocation = "InferenceCallback(Webhook)";
 const router = express.Router();
@@ -720,6 +722,54 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
             logger.info(
               `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}). AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
             );
+            
+            // Fire bullseye analysis non-blocking using the project's source NIfTI.
+            // Using the original NIfTI directly is far faster than re-exporting
+            // a segmentation NIfTI via Python, and the bullseye endpoint only
+            // needs the raw anatomy — not the segmentation labels.
+            if (manualCreationResult.projectsegmentationmask._id) {
+              const bullseyeNiftiPath = `/tmp/bullseye_source_${projectId}_${gpuJobId}.nii.gz`;
+              const maskIdForBullseye = manualCreationResult.projectsegmentationmask._id.toString();
+
+              (async () => {
+                try {
+                  const projectResult = await readProject(projectId);
+                  const originalFilepath = projectResult.projects?.[0]?.originalfilepath;
+                  if (!originalFilepath) {
+                    logger.warn(`${serviceLocation}: [Bullseye] No originalfilepath on project ${projectId} — skipping bullseye`);
+                    return;
+                  }
+
+                  // Extract S3 key from the stored URL (e.g. "http://minio:9000/visheart-bucket/source_nifti/...")
+                  let s3Key: string;
+                  try {
+                    const parsed = new URL(originalFilepath);
+                    // pathname is "/<bucket>/<key...>" — strip leading "/<bucket>/"
+                    const parts = parsed.pathname.replace(/^\//, "").split("/");
+                    s3Key = parts.slice(1).join("/");
+                  } catch {
+                    // Fallback: treat value as a bare S3 key
+                    s3Key = originalFilepath;
+                  }
+
+                  const bucketName = process.env.AWS_BUCKET_NAME;
+                  if (!bucketName || !s3Key) {
+                    logger.warn(`${serviceLocation}: [Bullseye] Missing bucket or S3 key for project ${projectId} — skipping bullseye`);
+                    return;
+                  }
+
+                  const { downloadFromS3 } = await import("../services/s3_handler");
+                  await downloadFromS3(bucketName, s3Key, bullseyeNiftiPath);
+
+                  await computeBullseyeAndStore(bullseyeNiftiPath, maskIdForBullseye, projectId);
+                  logger.info(`${serviceLocation}: [Bullseye] Successfully computed bullseye for mask ${maskIdForBullseye} after job ${gpuJobId}`);
+                } catch (bullseyeErr: any) {
+                  logger.warn(`${serviceLocation}: [Bullseye] Failed to compute bullseye after segmentation job ${gpuJobId}: ${bullseyeErr?.message}`);
+                } finally {
+                  try { await fsExtra.remove(bullseyeNiftiPath); } catch { /* ignore */ }
+                }
+              })();
+            }
           } else {
             logger.error(
               `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}) after AI mask creation. Reason: ${manualCreationResult.message}`
