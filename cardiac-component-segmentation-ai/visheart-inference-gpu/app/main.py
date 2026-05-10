@@ -7,22 +7,23 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=".env", override=True)
 
 # Import logging configuration
-from utils.logging_config import setup_logging, log_startup_banner
+from app.utils.logging_config import setup_logging, log_startup_banner
 
 # Class imports
-from classes.yolo_handler import YoloHandler
+from app.classes.yolo_handler import YoloHandler
 
 # Route imports
-from routes.inference_route import router as inference_router
-from routes.status_routes import router as status_router
-from routes.inference_route_old import router as inference_router_old
-from routes.bullseye_route import router as bullseye_router
+from app.routes.inference_route import router as inference_router
+from app.routes.status_routes import router as status_router
+from app.routes.inference_route_old import router as inference_router_old
+from app.routes.bullseye_route import router as bullseye_router
 
 # Import the lifespans (custom dependencies)
-from dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan
+# Import the combined lifespan manager
+from app.dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan # Updated import
 
 # Import additional logging functions
-from utils.logging_config import log_startup_complete
+from app.utils.logging_config import log_startup_complete
 
 # Composite the lifespans
 @asynccontextmanager

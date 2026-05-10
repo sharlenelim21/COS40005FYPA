@@ -80,9 +80,15 @@ services:
       GPU_SERVER_JWT_REFRESH_INTERVAL: 480000
       GPU_SERVER_JWT_LIFETIME_SECONDS: 600
 
-      # GPU container calls back to the backend via the host port mapping.
-      CALLBACK_URL: http://host.docker.internal:5000
+      # Callback URL Configuration
+      # Backend submits inference to the host-side GPU service on port 8011,
+      # so callbacks must use an address that the host process can resolve.
+      CALLBACK_URL: http://visheart-app:5000
       LOCAL_CALLBACK_URL: http://visheart-app:5000
+      # GPU container calls back to the backend; host.docker.internal:5000
+      # is the host-side port mapping for the visheart-local container.
+      CALLBACK_URL: http://host.docker.internal:5000
+      
       # ========== Frontend Configuration ==========
       NEXT_PUBLIC_API_URL: http://localhost:5000
       NEXT_PUBLIC_ENV: development
@@ -107,7 +113,6 @@ services:
       #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
     volumes:
-      - ../Cardiac_Segmentation_FYP_Server/dist/routes/segmentation_routes.js:/app/backend/dist/routes/segmentation_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/webhook_routes.js:/app/backend/dist/routes/webhook_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/gpu_status.js:/app/backend/dist/routes/gpu_status.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/landmark_routes.js:/app/backend/dist/routes/landmark_routes.js:ro
@@ -232,7 +237,6 @@ services:
       <<: *gpu-env
       USE_GPU: "false" # Safely overrides for CPU
     volumes:
-      - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
       - ../visheart-inference-gpu/app:/app/app
       - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
@@ -267,17 +271,12 @@ services:
       pip install --no-cache-dir "nibabel>=5.0.0" timm;
       exec bash ./docker/scripts/start.sh'
     volumes:
-      - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
-      - ../visheart-inference-gpu/app/main.py:/app/app/main.py:ro
       - ../visheart-inference-gpu/app/external_unet_inference.py:/app/app/external_unet_inference.py:ro
       - ../visheart-inference-gpu/app/routes/inference_route.py:/app/app/routes/inference_route.py:ro
-      - ../visheart-inference-gpu/app/routes/bullseye_route.py:/app/app/routes/bullseye_route.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
       - ../visheart-inference-gpu/app/helpers/unet_inference_api.py:/app/app/helpers/unet_inference_api.py:ro
       - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
-      - ../visheart-inference-gpu/app/classes/pydantic_schema.py:/app/app/classes/pydantic_schema.py:ro
-      - ../visheart-inference-gpu/app/bullseye_analysis.py:/app/app/bullseye_analysis.py:ro
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
       - ../../UNETRESNET34:/app/UNETRESNET34:ro
       - ../visheart-inference-gpu/app/dependencies/get_P.py:/app/app/dependencies/get_P.py:ro
