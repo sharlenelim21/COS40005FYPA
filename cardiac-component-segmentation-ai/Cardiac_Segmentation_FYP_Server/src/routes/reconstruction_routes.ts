@@ -146,32 +146,22 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                     normalizeSegmentationModel(maskName.includes("unet") ? "unet" : maskName.includes("medsam") ? "medsam" : undefined) ||
                     "unknown";
 
-                // Generate a browser-accessible download URL for the mesh tar file.
-                // When S3_PUBLIC_ENDPOINT is set the bucket is publicly readable
-                // (anonymous download policy), so build a plain URL directly —
-                // presigned URLs would be signed against the internal hostname and
-                // fail signature validation when the host is swapped for the public one.
+                // Generate presigned URL if mesh file exists
                 if (recon.reconstructedMesh?.path) {
                     try {
                         const s3Key = outputKey;
                         if (s3Key) {
                             const awsBucketName = process.env.AWS_BUCKET_NAME;
                             if (awsBucketName) {
-                                if (process.env.S3_PUBLIC_ENDPOINT) {
-                                    // Build plain public URL — bucket has anonymous read policy
-                                    const base = process.env.S3_PUBLIC_ENDPOINT.replace(/\/$/, "");
-                                    downloadUrl = `${base}/${awsBucketName}/${s3Key}`;
-                                } else {
-                                    downloadUrl = await generatePresignedGetUrl(
-                                        awsBucketName,
-                                        s3Key,
-                                        3600 // 1 hour expiry
-                                    );
-                                }
+                                downloadUrl = await generatePresignedGetUrl(
+                                    awsBucketName,
+                                    s3Key,
+                                    3600 // 1 hour expiry
+                                );
                             }
                         }
                     } catch (urlError) {
-                        logger.warn(`${serviceLocation}: Failed to generate download URL for reconstruction ${recon._id}: ${(urlError as Error).message}`);
+                        logger.warn(`${serviceLocation}: Failed to generate presigned URL for reconstruction ${recon._id}: ${(urlError as Error).message}`);
                     }
                 }
 

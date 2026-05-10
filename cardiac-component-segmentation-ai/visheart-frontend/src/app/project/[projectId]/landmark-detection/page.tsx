@@ -114,27 +114,17 @@ export default function LandmarkDetectionPage() {
   );
 
   // Bullseye data
-  const BULLSEYE_MAX_RETRIES = 10;
-  const BULLSEYE_RETRY_DELAY = 5000;
-
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
-  const [bullseyeRetryCount, setBullseyeRetryCount] = useState(0);
 
-  const fetchBullseye = useCallback(async (isManualRefresh = false) => {
+  const fetchBullseye = useCallback(async () => {
     setBullseyeLoading(true);
-    if (isManualRefresh) setBullseyeRetryCount(0);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
       const segmentations = res.segmentations as Array<{ isMedSAMOutput: boolean; bullseye?: BullseyeData }>;
       const mask = segmentations?.find((m) => m.bullseye != null)
         ?? segmentations?.find((m) => !m.isMedSAMOutput);
-      const found = mask?.bullseye ?? null;
-      setBullseyeData(found);
-      if (!found && !isManualRefresh) {
-        // Bullseye is computed async after reconstruction — schedule retry
-        setBullseyeRetryCount((prev) => prev + 1);
-      }
+      setBullseyeData(mask?.bullseye ?? null);
     } catch {
       setBullseyeData(null);
     } finally {
@@ -142,26 +132,9 @@ export default function LandmarkDetectionPage() {
     }
   }, [projectId]);
 
-  const handleTriggerBullseye = useCallback(async () => {
-    setBullseyeLoading(true);
-    await segmentationApi.triggerBullseye(projectId);
-    // Wait a few seconds for GPU to finish, then poll
-    setBullseyeRetryCount(0);
-    await new Promise((r) => setTimeout(r, 5000));
-    await fetchBullseye(true);
-  }, [projectId, fetchBullseye]);
-
   useEffect(() => {
     fetchBullseye();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
-
-  // Retry polling when bullseye not found yet
-  useEffect(() => {
-    if (bullseyeRetryCount === 0 || bullseyeRetryCount > BULLSEYE_MAX_RETRIES || bullseyeData != null) return;
-    const id = setTimeout(() => fetchBullseye(), BULLSEYE_RETRY_DELAY);
-    return () => clearTimeout(id);
-  }, [bullseyeRetryCount, bullseyeData, fetchBullseye]);
+  }, [fetchBullseye]);
 
   // Landmark dot visibility
   const [visibleLandmarks, setVisibleLandmarks] = useState<Set<string>>(
@@ -187,19 +160,16 @@ export default function LandmarkDetectionPage() {
         setAhaAlignmentAngle(null);
       }
       if (prevStatus.current === "running" && state.status === "done") {
-        fetchBullseye(true);
+        fetchBullseye();
       }
     }
     prevStatus.current = state.status;
   }, [state.status, fetchBullseye]);
 
   const handleApplyAlignment = useCallback(() => {
-    if (!currentPrediction?.rv_insertion_1 || !currentPrediction?.rv_insertion_2) {
-      // No landmarks yet — use default orientation so the bullseye still shows
-      setAhaAlignmentAngle(0);
-      return;
-    }
+    if (!currentPrediction) return;
     const { rv_insertion_1, rv_insertion_2 } = currentPrediction;
+    if (!rv_insertion_1 || !rv_insertion_2) return;
 
     const rvMidX = (rv_insertion_1[0] + rv_insertion_2[0]) / 2;
     const rvMidY = (rv_insertion_1[1] + rv_insertion_2[1]) / 2;
@@ -489,8 +459,6 @@ export default function LandmarkDetectionPage() {
                     : 1
                 }
                 isAligned={ahaAlignmentAngle !== null}
-                onRefresh={() => fetchBullseye(true)}
-                onTrigger={handleTriggerBullseye}
               />
             </div>
           </ResizablePanel>
@@ -625,16 +593,12 @@ function AhaBullseyePanel({
   referenceAngleDeg = 0,
   frameCount = 1,
   isAligned = false,
-  onRefresh,
-  onTrigger,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
   referenceAngleDeg?: number;
   frameCount?: number;
   isAligned?: boolean;
-  onRefresh?: () => void;
-  onTrigger?: () => void;
 }) {
   return (
     <div className="flex-1 min-h-0 rounded-lg border border-border bg-background p-3 flex flex-col overflow-hidden">
@@ -663,33 +627,11 @@ function AhaBullseyePanel({
           </div>
         </div>
       ) : !bullseyeData ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-4">
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
           <p className="text-xs text-muted-foreground">
-            Bullseye data not available yet. Run reconstruction to compute it, or trigger computation manually if reconstruction is already done.
+            Run reconstruction first to generate bullseye data
           </p>
-          <div className="flex flex-col items-center gap-1.5">
-            {onTrigger && (
-              <button
-                type="button"
-                onClick={onTrigger}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:text-primary/80 underline underline-offset-2 transition-colors"
-              >
-                <RefreshCw className="h-3 w-3" />
-                Compute Bullseye
-              </button>
-            )}
-            {onRefresh && (
-              <button
-                type="button"
-                onClick={onRefresh}
-                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
-              >
-                <RefreshCw className="h-3 w-3" />
-                Check again
-              </button>
-            )}
-          </div>
         </div>
       ) : (
         <>
