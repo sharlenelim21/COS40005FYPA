@@ -1,9 +1,9 @@
 // File: src/services/reconstruction.ts
 // Description: Service layer for initiating 4D reconstruction process, including GPU service communication.
 
-import { IUserSafe, ProjectCrudResult } from "../types/database_types";
+import { IUserSafe, ProjectCrudResult, IProjectSegmentationMask, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
-import { readProject, readProjectSegmentationMask } from "./database";
+import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
@@ -13,6 +13,42 @@ import { getFreshGPUServerAddress, getCurrentToken } from "./gpu_auth_client";
 import { generateAISegmentationForReconstruction } from "./segmentation_export";
 
 const serviceLocation = 'Reconstruction';
+
+/**
+ * Resolve which segmentation model a mask document belongs to.
+ * Mirrors the frontend's `inferDocModel` so a doc whose explicit
+ * `segmentationModel` field was lost in transit is still classified
+ * correctly via the webhook's name templates.
+ *
+ * Returns "medsam" | "unet" | null. Never guesses.
+ */
+const inferMaskModel = (
+    mask: IProjectSegmentationMask
+): "medsam" | "unet" | null => {
+    const tag = (
+        (mask as any).segmentationModel ||
+        (mask as any).model_used ||
+        ""
+    )
+        .toString()
+        .toLowerCase();
+    if (tag === "medsam" || tag === "unet") return tag;
+
+    const name = (mask.name || "").toString().toLowerCase();
+    if (name.includes("unet")) return "unet";
+    if (name.includes("medsam")) return "medsam";
+    if (name.startsWith("ai output")) return "medsam";
+    if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+    return null;
+};
+
+const normalizeStoredModel = (value: unknown): "medsam" | "unet" | null => {
+    const normalized = (value ?? "").toString().toLowerCase();
+    if (normalized === "medsam" || normalized === "unet") {
+        return normalized;
+    }
+    return null;
+};
 
 /**
  * Sends 4D reconstruction request to the configured GPU server
@@ -111,8 +147,33 @@ const sendReconstructionRequestToCloudGpu = async (
  * @param export_format - Export format for mesh files ('glb' or 'obj')
  * @returns Promise with success status, message, and job UUID
  */
-export const startReconstruction = async (projectId: string, user?: IUserSafe, reconstructionName?: string, reconstructionDescription?: string, parameters?: any, ed_frame?: number, export_format?: string): Promise<{ success: boolean; message: string; uuid?: string }> => {
-    logger.info(`${serviceLocation}: Starting 4D reconstruction for project ${projectId} by user ${user?.username} with export_format: ${export_format || 'default'}`);
+export const startReconstruction = async (
+    projectId: string,
+    user?: IUserSafe,
+    reconstructionName?: string,
+    reconstructionDescription?: string,
+    parameters?: any,
+    ed_frame?: number,
+    export_format?: string,
+    segmentationModel?: string
+): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number }> => {
+    // Normalise the requested segmentation model. Allowed values:
+    //   "medsam" — only MedSAM-tagged editable masks
+    //   "unet"   — only UNet-tagged editable masks
+    //   undefined / anything else — legacy fallback (whatever editable
+    //                              mask comes first; matches old behavior).
+    const requestedModel: "medsam" | "unet" | null =
+        typeof segmentationModel === "string"
+            ? (segmentationModel.toLowerCase() === "medsam"
+                ? "medsam"
+                : segmentationModel.toLowerCase() === "unet"
+                ? "unet"
+                : null)
+            : null;
+
+    logger.info(
+        `${serviceLocation}: Starting 4D reconstruction for project ${projectId} by user ${user?.username} with export_format: ${export_format || 'default'}, requestedModel: ${requestedModel ?? "<none — legacy>"}`
+    );
     
     // Get current GPU authentication token
     const gpuAuthToken = getCurrentToken();
@@ -150,6 +211,43 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
             return { success: false, message: "Access denied to this project" };
         }
 
+        if (requestedModel) {
+            const existingReconstructions = await readProjectReconstruction(projectId);
+            if (existingReconstructions.success && existingReconstructions.projectreconstructions) {
+                const matchingReconstruction = existingReconstructions.projectreconstructions.find(
+                    (reconstruction) =>
+                        normalizeStoredModel(reconstruction.segmentationModel) === requestedModel,
+                );
+
+                if (matchingReconstruction) {
+                    const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
+                    return {
+                        success: false,
+                        statusCode: 409,
+                        message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
+                    };
+                }
+            }
+
+            const blockingJob = await jobModel.findOne({
+                projectid: projectId,
+                segmentationModel: requestedModel === "medsam"
+                    ? SegmentationModel.MEDSAM
+                    : SegmentationModel.UNET,
+                status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
+                model_used: "4d_reconstruction",
+            }).lean();
+
+            if (blockingJob) {
+                const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
+                return {
+                    success: false,
+                    statusCode: 409,
+                    message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
+                };
+            }
+        }
+
         // Validate that project has segmentation masks (required for 4D reconstruction)
         const hasMasksResult = await readProjectSegmentationMask(projectId);
         if (!hasMasksResult.projectsegmentationmasks || hasMasksResult.projectsegmentationmasks.length === 0) {
@@ -159,18 +257,59 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
 
         logger.info(`${serviceLocation}: Found ${hasMasksResult.projectsegmentationmasks.length} segmentation mask(s) for project ${projectId}. Proceeding with 4D reconstruction.`);
 
-        // Filter for editable/manual masks (isMedSAMOutput: false) - reconstruction uses user-edited masks for better accuracy
-        const editableMasks = hasMasksResult.projectsegmentationmasks.filter(mask => mask.isMedSAMOutput === false);
-        
-        if (editableMasks.length === 0) {
-            logger.warn(`${serviceLocation}: No editable segmentation masks found for project ${projectId}. 4D reconstruction requires editable masks (user-refined segmentation).`);
-            return { success: false, message: "4D reconstruction requires editable segmentation masks. Please complete or refine segmentation before starting reconstruction." };
+        // Filter for editable/manual masks (isMedSAMOutput: false) — reconstruction uses user-edited masks for accuracy.
+        const allEditableMasks = hasMasksResult.projectsegmentationmasks.filter(
+            mask => mask.isMedSAMOutput === false
+        );
+
+        if (allEditableMasks.length === 0) {
+            logger.warn(
+                `${serviceLocation}: No editable segmentation masks found for project ${projectId}. 4D reconstruction requires editable masks (user-refined segmentation).`
+            );
+            return {
+                success: false,
+                message:
+                    "4D reconstruction requires editable segmentation masks. Please complete or refine segmentation before starting reconstruction.",
+            };
         }
 
-        // Extract mask ID from the first editable segmentation mask
+        // Per-model scoping. If the caller specified a segmentationModel,
+        // restrict the candidate set to docs that resolve to that model.
+        // If no candidates match (e.g. caller asked for UNet but project
+        // only has MedSAM), refuse — do NOT silently fall back to the
+        // other model. Callers expecting a specific model must get that
+        // model or an explicit failure.
+        let editableMasks = allEditableMasks;
+        if (requestedModel) {
+            const scoped = allEditableMasks.filter(
+                m => inferMaskModel(m) === requestedModel
+            );
+            if (scoped.length === 0) {
+                const availableModels = Array.from(
+                    new Set(
+                        allEditableMasks
+                            .map(m => inferMaskModel(m))
+                            .filter((x): x is "medsam" | "unet" => !!x)
+                    )
+                );
+                logger.warn(
+                    `${serviceLocation}: No editable masks tagged for model "${requestedModel}" in project ${projectId}. Available editable models: [${availableModels.join(", ") || "none-resolved"}].`
+                );
+                return {
+                    success: false,
+                    message: `No cached ${requestedModel.toUpperCase()} segmentation found for this project. Available: ${availableModels.length ? availableModels.map(m => m.toUpperCase()).join(", ") : "none"}.`,
+                };
+            }
+            editableMasks = scoped;
+        }
+
         const firstEditableMask = editableMasks[0];
         const maskId = firstEditableMask._id?.toString();
-        logger.info(`${serviceLocation}: Using editable segmentation mask ID ${maskId} for reconstruction of project ${projectId} (${editableMasks.length} editable mask(s) available)`);
+        const resolvedModelForChosenMask = inferMaskModel(firstEditableMask);
+        const persistedSegmentationModel = requestedModel ?? resolvedModelForChosenMask ?? undefined;
+        logger.info(
+            `${serviceLocation}: Using editable segmentation mask ID ${maskId} (resolvedModel=${resolvedModelForChosenMask ?? "<unresolved>"}) for reconstruction of project ${projectId}. Candidates after model scoping: ${editableMasks.length}, total editable in project: ${allEditableMasks.length}, requestedModel: ${requestedModel ?? "<none — legacy>"}`
+        );
 
         // Validate ed_frame parameter if provided
         if (ed_frame !== undefined) {
@@ -190,7 +329,11 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
         // Generate segmentation NIfTI file directly (no HTTP call needed)
         logger.info(`${serviceLocation}: Reconstruction started - generating segmentation NIfTI for project ${projectId}`);
         
-        const segmentationResult = await generateAISegmentationForReconstruction(projectId, user?._id);
+        const segmentationResult = await generateAISegmentationForReconstruction(
+            projectId,
+            user?._id,
+            requestedModel ?? undefined
+        );
         
         if (!segmentationResult.success || !segmentationResult.s3Key) {
             logger.error(`${serviceLocation}: Failed to generate segmentation NIfTI for project ${projectId}: ${segmentationResult.message}`);
@@ -262,13 +405,19 @@ export const startReconstruction = async (projectId: string, user?: IUserSafe, r
             const jobData: Partial<IJob> = {
                 userid: user?._id,
                 projectid: projectId,
+                maskId,
                 uuid: jobUuid,
                 status: JobStatus.PENDING,  // Set to PENDING since GPU already accepted
-                result: `GPU Job ID: ${reconstructionResult.jobId}${maskId ? `, Mask ID: ${maskId}` : ''}`,
+                result: `GPU Job ID: ${reconstructionResult.jobId}${maskId ? `, Mask ID: ${maskId}` : ''}${persistedSegmentationModel ? `, Segmentation Model: ${persistedSegmentationModel}` : ''}`,
                 message: "4D reconstruction submitted to GPU server",
                 segmentationName: reconstructionName || `4D Reconstruction - ${new Date().toISOString()}`,
                 segmentationDescription: reconstructionDescription || "4D cardiac reconstruction using SDF model",
-                model_used: "4d_reconstruction"
+                model_used: "4d_reconstruction",
+                segmentationModel: persistedSegmentationModel === "medsam"
+                    ? SegmentationModel.MEDSAM
+                    : persistedSegmentationModel === "unet"
+                    ? SegmentationModel.UNET
+                    : undefined
             };
 
             const jobCreationResult = await createJob(jobData as IJob);
