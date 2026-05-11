@@ -117,17 +117,34 @@ export default function LandmarkDetectionPage() {
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
 
-  const fetchBullseye = useCallback(async () => {
+  const fetchBullseye = useCallback(async (triggerIfMissing = true) => {
     setBullseyeLoading(true);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
-      const segmentations = res.segmentations as Array<{ isMedSAMOutput: boolean; bullseye?: BullseyeData }>;
-      const mask = segmentations?.find((m) => m.bullseye != null)
-        ?? segmentations?.find((m) => !m.isMedSAMOutput);
-      setBullseyeData(mask?.bullseye ?? null);
+      const segs = res.segmentations as Array<{ _id?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData }>;
+      const withBullseye = segs?.find((m) => m.bullseye != null);
+      if (withBullseye) {
+        setBullseyeData(withBullseye.bullseye!);
+        setBullseyeLoading(false);
+        return;
+      }
+      // No bullseye yet — trigger server-side computation for the first editable mask
+      const editableMask = segs?.find((m) => !m.isMedSAMOutput);
+      if (editableMask?._id && triggerIfMissing) {
+        try {
+          await segmentationApi.triggerBullseye(editableMask._id);
+          // Re-fetch after giving the backend ~8s to finish the Python computation.
+          // Keep loading=true during the wait; fetchBullseye(false) will set it false.
+          setTimeout(() => fetchBullseye(false), 8000);
+          return;
+        } catch {
+          // trigger failed; fall through to show null
+        }
+      }
+      setBullseyeData(null);
+      setBullseyeLoading(false);
     } catch {
       setBullseyeData(null);
-    } finally {
       setBullseyeLoading(false);
     }
   }, [projectId]);
@@ -225,10 +242,7 @@ export default function LandmarkDetectionPage() {
       const cachedUrl = await getMRIImage(currentImageFrame, currentImageSlice);
       if (cancelled) return;
 
-      setFrameImageUrl(
-        cachedUrl ??
-          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"}/api/projects/${projectId}/images/frame_${currentImageFrame}_slice_${currentImageSlice}.jpeg`,
-      );
+      setFrameImageUrl(cachedUrl ?? null);
     }
 
     loadFrameImage();
@@ -630,7 +644,7 @@ function AhaBullseyePanel({
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
           <p className="text-xs text-muted-foreground">
-            Run reconstruction first to generate bullseye data
+            No bullseye data available for this project. Bullseye analysis is generated automatically during segmentation.
           </p>
         </div>
       ) : (

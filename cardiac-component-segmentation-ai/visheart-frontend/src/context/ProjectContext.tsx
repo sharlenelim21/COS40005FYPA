@@ -146,7 +146,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
   // 5. Reconstruction cache state - NEW
   const [hasReconstructions, setHasReconstructions] = useState<boolean>(false);
-  const [reconstructionFetchDone, setReconstructionFetchDone] = useState<boolean>(false);
   const [reconstructionMetadata, setReconstructionMetadata] = useState<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
   const [reconstructionResults, setReconstructionResults] = useState<any[]>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
   const [reconstructionsByModel, setReconstructionsByModel] = useState<Record<string, any>>({}); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -849,6 +848,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
 
+    setLoading("project");
+
     // Check if projectId is available
     if (!projectId) {
       setProjectData(null);
@@ -886,6 +887,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         // Don't update loading if request was aborted
         if (signal.aborted) return;
 
+        setLoading("idle");
       });
 
     // Cleanup function
@@ -903,6 +905,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       return;
     }
 
+    setLoading("mask");
     setMaskFetchDone(false);
 
     // Fetch segmentation masks for the project
@@ -993,6 +996,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     if (!maskFetchDone || hasMasks || !projectData || !projectId || jobsFetchedRef.current) {
       return;
     }
+
+    setLoading("job");
 
     // Mark that we're fetching jobs to prevent redundant calls
     jobsFetchedRef.current = true;
@@ -1104,11 +1109,13 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         setReconstructionJobs(projectJobs);
         console.log(`Found ${projectJobs.length} reconstruction jobs for project ${projectId}:`, projectJobs);
 
-        // Check for logical errors: completed jobs should have reconstructions
+        // Only log a dev-mode warning if completed reconstruction jobs exist but no reconstruction
+        // documents were found. This is expected when old jobs were deleted and re-run; we do NOT
+        // surface this as a UI error because the reconstruction API is the authoritative source of
+        // truth and is fetched separately in effect 4b.
         const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
         if (completedJobs.length > 0 && !hasReconstructions) {
-          console.warn(`Warning: Found ${completedJobs.length} completed reconstruction job(s) but no reconstructions for project ${projectId}. This may indicate a server-side issue.`);
-          setReconstructionJobsError(`Found completed reconstruction job(s) but no results. Please contact support or try re-creating the reconstruction.`);
+          console.warn(`[ProjectContext] Found ${completedJobs.length} completed reconstruction job(s) but hasReconstructions=false for project ${projectId}. This is expected if old jobs were deleted. Reconstruction API is authoritative.`);
         }
       })
       .catch((error: unknown) => {
@@ -1138,18 +1145,31 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       try {
         console.log(`[ProjectContext] Initializing tar cache for project ${projectId}`);
 
-        // Initialize tar cache system
+        // Initialize tar cache system (no-op if already done)
         await tarImageCache.init();
 
-        // Check if images are already cached
+        // Fast path: project was already extracted this browser session — skip
+        // the loading spinner and the tar download entirely.
+        if (tarImageCache.isProjectReady(projectId)) {
+          console.log(`[ProjectContext] Project ${projectId} already in session cache — skipping tar fetch`);
+          setTarCacheReady(true);
+          setTarCacheError(null);
+          return;
+        }
+
+        // Slow path: show loading spinner and fetch from MinIO
+        setLoading("tar-cache");
+
+        // Check IndexedDB in case the browser session was refreshed but IndexedDB
+        // still has data (e.g. user hit F5 without clearing storage).
         const { frames, slices } = await tarImageCache.getAvailableFramesAndSlices(projectId);
         if (frames.length > 0 && slices.length > 0) {
-          console.log(`[ProjectContext] Found ${frames.length} frames and ${slices.length} slices in tar cache`);
+          console.log(`[ProjectContext] Found ${frames.length} frames and ${slices.length} slices in IndexedDB`);
+          tarImageCache.markProjectReady(projectId);
           setTarCacheReady(true);
           setTarCacheError(null);
         } else {
-          console.log("[ProjectContext] No cached images found, will attempt to extract from tar");
-          // Attempt to fetch and extract images in background
+          console.log("[ProjectContext] No cached images found, fetching tar from MinIO");
           const result = await tarImageCache.fetchAndExtractProjectImages(projectId, projectApi.getProjectPresignedUrl);
           if (result.success) {
             console.log(`[ProjectContext] Successfully extracted ${result.extractedImages} images to cache`);
@@ -1171,25 +1191,20 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     initializeTarCache();
 
-    // Cleanup function - clear project-specific cache when component unmounts or project changes
-    return () => {
-      console.log(`[ProjectContext] Cleaning up tar cache for project ${projectId}`);
-      tarImageCache.clearProjectCache(projectId).catch((error) => console.warn(`[ProjectContext] Cleanup error for project ${projectId}:`, error));
-    };
+    // No cleanup: the module-level singleton and IndexedDB persist across React
+    // unmounts intentionally so re-entering a project is instant. Explicit cache
+    // invalidation is available via the clearProjectCache context method.
   }, [projectData, projectId, maskFetchDone]);
 
   // 4b. Fetch reconstruction metadata when project is loaded - NEW
   useEffect(() => {
     if (!projectId || !projectData) {
       setHasReconstructions(false);
-      setReconstructionFetchDone(false);
       setReconstructionMetadata(null);
       setReconstructionResults([]);
       setReconstructionsByModel({});
       return;
     }
-
-    setReconstructionFetchDone(false);
 
     const fetchReconstructionMetadata = async () => {
       try {
@@ -1219,8 +1234,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         setReconstructionResults([]);
         setReconstructionsByModel({});
         setHasReconstructions(false);
-      } finally {
-        setReconstructionFetchDone(true);
       }
     };
 
@@ -1251,6 +1264,9 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     lastReconstructionInitKeyRef.current = activeReconstructionCacheKey;
     lastAutoPreloadKeyRef.current = null;
+
+    // Set loading stage to reconstruction-cache
+    setLoading("reconstruction-cache");
 
     const initializeReconstructionCache = async () => {
       const startTime = performance.now();
@@ -1375,30 +1391,26 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     // Set to done when:
     // 1. There's an error (project not found, etc.)
     // 2. OR we have project data, masks are fetched, tar cache is ready (or has error)
-    // 3. AND reconstruction metadata fetch has completed (so hasReconstructions is authoritative)
-    // 4. AND if reconstructions exist, reconstruction cache should be ready or have error
-    const reconstructionCondition = reconstructionFetchDone
-      ? (hasReconstructions
-          ? (shouldSkipReconstructionPreload || reconstructionCacheReady || !!reconstructionCacheError)
-          : true)
-      : false; // Wait until we know whether reconstructions exist
+    // 3. AND if reconstructions exist, reconstruction cache should be ready or have error
+    //    UNLESS shouldSkipReconstructionPreload is true (e.g. project overview page),
+    //    in which case we never load the reconstruction cache and should not wait for it.
+    const reconstructionCondition = !hasReconstructions || shouldSkipReconstructionPreload
+      ? true
+      : (reconstructionCacheReady || reconstructionCacheError);
 
-    // Tar cache runs in background — don't block page load on it.
-    // The page shows fine without MRI images cached; they load lazily on demand.
-    if (error || (projectData && maskFetchDone && reconstructionCondition && loading !== "done")) {
+    if (error || (projectData && maskFetchDone && (tarCacheReady || tarCacheError) && reconstructionCondition && loading !== "done")) {
       console.log(`[ProjectContext] 🎉 All loading complete - setting stage to "done"`);
       console.log(`[ProjectContext] 📊 Final status:`, {
         projectData: !!projectData,
         maskFetchDone,
         tarCacheReady,
         hasReconstructions,
-        reconstructionFetchDone,
         reconstructionCacheReady: hasReconstructions ? reconstructionCacheReady : 'N/A',
         error: error || 'none'
       });
       setLoading("done");
     }
-  }, [error, projectData, maskFetchDone, tarCacheReady, tarCacheError, hasReconstructions, reconstructionFetchDone, reconstructionCacheReady, reconstructionCacheError, shouldSkipReconstructionPreload, loading]);
+  }, [error, projectData, maskFetchDone, tarCacheReady, tarCacheError, hasReconstructions, reconstructionCacheReady, reconstructionCacheError, loading, shouldSkipReconstructionPreload]);
 
   // Cache invalidation function to refresh masks from backend
   const refreshMasks = useCallback(async () => {

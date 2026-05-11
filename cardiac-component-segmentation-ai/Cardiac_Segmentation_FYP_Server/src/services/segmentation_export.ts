@@ -17,6 +17,50 @@ import { getFreshGPUServerAddress, getCurrentToken } from "./gpu_auth_client";
 const serviceLocation = 'SegmentationExport';
 
 /**
+ * Compute AHA 17-segment bullseye analysis directly from the mask's RLE frame data
+ * using the local Python script. No GPU or NIfTI file required.
+ * Stores the result in MongoDB on the segmentation mask document.
+ */
+export const computeBullseyeFromMaskDoc = async (
+    maskId: string,
+    frames: any[],
+    width: number,
+    height: number,
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
+    const input = JSON.stringify({ frames, width, height });
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [Bullseye] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [Bullseye] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [Bullseye] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                await projectSegmentationMaskModel.findByIdAndUpdate(
+                    maskId,
+                    { $set: { bullseye: result } },
+                    { new: false },
+                );
+                logger.info(`${serviceLocation}: [Bullseye] Stored RLE-derived bullseye for mask ${maskId} — stats: ${JSON.stringify(result.stats)}`);
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [Bullseye] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
  * Non-blocking: POSTs the NIfTI file at niftiPath to the GPU /bullseye/analyze endpoint,
  * then stores the result in MongoDB on the segmentation mask document.
  */
@@ -72,7 +116,27 @@ export const computeBullseyeAndStore = async (
 
         logger.info(`${serviceLocation}: [Bullseye] Stored bullseye result for mask ${maskId} — stats: ${JSON.stringify(bullseyeData.stats)}`);
     } catch (err: any) {
-        logger.warn(`${serviceLocation}: [Bullseye] Failed to compute/store bullseye for mask ${maskId}: ${err?.message}`);
+        logger.warn(`${serviceLocation}: [Bullseye] GPU bullseye failed for mask ${maskId} (${err?.message}). Falling back to local RLE computation.`);
+        // Fall back to local RLE-based computation using the mask document's frame data
+        try {
+            const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+            const frames = (maskDoc as any)?.frames ?? [];
+            if (!frames.length) {
+                logger.warn(`${serviceLocation}: [Bullseye] No frame data on mask ${maskId} — cannot fall back to local computation.`);
+                return;
+            }
+            const projectResult = await readProject(projectId);
+            const project = projectResult.projects?.[0] as any;
+            const W = project?.dimensions?.width;
+            const H = project?.dimensions?.height;
+            if (!W || !H) {
+                logger.warn(`${serviceLocation}: [Bullseye] No dimensions for project ${projectId} — cannot fall back to local computation.`);
+                return;
+            }
+            await computeBullseyeFromMaskDoc(maskId, frames, W, H);
+        } catch (fallbackErr: any) {
+            logger.warn(`${serviceLocation}: [Bullseye] Local fallback also failed for mask ${maskId}: ${fallbackErr?.message}`);
+        }
     }
 };
 
