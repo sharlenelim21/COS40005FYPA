@@ -3,7 +3,6 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import { useProject } from "@/context/ProjectContext";
-import { reconstructionApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
@@ -11,23 +10,20 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle
+import { 
+  ResizablePanelGroup, 
+  ResizablePanel, 
+  ResizableHandle 
 } from "@/components/ui/resizable";
-import {
-  ArrowLeft,
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
+import { 
+  ArrowLeft, 
+  Play, 
+  Pause, 
+  SkipBack, 
+  SkipForward, 
   Loader2,
-  AlertCircle
+  AlertCircle 
 } from "lucide-react";
-
-const MAX_RETRIES = 6;
-const RETRY_DELAY = 2500;
 
 export default function Standalone4DViewerPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -37,52 +33,18 @@ export default function Standalone4DViewerPage() {
   const selectedModel = modelParam === "medsam" || modelParam === "unet" ? modelParam : null;
   const reconstructionIdParam = searchParams.get("reconstructionId");
 
-  // Get data from ProjectContext (used for everything except reconstruction availability check)
+  // Get data from ProjectContext
   const {
     loading,
     error,
     projectData,
+    hasReconstructions,
     reconstructionCacheError,
     getReconstructionGLB,
     reconstructionMetadata,
     getReconstructionForModel,
     getReconstructionById,
   } = useProject();
-
-  // Local reconstruction availability check with retry — independent of context state machine
-  const [localReconstructionData, setLocalReconstructionData] = useState<{ reconstructions: unknown[] } | null>(null);
-  const [localLoading, setLocalLoading] = useState(true);
-  const [retryCount, setRetryCount] = useState(0);
-
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-
-    const fetchData = async () => {
-      try {
-        const res = await reconstructionApi.getReconstructionResults(projectId as string);
-        if (cancelled) return;
-        if (res.reconstructions?.length > 0) {
-          setLocalReconstructionData(res);
-          setLocalLoading(false);
-        } else if (retryCount < MAX_RETRIES) {
-          setTimeout(() => { if (!cancelled) setRetryCount(prev => prev + 1); }, RETRY_DELAY);
-        } else {
-          setLocalLoading(false);
-        }
-      } catch {
-        if (cancelled) return;
-        if (retryCount < MAX_RETRIES) {
-          setTimeout(() => { if (!cancelled) setRetryCount(prev => prev + 1); }, RETRY_DELAY);
-        } else {
-          setLocalLoading(false);
-        }
-      }
-    };
-
-    fetchData();
-    return () => { cancelled = true; };
-  }, [projectId, retryCount]);
 
   const activeReconstruction = reconstructionIdParam
     ? getReconstructionById(reconstructionIdParam) ||
@@ -98,7 +60,7 @@ export default function Standalone4DViewerPage() {
     } else {
       document.title = "VisHeart | 4D Reconstruction Viewer";
     }
-
+    
     return () => {
       document.title = "VisHeart";
     };
@@ -116,7 +78,7 @@ export default function Standalone4DViewerPage() {
 
   // Load 3D reconstruction model when frame changes
   useEffect(() => {
-    if (!localReconstructionData?.reconstructions?.length) {
+    if (!hasReconstructions) {
       setReconstructionModelUrl(null);
       return;
     }
@@ -147,7 +109,7 @@ export default function Standalone4DViewerPage() {
     };
 
     loadModel();
-  }, [activeReconstruction, currentFrame, getReconstructionGLB, localReconstructionData, reconstructionIdParam, selectedModel]);
+  }, [activeReconstruction, currentFrame, getReconstructionGLB, hasReconstructions, reconstructionIdParam, selectedModel]);
 
   // Playback animation
   useEffect(() => {
@@ -163,22 +125,27 @@ export default function Standalone4DViewerPage() {
   // Keyboard navigation for frame control
   useEffect(() => {
     const handleKeyPress = (event: KeyboardEvent) => {
+      // Don't handle keyboard shortcuts if only 1 frame
       if (totalFrames <= 1) return;
-
+      
+      // Prevent default browser behavior for arrow keys
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
       }
 
       switch (event.key) {
         case "ArrowLeft":
+          // Go to previous frame
           setCurrentFrame((prev) => Math.max(0, prev - 1));
-          setIsPlaying(false);
+          setIsPlaying(false); // Pause playback when manually navigating
           break;
         case "ArrowRight":
+          // Go to next frame
           setCurrentFrame((prev) => Math.min(totalFrames - 1, prev + 1));
-          setIsPlaying(false);
+          setIsPlaying(false); // Pause playback when manually navigating
           break;
         case " ":
+          // Spacebar toggles play/pause
           event.preventDefault();
           setIsPlaying((prev) => !prev);
           break;
@@ -191,7 +158,7 @@ export default function Standalone4DViewerPage() {
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [totalFrames]);
 
-  // Wait for context to finish loading project/mask data
+  // Loading state
   if (loading !== "done") {
     return <LoadingProject loadingStage={loading} />;
   }
@@ -206,33 +173,19 @@ export default function Standalone4DViewerPage() {
     return <ErrorProject error="Failed to load project data" />;
   }
 
-  // Show spinner while local fetch is in progress (includes retries)
-  if (localLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen gap-3">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">
-          {retryCount > 0
-            ? `Loading reconstruction... (${retryCount}/${MAX_RETRIES})`
-            : "Loading reconstruction..."}
-        </p>
-      </div>
-    );
-  }
-
-  // No reconstruction data after all retries
-  if (!localReconstructionData?.reconstructions?.length || (selectedModel && !activeReconstruction)) {
+  // No reconstruction data
+  if (!hasReconstructions || (selectedModel && !activeReconstruction)) {
     return (
       <div className="container mx-auto p-6 max-w-4xl">
-        <Button
-          variant="ghost"
+        <Button 
+          variant="ghost" 
           onClick={() => router.back()}
           className="mb-4"
         >
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Project
         </Button>
-
+        
         <Card>
           <CardContent className="pt-6">
             <div className="text-center py-12">
@@ -257,15 +210,15 @@ export default function Standalone4DViewerPage() {
   if (reconstructionCacheError) {
     return (
       <div className="container mx-auto p-6 max-w-4xl">
-        <Button
-          variant="ghost"
+        <Button 
+          variant="ghost" 
           onClick={() => router.back()}
           className="mb-4"
         >
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Project
         </Button>
-
+        
         <Card>
           <CardContent className="pt-6">
             <div className="text-center py-12">
@@ -287,16 +240,16 @@ export default function Standalone4DViewerPage() {
   return (
     <div className="h-[90vh] flex flex-col">
       {/* Resizable Layout */}
-      <ResizablePanelGroup
-        direction="horizontal"
+      <ResizablePanelGroup 
+        direction="horizontal" 
         className="flex-1 min-h-0"
       >
         {/* Main Viewer Panel */}
         <ResizablePanel defaultSize={70} minSize={20}>
           <div className="h-full w-full p-4 relative">
             {/* Back Button - Positioned in top-left */}
-            <Button
-              variant="secondary"
+            <Button 
+              variant="secondary" 
               size="sm"
               onClick={() => router.push(`/project/${projectId}`)}
               className="absolute top-6 left-6 z-20 bg-black/70 hover:bg-black/90 text-white"
@@ -304,7 +257,7 @@ export default function Standalone4DViewerPage() {
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back to Project
             </Button>
-
+            
             <ReconstructionGLBViewer
               modelUrl={reconstructionModelUrl}
               frame={currentFrame + 1} // 1-based index for user friendliness
@@ -363,7 +316,7 @@ export default function Standalone4DViewerPage() {
                   >
                     <SkipBack className="h-4 w-4" />
                   </Button>
-
+                  
                   <Button
                     variant="outline"
                     size="icon"
@@ -373,7 +326,7 @@ export default function Standalone4DViewerPage() {
                   >
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
-
+                  
                   <Button
                     variant="default"
                     size="icon"
@@ -388,7 +341,7 @@ export default function Standalone4DViewerPage() {
                       <Play className="h-5 w-5" />
                     )}
                   </Button>
-
+                  
                   <Button
                     variant="outline"
                     size="icon"
@@ -398,7 +351,7 @@ export default function Standalone4DViewerPage() {
                   >
                     <ArrowLeft className="h-4 w-4 rotate-180" />
                   </Button>
-
+                  
                   <Button
                     variant="outline"
                     size="icon"
