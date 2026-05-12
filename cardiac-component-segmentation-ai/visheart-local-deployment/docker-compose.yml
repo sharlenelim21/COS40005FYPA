@@ -114,13 +114,17 @@ services:
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/gpu_status.js:/app/backend/dist/routes/gpu_status.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/landmark_routes.js:/app/backend/dist/routes/landmark_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/reconstruction_routes.js:/app/backend/dist/routes/reconstruction_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/segmentation_routes.js:/app/backend/dist/routes/segmentation_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/support_routes.js:/app/backend/dist/routes/support_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/express_app.js:/app/backend/dist/services/express_app.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/gpu_auth_client.js:/app/backend/dist/services/gpu_auth_client.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/inference.js:/app/backend/dist/services/inference.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/reconstruction.js:/app/backend/dist/services/reconstruction.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/landmark_inference.js:/app/backend/dist/services/landmark_inference.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/unet_inference.js:/app/backend/dist/services/unet_inference.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/segmentation_export.js:/app/backend/dist/services/segmentation_export.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/types/database_types.js:/app/backend/dist/types/database_types.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/src/python:/app/backend/src/python:ro
     networks:
       - visheart-network
     healthcheck:
