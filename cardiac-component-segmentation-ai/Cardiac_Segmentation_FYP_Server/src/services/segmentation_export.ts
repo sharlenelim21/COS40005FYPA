@@ -1,6 +1,7 @@
 // File: src/services/segmentation_export.ts
 // Description: Service layer for segmentation NIfTI export functionality - extracted from routes for reuse.
 
+import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
 import { readProject, readProjectSegmentationMask, projectSegmentationMaskModel } from "./database";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
@@ -44,12 +45,11 @@ export const computeBullseyeFromMaskDoc = async (
                     return resolve();
                 }
                 result.computed_at = new Date().toISOString();
-                await projectSegmentationMaskModel.findByIdAndUpdate(
-                    maskId,
-                    { $set: { bullseye: result } },
-                    { new: false },
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { bullseye: result, updatedAt: new Date() } },
                 );
-                logger.info(`${serviceLocation}: [Bullseye] Stored RLE-derived bullseye for mask ${maskId} — stats: ${JSON.stringify(result.stats)}`);
+                logger.info(`${serviceLocation}: [Bullseye] Stored RLE-derived bullseye for mask ${maskId} — stats: ${JSON.stringify(result.stats)} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
             } catch (parseErr: any) {
                 logger.warn(`${serviceLocation}: [Bullseye] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
@@ -107,14 +107,12 @@ export const computeBullseyeAndStore = async (
         const bullseyeData = response.data;
         bullseyeData.computed_at = new Date().toISOString();
 
-        // Use findOneAndUpdate with $set to bypass the Mongoose frame validation in updateProjectSegmentationMask
-        await projectSegmentationMaskModel.findByIdAndUpdate(
-            maskId,
-            { $set: { bullseye: bullseyeData } },
-            { new: false },
+        const gpuWriteResult = await projectSegmentationMaskModel.collection.updateOne(
+            { _id: new mongoose.Types.ObjectId(maskId) },
+            { $set: { bullseye: bullseyeData, updatedAt: new Date() } },
         );
 
-        logger.info(`${serviceLocation}: [Bullseye] Stored bullseye result for mask ${maskId} — stats: ${JSON.stringify(bullseyeData.stats)}`);
+        logger.info(`${serviceLocation}: [Bullseye] Stored bullseye result for mask ${maskId} — stats: ${JSON.stringify(bullseyeData.stats)} | matched=${gpuWriteResult.matchedCount} modified=${gpuWriteResult.modifiedCount}`);
     } catch (err: any) {
         logger.warn(`${serviceLocation}: [Bullseye] GPU bullseye failed for mask ${maskId} (${err?.message}). Falling back to local RLE computation.`);
         // Fall back to local RLE-based computation using the mask document's frame data
@@ -418,10 +416,14 @@ export const generateAISegmentationForReconstruction = async (
         // Generate presigned URL for GPU server access
         const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);
 
-        // Fire bullseye analysis non-blocking.
-        // Copy the NIfTI to a path OUTSIDE baseTempDir so it survives the finally cleanup.
-        const bullseyeMaskId = exportMask._id?.toString();
-        if (bullseyeMaskId) {
+        // Fire bullseye analysis non-blocking for ALL editable masks in the project
+        // (not just exportMask) so both MedSAM and UNet editable masks get bullseye data.
+        const allEditableMasks = hasMasksResult.projectsegmentationmasks!.filter(
+            m => m.isMedSAMOutput === false
+        );
+        for (const editableMaskForBullseye of allEditableMasks) {
+            const bullseyeMaskId = editableMaskForBullseye._id?.toString();
+            if (!bullseyeMaskId) continue;
             const bullseyeTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_${bullseyeMaskId}_${tempExportId}`);
             const bullseyeCopyPath = path.join(bullseyeTempDir, 'input.nii.gz');
             try {
@@ -435,9 +437,9 @@ export const generateAISegmentationForReconstruction = async (
                         try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
                     }
                 })();
-                logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId}`);
+                logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
             } catch (bullseyeCopyErr: any) {
-                logger.warn(`${serviceLocation}: [Bullseye] Failed to copy NIfTI for bullseye — skipping: ${bullseyeCopyErr?.message}`);
+                logger.warn(`${serviceLocation}: [Bullseye] Failed to copy NIfTI for bullseye on mask ${bullseyeMaskId} — skipping: ${bullseyeCopyErr?.message}`);
                 try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
             }
         }
