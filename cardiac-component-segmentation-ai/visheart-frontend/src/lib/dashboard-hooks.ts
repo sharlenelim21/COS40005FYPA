@@ -44,13 +44,15 @@ export function useGpuStatus() {
         typeof details.gpu?.status === "string" ? details.gpu.status : "";
       const detailsGpuName: string | null =
         typeof details.gpu?.gpu_name === "string" ? details.gpu.gpu_name : null;
+      const hasGpuTelemetry = Boolean(detailsGpuName);
 
       const gpuAvailable =
         Boolean(response.gpuAvailable) ||
         Boolean(response.details?.gpuAvailable) ||
         detailsBackend === "cuda" ||
-        detailsGpuStatus === "ok" ||
-        detailsGpuStatus === "busy";
+        (details.status === "ok" && hasGpuTelemetry) ||
+        (detailsBackend === "cuda" &&
+          (detailsGpuStatus === "ok" || detailsGpuStatus === "busy"));
 
       const mode = (
         response.mode ??
