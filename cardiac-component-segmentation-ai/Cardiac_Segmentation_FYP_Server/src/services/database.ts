@@ -718,10 +718,10 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   name: { type: String, required: true }, // Name of the segmentation mask
   description: { type: String, required: false }, // Description of the segmentation mask
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is saved
-  segmentationmaskRLE: { type: Boolean, required: false }, // RLE of the segmentation mask (e.g., S3 bucket URL)
+  segmentationmaskRLE: { type: Boolean, required: true, default: true }, // RLE of the segmentation mask
   isMedSAMOutput: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is a MedSAM output
-  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model tag
-  model_used: { type: String, required: false }, // Compatibility field for external tools
+  segmentationModel: { type: String, required: true, default: SegmentationModel.MEDSAM, enum: Object.values(SegmentationModel) }, // Optional model tag
+  model_used: { type: String, required: true, default: "medsam" }, // Compatibility field for external tools
   // Properties of extracted folder + location tracking
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
@@ -1244,10 +1244,19 @@ const createProjectSegmentationMask = async (
 ): Promise<ProjectSegmentationMaskCrudResult> => {
   const operation = CRUDOperation.CREATE;
   const psm = projectsegmentationmask;
-  // Backwards-compatibility: populate model_used from segmentationModel if not explicitly provided
+  
+  // Backwards-compatibility logic for segmentation model fields
+  if (!psm.segmentationModel) {
+    // Infer model from isMedSAMOutput if segmentationModel is missing
+    psm.segmentationModel = psm.isMedSAMOutput ? SegmentationModel.MEDSAM : SegmentationModel.UNET;
+  }
   if (!psm.model_used && psm.segmentationModel) {
     psm.model_used = psm.segmentationModel as unknown as string;
   }
+  if (psm.segmentationmaskRLE === undefined) {
+    psm.segmentationmaskRLE = true;
+  }
+
   try {
     const projectid = projectsegmentationmask.projectid;
     const projectidexists = await projectModel.exists({ _id: projectid });
