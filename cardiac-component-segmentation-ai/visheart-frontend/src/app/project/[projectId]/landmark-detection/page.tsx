@@ -113,23 +113,73 @@ export default function LandmarkDetectionPage() {
     },
   );
 
-  // Bullseye data
+  // Bullseye data + model selector state
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
+  const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("medsam");
+  const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
 
-  const fetchBullseye = useCallback(async () => {
+  // Infer which segmentation model produced a mask from its name (matches backend inferMaskModelForExport).
+  const inferMaskModel = (name: string): "medsam" | "unet" | null => {
+    const n = name.toLowerCase();
+    if (n.includes("unet")) return "unet";
+    if (n.includes("medsam")) return "medsam";
+    return null;
+  };
+
+  const fetchBullseye = useCallback(async (preferredModel?: "medsam" | "unet", triggerIfMissing = true) => {
     setBullseyeLoading(true);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
-      const mask = (res.segmentations as Array<{ isMedSAMOutput: boolean; bullseye?: BullseyeData }>)
-        ?.find((m) => !m.isMedSAMOutput);
-      setBullseyeData(mask?.bullseye ?? null);
+      type SegItem = { _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData };
+      const segs = (res.segmentations ?? []) as SegItem[];
+
+      // Editable masks only (isMedSAMOutput === false), split by inferred model
+      const editables = segs.filter((m) => !m.isMedSAMOutput);
+      const medsamMasks = editables.filter((m) => inferMaskModel(m.name ?? "") !== "unet");
+      const unetMasks = editables.filter((m) => inferMaskModel(m.name ?? "") === "unet");
+
+      const medsamWithBullseye = medsamMasks.find((m) => m.bullseye != null);
+      const unetWithBullseye = unetMasks.find((m) => m.bullseye != null);
+
+      const newAvailable = { medsam: !!medsamWithBullseye, unet: !!unetWithBullseye };
+      setAvailableBullseyeModels(newAvailable);
+
+      // Choose which model to display: use preferredModel, fall back to whatever has data
+      const effective = preferredModel ?? selectedBullseyeModel;
+      let selectedMask: SegItem | undefined;
+      if (effective === "unet") {
+        selectedMask = unetWithBullseye ?? medsamWithBullseye;
+      } else {
+        selectedMask = medsamWithBullseye ?? unetWithBullseye;
+      }
+
+      if (selectedMask) {
+        setBullseyeData(selectedMask.bullseye!);
+        setBullseyeLoading(false);
+        return;
+      }
+
+      // No bullseye yet — trigger computation for the first available editable mask
+      const firstEditable = editables[0];
+      if (firstEditable?._id && triggerIfMissing) {
+        try {
+          await segmentationApi.triggerBullseye(firstEditable._id);
+          // Re-fetch after ~8s; keep loading=true during the wait
+          setTimeout(() => fetchBullseye(preferredModel, false), 8000);
+          return;
+        } catch {
+          // trigger failed; fall through to show null
+        }
+      }
+      setBullseyeData(null);
+      setBullseyeLoading(false);
     } catch {
       setBullseyeData(null);
-    } finally {
       setBullseyeLoading(false);
     }
-  }, [projectId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, selectedBullseyeModel]);
 
   useEffect(() => {
     fetchBullseye();
@@ -159,11 +209,11 @@ export default function LandmarkDetectionPage() {
         setAhaAlignmentAngle(null);
       }
       if (prevStatus.current === "running" && state.status === "done") {
-        fetchBullseye();
+        fetchBullseye(selectedBullseyeModel);
       }
     }
     prevStatus.current = state.status;
-  }, [state.status, fetchBullseye]);
+  }, [state.status, fetchBullseye, selectedBullseyeModel]);
 
   const handleApplyAlignment = useCallback(() => {
     if (!currentPrediction) return;
@@ -224,10 +274,7 @@ export default function LandmarkDetectionPage() {
       const cachedUrl = await getMRIImage(currentImageFrame, currentImageSlice);
       if (cancelled) return;
 
-      setFrameImageUrl(
-        cachedUrl ??
-          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"}/api/projects/${projectId}/images/frame_${currentImageFrame}_slice_${currentImageSlice}.jpeg`,
-      );
+      setFrameImageUrl(cachedUrl ?? null);
     }
 
     loadFrameImage();
@@ -425,7 +472,7 @@ export default function LandmarkDetectionPage() {
           <ResizablePanel defaultSize={28} minSize={0} maxSize={55}>
             <div className="w-full bg-background p-4 flex flex-col" style={{ height: "calc(100vh - 120px)" }}>
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-semibold text-foreground">
                     AHA 17-Segment Bullseye
                   </h3>
@@ -435,6 +482,40 @@ export default function LandmarkDetectionPage() {
                       AHA Aligned
                     </span>
                   )}
+                  {/* Bullseye model selector */}
+                  <Select
+                    value={selectedBullseyeModel}
+                    onValueChange={(v: string) => {
+                      const model = v as "medsam" | "unet";
+                      setSelectedBullseyeModel(model);
+                      fetchBullseye(model);
+                    }}
+                    disabled={bullseyeLoading}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="h-6 min-w-[80px] rounded-lg bg-background px-2 text-[10px] shadow-sm hover:bg-muted/40"
+                      aria-label="Select bullseye model"
+                    >
+                      <SelectValue placeholder="Model" />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl p-1 shadow-lg">
+                      <SelectItem
+                        value="medsam"
+                        disabled={!availableBullseyeModels.medsam}
+                        className="rounded-lg py-1.5 text-xs"
+                      >
+                        MedSAM{!availableBullseyeModels.medsam ? " (no data)" : ""}
+                      </SelectItem>
+                      <SelectItem
+                        value="unet"
+                        disabled={!availableBullseyeModels.unet}
+                        className="rounded-lg py-1.5 text-xs"
+                      >
+                        UNet{!availableBullseyeModels.unet ? " (no data)" : ""}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 {ahaAlignmentAngle !== null && (
                   <button
@@ -629,7 +710,7 @@ function AhaBullseyePanel({
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
           <p className="text-xs text-muted-foreground">
-            Run reconstruction first to generate bullseye data
+            No bullseye data available for this project. Bullseye analysis is generated automatically during segmentation.
           </p>
         </div>
       ) : (

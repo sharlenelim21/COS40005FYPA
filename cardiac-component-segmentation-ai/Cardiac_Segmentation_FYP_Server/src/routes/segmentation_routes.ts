@@ -2,6 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
+import { computeBullseyeFromMaskDoc } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -984,6 +985,50 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
             success: false,
             message: "An error occurred while checking segmentation status."
         });
+    }
+});
+
+// Trigger bullseye computation for a single mask from its stored RLE data.
+// POST /segmentation/trigger-bullseye/:maskId
+router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        const project = projectResult.projects[0] as IProjectDocument;
+        const W = project.dimensions?.width;
+        const H = project.dimensions?.height;
+        if (!W || !H) {
+            return res.status(400).json({ success: false, message: "Project is missing dimension data." });
+        }
+
+        const frames = (maskDoc as any).frames ?? [];
+        if (!frames.length) {
+            return res.status(400).json({ success: false, message: "Mask has no frame data." });
+        }
+
+        // Respond immediately and run computation async
+        res.json({ success: true, message: "Bullseye computation started." });
+
+        computeBullseyeFromMaskDoc(maskId, frames, W, H).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-bullseye async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering bullseye for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
     }
 });
 

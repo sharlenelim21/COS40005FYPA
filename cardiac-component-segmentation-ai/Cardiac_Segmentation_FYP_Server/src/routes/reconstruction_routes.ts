@@ -158,7 +158,7 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                                     s3Key,
                                     3600 // 1 hour expiry
                                 );
-                            }
+                                                            }
                         }
                     } catch (urlError) {
                         logger.warn(`${serviceLocation}: Failed to generate presigned URL for reconstruction ${recon._id}: ${(urlError as Error).message}`);
