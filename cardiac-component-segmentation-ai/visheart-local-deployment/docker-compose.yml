@@ -237,6 +237,10 @@ services:
     environment:
       <<: *gpu-env
       USE_GPU: "false" # Safely overrides for CPU
+    command: >
+      bash -lc 'python -c "import nibabel, timm" ||
+      pip install --no-cache-dir "nibabel>=5.0.0" timm;
+      exec bash ./docker/scripts/start.sh'
     volumes:
       - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
       - ../visheart-inference-gpu/app:/app/app
