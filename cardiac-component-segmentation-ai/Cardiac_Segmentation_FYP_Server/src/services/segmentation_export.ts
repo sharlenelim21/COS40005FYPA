@@ -3,14 +3,17 @@
 
 import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
-import { readProject, readProjectSegmentationMask } from "./database";
+import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask } from "./database";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
+import axios from 'axios';
+import FormData from 'form-data';
 import logger from "./logger";
 import fs from 'fs-extra';
 import path from 'path';
 import { exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
+import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
 
 const serviceLocation = 'SegmentationExport';
 
