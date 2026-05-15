@@ -35,11 +35,15 @@ function resolveGpuAvailability(data: any): { gpuAvailable: boolean; mode: strin
   const status = typeof data?.status === "string" ? data.status.toLowerCase() : "";
   const gpuStatus =
     typeof data?.gpu?.status === "string" ? data.gpu.status.toLowerCase() : "";
+  const hasGpuTelemetry =
+    typeof data?.gpu?.gpu_name === "string" && data.gpu.gpu_name.trim().length > 0;
   const mode = data?.mode || backend || nestedBackend || "unknown";
   const gpuAvailable =
     Boolean(data?.gpuAvailable) ||
     (status === "ok" && (backend === "cuda" || nestedBackend === "cuda")) ||
-    gpuStatus === "ok";
+    (status === "ok" && hasGpuTelemetry) ||
+    ((backend === "cuda" || nestedBackend === "cuda") &&
+      (gpuStatus === "ok" || gpuStatus === "busy"));
 
   return {
     gpuAvailable,
