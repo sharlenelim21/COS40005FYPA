@@ -14,5 +14,5 @@ if __name__ == "__main__":
         port=8001,
         workers=1,
         limit_concurrency=100,
-        reload=False
+        reload=False  # Windows/Python 3.14 can hang with the reloader subprocess
     )

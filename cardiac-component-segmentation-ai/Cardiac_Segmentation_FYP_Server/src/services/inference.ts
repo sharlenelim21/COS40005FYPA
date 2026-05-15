@@ -17,14 +17,25 @@ const serviceLocation = "Inference";
  *
  * Default behavior is local-first to reduce cloud GPU cost:
  * - MEDSAM_USE_LOCALHOST is "true" by default
- * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8000
+ * - MEDSAM_LOCAL_BASE_URL defaults to the configured GPU server port, or 8001
  *
  * Set MEDSAM_USE_LOCALHOST="false" to use database-configured remote GPU host.
  */
 const resolveMedsamBaseUrl = async (): Promise<string | null> => {
     const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
     if (useLocalhost) {
-        return (process.env.MEDSAM_LOCAL_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+        const configuredBaseUrl =
+            process.env.MEDSAM_LOCAL_BASE_URL ||
+            process.env.LOCAL_GPU_API_URL ||
+            process.env.GPU_API_URL;
+
+        if (configuredBaseUrl) {
+            return configuredBaseUrl.replace(/\/$/, "");
+        }
+
+        const gpuHost = process.env.GPU_SERVER_URL || "127.0.0.1";
+        const gpuPort = process.env.GPU_SERVER_PORT || "8001";
+        return `http://${gpuHost}:${gpuPort}`;
     }
 
     const remoteBaseUrl = await getFreshGPUServerAddress();
@@ -124,11 +135,14 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
         if (isConnRefused) {
             errorMessage =
                 `Local GPU server is not reachable at ${inferenceEndpoint}. ` +
-                `Start visheart-inference-gpu on the host (default port 8011) and retry.`;
+                `Start visheart-inference-gpu on the host (default port 8001) and retry.`;
         } else {
             errorMessage = `Error communicating with local GPU server at ${inferenceEndpoint}: ${error.message}`;
             if (error.response?.status) {
                 errorMessage += ` (Status: ${error.response.status})`;
+            }
+            if (error.response?.data) {
+                errorMessage += ` Response: ${JSON.stringify(error.response.data)}`;
             }
         }
         return { success: false, error: errorMessage };
@@ -319,11 +333,14 @@ const sendUnetInferenceRequestToApi = async (
         if (isConnRefused) {
             errorMessage =
                 `Local GPU server is not reachable at ${endpoint}. ` +
-                `Start visheart-inference-gpu on the host (default port 8011) and retry.`;
+                `Start visheart-inference-gpu on the host (default port 8001) and retry.`;
         } else {
             errorMessage = `Error communicating with local UNET API at ${endpoint}: ${error.message}`;
             if (error.response?.status) {
                 errorMessage += ` (Status: ${error.response.status})`;
+            }
+            if (error.response?.data) {
+                errorMessage += ` Response: ${JSON.stringify(error.response.data)}`;
             }
         }
         return { success: false, error: errorMessage };
@@ -380,7 +397,7 @@ export async function startModel2Inference(
         const projectData = projectResult.projects[0];
         const niftiS3Url = projectData.originalfilepath;
         const s3BucketName = process.env.AWS_BUCKET_NAME;
-        const callbackBaseUrl = process.env.CALLBACK_URL;
+        const callbackBaseUrl = process.env.LOCAL_CALLBACK_URL || process.env.CALLBACK_URL;
 
         if (!niftiS3Url || !s3BucketName || !callbackBaseUrl) {
             logger.error(`${serviceLocation}: Missing NIfTI source path or AWS bucket configuration for UNET inference on project ${projectId}.`);
