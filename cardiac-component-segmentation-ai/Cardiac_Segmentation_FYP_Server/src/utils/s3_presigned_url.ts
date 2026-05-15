@@ -5,8 +5,33 @@ import logger from "../services/logger"; // Assuming logger is in ../services/lo
 const serviceLocation = "S3Utils";
 
 let s3ClientInstance: S3Client | null = null;
+let s3PublicClientInstance: S3Client | null = null;
 
-const getS3Client = (): S3Client => {
+const getS3Client = (usePublicEndpoint: boolean = false): S3Client => {
+    if (usePublicEndpoint) {
+        if (!s3PublicClientInstance) {
+            const region = process.env.AWS_REGION || process.env.S3_REGION;
+            if (!region) {
+                logger.error(`${serviceLocation}: AWS_REGION or S3_REGION environment variable is not set.`);
+                throw new Error("S3 client region not configured. Please set AWS_REGION or S3_REGION.");
+            }
+            
+            const s3Config: any = {
+                region: region,
+            };
+
+            const publicEndpoint = process.env.S3_PUBLIC_URL || process.env.S3_ENDPOINT;
+            if (publicEndpoint) {
+                s3Config.endpoint = publicEndpoint;
+                s3Config.forcePathStyle = process.env.S3_FORCE_PATH_STYLE === 'true';
+                logger.info(`${serviceLocation}: Using public S3 endpoint for presigned URLs: ${publicEndpoint} (forcePathStyle: ${s3Config.forcePathStyle})`);
+            }
+
+            s3PublicClientInstance = new S3Client(s3Config);
+        }
+        return s3PublicClientInstance;
+    }
+
     if (!s3ClientInstance) {
         const region = process.env.AWS_REGION || process.env.S3_REGION; // Allow S3_REGION as an alternative
         if (!region) {
@@ -39,12 +64,14 @@ const getS3Client = (): S3Client => {
  * @param bucket The S3 bucket name.
  * @param key The S3 object key.
  * @param expiresIn The duration in seconds for which the presigned URL is valid (default: 3600 seconds = 1 hour).
+ * @param usePublicEndpoint Whether to use the public endpoint (S3_PUBLIC_URL) for the presigned URL (default: true).
  * @returns A promise that resolves to the presigned URL string, or null if an error occurs.
  */
 export const generatePresignedGetUrl = async (
     bucket: string,
     key: string,
-    expiresIn: number = 3600
+    expiresIn: number = 3600,
+    usePublicEndpoint: boolean = true
 ): Promise<string | null> => {
     if (!bucket || !key) {
         logger.error(`${serviceLocation}: Bucket name or object key is missing for generating presigned URL. Bucket: '${bucket}', Key: '${key}'`);
@@ -52,7 +79,7 @@ export const generatePresignedGetUrl = async (
     }
 
     try {
-        const client = getS3Client();
+        const client = getS3Client(usePublicEndpoint);
         const commandInput: GetObjectCommandInput = {
             Bucket: bucket,
             Key: key,
