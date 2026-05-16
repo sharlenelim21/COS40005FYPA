@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   Loader2,
   Scan,
@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   RefreshCw,
   Heart,
+  ArrowLeft,
 } from "lucide-react";
 
 import { useProject } from "@/context/ProjectContext";
@@ -70,6 +71,7 @@ const AHA_SEGMENTS = [
 
 export default function LandmarkDetectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const router = useRouter();
 
   const {
     loading,
@@ -200,9 +202,22 @@ export default function LandmarkDetectionPage() {
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
 
-  // Render 
+  // Render
   return (
     <div className="flex flex-col bg-background" style={{ height: "calc(100vh - 64px)" }}>
+      {/* Back to Project Button */}
+      <div className="px-4 pt-3 pb-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => router.push(`/project/${projectId}`)}
+          className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          <span>Back to Project</span>
+        </Button>
+      </div>
+
       <header className="flex items-center gap-3 px-4 py-2 border-b border-border bg-background flex-shrink-0 flex-wrap">
 
         {/* Project name + badges */}
