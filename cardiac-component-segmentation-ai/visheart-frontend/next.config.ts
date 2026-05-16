@@ -1,9 +1,12 @@
 import type { NextConfig } from "next";
 
+const isWindows = process.platform === "win32";
+
 const nextConfig: NextConfig = {
   /* config options here */
-  // Enable standalone output for Docker deployment
-  output: 'standalone',
+  // Enable standalone output for Docker/Linux deployment. Local Windows builds
+  // can fail during symlink-based trace copying and leave a corrupt .next cache.
+  output: isWindows ? undefined : "standalone",
   outputFileTracingRoot: process.cwd(),
   eslint: {
     // Warning: This allows production builds to successfully complete even if

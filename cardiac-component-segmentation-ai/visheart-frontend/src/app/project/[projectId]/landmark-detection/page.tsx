@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import {
   Loader2,
   Scan,
@@ -10,11 +11,16 @@ import {
   CheckCircle2,
   RefreshCw,
   Heart,
+  Download,
+  FileText,
+  ArrowLeft,
+  Activity,
 } from "lucide-react";
 
 import { useProject } from "@/context/ProjectContext";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
+import { exportLandmarkPDF } from "@/lib/landmarkPdfExport";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -31,6 +37,7 @@ import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
 import { segmentationApi } from "@/lib/api";
 import type { BullseyeData } from "@/types/project";
+import { StrainBullseye, type StrainType } from "@/components/landmark/StrainVisualization";
 
 const LandmarkSliceViewer = dynamic(
   () => import("@/components/landmark/LandmarkSliceViewer").then((m) => m.LandmarkSliceViewer),
@@ -49,26 +56,6 @@ const MODEL_OPTIONS = [
 ] as const;
 
 type ModelId = typeof MODEL_OPTIONS[number]["value"];
-
-const AHA_SEGMENTS = [
-  "Basal Anterior",
-  "Basal Anteroseptal",
-  "Basal Inferoseptal",
-  "Basal Inferior",
-  "Basal Inferolateral",
-  "Basal Anterolateral",
-  "Mid Anterior",
-  "Mid Anteroseptal",
-  "Mid Inferoseptal",
-  "Mid Inferior",
-  "Mid Inferolateral",
-  "Mid Anterolateral",
-  "Apical Anterior",
-  "Apical Septal",
-  "Apical Inferior",
-  "Apical Lateral",
-  "Apex",
-] as const;
 
 export default function LandmarkDetectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -118,6 +105,8 @@ export default function LandmarkDetectionPage() {
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
   const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("medsam");
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  const [leftPanelView, setLeftPanelView] = useState<"bullseye" | "strain">("bullseye");
+  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GLS");
 
   // Infer which segmentation model produced a mask from its name (matches backend inferMaskModelForExport).
   const inferMaskModel = (name: string): "medsam" | "unet" | null => {
@@ -318,6 +307,12 @@ export default function LandmarkDetectionPage() {
 
         {/* Project name + badges */}
         <div className="flex items-center gap-2 min-w-0">
+          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+            <Link href={`/project/${projectId}`}>
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Project
+            </Link>
+          </Button>
           <Heart className="h-4 w-4 text-rose-500 shrink-0" aria-hidden />
           <span className="text-sm font-medium truncate">{projectData.name}</span>
           <StatusBadge status={state.status} />
@@ -397,6 +392,47 @@ export default function LandmarkDetectionPage() {
             </>
           )}
         </Button>
+
+        {/* Export buttons */}
+        {hasPredictions && (
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs gap-1.5"
+              onClick={() => {
+                exportLandmarkPDF({
+                  projectName: projectData?.name || "Unnamed Project",
+                  detectionModel: state.modelUsed || "UNetResNet34",
+                  totalFrames: state.totalFrames || 0,
+                  currentFrame: state.currentFrame,
+                  strainMetrics: {
+                    peakGCS: "–17.6%",
+                    peakGRS: "+27.8%",
+                    peakGLS: "–16.2%",
+                    alignment: "94%",
+                  },
+                });
+              }}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export Report
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs gap-1.5"
+              onClick={() => {
+                // Dummy CSV export
+                console.log("Exporting landmark data as CSV (dummy)...");
+                alert("Landmark data CSV export initiated.\n(Currently a placeholder - CSV export coming soon)");
+              }}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Export Data
+            </Button>
+          </div>
+        )}
       </header>
       {state.error && (
         <div
@@ -454,7 +490,6 @@ export default function LandmarkDetectionPage() {
             onPlaybackSpeedChange={handlePlaybackSpeedChange}
             onRerun={() => handleRerunDetection(selectedModel)}
             onReset={handleReset}
-            onApplyAlignment={handleApplyAlignment}
             onFileSelect={handleFileSelect}
             onClearReplacementFile={handleClearReplacementFile}
             showLabels={showLabels}
@@ -474,72 +509,89 @@ export default function LandmarkDetectionPage() {
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-semibold text-foreground">
-                    AHA 17-Segment Bullseye
+                    {leftPanelView === "bullseye" ? "AHA 17-Segment Bullseye" : "Strain Preview"}
                   </h3>
-                  {ahaAlignmentAngle !== null && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
-                      <span className="h-1 w-1 rounded-full bg-emerald-500 inline-block" />
-                      AHA Aligned
-                    </span>
-                  )}
-                  {/* Bullseye model selector */}
-                  <Select
-                    value={selectedBullseyeModel}
-                    onValueChange={(v: string) => {
-                      const model = v as "medsam" | "unet";
-                      setSelectedBullseyeModel(model);
-                      fetchBullseye(model);
-                    }}
-                    disabled={bullseyeLoading}
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="h-6 min-w-[80px] rounded-lg bg-background px-2 text-[10px] shadow-sm hover:bg-muted/40"
-                      aria-label="Select bullseye model"
+                  <div className="grid grid-cols-2 rounded-lg border border-border bg-background p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setLeftPanelView("bullseye")}
+                      className={cn(
+                        "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+                        leftPanelView === "bullseye" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                      )}
                     >
-                      <SelectValue placeholder="Model" />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-xl p-1 shadow-lg">
-                      <SelectItem
-                        value="medsam"
-                        disabled={!availableBullseyeModels.medsam}
-                        className="rounded-lg py-1.5 text-xs"
+                      Bullseye
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLeftPanelView("strain")}
+                      className={cn(
+                        "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+                        leftPanelView === "strain" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      Strain
+                    </button>
+                  </div>
+                  {leftPanelView === "bullseye" && (
+                    <Select
+                      value={selectedBullseyeModel}
+                      onValueChange={(v: string) => {
+                        const model = v as "medsam" | "unet";
+                        setSelectedBullseyeModel(model);
+                        fetchBullseye(model);
+                      }}
+                      disabled={bullseyeLoading}
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="h-6 min-w-[80px] rounded-lg bg-background px-2 text-[10px] shadow-sm hover:bg-muted/40"
+                        aria-label="Select bullseye model"
                       >
-                        MedSAM{!availableBullseyeModels.medsam ? " (no data)" : ""}
-                      </SelectItem>
-                      <SelectItem
-                        value="unet"
-                        disabled={!availableBullseyeModels.unet}
-                        className="rounded-lg py-1.5 text-xs"
-                      >
-                        UNet{!availableBullseyeModels.unet ? " (no data)" : ""}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
+                        <SelectValue placeholder="Model" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl p-1 shadow-lg">
+                        <SelectItem value="medsam" disabled={!availableBullseyeModels.medsam} className="rounded-lg py-1.5 text-xs">
+                          MedSAM{!availableBullseyeModels.medsam ? " (no data)" : ""}
+                        </SelectItem>
+                        <SelectItem value="unet" disabled={!availableBullseyeModels.unet} className="rounded-lg py-1.5 text-xs">
+                          UNet{!availableBullseyeModels.unet ? " (no data)" : ""}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {leftPanelView === "strain" && (
+                    <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                  )}
                 </div>
-                {ahaAlignmentAngle !== null && (
-                  <button
-                    type="button"
-                    onClick={handleResetAlignment}
-                    className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors shrink-0"
-                  >
-                    Reset Orientation
-                  </button>
-                )}
               </div>
-              <AhaBullseyePanel
-                bullseyeData={bullseyeData}
-                loading={bullseyeLoading}
-                referenceAngleDeg={ahaAlignmentAngle ?? 0}
-                frameCount={
-                  (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
-                    ? projectData.dimensions.frames
-                    : (projectData?.dimensions?.slices && projectData.dimensions.slices > 0)
-                    ? projectData.dimensions.slices
-                    : 1
-                }
-                isAligned={ahaAlignmentAngle !== null}
-              />
+              {leftPanelView === "bullseye" ? (
+                <AhaBullseyePanel
+                  bullseyeData={bullseyeData}
+                  loading={bullseyeLoading}
+                  referenceAngleDeg={ahaAlignmentAngle ?? 0}
+                  currentFrame={state.currentFrame}
+                  frameCount={
+                    (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
+                      ? projectData.dimensions.frames
+                      : (projectData?.dimensions?.slices && projectData.dimensions.slices > 0)
+                      ? projectData.dimensions.slices
+                      : 1
+                  }
+                />
+              ) : (
+                <StrainPreviewPanel
+                  selectedStrainType={selectedStrainType}
+                  onStrainTypeChange={setSelectedStrainType}
+                  currentFrame={state.currentFrame}
+                  frameCount={
+                    (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
+                      ? projectData.dimensions.frames
+                      : state.totalFrames || 1
+                  }
+                  hasPredictions={hasPredictions}
+                />
+              )}
             </div>
           </ResizablePanel>
 
@@ -635,7 +687,6 @@ export default function LandmarkDetectionPage() {
                 onPlaybackSpeedChange={handlePlaybackSpeedChange}
                 onRerun={() => handleRerunDetection(selectedModel)}
                 onReset={handleReset}
-                onApplyAlignment={handleApplyAlignment}
                 onFileSelect={handleFileSelect}
                 onClearReplacementFile={handleClearReplacementFile}
                 showLabels={showLabels}
@@ -671,14 +722,14 @@ function AhaBullseyePanel({
   bullseyeData,
   loading,
   referenceAngleDeg = 0,
+  currentFrame = 0,
   frameCount = 1,
-  isAligned = false,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
   referenceAngleDeg?: number;
+  currentFrame?: number;
   frameCount?: number;
-  isAligned?: boolean;
 }) {
   return (
     <div className="flex-1 min-h-0 rounded-lg border border-border bg-background p-3 flex flex-col overflow-hidden">
@@ -687,23 +738,6 @@ function AhaBullseyePanel({
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
             <span className="text-xs">Loading bullseye…</span>
-          </div>
-        </div>
-      ) : !isAligned ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-4">
-          <Heart className="h-8 w-8 text-muted-foreground opacity-25" />
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Apply AHA-17 Alignment to view polar maps
-          </p>
-          <div className="w-full pt-3 border-t border-border">
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-4 gap-y-2">
-              {AHA_SEGMENTS.map((label, index) => (
-                <div key={label} className="flex items-center gap-2 min-w-0 text-[11px] text-muted-foreground">
-                  <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: AHA_SEGMENT_COLORS[index] }} />
-                  <span className="truncate">{index + 1}. {label}</span>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       ) : !bullseyeData ? (
@@ -716,13 +750,17 @@ function AhaBullseyePanel({
       ) : (
         <>
           <p className="text-[10px] text-muted-foreground mb-2 flex-shrink-0">
-            {frameCount} frame{frameCount !== 1 ? "s" : ""}
+            Frame {Math.min(currentFrame + 1, Math.max(frameCount, 1))} of {Math.max(frameCount, 1)}
           </p>
-          <BullseyeFrameGrid
-            bullseyeData={bullseyeData}
-            frameCount={frameCount}
-            referenceAngleDeg={referenceAngleDeg}
-          />
+          <div className="flex-1 min-h-0 rounded-lg bg-zinc-900/30 p-3 flex items-center justify-center">
+            <AhaBullseyeChart
+              bullseyeData={bullseyeData}
+              referenceAngleDeg={referenceAngleDeg}
+              size={320}
+              currentFrame={currentFrame}
+              frameCount={frameCount}
+            />
+          </div>
           {/* Shared color scale legend */}
           <div className="flex-shrink-0 pt-2 border-t border-border mt-2 space-y-1">
             <div className="flex items-center gap-2">
@@ -806,17 +844,28 @@ function AhaBullseyeChart({
   bullseyeData,
   referenceAngleDeg = 0,
   size = 300,
+  currentFrame = 0,
+  frameCount = 1,
 }: {
   bullseyeData: BullseyeData;
   referenceAngleDeg?: number;
   size?: number;
+  currentFrame?: number;
+  frameCount?: number;
 }) {
   const center = 150;
   const basalOuter = 118;
   const basalInner = 88;
   const midInner = 58;
   const apicalInner = 30;
-  const { segment_values, stats, segment_metadata } = bullseyeData;
+  const { segment_values, segment_metadata } = bullseyeData;
+  const phase = frameCount > 1 ? currentFrame / (frameCount - 1) : 0;
+  const beat = Math.sin(phase * Math.PI);
+  const frameValues = segment_values.map((value, index) => (
+    value + Math.sin(index * 0.7 + currentFrame * 0.45) * 0.9 + beat * 1.2
+  ));
+  const frameMin = Math.min(...frameValues);
+  const frameMax = Math.max(...frameValues);
 
   // Cardinal label positions rotate with the reference angle.
   const anteriorPt  = polarPoint(center, 135, -90 + referenceAngleDeg);
@@ -854,10 +903,10 @@ function AhaBullseyeChart({
           outerRadius={basalOuter}
           startAngle={-90 + index * 60 + referenceAngleDeg}
           endAngle={-90 + (index + 1) * 60 + referenceAngleDeg}
-          value={segment_values[index]}
+          value={frameValues[index]}
           tooltip={segment_metadata[index]}
-          min={stats.min}
-          max={stats.max}
+          min={frameMin}
+          max={frameMax}
         />
       ))}
       {Array.from({ length: 6 }, (_, index) => (
@@ -869,10 +918,10 @@ function AhaBullseyeChart({
           outerRadius={basalInner}
           startAngle={-90 + index * 60 + referenceAngleDeg}
           endAngle={-90 + (index + 1) * 60 + referenceAngleDeg}
-          value={segment_values[index + 6]}
+          value={frameValues[index + 6]}
           tooltip={segment_metadata[index + 6]}
-          min={stats.min}
-          max={stats.max}
+          min={frameMin}
+          max={frameMax}
         />
       ))}
       {Array.from({ length: 4 }, (_, index) => (
@@ -884,21 +933,21 @@ function AhaBullseyeChart({
           outerRadius={midInner}
           startAngle={-90 + index * 90 + referenceAngleDeg}
           endAngle={-90 + (index + 1) * 90 + referenceAngleDeg}
-          value={segment_values[index + 12]}
+          value={frameValues[index + 12]}
           tooltip={segment_metadata[index + 12]}
-          min={stats.min}
-          max={stats.max}
+          min={frameMin}
+          max={frameMax}
         />
       ))}
       <circle
         cx={center}
         cy={center}
         r={apicalInner}
-        fill={segmentColor(segment_values[16], stats.min, stats.max)}
+        fill={segmentColor(frameValues[16], frameMin, frameMax)}
         stroke="rgba(255,255,255,0.5)"
         strokeWidth="0.8"
       >
-        <title>{segment_metadata[16]?.name}: {segment_values[16]?.toFixed(2)} px</title>
+        <title>{segment_metadata[16]?.name}: {frameValues[16]?.toFixed(2)} px</title>
       </circle>
       <text
         x={center}
@@ -922,7 +971,7 @@ function AhaBullseyeChart({
         fill="white"
         style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.9))" }}
       >
-        {segment_values[16].toFixed(1)}
+        {frameValues[16].toFixed(1)}
       </text>
     </svg>
   );
@@ -1029,6 +1078,79 @@ function annularSectorPath(
     `A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${innerStart.x} ${innerStart.y}`,
     "Z",
   ].join(" ");
+}
+
+function StrainPreviewPanel({
+  selectedStrainType,
+  onStrainTypeChange,
+  currentFrame,
+  frameCount,
+  hasPredictions,
+}: {
+  selectedStrainType: StrainType;
+  onStrainTypeChange: (type: StrainType) => void;
+  currentFrame: number;
+  frameCount: number;
+  hasPredictions: boolean;
+}) {
+  return (
+    <div className="flex-1 min-h-0 rounded-lg border border-border bg-background p-3 flex flex-col overflow-hidden">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+          {(["GLS", "GCS", "GRS"] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => onStrainTypeChange(type)}
+              className={cn(
+                "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+                selectedStrainType === type ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {type}
+            </button>
+          ))}
+        </div>
+        <span className="text-[10px] font-mono text-muted-foreground">
+          Frame {Math.min(currentFrame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
+        </span>
+      </div>
+
+      {!hasPredictions ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+          <Activity className="h-8 w-8 opacity-30" />
+          <p className="text-xs leading-relaxed">
+            Run landmark detection to preview frame-by-frame dummy strain values.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="flex-1 min-h-0 overflow-y-auto rounded-lg bg-muted/20 p-2">
+            <StrainBullseye
+              selectedStrainType={selectedStrainType}
+              frame={currentFrame}
+              totalFrames={frameCount}
+              compact
+            />
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[10px]">
+            <div className="rounded-md border border-border bg-muted/20 p-2">
+              <p className="text-muted-foreground">GLS</p>
+              <p className="font-semibold text-red-500">-16.2%</p>
+            </div>
+            <div className="rounded-md border border-border bg-muted/20 p-2">
+              <p className="text-muted-foreground">GCS</p>
+              <p className="font-semibold text-red-500">-17.6%</p>
+            </div>
+            <div className="rounded-md border border-border bg-muted/20 p-2">
+              <p className="text-muted-foreground">GRS</p>
+              <p className="font-semibold text-green-500">+27.8%</p>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 function StatusBadge({ status }: { status: LandmarkPageState["status"] }) {

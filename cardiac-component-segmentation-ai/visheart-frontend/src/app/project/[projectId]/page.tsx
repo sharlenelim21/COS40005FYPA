@@ -1065,7 +1065,7 @@ export default function ProjectPage() {
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Landmark Detection</p>
                                   <p className="text-xs text-muted-foreground">
-                                    Detect cardiac landmarks with UNetResNet34
+                                    Detect landmarks, preview strain, and export reports
                                   </p>
                                 </div>
                               </div>
@@ -1073,7 +1073,7 @@ export default function ProjectPage() {
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Run UNetResNet34 landmark detection for this project</p>
+                          <p>Run landmark detection, view strain previews, and export a PDF report</p>
                         </TooltipContent>
                       </Tooltip>
 
@@ -1203,7 +1203,7 @@ export default function ProjectPage() {
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Landmark Detection</p>
                                   <p className="text-xs text-muted-foreground">
-                                    Detect cardiac landmarks with UNetResNet34
+                                    Detect landmarks, preview strain, and export reports
                                   </p>
                                 </div>
                               </div>
@@ -1211,7 +1211,7 @@ export default function ProjectPage() {
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Run UNetResNet34 landmark detection for this project</p>
+                          <p>Run landmark detection, view strain previews, and export a PDF report</p>
                         </TooltipContent>
                       </Tooltip>
 

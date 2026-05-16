@@ -237,6 +237,7 @@ export default function AdminLayout({
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const [hiddenCardHrefs, setHiddenCardHrefs] = useState<string[]>([]);
+  const [hiddenCardsLoaded, setHiddenCardsLoaded] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     open: false,
     x: 0,
@@ -262,14 +263,18 @@ export default function AdminLayout({
         console.error("Failed to parse hidden admin cards:", error);
       }
     }
+
+    setHiddenCardsLoaded(true);
   }, []);
 
   useEffect(() => {
+    if (!hiddenCardsLoaded) return;
+
     localStorage.setItem(
       "visheart-admin-hidden-cards",
       JSON.stringify(hiddenCardHrefs),
     );
-  }, [hiddenCardHrefs]);
+  }, [hiddenCardHrefs, hiddenCardsLoaded]);
 
   useEffect(() => {
     const handleCloseMenu = () => {
