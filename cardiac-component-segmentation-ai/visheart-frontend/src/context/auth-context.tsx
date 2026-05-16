@@ -62,8 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuthStatus();
   }, []);
 
-  const checkAuthStatus = async (): Promise<User | null> => {
-    setLoading(true);
+  const fetchUserData = async (): Promise<User | null> => {
     try {
       const response = await authApi.fetchUser();
       if (response.fetch && response.user) {
@@ -74,7 +73,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return null;
       }
     } catch (err) {
-      // Only log unexpected errors (not authentication failures)
       const errorStatus = (err as any)?.response?.status;
       const isNetworkError = (err as any)?.code === "ERR_NETWORK" || (err as any)?.message === "Network Error";
       if (errorStatus !== 401 && errorStatus !== 403 && !isNetworkError) {
@@ -82,6 +80,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setUser(null);
       return null;
+    }
+  };
+
+  const checkAuthStatus = async (): Promise<User | null> => {
+    setLoading(true);
+    try {
+      return await fetchUserData();
     } finally {
       setLoading(false);
     }
@@ -96,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error("Login failed");
       }
 
-      const authenticatedUser = await checkAuthStatus();
+      const authenticatedUser = await fetchUserData();
       if (!authenticatedUser) {
         throw new Error(
           "Login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
@@ -117,7 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await authApi.guestLogin();
-      await checkAuthStatus(); // Refresh user data
+      await fetchUserData();
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || "Guest login failed";
       setError(errorMessage);

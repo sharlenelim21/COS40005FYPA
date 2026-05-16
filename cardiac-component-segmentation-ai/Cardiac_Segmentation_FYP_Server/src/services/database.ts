@@ -718,13 +718,14 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   name: { type: String, required: true }, // Name of the segmentation mask
   description: { type: String, required: false }, // Description of the segmentation mask
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is saved
-  segmentationmaskRLE: { type: Boolean, required: false }, // RLE of the segmentation mask (e.g., S3 bucket URL)
+  segmentationmaskRLE: { type: Boolean, required: true, default: true }, // RLE of the segmentation mask
   isMedSAMOutput: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is a MedSAM output
-  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model tag
-  model_used: { type: String, required: false }, // Compatibility field for external tools
+  segmentationModel: { type: String, required: true, default: SegmentationModel.MEDSAM, enum: Object.values(SegmentationModel) }, // Optional model tag
+  model_used: { type: String, required: true, default: "medsam" }, // Compatibility field for external tools
   // Properties of extracted folder + location tracking
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
+  bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Create the model with proper typing
@@ -756,6 +757,7 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the reconstruction is saved
   isAIGenerated: { type: Boolean, required: true, default: false }, // Indicates if the reconstruction is AI generated
   meshFormat: { type: String, required: true, enum: Object.values(MeshFormat) }, // Format of the mesh file
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional source model for the reconstruction
   
   // File properties
   filename: { type: String, required: true }, // Server-generated unique filename
@@ -1242,10 +1244,19 @@ const createProjectSegmentationMask = async (
 ): Promise<ProjectSegmentationMaskCrudResult> => {
   const operation = CRUDOperation.CREATE;
   const psm = projectsegmentationmask;
-  // Backwards-compatibility: populate model_used from segmentationModel if not explicitly provided
+  
+  // Backwards-compatibility logic for segmentation model fields
+  if (!psm.segmentationModel) {
+    // Infer model from isMedSAMOutput if segmentationModel is missing
+    psm.segmentationModel = psm.isMedSAMOutput ? SegmentationModel.MEDSAM : SegmentationModel.UNET;
+  }
   if (!psm.model_used && psm.segmentationModel) {
     psm.model_used = psm.segmentationModel as unknown as string;
   }
+  if (psm.segmentationmaskRLE === undefined) {
+    psm.segmentationmaskRLE = true;
+  }
+
   try {
     const projectid = projectsegmentationmask.projectid;
     const projectidexists = await projectModel.exists({ _id: projectid });
@@ -1705,7 +1716,7 @@ const readProjectReconstruction = async (
       }
       
       // Find reconstructions based on query
-      const reconstructions = await projectReconstructionModel.find(query);
+      const reconstructions = await projectReconstructionModel.find(query).sort({ createdAt: -1, updatedAt: -1 });
       
       if (reconstructions.length === 0) {
         const searchDesc = maskid ? `project ${projectid} and mask ${maskid}` : `project ${projectid}`;
@@ -1861,6 +1872,7 @@ const deleteProjectReconstruction = async (reconstructionid: string): Promise<Pr
 const jobSchema = new mongoose.Schema({
   userid: { type: String, required: true },
   projectid: { type: String, required: true },
+  maskId: { type: String, required: false },
   uuid: { type: String, required: true, unique: true }, // Unique identifier for the job
   status: { type: String, required: true, enum: Object.values(JobStatus) },
   result: {

@@ -17,10 +17,9 @@ import { useMaskRendering } from "@/hooks/useMaskRendering";
 
 // Import shared types and constants
 import type { ImageCanvasProps, AnatomicalLabel } from "@/types/segmentation";
-import { 
-  LABEL_COLORS, 
+import {
+  LABEL_COLORS,
   LABEL_NAMES,
-  PERFORMANCE_CONSTANTS 
 } from "@/types/segmentation";
 
 // Import tar cache for background images
@@ -544,7 +543,18 @@ export function ImageCanvas({
       if (isInitialLoad || !image) {
         setImageStatus("loading");
       }
-      
+
+      // Tar cache is the only working image source. The API fallback below
+      // points at a route that doesn't exist on this backend, so triggering
+      // it before the tar cache has had a chance to extract just locks the
+      // canvas into the "error" state. Wait until the tar cache reports
+      // either ready or a hard error before deciding to load.
+      if (!tarCacheReady && !tarCacheError) {
+        // Effect deps include tarCacheReady/tarCacheError — when those flip
+        // this effect will re-run automatically.
+        return;
+      }
+
       let imageLoaded = false;
 
       // Method 1: Try loading from tar cache (if ready and available)
@@ -593,37 +603,18 @@ export function ImageCanvas({
         console.log(`[ImageCanvas] Tar cache not ready yet (${tarCacheReady}), falling back to API`);
       }
 
-      // Method 2: Fallback to API loading (if tar cache failed or not available)
+      // Method 2 (REMOVED): The previous API fallback pointed at a route
+      // (`/api/projects/{id}/images/frame_X_slice_Y.jpeg`) that does not
+      // exist on this backend, so it always errored and produced the
+      // "Both tar cache and API loading failed" console.error. The tar
+      // cache is the only working image source, so if it didn't yield a
+      // URL we just mark the image as unavailable and let the user retry.
       if (!imageLoaded) {
-        try {
-          console.log(`[ImageCanvas] Loading from API: frame ${currentFrame}, slice ${currentSlice}`);
-          const img = new window.Image();
-          img.crossOrigin = "use-credentials"; // For API images
-          img.src = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/api/projects/${projectData.projectId}/images/frame_${currentFrame}_slice_${currentSlice}.jpeg`;
-          
-          await new Promise<void>((resolve, reject) => {
-            const timeoutId = setTimeout(() => reject("API timeout"), PERFORMANCE_CONSTANTS?.IMAGE_LOAD_TIMEOUT_MS || 10000);
-            
-            img.onload = () => {
-              clearTimeout(timeoutId);
-              setImage(img);
-              setImageStatus("loaded");
-              setImageLoadMethod("api");
-              setIsInitialLoad(false); // Mark initial load as complete
-              console.log(`[ImageCanvas] Successfully loaded from API: frame ${currentFrame}, slice ${currentSlice}`);
-              resolve();
-            };
-            
-            img.onerror = () => {
-              clearTimeout(timeoutId);
-              reject("API load failed");
-            };
-          });
-        } catch (error) {
-          console.error(`[ImageCanvas] Both tar cache and API loading failed:`, error);
-          setImageStatus("error");
-          setImageLoadMethod(null);
-        }
+        console.log(
+          `[ImageCanvas] Tar cache had no image for frame ${currentFrame}, slice ${currentSlice}; no usable fallback. Showing empty canvas.`
+        );
+        setImageStatus(tarCacheError ? "error" : "loading");
+        setImageLoadMethod(null);
       }
     };
 

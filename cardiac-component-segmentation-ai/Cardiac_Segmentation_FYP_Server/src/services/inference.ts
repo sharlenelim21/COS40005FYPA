@@ -17,42 +17,29 @@ const serviceLocation = "Inference";
  *
  * Default behavior is local-first to reduce cloud GPU cost:
  * - MEDSAM_USE_LOCALHOST is "true" by default
- * - MEDSAM_LOCAL_BASE_URL defaults to http://127.0.0.1:8001
+ * - MEDSAM_LOCAL_BASE_URL defaults to the configured GPU server port, or 8001
  *
  * Set MEDSAM_USE_LOCALHOST="false" to use database-configured remote GPU host.
  */
 const resolveMedsamBaseUrl = async (): Promise<string | null> => {
-  logger.warn("[Inference Debug] Env snapshot", {
-    GPU_API_URL: process.env.GPU_API_URL,
-    MEDSAM_USE_LOCALHOST: process.env.MEDSAM_USE_LOCALHOST,
-    MEDSAM_LOCAL_BASE_URL: process.env.MEDSAM_LOCAL_BASE_URL,
-    GPU_SERVER_URL: process.env.GPU_SERVER_URL,
-    GPU_SERVER_PORT: process.env.GPU_SERVER_PORT,
-    CALLBACK_URL: process.env.CALLBACK_URL,
-  });
+    const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
+    if (useLocalhost) {
+        const configuredBaseUrl =
+            process.env.MEDSAM_LOCAL_BASE_URL ||
+            process.env.LOCAL_GPU_API_URL ||
+            process.env.GPU_API_URL;
 
-  const directGpuApiUrl = process.env.GPU_API_URL?.replace(/\/$/, "");
-  if (directGpuApiUrl) {
-    logger.warn(`[Inference Debug] Using GPU_API_URL: ${directGpuApiUrl}`);
-    return directGpuApiUrl;
-  }
+        if (configuredBaseUrl) {
+            return configuredBaseUrl.replace(/\/$/, "");
+        }
 
-  const useLocalhost =
-    (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
+        const gpuHost = process.env.GPU_SERVER_URL || "127.0.0.1";
+        const gpuPort = process.env.GPU_SERVER_PORT || "8001";
+        return `http://${gpuHost}:${gpuPort}`;
+    }
 
-  if (useLocalhost) {
-    const localUrl = (
-      process.env.MEDSAM_LOCAL_BASE_URL ||
-      `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
-    ).replace(/\/$/, "");
-
-    logger.warn(`[Inference Debug] Using localhost-style URL: ${localUrl}`);
-    return localUrl;
-  }
-
-  const remoteBaseUrl = await getFreshGPUServerAddress();
-  logger.warn(`[Inference Debug] Using remote GPU URL: ${remoteBaseUrl}`);
-  return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
+    const remoteBaseUrl = await getFreshGPUServerAddress();
+    return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
 };
 
 // Interface for the expected GPU response for direct manual segmentation
@@ -95,8 +82,7 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
     }
 
     const inferenceEndpoint = `${medsamBaseUrl}/inference/v2/medsam-inference`;
-    logger.warn(`[Inference Debug] Final endpoint = ${inferenceEndpoint}`);
-    
+
     try {
         const response = await axios.post(inferenceEndpoint, inferenceData, {
             headers: {
@@ -140,9 +126,24 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
         }
     } catch (error: any) {
         logger.error(`${serviceLocation}: Error sending inference request to ${inferenceEndpoint}: ${error.message}`, { error });
-        let errorMessage = `Error communicating with Cloud GPU: ${error.message}`;
-        if (error.response?.status) {
-            errorMessage += ` (Status: ${error.response.status})`;
+        // Cloud GPU is no longer used — all inference goes to the local
+        // visheart-inference-gpu service. Use a clear, actionable error
+        // message so users know to start the local GPU server, not chase
+        // a cloud config that does not exist.
+        const isConnRefused = error.code === "ECONNREFUSED" || /ECONNREFUSED/.test(error.message || "");
+        let errorMessage: string;
+        if (isConnRefused) {
+            errorMessage =
+                `Local GPU server is not reachable at ${inferenceEndpoint}. ` +
+                `Start visheart-inference-gpu on the host (default port 8001) and retry.`;
+        } else {
+            errorMessage = `Error communicating with local GPU server at ${inferenceEndpoint}: ${error.message}`;
+            if (error.response?.status) {
+                errorMessage += ` (Status: ${error.response.status})`;
+            }
+            if (error.response?.data) {
+                errorMessage += ` Response: ${JSON.stringify(error.response.data)}`;
+            }
         }
         return { success: false, error: errorMessage };
     }
@@ -156,8 +157,9 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         return { success: false, message: "GPU authentication token is missing. Cannot start inference." };
     }
 
-    // Build full callback URL by appending segmentation webhook path to base URL
-    const callback_base_url = process.env.CALLBACK_URL;
+    // Build full callback URL — prefer LOCAL_CALLBACK_URL so Docker-internal hostnames
+    // (visheart-app) are used when the GPU container calls back, not host.docker.internal
+    const callback_base_url = process.env.LOCAL_CALLBACK_URL || process.env.CALLBACK_URL;
     if (!callback_base_url) {
         logger.error(`${serviceLocation}: CALLBACK_URL is not set in environment variables. Cannot start inference for project ${projectId}.`);
         return { success: false, message: "Callback URL not configured for inference." };
@@ -203,10 +205,7 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         }
 
         const dataUrlForGpu = await generatePresignedGetUrl(s3BucketName, objectKeyForTar);
-        logger.error("[MedSAM Debug] s3BucketName =", s3BucketName);
-        logger.error("[MedSAM Debug] extractedfolderpath =", s3HttpsUrlForTar);
-        logger.error("[MedSAM Debug] objectKeyForTar =", objectKeyForTar);
-                
+
         if (!dataUrlForGpu) {
             logger.error(`${serviceLocation}: Failed to generate presigned S3 URL for project ${projectId}, TAR S3 Key: ${objectKeyForTar}`);
             return { success: false, message: "Failed to prepare TAR file URL for inference." };
@@ -284,10 +283,6 @@ const sendUnetInferenceRequestToApi = async (
     }
 
     const endpoint = `${unetBaseUrl}/inference/v2/unet-inference`;
-    logger.warn(
-        `[Inference Debug] Final UNET endpoint = ${endpoint}. model=${inferenceData.segmentationModel}, device=${inferenceData.device || "auto"}`
-    );
-
     try {
         logger.info(
             `${serviceLocation}: Submitting UNET inference job uuid=${inferenceData.uuid}, model=${inferenceData.segmentationModel}, device=${inferenceData.device || "auto"}, callback=${inferenceData.callbackUrl}`
@@ -333,9 +328,20 @@ const sendUnetInferenceRequestToApi = async (
             `${serviceLocation}: Error sending UNET inference request to ${endpoint} after ${Date.now() - requestStart}ms: ${error.message}`,
             { error }
         );
-        let errorMessage = `Error communicating with UNET API: ${error.message}`;
-        if (error.response?.status) {
-            errorMessage += ` (Status: ${error.response.status})`;
+        const isConnRefused = error.code === "ECONNREFUSED" || /ECONNREFUSED/.test(error.message || "");
+        let errorMessage: string;
+        if (isConnRefused) {
+            errorMessage =
+                `Local GPU server is not reachable at ${endpoint}. ` +
+                `Start visheart-inference-gpu on the host (default port 8001) and retry.`;
+        } else {
+            errorMessage = `Error communicating with local UNET API at ${endpoint}: ${error.message}`;
+            if (error.response?.status) {
+                errorMessage += ` (Status: ${error.response.status})`;
+            }
+            if (error.response?.data) {
+                errorMessage += ` Response: ${JSON.stringify(error.response.data)}`;
+            }
         }
         return { success: false, error: errorMessage };
     }
@@ -391,7 +397,7 @@ export async function startModel2Inference(
         const projectData = projectResult.projects[0];
         const niftiS3Url = projectData.originalfilepath;
         const s3BucketName = process.env.AWS_BUCKET_NAME;
-        const callbackBaseUrl = process.env.CALLBACK_URL;
+        const callbackBaseUrl = process.env.LOCAL_CALLBACK_URL || process.env.CALLBACK_URL;
 
         if (!niftiS3Url || !s3BucketName || !callbackBaseUrl) {
             logger.error(`${serviceLocation}: Missing NIfTI source path or AWS bucket configuration for UNET inference on project ${projectId}.`);
@@ -413,8 +419,6 @@ export async function startModel2Inference(
         }
 
         const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
-        logger.info("[UNET Debug] niftiPresignedUrl prepared", { projectId, s3Key });
-        
         if (!niftiPresignedUrl) {
             logger.error(`${serviceLocation}: Failed to generate presigned NIfTI URL for UNET inference on project ${projectId}.`);
             return { success: false, message: "Failed to prepare NIfTI URL for UNET inference." };
@@ -450,7 +454,7 @@ export async function startModel2Inference(
                 uuid: jobUuid,
                 callbackUrl,
                 segmentationModel: SegmentationModel.UNET,
-                device: modelConfig?.deviceType || "auto",
+                device: modelConfig?.deviceType || "cpu",
                 checkpointPath: modelConfig?.checkpointPath,
             },
             gpuAuthToken

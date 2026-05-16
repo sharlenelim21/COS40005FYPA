@@ -376,19 +376,17 @@ export default function DashboardPage() {
               className={`h-3 w-3 rounded-full ${
                 gpuLoading
                   ? "bg-yellow-500"
-                  : processingUnit.status === "online" && processingUnit.gpuAvailable
+                  : processingUnit.gpuAvailable
                     ? "bg-green-500"
                     : processingUnit.status === "degraded" && processingUnit.serviceOnline
                       ? "bg-yellow-500"
-                      : processingUnit.status === "timeout" || processingUnit.status === "offline"
-                        ? "bg-gray-400"
-                        : "bg-gray-400"
+                      : "bg-gray-400"
               }`}
             />
             <span className="text-muted-foreground text-sm">
               {gpuLoading
                 ? "Processing Unit Checking..."
-                : processingUnit.status === "online" && processingUnit.gpuAvailable
+                : processingUnit.gpuAvailable
                   ? "NVIDIA GPU"
                   : processingUnit.status === "degraded" && processingUnit.serviceOnline
                     ? "CPU"
@@ -477,15 +475,15 @@ export default function DashboardPage() {
               <CardContent>
                 <div
                   className={`text-2xl font-bold ${
-                    processingUnit.status === "online" && processingUnit.gpuAvailable
+                    processingUnit.gpuAvailable
                       ? "text-green-600"
                       : processingUnit.status === "degraded" && processingUnit.serviceOnline
                         ? "text-yellow-600"
                         : "text-gray-600"
                   }`}
                 >
-                  {processingUnit.status === "online" && processingUnit.gpuAvailable
-                    ? "🟢 NVIDIA GPU"
+                  {processingUnit.gpuAvailable
+                    ? `🟢 ${processingUnit.gpuName ? processingUnit.gpuName.replace(/^NVIDIA\s+GeForce\s+/i, "").replace(/\s+Laptop\s+GPU$/i, "").trim() : "NVIDIA GPU"}`
                     : processingUnit.status === "degraded" && processingUnit.serviceOnline
                       ? "🟡 CPU"
                       : "⚪ Unknown / Error"}

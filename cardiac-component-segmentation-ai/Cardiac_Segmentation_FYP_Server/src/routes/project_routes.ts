@@ -179,10 +179,10 @@ router.get(
         daterange
       );
 
-      if (result.success && result.projects) {
+      if (result.success) {
         // Sanitize the projects and fetch reconstruction metadata for each
         const sanitized_results = await Promise.all(
-          result.projects.map(async (project) => {
+          (result.projects ?? []).map(async (project) => {
             // Fetch reconstruction data for the project
             let reconstructionMetadata = null;
             try {

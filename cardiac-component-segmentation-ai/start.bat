@@ -19,7 +19,7 @@ if not exist "start.bat" (
     exit /b 1
 )
 
-call start.bat
+call start.bat %*
 
 if errorlevel 1 (
     echo.
