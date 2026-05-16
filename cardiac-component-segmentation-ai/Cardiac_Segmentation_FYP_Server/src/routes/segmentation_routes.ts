@@ -2,6 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
+import { computeBullseyeFromMaskDoc } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -30,10 +31,16 @@ const serviceLocation = "SegmentationRoutes";
 const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
     const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
     if (useLocalhost) {
-        return (
+        const configuredBaseUrl =
             process.env.MEDSAM_LOCAL_BASE_URL ||
-            `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
-        ).replace(/\/$/, "");
+            process.env.LOCAL_GPU_API_URL ||
+            process.env.GPU_API_URL;
+
+        if (configuredBaseUrl) {
+            return configuredBaseUrl.replace(/\/$/, "");
+        }
+
+        return `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`;
     }
 
     const remoteBaseUrl = await getFreshGPUServerAddress();
@@ -568,14 +575,41 @@ router.put("/save-manual-segmentation/:projectId",
                 return res.status(500).json({ success: false, message: masksResult.message || "Error finding segmentation masks." });
             }
 
-            const editableMask = masksResult.projectsegmentationmasks.find(mask => !mask.isMedSAMOutput) as IProjectSegmentationMaskDocument | undefined;
+            // Scope the editable-mask lookup to the model the request is
+            // targeting. With per-model Manual docs (one for MedSAM, one for
+            // UNET), a plain `!isMedSAMOutput` filter would non-deterministically
+            // pick whichever doc happens to come first and overwrite the
+            // wrong model's edits. We prefer an exact `segmentationModel`
+            // match; if the request omits `model` or no model-tagged doc
+            // exists (legacy data from before the per-model split), fall
+            // back to the first non-AI doc to preserve old behavior.
+            const requestedModel =
+                typeof model === "string" ? model.toLowerCase() : undefined;
+            const candidateMasks = masksResult.projectsegmentationmasks.filter(
+                mask => !mask.isMedSAMOutput
+            );
+            const modelMatchedMask = requestedModel
+                ? candidateMasks.find(mask => {
+                      const tag = (
+                          (mask as any).segmentationModel ||
+                          (mask as any).model_used ||
+                          ""
+                      )
+                          .toString()
+                          .toLowerCase();
+                      return tag === requestedModel;
+                  })
+                : undefined;
+            const editableMask = (modelMatchedMask || candidateMasks[0]) as
+                | IProjectSegmentationMaskDocument
+                | undefined;
 
             if (!editableMask || !editableMask._id) {
-                logger.warn(`${serviceLocation}: No editable (isMedSAMOutput: false) segmentation mask found for project ${projectId}.`);
+                logger.warn(`${serviceLocation}: No editable (isMedSAMOutput: false) segmentation mask found for project ${projectId} (requestedModel=${requestedModel ?? "<none>"}).`);
                 return res.status(404).json({ success: false, message: "No editable segmentation mask found for this project." });
             }
 
-            logger.info(`${serviceLocation}: Found editable segmentation mask with ID ${editableMask._id} for project ${projectId}.`);
+            logger.info(`${serviceLocation}: Found editable segmentation mask with ID ${editableMask._id} for project ${projectId} (requestedModel=${requestedModel ?? "<none>"}, matchedByModel=${!!modelMatchedMask}).`);
 
             const updatePayload: Partial<IProjectSegmentationMask> & { model?: string } = {
                 isSaved: true,
@@ -957,6 +991,50 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
             success: false,
             message: "An error occurred while checking segmentation status."
         });
+    }
+});
+
+// Trigger bullseye computation for a single mask from its stored RLE data.
+// POST /segmentation/trigger-bullseye/:maskId
+router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        const project = projectResult.projects[0] as IProjectDocument;
+        const W = project.dimensions?.width;
+        const H = project.dimensions?.height;
+        if (!W || !H) {
+            return res.status(400).json({ success: false, message: "Project is missing dimension data." });
+        }
+
+        const frames = (maskDoc as any).frames ?? [];
+        if (!frames.length) {
+            return res.status(400).json({ success: false, message: "Mask has no frame data." });
+        }
+
+        // Respond immediately and run computation async
+        res.json({ success: true, message: "Bullseye computation started." });
+
+        computeBullseyeFromMaskDoc(maskId, frames, W, H).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-bullseye async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering bullseye for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
     }
 });
 

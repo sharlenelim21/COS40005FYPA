@@ -216,7 +216,17 @@ export function LandmarkSidebar({
       {/* Bottom action buttons */}
       {hasPredictions && (
         <div className="p-4 border-t border-[var(--sidebar-border)] flex flex-col gap-2 flex-shrink-0">
-          <Button size="sm" className="w-full text-xs gap-1.5" onClick={onApplyAlignment}>
+          <Button
+            size="sm"
+            className="w-full text-xs gap-1.5"
+            onClick={onApplyAlignment}
+            disabled={!currentPrediction?.rv_insertion_1 || !currentPrediction?.rv_insertion_2}
+            title={
+              !currentPrediction?.rv_insertion_1 || !currentPrediction?.rv_insertion_2
+                ? "RV insertion points required — run detection first"
+                : undefined
+            }
+          >
             Apply AHA-17 Alignment
             <ArrowRight className="h-3.5 w-3.5" />
           </Button>

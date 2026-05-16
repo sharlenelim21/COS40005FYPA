@@ -1,17 +1,142 @@
 // File: src/services/segmentation_export.ts
 // Description: Service layer for segmentation NIfTI export functionality - extracted from routes for reuse.
 
+import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
-import { readProject, readProjectSegmentationMask } from "./database";
+import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask } from "./database";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
+import axios from 'axios';
+import FormData from 'form-data';
 import logger from "./logger";
 import fs from 'fs-extra';
 import path from 'path';
 import { exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
+import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
 
 const serviceLocation = 'SegmentationExport';
+
+/**
+ * Compute AHA 17-segment bullseye analysis directly from the mask's RLE frame data
+ * using the local Python script. No GPU or NIfTI file required.
+ * Stores the result in MongoDB on the segmentation mask document.
+ */
+export const computeBullseyeFromMaskDoc = async (
+    maskId: string,
+    frames: any[],
+    width: number,
+    height: number,
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
+    const input = JSON.stringify({ frames, width, height });
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [Bullseye] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [Bullseye] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [Bullseye] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { bullseye: result, updatedAt: new Date() } },
+                );
+                logger.info(`${serviceLocation}: [Bullseye] Stored RLE-derived bullseye for mask ${maskId} — stats: ${JSON.stringify(result.stats)} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [Bullseye] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
+ * Non-blocking: POSTs the NIfTI file at niftiPath to the GPU /bullseye/analyze endpoint,
+ * then stores the result in MongoDB on the segmentation mask document.
+ */
+export const computeBullseyeAndStore = async (
+    niftiPath: string,
+    maskId: string,
+    projectId: string,
+): Promise<void> => {
+    try {
+        const gpuBaseUrl = await getFreshGPUServerAddress();
+        const token = getCurrentToken();
+        if (!gpuBaseUrl || !token) {
+            logger.warn(`${serviceLocation}: [Bullseye] GPU address or token unavailable — skipping bullseye for mask ${maskId}`);
+            return;
+        }
+
+        const fileExists = await fs.pathExists(niftiPath);
+        if (!fileExists) {
+            logger.warn(`${serviceLocation}: [Bullseye] NIfTI file not found at ${niftiPath} — skipping bullseye for mask ${maskId}`);
+            return;
+        }
+
+        logger.info(`${serviceLocation}: [Bullseye] Sending NIfTI to GPU for mask ${maskId} (project ${projectId})`);
+
+        const form = new FormData();
+        form.append('file', fs.createReadStream(niftiPath), {
+            filename: path.basename(niftiPath),
+            contentType: 'application/gzip',
+        });
+
+        const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
+            headers: {
+                ...form.getHeaders(),
+                Authorization: `Bearer ${token}`,
+            },
+            timeout: 120000,
+        });
+
+        if (response.status !== 200 || !response.data) {
+            logger.warn(`${serviceLocation}: [Bullseye] GPU returned status ${response.status} for mask ${maskId} — skipping store`);
+            return;
+        }
+
+        const bullseyeData = response.data;
+        bullseyeData.computed_at = new Date().toISOString();
+
+        const gpuWriteResult = await projectSegmentationMaskModel.collection.updateOne(
+            { _id: new mongoose.Types.ObjectId(maskId) },
+            { $set: { bullseye: bullseyeData, updatedAt: new Date() } },
+        );
+
+        logger.info(`${serviceLocation}: [Bullseye] Stored bullseye result for mask ${maskId} — stats: ${JSON.stringify(bullseyeData.stats)} | matched=${gpuWriteResult.matchedCount} modified=${gpuWriteResult.modifiedCount}`);
+    } catch (err: any) {
+        logger.warn(`${serviceLocation}: [Bullseye] GPU bullseye failed for mask ${maskId} (${err?.message}). Falling back to local RLE computation.`);
+        // Fall back to local RLE-based computation using the mask document's frame data
+        try {
+            const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+            const frames = (maskDoc as any)?.frames ?? [];
+            if (!frames.length) {
+                logger.warn(`${serviceLocation}: [Bullseye] No frame data on mask ${maskId} — cannot fall back to local computation.`);
+                return;
+            }
+            const projectResult = await readProject(projectId);
+            const project = projectResult.projects?.[0] as any;
+            const W = project?.dimensions?.width;
+            const H = project?.dimensions?.height;
+            if (!W || !H) {
+                logger.warn(`${serviceLocation}: [Bullseye] No dimensions for project ${projectId} — cannot fall back to local computation.`);
+                return;
+            }
+            await computeBullseyeFromMaskDoc(maskId, frames, W, H);
+        } catch (fallbackErr: any) {
+            logger.warn(`${serviceLocation}: [Bullseye] Local fallback also failed for mask ${maskId}: ${fallbackErr?.message}`);
+        }
+    }
+};
 
 /**
  * Generates a segmentation NIfTI file specifically for 4D reconstruction
@@ -21,13 +146,43 @@ const serviceLocation = 'SegmentationExport';
  * @param userId - The user ID (for access validation)
  * @returns Promise with success status, S3 URL, and metadata
  */
+/**
+ * Resolve a mask doc to a model. Mirrors the frontend `inferDocModel`
+ * and the backend reconstruction.ts copy so behaviour is consistent
+ * across all three call sites. Returns null when there's no signal —
+ * never guesses a model.
+ */
+const inferMaskModelForExport = (mask: IProjectSegmentationMask): "medsam" | "unet" | null => {
+    const tag = (
+        (mask as any).segmentationModel ||
+        (mask as any).model_used ||
+        ""
+    )
+        .toString()
+        .toLowerCase();
+    if (tag === "medsam" || tag === "unet") return tag;
+    const name = (mask.name || "").toString().toLowerCase();
+    if (name.includes("unet")) return "unet";
+    if (name.includes("medsam")) return "medsam";
+    if (name.startsWith("ai output")) return "medsam";
+    if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+    return null;
+};
+
 export const generateAISegmentationForReconstruction = async (
-    projectId: string, 
-    userId?: string
-): Promise<{ 
-    success: boolean; 
-    message?: string; 
-    s3Url?: string; 
+    projectId: string,
+    userId?: string,
+    /**
+     * Optional segmentation-model scope. When set to "medsam" or "unet",
+     * the function will only consider masks resolving to that model and
+     * fail explicitly if none are available. When omitted, behaviour
+     * matches the original (model-agnostic) implementation.
+     */
+    segmentationModel?: "medsam" | "unet"
+): Promise<{
+    success: boolean;
+    message?: string;
+    s3Url?: string;
     fileSizeBytes?: number;
     s3Key?: string;
 }> => {
@@ -71,8 +226,32 @@ export const generateAISegmentationForReconstruction = async (
 
         // 3. Select the best reconstruction mask set.
         // Prefer the editable mask, but fall back to the AI mask if the editable export is missing myocardium labels.
-        const editableMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === false);
-        const aiMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === true);
+        // When `segmentationModel` is provided, candidates are restricted
+        // to that model so MedSAM and UNet results never leak into each
+        // other. When omitted, original (legacy) behaviour is preserved.
+        const candidatePool = segmentationModel
+            ? hasMasksResult.projectsegmentationmasks!.filter(
+                  m => inferMaskModelForExport(m) === segmentationModel
+              )
+            : hasMasksResult.projectsegmentationmasks!;
+
+        if (segmentationModel) {
+            logger.info(
+                `${serviceLocation}: Scoped to segmentationModel=${segmentationModel} for project ${projectId}. Pool size: ${candidatePool.length}/${hasMasksResult.projectsegmentationmasks!.length}.`
+            );
+            if (candidatePool.length === 0) {
+                logger.error(
+                    `${serviceLocation}: No mask docs resolve to segmentationModel=${segmentationModel} for project ${projectId}.`
+                );
+                return {
+                    success: false,
+                    message: `No ${segmentationModel.toUpperCase()} segmentation masks found for reconstruction. Run ${segmentationModel.toUpperCase()} segmentation first.`,
+                };
+            }
+        }
+
+        const editableMask = candidatePool.find(mask => mask.isMedSAMOutput === false);
+        const aiMask = candidatePool.find(mask => mask.isMedSAMOutput === true);
 
         const maskHasMyocardium = (mask?: IProjectSegmentationMask) =>
             !!mask?.frames?.some(frame =>
@@ -81,15 +260,15 @@ export const generateAISegmentationForReconstruction = async (
                 )
             );
 
-        let selectedMask: IProjectSegmentationMask;
         let segmentationsToProcess: IProjectSegmentationMask[] = [];
+        let exportMask: IProjectSegmentationMask | undefined;
         if (editableMask && maskHasMyocardium(editableMask)) {
-            selectedMask = editableMask;
             segmentationsToProcess = [editableMask];
+            exportMask = editableMask;
             logger.info(`${serviceLocation}: Using editable mask for reconstruction`);
         } else if (aiMask && maskHasMyocardium(aiMask)) {
-            selectedMask = aiMask;
             segmentationsToProcess = [aiMask];
+            exportMask = aiMask;
             logger.warn(`${serviceLocation}: Editable mask has no myocardium labels; falling back to AI mask for reconstruction`);
         } else if (editableMask) {
             logger.error(`${serviceLocation}: No myocardium (myo/label 2) found in editable or AI masks for project ${projectId}`);
@@ -99,23 +278,27 @@ export const generateAISegmentationForReconstruction = async (
             return { success: false, message: "No editable segmentation mask available for reconstruction. Please complete or refine segmentation first." };
         }
 
+        if (!exportMask) {
+            throw new Error("Editable mask not found for this segmentation export");
+        }
+
         // Write segmentation data for Python processing
         await fs.writeJson(segmentationsJsonPath, segmentationsToProcess, { spaces: 2 });
         
         // Log segmentation data being processed
         const maskStructure = {
-            maskId: selectedMask._id,
-            frameCount: selectedMask.frames?.length || 0,
-            isMedSAMOutput: selectedMask.isMedSAMOutput,
-            firstFrameIndex: selectedMask.frames?.[0]?.frameindex,
-            lastFrameIndex: selectedMask.frames?.[selectedMask.frames.length - 1]?.frameindex
+            maskId: exportMask._id,
+            frameCount: exportMask.frames?.length || 0,
+            isMedSAMOutput: exportMask.isMedSAMOutput,
+            firstFrameIndex: exportMask.frames?.[0]?.frameindex,
+            lastFrameIndex: exportMask.frames?.[exportMask.frames.length - 1]?.frameindex
         };
         logger.info(`${serviceLocation}: Segmentation mask structure for project ${projectId}: ${JSON.stringify(maskStructure)}`);
         
         // Log detailed class distribution across frames for debugging
         const classDistribution: Record<string, number> = {};
         let totalMasks = 0;
-        selectedMask.frames?.forEach(frame => {
+        exportMask.frames?.forEach(frame => {
             frame.slices?.forEach(slice => {
                 slice.segmentationmasks?.forEach(mask => {
                     const className = mask.class || 'unknown';
@@ -159,7 +342,7 @@ export const generateAISegmentationForReconstruction = async (
             };
             logger.info(`${serviceLocation}: NIfTI generation parameters for project ${projectId}: ${JSON.stringify(niftiParams)}`);
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
+            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
         } else {
             // Use download and extract approach (legacy)
             logger.info(`${serviceLocation}: No stored affine matrix found for reconstruction of project ${projectId}. Using download approach.`);
@@ -171,7 +354,7 @@ export const generateAISegmentationForReconstruction = async (
                 return { success: false, message: "Project has no associated S3 file path." };
             }
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
+            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
         }
 
         logger.info(`${serviceLocation}: Saving output - executing Python script for reconstruction NIfTI generation of project ${projectId}`);
@@ -232,7 +415,35 @@ export const generateAISegmentationForReconstruction = async (
 
         // Generate presigned URL for GPU server access
         const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);
-        
+
+        // Fire bullseye analysis non-blocking for ALL editable masks in the project
+        // (not just exportMask) so both MedSAM and UNet editable masks get bullseye data.
+        const allEditableMasks = hasMasksResult.projectsegmentationmasks!.filter(
+            m => m.isMedSAMOutput === false
+        );
+        for (const editableMaskForBullseye of allEditableMasks) {
+            const bullseyeMaskId = editableMaskForBullseye._id?.toString();
+            if (!bullseyeMaskId) continue;
+            const bullseyeTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_${bullseyeMaskId}_${tempExportId}`);
+            const bullseyeCopyPath = path.join(bullseyeTempDir, 'input.nii.gz');
+            try {
+                await fs.ensureDir(bullseyeTempDir);
+                await fs.copy(localOutputSegmentationNiftiPath, bullseyeCopyPath);
+                // Launch async — intentionally not awaited; cleans up its own temp dir
+                (async () => {
+                    try {
+                        await computeBullseyeAndStore(bullseyeCopyPath, bullseyeMaskId, projectId);
+                    } finally {
+                        try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
+                    }
+                })();
+                logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
+            } catch (bullseyeCopyErr: any) {
+                logger.warn(`${serviceLocation}: [Bullseye] Failed to copy NIfTI for bullseye on mask ${bullseyeMaskId} — skipping: ${bullseyeCopyErr?.message}`);
+                try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
+            }
+        }
+
         return {
             success: true,
             message: "AI segmentation NIfTI generated successfully for reconstruction.",

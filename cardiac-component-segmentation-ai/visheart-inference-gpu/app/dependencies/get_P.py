@@ -385,7 +385,7 @@ def get_T(base_path, dataset_name='', patient='', patient_file=''): # ADDED CONS
     max_idx = np.argmax(np.array(area))
 
     result_U = np.zeros(mask.shape, np.uint8)
-    list = np.squeeze(contours[max_idx])
+    list = np.squeeze(contours[max_idx]).reshape(-1, 2)
     list = np.array(list)
     list = [list[:, 1], list[:, 0]]
     result_U[tuple(list)] = 255
@@ -405,7 +405,7 @@ def get_T(base_path, dataset_name='', patient='', patient_file=''): # ADDED CONS
     max_idx = np.argmax(np.array(area))
 
     result_lvv = np.zeros(mask.shape, np.uint8)
-    list = np.squeeze(contours[max_idx])
+    list = np.squeeze(contours[max_idx]).reshape(-1, 2)
     list = np.array(list)
     list = [list[:, 1], list[:, 0]]
     result_lvv[tuple(list)] = 255
@@ -422,7 +422,7 @@ def get_T(base_path, dataset_name='', patient='', patient_file=''): # ADDED CONS
     result_rv = np.zeros(mask.shape, np.uint8)
     list = []
     for k in range(len(contours)):
-        contours_list = np.squeeze(contours[k])  # [N，2]
+        contours_list = np.squeeze(contours[k]).reshape(-1, 2)  # [N, 2]
         if len(contours_list.shape) == 1:
             continue
         list.extend(contours_list)
@@ -471,7 +471,7 @@ def get_T(base_path, dataset_name='', patient='', patient_file=''): # ADDED CONS
     max_idx = np.argmax(np.array(area))
 
     result_lv = np.zeros(mask.shape, np.uint8)
-    list_LV = np.squeeze(contours[max_idx])
+    list_LV = np.squeeze(contours[max_idx]).reshape(-1, 2)
     list_LV = np.array(list_LV)
     ###### Here get the LV MID point #####
     list_LV = [list_LV[:, 1], list_LV[:, 0]]
@@ -614,7 +614,7 @@ def get_T_safe(base_path, dataset_name='', patient='', patient_file=''):
     max_idx = np.argmax(np.array(area))
 
     result_U = np.zeros(mask.shape, np.uint8)
-    list = np.squeeze(contours[max_idx])
+    list = np.squeeze(contours[max_idx]).reshape(-1, 2)
     list = np.array(list)
     list = [list[:, 1], list[:, 0]]
     result_U[tuple(list)] = 255
@@ -634,7 +634,7 @@ def get_T_safe(base_path, dataset_name='', patient='', patient_file=''):
     max_idx = np.argmax(np.array(area))
 
     result_lvv = np.zeros(mask.shape, np.uint8)
-    list = np.squeeze(contours[max_idx])
+    list = np.squeeze(contours[max_idx]).reshape(-1, 2)
     list = np.array(list)
     list = [list[:, 1], list[:, 0]]
     result_lvv[tuple(list)] = 255
@@ -651,7 +651,7 @@ def get_T_safe(base_path, dataset_name='', patient='', patient_file=''):
     result_rv = np.zeros(mask.shape, np.uint8)
     list = []
     for k in range(len(contours)):
-        contours_list = np.squeeze(contours[k])  # [N，2]
+        contours_list = np.squeeze(contours[k]).reshape(-1, 2)  # [N, 2]
         if len(contours_list.shape) == 1:
             continue
         list.extend(contours_list)
@@ -700,7 +700,7 @@ def get_T_safe(base_path, dataset_name='', patient='', patient_file=''):
     max_idx = np.argmax(np.array(area))
 
     result_lv = np.zeros(mask.shape, np.uint8)
-    list_LV = np.squeeze(contours[max_idx])
+    list_LV = np.squeeze(contours[max_idx]).reshape(-1, 2)
     list_LV = np.array(list_LV)
     ###### Here get the LV MID point #####
     list_LV = [list_LV[:, 1], list_LV[:, 0]]

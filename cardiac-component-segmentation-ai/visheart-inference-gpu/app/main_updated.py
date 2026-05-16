@@ -7,23 +7,23 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=".env", override=True)
 
 # Import logging configuration
-from app.utils.logging_config import setup_logging, log_startup_banner
+from utils.logging_config import setup_logging, log_startup_banner
 
 # Class imports
-from app.classes.yolo_handler import YoloHandler
+from classes.yolo_handler import YoloHandler
 
 # Route imports
-from app.routes.inference_route import router as inference_router
-from app.routes.status_routes import router as status_router
-from app.routes.inference_route_old import router as inference_router_old
-from app.routes.bullseye_route import router as bullseye_router
+from routes.inference_route import router as inference_router
+from routes.status_routes import router as status_router
+from routes.inference_route_old import router as inference_router_old
+from routes.bullseye_route import router as bullseye_router
 
 # Import the lifespans (custom dependencies)
 # Import the combined lifespan manager
-from app.dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan # Updated import
+from dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan # Updated import
 
 # Import additional logging functions
-from app.utils.logging_config import log_startup_complete
+from utils.logging_config import log_startup_complete
 
 # Composite the lifespans
 @asynccontextmanager
@@ -56,8 +56,8 @@ models_info = {
 log_startup_banner(env_type, models_info)
 
 app.include_router(inference_router, prefix="/inference/v2")
-app.include_router(bullseye_router, prefix="/bullseye")
 app.include_router(status_router, prefix="/status")
+app.include_router(bullseye_router, prefix="/bullseye")
 # Kept for script compatibility
 if env_type == "development":
     logger.info("🔧 Development mode: Including legacy inference routes")
