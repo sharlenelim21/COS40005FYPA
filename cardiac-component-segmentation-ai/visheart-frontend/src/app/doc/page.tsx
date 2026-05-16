@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { BookOpen, Zap, Info, Users, Play, Menu, Loader2, Send, X } from "lucide-react";
+import { BookOpen, Zap, Info, Users, Play, Menu, Loader2, Send, X, MapPin } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -90,6 +90,11 @@ const DocPage = () => {
     { value: "getting-started", icon: BookOpen, label: "Getting Started" },
     { value: "accounts", icon: Users, label: "Accounts" },
     { value: "how-it-works", icon: Play, label: "How Segmentation Works" },
+    {
+      value: "landmark-detection",
+      icon: MapPin,
+      label: "How Landmark Detection Works",
+    },
     {
       value: "reconstruction",
       icon: Zap,
@@ -1031,6 +1036,179 @@ const DocPage = () => {
                           permanently and access advanced project management
                           features. Guest accounts provide full functionality but
                           projects are only available during your session.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          {/* ── LANDMARK DETECTION ── */}
+          <TabsContent value="landmark-detection" className="flex-1 m-0 h-full">
+            <ScrollArea className="h-full w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
+                <div className="space-y-6 md:space-y-8 max-w-none">
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold mb-4">
+                      How Landmark Detection Works
+                    </h1>
+                    <p className="text-muted-foreground mb-6">
+                      Landmark detection identifies repeatable cardiac reference points across MRI frames so users can review motion, compare phases, and prepare strain-style reporting from a consistent anatomical layout.
+                    </p>
+                  </div>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <MapPin className="w-5 h-5 flex-shrink-0" />
+                        Overview
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        The landmark model reads the project MRI sequence and predicts key points such as RV insertion points, the left ventricular apex, basal references, and mid-ventricular references. These points are shown directly on the slice viewer and can be checked frame by frame.
+                      </p>
+                      <div className="grid gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            AI
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">Per-Frame Detection</h4>
+                            <p className="text-sm text-muted-foreground">
+                              UNetResNet34 landmark inference produces predictions for the cardiac frames returned by the project data.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            17
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">AHA-17 Review</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Bullseye and strain preview panels use a 17-segment layout to summarize regional behavior in a familiar cardiac reporting format.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            4D
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">Motion Review</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Playback controls let users compare landmark movement, bullseye color changes, and 4D reconstruction frames over time.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          1
+                        </div>
+                        Start Landmark Detection
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        Open a project and choose <strong>Landmark Detection</strong> from the project workflow card. The page loads the MRI frame data, available masks, model selector, and visualization panels.
+                      </p>
+                      <ul className="text-sm text-muted-foreground space-y-1">
+                        <li>Click <strong>Run Detection</strong> to send the project through the landmark endpoint.</li>
+                        <li>Use the default UNetResNet34 landmark model unless another model is added later.</li>
+                        <li>An optional replacement NIfTI file can be selected from the sidebar for testing.</li>
+                      </ul>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          2
+                        </div>
+                        Review Detected Landmarks
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        Detection results appear as colored points on the MRI slice. The sidebar lists every landmark and its coordinate for the current frame.
+                      </p>
+                      <ul className="text-sm text-muted-foreground space-y-1">
+                        <li>Scrub through frames or press play to inspect temporal consistency.</li>
+                        <li>Toggle individual landmark points if the image becomes crowded.</li>
+                        <li>Hide labels when checking point placement against the image and mask overlays.</li>
+                      </ul>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          3
+                        </div>
+                        Inspect Bullseye And Strain Preview
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        The analysis panels provide a bullseye/strain preview for demonstration and workflow review. Current strain values are dummy data until the strain calculation pipeline is connected.
+                      </p>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Metric</TableHead>
+                            <TableHead>Meaning</TableHead>
+                            <TableHead>Current Use</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          <TableRow>
+                            <TableCell className="font-medium">GLS</TableCell>
+                            <TableCell>Global Longitudinal Strain</TableCell>
+                            <TableCell>Dummy preview curve</TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium">GCS</TableCell>
+                            <TableCell>Global Circumferential Strain</TableCell>
+                            <TableCell>Dummy preview curve</TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium">GRS</TableCell>
+                            <TableCell>Global Radial Strain</TableCell>
+                            <TableCell>Dummy preview curve</TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          4
+                        </div>
+                        Export Results
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        After reviewing the landmarks and preview panels, export a PDF report from the landmark page. The report summarizes the project, detected landmark workflow, frame review sequence, and placeholder strain metrics.
+                      </p>
+                      <div className="p-2 md:p-4 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                        <p className="text-sm font-medium mb-1">Preview Data Note</p>
+                        <p className="text-sm text-muted-foreground">
+                          Strain values in the current interface are for presentation and workflow testing. They should be replaced by computed strain values before clinical interpretation.
                         </p>
                       </div>
                     </CardContent>

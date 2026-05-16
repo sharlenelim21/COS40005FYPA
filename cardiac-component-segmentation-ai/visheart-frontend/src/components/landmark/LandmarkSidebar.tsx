@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -27,14 +28,15 @@ import {
   X,
   AlertCircle,
   RefreshCw,
-  ArrowRight,
+  Download,
+  FileText,
 } from "lucide-react";
 import {
   LANDMARK_DEFINITIONS,
   getLandmarkCoord,
-  AHA_SEGMENT_COLORS,
 } from "@/types/landmark";
 import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
+import { getDummyStrainData, getStrainColor, type StrainType } from "@/components/landmark/StrainVisualization";
 
 const NAV_ITEMS = [
   { key: "landmarks", icon: MapPin,    label: "Landmarks" },
@@ -44,18 +46,18 @@ const NAV_ITEMS = [
 
 type TabKey = typeof NAV_ITEMS[number]["key"];
 
-const STRAIN_CURVE_DATA = [
-  { frame: 1, strain: -4.2 },
-  { frame: 2, strain: -8.8 },
-  { frame: 3, strain: -13.6 },
-  { frame: 4, strain: -17.6 },
-  { frame: 5, strain: -15.7 },
-  { frame: 6, strain: -14.6 },
-  { frame: 7, strain: -12.2 },
-  { frame: 8, strain: -8.1 },
-  { frame: 9, strain: -5.4 },
-  { frame: 10, strain: -3.2 },
-];
+function strainCurveData(type: StrainType, totalFrames: number) {
+  const frames = Math.max(totalFrames || 10, 1);
+  return Array.from({ length: frames }, (_, frame) => {
+    const values = getDummyStrainData(type, frame, frames);
+    const average = values.reduce((sum, item) => sum + item.strain, 0) / values.length;
+    return {
+      frame: frame + 1,
+      time: Math.round((frame / Math.max(frames - 1, 1)) * 1200),
+      strain: Number(average.toFixed(1)),
+    };
+  });
+}
 
 // Props 
 export interface LandmarkSidebarProps {
@@ -72,7 +74,6 @@ export interface LandmarkSidebarProps {
   onPlaybackSpeedChange: (fps: number) => void;
   onRerun: () => void;
   onReset: () => void;
-  onApplyAlignment: () => void;
   onFileSelect: (file: File | null) => void;
   onClearReplacementFile: () => void;
   showLabels: boolean;
@@ -92,7 +93,6 @@ export function LandmarkSidebar({
   onPlaybackSpeedChange,
   onRerun,
   onReset,
-  onApplyAlignment,
   onFileSelect,
   onClearReplacementFile,
   showLabels,
@@ -200,7 +200,11 @@ export function LandmarkSidebar({
           />
         )}
         {activeTab === "strain" && (
-          <StrainTab hasPredictions={hasPredictions} />
+          <StrainTab
+            hasPredictions={hasPredictions}
+            currentFrame={state.currentFrame}
+            totalFrames={state.totalFrames}
+          />
         )}
         {activeTab === "settings" && (
           <SettingsTab
@@ -219,25 +223,11 @@ export function LandmarkSidebar({
           <Button
             size="sm"
             className="w-full text-xs gap-1.5"
-            onClick={onApplyAlignment}
-            disabled={!currentPrediction?.rv_insertion_1 || !currentPrediction?.rv_insertion_2}
-            title={
-              !currentPrediction?.rv_insertion_1 || !currentPrediction?.rv_insertion_2
-                ? "RV insertion points required — run detection first"
-                : undefined
-            }
-          >
-            Apply AHA-17 Alignment
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full text-xs gap-1.5"
             onClick={onRerun}
+            variant="outline"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
             Re-run Detection
+            <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
       )}
@@ -632,66 +622,96 @@ function ReplacementFileRow({
   );
 }
 
-// Strain / AHA-17 tab
-function StrainTab({ hasPredictions }: { hasPredictions: boolean }) {
+function StrainTab({
+  hasPredictions,
+  currentFrame,
+  totalFrames,
+}: {
+  hasPredictions: boolean;
+  currentFrame: number;
+  totalFrames: number;
+}) {
+  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GCS");
+  const frameCount = Math.max(totalFrames || 10, 1);
+  const curveData = strainCurveData(selectedStrainType, frameCount);
+  const segmentValues = getDummyStrainData(selectedStrainType, currentFrame, frameCount);
+  const currentAverage = segmentValues.reduce((sum, item) => sum + item.strain, 0) / segmentValues.length;
+  const peakValue = selectedStrainType === "GRS"
+    ? Math.max(...curveData.map((item) => item.strain))
+    : Math.min(...curveData.map((item) => item.strain));
+  const currentTime = curveData[Math.min(currentFrame, curveData.length - 1)]?.time ?? 0;
+
   if (!hasPredictions) {
     return (
       <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
         <Activity className="h-8 w-8 opacity-25" />
-        <p className="text-sm">Run detection first to preview AHA-17 segment mapping.</p>
+        <p className="text-sm leading-snug">
+          Run detection first to view strain curves and frame metrics.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-medium text-foreground">AHA 17-Segment Alignment</h3>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-foreground">Strain Results</h3>
+          <p className="text-[10px] text-muted-foreground">
+            Dummy preview values, frame {currentFrame + 1}/{frameCount}
+          </p>
+        </div>
+        <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-mono text-muted-foreground">
+          {currentTime} ms
+        </span>
+      </div>
 
-      <p className="text-[10px] text-muted-foreground leading-relaxed">
-        Basal (1–6) · Mid (7–12) · Apical (13–16) · Apex (17)
-      </p>
-
-      {/* AHA grid */}
-      <div className="grid grid-cols-6 gap-1">
-        {AHA_SEGMENT_COLORS.map((color, i) => (
+      <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+        {(["GRS", "GCS", "GLS"] as const).map((type) => (
           <button
-            key={i}
+            key={type}
             type="button"
-            className="aspect-square rounded flex items-center justify-center text-[9px] font-semibold text-white/90 hover:opacity-80 transition-opacity cursor-pointer"
-            style={{ backgroundColor: color }}
-            title={`Segment ${i + 1}`}
-            aria-label={`AHA Segment ${i + 1}`}
+            onClick={() => setSelectedStrainType(type)}
+            className={cn(
+              "rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
+              selectedStrainType === type
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
           >
-            {i + 1}
+            {type}
           </button>
         ))}
       </div>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-sm bg-red-500 inline-block" />
-          High strain
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-sm bg-green-500 inline-block" />
-          Low strain
-        </span>
+      <div className="grid grid-cols-2 gap-2">
+        <StrainMetricCard
+          label={`Current ${selectedStrainType}`}
+          value={`${currentAverage > 0 ? "+" : ""}${currentAverage.toFixed(1)}%`}
+          strainType={selectedStrainType}
+          valueNumber={currentAverage}
+        />
+        <StrainMetricCard
+          label={`Peak ${selectedStrainType}`}
+          value={`${peakValue > 0 ? "+" : ""}${peakValue.toFixed(1)}%`}
+          strainType={selectedStrainType}
+          valueNumber={peakValue}
+        />
       </div>
 
       <div className="rounded-lg border border-border bg-background p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="mb-2 flex items-center justify-between">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-            Global Strain Curve
+            Global {selectedStrainType} Curve
           </h4>
-          <span className="text-[10px] text-muted-foreground">GLS</span>
+          <span className="text-[10px] text-muted-foreground">Time (ms)</span>
         </div>
-        <div className="h-32">
+        <div className="h-44">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={STRAIN_CURVE_DATA} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
+            <LineChart data={curveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
               <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
               <XAxis
-                dataKey="frame"
+                dataKey="time"
                 tickLine={false}
                 axisLine={false}
                 tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
@@ -700,16 +720,13 @@ function StrainTab({ hasPredictions }: { hasPredictions: boolean }) {
                 tickLine={false}
                 axisLine={false}
                 tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                domain={[-20, 0]}
+                domain={selectedStrainType === "GRS" ? [0, 42] : [-26, 2]}
                 tickFormatter={(value) => `${value}%`}
               />
               <Tooltip
                 cursor={{ stroke: "hsl(var(--border))" }}
-                formatter={(value) => {
-                  const numericValue = Number(value ?? 0);
-                  return [`${numericValue.toFixed(1)}%`, "GLS"];
-                }}
-                labelFormatter={(label) => `Frame ${label}`}
+                formatter={(value) => [`${Number(value).toFixed(1)}%`, selectedStrainType]}
+                labelFormatter={(label) => `${label} ms`}
                 contentStyle={{
                   borderRadius: 8,
                   border: "1px solid hsl(var(--border))",
@@ -718,10 +735,16 @@ function StrainTab({ hasPredictions }: { hasPredictions: boolean }) {
                   fontSize: 12,
                 }}
               />
+              <ReferenceLine
+                x={currentTime}
+                stroke="hsl(var(--primary))"
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+              />
               <Line
                 type="monotone"
                 dataKey="strain"
-                stroke="#f87171"
+                stroke={selectedStrainType === "GRS" ? "#22c55e" : "#f87171"}
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 3 }}
@@ -729,30 +752,77 @@ function StrainTab({ hasPredictions }: { hasPredictions: boolean }) {
             </LineChart>
           </ResponsiveContainer>
         </div>
-        <p className="mt-2 text-center text-[10px] text-muted-foreground">
-          Time (ms) - 3 frames - GLS shown
-        </p>
       </div>
 
-      {/* Metric cards */}
-      <div className="grid grid-cols-2 gap-2 pt-1">
-        {[
-          { label: "Peak GCS (SAX)", value: "–17.6%", neg: true  },
-          { label: "Peak GRS (SAX)", value: "+27.8%", neg: false },
-          { label: "Peak GLS (LAX)", value: "–16.2%", neg: true  },
-          { label: "Alignment",      value: "94%",    neg: false },
-        ].map(({ label, value, neg }) => (
-          <div key={label} className="rounded-lg border border-border bg-muted/30 p-2 text-center">
-            <p className="text-[10px] text-muted-foreground leading-none mb-1">{label}</p>
-            <p className={cn("text-sm font-semibold", neg ? "text-red-500" : "text-green-500")}>
-              {value}
-            </p>
-          </div>
-        ))}
+      <div className="rounded-lg border border-border bg-background">
+        <div className="border-b border-border px-3 py-2">
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+            Segment Values
+          </h4>
+        </div>
+        <div className="max-h-56 overflow-y-auto">
+          <table className="w-full text-xs">
+            <tbody className="divide-y divide-border">
+              {segmentValues.map((segment) => (
+                <tr key={segment.segment} className="hover:bg-muted/40">
+                  <td className="px-3 py-2 text-muted-foreground">{segment.segment}</td>
+                  <td className="px-2 py-2">{segment.label}</td>
+                  <td
+                    className="px-3 py-2 text-right font-mono"
+                    style={{ color: getStrainColor(segment.strain, selectedStrainType) }}
+                  >
+                    {segment.strain > 0 ? "+" : ""}{segment.strain.toFixed(1)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <p className="text-[10px] text-muted-foreground/60 italic">
-        Values shown are mock data. Real strain values will be computed after AHA-17 alignment (EPIC 7).
+      <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-xs gap-1.5"
+          onClick={() => alert("Strain report export is a placeholder until real strain values are connected.")}
+        >
+          <Download className="h-3.5 w-3.5" />
+          Report
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-xs gap-1.5"
+          onClick={() => alert("Strain CSV export is a placeholder.")}
+        >
+          <FileText className="h-3.5 w-3.5" />
+          Data
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function StrainMetricCard({
+  label,
+  value,
+  strainType,
+  valueNumber,
+}: {
+  label: string;
+  value: string;
+  strainType: StrainType;
+  valueNumber: number;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/20 p-3">
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+      <p
+        className="mt-1 text-lg font-semibold"
+        style={{ color: getStrainColor(valueNumber, strainType) }}
+      >
+        {value}
       </p>
     </div>
   );

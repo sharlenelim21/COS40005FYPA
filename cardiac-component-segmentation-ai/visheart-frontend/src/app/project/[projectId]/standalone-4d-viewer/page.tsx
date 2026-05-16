@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
+import { StrainBullseye, type StrainType } from "@/components/landmark/StrainVisualization";
 import { 
   ResizablePanelGroup, 
   ResizablePanel, 
@@ -72,6 +73,7 @@ export default function Standalone4DViewerPage() {
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(500); // ms per frame
+  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GLS");
 
   // Get total frames from reconstruction metadata (more reliable than project dimensions for reconstructions)
   const totalFrames = activeReconstruction?.totalFrames || projectData?.dimensions?.frames || 0;
@@ -384,6 +386,59 @@ export default function Standalone4DViewerPage() {
                     className="w-full"
                     disabled={totalFrames <= 1}
                   />
+                </div>
+
+                {/* Dynamic Bullseye Visualization */}
+                <div className="pt-4 border-t space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      Frame Strain Analysis
+                    </p>
+                    <span className="text-xs text-foreground font-mono font-semibold">
+                      Frame {currentFrame + 1} / {totalFrames}
+                    </span>
+                  </div>
+                  
+                  {/* Strain type selector */}
+                  <div className="flex gap-2">
+                    {(["GLS", "GCS", "GRS"] as const).map((type) => (
+                      <Button
+                        key={type}
+                        variant={selectedStrainType === type ? "default" : "outline"}
+                        size="sm"
+                        className="flex-1 text-xs h-8"
+                        onClick={() => setSelectedStrainType(type)}
+                      >
+                        {type}
+                      </Button>
+                    ))}
+                  </div>
+
+                  {/* Bullseye chart */}
+                  <div className="rounded-lg border border-border bg-muted/10 p-2">
+                    <StrainBullseye
+                      selectedStrainType={selectedStrainType}
+                      frame={currentFrame}
+                      totalFrames={totalFrames}
+                      compact
+                    />
+                  </div>
+                  
+                  {/* Mini strain indicators */}
+                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                    <div className="rounded bg-red-100/50 dark:bg-red-950/20 p-2 text-center">
+                      <div className="text-muted-foreground">GLS</div>
+                      <div className="font-semibold text-red-600">-18.2%</div>
+                    </div>
+                    <div className="rounded bg-yellow-100/50 dark:bg-yellow-950/20 p-2 text-center">
+                      <div className="text-muted-foreground">GCS</div>
+                      <div className="font-semibold text-yellow-600">-17.6%</div>
+                    </div>
+                    <div className="rounded bg-green-100/50 dark:bg-green-950/20 p-2 text-center">
+                      <div className="text-muted-foreground">GRS</div>
+                      <div className="font-semibold text-green-600">+27.8%</div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Reconstruction Info */}
