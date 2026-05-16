@@ -160,12 +160,13 @@ export default function Standalone4DViewerPage() {
   if (!hasReconstructions) {
     return (
       <div className="container mx-auto p-6 max-w-4xl">
-        <Button 
-          variant="ghost" 
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => router.back()}
-          className="mb-4"
+          className="mb-4 gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
         >
-          <ArrowLeft className="h-4 w-4 mr-2" />
+          <ArrowLeft className="h-4 w-4" />
           Back to Project
         </Button>
         
@@ -191,12 +192,13 @@ export default function Standalone4DViewerPage() {
   if (reconstructionCacheError) {
     return (
       <div className="container mx-auto p-6 max-w-4xl">
-        <Button 
-          variant="ghost" 
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => router.back()}
-          className="mb-4"
+          className="mb-4 gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
         >
-          <ArrowLeft className="h-4 w-4 mr-2" />
+          <ArrowLeft className="h-4 w-4" />
           Back to Project
         </Button>
         
@@ -229,15 +231,17 @@ export default function Standalone4DViewerPage() {
         <ResizablePanel defaultSize={70} minSize={20}>
           <div className="h-full w-full p-4 relative">
             {/* Back Button - Positioned in top-left */}
-            <Button 
-              variant="secondary" 
-              size="sm"
-              onClick={() => router.push(`/project/${projectId}`)}
-              className="absolute top-6 left-6 z-20 bg-black/70 hover:bg-black/90 text-white"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Project
-            </Button>
+            <div className="absolute top-6 left-6 z-20">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push(`/project/${projectId}`)}
+                className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md backdrop-blur-sm"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Back to Project</span>
+              </Button>
+            </div>
             
             <ReconstructionGLBViewer
               modelUrl={reconstructionModelUrl}
