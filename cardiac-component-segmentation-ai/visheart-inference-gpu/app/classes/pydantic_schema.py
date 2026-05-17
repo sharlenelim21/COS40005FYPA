@@ -229,6 +229,7 @@ class BullseyeAnalysisResult(BaseModel):
     stats: Dict[str, Any] = Field(..., description="min / max / mean / n_nan across all segments")
     input_shape: List[int] = Field(..., description="Shape of the input mask [H, W, N_slices]")
     slice_labels: List[str] = Field(..., description="Label per slice: basal | mid | apical | apex | none")
+    lv_centroid: Optional[List[float]] = Field(None, description="Average myocardium centroid [cx, cy] in pixel coords across basal/mid slices")
 
 
 class FourDReconstructionResult(BaseModel):

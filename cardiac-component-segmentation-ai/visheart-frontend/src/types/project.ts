@@ -222,6 +222,7 @@ export interface BullseyeData {
     segment_metadata: BullseyeSegmentMeta[];
     stats: BullseyeStats;
     computed_at: string;
+    lv_centroid?: [number, number];
 }
 
 /*==================================== Bullseye Section ends here ==========================================*/

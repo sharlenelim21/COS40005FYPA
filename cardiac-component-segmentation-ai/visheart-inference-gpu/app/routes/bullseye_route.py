@@ -29,12 +29,12 @@ import aiohttp
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
-from app.security.backend_authentication import conditional_verify_jwt, TokenPayLoad
-from app.classes.pydantic_schema import (
+from security.backend_authentication import conditional_verify_jwt, TokenPayLoad
+from classes.pydantic_schema import (
     BullseyeAnalysisResult,
     BullseyeS3Request,
 )
-from app.bullseye_analysis import (
+from bullseye_analysis import (
     AHA_SEGMENTS,
     RING_NAMES,
     classify_slices,
@@ -85,13 +85,14 @@ def _run_analysis(mask_3d: np.ndarray, request_id: Optional[str]) -> BullseyeAna
             detail="Mask contains no myocardium (class 2) pixels. Cannot compute wall thickness."
         )
 
-    values: np.ndarray = mask_to_17_segments(mask_3d)
+    analysis = mask_to_17_segments(mask_3d)
+    values: np.ndarray = analysis["values"]
+    lv_centroid: Optional[List[float]] = analysis["lv_centroid"]
     slice_labels: list[str] = classify_slices(mask_3d)
 
     segment_values = [float(v) for v in values]
     n_nan = int(np.sum(np.isnan(values)))
 
-    valid = values[~np.isnan(values)]
     stats = {
         "min":   float(np.nanmin(values)),
         "max":   float(np.nanmax(values)),
@@ -116,6 +117,7 @@ def _run_analysis(mask_3d: np.ndarray, request_id: Optional[str]) -> BullseyeAna
         stats=stats,
         input_shape=list(mask_3d.shape),
         slice_labels=slice_labels,
+        lv_centroid=lv_centroid,
     )
 
 

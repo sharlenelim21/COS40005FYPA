@@ -52,21 +52,21 @@ type ModelId = typeof MODEL_OPTIONS[number]["value"];
 
 const AHA_SEGMENTS = [
   "Basal Anterior",
-  "Basal Anteroseptal",
-  "Basal Inferoseptal",
-  "Basal Inferior",
-  "Basal Inferolateral",
   "Basal Anterolateral",
+  "Basal Inferolateral",
+  "Basal Inferior",
+  "Basal Inferoseptal",
+  "Basal Anteroseptal",
   "Mid Anterior",
-  "Mid Anteroseptal",
-  "Mid Inferoseptal",
-  "Mid Inferior",
-  "Mid Inferolateral",
   "Mid Anterolateral",
+  "Mid Inferolateral",
+  "Mid Inferior",
+  "Mid Inferoseptal",
+  "Mid Anteroseptal",
   "Apical Anterior",
-  "Apical Septal",
-  "Apical Inferior",
   "Apical Lateral",
+  "Apical Inferior",
+  "Apical Septal",
   "Apex",
 ] as const;
 
@@ -216,30 +216,36 @@ export default function LandmarkDetectionPage() {
   }, [state.status, fetchBullseye, selectedBullseyeModel]);
 
   const handleApplyAlignment = useCallback(() => {
-    if (!currentPrediction) return;
-    const { rv_insertion_1, rv_insertion_2 } = currentPrediction;
-    if (!rv_insertion_1 || !rv_insertion_2) return;
+    const validPreds = state.predictions.filter(
+      (p) => p.rv_insertion_1 && p.rv_insertion_2,
+    );
+    if (validPreds.length === 0) return;
 
-    const rvMidX = (rv_insertion_1[0] + rv_insertion_2[0]) / 2;
-    const rvMidY = (rv_insertion_1[1] + rv_insertion_2[1]) / 2;
+    // Compute septal angle per slice (90° CW rotation of rv1→rv2 in y-down coords)
+    const allAngles = validPreds.map((p) => {
+      const dx = p.rv_insertion_2![0] - p.rv_insertion_1![0];
+      const dy = p.rv_insertion_2![1] - p.rv_insertion_1![1];
+      return Math.atan2(-dx, dy);
+    });
 
-    const dims =
-      state.imageDimensions.width > 0
-        ? state.imageDimensions
-        : { width: projectData?.dimensions?.width ?? 256, height: projectData?.dimensions?.height ?? 256 };
-    const cx = dims.width / 2;
-    const cy = dims.height / 2;
+    // Preliminary circular mean to establish a reference direction
+    const prelimRad = Math.atan2(
+      allAngles.reduce((s, a) => s + Math.sin(a), 0),
+      allAngles.reduce((s, a) => s + Math.cos(a), 0),
+    );
 
-    // Angle from LV centroid to RV midpoint = Septal direction.
-    // SVG Y-axis is flipped, so negate dy to get standard math coords.
-    const septalAngleDeg = (Math.atan2(-(rvMidY - cy), rvMidX - cx) * 180) / Math.PI;
+    // Filter out slices whose angle deviates more than 30° from the preliminary mean
+    const filtered = allAngles.filter((a) => {
+      const diff = Math.abs((((a - prelimRad) * 180) / Math.PI + 540) % 360 - 180);
+      return diff < 30;
+    });
 
-    // Anterior is 90° CCW from Septal in standard CMR convention.
-    // The chart default has Anterior at -90° (top), so the offset is
-    // (septalAngleDeg + 90) relative to that default top position.
-    const offset = septalAngleDeg + 90;
-    setAhaAlignmentAngle(offset);
-  }, [currentPrediction, state.imageDimensions, projectData?.dimensions]);
+    const finalRad = Math.atan2(
+      filtered.reduce((s, a) => s + Math.sin(a), 0),
+      filtered.reduce((s, a) => s + Math.cos(a), 0),
+    );
+    setAhaAlignmentAngle(finalRad * (180 / Math.PI));
+  }, [state.predictions]);
 
   const handleResetAlignment = useCallback(() => {
     setAhaAlignmentAngle(null);
@@ -818,11 +824,11 @@ function AhaBullseyeChart({
   const apicalInner = 30;
   const { segment_values, stats, segment_metadata } = bullseyeData;
 
-  // Cardinal label positions rotate with the reference angle.
-  const anteriorPt  = polarPoint(center, 135, -90 + referenceAngleDeg);
-  const septalPt    = polarPoint(center, 135,   0 + referenceAngleDeg);
-  const lateralPt   = polarPoint(center, 135, 180 + referenceAngleDeg);
-  const inferiorPt  = polarPoint(center, 135,  90 + referenceAngleDeg);
+  // Cardinal label positions are fixed (anatomically correct, do not rotate with segments).
+  const anteriorPt  = polarPoint(center, 135, -90);  // 12 o'clock
+  const lateralPt   = polarPoint(center, 135, 180);  // 9 o'clock
+  const inferiorPt  = polarPoint(center, 135,  90);  // 6 o'clock
+  const septalPt    = polarPoint(center, 135,   0);  // 3 o'clock
 
   return (
     <svg
@@ -852,8 +858,8 @@ function AhaBullseyeChart({
           center={center}
           innerRadius={basalInner}
           outerRadius={basalOuter}
-          startAngle={-90 + index * 60 + referenceAngleDeg}
-          endAngle={-90 + (index + 1) * 60 + referenceAngleDeg}
+          startAngle={-120 - index * 60 + referenceAngleDeg}
+          endAngle={-60 - index * 60 + referenceAngleDeg}
           value={segment_values[index]}
           tooltip={segment_metadata[index]}
           min={stats.min}
@@ -867,8 +873,8 @@ function AhaBullseyeChart({
           center={center}
           innerRadius={midInner}
           outerRadius={basalInner}
-          startAngle={-90 + index * 60 + referenceAngleDeg}
-          endAngle={-90 + (index + 1) * 60 + referenceAngleDeg}
+          startAngle={-120 - index * 60 + referenceAngleDeg}
+          endAngle={-60 - index * 60 + referenceAngleDeg}
           value={segment_values[index + 6]}
           tooltip={segment_metadata[index + 6]}
           min={stats.min}
@@ -882,8 +888,8 @@ function AhaBullseyeChart({
           center={center}
           innerRadius={apicalInner}
           outerRadius={midInner}
-          startAngle={-90 + index * 90 + referenceAngleDeg}
-          endAngle={-90 + (index + 1) * 90 + referenceAngleDeg}
+          startAngle={-135 - index * 90 + referenceAngleDeg}
+          endAngle={-45 - index * 90 + referenceAngleDeg}
           value={segment_values[index + 12]}
           tooltip={segment_metadata[index + 12]}
           min={stats.min}

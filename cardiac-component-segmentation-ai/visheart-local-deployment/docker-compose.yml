@@ -118,6 +118,8 @@ services:
       - ../Cardiac_Segmentation_FYP_Server/dist/routes/support_routes.js:/app/backend/dist/routes/support_routes.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/express_app.js:/app/backend/dist/services/express_app.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/gpu_auth_client.js:/app/backend/dist/services/gpu_auth_client.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/database.js:/app/backend/dist/services/database.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/utils/env.js:/app/backend/dist/utils/env.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/inference.js:/app/backend/dist/services/inference.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/reconstruction.js:/app/backend/dist/services/reconstruction.js:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/services/landmark_inference.js:/app/backend/dist/services/landmark_inference.js:ro
@@ -141,6 +143,8 @@ services:
     image: mongo:7.0
     container_name: visheart-mongodb
     restart: unless-stopped
+    ports:
+      - "27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: P@ssw0rd123!
