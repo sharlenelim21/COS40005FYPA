@@ -264,6 +264,7 @@ export interface IProjectSegmentationMask {
     segment_metadata: { idx: number; name: string; ring: string; value: number }[];
     stats: { min: number; max: number; mean: number; n_nan: number };
     computed_at: string;
+    lv_centroid?: [number, number];
   };
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)

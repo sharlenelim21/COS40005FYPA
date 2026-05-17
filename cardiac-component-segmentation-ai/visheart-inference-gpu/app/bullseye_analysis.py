@@ -14,7 +14,7 @@ Public API
 ----------
     classify_slices(mask_3d)        -> list[str]
     compute_centroid(slice_mask)    -> (cx, cy) | (None, None)
-    ray_cast_thickness(slice_mask, cx, cy, n_rays) -> np.ndarray (n_rays,)
+    ray_cast_thickness(slice_mask, cx, cy, n_rays, start_angle_rad) -> np.ndarray (n_rays,)
     group_sectors(thicknesses, ring_type)           -> np.ndarray (6|4|1,)
     mask_to_17_segments(mask_3d)    -> np.ndarray (17,)
 
@@ -165,23 +165,21 @@ def ray_cast_thickness(
     cx: float,
     cy: float,
     n_rays: int = 360,
+    start_angle_rad: float = 0.0,
 ) -> np.ndarray:
     """
     Cast `n_rays` radial rays from (cx, cy) and measure myocardial wall thickness.
 
-    Implements the same pixel-walk / transition-detection logic as
-    find-centroid-and-sample-points.ipynb:
-      - Walk outward from the centroid along each ray direction
-      - Detect every change in the binary myocardium mask (class-2 vs not-class-2)
-      - Assign the closer transition point as the inner boundary,
-        the farther one as the outer boundary
-      - Thickness = Euclidean distance between inner and outer boundary
+    Rays are cast counter-clockwise on screen starting at `start_angle_rad`,
+    matching alignment_17seg_update.ipynb:
+        angles = start_angle_rad - linspace(0, 2π, n_rays)
 
     Parameters
     ----------
-    slice_mask : ndarray, shape (H, W), values 0–3
-    cx, cy     : centroid (float pixel coords)
-    n_rays     : number of evenly-spaced rays (default 360 → 1° resolution)
+    slice_mask      : ndarray, shape (H, W), values 0–3
+    cx, cy          : centroid (float pixel coords)
+    n_rays          : number of evenly-spaced rays (default 360 → 1° resolution)
+    start_angle_rad : starting angle in radians (default 0.0)
 
     Returns
     -------
@@ -193,7 +191,7 @@ def ray_cast_thickness(
 
     myo = (slice_mask == _MYO_CLASS).astype(np.uint8)
 
-    angles     = np.linspace(0.0, 2.0 * np.pi, n_rays, endpoint=False)
+    angles     = start_angle_rad - np.linspace(0.0, 2.0 * np.pi, n_rays, endpoint=False)
     directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
 
     thicknesses = np.full(n_rays, np.nan, dtype=np.float64)
@@ -242,18 +240,16 @@ def ray_cast_thickness(
 
 def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
     """
-    Average ray thicknesses into AHA sectors, matching AHA_SEGMENTS angle layout.
+    Average ray thicknesses into AHA sectors using sequential grouping.
 
-    Ray angle for ray i = i * 360 / n_rays degrees (0° = right, counterclockwise).
+    Rays are cast CCW from a fixed start angle (set by ray_cast_thickness),
+    so sectors are simply consecutive equal-sized groups of rays — matching
+    alignment_17seg_update.ipynb (distances.reshape(-1, rays_per_sector).mean).
 
-    Sector assignment formula:
-        basal / mid  : sector_idx = int( ((angle_deg − 60) % 360) / 60 )
-                       → 6 sectors, sector 0 = 60°–120°  (Anterior)
-        apical       : sector_idx = int( ((angle_deg − 45) % 360) / 90 )
-                       → 4 sectors, sector 0 = 45°–135°  (Apical Anterior)
-        apex         : single mean across all rays
-
-    NaN rays are excluded via np.nanmean.
+    Raw group order from CCW sampling, then np.roll(-1) for basal/mid only:
+        basal/mid : [seg6,seg1,seg2,seg3,seg4,seg5] → roll(-1) → [seg1..seg6]
+        apical    : [seg13,seg14,seg15,seg16] — CCW from -45° is already correct, no roll
+        apex      : single nanmean (no grouping needed)
 
     Parameters
     ----------
@@ -264,31 +260,31 @@ def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
     -------
     ndarray — 6 values (basal/mid), 4 (apical), or 1 (apex).
     """
-    n_rays     = len(thicknesses)
-    ray_angles = np.linspace(0.0, 360.0, n_rays, endpoint=False)
-
     if ring_type == "apex":
         return np.array([np.nanmean(thicknesses)])
 
     if ring_type in ("basal", "mid"):
         n_sectors = 6
-        raw       = ((ray_angles - 60.0) % 360.0) / 60.0
     elif ring_type == "apical":
         n_sectors = 4
-        raw       = ((ray_angles - 45.0) % 360.0) / 90.0
     else:
         raise ValueError(f"Unknown ring_type: {ring_type!r}")
 
-    sector_indices = np.clip(raw.astype(int), 0, n_sectors - 1)
+    n_rays = len(thicknesses)
+    rays_per_sector = n_rays // n_sectors
 
-    result = np.full(n_sectors, np.nan, dtype=np.float64)
-    for s in range(n_sectors):
-        mask_s = sector_indices == s
-        if mask_s.any():
-            vals = thicknesses[mask_s]
-            if not np.all(np.isnan(vals)):
-                result[s] = float(np.nanmean(vals))
+    result = np.array([
+        np.nanmean(thicknesses[s * rays_per_sector : (s + 1) * rays_per_sector])
+        for s in range(n_sectors)
+    ])
 
+    if ring_type in ("basal", "mid"):
+        # With start=240°, raw CW sector order is
+        # [Anterolateral, Inferolateral, Inferior, Inferoseptal, Anteroseptal, Anterior].
+        # np.roll(result, 1) rotates right by 1 to produce the correct CCW AHA order
+        # [Anterior, Anterolateral, Inferolateral, Inferior, Inferoseptal, Anteroseptal].
+        return np.roll(result, 1)
+    # apical: CW from 315° gives raw order [Anterior, Lateral, Inferior, Septal] — correct as-is
     return result
 
 
@@ -296,7 +292,7 @@ def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
 # mask_to_17_segments  (main entry point)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
+def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
     """
     Convert a 3-D segmentation mask to 17 AHA segment values.
 
@@ -318,9 +314,10 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
 
     Returns
     -------
-    ndarray, shape (17,)
-        Mean wall thickness per AHA segment (index 0 = segment 1).
-        np.nan for ring types with no valid slices.
+    dict with keys:
+        "values"      : ndarray, shape (17,) — mean wall thickness per AHA segment
+        "lv_centroid" : [cx, cy] float list, or None — average myocardium centroid
+                        across basal/mid slices, in pixel coords
     """
     labels = classify_slices(mask_3d)
 
@@ -331,6 +328,7 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
         "apex":   1,
     }
     ring_results: dict[str, np.ndarray] = {}
+    lv_centroids: list[list[float]] = []
 
     for ring_type, n_sectors in ring_configs.items():
         ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring_type]
@@ -339,13 +337,27 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
             continue
 
+        # Start angles chosen so that sector boundaries align exactly with AHA 60°/90°
+        # boundaries in image coordinates (y-axis points DOWN).
+        # Anterior = top of image = 270° in image coords.
+        # Rays are sampled CW (decreasing angle); group_sectors reverses basal/mid result.
+        start_angle_by_ring = {
+            "basal":  4 * np.pi / 3,   # 240° — sector boundaries at 240,180,120,60,0,300
+            "mid":    4 * np.pi / 3,   # 240°
+            "apical": 7 * np.pi / 4,   # 315° — sector boundaries at 315,225,135,45
+            "apex":   0.0,
+        }
+        start_angle = start_angle_by_ring[ring_type]
+
         per_slice: list[np.ndarray] = []
         for sl_idx in ring_slices:
             sl   = mask_3d[:, :, sl_idx]
             cx, cy = compute_centroid(sl)
             if cx is None:
                 continue
-            thick   = ray_cast_thickness(sl, cx, cy)
+            if ring_type in ("basal", "mid"):
+                lv_centroids.append([cx, cy])
+            thick   = ray_cast_thickness(sl, cx, cy, start_angle_rad=start_angle)
             sectors = group_sectors(thick, ring_type)
             if not np.all(np.isnan(sectors)):
                 per_slice.append(sectors)
@@ -355,9 +367,15 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
         else:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
 
-    return np.concatenate([
+    values = np.concatenate([
         ring_results["basal"],
         ring_results["mid"],
         ring_results["apical"],
         ring_results["apex"],
     ])
+    lv_centroid: list[float] | None = (
+        [float(np.mean([c[0] for c in lv_centroids])),
+         float(np.mean([c[1] for c in lv_centroids]))]
+        if lv_centroids else None
+    )
+    return {"values": values, "lv_centroid": lv_centroid}

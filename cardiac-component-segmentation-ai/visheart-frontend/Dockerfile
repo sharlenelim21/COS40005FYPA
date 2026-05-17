@@ -23,6 +23,7 @@ ARG NEXT_PUBLIC_ENV=production
 # Set environment variables for the build process
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_ENV=$NEXT_PUBLIC_ENV
+ENV NEXT_STANDALONE=1
 
 # Copy dependencies from deps stage
 COPY --from=deps /app/node_modules ./node_modules

@@ -220,10 +220,11 @@ def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
     return result
 
 
-def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
+def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
     labels = classify_slices(mask_3d)
     ring_configs = {"basal": 6, "mid": 6, "apical": 4, "apex": 1}
     ring_results = {}
+    lv_centroids: list[list[float]] = []
     for ring_type, n_sectors in ring_configs.items():
         ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring_type]
         if not ring_slices:
@@ -235,6 +236,8 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
             cx, cy = compute_centroid(sl)
             if cx is None:
                 continue
+            if ring_type in ("basal", "mid"):
+                lv_centroids.append([cx, cy])
             thick = ray_cast_thickness(sl, cx, cy)
             sectors = group_sectors(thick, ring_type)
             if not np.all(np.isnan(sectors)):
@@ -243,12 +246,18 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> np.ndarray:
             ring_results[ring_type] = np.nanmean(per_slice, axis=0)
         else:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
-    return np.concatenate([
+    values = np.concatenate([
         ring_results["basal"],
         ring_results["mid"],
         ring_results["apical"],
         ring_results["apex"],
     ])
+    lv_centroid = (
+        [float(np.mean([c[0] for c in lv_centroids])),
+         float(np.mean([c[1] for c in lv_centroids]))]
+        if lv_centroids else None
+    )
+    return {"values": values, "lv_centroid": lv_centroid}
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -269,7 +278,9 @@ def main():
         print(json.dumps({"error": "No myocardium (class 2) pixels found in mask data."}), file=sys.stdout)
         sys.exit(1)
 
-    values = mask_to_17_segments(mask_3d)
+    analysis = mask_to_17_segments(mask_3d)
+    values = analysis["values"]
+    lv_centroid = analysis["lv_centroid"]
     slice_labels = classify_slices(mask_3d)
 
     segment_values = [float(v) for v in values]
@@ -299,6 +310,7 @@ def main():
         "stats":            stats,
         "input_shape":      list(mask_3d.shape),
         "slice_labels":     slice_labels,
+        "lv_centroid":      lv_centroid,
     }
 
     print(json.dumps(result))
