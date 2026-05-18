@@ -31,10 +31,16 @@ const serviceLocation = "SegmentationRoutes";
 const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
     const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
     if (useLocalhost) {
-        return (
+        const configuredBaseUrl =
             process.env.MEDSAM_LOCAL_BASE_URL ||
-            `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`
-        ).replace(/\/$/, "");
+            process.env.LOCAL_GPU_API_URL ||
+            process.env.GPU_API_URL;
+
+        if (configuredBaseUrl) {
+            return configuredBaseUrl.replace(/\/$/, "");
+        }
+
+        return `http://${process.env.GPU_SERVER_URL || "127.0.0.1"}:${process.env.GPU_SERVER_PORT || "8001"}`;
     }
 
     const remoteBaseUrl = await getFreshGPUServerAddress();
@@ -71,7 +77,7 @@ router.post("/start-segmentation/:projectId",
         }
 
         const segmentationModel = req.body?.segmentationModel || SegmentationModel.MEDSAM;
-        // DEVELOPER NOTE: deviceType is only us..0ed by the UNET API inference path.
+        // DEVELOPER NOTE: deviceType is only used by the UNET API inference path.
         // Supported values: "cpu", "cuda" (for NVIDIA GPU), or "auto" (GPU if available, else CPU).
         // For MEDSAM, the local GPU service resolves its own runtime device.
         const modelDevice = typeof req.body?.deviceType === "string" ? req.body.deviceType : "auto";
