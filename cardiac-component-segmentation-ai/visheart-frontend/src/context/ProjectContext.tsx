@@ -1331,12 +1331,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     };
 
     initializeReconstructionCache();
-
-    // Cleanup function - clear project-specific cache when component unmounts or project changes
-    return () => {
-      console.log(`[ProjectContext] 🧹 Cleaning up reconstruction cache for project ${projectId}`);
-      reconstructionCache.clearProjectModels(projectId).catch((error) => console.warn(`[ProjectContext] ⚠️ Reconstruction cleanup error:`, error));
-    };
+    // No cleanup: the module-level singleton and IndexedDB persist across React unmounts
+    // intentionally so re-entering a project's 4D viewer is instant without re-downloading the tar.
   }, [activeReconstructionCacheKey, activeReconstructionTarget, projectId, preloadReconstructionModels, shouldSkipReconstructionPreload]);
 
   // 4d. Auto-preload ALL models (URLs + Three.js cache) when reconstruction cache is ready - ZERO-LAG SYSTEM

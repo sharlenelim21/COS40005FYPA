@@ -7,7 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 // Backend integration
-import { segmentationApi, reconstructionApi } from "@/lib/api";
+import { segmentationApi } from "@/lib/api";
 import { createFramesStructureFromEditableMasks, decodeSegmentationMasks } from "@/lib/decode-RLE";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
@@ -64,6 +64,7 @@ export default function SegmentationResultsPage() {
     hasReconstructions,
     reconstructionCacheReady,
     getReconstructionGLB,
+    getReconstructionForModel,
   } = useProject();
 
   useEffect(() => {
@@ -440,54 +441,15 @@ export default function SegmentationResultsPage() {
 
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
-  const [reconstructionMetadataForModel, setReconstructionMetadataForModel] = useState<any>(null);
 
-  // Refresh reconstruction metadata when selectedModel changes
-  // This ensures we're showing reconstructions from the correct segmentation model
-  useEffect(() => {
-    if (!projectId) return;
-
-    const refreshReconstructionsForModel = async () => {
-      try {
-        console.log(`[Segmentation 3D] Refreshing reconstructions for model: ${selectedModel}`);
-        const response = await reconstructionApi.getReconstructionResults(projectId);
-
-        if (response.success && response.reconstructions && response.reconstructions.length > 0) {
-          // Filter reconstructions by segmentation model
-          // If no segmentationModel field exists (legacy), show the latest one anyway
-          const modelReconstructions = response.reconstructions.filter((recon: any) => {
-            // If reconstruction has explicit segmentationModel field, match it
-            if (recon.segmentationModel) {
-              return recon.segmentationModel.toLowerCase() === selectedModel.toLowerCase();
-            }
-            // Legacy: reconstructions without segmentationModel tag
-            // Only show for medsam (assume medsam was the original/legacy model)
-            return selectedModel === "medsam";
-          });
-
-          if (modelReconstructions.length > 0) {
-            const latestReconstruction = modelReconstructions[0];
-            setReconstructionMetadataForModel(latestReconstruction);
-            console.log(`[Segmentation 3D] Found ${modelReconstructions.length} reconstruction(s) for model ${selectedModel}:`, latestReconstruction.name);
-          } else {
-            console.log(`[Segmentation 3D] No reconstructions found for model ${selectedModel}`);
-            setReconstructionMetadataForModel(null);
-          }
-        } else {
-          console.log("[Segmentation 3D] No reconstructions available");
-          setReconstructionMetadataForModel(null);
-        }
-      } catch (error) {
-        console.error("[Segmentation 3D] Failed to fetch reconstructions:", error);
-        setReconstructionMetadataForModel(null);
-      }
-    };
-
-    refreshReconstructionsForModel();
-  }, [projectId, selectedModel]);
+  // Derive the reconstruction for the currently selected model directly from context data.
+  // This avoids a redundant independent API call and ensures the reconstructionId is the same
+  // object that context already has (so getReconstructionGLB can find it via reconstructionsByModel).
+  const reconstructionMetadataForModel = hasReconstructions
+    ? getReconstructionForModel(selectedModel)
+    : null;
 
   // Load GLB model when frame or model-specific reconstruction changes
-  // This depends on reconstructionMetadataForModel instead of the generic hasReconstructions
   useEffect(() => {
     if (!reconstructionMetadataForModel) {
       setReconstructionModelUrl(null);
@@ -497,13 +459,15 @@ export default function SegmentationResultsPage() {
     const loadModel = async () => {
       setIsLoadingModel(true);
       try {
-        console.log(`[Segmentation 3D] Loading model for frame ${currentFrame} from ${reconstructionMetadataForModel.name}...`);
-        const url = await getReconstructionGLB(currentFrame + 1);
+        // Pass the model name so getReconstructionGLB resolves via reconstructionsByModel,
+        // which is guaranteed to have the same object reference as reconstructionMetadataForModel.
+        const url = await getReconstructionGLB(
+          currentFrame,
+          selectedModel as "medsam" | "unet",
+        );
         if (url) {
-          console.log(`[Segmentation 3D] ✅ Loaded model for frame ${currentFrame}`);
           setReconstructionModelUrl(url);
         } else {
-          console.warn(`[Segmentation 3D] ❌ No model URL for frame ${currentFrame}`);
           setReconstructionModelUrl(null);
         }
       } catch (error) {
@@ -515,7 +479,7 @@ export default function SegmentationResultsPage() {
     };
 
     loadModel();
-  }, [currentFrame, reconstructionMetadataForModel, getReconstructionGLB]);
+  }, [currentFrame, reconstructionMetadataForModel, selectedModel, getReconstructionGLB]);
 
   const handleReset = useCallback(() => {
     setZoomLevel(1);
@@ -1197,32 +1161,28 @@ export default function SegmentationResultsPage() {
           {/* Canvas Panel with horizontal split for 3D viewer */}
           <ResizablePanel defaultSize={70} minSize={20}>
             <ResizablePanelGroup direction="horizontal">
-              {/* 3D Viewer (Left)*/}
-              <>
-                <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
-                  <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
-                    <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                      <h3 className="text-sm font-semibold">3D Reconstruction of Left Ventricle Myocardium</h3>
-                      {isLoadingModel && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Loading model...
-                        </div>
-                      )}
-                    </div>
+              {/* 3D Viewer (Left) — only shown when a 4D reconstruction exists for the selected model */}
+              {reconstructionMetadataForModel && (
+                <>
+                  <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
+                    <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
+                      <div className="flex items-center justify-between mb-2 flex-shrink-0">
+                        <h3 className="text-sm font-semibold">3D Reconstruction of Left Ventricle Myocardium</h3>
+                      </div>
 
-                    <div className="flex-1 min-h-0 max-h-full">
-                      <ReconstructionGLBViewer
-                        modelUrl={reconstructionModelUrl}
-                        frame={currentFrame + 1}
-                        className="w-full h-full"
-                      />
+                      <div className="flex-1 min-h-0 max-h-full">
+                        <ReconstructionGLBViewer
+                          modelUrl={reconstructionModelUrl}
+                          frame={currentFrame + 1}
+                          className="w-full h-full"
+                        />
+                      </div>
                     </div>
-                  </div>
-                </ResizablePanel>
+                  </ResizablePanel>
 
-                <ResizableHandle withHandle />
-              </>
+                  <ResizableHandle withHandle />
+                </>
+              )}
 
               {/* 2D Canvas (Right) */}
               <ResizablePanel defaultSize={65}>

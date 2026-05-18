@@ -308,7 +308,11 @@ def decide_orient(input_pa, dataset_name='', patient='', patient_file=''):
 def get_T(base_path, dataset_name='', patient='', patient_file=''): # ADDED CONSIDERATIONS FOR WORKING WITH ACDC
     """Get T from input segmentation.
         """
-    data_type = decide_orient(base_path, dataset_name, patient, patient_file)
+    # ACDC is always base-to-apex; skip heuristic to avoid per-model inconsistency
+    if dataset_name == 'acdc':
+        data_type = "btoa"
+    else:
+        data_type = decide_orient(base_path, dataset_name, patient, patient_file)
     if dataset_name == 'acdc':
       vertices_lvv_slice = get_contour(os.path.join(base_path, patient, patient_file))  # Get 3D contour from mask
     else:
@@ -537,7 +541,11 @@ def get_T_safe(base_path, dataset_name='', patient='', patient_file=''):
     """Get T from input segmentation.
     Safe version that uses get_contour_safe.
     """
-    data_type = decide_orient(base_path, dataset_name, patient, patient_file)
+    # ACDC is always base-to-apex; skip heuristic to avoid per-model inconsistency
+    if dataset_name == 'acdc':
+        data_type = "btoa"
+    else:
+        data_type = decide_orient(base_path, dataset_name, patient, patient_file)
     if dataset_name == 'acdc':
       vertices_lvv_slice = get_contour_safe(os.path.join(base_path, patient, patient_file))  # Get 3D contour from mask
     else:
