@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+const isWindows = process.platform === "win32";
+
 const nextConfig: NextConfig = {
   /* config options here */
   // standalone output is required for Docker but causes symlink EPERM errors on Windows

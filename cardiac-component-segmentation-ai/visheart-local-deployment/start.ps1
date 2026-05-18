@@ -1,6 +1,8 @@
 param(
     [int]$WaitRetries = 12,
-    [int]$WaitIntervalSec = 5
+    [int]$WaitIntervalSec = 5,
+    [switch]$ForceCpu,
+    [switch]$ForceGpu
 )
 
 # VisHeart local-deployment startup script.
@@ -30,26 +32,37 @@ function Test-DockerAvailable {
 }
 
 function Test-DockerGpuAvailable {
-    # Method 1: check whether Docker exposes the 'nvidia' runtime.
+    # Method 1 is only a hint: a registered 'nvidia' runtime does NOT mean
+    # the GPU actually works (e.g. Docker Desktop on a WSL2 host with no
+    # NVIDIA adapter still lists the runtime). We must verify with Method 2
+    # before claiming the GPU is available.
+    $runtimeHinted = $false
     try {
         $runtimes = docker info --format '{{json .Runtimes}}' 2>$null
         if ($runtimes) {
             try {
                 $obj = $runtimes | ConvertFrom-Json -ErrorAction Stop
                 if ($obj.PSObject.Properties.Name -contains 'nvidia') {
-                    Write-Log "Detected 'nvidia' runtime in 'docker info'."
-                    return $true
+                    Write-Log "Detected 'nvidia' runtime in 'docker info' (hint only; will verify)."
+                    $runtimeHinted = $true
                 }
             } catch {
-                # ignore parse errors and fall through to Method 2
+                # ignore parse errors; treat as no hint
             }
         }
     } catch {
-        # ignore; fall through to Method 2
+        # ignore; treat as no hint
+    }
+
+    if (-not $runtimeHinted) {
+        Write-Log "No 'nvidia' runtime registered with Docker. Treating as CPU-only."
+        return $false
     }
 
     # Method 2: actually attempt to run nvidia-smi inside a CUDA container.
-    Write-Log "Attempting container-level GPU check (this may pull a CUDA base image)."
+    # Only run this if Method 1 was positive, so CPU-only machines don't
+    # pay the cost of pulling a CUDA base image just to confirm 'no GPU'.
+    Write-Log "Verifying GPU with container-level check (may pull a CUDA base image)."
     $img = 'nvidia/cuda:12.4.1-base-ubuntu22.04'
     try {
         & docker run --rm --gpus all $img nvidia-smi > $null 2>&1
@@ -57,11 +70,11 @@ function Test-DockerGpuAvailable {
             Write-Log 'Container-level GPU check succeeded.'
             return $true
         } else {
-            Write-Log 'Container-level GPU check failed (non-zero exit).'
+            Write-Log 'Container-level GPU check failed (registered runtime but no usable adapter). Falling back to CPU.'
             return $false
         }
     } catch {
-        Write-Log 'Container-level GPU check failed (exception).'
+        Write-Log 'Container-level GPU check failed (exception). Falling back to CPU.'
         return $false
     }
 }
@@ -86,7 +99,20 @@ try {
         exit 2
     }
 
-    $gpuAvailable = Test-DockerGpuAvailable
+    if ($ForceCpu -and $ForceGpu) {
+        Write-Log 'ERROR: -ForceCpu and -ForceGpu cannot both be set.'
+        exit 6
+    }
+
+    if ($ForceCpu) {
+        Write-Log '-ForceCpu set: skipping GPU detection.'
+        $gpuAvailable = $false
+    } elseif ($ForceGpu) {
+        Write-Log '-ForceGpu set: skipping GPU detection.'
+        $gpuAvailable = $true
+    } else {
+        $gpuAvailable = Test-DockerGpuAvailable
+    }
 
     if ($gpuAvailable) {
         $profile = 'gpu'

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, ArrowLeft } from "lucide-react";
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -21,6 +21,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 
 export type SegmentationModelId = "medsam" | "unet";
@@ -995,6 +996,18 @@ export default function SegmentationResultsPage() {
 
   return (
     <div className="h-full w-full bg-background flex flex-col">
+      {/* Back to Project Button */}
+      <div className="px-4 pt-3 pb-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => router.push(`/project/${projectId}`)}
+          className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          <span>Back to Project</span>
+        </Button>
+      </div>
 
       {/* AI Model Selector Bar */}
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-background shrink-0 flex-wrap">
