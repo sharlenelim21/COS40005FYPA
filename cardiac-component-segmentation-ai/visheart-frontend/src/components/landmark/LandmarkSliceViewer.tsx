@@ -45,6 +45,12 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
 
+  // Keep frame label values in refs so changing frame doesn't recreate `draw`
+  const currentFrameRef = useRef(currentFrame);
+  const totalFramesRef  = useRef(totalFrames);
+  useEffect(() => { currentFrameRef.current = currentFrame; }, [currentFrame]);
+  useEffect(() => { totalFramesRef.current  = totalFrames;  }, [totalFrames]);
+
   const toCanvas = useCallback(
     (coord: [number, number], cw: number, ch: number): [number, number] => {
       const sx = cw / imageDimensions.width;
@@ -85,17 +91,18 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawDot(ctx, cx, cy, def, showLabels);
       }
 
-      if (totalFrames > 0) {
-        drawFrameLabel(ctx, currentFrame, totalFrames);
+      if (totalFramesRef.current > 0) {
+        drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
       }
     },
-    [prediction, visibleLandmarks, showLabels, currentFrame, totalFrames, toCanvas, maskOverlays, imageDimensions],
+    [prediction, visibleLandmarks, showLabels, toCanvas, maskOverlays, imageDimensions],
   );
 
+  // Redraw whenever draw function changes (prediction/masks/settings) or frame advances
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas) draw(canvas);
-  }, [draw]);
+  }, [draw, currentFrame, totalFrames]);
 
   useEffect(() => {
     if (!frameImageUrl) {
@@ -104,19 +111,24 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       if (canvas) draw(canvas);
       return;
     }
+    // Don't clear frameImgRef here — keep the previous frame visible while
+    // the next one loads so the mock MRI placeholder never flashes through.
     const img = new Image();
-    frameImgRef.current = null;
+    let cancelled = false;
     img.onload = () => {
+      if (cancelled) return;
       frameImgRef.current = img;
       const canvas = canvasRef.current;
       if (canvas) draw(canvas);
     };
     img.onerror = () => {
+      if (cancelled) return;
       frameImgRef.current = null;
       const canvas = canvasRef.current;
       if (canvas) draw(canvas);
     };
     img.src = frameImageUrl;
+    return () => { cancelled = true; };
   }, [frameImageUrl, draw]);
 
   useEffect(() => {

@@ -45,6 +45,7 @@ export default function Standalone4DViewerPage() {
     reconstructionMetadata,
     getReconstructionForModel,
     getReconstructionById,
+    refreshReconstructions,
   } = useProject();
 
   const activeReconstruction = reconstructionIdParam
@@ -66,6 +67,37 @@ export default function Standalone4DViewerPage() {
       document.title = "VisHeart";
     };
   }, [projectData?.name]);
+
+  // Poll for reconstruction when it doesn't exist yet (job was just started)
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+
+  useEffect(() => {
+    // Only poll after initial context load is done and reconstruction is missing
+    if (loading !== "done") return;
+    if (hasReconstructions && (!selectedModel || activeReconstruction)) return;
+    if (pollTimedOut) return;
+
+    setIsPolling(true);
+    let attempts = 0;
+    const maxAttempts = 60; // 2 minutes at 2s intervals
+
+    const interval = setInterval(async () => {
+      attempts++;
+      await refreshReconstructions();
+
+      if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        setIsPolling(false);
+        setPollTimedOut(true);
+      }
+    }, 2000);
+
+    return () => {
+      clearInterval(interval);
+      setIsPolling(false);
+    };
+  }, [loading, hasReconstructions, selectedModel, activeReconstruction, pollTimedOut, refreshReconstructions]);
 
   // Viewer state
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -175,8 +207,38 @@ export default function Standalone4DViewerPage() {
     return <ErrorProject error="Failed to load project data" />;
   }
 
-  // No reconstruction data
+  // No reconstruction data — show waiting UI while polling, error only on timeout
   if (!hasReconstructions || (selectedModel && !activeReconstruction)) {
+    if (isPolling) {
+      return (
+        <div className="container mx-auto p-6 max-w-4xl">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => router.back()}
+            className="mb-4 gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Project
+          </Button>
+
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-center py-12">
+                <Loader2 className="h-12 w-12 mx-auto text-primary mb-4 animate-spin" />
+                <h3 className="text-lg font-semibold mb-2">Generating 4D Reconstruction...</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {selectedModel
+                    ? `Building the ${selectedModel.toUpperCase()} 4D model. This may take several minutes.`
+                    : "Building the 4D model. This may take several minutes."}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
     return (
       <div className="container mx-auto p-6 max-w-4xl">
         <Button
@@ -188,7 +250,7 @@ export default function Standalone4DViewerPage() {
           <ArrowLeft className="h-4 w-4" />
           Back to Project
         </Button>
-        
+
         <Card>
           <CardContent className="pt-6">
             <div className="text-center py-12">
