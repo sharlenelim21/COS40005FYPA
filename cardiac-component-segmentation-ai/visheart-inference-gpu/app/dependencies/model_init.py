@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import os
 import logging
+import torch
 from fastapi import FastAPI
 
 # Import your model handlers
@@ -18,6 +19,8 @@ MODEL_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "model
 yolo_model = None
 medsam_model = None
 fourd_reconstruction_model = None
+landmark_model_2ch = None
+landmark_model_1ch = None
 
 
 @asynccontextmanager
@@ -158,3 +161,73 @@ def get_fourd_reconstruction_model():
     if fourd_reconstruction_model is None:
         raise RuntimeError("4D Reconstruction model is not initialized")
     return fourd_reconstruction_model
+
+
+@asynccontextmanager
+async def landmark_model_lifespan(app: FastAPI):
+    """
+    Load both UNetResNet34 landmark models at server startup.
+
+    model_2ch — 2-channel BatchNorm model, used when a valid seg mask is present.
+    model_1ch — 1-channel BatchNorm model, used as fallback when seg mask is
+                missing, invalid, or download failed.
+
+    If best_model_1ch.pth is absent, logs a warning and uses model_2ch as fallback.
+    Never crashes the server on missing/broken checkpoint.
+    """
+    global landmark_model_2ch, landmark_model_1ch
+
+    _log = logging.getLogger("visheart")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Import load helper from volume-mounted landmark_inference_api
+    try:
+        from app.helpers.landmark_inference_api import load_landmark_model
+    except Exception as exc:
+        _log.error(f"[Landmark] Cannot import load_landmark_model: {exc} — landmark disabled")
+        yield
+        return
+
+    ckpt_2ch = os.path.join(MODEL_DIR, "best_model.pth")
+    ckpt_1ch = os.path.join(MODEL_DIR, "best_model_1ch.pth")
+
+    # Load 2ch model
+    _log.info(f"[Landmark] Loading 2ch model from {ckpt_2ch}")
+    try:
+        from pathlib import Path
+        landmark_model_2ch = load_landmark_model(Path(ckpt_2ch), in_channels=2, device=device)
+        _log.info("[Landmark] 2ch model loaded OK")
+    except Exception as exc:
+        _log.error(f"[Landmark] FAILED to load 2ch model: {exc}")
+        landmark_model_2ch = None
+
+    # Load 1ch model (optional)
+    if os.path.exists(ckpt_1ch):
+        _log.info(f"[Landmark] Loading 1ch model from {ckpt_1ch}")
+        try:
+            from pathlib import Path
+            landmark_model_1ch = load_landmark_model(Path(ckpt_1ch), in_channels=1, device=device)
+            _log.info("[Landmark] 1ch model loaded OK")
+        except Exception as exc:
+            _log.warning(f"[Landmark] Could not load 1ch model: {exc} — using 2ch as fallback")
+            landmark_model_1ch = landmark_model_2ch
+    else:
+        _log.warning(f"[Landmark] best_model_1ch.pth not found at {ckpt_1ch} — using 2ch as 1ch fallback")
+        landmark_model_1ch = landmark_model_2ch
+
+    # Publish into landmark_inference_api module so run_landmark_inference_from_nifti
+    # can access them without reloading from disk on every request
+    try:
+        import app.helpers.landmark_inference_api as _lm_api
+        _lm_api._LOADED_MODEL_2CH = landmark_model_2ch
+        _lm_api._LOADED_MODEL_1CH = landmark_model_1ch
+        _lm_api._LOADED_DEVICE = device
+    except Exception:
+        pass
+
+    yield
+
+    # Cleanup
+    landmark_model_2ch = None
+    landmark_model_1ch = None
+    _log.info("[Landmark] Models unloaded")

@@ -344,6 +344,41 @@ function stateSpeedClass(fps: number, currentFps?: number) {
 }
 
 // Landmarks tab
+/** Small coloured dot + tooltip for per-slice prediction quality. */
+function SliceConfidenceDot({
+  flag,
+  confidence,
+  model_used,
+}: {
+  flag?: "normal" | "collapsed_to_mean";
+  confidence?: "high" | "low";
+  model_used?: "2ch" | "1ch_fallback";
+}) {
+  if (!flag && !confidence) return null;
+
+  let color: string;
+  let tip: string;
+
+  if (flag === "collapsed_to_mean") {
+    color = "bg-zinc-400";
+    tip = "Landmarks too close — mean point used";
+  } else if (confidence === "high") {
+    color = "bg-green-500";
+    tip = model_used === "2ch" ? "High confidence (seg-guided)" : "High confidence";
+  } else {
+    color = "bg-orange-400";
+    tip = "Low confidence prediction";
+  }
+
+  return (
+    <span
+      className={cn("inline-block h-2 w-2 rounded-full shrink-0", color)}
+      title={tip}
+      aria-label={tip}
+    />
+  );
+}
+
 function LandmarksTab({
   prediction,
   visibleLandmarks,
@@ -417,9 +452,16 @@ function LandmarksTab({
       {/* Section header */}
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-foreground">Detected Landmarks</h3>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          Frame {currentFrame + 1}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <SliceConfidenceDot
+            flag={prediction?.flag}
+            confidence={prediction?.confidence}
+            model_used={prediction?.model_used}
+          />
+          <span className="text-xs text-muted-foreground tabular-nums">
+            Frame {currentFrame + 1}
+          </span>
+        </div>
       </div>
 
       {/* Landmark rows */}

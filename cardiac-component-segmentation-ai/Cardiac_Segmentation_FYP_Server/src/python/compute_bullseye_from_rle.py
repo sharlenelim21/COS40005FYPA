@@ -37,7 +37,9 @@ import math
 import sys
 from typing import Optional
 
+import warnings
 import numpy as np
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # ── AHA 17-Segment Definitions (verbatim from bullseye_analysis.py) ───────────
 AHA_SEGMENTS = [
@@ -283,13 +285,24 @@ def main():
     lv_centroid = analysis["lv_centroid"]
     slice_labels = classify_slices(mask_3d)
 
-    segment_values = [float(v) for v in values]
-    n_nan = int(np.sum(np.isnan(values)))
+    # Replace Python nan with None so JSON serialises to null, not NaN
+    def _safe_float(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if math.isnan(f) or math.isinf(f) else f
+        except (TypeError, ValueError):
+            return None
+
+    segment_values = [_safe_float(v) for v in values]
+    finite_vals = [v for v in segment_values if v is not None]
+    n_nan = len(segment_values) - len(finite_vals)
 
     stats = {
-        "min":   float(np.nanmin(values)),
-        "max":   float(np.nanmax(values)),
-        "mean":  float(np.nanmean(values)),
+        "min":   _safe_float(min(finite_vals)) if finite_vals else None,
+        "max":   _safe_float(max(finite_vals)) if finite_vals else None,
+        "mean":  _safe_float(sum(finite_vals) / len(finite_vals)) if finite_vals else None,
         "n_nan": n_nan,
     }
 

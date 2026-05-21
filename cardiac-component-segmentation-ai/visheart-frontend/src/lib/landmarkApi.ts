@@ -29,8 +29,9 @@ export const landmarkApi = {
   runDetectionByProject: async (
     projectId: string,
     model = DEFAULT_MODEL,
+    segmentationModel = "medsam",
   ): Promise<LandmarkInferenceResponse> => {
-    const key = `${projectId}::${model}`;
+    const key = `${projectId}::${model}::${segmentationModel}`;
 
     if (predictionCache.has(key)) {
       if (process.env.NODE_ENV === "development") {
@@ -58,6 +59,7 @@ export const landmarkApi = {
       }>(`${ENDPOINT}/start/${projectId}`, {
         model,
         deviceType: "auto",
+        segmentationModel,
       });
 
       if (!startResponse.data.success || !startResponse.data.uuid) {
@@ -68,7 +70,7 @@ export const landmarkApi = {
       }
 
       const result = await pollLandmarkResult(projectId, startResponse.data.uuid);
-      if (!result.predictions?.length) {
+      if (!result?.predictions?.length) {
         throw new LandmarkApiError(
           "empty_predictions",
           "The model returned no landmark predictions for this project.",
@@ -186,8 +188,9 @@ async function pollLandmarkResult(
       params: { jobUuid },
     });
 
-    if (response.data.result?.predictions?.length) {
-      return response.data.result;
+    const polledResult = response.data.result;
+    if (polledResult?.predictions?.length) {
+      return polledResult;
     }
 
     if (response.data.job?.status === "failed") {

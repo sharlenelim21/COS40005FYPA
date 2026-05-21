@@ -10,6 +10,14 @@ export interface FramePrediction {
   basal_inferior?: LandmarkCoord;
   basal_lateral?: LandmarkCoord;
   mid_anterior?: LandmarkCoord;
+  // Per-slice quality fields returned by the new GPU inference
+  flag?: "normal" | "collapsed_to_mean";
+  confidence?: "high" | "low";
+  model_used?: "2ch" | "1ch_fallback";
+  display_mean?: { x: number; y: number } | null;
+  hm1_max?: number;
+  hm2_max?: number;
+  lm_dist?: number;
 }
 
 export interface LandmarkInferenceResponse {
@@ -17,6 +25,13 @@ export interface LandmarkInferenceResponse {
   total_frames: number;
   model_used: string;
   image_dimensions: { width: number; height: number };
+  // Top-level summary stats from new GPU response
+  avg_lm1?: { x: number; y: number };
+  avg_lm2?: { x: number; y: number };
+  n_total?: number;
+  n_collapsed?: number;
+  n_2ch?: number;
+  n_1ch_fallback?: number;
 }
 
 export interface LandmarkDefinition {
@@ -58,12 +73,19 @@ export interface LandmarkPageState {
   predictions: FramePrediction[];
   totalFrames: number;
   imageDimensions: { width: number; height: number };
-  currentFrame: number;   
+  currentFrame: number;
   isPlaying: boolean;
   playbackFps: number;
   error: string | null;
   modelUsed: string;
   replacementFile: File | null;
+  // Summary stats from new GPU response (optional — absent on stub / old format)
+  avgLm1?: { x: number; y: number };
+  avgLm2?: { x: number; y: number };
+  nTotal?: number;
+  nCollapsed?: number;
+  n2ch?: number;
+  n1chFallback?: number;
 }
 
 export const AHA_SEGMENT_COLORS: string[] = [

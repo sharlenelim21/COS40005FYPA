@@ -16,6 +16,7 @@ interface LandmarkSliceViewerProps {
   currentFrame: number;
   totalFrames: number;
   imageDimensions: { width: number; height: number };
+  maskDimensions?: { width: number; height: number };
   frameImageUrl?: string | null;
   maskOverlays?: LandmarkMaskOverlay[];
   visibleLandmarks: Set<string>;
@@ -35,12 +36,14 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   currentFrame,
   totalFrames,
   imageDimensions,
+  maskDimensions,
   frameImageUrl,
   maskOverlays = [],
   visibleLandmarks,
   showLabels = true,
   className,
 }: LandmarkSliceViewerProps) {
+  const effectiveMaskDimensions = maskDimensions ?? imageDimensions;
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
@@ -75,7 +78,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       }
 
       for (const overlay of maskOverlays) {
-        drawMaskOverlay(ctx, overlay, imageDimensions.width, imageDimensions.height, cw, ch);
+        drawMaskOverlay(ctx, overlay, effectiveMaskDimensions.width, effectiveMaskDimensions.height, cw, ch);
       }
 
       if (!prediction) return;
@@ -95,7 +98,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
       }
     },
-    [prediction, visibleLandmarks, showLabels, toCanvas, maskOverlays, imageDimensions],
+    [prediction, visibleLandmarks, showLabels, toCanvas, maskOverlays, effectiveMaskDimensions],
   );
 
   // Redraw whenever draw function changes (prediction/masks/settings) or frame advances
@@ -164,7 +167,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       <canvas
         ref={canvasRef}
         className="block max-w-full max-h-full"
-        style={{ imageRendering: "pixelated" }}
+        style={{ imageRendering: "auto" }}
         aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
       />
     </div>
@@ -184,14 +187,19 @@ function drawDot(
   ctx.fillStyle = def.color + "2a";  // ~16% opacity
   ctx.fill();
 
-  // Crosshair lines
+  // Crosshair lines — clipped tightly around the dot
+  const arm = DOT_R + CROSS_EXT;
   ctx.beginPath();
-  ctx.moveTo(cx - DOT_R - CROSS_EXT, cy);
-  ctx.lineTo(cx + DOT_R + CROSS_EXT, cy);
-  ctx.moveTo(cx, cy - DOT_R - CROSS_EXT);
-  ctx.lineTo(cx, cy + DOT_R + CROSS_EXT);
-  ctx.strokeStyle = def.color + "88";  // 53% opacity
-  ctx.lineWidth = 0.8;
+  ctx.moveTo(Math.round(cx - arm) + 0.5, Math.round(cy) + 0.5);
+  ctx.lineTo(Math.round(cx - DOT_R) + 0.5, Math.round(cy) + 0.5);
+  ctx.moveTo(Math.round(cx + DOT_R) + 0.5, Math.round(cy) + 0.5);
+  ctx.lineTo(Math.round(cx + arm) + 0.5, Math.round(cy) + 0.5);
+  ctx.moveTo(Math.round(cx) + 0.5, Math.round(cy - arm) + 0.5);
+  ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy - DOT_R) + 0.5);
+  ctx.moveTo(Math.round(cx) + 0.5, Math.round(cy + DOT_R) + 0.5);
+  ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy + arm) + 0.5);
+  ctx.strokeStyle = def.color + "88";
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   // Dot fill

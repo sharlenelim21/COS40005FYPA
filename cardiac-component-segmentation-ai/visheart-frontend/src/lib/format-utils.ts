@@ -41,3 +41,12 @@ export function formatMetricValue(value: number, unit: 'bytes' | 'percentage' = 
   }
   return formatBytes(value);
 }
+
+/**
+ * Safely format a nullable number to a fixed-decimal string.
+ * Returns "—" for null/undefined/NaN/Infinity.
+ */
+export function fmt(v: number | null | undefined, digits = 2): string {
+  if (v == null || !isFinite(v)) return "—";
+  return v.toFixed(digits);
+}
