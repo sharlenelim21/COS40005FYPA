@@ -47,6 +47,9 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
+  // Actual pixel dimensions of the loaded JPEG — may differ from imageDimensions
+  // if the backend stored thumbnails with transposed axes (H×W vs W×H).
+  const imgPixelDimsRef = useRef<{ w: number; h: number } | null>(null);
 
   // Keep frame label values in refs so changing frame doesn't recreate `draw`
   const currentFrameRef = useRef(currentFrame);
@@ -56,6 +59,9 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
   const toCanvas = useCallback(
     (coord: [number, number], cw: number, ch: number): [number, number] => {
+      // GPU coords are in NIfTI space: x ∈ [0, W_nifti], y ∈ [0, H_nifti].
+      // Canvas is always sized to the actual image aspect so cw/imageDimensions.width
+      // gives the correct pixel-per-unit scale.
       const sx = cw / imageDimensions.width;
       const sy = ch / imageDimensions.height;
       return [Math.round(coord[0] * sx), Math.round(coord[1] * sy)];
@@ -83,6 +89,16 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
       if (!prediction) return;
 
+      // Collapsed slice — show single grey mean dot, skip all individual landmark dots
+      if (prediction.flag === "collapsed_to_mean" && prediction.display_mean) {
+        const meanCoord: [number, number] = [prediction.display_mean.x, prediction.display_mean.y];
+        const [cx, cy] = toCanvas(meanCoord, cw, ch);
+        drawCollapsedDot(ctx, cx, cy, showLabels);
+        if (totalFramesRef.current > 0) drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
+        return;
+      }
+
+      const isLowConfidence = prediction.flag === "normal" && prediction.confidence === "low";
       const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
 
       for (const def of sorted) {
@@ -91,7 +107,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         if (!coord) continue;
 
         const [cx, cy] = toCanvas(coord, cw, ch);
-        drawDot(ctx, cx, cy, def, showLabels);
+        drawDot(ctx, cx, cy, def, showLabels, isLowConfidence);
       }
 
       if (totalFramesRef.current > 0) {
@@ -121,7 +137,21 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     img.onload = () => {
       if (cancelled) return;
       frameImgRef.current = img;
-      const canvas = canvasRef.current;
+      // Record actual pixel dimensions so canvas uses correct aspect ratio
+      imgPixelDimsRef.current = { w: img.naturalWidth, h: img.naturalHeight };
+      // Re-trigger the ResizeObserver sizing by dispatching a resize
+      const container = containerRef.current;
+      const canvas    = canvasRef.current;
+      if (container && canvas) {
+        const { clientWidth: cw, clientHeight: ch } = container;
+        if (cw > 0 && ch > 0) {
+          const aspect = img.naturalWidth / img.naturalHeight;
+          let w = cw, h = cw / aspect;
+          if (h > ch) { h = ch; w = h * aspect; }
+          canvas.width  = Math.round(w);
+          canvas.height = Math.round(h);
+        }
+      }
       if (canvas) draw(canvas);
     };
     img.onerror = () => {
@@ -143,7 +173,12 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       const { clientWidth: cw, clientHeight: ch } = container;
       if (cw === 0 || ch === 0) return;
 
-      const aspect = imageDimensions.width / imageDimensions.height;
+      // Prefer actual JPEG pixel dimensions for aspect ratio so the image
+      // isn't stretched when the backend stored thumbnails transposed.
+      const imgDims = imgPixelDimsRef.current;
+      const aspect  = imgDims
+        ? imgDims.w / imgDims.h
+        : imageDimensions.width / imageDimensions.height;
       let w = cw, h = cw / aspect;
       if (h > ch) { h = ch; w = h * aspect; }
 
@@ -180,11 +215,20 @@ function drawDot(
   cy: number,
   def: LandmarkDefinition,
   showLabel: boolean,
+  lowConfidence = false,
 ) {
+  // Low-confidence: keep original colour but reduce opacity so dots remain distinguishable
+  const dotColor  = def.color;
+  const glowAlpha = lowConfidence ? "18" : "2a";
+  const alpha     = lowConfidence ? 0.50 : 1.0;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
   // Outer glow
   ctx.beginPath();
   ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
-  ctx.fillStyle = def.color + "2a";  // ~16% opacity
+  ctx.fillStyle = dotColor + glowAlpha;
   ctx.fill();
 
   // Crosshair lines — clipped tightly around the dot
@@ -198,14 +242,14 @@ function drawDot(
   ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy - DOT_R) + 0.5);
   ctx.moveTo(Math.round(cx) + 0.5, Math.round(cy + DOT_R) + 0.5);
   ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy + arm) + 0.5);
-  ctx.strokeStyle = def.color + "88";
+  ctx.strokeStyle = dotColor + "88";
   ctx.lineWidth = 1;
   ctx.stroke();
 
   // Dot fill
   ctx.beginPath();
   ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
-  ctx.fillStyle = def.color;
+  ctx.fillStyle = dotColor;
   ctx.fill();
 
   // White border
@@ -215,8 +259,9 @@ function drawDot(
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Label pill
-  if (!showLabel) return;
+  // Label pill — always full opacity regardless of confidence
+  if (!showLabel) { ctx.restore(); return; }
+  ctx.globalAlpha = 1.0;
 
   ctx.font = LABEL_FONT;
   const text  = def.label;
@@ -234,6 +279,57 @@ function drawDot(
 
   // Pill text
   ctx.fillStyle = "#ffffff";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, lx + LABEL_PAD_X, cy);
+  ctx.restore();
+}
+
+function drawCollapsedDot(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  showLabel: boolean,
+) {
+  const color = "#9ca3af"; // zinc-400
+
+  // Outer glow
+  ctx.beginPath();
+  ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
+  ctx.fillStyle = color + "22";
+  ctx.fill();
+
+  // Dashed circle border (uncertain indicator)
+  ctx.save();
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+
+  // Grey fill, slightly transparent
+  ctx.beginPath();
+  ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
+  ctx.fillStyle = color + "cc";
+  ctx.fill();
+
+  if (!showLabel) return;
+
+  ctx.font = LABEL_FONT;
+  const text = "Uncertain";
+  const tw   = ctx.measureText(text).width;
+  const bw   = tw + LABEL_PAD_X * 2;
+  const bh   = 16;
+  const lx   = cx + DOT_R + 4;
+  const ly   = cy - bh / 2;
+
+  ctx.beginPath();
+  ctx.roundRect(lx, ly, bw, bh, 3);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fill();
+
+  ctx.fillStyle = "#d1d5db";
   ctx.textBaseline = "middle";
   ctx.fillText(text, lx + LABEL_PAD_X, cy);
 }

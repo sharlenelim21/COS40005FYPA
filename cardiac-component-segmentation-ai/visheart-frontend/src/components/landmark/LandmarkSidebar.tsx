@@ -65,6 +65,7 @@ export interface LandmarkSidebarProps {
   currentPrediction: FramePrediction | null;
   visibleLandmarks: Set<string>;
   replacementFileError: string | null;
+  confidentCount?: number;
 
   onToggleLandmark: (id: string) => void;
   onTogglePlay: () => void;
@@ -85,6 +86,7 @@ export function LandmarkSidebar({
   currentPrediction,
   visibleLandmarks,
   replacementFileError,
+  confidentCount,
   onToggleLandmark,
   onTogglePlay,
   onNextFrame,
@@ -166,6 +168,7 @@ export function LandmarkSidebar({
           totalFrames={state.totalFrames}
           isPlaying={state.isPlaying}
           playbackFps={state.playbackFps}
+          confidentCount={confidentCount ?? 0}
           onTogglePlay={onTogglePlay}
           onNextFrame={onNextFrame}
           onPrevFrame={onPrevFrame}
@@ -241,6 +244,7 @@ function PlaybackBar({
   totalFrames,
   isPlaying,
   playbackFps,
+  confidentCount,
   onTogglePlay,
   onNextFrame,
   onPrevFrame,
@@ -251,6 +255,7 @@ function PlaybackBar({
   totalFrames: number;
   isPlaying: boolean;
   playbackFps: number;
+  confidentCount: number;
   onTogglePlay: () => void;
   onNextFrame: () => void;
   onPrevFrame: () => void;
@@ -300,6 +305,13 @@ function PlaybackBar({
           {currentFrame + 1}/{totalFrames}
         </span>
       </div>
+
+      {/* Playback mode label */}
+      <p className="text-[10px] text-muted-foreground text-center">
+        {confidentCount >= 2
+          ? `Playing ${confidentCount} confident slices`
+          : "Playing all slices"}
+      </p>
 
       {/* Slider */}
       <input

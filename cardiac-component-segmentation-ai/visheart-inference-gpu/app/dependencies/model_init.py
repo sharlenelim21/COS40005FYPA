@@ -188,31 +188,50 @@ async def landmark_model_lifespan(app: FastAPI):
         yield
         return
 
-    ckpt_2ch = os.path.join(MODEL_DIR, "best_model.pth")
-    ckpt_1ch = os.path.join(MODEL_DIR, "best_model_1ch.pth")
+    from pathlib import Path
+
+    # Resolve 2ch checkpoint: models dir first, then UNETRESNET34/checkpoints
+    _unetresnet_dir = Path("/app/UNETRESNET34")
+    _models_dir = Path(MODEL_DIR)
+
+    def _find_ckpt(names_in_models: list, names_in_repo: list) -> Path | None:
+        for name in names_in_models:
+            p = _models_dir / name
+            if p.exists():
+                return p
+        for name in names_in_repo:
+            p = _unetresnet_dir / "checkpoints" / name
+            if p.exists():
+                return p
+        return None
+
+    ckpt_2ch_path = _find_ckpt(["best_model_2ch.pth", "best_model.pth"], ["best_model_2ch.pth"])
+    ckpt_1ch_path = _find_ckpt(["best_model_1ch.pth"], ["best_model_1ch.pth"])
 
     # Load 2ch model
-    _log.info(f"[Landmark] Loading 2ch model from {ckpt_2ch}")
-    try:
-        from pathlib import Path
-        landmark_model_2ch = load_landmark_model(Path(ckpt_2ch), in_channels=2, device=device)
-        _log.info("[Landmark] 2ch model loaded OK")
-    except Exception as exc:
-        _log.error(f"[Landmark] FAILED to load 2ch model: {exc}")
+    if ckpt_2ch_path:
+        _log.info(f"[Landmark] Loading 2ch model from {ckpt_2ch_path}")
+        try:
+            landmark_model_2ch = load_landmark_model(ckpt_2ch_path, in_channels=2, device=device)
+            _log.info("[Landmark] 2ch model loaded OK")
+        except Exception as exc:
+            _log.error(f"[Landmark] FAILED to load 2ch model: {exc}")
+            landmark_model_2ch = None
+    else:
+        _log.error("[Landmark] No 2ch checkpoint found in models/ or UNETRESNET34/checkpoints/")
         landmark_model_2ch = None
 
-    # Load 1ch model (optional)
-    if os.path.exists(ckpt_1ch):
-        _log.info(f"[Landmark] Loading 1ch model from {ckpt_1ch}")
+    # Load 1ch model (optional — falls back to 2ch)
+    if ckpt_1ch_path:
+        _log.info(f"[Landmark] Loading 1ch model from {ckpt_1ch_path}")
         try:
-            from pathlib import Path
-            landmark_model_1ch = load_landmark_model(Path(ckpt_1ch), in_channels=1, device=device)
+            landmark_model_1ch = load_landmark_model(ckpt_1ch_path, in_channels=1, device=device)
             _log.info("[Landmark] 1ch model loaded OK")
         except Exception as exc:
             _log.warning(f"[Landmark] Could not load 1ch model: {exc} — using 2ch as fallback")
             landmark_model_1ch = landmark_model_2ch
     else:
-        _log.warning(f"[Landmark] best_model_1ch.pth not found at {ckpt_1ch} — using 2ch as 1ch fallback")
+        _log.warning("[Landmark] No 1ch checkpoint found — using 2ch as 1ch fallback")
         landmark_model_1ch = landmark_model_2ch
 
     # Publish into landmark_inference_api module so run_landmark_inference_from_nifti

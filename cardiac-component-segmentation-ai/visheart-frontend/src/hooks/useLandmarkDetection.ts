@@ -48,10 +48,13 @@ export function useLandmarkDetection(
   }));
 
   const [replacementFileError, setReplacementFileError] = useState<string | null>(null);
-  const rafRef       = useRef<number | null>(null);
-  const lastTickRef  = useRef<number>(0);
-  const isPlayingRef = useRef<boolean>(false);   
-  const playbackFpsRef = useRef<number>(DEFAULT_PLAYBACK_FPS);
+  const rafRef          = useRef<number | null>(null);
+  const lastTickRef     = useRef<number>(0);
+  const isPlayingRef    = useRef<boolean>(false);
+  const playbackFpsRef  = useRef<number>(DEFAULT_PLAYBACK_FPS);
+  // Indices into state.predictions to cycle during playback.
+  // Populated just before playback starts; empty = play all.
+  const playIndicesRef  = useRef<number[]>([]);
 
   const startPlaybackLoop = useCallback(() => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -64,7 +67,14 @@ export function useLandmarkDetection(
         lastTickRef.current = now;
         setState((s) => {
           if (!s.isPlaying || s.totalFrames < 2) return s;
-          return { ...s, currentFrame: (s.currentFrame + 1) % s.totalFrames };
+          const indices = playIndicesRef.current;
+          if (indices.length < 2) {
+            // Fall back to all frames
+            return { ...s, currentFrame: (s.currentFrame + 1) % s.totalFrames };
+          }
+          const pos = indices.indexOf(s.currentFrame);
+          const next = pos === -1 ? indices[0] : indices[(pos + 1) % indices.length];
+          return { ...s, currentFrame: next };
         });
       }
 
@@ -218,11 +228,17 @@ export function useLandmarkDetection(
 
   const handlePlay = useCallback(() => {
     if (state.status !== "done" || state.totalFrames < 2) return;
+    // Compute confident indices — flag=normal AND confidence=high
+    const confident = state.predictions
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => p.flag === "normal" && p.confidence === "high")
+      .map(({ i }) => i);
+    playIndicesRef.current = confident.length >= 2 ? confident : [];
     isPlayingRef.current = true;
     lastTickRef.current = 0;
     setState((s) => ({ ...s, isPlaying: true }));
     startPlaybackLoop();
-  }, [state.status, state.totalFrames, startPlaybackLoop]);
+  }, [state.status, state.totalFrames, state.predictions, startPlaybackLoop]);
 
   const handlePause = useCallback(() => stopPlayback(), [stopPlayback]);
 
@@ -278,10 +294,15 @@ export function useLandmarkDetection(
   const currentPrediction: FramePrediction | null =
     state.predictions[state.currentFrame] ?? null;
 
+  const confidentCount = state.predictions.filter(
+    (p) => p.flag === "normal" && p.confidence === "high",
+  ).length;
+
   return {
     state,
     replacementFileError,
     currentPrediction,
+    confidentCount,
     handleRunDetection,
     handleRerunDetection,
     handleFileSelect,

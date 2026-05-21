@@ -361,13 +361,11 @@ def run_landmark_inference_from_nifti(
         hm_lm2 = heatmap[1]
         lm1_x, lm1_y, hm1_max = _heatmap_to_coord(hm_lm1, H_orig, W_orig)
         lm2_x, lm2_y, hm2_max = _heatmap_to_coord(hm_lm2, H_orig, W_orig)
-        import sys
-        print(
+        logger.info(
             f"[Landmark] slice {i} [{model_used}] "
             f"lm1=({lm1_x:.1f},{lm1_y:.1f}) max={hm1_max:.4f}  "
             f"lm2=({lm2_x:.1f},{lm2_y:.1f}) max={hm2_max:.4f}  "
-            f"dist={sqrt((lm1_x-lm2_x)**2+(lm1_y-lm2_y)**2):.1f}",
-            file=sys.stderr, flush=True
+            f"dist={sqrt((lm1_x-lm2_x)**2+(lm1_y-lm2_y)**2):.1f}"
         )
 
         # Distance and collapse flag — NEVER overwrite original coords

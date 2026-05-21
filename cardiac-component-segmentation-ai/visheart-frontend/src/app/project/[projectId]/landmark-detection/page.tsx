@@ -122,6 +122,7 @@ export default function LandmarkDetectionPage() {
     handleRerunDetection,
     handleFileSelect,
     handleClearReplacementFile,
+    confidentCount,
     handleTogglePlay,
     handleNextFrame,
     handlePrevFrame,
@@ -544,6 +545,7 @@ export default function LandmarkDetectionPage() {
             currentPrediction={currentPrediction}
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
+            confidentCount={confidentCount}
             onToggleLandmark={handleToggleLandmark}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
