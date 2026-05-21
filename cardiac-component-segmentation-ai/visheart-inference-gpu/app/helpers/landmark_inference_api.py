@@ -46,23 +46,21 @@ def _resolve_unetresnet34_dir() -> Path:
 
 def _resolve_checkpoint_2ch() -> Path:
     """Path to the 2-channel (MRI + seg) BatchNorm checkpoint."""
-    # Prefer env var, then models dir, then UNETRESNET34/checkpoints
     env = os.getenv("LANDMARK_MODEL_2CH_PATH")
     if env and Path(env).exists():
         return Path(env).resolve()
-    # Models dir is volume-mounted: /app/app/models/
     models_dir = Path(__file__).resolve().parents[1] / "models"
-    candidate = models_dir / "best_model.pth"
-    if candidate.exists():
-        return candidate.resolve()
-    # Fallback: UNETRESNET34/checkpoints/best_model_2ch.pth
+    for name in ("best_model_2ch.pth", "best_model.pth"):
+        p = models_dir / name
+        if p.exists():
+            return p.resolve()
     repo_dir = _resolve_unetresnet34_dir()
-    fallback = repo_dir / "checkpoints" / "best_model_2ch.pth"
-    if fallback.exists():
-        return fallback.resolve()
+    p = repo_dir / "checkpoints" / "best_model_2ch.pth"
+    if p.exists():
+        return p.resolve()
     raise FileNotFoundError(
         "Could not find 2ch landmark checkpoint. "
-        "Set LANDMARK_MODEL_2CH_PATH or place best_model.pth in app/models/."
+        "Set LANDMARK_MODEL_2CH_PATH or place best_model_2ch.pth in app/models/."
     )
 
 
@@ -72,13 +70,13 @@ def _resolve_checkpoint_1ch() -> Optional[Path]:
     if env and Path(env).exists():
         return Path(env).resolve()
     models_dir = Path(__file__).resolve().parents[1] / "models"
-    candidate = models_dir / "best_model_1ch.pth"
-    if candidate.exists():
-        return candidate.resolve()
+    p = models_dir / "best_model_1ch.pth"
+    if p.exists():
+        return p.resolve()
     repo_dir = _resolve_unetresnet34_dir()
-    fallback = repo_dir / "checkpoints" / "best_model_1ch.pth"
-    if fallback.exists():
-        return fallback.resolve()
+    p = repo_dir / "checkpoints" / "best_model_1ch.pth"
+    if p.exists():
+        return p.resolve()
     return None
 
 
