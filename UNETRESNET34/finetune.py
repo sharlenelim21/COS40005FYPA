@@ -18,7 +18,7 @@ import numpy as np
 import os
 from datetime import datetime
 
-from dataset.landmark_dataset import LandmarkDataset
+from UNETRESNET34.dataset.acdc_landmark_dataset import LandmarkDataset
 from models.unet_resnet34 import UNetResNet34
 from utils.loss import HeatmapLoss
 from utils.postprocess import gaussian_subpixel_argmax   

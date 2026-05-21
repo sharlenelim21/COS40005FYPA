@@ -1,4 +1,4 @@
-from dataset.landmark_dataset import LandmarkDataset
+from UNETRESNET34.dataset.acdc_landmark_dataset import LandmarkDataset
 
 dataset = LandmarkDataset(
     image_dir="data/lv-landmark/Training/images",
