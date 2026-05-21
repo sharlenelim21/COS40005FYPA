@@ -89,25 +89,24 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
       if (!prediction) return;
 
-      // Collapsed slice — show single grey mean dot, skip all individual landmark dots
-      if (prediction.flag === "collapsed_to_mean" && prediction.display_mean) {
-        const meanCoord: [number, number] = [prediction.display_mean.x, prediction.display_mean.y];
-        const [cx, cy] = toCanvas(meanCoord, cw, ch);
-        drawCollapsedDot(ctx, cx, cy, showLabels);
-        if (totalFramesRef.current > 0) drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
-        return;
-      }
-
+      const isCollapsed     = prediction.flag === "collapsed_to_mean";
       const isLowConfidence = prediction.flag === "normal" && prediction.confidence === "low";
-      const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
 
+      const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
       for (const def of sorted) {
         if (!visibleLandmarks.has(def.id)) continue;
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
-
         const [cx, cy] = toCanvas(coord, cw, ch);
-        drawDot(ctx, cx, cy, def, showLabels, isLowConfidence);
+        // Collapsed: draw RV1/RV2 faded and without labels (mean point label replaces them)
+        drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, isLowConfidence || isCollapsed);
+      }
+
+      // Collapsed: draw mean point on top with its own label
+      if (isCollapsed && prediction.display_mean) {
+        const meanCoord: [number, number] = [prediction.display_mean.x, prediction.display_mean.y];
+        const [cx, cy] = toCanvas(meanCoord, cw, ch);
+        drawMeanDot(ctx, cx, cy, showLabels);
       }
 
       if (totalFramesRef.current > 0) {
@@ -201,8 +200,8 @@ function drawDot(
 ) {
   // Low-confidence: keep original colour but reduce opacity so dots remain distinguishable
   const dotColor  = def.color;
-  const glowAlpha = lowConfidence ? "18" : "2a";
-  const alpha     = lowConfidence ? 0.50 : 1.0;
+  const glowAlpha = "2a";
+  const alpha     = 1.0;
 
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -266,54 +265,41 @@ function drawDot(
   ctx.restore();
 }
 
-function drawCollapsedDot(
+function drawMeanDot(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
   showLabel: boolean,
 ) {
-  const color = "#9ca3af"; // zinc-400
+  const MEAN_R = 4; // smaller than regular DOT_R (6)
+  const color  = "#e2e8f0"; // slate-200 — bright enough to see on dark MRI
 
-  // Outer glow
+  // Small solid dot
   ctx.beginPath();
-  ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
-  ctx.fillStyle = color + "22";
+  ctx.arc(cx, cy, MEAN_R, 0, Math.PI * 2);
+  ctx.fillStyle = color;
   ctx.fill();
 
-  // Dashed circle border (uncertain indicator)
+  // Thin dashed ring just outside
   ctx.save();
   ctx.setLineDash([2, 2]);
   ctx.beginPath();
-  ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
+  ctx.arc(cx, cy, MEAN_R + 3, 0, Math.PI * 2);
+  ctx.strokeStyle = color + "99";
+  ctx.lineWidth = 1;
   ctx.stroke();
   ctx.restore();
 
-  // Grey fill, slightly transparent
-  ctx.beginPath();
-  ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
-  ctx.fillStyle = color + "cc";
-  ctx.fill();
-
   if (!showLabel) return;
 
-  ctx.font = LABEL_FONT;
-  const text = "Uncertain";
-  const tw   = ctx.measureText(text).width;
-  const bw   = tw + LABEL_PAD_X * 2;
-  const bh   = 16;
-  const lx   = cx + DOT_R + 4;
-  const ly   = cy - bh / 2;
-
-  ctx.beginPath();
-  ctx.roundRect(lx, ly, bw, bh, 3);
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fill();
-
-  ctx.fillStyle = "#d1d5db";
+  // Small inline label to the right, no pill background — just text with a shadow
+  ctx.font = "10px/1 system-ui, sans-serif";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, lx + LABEL_PAD_X, cy);
+  ctx.shadowColor   = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur    = 3;
+  ctx.fillStyle = color;
+  ctx.fillText("Mean", cx + MEAN_R + 5, cy);
+  ctx.shadowBlur = 0;
 }
 
 function drawMaskOverlay(
