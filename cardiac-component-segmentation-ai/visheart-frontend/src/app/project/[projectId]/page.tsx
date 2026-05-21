@@ -138,8 +138,8 @@ export default function ProjectPage() {
       const name = ((m?.name || "") + "").toLowerCase();
       if (name.includes("unet")) return "unet";
       if (name.includes("medsam")) return "medsam";
-      if (name.startsWith("ai output")) return "medsam";
-      if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+      // Do not guess "medsam" for generic names — they predate per-model tagging
+      // and could belong to UNet on CPU environments.
       return null;
     };
     const found = new Set<"medsam" | "unet">();
@@ -1614,6 +1614,7 @@ export default function ProjectPage() {
         availableModels={availableReconstructionModels}
         blockedModels={Array.from(existing4DModels)}
         defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
+        gpuAvailable={processingUnit.gpuAvailable}
       />
 
       {/* Delete Model Reconstruction Confirmation Dialog */}

@@ -36,6 +36,7 @@ import { AHA_SEGMENT_COLORS, LANDMARK_DEFINITIONS } from "@/types/landmark";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
 import { segmentationApi } from "@/lib/api";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
 import { StrainBullseye, type StrainType } from "@/components/landmark/StrainVisualization";
 
@@ -120,13 +121,52 @@ export default function LandmarkDetectionPage() {
     },
   );
 
+  // GPU availability — mirrors segmentation page pattern (async, false on first render)
+  const { processingUnit, isLoading: gpuLoading } = useGpuStatus();
+  const isGpuMode = processingUnit.gpuAvailable;
+
   // Bullseye data + model selector state
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
   const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("medsam");
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  const [calculatingModels, setCalculatingModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  const [calcCountdown, setCalcCountdown] = useState(15);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [leftPanelView, setLeftPanelView] = useState<"bullseye" | "strain">("bullseye");
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GLS");
+
+  // Correct the bullseye model default once the GPU probe resolves.
+  // Guard on gpuLoading: isGpuMode starts false before the fetch completes,
+  // so without the guard this fires immediately and locks GPU users on UNet.
+  useEffect(() => {
+    if (gpuLoading) return;
+    setSelectedBullseyeModel(isGpuMode ? "medsam" : "unet");
+  }, [isGpuMode, gpuLoading]);
+
+  // Countdown timer — ticks while any model is still calculating its bullseye.
+  // Resets to 15 each time calculatingModels changes (i.e. on each fetchBullseye cycle).
+  useEffect(() => {
+    const anyCalculating = calculatingModels.medsam || calculatingModels.unet;
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    if (!anyCalculating) {
+      setCalcCountdown(15);
+      return;
+    }
+    setCalcCountdown(15);
+    countdownRef.current = setInterval(() => {
+      setCalcCountdown((prev) => {
+        if (prev <= 1) {
+          if (countdownRef.current) clearInterval(countdownRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    };
+  }, [calculatingModels.medsam, calculatingModels.unet]);
 
   // Infer which segmentation model produced a mask from its name (matches backend inferMaskModelForExport).
   const inferMaskModel = (name: string): "medsam" | "unet" | null => {
@@ -151,8 +191,13 @@ export default function LandmarkDetectionPage() {
       const medsamWithBullseye = medsamMasks.find((m) => m.bullseye != null);
       const unetWithBullseye = unetMasks.find((m) => m.bullseye != null);
 
-      const newAvailable = { medsam: !!medsamWithBullseye, unet: !!unetWithBullseye };
-      setAvailableBullseyeModels(newAvailable);
+      const medsamHasBullseye = !!medsamWithBullseye;
+      const unetHasBullseye = !!unetWithBullseye;
+      setAvailableBullseyeModels({ medsam: medsamHasBullseye, unet: unetHasBullseye });
+      setCalculatingModels({
+        medsam: medsamMasks.length > 0 && !medsamHasBullseye,
+        unet: unetMasks.length > 0 && !unetHasBullseye,
+      });
 
       // Choose which model to display: use preferredModel, fall back to whatever has data
       const effective = preferredModel ?? selectedBullseyeModel;
@@ -163,24 +208,32 @@ export default function LandmarkDetectionPage() {
         selectedMask = medsamWithBullseye ?? unetWithBullseye;
       }
 
+      // Auto-trigger bullseye for every editable mask that has no data yet,
+      // using a session ref so each mask is triggered at most once.
+      if (triggerIfMissing) {
+        const masksNeedingBullseye = editables.filter(
+          (m) => m._id && !m.bullseye && !autoTriggeredBullseyeMasks.current.has(m._id)
+        );
+        for (const mask of masksNeedingBullseye) {
+          const maskId = mask._id as string;
+          autoTriggeredBullseyeMasks.current.add(maskId);
+          segmentationApi.triggerBullseye(maskId).catch(() => {
+            // Allow retry on next page visit by removing from the set
+            autoTriggeredBullseyeMasks.current.delete(maskId);
+          });
+        }
+        if (masksNeedingBullseye.length > 0) {
+          // Re-fetch after ~15s to pick up newly computed bullseye data
+          setTimeout(() => fetchBullseye(preferredModel, false), 15000);
+        }
+      }
+
       if (selectedMask) {
         setBullseyeData(selectedMask.bullseye!);
         setBullseyeLoading(false);
         return;
       }
 
-      // No bullseye yet — trigger computation for the first available editable mask
-      const firstEditable = editables[0];
-      if (firstEditable?._id && triggerIfMissing) {
-        try {
-          await segmentationApi.triggerBullseye(firstEditable._id);
-          // Re-fetch after ~8s; keep loading=true during the wait
-          setTimeout(() => fetchBullseye(preferredModel, false), 8000);
-          return;
-        } catch {
-          // trigger failed; fall through to show null
-        }
-      }
       setBullseyeData(null);
       setBullseyeLoading(false);
     } catch {
@@ -209,6 +262,9 @@ export default function LandmarkDetectionPage() {
 
   // AHA alignment
   const [ahaAlignmentAngle, setAhaAlignmentAngle] = useState<number | null>(null);
+
+  // Tracks which mask IDs have already had bullseye auto-triggered this session
+  const autoTriggeredBullseyeMasks = useRef<Set<string>>(new Set());
 
   // Refetch bullseye after detection finishes; clear alignment on new run
   const prevStatus = useRef(state.status);
@@ -577,11 +633,20 @@ export default function LandmarkDetectionPage() {
                         <SelectValue placeholder="Model" />
                       </SelectTrigger>
                       <SelectContent className="rounded-xl p-1 shadow-lg">
-                        <SelectItem value="medsam" disabled={!availableBullseyeModels.medsam} className="rounded-lg py-1.5 text-xs">
-                          MedSAM{!availableBullseyeModels.medsam ? " (no data)" : ""}
+                        <SelectItem value="medsam" disabled={!availableBullseyeModels.medsam || !isGpuMode} className="rounded-lg py-1.5 text-xs">
+                          MedSAM{
+                            !isGpuMode ? " (GPU only)" :
+                            calculatingModels.medsam ? ` (Calculating... ${calcCountdown}s)` :
+                            !availableBullseyeModels.medsam ? " (no data)" :
+                            ""
+                          }
                         </SelectItem>
                         <SelectItem value="unet" disabled={!availableBullseyeModels.unet} className="rounded-lg py-1.5 text-xs">
-                          UNet{!availableBullseyeModels.unet ? " (no data)" : ""}
+                          UNet{
+                            calculatingModels.unet ? ` (Calculating... ${calcCountdown}s)` :
+                            !availableBullseyeModels.unet ? " (no data)" :
+                            ""
+                          }
                         </SelectItem>
                       </SelectContent>
                     </Select>
@@ -591,7 +656,19 @@ export default function LandmarkDetectionPage() {
                   )}
                 </div>
               </div>
-              {leftPanelView === "bullseye" ? (
+              {!hasPredictions ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
+                  <div className="h-16 w-16 rounded-full border-2 border-dashed border-muted-foreground/30 flex items-center justify-center">
+                    <span className="text-2xl opacity-30">♥</span>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">No landmark data yet</p>
+                    <p className="text-xs mt-1 opacity-70">
+                      Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the AHA 17-Segment Bullseye.
+                    </p>
+                  </div>
+                </div>
+              ) : leftPanelView === "bullseye" ? (
                 <AhaBullseyePanel
                   bullseyeData={bullseyeData}
                   loading={bullseyeLoading}
