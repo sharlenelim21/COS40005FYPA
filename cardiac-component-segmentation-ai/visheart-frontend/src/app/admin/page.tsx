@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { useAuth } from "@/context/auth-context";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -13,7 +13,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Users,
-  Shield,
   Activity,
   TrendingUp,
   Clock,
@@ -80,24 +79,26 @@ const quickActions = [
     variant: "default" as const,
     section: "core" as const,
   },
-  {
-    title: "AWS Analytics",
-    description: "View AWS metrics and reports",
-    href: "/admin/analytics",
-    icon: TrendingUp,
-    variant: "secondary" as const,
-    disabled: true,
-    section: "advanced" as const,
-  },
-  {
-    title: "Database Management",
-    description: "Manage database operations and backups",
-    href: "/admin/database",
-    icon: Shield,
-    variant: "secondary" as const,
-    disabled: true,
-    section: "advanced" as const,
-  },
+  // Hidden for current client scope. Restore when AWS analytics is needed.
+  // {
+  //   title: "AWS Analytics",
+  //   description: "View AWS metrics and reports",
+  //   href: "/admin/analytics",
+  //   icon: TrendingUp,
+  //   variant: "secondary" as const,
+  //   disabled: true,
+  //   section: "advanced" as const,
+  // },
+  // Hidden for current client scope. Restore when database tools are needed.
+  // {
+  //   title: "Database Management",
+  //   description: "Manage database operations and backups",
+  //   href: "/admin/database",
+  //   icon: Shield,
+  //   variant: "secondary" as const,
+  //   disabled: true,
+  //   section: "advanced" as const,
+  // },
 ];
 
 /**
@@ -108,12 +109,6 @@ const quickActions = [
  */
 export default function AdminPageHome() {
   const { user } = useAuth();
-  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
-
-  const visibleQuickActions = quickActions.filter((action) => {
-    if (action.section === "core") return true;
-    return showAdvancedTools;
-  });
 
   return (
     <div className="space-y-8">
@@ -224,37 +219,21 @@ export default function AdminPageHome() {
         </Card>
 
         <Card>
-          <CardHeader className="space-y-3">
-            <div>
-              <CardTitle>Quick Actions</CardTitle>
-              <CardDescription>Common administrative tasks</CardDescription>
-            </div>
-
-            <div className="flex justify-end">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setShowAdvancedTools((prev) => !prev)}
-              >
-                {showAdvancedTools ? "Hide" : "Show"} Analytics & Database
-              </Button>
-            </div>
+          <CardHeader>
+            <CardTitle>Quick Actions</CardTitle>
+            <CardDescription>Common administrative tasks</CardDescription>
           </CardHeader>
 
           <CardContent>
             <div className="space-y-3">
-              {visibleQuickActions.map((action) => {
+              {quickActions.map((action) => {
                 const Icon = action.icon;
 
                 return (
-                  <div
+                  <Link
                     key={action.title}
-                    className={`flex items-center justify-between rounded-lg border p-3 transition-colors ${
-                      action.disabled
-                        ? "bg-muted/50 cursor-not-allowed opacity-50"
-                        : "hover:bg-muted/50 cursor-pointer"
-                    }`}
+                    href={action.href}
+                    className="flex min-h-[88px] items-center justify-between rounded-lg border p-3 transition-colors hover:bg-muted/50"
                   >
                     <div className="flex items-center space-x-3">
                       <div className="flex-shrink-0">
@@ -268,22 +247,11 @@ export default function AdminPageHome() {
                       </div>
                     </div>
 
-                    {action.disabled && (
-                      <Badge variant="secondary" className="text-xs">
-                        Coming Soon
-                      </Badge>
-                    )}
-                  </div>
+                  </Link>
                 );
               })}
             </div>
 
-            {!showAdvancedTools && (
-              <p className="text-muted-foreground mt-4 text-xs">
-                Analytics and Database Management are currently hidden based on
-                the latest client scope.
-              </p>
-            )}
           </CardContent>
         </Card>
       </div>

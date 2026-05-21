@@ -24,7 +24,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronDown, Settings, Sparkles, AlertTriangle } from "lucide-react";
+import { ChevronDown, Settings, Sparkles, AlertTriangle, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type ReconstructionSegmentationModel = "medsam" | "unet";
@@ -64,6 +64,8 @@ interface ReconstructionConfigDialogProps {
    * the requested default is unavailable.
    */
   defaultSelectedModel?: ReconstructionSegmentationModel;
+  existingReconstructionsByModel?: Partial<Record<ReconstructionSegmentationModel, string>>;
+  onViewReconstruction?: (model: ReconstructionSegmentationModel, reconstructionId?: string) => void;
 }
 
 const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
@@ -86,6 +88,8 @@ export function ReconstructionConfigDialog({
   availableModels,
   blockedModels,
   defaultSelectedModel,
+  existingReconstructionsByModel,
+  onViewReconstruction,
 }: ReconstructionConfigDialogProps) {
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
@@ -171,12 +175,20 @@ export function ReconstructionConfigDialog({
                 const isAvailable = hasSegmentation && !isBlocked;
                 const isSelected = selectedModel === m;
                 return (
-                  <button
+                  <div
                     key={m}
-                    type="button"
+                    role="button"
+                    tabIndex={isAvailable && !isLoading ? 0 : -1}
                     onClick={() => isAvailable && setSelectedModel(m)}
-                    disabled={!isAvailable || isLoading}
+                    onKeyDown={(event) => {
+                      if (!isAvailable || isLoading) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedModel(m);
+                      }
+                    }}
                     aria-pressed={isSelected}
+                    aria-disabled={!isAvailable || isLoading}
                     title={
                       isBlocked
                         ? `A 4D reconstruction already exists for ${MODEL_META[m].label}. Delete the existing result before creating a new one.`
@@ -188,6 +200,8 @@ export function ReconstructionConfigDialog({
                       "rounded-lg border px-3 py-3 text-left transition-colors",
                       isAvailable
                         ? "hover:bg-muted/40"
+                        : isBlocked
+                        ? "bg-primary/5"
                         : "opacity-50 cursor-not-allowed",
                       isSelected && isAvailable
                         ? "border-primary ring-2 ring-primary/30 bg-primary/5"
@@ -216,8 +230,24 @@ export function ReconstructionConfigDialog({
                       {MODEL_META[m].description}
                     </div>
                     {isBlocked && (
-                      <div className="text-[11px] text-muted-foreground mt-1.5">
-                        Delete existing 4D result first
+                      <div className="mt-2 flex items-end justify-between gap-2">
+                        <span className="text-[11px] text-muted-foreground">
+                          Delete existing 4D result first
+                        </span>
+                        {onViewReconstruction && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 gap-1 border border-primary/40 bg-primary px-2 text-[11px] font-semibold text-primary-foreground shadow-sm hover:bg-primary/90"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onViewReconstruction(m, existingReconstructionsByModel?.[m]);
+                            }}
+                          >
+                            <Eye className="h-3 w-3" />
+                            View 4D
+                          </Button>
+                        )}
                       </div>
                     )}
                     {!hasSegmentation && (
@@ -225,7 +255,7 @@ export function ReconstructionConfigDialog({
                         No cached segmentation
                       </div>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>

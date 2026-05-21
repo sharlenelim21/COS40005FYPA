@@ -1,0 +1,19 @@
+[
+    {"AHAIndex": 1, "AHASegmentName": "Basal Anterior", "Class": "InferiorPosteriorLV", "File": "MM631_BP52012_FMA9561_Inferior.obj", "StrainValue": [10, -30, 0]},
+    {"AHAIndex": 2, "AHASegmentName": "Basal Anteroseptal", "Class": "SeptalLV" , "File" : "MM629_BP52013_FMA9345_Septal.obj", "StrainValue": [15, 30, -10]},
+    {"AHAIndex": 3, "AHASegmentName": "Basal Inferoseptal", "Class": "SeptalLV", "File": "MM613_BP52013_FMA9345_Septal.obj", "StrainValue": [20, -5, 30]},
+    {"AHAIndex": 4, "AHASegmentName": "Basal Inferior", "Class": "AnteriorLV", "File": "MM614_BP52011_FMA9560_Anterior.obj",  "StrainValue": [30, 10, 0]},
+    {"AHAIndex": 5, "AHASegmentName": "Basal Inferolateral", "Class": "LateralLV", "File": "MM615_BP52010_FMA9563_Lateral.obj", "StrainValue": [0, 15, -20]},
+    {"AHAIndex": 6, "AHASegmentName": "Basal Anterolateral", "Class": "InferiorPosteriorLV", "File": "MM616_BP52012_FMA9561_Inferior.obj", "StrainValue": [-10, 5, 20]},
+    {"AHAIndex": 7, "AHASegmentName": "Mid Anterior", "Class": "InferiorPosteriorLV", "File": "MM623_BP52012_FMA9561_Inferior.obj", "StrainValue": [-15, 20, 5]},
+    {"AHAIndex": 8, "AHASegmentName": "Mid Anteroseptal", "Class": "SeptalLV", "File": "MM618_BP52013_FMA9345_Septal.obj", "StrainValue": [-20, 30, 0]},
+    {"AHAIndex": 9, "AHASegmentName": "Mid Inferoseptal", "Class" : "SeptalLV" , "File" :	"MM619_BP52013_FMA9345_Septal.obj" , "StrainValue" : [-25, 15, 5]},
+    {"AHAIndex": 10, "AHASegmentName": "Mid Inferior", "Class": "AnteriorLV", "File": "MM620_BP52011_FMA9560_Anterior.obj", "StrainValue": [-30, 5, 10]},
+    {"AHAIndex": 11, "AHASegmentName": "Mid Inferolateral", "Class": "LateralLV", "File": "MM621_BP52010_FMA9563_Lateral.obj", "StrainValue": [25, -30, 0]},
+    {"AHAIndex": 12, "AHASegmentName": "Mid Anterolateral", "Class": "InferiorPosteriorLV", "File": "MM622_BP52012_FMA9561_Inferior.obj", "StrainValue": [5, 30, -15]},
+    {"AHAIndex": 13, "AHASegmentName": "Apical Anterior", "Class": "InferiorPosteriorLV", "File": "MM626_BP52012_FMA9561_Inferior.obj", "StrainValue": [-5, 10, 25]},
+    {"AHAIndex": 14, "AHASegmentName": "Apical Septal", "Class": "SeptalLV" , "File" : "MM625_BP52013_FMA9345_Septal.obj" , "StrainValue" : [10, -20, 15]},
+    {"AHAIndex": 15, "AHASegmentName": "Apical Interior", "Class": "AnteriorLV", "File": "MM624_BP52011_FMA9560_Anterior.obj", "StrainValue": [20, -10, 5]},
+    {"AHAIndex": 16, "AHASegmentName": "Apical Lateral", "Class": "LateralLV", "File": "MM627_BP52010_FMA9563_Lateral.obj", "StrainValue": [5, 15, -10]},
+    {"AHAIndex": 17, "AHASegmentName": "Apex", "Class": "AnteriorLV", "File": "MM628_BP52011_FMA9560_Anterior.obj", "StrainValue": [15, 0, -5]}
+]

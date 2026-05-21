@@ -3,7 +3,7 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Brain, Heart, Zap, ExternalLink, Box, FileDown, Download, Upload, ArrowRight } from 'lucide-react';
+import { Brain, Heart, Zap, ExternalLink, Box, FileDown, Download, Upload, ArrowRight, Crosshair, Activity } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -548,12 +548,109 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                 <ArrowRight className="w-6 h-6 text-primary rotate-90" />
               </div>
 
-              {/* Step 3: 4D Reconstruction */}
+              {/* Step 3: Landmark Detection */}
+              <motion.div
+                className="flex flex-col gap-4"
+                initial={{ opacity: 0, x: -30 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.6, delay: 0.68 }}
+                viewport={{ once: true }}
+              >
+                <div className="flex items-center gap-4">
+                  <motion.div
+                    className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0"
+                    whileHover={{ scale: 1.1, rotate: 5 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <span className="text-2xl font-bold text-primary">3</span>
+                  </motion.div>
+                  <h4 className="text-xl font-semibold text-foreground">Run Landmark Detection</h4>
+                </div>
+                <motion.div
+                  className="w-full bg-muted/50 border-2 border-primary/20 rounded-lg p-6"
+                  whileHover={{ borderColor: "hsl(var(--primary) / 0.4)" }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <div className="flex flex-col md:flex-row gap-6 items-center">
+                    <div className="flex-1 space-y-4">
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 bg-primary/20 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+                          <Crosshair className="w-4 h-4 text-primary" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground mb-1">Cardiac Reference Points</p>
+                          <p className="text-sm text-muted-foreground">
+                            Detect RV insertion points and align the cardiac view for AHA-style regional review.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="h-px bg-primary/20"></div>
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 bg-primary/20 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+                          <Activity className="w-4 h-4 text-primary" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground mb-1">Bullseye &amp; Strain Preview</p>
+                          <p className="text-sm text-muted-foreground">
+                            Review AHA 17-segment bullseye output, 3D heart projection, and strain-style visual summaries.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="bg-primary/5 rounded-lg p-3 mt-4">
+                        <p className="text-xs text-muted-foreground italic text-center">
+                          Landmark detection connects segmentation results with motion-aware analysis and reporting.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="w-full md:w-48 h-48 bg-muted/30 rounded-lg border-2 border-dashed border-primary/30 flex items-center justify-center relative overflow-hidden">
+                      <span className="px-4 text-center text-xs text-muted-foreground">
+                        Landmark workflow video placeholder
+                      </span>
+                    </div>
+                  </div>
+                </motion.div>
+              </motion.div>
+
+              {/* Step 3.1: Export Landmark Report */}
+              <motion.div
+                className="flex flex-col gap-4"
+                initial={{ opacity: 0, x: -30 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.6, delay: 0.69 }}
+                viewport={{ once: true }}
+              >
+                <div className="flex items-center gap-4">
+                  <motion.div
+                    className="w-12 h-12 bg-muted/50 rounded-full flex items-center justify-center border-2 border-primary/30 flex-shrink-0"
+                    whileHover={{ scale: 1.1 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <FileDown className="w-5 h-5 text-primary" />
+                  </motion.div>
+                  <h5 className="text-lg font-semibold text-foreground">Export Landmark Report</h5>
+                </div>
+                <div className="w-full bg-muted/30 border border-primary/20 rounded-lg p-4">
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Download a PDF report containing detected landmarks, AHA bullseye output, 3D heart preview, strain-style visuals, and analysis notes.
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                    <span>Ready after landmark detection completes</span>
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* Arrow Down */}
+              <div className="flex justify-center">
+                <ArrowRight className="w-6 h-6 text-primary rotate-90" />
+              </div>
+
+              {/* Step 4: 4D Reconstruction */}
               <motion.div 
                 className="flex flex-col gap-4"
                 initial={{ opacity: 0, x: -30 }}
                 whileInView={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.6, delay: 0.7 }}
+                transition={{ duration: 0.6, delay: 0.72 }}
                 viewport={{ once: true }}
               >
                 <div className="flex items-center gap-4">
@@ -562,7 +659,7 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                     whileHover={{ scale: 1.1, rotate: 5 }}
                     transition={{ duration: 0.3 }}
                   >
-                    <span className="text-2xl font-bold text-primary">3</span>
+                    <span className="text-2xl font-bold text-primary">4</span>
                   </motion.div>
                   <h4 className="text-xl font-semibold text-foreground">Generate 4D Reconstruction</h4>
                 </div>
@@ -623,12 +720,12 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                 </div>
               </motion.div>
 
-              {/* Step 3.1: Export Meshes */}
+              {/* Step 4.1: Export Meshes */}
               <motion.div 
                 className="flex flex-col gap-4"
                 initial={{ opacity: 0, x: -30 }}
                 whileInView={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.6, delay: 0.75 }}
+                transition={{ duration: 0.6, delay: 0.78 }}
                 viewport={{ once: true }}
               >
                 <div className="flex items-center gap-4">

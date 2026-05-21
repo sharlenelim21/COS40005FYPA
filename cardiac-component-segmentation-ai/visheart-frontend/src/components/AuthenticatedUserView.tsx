@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useAuth } from "@/context/auth-context";
+import { projectApi } from "@/lib/api";
 import {
   ShowForAdmin,
   ShowForUser,
@@ -61,6 +62,27 @@ export const AuthenticatedUserView = () => {
   const { user, logout } = useAuth();
 
   if (!user) return null;
+
+  const handleLogout = async () => {
+    try {
+      const response = await projectApi.getProjects();
+      const tempProjects = (response.projects ?? []).filter((project: { isSaved?: boolean }) => !project.isSaved);
+
+      if (tempProjects.length > 0) {
+        const proceed = window.confirm(
+          `You have ${tempProjects.length} temporary project${tempProjects.length === 1 ? "" : "s"} that will be deleted after logout.\n\nTo keep them, go to Dashboard > Projects and click each Temp badge to change it to Saved.\n\nContinue signing out?`,
+        );
+        if (!proceed) return;
+      }
+    } catch {
+      const proceed = window.confirm(
+        "I could not check your temporary projects before logout. Go to Dashboard > Projects to save any Temp projects you want to keep.\n\nContinue signing out?",
+      );
+      if (!proceed) return;
+    }
+
+    await logout();
+  };
 
   return (
     <div className="w-full max-w-[400px] pb-5 select-none sm:w-[400px]">
@@ -138,7 +160,7 @@ export const AuthenticatedUserView = () => {
         <Button
           variant="outline"
           className="w-full justify-start border-red-200 text-red-600 hover:bg-red-50 h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200"
-          onClick={logout}
+          onClick={handleLogout}
         >
           <LogOut className="mr-2 h-4 w-4 flex-shrink-0" />
           Sign Out

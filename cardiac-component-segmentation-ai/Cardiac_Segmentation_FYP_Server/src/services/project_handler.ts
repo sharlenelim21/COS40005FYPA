@@ -18,8 +18,116 @@ import { exec } from "child_process";
 import logger from "./logger";
 import LogError from "../utils/error_logger";
 import fs from "fs";
+import AdmZip from "adm-zip";
 
 const serviceLocation = "Project Handler";
+const maxFilesPerUpload = 10;
+
+type UploadWorkFile = Express.Multer.File & {
+  extractedFromZip?: string;
+};
+
+const getMedicalExtension = (filename: string): ".nii" | ".nii.gz" | ".dcm" | null => {
+  const lowerName = filename.toLowerCase();
+  if (lowerName.endsWith(".nii.gz")) return ".nii.gz";
+  const ext = path.extname(lowerName);
+  if (ext === ".nii" || ext === ".dcm") return ext;
+  return null;
+};
+
+const isZipFile = (filename: string): boolean => filename.toLowerCase().endsWith(".zip");
+
+const stripMedicalExtension = (filename: string): string => {
+  const basename = path.basename(filename);
+  if (basename.toLowerCase().endsWith(".nii.gz")) {
+    return basename.slice(0, -7);
+  }
+  return basename.slice(0, basename.length - path.extname(basename).length);
+};
+
+const inferMimeType = (filename: string, fallback: string): string => {
+  const ext = getMedicalExtension(filename);
+  if (ext === ".nii.gz") return "application/x-gzip";
+  if (ext === ".nii") return "application/octet-stream";
+  if (ext === ".dcm") return "application/dicom";
+  return fallback || "application/octet-stream";
+};
+
+const cleanupPath = (targetPath: string | undefined): void => {
+  if (targetPath && fs.existsSync(targetPath)) {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  }
+};
+
+const cleanupPaths = (paths: string[]): void => {
+  paths.forEach(cleanupPath);
+};
+
+const prepareUploadFiles = (files: Express.Multer.File[], userId: string): { workFiles: UploadWorkFile[]; cleanupDirs: string[] } => {
+  const workFiles: UploadWorkFile[] = [];
+  const cleanupDirs: string[] = [];
+
+  for (const file of files) {
+    if (!isZipFile(file.originalname)) {
+      workFiles.push(file);
+      continue;
+    }
+
+    const extractionDir = path.join(
+      path.dirname(file.path),
+      `zip_${userId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    );
+    fs.mkdirSync(extractionDir, { recursive: true });
+    cleanupDirs.push(extractionDir);
+
+    try {
+      const zip = new AdmZip(file.path);
+      const entries = zip.getEntries();
+      let extractedCount = 0;
+
+      for (const entry of entries) {
+        if (entry.isDirectory) continue;
+
+        const entryBaseName = path.basename(entry.entryName);
+        if (!entryBaseName || entryBaseName.startsWith(".")) continue;
+        if (!getMedicalExtension(entryBaseName)) continue;
+
+        if (workFiles.length >= maxFilesPerUpload) {
+          throw new Error(`ZIP upload contains more than ${maxFilesPerUpload} supported medical files.`);
+        }
+
+        const safeName = entryBaseName.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const extractedPath = path.join(extractionDir, `${extractedCount + 1}-${safeName}`);
+        const data = entry.getData();
+        if (data.length === 0) continue;
+
+        fs.writeFileSync(extractedPath, data);
+        extractedCount += 1;
+
+        workFiles.push({
+          ...file,
+          fieldname: "files",
+          originalname: entryBaseName,
+          encoding: file.encoding,
+          mimetype: inferMimeType(entryBaseName, file.mimetype),
+          destination: extractionDir,
+          filename: path.basename(extractedPath),
+          path: extractedPath,
+          size: data.length,
+          extractedFromZip: file.originalname,
+        });
+      }
+
+      if (extractedCount === 0) {
+        throw new Error("ZIP upload did not contain any supported .nii, .nii.gz, or .dcm files.");
+      }
+    } finally {
+      cleanupPath(file.path);
+    }
+  }
+
+  return { workFiles, cleanupDirs };
+};
 
 export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
   // With fields configuration, files are now in req.files.files
@@ -51,8 +159,22 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
 
   const uploadedProjects: IProject[] = [];
   const storageMode = process.env.STORAGE_MODE || "local";
+  let filesToProcess: UploadWorkFile[] = [];
+  let extractionCleanupDirs: string[] = [];
 
-  for (const file of files) {
+  try {
+    const prepared = prepareUploadFiles(files, String(userId));
+    filesToProcess = prepared.workFiles;
+    extractionCleanupDirs = prepared.cleanupDirs;
+  } catch (error) {
+    files.forEach((file) => cleanupPath(file.path));
+    return res.status(400).json({
+      success: false,
+      message: (error as Error).message || "Could not extract ZIP upload.",
+    });
+  }
+
+  for (const file of filesToProcess) {
     const { originalname, mimetype, size, path: filePath } = file;
 
     let newFilePath: string | undefined;
@@ -63,6 +185,7 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
     // Should not fall here due to Multer
     try {
       if (!isValidFileFormat(originalname)) {
+        cleanupPaths(extractionCleanupDirs);
         return res.status(400).json({
           success: false,
           error: "Invalid file format. Only .nii, .nii.gz, or .dcm allowed.",
@@ -95,6 +218,7 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
 
         // Clean up the temporary file
         fs.unlinkSync(filePath);
+        cleanupPaths(extractionCleanupDirs);
 
         return res.status(409).json({
           success: false,
@@ -109,10 +233,7 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
       // Continue with file processing if no duplicate was found
       logger.info(`${serviceLocation}: No duplicate found for file hash ${filehash}. Proceeding with upload.`);
 
-      let fileExtension = path.extname(originalname).toLowerCase();
-      if (originalname.toLowerCase().endsWith(".nii.gz")) {
-        fileExtension = ".nii.gz";
-      }
+      const fileExtension = getMedicalExtension(originalname) ?? path.extname(originalname).toLowerCase();
       const newFileName = `${userId}_${filehash}${fileExtension}`;
       newFilePath = path.join(path.dirname(filePath), newFileName);
       fs.renameSync(filePath, newFilePath);
@@ -202,7 +323,7 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
 
       const project: IProject = {
         userid: String(userId),
-        name: projectName || originalname,
+        name: filesToProcess.length === 1 && projectName ? projectName : stripMedicalExtension(originalname),
         originalfilename: originalname,
         description: description || "",
         isSaved: false,
@@ -249,14 +370,19 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
       );
 
       if (!result.success) {
+        cleanupPaths(extractionCleanupDirs);
         return res.status(500).json({
           success: false,
           error: result?.message || "An unknown error occurred.",
         });
       }
 
-      uploadedProjects.push(project);
+      uploadedProjects.push({
+        ...project,
+        _id: (result as any).project?._id,
+      } as any);
     } catch (error) {
+      cleanupPaths(extractionCleanupDirs);
       return res.status(500).json({ message: "Processing failed.", error: (error as Error).message });
     } finally {
       // Ensure cleanup happens even if there's an error
@@ -272,10 +398,13 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
     }
   }
 
+  cleanupPaths(extractionCleanupDirs);
+
   return res.status(200).json({
     message: "Projects uploaded and processed successfully.",
     projects: uploadedProjects.map(p => ({
-      id: p.userid,
+      id: String((p as any)._id || ""),
+      projectId: String((p as any)._id || ""),
       name: p.name,
       originalfilename: p.originalfilename
     }))

@@ -16,6 +16,8 @@ interface StrainVisualizationProps {
   frame?: number;
   totalFrames?: number;
   compact?: boolean;
+  selectedSegment?: number | null;
+  onSelectSegment?: (segment: number) => void;
 }
 
 const SEGMENT_LABELS = [
@@ -119,6 +121,8 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
   frame = 0,
   totalFrames = 10,
   compact = false,
+  selectedSegment,
+  onSelectSegment,
 }) => {
   const data = segmentData ?? getDummyStrainData(selectedStrainType, frame, totalFrames);
   const center = 150;
@@ -147,6 +151,8 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
             outerRadius={basalOuter}
             startAngle={-90 + index * 60}
             endAngle={-90 + (index + 1) * 60}
+            selected={selectedSegment === index + 1}
+            onSelect={onSelectSegment}
           />
         ))}
         {Array.from({ length: 6 }, (_, index) => (
@@ -161,6 +167,8 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
             outerRadius={basalInner}
             startAngle={-90 + index * 60}
             endAngle={-90 + (index + 1) * 60}
+            selected={selectedSegment === index + 7}
+            onSelect={onSelectSegment}
           />
         ))}
         {Array.from({ length: 4 }, (_, index) => (
@@ -175,6 +183,8 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
             outerRadius={midInner}
             startAngle={-90 + index * 90}
             endAngle={-90 + (index + 1) * 90}
+            selected={selectedSegment === index + 13}
+            onSelect={onSelectSegment}
           />
         ))}
 
@@ -185,6 +195,8 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
           fill={getStrainColor(segmentValue(16), selectedStrainType)}
           stroke="#ffffff"
           strokeWidth="1"
+          className={onSelectSegment ? "cursor-pointer" : undefined}
+          onClick={() => onSelectSegment?.(17)}
         >
           <title>{segmentLabel(16)}: {segmentValue(16).toFixed(1)}%</title>
         </circle>
@@ -261,6 +273,8 @@ function StrainSegment({
   outerRadius,
   startAngle,
   endAngle,
+  selected = false,
+  onSelect,
 }: {
   index: number;
   value: number;
@@ -271,6 +285,8 @@ function StrainSegment({
   outerRadius: number;
   startAngle: number;
   endAngle: number;
+  selected?: boolean;
+  onSelect?: (segment: number) => void;
 }) {
   const midAngle = (startAngle + endAngle) / 2;
   const labelPoint = polarPoint(center, (innerRadius + outerRadius) / 2, midAngle);
@@ -280,8 +296,10 @@ function StrainSegment({
       <path
         d={annularSectorPath(center, innerRadius, outerRadius, startAngle, endAngle)}
         fill={getStrainColor(value, strainType)}
-        stroke="#ffffff"
-        strokeWidth="1"
+        stroke={selected ? "#111827" : "#ffffff"}
+        strokeWidth={selected ? "3" : "1"}
+        className={onSelect ? "cursor-pointer" : undefined}
+        onClick={() => onSelect?.(index + 1)}
       >
         <title>{label}: {value.toFixed(1)}%</title>
       </path>

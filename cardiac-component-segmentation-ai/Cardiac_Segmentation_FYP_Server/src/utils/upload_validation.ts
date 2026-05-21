@@ -14,10 +14,11 @@ import crypto from "crypto";
  * @returns True if the file format is valid, false otherwise.
  */
 export function isValidFileFormat(filename: string): boolean {
+  const lowerFilename = filename.toLowerCase();
   return (
-    filename.endsWith(".nii") || 
-    filename.endsWith(".nii.gz") || 
-    filename.endsWith(".dcm")
+    lowerFilename.endsWith(".nii") || 
+    lowerFilename.endsWith(".nii.gz") || 
+    lowerFilename.endsWith(".dcm")
   );
 }
 
