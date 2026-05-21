@@ -366,7 +366,7 @@ def run_landmark_inference_from_nifti(
             model_to_use = model_2ch
             model_used = "2ch"
         else:
-            tensor = preprocess_1ch(img_2d)
+            tensor = preprocess_1ch(img_2d, vol_mu, vol_std)
             model_to_use = model_1ch
             model_used = "1ch_fallback"
 
