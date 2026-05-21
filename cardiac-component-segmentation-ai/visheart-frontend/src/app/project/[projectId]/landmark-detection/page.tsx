@@ -293,13 +293,13 @@ export default function LandmarkDetectionPage() {
   const isRunning     = state.status === "running";
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
 
-  const imageDimensions =
-    state.imageDimensions.width > 0
-      ? state.imageDimensions
-      : {
-          width:  projectData?.dimensions?.width  ?? 256,
-          height: projectData?.dimensions?.height ?? 256,
-        };
+  // Always prefer projectData dimensions (actual DICOM W×H) over the hook's
+  // default 256×256 placeholder. GPU coords are in NIfTI space which matches
+  // projectData.dimensions exactly.
+  const imageDimensions = {
+    width:  projectData?.dimensions?.width  ?? state.imageDimensions.width,
+    height: projectData?.dimensions?.height ?? state.imageDimensions.height,
+  };
 
   const currentImageFrame = currentPrediction?.frame_id ?? state.currentFrame;
   const currentImageSlice = currentPrediction?.slice_id ?? 0;

@@ -370,6 +370,13 @@ def run_landmark_inference_from_nifti(
             model_to_use = model_1ch
             model_used = "1ch_fallback"
 
+        if i == 0:
+            logger.info(
+                f"[Landmark] DEBUG slice 0 tensor: shape={list(tensor.shape)} "
+                f"min={tensor.min():.3f} max={tensor.max():.3f} mean={tensor.mean():.3f} "
+                f"vol_mu={vol_mu:.3f} vol_std={vol_std:.3f}"
+            )
+
         heatmap = _tta_predict(model_to_use, tensor, torch_device)
         hm_lm1 = heatmap[0]
         hm_lm2 = heatmap[1]

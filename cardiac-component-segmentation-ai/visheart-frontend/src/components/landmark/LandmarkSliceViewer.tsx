@@ -137,21 +137,8 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     img.onload = () => {
       if (cancelled) return;
       frameImgRef.current = img;
-      // Record actual pixel dimensions so canvas uses correct aspect ratio
       imgPixelDimsRef.current = { w: img.naturalWidth, h: img.naturalHeight };
-      // Re-trigger the ResizeObserver sizing by dispatching a resize
-      const container = containerRef.current;
-      const canvas    = canvasRef.current;
-      if (container && canvas) {
-        const { clientWidth: cw, clientHeight: ch } = container;
-        if (cw > 0 && ch > 0) {
-          const aspect = img.naturalWidth / img.naturalHeight;
-          let w = cw, h = cw / aspect;
-          if (h > ch) { h = ch; w = h * aspect; }
-          canvas.width  = Math.round(w);
-          canvas.height = Math.round(h);
-        }
-      }
+      const canvas = canvasRef.current;
       if (canvas) draw(canvas);
     };
     img.onerror = () => {
@@ -173,12 +160,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       const { clientWidth: cw, clientHeight: ch } = container;
       if (cw === 0 || ch === 0) return;
 
-      // Prefer actual JPEG pixel dimensions for aspect ratio so the image
-      // isn't stretched when the backend stored thumbnails transposed.
-      const imgDims = imgPixelDimsRef.current;
-      const aspect  = imgDims
-        ? imgDims.w / imgDims.h
-        : imageDimensions.width / imageDimensions.height;
+      const aspect = imageDimensions.width / imageDimensions.height;
       let w = cw, h = cw / aspect;
       if (h > ch) { h = ch; w = h * aspect; }
 
