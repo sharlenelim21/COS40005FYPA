@@ -168,25 +168,36 @@ def _resize_2d(arr: np.ndarray) -> np.ndarray:
     return zoom(arr, (zy, zx), order=1).astype(np.float32)
 
 
-def _zscore(arr: np.ndarray) -> np.ndarray:
-    """Z-score normalise — matches training pipeline exactly (inference.py)."""
-    mu = arr.mean()
-    std = arr.std() + 1e-8
-    return ((arr - mu) / std).astype(np.float32)
+def _zscore_volume(vol: np.ndarray):
+    """Compute per-volume mean/std — matches training _PatientNormCache exactly."""
+    mu  = float(vol.mean())
+    std = float(vol.std()) + 1e-8
+    return mu, std
 
 
-def preprocess_1ch(img_2d: np.ndarray) -> torch.Tensor:
+def _normalize_slice(img_2d: np.ndarray, mu: float, std: float) -> np.ndarray:
+    """Resize to 256×256 then apply per-volume z-score (matches training __getitem__)."""
+    resized = _resize_2d(img_2d)
+    return ((resized - mu) / std).astype(np.float32)
+
+
+def preprocess_1ch(img_2d: np.ndarray, mu: float, std: float) -> torch.Tensor:
     """Return (1, 1, 256, 256) tensor from a 2-D MRI slice."""
-    img = _zscore(_resize_2d(img_2d))
+    img = _normalize_slice(img_2d, mu, std)
     return torch.from_numpy(img).unsqueeze(0).unsqueeze(0)
 
 
-def preprocess_2ch(img_2d: np.ndarray, seg_2d: np.ndarray) -> torch.Tensor:
-    """Return (1, 2, 256, 256) tensor: ch0 = z-scored MRI, ch1 = class-label seg (0-3) / 3."""
-    img = _zscore(_resize_2d(img_2d))
-    # Preserve class labels (0=bg, 1=RV, 2=MYO, 3=LV), scale to [0,1]
-    seg = np.clip(np.round(_resize_2d(seg_2d)), 0, 3).astype(np.float32) / 3.0
-    stacked = np.stack([img, seg], axis=0)
+def preprocess_2ch(img_2d: np.ndarray, seg_2d: np.ndarray, mu: float, std: float) -> torch.Tensor:
+    """Return (1, 2, 256, 256) tensor: ch0 = volume z-scored MRI, ch1 = seg /max(max,3)."""
+    img = _normalize_slice(img_2d, mu, std)
+    seg_resized = np.round(_resize_2d(seg_2d)).astype(np.float32)
+    # Match training: zero channel if RV absent, else divide by max(max, 3)
+    if not np.any(seg_resized == 1):
+        seg_norm = np.zeros_like(seg_resized)
+    else:
+        smax = max(float(seg_resized.max()), 3.0)
+        seg_norm = (seg_resized / smax).astype(np.float32)
+    stacked = np.stack([img, seg_norm], axis=0)
     return torch.from_numpy(stacked).unsqueeze(0)
 
 
@@ -331,6 +342,9 @@ def run_landmark_inference_from_nifti(
             logger.warning(f"[Landmark] Could not load seg mask: {exc} — 1ch fallback for all slices")
             seg_vol = None
 
+    # --- Per-volume normalisation stats (matches training _PatientNormCache) ---
+    vol_mu, vol_std = _zscore_volume(img)
+
     # --- Per-slice inference ---
     slices_out: List[Dict[str, Any]] = []
     lm1_xs, lm1_ys, lm2_xs, lm2_ys = [], [], [], []
@@ -348,7 +362,7 @@ def run_landmark_inference_from_nifti(
             seg_2d = np.round(seg_vol[:, :, i]).astype(np.float32)
 
         if is_seg_valid(seg_2d):
-            tensor = preprocess_2ch(img_2d, seg_2d)
+            tensor = preprocess_2ch(img_2d, seg_2d, vol_mu, vol_std)
             model_to_use = model_2ch
             model_used = "2ch"
         else:
