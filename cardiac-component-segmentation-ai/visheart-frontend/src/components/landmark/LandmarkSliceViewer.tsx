@@ -16,6 +16,7 @@ interface LandmarkSliceViewerProps {
   currentFrame: number;
   totalFrames: number;
   imageDimensions: { width: number; height: number };
+  maskDimensions?: { width: number; height: number };
   frameImageUrl?: string | null;
   maskOverlays?: LandmarkMaskOverlay[];
   visibleLandmarks: Set<string>;
@@ -35,15 +36,20 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   currentFrame,
   totalFrames,
   imageDimensions,
+  maskDimensions,
   frameImageUrl,
   maskOverlays = [],
   visibleLandmarks,
   showLabels = true,
   className,
 }: LandmarkSliceViewerProps) {
+  const effectiveMaskDimensions = maskDimensions ?? imageDimensions;
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
+  // Actual pixel dimensions of the loaded JPEG — may differ from imageDimensions
+  // if the backend stored thumbnails with transposed axes (H×W vs W×H).
+  const imgPixelDimsRef = useRef<{ w: number; h: number } | null>(null);
 
   // Keep frame label values in refs so changing frame doesn't recreate `draw`
   const currentFrameRef = useRef(currentFrame);
@@ -53,6 +59,9 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
   const toCanvas = useCallback(
     (coord: [number, number], cw: number, ch: number): [number, number] => {
+      // GPU coords are in NIfTI space: x ∈ [0, W_nifti], y ∈ [0, H_nifti].
+      // Canvas is always sized to the actual image aspect so cw/imageDimensions.width
+      // gives the correct pixel-per-unit scale.
       const sx = cw / imageDimensions.width;
       const sy = ch / imageDimensions.height;
       return [Math.round(coord[0] * sx), Math.round(coord[1] * sy)];
@@ -75,27 +84,36 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       }
 
       for (const overlay of maskOverlays) {
-        drawMaskOverlay(ctx, overlay, imageDimensions.width, imageDimensions.height, cw, ch);
+        drawMaskOverlay(ctx, overlay, effectiveMaskDimensions.width, effectiveMaskDimensions.height, cw, ch);
       }
 
       if (!prediction) return;
 
-      const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
+      const isCollapsed     = prediction.flag === "collapsed_to_mean";
+      const isLowConfidence = prediction.flag === "normal" && prediction.confidence === "low";
 
+      const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
       for (const def of sorted) {
         if (!visibleLandmarks.has(def.id)) continue;
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
-
         const [cx, cy] = toCanvas(coord, cw, ch);
-        drawDot(ctx, cx, cy, def, showLabels);
+        // Collapsed: draw RV1/RV2 faded and without labels (mean point label replaces them)
+        drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, isLowConfidence || isCollapsed);
+      }
+
+      // Collapsed: draw mean point on top with its own label
+      if (isCollapsed && prediction.display_mean) {
+        const meanCoord: [number, number] = [prediction.display_mean.x, prediction.display_mean.y];
+        const [cx, cy] = toCanvas(meanCoord, cw, ch);
+        drawMeanDot(ctx, cx, cy, showLabels);
       }
 
       if (totalFramesRef.current > 0) {
         drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
       }
     },
-    [prediction, visibleLandmarks, showLabels, toCanvas, maskOverlays, imageDimensions],
+    [prediction, visibleLandmarks, showLabels, toCanvas, maskOverlays, effectiveMaskDimensions],
   );
 
   // Redraw whenever draw function changes (prediction/masks/settings) or frame advances
@@ -118,6 +136,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     img.onload = () => {
       if (cancelled) return;
       frameImgRef.current = img;
+      imgPixelDimsRef.current = { w: img.naturalWidth, h: img.naturalHeight };
       const canvas = canvasRef.current;
       if (canvas) draw(canvas);
     };
@@ -164,7 +183,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       <canvas
         ref={canvasRef}
         className="block max-w-full max-h-full"
-        style={{ imageRendering: "pixelated" }}
+        style={{ imageRendering: "auto" }}
         aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
       />
     </div>
@@ -177,27 +196,41 @@ function drawDot(
   cy: number,
   def: LandmarkDefinition,
   showLabel: boolean,
+  lowConfidence = false,
 ) {
+  // Low-confidence: keep original colour but reduce opacity so dots remain distinguishable
+  const dotColor  = def.color;
+  const glowAlpha = "2a";
+  const alpha     = 1.0;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
   // Outer glow
   ctx.beginPath();
   ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
-  ctx.fillStyle = def.color + "2a";  // ~16% opacity
+  ctx.fillStyle = dotColor + glowAlpha;
   ctx.fill();
 
-  // Crosshair lines
+  // Crosshair lines — clipped tightly around the dot
+  const arm = DOT_R + CROSS_EXT;
   ctx.beginPath();
-  ctx.moveTo(cx - DOT_R - CROSS_EXT, cy);
-  ctx.lineTo(cx + DOT_R + CROSS_EXT, cy);
-  ctx.moveTo(cx, cy - DOT_R - CROSS_EXT);
-  ctx.lineTo(cx, cy + DOT_R + CROSS_EXT);
-  ctx.strokeStyle = def.color + "88";  // 53% opacity
-  ctx.lineWidth = 0.8;
+  ctx.moveTo(Math.round(cx - arm) + 0.5, Math.round(cy) + 0.5);
+  ctx.lineTo(Math.round(cx - DOT_R) + 0.5, Math.round(cy) + 0.5);
+  ctx.moveTo(Math.round(cx + DOT_R) + 0.5, Math.round(cy) + 0.5);
+  ctx.lineTo(Math.round(cx + arm) + 0.5, Math.round(cy) + 0.5);
+  ctx.moveTo(Math.round(cx) + 0.5, Math.round(cy - arm) + 0.5);
+  ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy - DOT_R) + 0.5);
+  ctx.moveTo(Math.round(cx) + 0.5, Math.round(cy + DOT_R) + 0.5);
+  ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy + arm) + 0.5);
+  ctx.strokeStyle = dotColor + "88";
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   // Dot fill
   ctx.beginPath();
   ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
-  ctx.fillStyle = def.color;
+  ctx.fillStyle = dotColor;
   ctx.fill();
 
   // White border
@@ -207,8 +240,9 @@ function drawDot(
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Label pill
-  if (!showLabel) return;
+  // Label pill — always full opacity regardless of confidence
+  if (!showLabel) { ctx.restore(); return; }
+  ctx.globalAlpha = 1.0;
 
   ctx.font = LABEL_FONT;
   const text  = def.label;
@@ -228,6 +262,44 @@ function drawDot(
   ctx.fillStyle = "#ffffff";
   ctx.textBaseline = "middle";
   ctx.fillText(text, lx + LABEL_PAD_X, cy);
+  ctx.restore();
+}
+
+function drawMeanDot(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  showLabel: boolean,
+) {
+  const MEAN_R = 4; // smaller than regular DOT_R (6)
+  const color  = "#e2e8f0"; // slate-200 — bright enough to see on dark MRI
+
+  // Small solid dot
+  ctx.beginPath();
+  ctx.arc(cx, cy, MEAN_R, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  // Thin dashed ring just outside
+  ctx.save();
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, MEAN_R + 3, 0, Math.PI * 2);
+  ctx.strokeStyle = color + "99";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+
+  if (!showLabel) return;
+
+  // Small inline label to the right, no pill background — just text with a shadow
+  ctx.font = "10px/1 system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor   = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur    = 3;
+  ctx.fillStyle = color;
+  ctx.fillText("Mean", cx + MEAN_R + 5, cy);
+  ctx.shadowBlur = 0;
 }
 
 function drawMaskOverlay(

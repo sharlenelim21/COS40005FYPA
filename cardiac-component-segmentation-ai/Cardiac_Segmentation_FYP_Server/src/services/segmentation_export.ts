@@ -164,8 +164,8 @@ const inferMaskModelForExport = (mask: IProjectSegmentationMask): "medsam" | "un
     const name = (mask.name || "").toString().toLowerCase();
     if (name.includes("unet")) return "unet";
     if (name.includes("medsam")) return "medsam";
-    // Do not guess "medsam" for generic names — these patterns predate per-model
-    // tagging and could belong to either model on CPU-only deployments.
+    if (name.startsWith("ai output")) return "medsam";
+    if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
     return null;
 };
 
