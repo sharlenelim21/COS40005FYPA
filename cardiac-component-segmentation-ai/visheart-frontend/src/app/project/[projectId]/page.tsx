@@ -133,13 +133,13 @@ export default function ProjectPage() {
   const availableReconstructionModels = useMemo<Array<"medsam" | "unet">>(() => {
     if (!undecodedMasks || undecodedMasks.length === 0) return [];
     const inferDocModel = (m: any): "medsam" | "unet" | null => {
-      const tag = ((m?.segmentationModel || m?.model_used || "") + "").toLowerCase();
-      if (tag === "medsam" || tag === "unet") return tag;
       const name = ((m?.name || "") + "").toLowerCase();
       if (name.includes("unet")) return "unet";
       if (name.includes("medsam")) return "medsam";
       // Do not guess "medsam" for generic names — they predate per-model tagging
       // and could belong to UNet on CPU environments.
+      const tag = ((m?.segmentationModel || m?.model_used || "") + "").toLowerCase();
+      if (tag === "medsam" || tag === "unet") return tag;
       return null;
     };
     const found = new Set<"medsam" | "unet">();
@@ -387,6 +387,17 @@ export default function ProjectPage() {
       }
     }
     return models;
+  }, [reconstructionRows]);
+
+  const existing4DByModel = useMemo(() => {
+    const map: Partial<Record<"medsam" | "unet", string>> = {};
+    for (const reconstruction of reconstructionRows) {
+      const normalized = ((reconstruction?.segmentationModel || "") + "").toLowerCase();
+      if ((normalized === "medsam" || normalized === "unet") && reconstruction?.reconstructionId) {
+        map[normalized] = reconstruction.reconstructionId;
+      }
+    }
+    return map;
   }, [reconstructionRows]);
 
   // Missing projectId handling
@@ -1615,6 +1626,8 @@ export default function ProjectPage() {
         blockedModels={Array.from(existing4DModels)}
         defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
         gpuAvailable={processingUnit.gpuAvailable}
+        existingReconstructionsByModel={existing4DByModel}
+        onViewReconstruction={goToReconstructionViewer}
       />
 
       {/* Delete Model Reconstruction Confirmation Dialog */}

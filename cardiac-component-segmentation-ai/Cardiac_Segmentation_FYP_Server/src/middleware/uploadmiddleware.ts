@@ -23,7 +23,7 @@ const ensureTempUploadDirExists = (): void => {
 ensureTempUploadDirExists();
 
 // Allowed Extensions and MIME types
-const allowedExtensions = [".nii", ".nii.gz", ".dcm"];
+const allowedExtensions = [".nii", ".nii.gz", ".dcm", ".zip"];
 
 // File Type Enum Mappings to MIME types (adjust as per your FileType enum definition)
 // This mapping assumes FileType enum values are the expected MIME types.
@@ -108,7 +108,7 @@ export const projectUploadFilter = multer({
   fileFilter,
 }).fields([
   // Define allowed fields for the multipart form
-  { name: 'files', maxCount: 1 },  // File field
+  { name: 'files', maxCount: 10 },  // File field
   { name: 'name', maxCount: 1 },    // Project name field
   { name: 'description', maxCount: 1 }  // Project description field
 ]);

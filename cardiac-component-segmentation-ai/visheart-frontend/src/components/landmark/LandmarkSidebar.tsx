@@ -45,6 +45,7 @@ const NAV_ITEMS = [
 ] as const;
 
 type TabKey = typeof NAV_ITEMS[number]["key"];
+const SIDEBAR_LANDMARK_IDS = new Set(["rv_insertion_1", "rv_insertion_2"]);
 
 function strainCurveData(type: StrainType, totalFrames: number) {
   const frames = Math.max(totalFrames || 10, 1);
@@ -78,6 +79,12 @@ export interface LandmarkSidebarProps {
   onClearReplacementFile: () => void;
   showLabels: boolean;
   onToggleShowLabels: () => void;
+  editableLandmarks?: boolean;
+  onToggleEditableLandmarks?: () => void;
+  highlightedLandmarkId?: string | null;
+  onHighlightLandmark?: (id: string | null) => void;
+  selectedStrainSegment?: number | null;
+  selectedStrainType?: StrainType;
 }
 
 export function LandmarkSidebar({
@@ -97,6 +104,12 @@ export function LandmarkSidebar({
   onClearReplacementFile,
   showLabels,
   onToggleShowLabels,
+  editableLandmarks = false,
+  onToggleEditableLandmarks,
+  highlightedLandmarkId,
+  onHighlightLandmark,
+  selectedStrainSegment,
+  selectedStrainType = "GCS",
 }: LandmarkSidebarProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("landmarks");
   const handleTabChange = useCallback((key: TabKey) => setActiveTab(key), []);
@@ -197,6 +210,10 @@ export function LandmarkSidebar({
             onToggleShowStrainOverlay={() => setShowStrainOverlay((p) => !p)}
             autoAlignAha={autoAlignAha}
             onToggleAutoAlignAha={() => setAutoAlignAha((p) => !p)}
+            editableLandmarks={editableLandmarks}
+            onToggleEditableLandmarks={onToggleEditableLandmarks}
+            highlightedLandmarkId={highlightedLandmarkId}
+            onHighlightLandmark={onHighlightLandmark}
           />
         )}
         {activeTab === "strain" && (
@@ -204,6 +221,8 @@ export function LandmarkSidebar({
             hasPredictions={hasPredictions}
             currentFrame={state.currentFrame}
             totalFrames={state.totalFrames}
+            selectedStrainSegment={selectedStrainSegment}
+            selectedStrainType={selectedStrainType}
           />
         )}
         {activeTab === "settings" && (
@@ -364,6 +383,10 @@ function LandmarksTab({
   onToggleShowStrainOverlay,
   autoAlignAha,
   onToggleAutoAlignAha,
+  editableLandmarks,
+  onToggleEditableLandmarks,
+  highlightedLandmarkId,
+  onHighlightLandmark,
 }: {
   prediction: FramePrediction | null;
   visibleLandmarks: Set<string>;
@@ -384,6 +407,10 @@ function LandmarksTab({
   onToggleShowStrainOverlay: () => void;
   autoAlignAha: boolean;
   onToggleAutoAlignAha: () => void;
+  editableLandmarks: boolean;
+  onToggleEditableLandmarks?: () => void;
+  highlightedLandmarkId?: string | null;
+  onHighlightLandmark?: (id: string | null) => void;
 }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -392,8 +419,7 @@ function LandmarksTab({
       <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
         <MapPin className="h-8 w-8 opacity-25" />
         <p className="text-sm leading-snug">
-          Click <strong className="text-foreground">Run Detection</strong> to detect landmarks
-          using this project&apos;s MRI data.
+          Landmark detection starts automatically when this page opens.
         </p>
         {/* Optional replacement file section */}
         <div className="w-full pt-2 border-t border-border">
@@ -424,7 +450,7 @@ function LandmarksTab({
 
       {/* Landmark rows */}
       <div className="space-y-1">
-        {LANDMARK_DEFINITIONS.map((def) => {
+        {LANDMARK_DEFINITIONS.filter((def) => SIDEBAR_LANDMARK_IDS.has(def.id)).map((def) => {
           const coord = getLandmarkCoord(prediction, def.id);
           const isVisible = visibleLandmarks.has(def.id);
           const hasCoord  = !!coord;
@@ -476,6 +502,23 @@ function LandmarksTab({
               >
                 {isVisible ? "on" : "off"}
               </span>
+              {onHighlightLandmark && (
+                <span
+                  className={cn(
+                    "text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
+                    highlightedLandmarkId === def.id
+                      ? "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onHighlightLandmark(highlightedLandmarkId === def.id ? null : def.id);
+                  }}
+                  title={highlightedLandmarkId === def.id ? "Remove highlight" : "Highlight this landmark"}
+                >
+                  {highlightedLandmarkId === def.id ? "clear" : "focus"}
+                </span>
+              )}
             </button>
           );
         })}
@@ -493,6 +536,8 @@ function LandmarksTab({
         onToggleShowStrainOverlay={onToggleShowStrainOverlay}
         autoAlignAha={autoAlignAha}
         onToggleAutoAlignAha={onToggleAutoAlignAha}
+        editableLandmarks={editableLandmarks}
+        onToggleEditableLandmarks={onToggleEditableLandmarks}
       />
 
       <div className="pt-3 border-t border-border">
@@ -520,6 +565,8 @@ function DetectionSettingsPanel({
   onToggleShowStrainOverlay,
   autoAlignAha,
   onToggleAutoAlignAha,
+  editableLandmarks,
+  onToggleEditableLandmarks,
 }: {
   showLabels: boolean;
   onToggleShowLabels: () => void;
@@ -531,13 +578,12 @@ function DetectionSettingsPanel({
   onToggleShowStrainOverlay: () => void;
   autoAlignAha: boolean;
   onToggleAutoAlignAha: () => void;
+  editableLandmarks: boolean;
+  onToggleEditableLandmarks?: () => void;
 }) {
   const settings = [
     { label: "Show landmark labels", checked: showLabels, onCheckedChange: onToggleShowLabels },
-    { label: "Show centroid", checked: showCentroid, onCheckedChange: onToggleShowCentroid },
-    { label: "Show radial lines", checked: showRadialLines, onCheckedChange: onToggleShowRadialLines },
-    { label: "Show strain overlay", checked: showStrainOverlay, onCheckedChange: onToggleShowStrainOverlay },
-    { label: "Auto-align to AHA", checked: autoAlignAha, onCheckedChange: onToggleAutoAlignAha },
+    { label: "Move/edit landmarks", checked: editableLandmarks, onCheckedChange: onToggleEditableLandmarks },
   ];
 
   return (
@@ -552,6 +598,7 @@ function DetectionSettingsPanel({
             <Switch
               checked={setting.checked}
               onCheckedChange={setting.onCheckedChange}
+              disabled={!setting.onCheckedChange}
               aria-label={setting.label}
             />
           </div>
@@ -626,15 +673,32 @@ function StrainTab({
   hasPredictions,
   currentFrame,
   totalFrames,
+  selectedStrainSegment,
+  selectedStrainType: externalStrainType,
 }: {
   hasPredictions: boolean;
   currentFrame: number;
   totalFrames: number;
+  selectedStrainSegment?: number | null;
+  selectedStrainType?: StrainType;
 }) {
-  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GCS");
+  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>(externalStrainType ?? "GCS");
   const frameCount = Math.max(totalFrames || 10, 1);
-  const curveData = strainCurveData(selectedStrainType, frameCount);
+  const curveData = selectedStrainSegment
+    ? Array.from({ length: frameCount }, (_, frame) => {
+        const segment = getDummyStrainData(selectedStrainType, frame, frameCount)
+          .find((item) => item.segment === selectedStrainSegment);
+        return {
+          frame: frame + 1,
+          time: Math.round((frame / Math.max(frameCount - 1, 1)) * 1200),
+          strain: segment?.strain ?? 0,
+        };
+      })
+    : strainCurveData(selectedStrainType, frameCount);
   const segmentValues = getDummyStrainData(selectedStrainType, currentFrame, frameCount);
+  const selectedSegmentValue = selectedStrainSegment
+    ? segmentValues.find((item) => item.segment === selectedStrainSegment)
+    : null;
   const currentAverage = segmentValues.reduce((sum, item) => sum + item.strain, 0) / segmentValues.length;
   const peakValue = selectedStrainType === "GRS"
     ? Math.max(...curveData.map((item) => item.strain))
@@ -646,7 +710,7 @@ function StrainTab({
       <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
         <Activity className="h-8 w-8 opacity-25" />
         <p className="text-sm leading-snug">
-          Run detection first to view strain curves and frame metrics.
+          Landmark detection starts automatically; strain curves appear when results are ready.
         </p>
       </div>
     );
@@ -658,13 +722,29 @@ function StrainTab({
         <div>
           <h3 className="text-sm font-medium text-foreground">Strain Results</h3>
           <p className="text-[10px] text-muted-foreground">
-            Dummy preview values, frame {currentFrame + 1}/{frameCount}
+            {selectedSegmentValue
+              ? `Segment ${selectedSegmentValue.segment}: ${selectedSegmentValue.label}`
+              : "Dummy preview values"}, frame {currentFrame + 1}/{frameCount}
           </p>
         </div>
         <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-mono text-muted-foreground">
           {currentTime} ms
         </span>
       </div>
+
+      {selectedSegmentValue && (
+        <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold">Selected from 2D chart</span>
+            <span className="font-mono" style={{ color: getStrainColor(selectedSegmentValue.strain, selectedStrainType) }}>
+              {selectedSegmentValue.strain > 0 ? "+" : ""}{selectedSegmentValue.strain.toFixed(1)}%
+            </span>
+          </div>
+          <p className="mt-1 text-muted-foreground">
+            The vertical marker below shows this frame on the global {selectedStrainType} curve.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-1">
         {(["GRS", "GCS", "GLS"] as const).map((type) => (
@@ -702,7 +782,7 @@ function StrainTab({
       <div className="rounded-lg border border-border bg-background p-3">
         <div className="mb-2 flex items-center justify-between">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-            Global {selectedStrainType} Curve
+            {selectedStrainSegment ? `Segment ${selectedStrainSegment}` : "Global"} {selectedStrainType} Curve
           </h4>
           <span className="text-[10px] text-muted-foreground">Time (ms)</span>
         </div>

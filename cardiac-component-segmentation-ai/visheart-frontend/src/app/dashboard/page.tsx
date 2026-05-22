@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "@/context/auth-context";
 import { useGpuStatus, useUserProjects, useUserJobs, useUserStats } from "@/lib/dashboard-hooks";
 import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStatus";
@@ -41,6 +41,8 @@ import {
   Trash2,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { projectApi, segmentationApi } from "@/lib/api";
 import { FileUploadDialog } from "@/components/upload/FileUploadDialog";
 import { SegmentationIndicator } from "@/components/dashboard/SegmentationIndicator";
@@ -93,6 +95,7 @@ const getRoleIcon = (role: string | undefined) => {
 
 export default function DashboardPage() {
   const { user, loading: authLoading, error: authError } = useAuth();
+  const router = useRouter();
   const isAuthenticated = Boolean(user);
   const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(isAuthenticated);
   const { recentJobs, isLoading: jobsLoading, refresh: refreshJobs } = useUserJobs(isAuthenticated);
@@ -162,6 +165,9 @@ export default function DashboardPage() {
 
   // State for upload dialog
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [walkthroughOpen, setWalkthroughOpen] = useState(false);
+  const [walkthroughStep, setWalkthroughStep] = useState(0);
+  const previousCompletedJobIds = useRef<Set<string> | null>(null);
 
   // State for delete confirmation dialog
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -243,6 +249,42 @@ export default function DashboardPage() {
   };
 
   const isLoadingData = projectsLoading || jobsLoading || gpuLoading || isLoadingReconstructionJobs;
+  const walkthroughSteps = [
+    {
+      title: "Upload a project",
+      body: "Start from Dashboard > New Project. Choose a .nii or .nii.gz file, name the project, then upload. After upload, VisHeart opens the project page automatically.",
+      actionLabel: "Open Upload",
+      action: () => setUploadDialogOpen(true),
+    },
+    {
+      title: "Save temporary projects",
+      body: "New projects start as Temp. Go to Dashboard > Projects and click the Temp badge to change it to Saved before logout.",
+      actionLabel: "Show Projects",
+      action: () => setWalkthroughOpen(false),
+    },
+    {
+      title: "Run the pipeline",
+      body: "Inside a project, start segmentation first. Use MedSAM when GPU is available or UNet when the server selects CPU-friendly processing.",
+      actionLabel: "Next",
+      action: () => setWalkthroughStep((step) => Math.min(step + 1, walkthroughSteps.length - 1)),
+    },
+    {
+      title: "Open the analysis tools",
+      body: "After segmentation, use Edit Segmentation Masks for refinements and Landmark Detection for automatic landmark and strain review.",
+      actionLabel: "Next",
+      action: () => setWalkthroughStep((step) => Math.min(step + 1, walkthroughSteps.length - 1)),
+    },
+    {
+      title: "Create and view 4D",
+      body: "Use Create 4D Reconstruction, choose the MedSAM or UNet source, then click View 4D once reconstruction is ready.",
+      actionLabel: "Open Project",
+      action: () => {
+        setWalkthroughOpen(false);
+        const firstProject = projects[0];
+        if (firstProject) router.push(`/project/${firstProject.projectId}`);
+      },
+    },
+  ];
 
   const refreshDashboard = async () => {
     if (user) {
@@ -309,8 +351,63 @@ export default function DashboardPage() {
     }
   };
 
-  const handleUploadSuccess = async () => {
+  useEffect(() => {
+    if (!user || isLoadingData) return;
+    const completedIds = new Set(allJobs.filter((job) => job.status === "completed").map((job) => `${job.jobType}-${job.jobId}`));
+
+    if (previousCompletedJobIds.current) {
+      allJobs
+        .filter((job) => job.status === "completed")
+        .forEach((job) => {
+          const id = `${job.jobType}-${job.jobId}`;
+          if (!previousCompletedJobIds.current?.has(id)) {
+            toast.success(`${job.jobType === "segmentation" ? "Segmentation" : "4D reconstruction"} completed`, {
+              description: `${getProjectName(job.projectId)} is ready to review.`,
+              action: {
+                label: "Open",
+                onClick: () => router.push(`/project/${job.projectId}`),
+              },
+            });
+          }
+        });
+    }
+
+    previousCompletedJobIds.current = completedIds;
+  }, [allJobs, isLoadingData, router, user]);
+
+  useEffect(() => {
+    if (!user || typeof window === "undefined") return;
+    const dismissed = localStorage.getItem("visheart-dashboard-walkthrough-dismissed");
+    if (!dismissed) setWalkthroughOpen(true);
+  }, [user]);
+
+  const handleUploadSuccess = async (result?: any) => {
+    const beforeIds = new Set(projects.map((project) => project.projectId));
     await refreshProjects();
+    const firstBatchResult = Array.isArray(result?.results) ? result.results[0] : undefined;
+    const uploadedProjectId =
+      result?.projectId ??
+      result?.project?._id ??
+      result?.project?.projectId ??
+      result?.data?.projectId ??
+      result?.projects?.[0]?.projectId ??
+      firstBatchResult?.projectId ??
+      firstBatchResult?.project?._id ??
+      firstBatchResult?.projects?.[0]?.projectId;
+
+    if (uploadedProjectId) {
+      router.push(`/project/${uploadedProjectId}`);
+      return;
+    }
+
+    setTimeout(async () => {
+      const response = await projectApi.getProjects();
+      const nextProjects = response.projects ?? [];
+      const newProject = nextProjects.find((project: { projectId: string }) => !beforeIds.has(project.projectId));
+      if (newProject?.projectId) {
+        router.push(`/project/${newProject.projectId}`);
+      }
+    }, 400);
   };
 
   if (authLoading) {
@@ -519,7 +616,7 @@ export default function DashboardPage() {
                   <Link href="/admin">
                     <Button variant="outline" className="w-full justify-start">
                       <Shield className="mr-2 h-4 w-4" />
-                      Admin Panel
+                      Go to Admin Panel
                     </Button>
                   </Link>
                 )}
@@ -539,8 +636,19 @@ export default function DashboardPage() {
                   .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
                   .slice(0, 4)
                   .map((project) => (
-                    <Link key={project.projectId} href={`/project/${project.projectId}`}>
-                      <div className="flex items-center justify-between rounded-lg border p-2 hover:bg-accent hover:text-accent-foreground transition-colors cursor-pointer">
+                    <div
+                      key={project.projectId}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => router.push(`/project/${project.projectId}`)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          router.push(`/project/${project.projectId}`);
+                        }
+                      }}
+                      className="flex items-center justify-between rounded-lg border p-2 hover:bg-accent hover:text-accent-foreground transition-colors cursor-pointer"
+                    >
                         <div className="flex items-center gap-3">
                           <FileText className="text-muted-foreground h-4 w-4" />
                           <div>
@@ -550,9 +658,23 @@ export default function DashboardPage() {
                             </p>
                           </div>
                         </div>
-                        <Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>
-                      </div>
-                    </Link>
+                        <ShowForRegisteredUser fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto p-1"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleSaveProject(project.projectId, !project.isSaved);
+                            }}
+                            title={`Click to ${project.isSaved ? "mark as temporary" : "save permanently"}`}
+                          >
+                            <Badge variant={project.isSaved ? "default" : "secondary"} className="cursor-pointer hover:opacity-80">
+                              {project.isSaved ? "Saved" : "Temp"}
+                            </Badge>
+                          </Button>
+                        </ShowForRegisteredUser>
+                    </div>
                   ))}
                 {projects.length === 0 && <p className="text-muted-foreground py-4 text-center text-sm">No projects yet. Upload your first project to get started.</p>}
               </CardContent>
@@ -1065,6 +1187,61 @@ export default function DashboardPage() {
 
       {/* File Upload Dialog */}
       <FileUploadDialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen} onUploadSuccess={handleUploadSuccess} />
+
+      {/* First-run walkthrough */}
+      <AlertDialog open={walkthroughOpen} onOpenChange={setWalkthroughOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{walkthroughSteps[walkthroughStep].title}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {walkthroughSteps[walkthroughStep].body}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex items-center justify-center gap-1 py-1">
+            {walkthroughSteps.map((step, index) => (
+              <button
+                key={step.title}
+                type="button"
+                aria-label={`Go to walkthrough step ${index + 1}`}
+                onClick={() => setWalkthroughStep(index)}
+                className={`h-1.5 rounded-full transition-all ${index === walkthroughStep ? "w-6 bg-primary" : "w-2 bg-muted-foreground/30"}`}
+              />
+            ))}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                localStorage.setItem("visheart-dashboard-walkthrough-dismissed", "true");
+                setWalkthroughOpen(false);
+              }}
+            >
+              Skip
+            </AlertDialogCancel>
+            {walkthroughStep > 0 && (
+              <Button variant="outline" onClick={() => setWalkthroughStep((step) => Math.max(step - 1, 0))}>
+                Back
+              </Button>
+            )}
+            {walkthroughStep < walkthroughSteps.length - 1 ? (
+              <AlertDialogAction onClick={(event) => {
+                event.preventDefault();
+                setWalkthroughStep((step) => Math.min(step + 1, walkthroughSteps.length - 1));
+              }}>
+                Next
+              </AlertDialogAction>
+            ) : (
+              <AlertDialogAction
+                onClick={() => {
+                  localStorage.setItem("visheart-dashboard-walkthrough-dismissed", "true");
+                  walkthroughSteps[walkthroughStep].action();
+                }}
+              >
+                {walkthroughSteps[walkthroughStep].actionLabel}
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

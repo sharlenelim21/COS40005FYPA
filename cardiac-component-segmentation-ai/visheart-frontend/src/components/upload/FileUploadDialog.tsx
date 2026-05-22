@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,21 +14,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Upload,
-  File,
-  FolderOpen,
-  X,
-  CheckCircle,
-  AlertCircle,
-  Loader2,
-} from "lucide-react";
+import { Upload, File, X, AlertCircle, Loader2 } from "lucide-react";
 import { projectApi } from "@/lib/api";
 
 interface FileUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onUploadSuccess?: () => void;
+  onUploadSuccess?: (result?: any) => void;
 }
 
 interface FileDetails {
@@ -39,26 +31,38 @@ interface FileDetails {
   lastModified: Date;
 }
 
+const friendlySuccessMessage =
+  "Your files are uploading. Each file will be created as its own project.";
+
+const stripMedicalExtension = (filename: string) =>
+  filename.replace(/\.(nii\.gz|nii|dcm|zip)$/i, "");
+
+const getUploadErrorMessage = (error: any) => {
+  if (error.response?.status === 409) {
+    return "An existing project with an identical file already exists. Please edit that project or delete it before uploading a new one to prevent server overload.";
+  }
+
+  return (
+    error.response?.data?.message ||
+    error.response?.data?.error ||
+    error.message ||
+    "Failed to upload file. Please try again."
+  );
+};
+
 export function FileUploadDialog({
   open,
   onOpenChange,
   onUploadSuccess,
 }: FileUploadDialogProps) {
-  const [selectedFile, setSelectedFile] = useState<FileDetails | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<FileDetails[]>([]);
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Supported file types for medical imaging
-  const supportedTypes = [
-    ".nii",
-    ".nii.gz",
-    "application/gzip",
-    "application/x-gzip",
-  ];
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 Bytes";
@@ -69,49 +73,52 @@ export function FileUploadDialog({
   };
 
   const validateFile = (file: File): string | null => {
-    // Check file size (limit to 500MB)
-    const maxSize = 500 * 1024 * 1024; // 500MB
+    const maxSize = 500 * 1024 * 1024;
+    const lowerName = file.name.toLowerCase();
+
     if (file.size > maxSize) {
-      return "File size must be less than 500MB";
+      return `${file.name}: file size must be less than 500MB`;
     }
 
-    // Check file type
-    const isValidType = supportedTypes.some(
-      (type) =>
-        file.name.toLowerCase().endsWith(type.toLowerCase()) ||
-        file.type === type,
-    );
+    const isValidType =
+      lowerName.endsWith(".nii") ||
+      lowerName.endsWith(".nii.gz") ||
+      lowerName.endsWith(".dcm") ||
+      lowerName.endsWith(".zip") ||
+      file.type === "application/gzip" ||
+      file.type === "application/x-gzip" ||
+      file.type === "application/dicom" ||
+      file.type === "application/zip" ||
+      file.type === "application/x-zip-compressed";
 
     if (!isValidType) {
-      return "Please select a valid medical imaging file (.nii, .nii.gz)";
+      return `${file.name}: please select .nii, .nii.gz, .dcm, or .zip files.`;
     }
 
     return null;
   };
 
-  const handleFileSelect = (file: File) => {
-    const error = validateFile(file);
-    if (error) {
-      setUploadError(error);
+  const handleFilesSelect = (files: File[]) => {
+    const errors = files.map(validateFile).filter(Boolean) as string[];
+    if (errors.length > 0) {
+      setUploadError(errors[0]);
       return;
     }
 
-    setUploadError(null);
-    setSelectedFile({
+    const nextFiles = files.map((file) => ({
       file,
       name: file.name,
       size: file.size,
       type: file.type || "Unknown",
       lastModified: new Date(file.lastModified),
-    });
+    }));
 
-    // Auto-fill project name from filename
-    if (!projectName) {
-      const nameWithoutExt = file.name.replace(
-        /\.(nii|nii\.gz)$/i,
-        "",
-      );
-      setProjectName(nameWithoutExt);
+    setUploadError(null);
+    setUploadNotice(files.length > 1 ? friendlySuccessMessage : null);
+    setSelectedFiles(nextFiles);
+
+    if (nextFiles.length === 1 && !projectName) {
+      setProjectName(stripMedicalExtension(nextFiles[0].name));
     }
   };
 
@@ -139,80 +146,88 @@ export function FileUploadDialog({
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
-      handleFileSelect(files[0]);
+      handleFilesSelect(files);
     }
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      handleFileSelect(files[0]);
+      handleFilesSelect(Array.from(files));
     }
   };
 
   const handleUpload = async () => {
-    if (!selectedFile || !projectName.trim()) {
-      setUploadError("Please select a file and provide a project name");
+    const isSingleUpload = selectedFiles.length === 1;
+    if (selectedFiles.length === 0 || (isSingleUpload && !projectName.trim())) {
+      setUploadError("Please select a file and provide a project name.");
       return;
     }
 
     setIsUploading(true);
     setUploadError(null);
 
+    const results: any[] = [];
     try {
-      const formData = new FormData();
-      formData.append("files", selectedFile.file);
-      formData.append("name", projectName.trim());
-      if (description.trim()) {
-        formData.append("description", description.trim());
+      for (const fileDetails of selectedFiles) {
+        const formData = new FormData();
+        formData.append("files", fileDetails.file);
+        formData.append(
+          "name",
+          isSingleUpload ? projectName.trim() : stripMedicalExtension(fileDetails.name),
+        );
+        if (description.trim()) {
+          formData.append("description", description.trim());
+        }
+
+        results.push(await projectApi.uploadProject(formData));
       }
 
-      await projectApi.uploadProject(formData);
-
-      // Reset form
-      setSelectedFile(null);
+      setSelectedFiles([]);
       setProjectName("");
       setDescription("");
+      setUploadNotice(null);
 
-      // Close dialog and trigger refresh
       onOpenChange(false);
-      onUploadSuccess?.();
+      onUploadSuccess?.(
+        results.length === 1
+          ? results[0]
+          : { success: true, batch: true, results },
+      );
     } catch (error: any) {
-      console.error("Upload error:", error);
-
-      // Handle specific error cases
-      if (error.response?.status === 409) {
-        setUploadError(
-          "An existing project with an identical file already exists. Please edit that project or delete it before uploading a new one to prevent server overload.",
-        );
-      } else {
-        setUploadError(
-          error.response?.data?.message ||
-            error.message ||
-            "Failed to upload file. Please try again.",
-        );
-      }
+      const progress = results.length > 0 ? ` Uploaded ${results.length} of ${selectedFiles.length} files.` : "";
+      setUploadError(`${getUploadErrorMessage(error)}${progress}`);
     } finally {
       setIsUploading(false);
     }
   };
 
   const handleCancel = () => {
-    setSelectedFile(null);
+    setSelectedFiles([]);
     setProjectName("");
     setDescription("");
     setUploadError(null);
+    setUploadNotice(null);
     setIsUploading(false);
     onOpenChange(false);
   };
 
-  const removeSelectedFile = () => {
-    setSelectedFile(null);
+  const removeSelectedFile = (index: number) => {
+    const nextFiles = selectedFiles.filter((_, fileIndex) => fileIndex !== index);
+    setSelectedFiles(nextFiles);
     setUploadError(null);
+    setUploadNotice(nextFiles.length > 1 ? friendlySuccessMessage : null);
+    if (nextFiles.length !== 1) {
+      setProjectName("");
+    } else {
+      setProjectName(stripMedicalExtension(nextFiles[0].name));
+    }
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
+
+  const isSingleUpload = selectedFiles.length === 1;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -220,14 +235,12 @@ export function FileUploadDialog({
         <DialogHeader>
           <DialogTitle>Upload New Project</DialogTitle>
           <DialogDescription>
-            Select a medical imaging file (.nii, .nii.gz, .dcm) to create a new
-            project
+            Select one or more medical imaging files to create projects in one upload flow.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* File Upload Area */}
-          {!selectedFile ? (
+          {selectedFiles.length === 0 ? (
             <div
               className={`relative rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
                 dragActive
@@ -242,7 +255,8 @@ export function FileUploadDialog({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".nii,.nii.gz"
+                multiple
+                accept=".nii,.nii.gz,.dcm,.zip"
                 onChange={handleFileInputChange}
                 className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
               />
@@ -255,68 +269,77 @@ export function FileUploadDialog({
                     Drop files here or click to browse
                   </p>
                   <p className="text-xs text-gray-500">
-                    Supports .nii, .nii.gz, .dcm files up to 500MB
+                    Supports multiple .nii, .nii.gz, .dcm, or .zip files up to 500MB each
                   </p>
                 </div>
               </div>
             </div>
           ) : (
-            /* Selected File Preview */
             <div className="space-y-3 rounded-lg border p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
-                    <File className="h-5 w-5 text-blue-600" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-foreground truncate text-sm font-medium">
-                      {selectedFile.name}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {formatFileSize(selectedFile.size)} • {selectedFile.type}
-                    </p>
-                  </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">
+                    {selectedFiles.length} file{selectedFiles.length > 1 ? "s" : ""} selected
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Each scan will become a separate project. ZIP files are extracted on the server.
+                  </p>
                 </div>
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  onClick={removeSelectedFile}
-                  className="h-8 w-8 p-0"
+                  onClick={() => {
+                    setSelectedFiles([]);
+                    setProjectName("");
+                    setUploadNotice(null);
+                  }}
                 >
-                  <X className="h-4 w-4" />
+                  Clear
                 </Button>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 text-xs">
-                <div>
-                  <span className="text-gray-500">Size:</span>
-                  <p className="font-medium">
-                    {formatFileSize(selectedFile.size)}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-gray-500">Modified:</span>
-                  <p className="font-medium">
-                    {selectedFile.lastModified.toLocaleDateString()}
-                  </p>
-                </div>
+              <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+                {selectedFiles.map((selectedFile, index) => (
+                  <div key={`${selectedFile.name}-${selectedFile.lastModified.getTime()}`} className="flex items-center justify-between rounded-md border p-2">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100">
+                        <File className="h-4 w-4 text-blue-600" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{selectedFile.name}</p>
+                        <p className="text-xs text-gray-500">
+                          {formatFileSize(selectedFile.size)} - {selectedFile.type}
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeSelectedFile(index)}
+                      className="h-8 w-8 shrink-0 p-0"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
-          {/* Project Details */}
-          {selectedFile && (
+          {selectedFiles.length > 0 && (
             <div className="space-y-3">
-              <div>
-                <Label htmlFor="projectName">Project Name *</Label>
-                <Input
-                  id="projectName"
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
-                  placeholder="Enter project name"
-                  className="mt-1"
-                />
-              </div>
+              {isSingleUpload && (
+                <div>
+                  <Label htmlFor="projectName">Project Name *</Label>
+                  <Input
+                    id="projectName"
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    placeholder="Enter project name"
+                    className="mt-1"
+                  />
+                </div>
+              )}
 
               <div>
                 <Label htmlFor="description">Description (Optional)</Label>
@@ -324,7 +347,7 @@ export function FileUploadDialog({
                   id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Enter project description"
+                  placeholder={isSingleUpload ? "Enter project description" : "Apply one description to all uploaded projects"}
                   className="mt-1 resize-none"
                   rows={3}
                 />
@@ -332,7 +355,13 @@ export function FileUploadDialog({
             </div>
           )}
 
-          {/* Error Alert */}
+          {uploadNotice && (
+            <Alert>
+              <Upload className="h-4 w-4" />
+              <AlertDescription>{uploadNotice}</AlertDescription>
+            </Alert>
+          )}
+
           {uploadError && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
@@ -351,7 +380,7 @@ export function FileUploadDialog({
           </Button>
           <Button
             onClick={handleUpload}
-            disabled={!selectedFile || !projectName.trim() || isUploading}
+            disabled={selectedFiles.length === 0 || (isSingleUpload && !projectName.trim()) || isUploading}
           >
             {isUploading ? (
               <>
@@ -361,7 +390,7 @@ export function FileUploadDialog({
             ) : (
               <>
                 <Upload className="mr-2 h-4 w-4" />
-                Upload to Cloud
+                {selectedFiles.length > 1 ? `Upload ${selectedFiles.length} Projects` : "Upload to Cloud"}
               </>
             )}
           </Button>

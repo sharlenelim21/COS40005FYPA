@@ -5,8 +5,6 @@ import type { Metadata } from "next";
 import {
   Shield,
   Users,
-  BarChart3,
-  Database,
   Activity,
   Eye,
   EyeOff,
@@ -53,20 +51,22 @@ const adminNavigation: NavigationItem[] = [
     description: "Manage users, roles, and permissions",
     status: "active",
   },
-  {
-    title: "AWS Analytics",
-    href: "/admin/analytics",
-    icon: BarChart3,
-    description: "View AWS metrics and reports",
-    status: "active",
-  },
-  {
-    title: "Database Management",
-    href: "/admin/database",
-    icon: Database,
-    description: "Manage database operations and backups",
-    status: "coming-soon",
-  },
+  // Hidden for current client scope. Restore when AWS analytics is needed.
+  // {
+  //   title: "AWS Analytics",
+  //   href: "/admin/analytics",
+  //   icon: BarChart3,
+  //   description: "View AWS metrics and reports",
+  //   status: "active",
+  // },
+  // Hidden for current client scope. Restore when database tools are needed.
+  // {
+  //   title: "Database Management",
+  //   href: "/admin/database",
+  //   icon: Database,
+  //   description: "Manage database operations and backups",
+  //   status: "coming-soon",
+  // },
   {
     title: "System Monitor & Configuration",
     href: "/admin/system-monitor",
@@ -127,7 +127,7 @@ function AdminNavigationCard({
     <Card
       onContextMenu={(event) => onRightClick?.(event, item)}
       className={cn(
-        "group relative overflow-hidden transition-all duration-200",
+        "group relative h-full min-h-[170px] overflow-hidden transition-all duration-200",
         isActive && !isHidden && "bg-blue-50/50 ring-2 ring-blue-500 dark:bg-blue-950/20",
         !isComingSoon && !isHidden && "cursor-pointer hover:scale-[1.02] hover:shadow-md",
         isComingSoon && !isHidden && "cursor-not-allowed opacity-60",
@@ -222,7 +222,7 @@ function AdminNavigationCard({
   }
 
   return (
-    <Link href={item.href} className="block">
+    <Link href={item.href} className="block h-full">
       {cardContent}
     </Link>
   );
@@ -410,7 +410,7 @@ export default function AdminLayout({
               </div>
 
               {/* Navigation grid - responsive layout */}
-              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid auto-rows-fr gap-6 md:grid-cols-2 lg:grid-cols-3">
                 {visibleAdminNavigation.map((item) => {
                   return (
                     <AdminNavigationCard

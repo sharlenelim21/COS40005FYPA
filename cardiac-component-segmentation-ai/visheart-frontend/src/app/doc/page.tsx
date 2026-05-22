@@ -122,12 +122,12 @@ const DocPage = () => {
         );
         const data = await response.json();
         if (!response.ok || !data.success) {
-          throw new Error(data.message || "Documentation search failed.");
+          throw new Error(data.message || "User guide search failed.");
         }
         setDocResults(Array.isArray(data.results) ? data.results : []);
       } catch (error) {
         if (!controller.signal.aborted) {
-          setDocSearchError(error instanceof Error ? error.message : "Documentation search failed.");
+          setDocSearchError(error instanceof Error ? error.message : "User guide search failed.");
           setDocResults([]);
         }
       } finally {
@@ -205,7 +205,7 @@ const DocPage = () => {
   }) => (
     <>
       <div className="p-4 md:p-6 border-b">
-        <h2 className="font-semibold text-lg">Documentation</h2>
+        <h2 className="font-semibold text-lg">User Guide</h2>
         <p className="text-sm text-muted-foreground">VisHeart Platform Guide</p>
       </div>
       <ScrollArea className="flex-1">
@@ -243,7 +243,7 @@ const DocPage = () => {
         <div className="md:hidden border-b bg-background sticky top-0 z-50">
           <div className="flex items-center justify-between p-4">
             <div>
-              <h2 className="font-semibold text-lg">Documentation</h2>
+              <h2 className="font-semibold text-lg">User Guide</h2>
               <p className="text-sm text-muted-foreground">
                 VisHeart Platform Guide
               </p>
@@ -1122,7 +1122,7 @@ const DocPage = () => {
                         Open a project and choose <strong>Landmark Detection</strong> from the project workflow card. The page loads the MRI frame data, available masks, model selector, and visualization panels.
                       </p>
                       <ul className="text-sm text-muted-foreground space-y-1">
-                        <li>Click <strong>Run Detection</strong> to send the project through the landmark endpoint.</li>
+                        <li>Open the landmark page to start detection automatically using the server-selected model.</li>
                         <li>Use the default UNetResNet34 landmark model unless another model is added later.</li>
                         <li>An optional replacement NIfTI file can be selected from the sidebar for testing.</li>
                       </ul>
@@ -1547,6 +1547,7 @@ const DocPage = () => {
 
         {/* FAQ Button */}
         <Button
+          id="faq"
           className="fixed bottom-6 right-6"
           onClick={() => setShowFAQ(true)}
         >

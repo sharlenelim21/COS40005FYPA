@@ -22,6 +22,7 @@ import type { Viewport } from "next";
 import { ThemeProvider } from "@/lib/theme-provider";
 
 import { AuthProvider } from "@/context/auth-context";
+import { FloatingFAQButton } from "@/components/FloatingFAQButton";
 
 export const metadata: Metadata = {
   title: "VisHeart",
@@ -60,6 +61,7 @@ export default function RootLayout({
           <AuthProvider>
             <Header />
             {children}
+            <FloatingFAQButton />
             <Footer />
           </AuthProvider>
         </ThemeProvider>
