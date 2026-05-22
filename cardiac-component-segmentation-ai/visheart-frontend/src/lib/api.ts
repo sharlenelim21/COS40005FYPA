@@ -1308,5 +1308,4 @@ export const analyticsApi = {
   }
 };
 
-<<<<<<< HEAD
 export default api;

@@ -681,7 +681,4 @@ export function ReconstructionGLBViewer({
       </div>
     </div>
   );
-<<<<<<< HEAD
-}
-=======
 }

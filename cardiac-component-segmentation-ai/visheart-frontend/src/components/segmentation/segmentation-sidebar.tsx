@@ -603,7 +603,4 @@ export function SegmentationSidebar({
       </div>
     </div>
   );
-<<<<<<< HEAD
-}
-=======
 }

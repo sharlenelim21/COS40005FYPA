@@ -83,41 +83,6 @@ const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; descr
   },
 };
 
-=======
-  /**
-   * Models that have a usable cached editable/manual segmentation
-   * for this project. Anything not in the set is rendered disabled
-   * with an explanatory tooltip. If the set is empty, Start is
-   * disabled and a banner tells the user to run segmentation first.
-   */
-  availableModels?: ReconstructionSegmentationModel[];
-  /**
-   * Models whose 4D reconstruction slot is already occupied by an
-   * existing result. These remain visible but cannot be selected again
-   * until the existing result is deleted.
-   */
-  blockedModels?: ReconstructionSegmentationModel[];
-  /**
-   * Initial selection. Caller should pass the segmentation toggle's
-   * current model (so the dialog defaults to whatever the user is
-   * currently viewing). Falls back to the first available model if
-   * the requested default is unavailable.
-   */
-  defaultSelectedModel?: ReconstructionSegmentationModel;
-}
-
-const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
-  medsam: {
-    label: "MedSAM",
-    description: "GPU-accelerated bounding-box segmentation",
-  },
-  unet: {
-    label: "UNet",
-    description: "End-to-end neural segmentation, runs on CPU or GPU",
-  },
-};
-
->>>>>>> backup-finalsprint3
 export function ReconstructionConfigDialog({
   open,
   onOpenChange,
