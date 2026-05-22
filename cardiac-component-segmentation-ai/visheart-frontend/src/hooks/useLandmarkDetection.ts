@@ -48,10 +48,13 @@ export function useLandmarkDetection(
   }));
 
   const [replacementFileError, setReplacementFileError] = useState<string | null>(null);
-  const rafRef       = useRef<number | null>(null);
-  const lastTickRef  = useRef<number>(0);
-  const isPlayingRef = useRef<boolean>(false);   
-  const playbackFpsRef = useRef<number>(DEFAULT_PLAYBACK_FPS);
+  const rafRef          = useRef<number | null>(null);
+  const lastTickRef     = useRef<number>(0);
+  const isPlayingRef    = useRef<boolean>(false);
+  const playbackFpsRef  = useRef<number>(DEFAULT_PLAYBACK_FPS);
+  // Indices into state.predictions to cycle during playback.
+  // Populated just before playback starts; empty = play all.
+  const playIndicesRef  = useRef<number[]>([]);
 
   const startPlaybackLoop = useCallback(() => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -64,7 +67,14 @@ export function useLandmarkDetection(
         lastTickRef.current = now;
         setState((s) => {
           if (!s.isPlaying || s.totalFrames < 2) return s;
-          return { ...s, currentFrame: (s.currentFrame + 1) % s.totalFrames };
+          const indices = playIndicesRef.current;
+          if (indices.length < 2) {
+            // Fall back to all frames
+            return { ...s, currentFrame: (s.currentFrame + 1) % s.totalFrames };
+          }
+          const pos = indices.indexOf(s.currentFrame);
+          const next = pos === -1 ? indices[0] : indices[(pos + 1) % indices.length];
+          return { ...s, currentFrame: next };
         });
       }
 
@@ -97,11 +107,23 @@ export function useLandmarkDetection(
         status: "done",
         predictions: result.predictions,
         totalFrames: result.total_frames,
-        imageDimensions: result.image_dimensions,
+        // Only update dimensions when the result carries real values.
+        // New GPU format omits image_dimensions (returns {width:0,height:0});
+        // keep existing project dimensions so the canvas scales correctly.
+        imageDimensions:
+          result.image_dimensions?.width > 0
+            ? result.image_dimensions
+            : s.imageDimensions,
         currentFrame: 0,
         modelUsed: result.model_used,
         error: null,
         isPlaying: false,
+        avgLm1: result.avg_lm1,
+        avgLm2: result.avg_lm2,
+        nTotal: result.n_total,
+        nCollapsed: result.n_collapsed,
+        n2ch: result.n_2ch,
+        n1chFallback: result.n_1ch_fallback,
       }));
     },
     [],
@@ -118,7 +140,7 @@ export function useLandmarkDetection(
   }, [projectId]); 
   
   const handleRunDetection = useCallback(
-    async (model = DEFAULT_LANDMARK_MODEL) => {
+    async (model = DEFAULT_LANDMARK_MODEL, segmentationModel = "medsam") => {
       if (state.status === "running") return;
 
       stopPlayback();
@@ -134,7 +156,7 @@ export function useLandmarkDetection(
             model,
           );
         } else {
-          result = await landmarkApi.runDetectionByProject(projectId, model);
+          result = await landmarkApi.runDetectionByProject(projectId, model, segmentationModel);
         }
 
         if (!result.predictions.length) {
@@ -163,11 +185,11 @@ export function useLandmarkDetection(
 
   /** Force a fresh run, bypassing cache. */
   const handleRerunDetection = useCallback(
-    (model = DEFAULT_LANDMARK_MODEL) => {
+    (model = DEFAULT_LANDMARK_MODEL, segmentationModel = "medsam") => {
       landmarkApi.invalidateCache(projectId);
       setState((s) => ({ ...s, status: "idle", predictions: [], error: null }));
       // Re-run after state flush
-      setTimeout(() => handleRunDetection(model), 0);
+      setTimeout(() => handleRunDetection(model, segmentationModel), 0);
     },
     [projectId, handleRunDetection],
   );
@@ -206,11 +228,17 @@ export function useLandmarkDetection(
 
   const handlePlay = useCallback(() => {
     if (state.status !== "done" || state.totalFrames < 2) return;
+    // Compute confident indices — flag=normal AND confidence=high
+    const confident = state.predictions
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => p.flag === "normal" && p.confidence === "high")
+      .map(({ i }) => i);
+    playIndicesRef.current = confident.length >= 2 ? confident : [];
     isPlayingRef.current = true;
     lastTickRef.current = 0;
     setState((s) => ({ ...s, isPlaying: true }));
     startPlaybackLoop();
-  }, [state.status, state.totalFrames, startPlaybackLoop]);
+  }, [state.status, state.totalFrames, state.predictions, startPlaybackLoop]);
 
   const handlePause = useCallback(() => stopPlayback(), [stopPlayback]);
 
@@ -266,10 +294,15 @@ export function useLandmarkDetection(
   const currentPrediction: FramePrediction | null =
     state.predictions[state.currentFrame] ?? null;
 
+  const confidentCount = state.predictions.filter(
+    (p) => p.flag === "normal" && p.confidence === "high",
+  ).length;
+
   return {
     state,
     replacementFileError,
     currentPrediction,
+    confidentCount,
     handleRunDetection,
     handleRerunDetection,
     handleFileSelect,

@@ -66,6 +66,12 @@ interface ReconstructionConfigDialogProps {
   defaultSelectedModel?: ReconstructionSegmentationModel;
   existingReconstructionsByModel?: Partial<Record<ReconstructionSegmentationModel, string>>;
   onViewReconstruction?: (model: ReconstructionSegmentationModel, reconstructionId?: string) => void;
+  /**
+   * Whether a GPU is available in the current environment.
+   * When false, MedSAM cards show "GPU required" instead of
+   * "Run MedSAM segmentation first", so CPU users are not misled.
+   */
+  gpuAvailable?: boolean;
 }
 
 const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
@@ -90,6 +96,7 @@ export function ReconstructionConfigDialog({
   defaultSelectedModel,
   existingReconstructionsByModel,
   onViewReconstruction,
+  gpuAvailable = true,
 }: ReconstructionConfigDialogProps) {
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
@@ -194,6 +201,8 @@ export function ReconstructionConfigDialog({
                         ? `A 4D reconstruction already exists for ${MODEL_META[m].label}. Delete the existing result before creating a new one.`
                         : isAvailable
                         ? `Use cached ${MODEL_META[m].label} segmentation as input`
+                        : (!gpuAvailable && m === "medsam")
+                        ? "MedSAM requires an NVIDIA GPU. Only UNet is available in CPU mode."
                         : `No cached segmentation found for ${MODEL_META[m].label}. Run ${MODEL_META[m].label} segmentation first.`
                     }
                     className={cn(
@@ -252,7 +261,9 @@ export function ReconstructionConfigDialog({
                     )}
                     {!hasSegmentation && (
                       <div className="text-[11px] text-muted-foreground mt-1.5">
-                        No cached segmentation
+                        {!gpuAvailable && m === "medsam"
+                          ? "GPU required"
+                          : "No cached segmentation"}
                       </div>
                     )}
                   </div>

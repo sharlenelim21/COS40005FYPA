@@ -106,7 +106,12 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
     }
 
     const result = req.body?.result;
-    if (!result?.predictions?.length) {
+    // Accept both response formats:
+    //   Old format: { predictions: [...], total_frames, model_used, image_dimensions }
+    //   New format: { slices: [...], avg_lm1, avg_lm2, n_total, n_collapsed, n_2ch, n_1ch_fallback }
+    const hasOldFormat = Array.isArray(result?.predictions) && result.predictions.length > 0;
+    const hasNewFormat = Array.isArray(result?.slices) && result.slices.length > 0;
+    if (!hasOldFormat && !hasNewFormat) {
       await updateJob(gpuJobId, {
         status: JobStatus.FAILED,
         message: "Landmark callback did not include predictions.",

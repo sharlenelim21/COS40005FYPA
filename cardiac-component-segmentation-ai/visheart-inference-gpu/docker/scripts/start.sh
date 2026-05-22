@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 
 # This script is used to start the FastAPI server for the visheart project
 # and is intended to be called from the Docker Container.

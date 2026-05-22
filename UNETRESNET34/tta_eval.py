@@ -17,7 +17,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader, Subset
 
-from dataset.landmark_dataset import LandmarkDataset
+from UNETRESNET34.dataset.acdc_landmark_dataset import LandmarkDataset
 from models.unet_resnet34 import UNetResNet34
 from utils.postprocess import gaussian_subpixel_argmax  
 from utils.metrics import compute_mre, compute_sdr, compute_mre_percentiles, compute_per_sample_mre

@@ -108,8 +108,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
       }
     } catch (err: any) {
-      const errorMessage =
-        err.response?.data?.message || err.message || "Login failed";
+      const status = err.response?.status;
+      const data = err.response?.data;
+      let errorMessage = data?.message || err.message || "Login failed";
+      if (status === 429) {
+        errorMessage = data?.message ?? "Too many login attempts. Please try again in 10 minutes.";
+      } else if (status === 423) {
+        const mins = data?.minutesRemaining;
+        errorMessage = data?.message ?? `Account locked. Try again in ${mins ?? 10} minute${mins !== 1 ? "s" : ""}.`;
+      }
       setError(errorMessage);
       throw err;
     } finally {

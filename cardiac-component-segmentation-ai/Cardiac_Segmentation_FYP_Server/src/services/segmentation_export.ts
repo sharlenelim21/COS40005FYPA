@@ -416,32 +416,27 @@ export const generateAISegmentationForReconstruction = async (
         // Generate presigned URL for GPU server access
         const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);
 
-        // Fire bullseye analysis non-blocking for ALL editable masks in the project
-        // (not just exportMask) so both MedSAM and UNet editable masks get bullseye data.
+        // Fire bullseye analysis non-blocking for ALL editable masks in the project,
+        // using each mask's own RLE frame data so MedSAM and UNet produce independent results.
         const allEditableMasks = hasMasksResult.projectsegmentationmasks!.filter(
             m => m.isMedSAMOutput === false
         );
         for (const editableMaskForBullseye of allEditableMasks) {
             const bullseyeMaskId = editableMaskForBullseye._id?.toString();
             if (!bullseyeMaskId) continue;
-            const bullseyeTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_${bullseyeMaskId}_${tempExportId}`);
-            const bullseyeCopyPath = path.join(bullseyeTempDir, 'input.nii.gz');
-            try {
-                await fs.ensureDir(bullseyeTempDir);
-                await fs.copy(localOutputSegmentationNiftiPath, bullseyeCopyPath);
-                // Launch async — intentionally not awaited; cleans up its own temp dir
-                (async () => {
-                    try {
-                        await computeBullseyeAndStore(bullseyeCopyPath, bullseyeMaskId, projectId);
-                    } finally {
-                        try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
-                    }
-                })();
-                logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
-            } catch (bullseyeCopyErr: any) {
-                logger.warn(`${serviceLocation}: [Bullseye] Failed to copy NIfTI for bullseye on mask ${bullseyeMaskId} — skipping: ${bullseyeCopyErr?.message}`);
-                try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
+
+            const maskFrames = editableMaskForBullseye.frames ?? [];
+            if (!maskFrames.length) {
+                logger.warn(`${serviceLocation}: [Bullseye] Skipping mask ${bullseyeMaskId} (${editableMaskForBullseye.name}) — no frame data`);
+                continue;
             }
+
+            // Use each mask's own RLE frame data (not the shared reconstruction NIfTI)
+            computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE)
+                .catch((err: any) => {
+                    logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
+                });
+            logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
         }
 
         return {

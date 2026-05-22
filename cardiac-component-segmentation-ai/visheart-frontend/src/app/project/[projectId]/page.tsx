@@ -138,6 +138,8 @@ export default function ProjectPage() {
       if (name.includes("medsam")) return "medsam";
       const tag = ((m?.segmentationModel || m?.model_used || "") + "").toLowerCase();
       if (tag === "medsam" || tag === "unet") return tag;
+      // Do not guess "medsam" for generic names — they predate per-model tagging
+      // and could belong to UNet on CPU environments.
       return null;
     };
     const found = new Set<"medsam" | "unet">();
@@ -1625,6 +1627,7 @@ export default function ProjectPage() {
         defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
         existingReconstructionsByModel={existing4DByModel}
         onViewReconstruction={goToReconstructionViewer}
+        gpuAvailable={processingUnit.gpuAvailable}
       />
 
       {/* Delete Model Reconstruction Confirmation Dialog */}
@@ -1662,47 +1665,6 @@ export default function ProjectPage() {
                 <>
                   <Trash2 className="h-4 w-4 mr-2" />
                   Delete
-                </>
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Delete Reconstruction Confirmation Dialog */}
-      <AlertDialog open={deleteReconstructionDialogOpen} onOpenChange={setDeleteReconstructionDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Reconstruction</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-3">
-              <p>
-                Are you sure you want to delete the 4D reconstruction for &quot;{currentProjectName}&quot;?
-              </p>
-              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                <p className="text-sm text-amber-900 dark:text-amber-100">
-                  <strong>Note:</strong> This will permanently delete all mesh files and reconstruction data. 
-                  You can create a new reconstruction after editing your segmentation masks.
-                </p>
-              </div>
-              <p className="font-semibold text-sm">This action cannot be undone.</p>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeletingReconstruction}>Cancel</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={handleDeleteReconstructions} 
-              disabled={isDeletingReconstruction}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {isDeletingReconstruction ? (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Deleting...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete Reconstruction
                 </>
               )}
             </AlertDialogAction>

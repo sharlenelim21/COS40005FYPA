@@ -46,7 +46,7 @@ const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas
 export default function SegmentationResultsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
-  const { processingUnit } = useGpuStatus();
+  const { processingUnit, isLoading: gpuStatusLoading } = useGpuStatus();
   const isGpuMode = processingUnit.gpuAvailable;
 
   const {
@@ -139,6 +139,11 @@ export default function SegmentationResultsPage() {
     // project has any masks yet (otherwise we may pick the env default
     // before the latest-mask data has arrived).
     if (!maskFetchDone) return;
+    // Wait for the GPU probe to resolve so isGpuMode reflects the real
+    // hardware state. Without this guard, new projects (no masks) hit the
+    // else-branch with isGpuMode=false and get locked on UNet before the
+    // probe comes back.
+    if (gpuStatusLoading) return;
 
     // Priority 0: explicit user choice from this tab session. Both
     // `handleModelSelect` and `handleRunSegmentation` write the user's
@@ -241,7 +246,7 @@ export default function SegmentationResultsPage() {
         setSelectedModel(resolvedModel);
       }
     }
-  }, [maskFetchDone, undecodedMasks, isGpuMode, selectedModel, modelSessionKey]);
+  }, [maskFetchDone, undecodedMasks, isGpuMode, gpuStatusLoading, selectedModel, modelSessionKey]);
 
   // NOTE: The previous "CPU-guard" effect that eagerly forced unet whenever
   // !isGpuMode has been removed. `useGpuStatus` returns `false` on first
