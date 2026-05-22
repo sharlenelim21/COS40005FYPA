@@ -38,6 +38,11 @@ const configureLocalStrategy = () => {
         const result = await authenticateUser(username, password);
 
         if (!result.success && result.message) {
+          logger.warn(
+            `${serviceLocation}: Failed login attempt - ` +
+            `username=${username} ` +
+            `timestamp=${new Date().toISOString()}`
+          );
           return done(null, false, { message: result.message });
         }
 
