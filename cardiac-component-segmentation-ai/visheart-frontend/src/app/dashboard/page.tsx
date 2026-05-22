@@ -93,16 +93,10 @@ const getRoleIcon = (role: string | undefined) => {
 
 export default function DashboardPage() {
   const { user, loading: authLoading, error: authError } = useAuth();
-<<<<<<< HEAD
-  const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects();
-  const { recentJobs, isLoading: jobsLoading, refresh: refreshJobs } = useUserJobs();
-  const { gpuStatus, isLoading: gpuLoading, refresh: refreshGpuStatus } = useGpuStatus();
-=======
   const isAuthenticated = Boolean(user);
   const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(isAuthenticated);
   const { recentJobs, isLoading: jobsLoading, refresh: refreshJobs } = useUserJobs(isAuthenticated);
   const { processingUnit, isLoading: gpuLoading, refresh: refreshGpuStatus } = useGpuStatus();
->>>>>>> backup-finalsprint3
   const userStats = useUserStats(projects, recentJobs);
 
   // Add reconstruction jobs tracking
@@ -111,38 +105,26 @@ export default function DashboardPage() {
 
   // Fetch reconstruction jobs
   const fetchReconstructionJobs = useCallback(async () => {
-<<<<<<< HEAD
-=======
     if (!isAuthenticated) {
       setReconstructionJobs([]);
       setIsLoadingReconstructionJobs(false);
       return;
     }
 
->>>>>>> backup-finalsprint3
     setIsLoadingReconstructionJobs(true);
     try {
       const response = await reconstructionApi.getUserReconstructionJobs();
       setReconstructionJobs(response.jobs || []);
-<<<<<<< HEAD
-    } catch (error) {
-      console.error("Error fetching reconstruction jobs:", error);
-=======
     } catch (error: any) {
       const isUnauthorized = error?.response?.status === 401;
       if (!isUnauthorized) {
         console.error("Error fetching reconstruction jobs:", error);
       }
->>>>>>> backup-finalsprint3
       setReconstructionJobs([]);
     } finally {
       setIsLoadingReconstructionJobs(false);
     }
-<<<<<<< HEAD
-  }, []);
-=======
   }, [isAuthenticated]);
->>>>>>> backup-finalsprint3
 
   useEffect(() => {
     fetchReconstructionJobs();
@@ -389,12 +371,6 @@ export default function DashboardPage() {
           </Button>
 
           <div className="flex items-center gap-2">
-<<<<<<< HEAD
-            {/* GPU Status Indicator: Green=Online, Yellow=Checking, Red=Offline/Timeout */}
-            <div className={`h-3 w-3 rounded-full ${gpuStatus === "online" ? "bg-green-500" : gpuStatus === "offline" ? "bg-red-500" : gpuStatus === "timeout" ? "bg-red-500" : "bg-yellow-500"}`} />
-            <span className="text-muted-foreground text-sm">
-              {gpuLoading ? "GPU Checking..." : `GPU ${gpuStatus === "unknown" ? "Unknown" : gpuStatus === "timeout" ? "Timeout" : gpuStatus === "online" ? "Online" : "Offline"}`}
-=======
             {/* Processing Unit Indicator: Green=NVIDIA GPU, Yellow=CPU, Grey=Unknown/Error */}
             <div
               className={`h-3 w-3 rounded-full ${
@@ -415,7 +391,6 @@ export default function DashboardPage() {
                   : processingUnit.status === "degraded" && processingUnit.serviceOnline
                     ? "CPU"
                     : "Unknown / Error"}
->>>>>>> backup-finalsprint3
             </span>
           </div>
         </div>
@@ -494,22 +469,12 @@ export default function DashboardPage() {
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-<<<<<<< HEAD
-                <CardTitle className="text-sm font-medium">GPU Status</CardTitle>
-=======
                 <CardTitle className="text-sm font-medium">Processing Unit</CardTitle>
->>>>>>> backup-finalsprint3
                 <Cpu className="text-muted-foreground h-4 w-4" />
               </CardHeader>
               <CardContent>
                 <div
                   className={`text-2xl font-bold ${
-<<<<<<< HEAD
-                    gpuStatus === "online" ? "text-green-600" : gpuStatus === "timeout" ? "text-red-600" : gpuStatus === "offline" ? "text-red-600" : "text-yellow-600"
-                  }`}
-                >
-                  {gpuStatus === "timeout" ? "Timeout" : gpuStatus.charAt(0).toUpperCase() + gpuStatus.slice(1)}
-=======
                     processingUnit.gpuAvailable
                       ? "text-green-600"
                       : processingUnit.status === "degraded" && processingUnit.serviceOnline
@@ -522,7 +487,6 @@ export default function DashboardPage() {
                     : processingUnit.status === "degraded" && processingUnit.serviceOnline
                       ? "🟡 CPU"
                       : "⚪ Unknown / Error"}
->>>>>>> backup-finalsprint3
                 </div>
                 <p className="text-muted-foreground text-xs">Processing server</p>
               </CardContent>

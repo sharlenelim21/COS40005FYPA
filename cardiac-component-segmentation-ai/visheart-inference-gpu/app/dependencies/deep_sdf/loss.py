@@ -4,6 +4,7 @@ from scipy.spatial import KDTree
 import numpy as np
 
 
+
 def apply_pointwise_reg(warped_xyz, xyz_, huber_fn, num_sdf_samples):
     dist = torch.norm(warped_xyz - xyz_, dim=-1)
     pw_loss = huber_fn(dist, delta=0.25) / num_sdf_samples

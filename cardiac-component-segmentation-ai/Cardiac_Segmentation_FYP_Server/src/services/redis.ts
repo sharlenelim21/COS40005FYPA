@@ -3,20 +3,13 @@ import path from "path";
 import dotenv from "dotenv";
 import logger from "./logger";
 import LogError from "../utils/error_logger";
-<<<<<<< HEAD
-=======
 import { loadEnvFromKnownLocations } from "../utils/env";
->>>>>>> backup-finalsprint3
 
 const serviceLocation = "Redis";
 
 // Load environment variables
 try {
-<<<<<<< HEAD
-  dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
-=======
   loadEnvFromKnownLocations(__dirname);
->>>>>>> backup-finalsprint3
 } catch (error: unknown) {
   logger.error(
     `${serviceLocation}: Failed to load environment variables. Error: ${error instanceof Error ? error.message : "Unknown error"}`

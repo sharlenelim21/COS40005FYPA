@@ -2,6 +2,14 @@
 // Description: Utility functions for formatting data
 
 /**
+ * Format a nullable number to a fixed decimal string, or "—" if null/undefined/NaN.
+ */
+export function fmt(value: number | null | undefined, decimals = 2): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(decimals);
+}
+
+/**
  * Format bytes into human-readable format (KB, MB, GB)
  * @param bytes - Number of bytes
  * @param decimals - Number of decimal places (default: 1)

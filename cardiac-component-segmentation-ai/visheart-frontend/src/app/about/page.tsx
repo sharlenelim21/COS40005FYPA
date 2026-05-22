@@ -4,18 +4,10 @@ import Image, { StaticImageData } from "next/image";
 // Import images for about page
 import dr_miko_image from "../../../public/images/about/miko.jpg";
 import ms_kathy_image from "../../../public/images/about/kathy.jpg";
-<<<<<<< HEAD
-import james_image from "../../../public/images/about/pfp-james.jpg";
-import clarissa_image from "../../../public/images/about/pfp-cla.jpg";
-import jesmine_image from "../../../public/images/about/pfp-jes.jpg";
-import qh_image from "../../../public/images/about/pfp-qh.jpg";
-import zia_image from "../../../public/images/about/pfp-zia.jpg";
-=======
 import sharlene_image from "../../../public/images/about/pfp-shar.jpg";
 import shihuey_image from "../../../public/images/about/pfp-shi.jpg";
 import jiayi_image from "../../../public/images/about/pfp-jia.jpg";
 import meiqi_image from "../../../public/images/about/pfp-mei.jpg";
->>>>>>> backup-finalsprint3
 
 interface MemberCardProps {
   name: string;
@@ -69,28 +61,6 @@ const AboutPage = () => {
 
   const team = [
     {
-<<<<<<< HEAD
-      name: "James",
-      role: "Lead Developer",
-      imageUrl: james_image,
-      description:
-        "Architecting the backend, pioneering the architecture choice and integrating machine learning models.",
-    },
-    {
-      name: "Clarissa",
-      role: "Backend Developer",
-      imageUrl: clarissa_image,
-      description:
-        "Building the server-side logic and database infrastructure for robust performance.",
-    },
-    {
-      name: "Jesmine",
-      role: "AWS Developer",
-      imageUrl: jesmine_image,
-      description:
-        "Managing cloud infrastructure and deployment on AWS to ensure scalability and reliability.",
-    },
-=======
       name: "Sharlene",
       role: "Team Leader",
       imageUrl: sharlene_image,
@@ -139,7 +109,6 @@ const AboutPage = () => {
     //   description:
     //     "Managing cloud infrastructure and deployment on AWS to ensure scalability and reliability.",
     // },
->>>>>>> backup-finalsprint3
     // {
     //   name: "Qian Hui",
     //   role: "Frontend Developer",

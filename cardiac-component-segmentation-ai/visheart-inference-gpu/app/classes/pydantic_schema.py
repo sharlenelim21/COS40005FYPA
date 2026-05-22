@@ -197,8 +197,6 @@ class FourDReconstructionJobRequest(BaseModel):
         description="Directory path for saving debug files (only used if debug_save is true)"
     )
 
-<<<<<<< HEAD
-=======
 # --- Bullseye AHA 17-Segment Analysis Models ---
 
 class BullseyeS3Request(BaseModel):
@@ -234,7 +232,6 @@ class BullseyeAnalysisResult(BaseModel):
     lv_centroid: Optional[List[float]] = Field(None, description="Average myocardium centroid [cx, cy] in pixel coords across basal/mid slices")
 
 
->>>>>>> backup-finalsprint3
 class FourDReconstructionResult(BaseModel):
     """Result model for 4D reconstruction job."""
     # For backward compatibility, keep single mesh fields for 3D cases

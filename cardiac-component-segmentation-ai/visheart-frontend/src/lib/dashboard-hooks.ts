@@ -5,15 +5,6 @@ import { projectApi, segmentationApi, adminApi, statusApi } from "@/lib/api";
 import { Project, Job, SystemStats, UserStats } from "@/types/dashboard";
 
 export function useGpuStatus() {
-<<<<<<< HEAD
-  const [gpuStatus, setGpuStatus] = useState<
-    "online" | "offline" | "unknown" | "timeout"
-  >("unknown");
-  const [isLoading, setIsLoading] = useState(true);
-
-  const fetchGpuStatus = useCallback(async () => {
-    console.log("🔄 [useGpuStatus] Starting GPU status fetch...");
-=======
   const [processingUnit, setProcessingUnit] = useState<{
     serviceOnline: boolean;
     gpuAvailable: boolean;
@@ -33,17 +24,10 @@ export function useGpuStatus() {
 
   const fetchGpuStatus = useCallback(async () => {
     console.log("🔄 [useGpuStatus] Starting processing unit status fetch...");
->>>>>>> backup-finalsprint3
     setIsLoading(true);
 
     try {
       const response = await statusApi.getGpuStatus();
-<<<<<<< HEAD
-      console.log("✅ [useGpuStatus] GPU status response:", response);
-
-      // Parse backend response to determine actual status
-      let finalStatus: "online" | "offline" | "timeout" = "offline";
-=======
       console.log("✅ [useGpuStatus] Processing unit status response:", response);
 
       const serviceOnline = Boolean(
@@ -79,7 +63,6 @@ export function useGpuStatus() {
       const gpuName = detailsGpuName;
 
       let finalStatus: "online" | "offline" | "degraded" | "timeout" = "offline";
->>>>>>> backup-finalsprint3
 
       // Check for timeout indicators in response
       const hasTimeoutCode = response.details?.code === "ETIMEDOUT";
@@ -89,28 +72,6 @@ export function useGpuStatus() {
       if (hasTimeoutCode || hasTimeoutMessage) {
         console.log("⏰ [useGpuStatus] Backend reported timeout - code:", response.details?.code, "message:", response.message);
         finalStatus = "timeout";
-<<<<<<< HEAD
-      } else if (response.status === "online") {
-        console.log("✅ [useGpuStatus] GPU is online");
-        finalStatus = "online";
-      } else {
-        console.log("❌ [useGpuStatus] GPU is offline - status:", response.status);
-        finalStatus = "offline";
-      }
-      
-      console.log("📊 [useGpuStatus] Final status set to:", finalStatus);
-      setGpuStatus(finalStatus);
-    } catch (error: any) {
-      console.error("❌ [useGpuStatus] Error fetching GPU status:", error);
-      
-      // Check if the error itself indicates a timeout
-      if (error?.code === "ETIMEDOUT" || error?.message?.toLowerCase?.().includes?.("timeout")) {
-        console.log("⏰ [useGpuStatus] Network timeout detected in catch block");
-        setGpuStatus("timeout");
-      } else {
-        console.log("💀 [useGpuStatus] Setting status to offline due to error");
-        setGpuStatus("offline");
-=======
       } else if (serviceOnline && gpuAvailable) {
         console.log("✅ [useGpuStatus] NVIDIA GPU is available");
         finalStatus = "online";
@@ -161,7 +122,6 @@ export function useGpuStatus() {
           status: "offline",
           message: "Processing unit status unavailable",
         });
->>>>>>> backup-finalsprint3
       }
     } finally {
       setIsLoading(false);
@@ -172,53 +132,34 @@ export function useGpuStatus() {
     fetchGpuStatus();
   }, [fetchGpuStatus]);
 
-<<<<<<< HEAD
-  return { gpuStatus, isLoading, refresh: fetchGpuStatus };
-}
-
-export function useUserProjects() {
-=======
   return { processingUnit, isLoading, refresh: fetchGpuStatus };
 }
 
 export function useUserProjects(enabled = true) {
->>>>>>> backup-finalsprint3
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchProjects = useCallback(async () => {
-<<<<<<< HEAD
-=======
     if (!enabled) {
       setProjects([]);
       setIsLoading(false);
       return;
     }
 
->>>>>>> backup-finalsprint3
     setIsLoading(true);
     try {
       const response = await projectApi.getProjects();
       setProjects(response.projects || []);
-<<<<<<< HEAD
-    } catch (error) {
-      console.error("Error fetching projects:", error);
-=======
     } catch (error: any) {
       const isUnauthorized = error?.response?.status === 401;
       if (!isUnauthorized) {
         console.error("Error fetching projects:", error);
       }
->>>>>>> backup-finalsprint3
       setProjects([]);
     } finally {
       setIsLoading(false);
     }
-<<<<<<< HEAD
-  }, []);
-=======
   }, [enabled]);
->>>>>>> backup-finalsprint3
 
   useEffect(() => {
     fetchProjects();
@@ -227,47 +168,31 @@ export function useUserProjects(enabled = true) {
   return { projects, isLoading, refresh: fetchProjects };
 }
 
-<<<<<<< HEAD
-export function useUserJobs() {
-=======
 export function useUserJobs(enabled = true) {
->>>>>>> backup-finalsprint3
   const [recentJobs, setRecentJobs] = useState<Job[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchJobs = useCallback(async () => {
-<<<<<<< HEAD
-=======
     if (!enabled) {
       setRecentJobs([]);
       setIsLoading(false);
       return;
     }
 
->>>>>>> backup-finalsprint3
     setIsLoading(true);
     try {
       const response = await segmentationApi.getUserJobs();
       setRecentJobs(response.jobs?.slice(0, 5) || []);
-<<<<<<< HEAD
-    } catch (error) {
-      console.error("Error fetching jobs:", error);
-=======
     } catch (error: any) {
       const isUnauthorized = error?.response?.status === 401;
       if (!isUnauthorized) {
         console.error("Error fetching jobs:", error);
       }
->>>>>>> backup-finalsprint3
       setRecentJobs([]);
     } finally {
       setIsLoading(false);
     }
-<<<<<<< HEAD
-  }, []);
-=======
   }, [enabled]);
->>>>>>> backup-finalsprint3
 
   useEffect(() => {
     fetchJobs();

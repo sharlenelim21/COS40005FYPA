@@ -12,20 +12,14 @@ import asyncio
 import threading
 import time
 
-<<<<<<< HEAD
-=======
 #New: Import device utilities
 from app.classes.device_runtime import resolve_device, get_backend
 
 
->>>>>>> backup-finalsprint3
 class YoloHandler:
     def __init__(self, model_path):
         self.model_path = model_path
         self.model = None
-<<<<<<< HEAD
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-=======
         #old:
         
         
@@ -34,7 +28,6 @@ class YoloHandler:
         self.device = resolve_device(preferred_device)
         self.backend = get_backend()
 
->>>>>>> backup-finalsprint3
         # Load model synchronously during init - usually OK as it happens once at startup
         self._load_model()
 
@@ -46,8 +39,6 @@ class YoloHandler:
         try:
             torch.serialization.add_safe_globals([DetectionModel])
             self.model = ultralytics.YOLO(self.model_path, task="detect")
-<<<<<<< HEAD
-=======
 
             # New: Attempt to move model to the resolved device at load time (ultralytics can also accept device at predict time)
             try:
@@ -56,7 +47,6 @@ class YoloHandler:
                 # keep non-fatal; fallback to per-call device assignment
                 pass 
 
->>>>>>> backup-finalsprint3
         except Exception as e:
             logger.error(f"Error loading YOLO model: {e}")
             raise e
@@ -71,10 +61,6 @@ class YoloHandler:
             raise RuntimeError("YOLO model is not loaded.")
         print(f"[Thread-{threading.get_ident()}] Running YOLO predict_sync on batch size {len(image_batch)}...")
         start_time = time.time()
-<<<<<<< HEAD
-        # This model call is the blocking part
-        results = self.model(image_batch, verbose=False)
-=======
 
         # New: Pass device argument to model.predict() to ensure it runs on the correct device.
         # Ultralytics accepts device as "cpu", "0", "cuda:0", etc.
@@ -83,7 +69,6 @@ class YoloHandler:
 
         # This model call is the blocking part
         #results = self.model(image_batch, verbose=False)
->>>>>>> backup-finalsprint3
         end_time = time.time()
         print(f"[Thread-{threading.get_ident()}] YOLO predict_sync finished in {end_time - start_time:.3f}s")
         return results

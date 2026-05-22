@@ -148,12 +148,8 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
 
       // Construct the command to execute the Python script to convert to JPEGs
       const pythonScriptPath = path.join(__dirname, '..', 'python', 'convert_to_jpeg.py');
-<<<<<<< HEAD
-      const pythonCommand = `python "${pythonScriptPath}" "${newFilePath}" "${jpegOutputDir}" "${(actualTarFilePath || "").replace('.tar', '')}" "${userId}" "${String(filehash)}"`;
-=======
       const pythonCmd = process.env.PYTHON_CMD || "python3";
       const pythonCommand = `"${pythonCmd}" "${pythonScriptPath}" "${newFilePath}" "${jpegOutputDir}" "${(actualTarFilePath || "").replace('.tar', '')}" "${userId}" "${String(filehash)}"`;
->>>>>>> backup-finalsprint3
       try {
         const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
           exec(pythonCommand, { maxBuffer: 1024 * 1024 * 10 }, async (error, stdout, stderr) => {

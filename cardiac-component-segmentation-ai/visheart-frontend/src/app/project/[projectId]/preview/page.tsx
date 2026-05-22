@@ -1,16 +1,10 @@
 "use client";
 
-<<<<<<< HEAD
-import { useParams } from "next/navigation";
-import { useProject } from "@/context/ProjectContext";
-import { useEffect } from "react";
-=======
 import { useParams, useRouter } from "next/navigation";
 import { useProject } from "@/context/ProjectContext";
 import { useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
->>>>>>> backup-finalsprint3
 
 // Custom components
 import { NoProjectFound } from "@/components/project/NoProjectFound";
@@ -20,10 +14,7 @@ import { DebugMRIViewer } from "@/components/project/DebugMRIViewer";
 
 export default function PreviewPage() {
   const { projectId } = useParams<{ projectId: string }>();
-<<<<<<< HEAD
-=======
   const router = useRouter();
->>>>>>> backup-finalsprint3
   const { loading, projectData, error } = useProject();
 
   // Update page title dynamically
@@ -50,8 +41,6 @@ export default function PreviewPage() {
 
   return projectData ? (
     <div>
-<<<<<<< HEAD
-=======
       {/* Back to Project Button */}
       <div className="px-4 pt-3 pb-2">
         <Button
@@ -65,7 +54,6 @@ export default function PreviewPage() {
         </Button>
       </div>
 
->>>>>>> backup-finalsprint3
       {/* Debug MRI Image Viewer */}
       <DebugMRIViewer projectId={projectId} />
     </div>

@@ -91,21 +91,12 @@ export default function Footer() {
               <div className="space-y-1">
                 <div className="flex items-center space-x-2 text-sm">
                   <Mail className="h-4 w-4 text-primary" />
-<<<<<<< HEAD
-                  <span className="font-medium text-foreground">James M.</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Lead Developer</div>
-                <div className="text-xs ml-6">
-                  <a href="mailto:102775371@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    102775371@students.swinburne.edu.my
-=======
                   <span className="font-medium text-foreground">Sharlene Lim</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Team Leader</div>
                 <div className="text-xs ml-6">
                   <a href="mailto:102775371@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783112@students.swinburne.edu.my
->>>>>>> backup-finalsprint3
                   </a>
                 </div>
               </div>
@@ -113,21 +104,12 @@ export default function Footer() {
               <div className="space-y-1">
                 <div className="flex items-center space-x-2 text-sm">
                   <Mail className="h-4 w-4 text-primary" />
-<<<<<<< HEAD
-                  <span className="font-medium text-foreground">Jesmine T.</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Full-Stack Cloud Architect</div>
-                <div className="text-xs ml-6">
-                  <a href="mailto:102773605@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    102773605@students.swinburne.edu.my
-=======
                   <span className="font-medium text-foreground">Ngui Jia Yi</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Product Owner</div>
                 <div className="text-xs ml-6">
                   <a href="mailto:102773605@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783222@students.swinburne.edu.my
->>>>>>> backup-finalsprint3
                   </a>
                 </div>
               </div>

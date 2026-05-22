@@ -161,8 +161,6 @@ const SamplePage: React.FC = () => {
               </div>
             </>
           )}
-<<<<<<< HEAD
-=======
 
           <Card className="border-none bg-muted/30 shadow-none">
             <CardContent className="space-y-4 p-6">
@@ -184,7 +182,6 @@ const SamplePage: React.FC = () => {
               </div>
             </CardContent>
           </Card>
->>>>>>> backup-finalsprint3
         </div>
       )}
     </div>

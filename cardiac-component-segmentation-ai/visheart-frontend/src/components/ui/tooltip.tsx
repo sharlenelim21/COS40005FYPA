@@ -5,11 +5,8 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip"
 
 import { cn } from "@/lib/utils"
 
-<<<<<<< HEAD
-=======
 const TooltipArrow = TooltipPrimitive.Arrow as React.ComponentType<any>
 
->>>>>>> backup-finalsprint3
 function TooltipProvider({
   delayDuration = 0,
   ...props
@@ -57,13 +54,9 @@ function TooltipContent({
         {...props}
       >
         {children}
-<<<<<<< HEAD
-        <TooltipPrimitive.Arrow className="bg-primary fill-primary z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px]" />
-=======
         <TooltipArrow asChild>
           <span className="bg-primary fill-primary z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px]" />
         </TooltipArrow>
->>>>>>> backup-finalsprint3
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )
