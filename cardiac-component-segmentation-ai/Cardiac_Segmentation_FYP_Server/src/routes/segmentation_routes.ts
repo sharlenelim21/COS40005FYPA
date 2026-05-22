@@ -21,7 +21,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import axios from 'axios'; // Simplified Axios import
 import { v4 as uuidv4 } from 'uuid';
-import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
+import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { extractS3KeyFromUrl, downloadFromS3, uploadMaskToS3 } from "../services/s3_handler";
 import { getFreshGPUServerAddress } from "../services/gpu_auth_client"; // Import fresh GPU server address function
 
@@ -210,7 +210,7 @@ router.post("/start-manual-segmentation/:projectId",
                 logger.error(`${serviceLocation}: AWS_BUCKET_NAME environment variable is not set.`);
                 return res.status(500).json({ success: false, message: "Server configuration error: AWS bucket name missing." });
             }
-            const presignedUrl = await generatePresignedGetUrl(awsBucketName, objectKey, 1800);
+            const presignedUrl = await generatePresignedGetUrlForInternalService(awsBucketName, objectKey, 1800);
             if (!presignedUrl) {
                 logger.error(`${serviceLocation}: Failed to generate presigned URL for project ${projectId}, object ${objectKey}.`);
                 return res.status(500).json({ success: false, message: "Failed to generate presigned URL." });
@@ -859,7 +859,7 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
             throw new Error("AWS_BUCKET_NAME environment variable is not set");
         }
 
-        const presignedExportUrl = await generatePresignedGetUrl(s3BucketName, finalS3Key, 3600);
+        const presignedExportUrl = await generatePresignedGetUrlForBrowser(s3BucketName, finalS3Key, 3600);
 
         if (!presignedExportUrl) {
             throw new Error("Failed to generate presigned URL for the segmentation NIfTI.");

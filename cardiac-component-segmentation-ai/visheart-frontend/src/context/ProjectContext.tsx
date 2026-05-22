@@ -181,6 +181,33 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     projectDataRef.current = projectData;
   }, [projectData]);
 
+  const clearLoadedProjectState = useCallback(() => {
+    setProjectData(null);
+    setHasMasks(false);
+    setUndecodedMasks(null);
+    setDecodedMasks(null);
+    setMaskFetchDone(false);
+    setJobs(null);
+    setJobsError(null);
+    setReconstructionJobs(null);
+    setReconstructionJobsError(null);
+    setTarCacheReady(false);
+    setTarCacheError(null);
+    setHasReconstructions(false);
+    setReconstructionMetadata(null);
+    setReconstructionResults([]);
+    setReconstructionsByModel({});
+    setReconstructionCacheReady(false);
+    setReconstructionCacheError(null);
+    setIsPreloading(false);
+    setPreloadProgress(null);
+    setIsFullyPreloaded(false);
+    setIsThreeJSPreloading(false);
+    setThreeJSPreloadProgress(null);
+    setError(null);
+    setSegmentationError(null);
+  }, []);
+
   const buildReconstructionsByModel = useCallback((reconstructions: Array<Record<string, unknown>>) => {
     const byModel: Record<string, any> = {}; // eslint-disable-line @typescript-eslint/no-explicit-any
     for (const recon of reconstructions) {
@@ -852,7 +879,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     // Check if projectId is available
     if (!projectId) {
-      setProjectData(null);
+      clearLoadedProjectState();
       setError("Project ID is missing.");
       // Don't set loading to done here - let final loading state management handle it
       return;
@@ -867,6 +894,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         // If backend cannot find project, set error state, end loading
         if (!response.success) {
+          clearLoadedProjectState();
           setError(response.message);
           // Don't set loading to done here - let final loading state management handle it
           return;
@@ -880,6 +908,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         // Don't set error if request was aborted
         if (signal.aborted) return;
 
+        clearLoadedProjectState();
         setError("Failed to fetch project data.");
         console.error("Error fetching project:", error);
       })

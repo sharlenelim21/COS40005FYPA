@@ -112,3 +112,15 @@ export const generatePresignedGetUrl = async (
         return null;
     }
 };
+
+export const generatePresignedGetUrlForBrowser = async (
+    bucket: string,
+    key: string,
+    expiresIn: number = 3600
+): Promise<string | null> => generatePresignedGetUrl(bucket, key, expiresIn, true);
+
+export const generatePresignedGetUrlForInternalService = async (
+    bucket: string,
+    key: string,
+    expiresIn: number = 3600
+): Promise<string | null> => generatePresignedGetUrl(bucket, key, expiresIn, false);

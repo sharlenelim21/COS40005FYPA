@@ -6,11 +6,20 @@ import logger from "./logger";
 import { createJob, IJob, JobStatus, readProject, updateJob } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
-import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
+import { generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { URL } from 'url';
 import { getFreshGPUServerAddress } from "./gpu_auth_client"; // Import fresh GPU server address function
 
 const serviceLocation = "Inference";
+
+const describeUrlOrigin = (value: string): string => {
+    try {
+        const parsed = new URL(value);
+        return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}`;
+    } catch {
+        return "<invalid-url>";
+    }
+};
 
 /**
  * Resolve the MedSAM server base URL.
@@ -204,7 +213,7 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
             return { success: false, message: "Failed to determine S3 object key for TAR file." };
         }
 
-        const dataUrlForGpu = await generatePresignedGetUrl(s3BucketName, objectKeyForTar);
+        const dataUrlForGpu = await generatePresignedGetUrlForInternalService(s3BucketName, objectKeyForTar);
 
         if (!dataUrlForGpu) {
             logger.error(`${serviceLocation}: Failed to generate presigned S3 URL for project ${projectId}, TAR S3 Key: ${objectKeyForTar}`);
@@ -219,6 +228,8 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
             callback_url: callback_url,
             url: dataUrlForGpu,
         };
+
+        logger.info(`${serviceLocation}: UNET payload input URL origin=${describeUrlOrigin(inferenceData.url)}`);
 
         // The logger in sendInferenceRequestToCloudGpu will log the full payload.
         // You can add a summary log here if preferred:
@@ -418,11 +429,13 @@ export async function startModel2Inference(
             return { success: false, message: "Could not determine the NIfTI file path." };
         }
 
-        const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
+        const niftiPresignedUrl = await generatePresignedGetUrlForInternalService(s3BucketName, s3Key);
         if (!niftiPresignedUrl) {
             logger.error(`${serviceLocation}: Failed to generate presigned NIfTI URL for UNET inference on project ${projectId}.`);
             return { success: false, message: "Failed to prepare NIfTI URL for UNET inference." };
         }
+
+        logger.info(`${serviceLocation}: UNET payload input URL origin=${describeUrlOrigin(niftiPresignedUrl)}`);
 
         const callbackUrl = `${callbackBaseUrl.replace(/\/$/, '')}/webhook/gpu-callback`;
 

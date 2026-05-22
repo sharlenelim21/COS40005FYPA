@@ -1,7 +1,7 @@
 import axios from "axios";
 import { URL } from "url";
 import { v4 as uuidv4 } from "uuid";
-import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
+import { generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { getFreshGPUServerAddress } from "./gpu_auth_client";
 import {
   createJob,
@@ -106,7 +106,7 @@ export async function startLandmarkInference(
     return { success: false, message: `Invalid NIfTI source URL: ${error.message}` };
   }
 
-  const niftiPresignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key);
+  const niftiPresignedUrl = await generatePresignedGetUrlForInternalService(s3BucketName, s3Key);
   if (!niftiPresignedUrl) {
     return {
       success: false,

@@ -1,8 +1,8 @@
 allowBuilds:
-  bcrypt: set this to true or false
-  core-js: set this to true or false
-  mongodb-memory-server: set this to true or false
-  unrs-resolver: set this to true or false
+  bcrypt: true
+  core-js: true
+  mongodb-memory-server: true
+  unrs-resolver: true
 onlyBuiltDependencies:
   - bcrypt
   - mongodb-memory-server

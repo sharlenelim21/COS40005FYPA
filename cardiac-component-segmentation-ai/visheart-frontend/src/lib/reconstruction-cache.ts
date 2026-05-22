@@ -540,7 +540,6 @@ export class ReconstructionCache {
       
       this.debugInfo.tarFileFetched = true;
       this.debugInfo.tarFileSize = tarBlob.size;
-      
       console.log(`[ReconstructionCache] ✅ TAR file downloaded successfully`);
       console.log(`[ReconstructionCache] 📦 File size: ${(tarBlob.size / 1024 / 1024).toFixed(2)} MB`);
       console.log(`[ReconstructionCache] ⚡ Download time: ${downloadTime}s`);

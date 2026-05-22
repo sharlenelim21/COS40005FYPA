@@ -476,6 +476,8 @@ export default function ProjectPage() {
     setIsDeleting(true);
     try {
       await projectApi.deleteProject(projectId);
+      await clearProjectCache();
+      await clearReconstructionCache();
       // Success - redirect to dashboard
       router.push("/dashboard");
     } catch (error) {
