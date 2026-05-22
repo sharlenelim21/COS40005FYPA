@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import os
 import logging
+import threading
 from fastapi import FastAPI
 
 # Import your model handlers
@@ -19,6 +20,108 @@ yolo_model = None
 medsam_model = None
 fourd_reconstruction_model = None
 
+_bootstrap_lock = threading.Lock()
+_bootstrap_started = False
+_bootstrap_finished = False
+_bootstrap_errors: dict[str, str] = {}
+_bootstrap_status: dict[str, dict[str, str | bool | None]] = {
+    "yolo": {"state": "pending", "loaded": False, "error": None},
+    "medsam": {"state": "pending", "loaded": False, "error": None},
+    "fourd_reconstruction": {"state": "pending", "loaded": False, "error": None},
+}
+
+
+def _set_bootstrap_status(model_key: str, state: str, error: str | None = None) -> None:
+    _bootstrap_status[model_key] = {
+        "state": state,
+        "loaded": state == "loaded",
+        "error": error,
+    }
+
+
+def _load_model_safely(model_key: str, model_path: str, loader) -> None:
+    logger = logging.getLogger("visheart")
+    try:
+        log_model_loading(model_key.upper() if model_key != "fourd_reconstruction" else "4D Reconstruction", model_path, "starting")
+        logger.info(f"🔄 Bootstrap loading {model_key} from {model_path}")
+        loader(model_path)
+        _set_bootstrap_status(model_key, "loaded")
+        log_model_loading(model_key.upper() if model_key != "fourd_reconstruction" else "4D Reconstruction", model_path, "success")
+        logger.info(f"✅ Bootstrap finished loading {model_key}")
+    except Exception as exc:
+        message = str(exc)
+        _bootstrap_errors[model_key] = message
+        _set_bootstrap_status(model_key, "error", message)
+        log_model_loading(model_key.upper() if model_key != "fourd_reconstruction" else "4D Reconstruction", model_path, "error")
+        logger.exception(f"❌ Bootstrap failed while loading {model_key}: {message}")
+
+
+def start_model_bootstrap() -> None:
+    """Start model loading in the background so the server can bind immediately."""
+    global _bootstrap_started, _bootstrap_finished
+
+    with _bootstrap_lock:
+        if _bootstrap_started:
+            return
+        _bootstrap_started = True
+
+    def _runner() -> None:
+        global yolo_model, medsam_model, fourd_reconstruction_model, _bootstrap_finished
+
+        logger = logging.getLogger("visheart")
+        logger.info("🚀 Starting background model bootstrap (server will be available immediately)")
+
+        skip_yolo = os.getenv("SKIP_YOLO_MODEL_LOAD", "false").lower() == "true"
+        skip_medsam = os.getenv("SKIP_MEDSAM_MODEL_LOAD", "false").lower() == "true"
+        skip_fourd = os.getenv("SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD", "false").lower() == "true"
+
+        if skip_yolo:
+            _set_bootstrap_status("yolo", "skipped")
+            logger.info("ℹ️ Skipping YOLO model load because SKIP_YOLO_MODEL_LOAD=true")
+        else:
+            model_name = os.environ.get("YOLO_MODEL_NAME", "24April2025-single-stage-usethis.pt")
+            model_path = os.path.join(MODEL_DIR, model_name)
+            _load_model_safely("yolo", model_path, lambda path: globals().__setitem__("yolo_model", YoloHandler(path)))
+
+        if skip_medsam:
+            _set_bootstrap_status("medsam", "skipped")
+            logger.info("ℹ️ Skipping MedSAM model load because SKIP_MEDSAM_MODEL_LOAD=true")
+        else:
+            model_name = os.environ.get("MEDSAM_MODEL_NAME", "medsam_vit_b.pth")
+            model_path = os.path.join(MODEL_DIR, model_name)
+            _load_model_safely("medsam", model_path, lambda path: globals().__setitem__("medsam_model", MedSamHandler(path)))
+
+        if skip_fourd:
+            _set_bootstrap_status("fourd_reconstruction", "skipped")
+            logger.info("ℹ️ Skipping 4D Reconstruction model load because SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD=true")
+        else:
+            model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "fourd_model_epoch_250.pth")
+            model_path = os.path.join(MODEL_DIR, model_name)
+            _load_model_safely("fourd_reconstruction", model_path, lambda path: globals().__setitem__("fourd_reconstruction_model", FourDReconstructionHandler(path)))
+
+        _bootstrap_finished = True
+
+        if _bootstrap_errors:
+            logger.error(f"⚠ Model bootstrap completed with errors: {_bootstrap_errors}")
+        else:
+            log_startup_complete()
+
+    threading.Thread(target=_runner, name="visheart-model-bootstrap", daemon=True).start()
+
+
+def get_bootstrap_status() -> dict[str, object]:
+    """Return a snapshot of the background bootstrap state."""
+    return {
+        "started": _bootstrap_started,
+        "finished": _bootstrap_finished,
+        "errors": dict(_bootstrap_errors),
+        "models": {
+            "yolo": dict(_bootstrap_status["yolo"]),
+            "medsam": dict(_bootstrap_status["medsam"]),
+            "fourd_reconstruction": dict(_bootstrap_status["fourd_reconstruction"]),
+        },
+    }
+
 
 @asynccontextmanager
 async def yolo_model_lifespan(app: FastAPI):
@@ -33,17 +136,7 @@ async def yolo_model_lifespan(app: FastAPI):
     """
     global yolo_model
 
-    # Get model name from environment variable with default fallback
-    model_name = os.environ.get(
-        "YOLO_MODEL_NAME", "24April2025-single-stage-usethis.pt"
-    )
-
-    # Construct absolute path to model file
-    model_path = os.path.join(MODEL_DIR, model_name)
-
-    log_model_loading("YOLO", model_path, "starting")
-    yolo_model = YoloHandler(model_path)
-    log_model_loading("YOLO", model_path, "success")
+    start_model_bootstrap()
 
     # Main application runs during yield
     yield
@@ -66,15 +159,7 @@ async def medsam_model_lifespan(app: FastAPI):
     """
     global medsam_model
 
-    # Get model name from environment variable with default fallback
-    model_name = os.environ.get("MEDSAM_MODEL_NAME", "medsam_vit_b.pth")
-
-    # Construct absolute path to model file
-    model_path = os.path.join(MODEL_DIR, model_name)
-
-    log_model_loading("MedSAM", model_path, "starting")
-    medsam_model = MedSamHandler(model_path)
-    log_model_loading("MedSAM", model_path, "success")
+    start_model_bootstrap()
 
     # Main application runs during yield
     yield
@@ -127,15 +212,7 @@ async def fourd_reconstruction_model_lifespan(app: FastAPI):
     """
     global fourd_reconstruction_model
 
-    # Get model name from environment variable with default fallback
-    model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "fourd_model_epoch_250.pth")
-
-    # Construct absolute path to model file
-    model_path = os.path.join(MODEL_DIR, model_name)
-
-    log_model_loading("4D Reconstruction", model_path, "starting")
-    fourd_reconstruction_model = FourDReconstructionHandler(model_path)
-    log_model_loading("4D Reconstruction", model_path, "success")
+    start_model_bootstrap()
 
     # Main application runs during yield
     yield

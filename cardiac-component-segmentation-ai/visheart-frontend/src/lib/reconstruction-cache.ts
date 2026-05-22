@@ -481,9 +481,27 @@ export class ReconstructionCache {
       this.debugInfo.presignedUrl = presignedResponse.presignedUrl;
       this.debugInfo.presignedUrlExpiry = presignedResponse.expiresAt || null;
 
+      let presignedOrigin = '<unparseable>';
+      let presignedHost = '<unparseable>';
+      try {
+        const parsedUrl = new URL(presignedResponse.presignedUrl);
+        presignedOrigin = parsedUrl.origin;
+        presignedHost = parsedUrl.host;
+      } catch {
+        // keep placeholders for debug output
+      }
+
+      const isLocalhost9000 = presignedHost === 'localhost:9000';
+      const isMinio9000 = presignedHost === 'minio:9000';
+      const isVisheartMinio9000 = presignedHost === 'visheart-minio:9000';
+
+      console.log(`[ReconstructionCache] Presigned URL origin: ${presignedOrigin}`);
+      console.log(`[ReconstructionCache] Presigned URL host: ${presignedHost}`);
+      console.log(`[ReconstructionCache] Host flags: localhost:9000=${isLocalhost9000}, minio:9000=${isMinio9000}, visheart-minio:9000=${isVisheartMinio9000}`);
+
       // Step 2: Fetch tar file
       console.log(`[ReconstructionCache] 🌐 Fetching tar file from presigned URL...`);
-      console.log(`[ReconstructionCache] 🔗 URL: ${presignedResponse.presignedUrl.substring(0, 100)}...`);
+      console.log(`[ReconstructionCache] 🔗 URL origin only: ${presignedOrigin}`);
       
       const downloadStartTime = performance.now();
       let tarResponse;

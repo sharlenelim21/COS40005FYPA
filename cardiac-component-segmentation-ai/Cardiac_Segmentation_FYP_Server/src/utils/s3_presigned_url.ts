@@ -4,6 +4,19 @@ import logger from "../services/logger"; // Assuming logger is in ../services/lo
 
 const serviceLocation = "S3Utils";
 
+const summarizeUrl = (value: string | undefined | null): string => {
+    if (!value) {
+        return "<unset>";
+    }
+
+    try {
+        const parsed = new URL(value);
+        return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+        return value;
+    }
+};
+
 let s3ClientInstance: S3Client | null = null;
 let s3PublicClientInstance: S3Client | null = null;
 
@@ -87,7 +100,7 @@ export const generatePresignedGetUrl = async (
         const command = new GetObjectCommand(commandInput);
 
         const url = await getSignedUrl(client, command, { expiresIn });
-        logger.info(`${serviceLocation}: Successfully generated presigned GET URL for s3://${bucket}/${key} (expires in ${expiresIn}s)`);
+        logger.info(`${serviceLocation}: Successfully generated presigned GET URL for s3://${bucket}/${key} (expires in ${expiresIn}s, origin=${summarizeUrl(new URL(url).origin)}, host=${new URL(url).host})`);
         return url;
     } catch (error: any) {
         logger.error(`${serviceLocation}: Error generating presigned GET URL for s3://${bucket}/${key}: ${error.message}`, {

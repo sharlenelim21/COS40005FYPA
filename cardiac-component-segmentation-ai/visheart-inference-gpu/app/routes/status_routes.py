@@ -128,7 +128,7 @@ def server_status():
     """
     try:
         # Get CPU information
-        cpu_percent = psutil.cpu_percent(interval=1)
+        cpu_percent = psutil.cpu_percent(interval=None)
         cpu_count = psutil.cpu_count(logical=True)
         
         # Get memory information
@@ -184,6 +184,24 @@ def server_status():
         return {"status": "error", "error": str(e)}
 
 
+@router.get("/ready")
+def ready_status():
+    """Return model bootstrap readiness without blocking server startup."""
+    bootstrap = model_init.get_bootstrap_status()
+    models = bootstrap.get("models", {})
+
+    ready = bootstrap.get("finished", False) and all(
+        model_state.get("state") in ("loaded", "skipped")
+        for model_state in models.values()
+    )
+
+    return {
+        "status": "ok" if ready else "starting",
+        "ready": ready,
+        "bootstrap": bootstrap,
+    }
+
+
 @router.get("/environment")
 def environment_status():
     """
@@ -236,8 +254,10 @@ def model_status():
     """
     Endpoint to check whether each inference model is loaded in memory.
     """
+    bootstrap = model_init.get_bootstrap_status()
     return {
         "status": "ok",
+        "bootstrap": bootstrap,
         "models": {
             "yolo": model_init.yolo_model is not None,
             "medsam": model_init.medsam_model is not None,

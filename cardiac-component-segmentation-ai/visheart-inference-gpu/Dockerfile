@@ -72,6 +72,8 @@ RUN pip install --no-cache-dir -r requirements_torch.txt --index-url https://dow
 RUN pip install --no-cache-dir -r requirements_prod.txt && \
     rm -rf /root/.cache/pip
 
+RUN python3 -c "import nibabel; print('NIBABEL INSTALLED OK')"
+
 #------------------------------------------------------------------------------
 # Final Stage
 #------------------------------------------------------------------------------

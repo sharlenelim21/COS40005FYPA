@@ -20,10 +20,7 @@ from app.routes.bullseye_route import router as bullseye_router
 
 # Import the lifespans (custom dependencies)
 # Import the combined lifespan manager
-from app.dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan # Updated import
-
-# Import additional logging functions
-from app.utils.logging_config import log_startup_complete
+from app.dependencies.model_init import start_model_bootstrap
 
 # Composite the lifespans
 @asynccontextmanager
@@ -31,13 +28,8 @@ async def lifespan(app: FastAPI):
     """
     Asynchronous context manager for managing the lifespan of the FastAPI application.
     """
-    async with yolo_model_lifespan(app):
-        async with medsam_model_lifespan(app):
-            async with fourd_reconstruction_model_lifespan(app):
-                # Log startup completion after all models are loaded
-                log_startup_complete()
-                # Add more lifespans, sequentially nested depend on load order
-                yield
+    start_model_bootstrap()
+    yield
 
 
 app = FastAPI(lifespan=lifespan)
