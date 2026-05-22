@@ -102,6 +102,7 @@ export default function LandmarkDetectionPage() {
     projectData,
     decodedMasks,
     getMRIImage,
+    preloadMRIImages,
   } = useProject();
 
   useEffect(() => {
@@ -111,6 +112,11 @@ export default function LandmarkDetectionPage() {
       : "VisHeart | Landmark Detection";
     return () => { document.title = "VisHeart"; };
   }, [projectData?.name]);
+
+  // Ensure MRI images are available in the tar cache — runs once projectData is ready
+  useEffect(() => {
+    if (projectId && projectData) preloadMRIImages();
+  }, [projectId, projectData, preloadMRIImages]);
 
   const [selectedModel, setSelectedModel] = useState<ModelId>("unetresnet34-landmark");
 
@@ -313,7 +319,9 @@ export default function LandmarkDetectionPage() {
         return;
       }
 
+      console.log(`[LandmarkPage] Loading MRI image: projectId=${projectId} frame=${currentImageFrame} slice=${currentImageSlice}`);
       const cachedUrl = await getMRIImage(currentImageFrame, currentImageSlice);
+      console.log(`[LandmarkPage] getMRIImage returned: ${cachedUrl ? 'URL found' : 'null'}`);
       if (cancelled) return;
 
       setFrameImageUrl(cachedUrl ?? null);

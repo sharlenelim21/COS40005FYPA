@@ -517,6 +517,9 @@ export class TarImageCache {
         try {
           const { frame, slice } = extractIndicesFromFilename(file.name);
           const imageId = `${projectId}_f${frame}_s${slice}`;
+          if (storedCount < 3) {
+            console.log(`[TarImageCache] Sample stored key: filename="${file.name}" → id="${imageId}"`);
+          }
 
           const blob = new Blob([file.buffer], {
             type: this.getMimeType(file.name)
@@ -629,20 +632,24 @@ export class TarImageCache {
   async getImageURL(projectId: string, frame: number, slice: number): Promise<string | null> {
     this.checkInitialization();
     const imageId = `${projectId}_f${frame}_s${slice}`;
+    console.log(`[TarImageCache] getImageURL: looking up key="${imageId}"`);
 
     // Check URL cache first to avoid creating duplicate URLs for same blob
     if (this.urlCache.has(imageId)) {
+      console.log(`[TarImageCache] getImageURL: found in URL cache`);
       return this.urlCache.get(imageId)!;
     }
 
     // Retrieve blob from IndexedDB and create object URL
     const blob = await this.getImageBlob(projectId, frame, slice);
     if (blob) {
+      console.log(`[TarImageCache] getImageURL: blob found in IndexedDB, creating object URL`);
       const url = URL.createObjectURL(blob);
       this.urlCache.set(imageId, url); // Cache URL to prevent duplicates
       return url;
     }
 
+    console.warn(`[TarImageCache] getImageURL: key="${imageId}" NOT found in IndexedDB`);
     return null; // Image not found in cache
   }
 

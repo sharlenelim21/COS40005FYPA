@@ -265,13 +265,16 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     async (frame: number, slice: number): Promise<string | null> => {
       if (!projectId) return null;
       try {
-        return await tarImageCache.getImageURL(projectId, frame, slice);
+        console.log(`[ProjectContext] getMRIImage: projectId=${projectId} frame=${frame} slice=${slice} tarCacheReady=${tarCacheReady}`);
+        const url = await tarImageCache.getImageURL(projectId, frame, slice);
+        console.log(`[ProjectContext] getMRIImage result: ${url ? 'found' : 'null (not in cache)'}`);
+        return url;
       } catch (error) {
         console.error("[ProjectContext] Failed to get MRI image:", error);
         return null;
       }
     },
-    [projectId],
+    [projectId, tarCacheReady],
   );
 
   const getMRIImageFilename = useCallback(
@@ -291,6 +294,22 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     if (!projectId || !projectData) return;
 
     try {
+      await tarImageCache.init();
+
+      // Skip download if already ready this session
+      if (tarImageCache.isProjectReady(projectId)) {
+        setTarCacheReady(true);
+        return;
+      }
+
+      // Skip download if IndexedDB already has images (e.g. came from segmentation page)
+      const { frames, slices } = await tarImageCache.getAvailableFramesAndSlices(projectId);
+      if (frames.length > 0 && slices.length > 0) {
+        tarImageCache.markProjectReady(projectId);
+        setTarCacheReady(true);
+        return;
+      }
+
       const result = await tarImageCache.fetchAndExtractProjectImages(projectId, projectApi.getProjectPresignedUrl);
       if (result.success) {
         setTarCacheReady(true);

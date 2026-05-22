@@ -1,7 +1,7 @@
 # Docker Compose for LOCAL Deployment - Combined Container Version
 
 x-gpu-environment: &gpu-env
-  JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
+  JWT_SECRET: dev-gpu-secret
   YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
   MEDSAM_MODEL_NAME: medsam_vit_b.pth
   FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
