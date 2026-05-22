@@ -19,7 +19,7 @@ const MOBILE_MENU_ITEMS = [
     title: "Information",
     items: [
       {
-        title: "Documentation",
+        title: "User Guide",
         href: "/doc",
         icon: FileText,
         badge: "Updated",
@@ -226,7 +226,7 @@ const HomeDropDown = React.memo(function HomeDropDown() {
       <NavigationMenuContent className="bg-background/95 border shadow-lg backdrop-blur-md">
         <div className="w-[400px] p-6">
           <ul className="flex flex-col space-y-3">
-            <ListItem href="/doc" title="Documentation" icon={FileText} badge="Updated" className="min-h-20">
+            <ListItem href="/doc" title="User Guide" icon={FileText} badge="Updated" className="min-h-20">
               A work in progress guide on using VisHeart&apos;s features, tools, and best practices for cardiac imaging.
             </ListItem>
             <ListItem href="/sample" title="Sample NIfTI" icon={Download} className="min-h-16">

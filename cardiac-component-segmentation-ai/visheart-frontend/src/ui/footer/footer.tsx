@@ -47,7 +47,7 @@ export default function Footer() {
                 About Us
               </Link>
               <Link href="/doc" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                Documentation
+                User Guide
               </Link>
               <Link href="/sample" className="text-sm text-muted-foreground hover:text-primary transition-colors">
                 Sample NIfTI files

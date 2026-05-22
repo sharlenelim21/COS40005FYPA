@@ -21,6 +21,9 @@ interface LandmarkSliceViewerProps {
   maskOverlays?: LandmarkMaskOverlay[];
   visibleLandmarks: Set<string>;
   showLabels?: boolean;
+  editableLandmarks?: boolean;
+  highlightedLandmarkId?: string | null;
+  onLandmarkMove?: (id: string, coord: [number, number]) => void;
   className?: string;
 }
 
@@ -41,12 +44,16 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   maskOverlays = [],
   visibleLandmarks,
   showLabels = true,
+  editableLandmarks = false,
+  highlightedLandmarkId,
+  onLandmarkMove,
   className,
 }: LandmarkSliceViewerProps) {
   const effectiveMaskDimensions = maskDimensions ?? imageDimensions;
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
+  const draggingLandmarkRef = useRef<string | null>(null);
   // Actual pixel dimensions of the loaded JPEG — may differ from imageDimensions
   // if the backend stored thumbnails with transposed axes (H×W vs W×H).
   const imgPixelDimsRef = useRef<{ w: number; h: number } | null>(null);
@@ -98,6 +105,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
         const [cx, cy] = toCanvas(coord, cw, ch);
+        drawDot(ctx, cx, cy, def, showLabels, highlightedLandmarkId === def.id);
         // Collapsed: draw RV1/RV2 faded and without labels (mean point label replaces them)
         drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, isLowConfidence || isCollapsed);
       }
@@ -113,8 +121,39 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
       }
     },
+    [prediction, visibleLandmarks, showLabels, highlightedLandmarkId, toCanvas, maskOverlays, imageDimensions],
     [prediction, visibleLandmarks, showLabels, toCanvas, maskOverlays, effectiveMaskDimensions],
   );
+
+  const canvasToImageCoord = useCallback((event: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
+    const canvas = canvasRef.current;
+    if (!canvas) return [0, 0];
+    const rect = canvas.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * imageDimensions.width;
+    const y = ((event.clientY - rect.top) / rect.height) * imageDimensions.height;
+    return [
+      Math.max(0, Math.min(imageDimensions.width, Math.round(x))),
+      Math.max(0, Math.min(imageDimensions.height, Math.round(y))),
+    ];
+  }, [imageDimensions]);
+
+  const hitTestLandmark = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!prediction || !editableLandmarks) return null;
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const pointerX = ((event.clientX - rect.left) / rect.width) * canvas.width;
+    const pointerY = ((event.clientY - rect.top) / rect.height) * canvas.height;
+
+    for (const def of [...LANDMARK_DEFINITIONS].sort((a, b) => b.priority - a.priority)) {
+      if (!visibleLandmarks.has(def.id)) continue;
+      const coord = getLandmarkCoord(prediction, def.id);
+      if (!coord) continue;
+      const [cx, cy] = toCanvas(coord, canvas.width, canvas.height);
+      if (Math.hypot(pointerX - cx, pointerY - cy) <= GLOW_R + 6) return def.id;
+    }
+    return null;
+  }, [editableLandmarks, prediction, toCanvas, visibleLandmarks]);
 
   // Redraw whenever draw function changes (prediction/masks/settings) or frame advances
   useEffect(() => {
@@ -182,9 +221,28 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     >
       <canvas
         ref={canvasRef}
+        className={cn("block max-w-full max-h-full", editableLandmarks && "cursor-crosshair")}
+        style={{ imageRendering: "pixelated" }}
         className="block max-w-full max-h-full"
         style={{ imageRendering: "auto" }}
         aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
+        onPointerDown={(event) => {
+          const landmarkId = hitTestLandmark(event);
+          if (!landmarkId) return;
+          draggingLandmarkRef.current = landmarkId;
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!draggingLandmarkRef.current) return;
+          onLandmarkMove?.(draggingLandmarkRef.current, canvasToImageCoord(event));
+        }}
+        onPointerUp={(event) => {
+          draggingLandmarkRef.current = null;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          draggingLandmarkRef.current = null;
+        }}
       />
     </div>
   );
@@ -196,6 +254,7 @@ function drawDot(
   cy: number,
   def: LandmarkDefinition,
   showLabel: boolean,
+  highlighted = false,
   lowConfidence = false,
 ) {
   // Low-confidence: keep original colour but reduce opacity so dots remain distinguishable
@@ -209,12 +268,19 @@ function drawDot(
   // Outer glow
   ctx.beginPath();
   ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
+  ctx.fillStyle = highlighted ? def.color + "55" : def.color + "2a";
   ctx.fillStyle = dotColor + glowAlpha;
   ctx.fill();
 
   // Crosshair lines — clipped tightly around the dot
   const arm = DOT_R + CROSS_EXT;
   ctx.beginPath();
+  ctx.moveTo(cx - DOT_R - CROSS_EXT, cy);
+  ctx.lineTo(cx + DOT_R + CROSS_EXT, cy);
+  ctx.moveTo(cx, cy - DOT_R - CROSS_EXT);
+  ctx.lineTo(cx, cy + DOT_R + CROSS_EXT);
+  ctx.strokeStyle = def.color + "88";  // 53% opacity
+  ctx.lineWidth = highlighted ? 1.8 : 0.8;
   ctx.moveTo(Math.round(cx - arm) + 0.5, Math.round(cy) + 0.5);
   ctx.lineTo(Math.round(cx - DOT_R) + 0.5, Math.round(cy) + 0.5);
   ctx.moveTo(Math.round(cx + DOT_R) + 0.5, Math.round(cy) + 0.5);
@@ -237,9 +303,19 @@ function drawDot(
   ctx.beginPath();
   ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
   ctx.strokeStyle = "rgba(255,255,255,0.9)";
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = highlighted ? 2.6 : 1.5;
   ctx.stroke();
 
+  if (highlighted) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, GLOW_R + 5, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  // Label pill
+  if (!showLabel) return;
   // Label pill — always full opacity regardless of confidence
   if (!showLabel) { ctx.restore(); return; }
   ctx.globalAlpha = 1.0;

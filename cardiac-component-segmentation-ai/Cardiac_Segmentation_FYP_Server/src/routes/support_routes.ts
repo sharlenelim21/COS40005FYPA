@@ -113,8 +113,8 @@ router.post('/faq-message', async (req: Request, res: Response): Promise<void> =
     res.status(200).json({
       success: true,
       message: delivery === 'email'
-        ? `FAQ message sent to ${adminEmail}.`
-        : `FAQ message saved for ${adminEmail}. Configure SMTP_HOST to send it as email.`,
+        ? 'Your message has been sent. We will get back to you soon, so please check your email.'
+        : 'Your message has been saved. We will get back to you soon once email delivery is available.',
       adminEmail,
       delivery,
     });
