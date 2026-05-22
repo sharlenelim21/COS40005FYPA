@@ -89,6 +89,10 @@ export interface ImageCanvasProps {
   zoomLevel?: number;
   setZoomLevel?: (level: number) => void;
   resetTrigger?: number;
+<<<<<<< HEAD
+=======
+  selectedModel: "medsam" | "unet";
+>>>>>>> backup-finalsprint3
 }
 
 export interface HistoryPanelProps {

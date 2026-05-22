@@ -38,6 +38,14 @@ const configureLocalStrategy = () => {
         const result = await authenticateUser(username, password);
 
         if (!result.success && result.message) {
+<<<<<<< HEAD
+=======
+          logger.warn(
+            `${serviceLocation}: Failed login attempt - ` +
+            `username=${username} ` +
+            `timestamp=${new Date().toISOString()}`
+          );
+>>>>>>> backup-finalsprint3
           return done(null, false, { message: result.message });
         }
 

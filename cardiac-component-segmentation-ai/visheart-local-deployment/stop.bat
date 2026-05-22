@@ -9,7 +9,15 @@ echo.
 
 cd /d "%~dp0"
 
-docker-compose down
+echo Detecting hardware capabilities...
+set COMPOSE_PROFILES=cpu
+where nvidia-smi >nul 2>nul
+if %errorlevel% equ 0 (
+    set COMPOSE_PROFILES=gpu
+)
+
+docker-compose --profile %COMPOSE_PROFILES% down
+docker-compose down --remove-orphans
 
 if errorlevel 1 (
     echo.

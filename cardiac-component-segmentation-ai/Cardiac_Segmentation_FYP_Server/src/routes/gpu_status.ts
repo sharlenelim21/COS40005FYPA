@@ -28,6 +28,32 @@ function isAxiosErrorLike(error: unknown): error is AxiosErrorLike {
   return error !== null && typeof error === "object" && "isAxiosError" in error;
 }
 
+<<<<<<< HEAD
+=======
+function resolveGpuAvailability(data: any): { gpuAvailable: boolean; mode: string } {
+  const backend = typeof data?.backend === "string" ? data.backend.toLowerCase() : "";
+  const nestedBackend =
+    typeof data?.gpu?.backend === "string" ? data.gpu.backend.toLowerCase() : "";
+  const status = typeof data?.status === "string" ? data.status.toLowerCase() : "";
+  const gpuStatus =
+    typeof data?.gpu?.status === "string" ? data.gpu.status.toLowerCase() : "";
+  const hasGpuTelemetry =
+    typeof data?.gpu?.gpu_name === "string" && data.gpu.gpu_name.trim().length > 0;
+  const mode = data?.mode || backend || nestedBackend || "unknown";
+  const gpuAvailable =
+    Boolean(data?.gpuAvailable) ||
+    (status === "ok" && (backend === "cuda" || nestedBackend === "cuda")) ||
+    (status === "ok" && hasGpuTelemetry) ||
+    ((backend === "cuda" || nestedBackend === "cuda") &&
+      (gpuStatus === "ok" || gpuStatus === "busy"));
+
+  return {
+    gpuAvailable,
+    mode: gpuAvailable ? "gpu" : mode === "unknown" ? "cpu" : mode,
+  };
+}
+
+>>>>>>> backup-finalsprint3
 // Returns if Cloud GPU is available
 router.get(
   "/gpu-status",
@@ -57,10 +83,23 @@ router.get(
       });
 
       if (response.status === 200) {
+<<<<<<< HEAD
         logger.info(`${serviceLocation}: GPU is available`);
         res.status(200).json({
           message: "GPU is available.",
           status: "online",
+=======
+        const { gpuAvailable, mode } = resolveGpuAvailability(response.data);
+        logger.info(
+          `${serviceLocation}: GPU status mapped. gpuAvailable=${gpuAvailable}, mode=${mode}, backend=${response.data?.backend}, gpuStatus=${response.data?.gpu?.status}`
+        );
+        res.status(200).json({
+          message: gpuAvailable ? "NVIDIA GPU is available." : "CPU mode is active.",
+          status: "online",
+          serviceOnline: true,
+          gpuAvailable,
+          mode,
+>>>>>>> backup-finalsprint3
           details: response.data,
         });
       } else {
@@ -70,6 +109,11 @@ router.get(
         res.status(response.status).json({
           message: `GPU returned status ${response.status}`,
           status: "degraded",
+<<<<<<< HEAD
+=======
+          serviceOnline: true,
+          ...resolveGpuAvailability(response.data),
+>>>>>>> backup-finalsprint3
           details: response.data,
         });
       }
@@ -139,6 +183,12 @@ router.get(
       res.status(statusCode).json({
         message: errorMessage,
         status: "offline",
+<<<<<<< HEAD
+=======
+        serviceOnline: false,
+        gpuAvailable: false,
+        mode: "unknown",
+>>>>>>> backup-finalsprint3
         details: errorDetails,
       });
     }

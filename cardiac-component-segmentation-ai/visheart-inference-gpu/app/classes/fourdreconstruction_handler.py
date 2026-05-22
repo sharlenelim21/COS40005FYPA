@@ -30,6 +30,19 @@ from deep_sdf.obj_process import obj_read
 # Import from get_P.py for contour extraction and affine matrix computation
 from get_P import get_contour, get_T
 
+<<<<<<< HEAD
+=======
+#New: Import device runtime utilities for better GPU management
+from app.classes.device_runtime import (
+    resolve_device,
+    get_backend,
+    is_gpu_available,
+    safe_empty_cache,
+    safe_synchronize,
+    safe_memory_stats,
+)
+
+>>>>>>> backup-finalsprint3
 
 class FourDReconstructionHandler:
     def __init__(self, model_path: str, specs_config: Optional[dict] = None):
@@ -43,7 +56,15 @@ class FourDReconstructionHandler:
         self.model_path = model_path
         self.specs = specs_config or self._get_default_specs()
         self.decoder = None
+<<<<<<< HEAD
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+=======
+        # New: Resolve device using utility function for better control and logging
+        preferred_device = os.getenv("VISHEART_DEVICE", "auto")
+        self.device = resolve_device(preferred_device)
+        self.backend = get_backend()
+
+>>>>>>> backup-finalsprint3
         
         # Model configuration from specs
         self.frame_num = self.specs["FrameNum"]
@@ -128,8 +149,13 @@ class FourDReconstructionHandler:
     
     def _clear_gpu_memory(self):
         """Clear GPU memory and cache"""
+<<<<<<< HEAD
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+=======
+        if is_gpu_available():
+            safe_empty_cache(self.device)
+>>>>>>> backup-finalsprint3
             gc.collect()
     
     def _reset_model_state(self):
@@ -143,7 +169,11 @@ class FourDReconstructionHandler:
             self.decoder.eval()
             
             # Clear GPU cache
+<<<<<<< HEAD
             torch.cuda.empty_cache()
+=======
+            safe_empty_cache(self.device)
+>>>>>>> backup-finalsprint3
     
     def _prepare_frame_processing(self):
         """Prepare for frame processing to avoid autograd conflicts"""
@@ -151,9 +181,15 @@ class FourDReconstructionHandler:
     
     def _force_gpu_sync(self):
         """Force GPU synchronization and memory cleanup"""
+<<<<<<< HEAD
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # Wait for all GPU operations to complete
             torch.cuda.empty_cache()  # Clear cache
+=======
+        if is_gpu_available():
+            safe_synchronize(self.device)
+            safe_empty_cache(self.device)
+>>>>>>> backup-finalsprint3
             gc.collect()  # Force garbage collection
     
     def _create_isolated_tensor(self, data, requires_grad=False):
@@ -192,7 +228,11 @@ class FourDReconstructionHandler:
                 self.decoder.cached_forward = None
             
             # Step 5: Final GPU sync
+<<<<<<< HEAD
             torch.cuda.synchronize()
+=======
+            safe_synchronize(self.device)
+>>>>>>> backup-finalsprint3
     
     def _verify_tensor_devices(self, **tensors):
         """Verify all tensors are on the correct device"""
@@ -234,25 +274,43 @@ class FourDReconstructionHandler:
         gc.collect()
         
         # Additional GPU memory management
+<<<<<<< HEAD
         if torch.cuda.is_available():
             # Clear all GPU caches
             torch.cuda.empty_cache()
             # Reset GPU memory stats (if available)
             if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+=======
+        if is_gpu_available():
+            # Clear all GPU caches
+            safe_empty_cache(self.device)
+            # Reset GPU memory stats (if available)
+            if is_gpu_available() and hasattr(torch.cuda, "reset_peak_memory_stats"):
+>>>>>>> backup-finalsprint3
                 torch.cuda.reset_peak_memory_stats()
         
         # Set random seeds for reproducibility
         seed = self._get_random_seed()
         torch.manual_seed(seed)
         np.random.seed(seed)
+<<<<<<< HEAD
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
+=======
+        if is_gpu_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed) 
+>>>>>>> backup-finalsprint3
         
         # Force garbage collection
         gc.collect()
         
+<<<<<<< HEAD
         print(f"GPU memory before frame processing: {torch.cuda.memory_allocated() / 1024**2:.1f} MB")
+=======
+        print(f"GPU memory before frame processing: {safe_memory_stats(self.device)['allocated_bytes'] / 1024**2:.1f} MB")
+>>>>>>> backup-finalsprint3
     
     def _detect_nifti_dimensions(self, nifti_file_path: str) -> Tuple[bool, int]:
         """
@@ -590,14 +648,22 @@ class FourDReconstructionHandler:
             
             # Clean up optimization variables
             del c_s, c_m, optimizer, xyz, sdf_gt, t
+<<<<<<< HEAD
             torch.cuda.empty_cache()
+=======
+            safe_empty_cache(self.device)
+>>>>>>> backup-finalsprint3
             
             return result_c_s, result_c_m
             
         except Exception as e:
             print(f"Error in latent code optimization: {e}")
             # AUTOGRAD FIX: Clean up on error
+<<<<<<< HEAD
             torch.cuda.empty_cache()
+=======
+            safe_empty_cache(self.device)
+>>>>>>> backup-finalsprint3
             raise e
     
     def _generate_mesh_sync(self, c_s: torch.Tensor, c_m: torch.Tensor, 
@@ -644,7 +710,11 @@ class FourDReconstructionHandler:
             # Generate mesh using deep_sdf with complete gradient isolation
             with torch.no_grad():
                 # Force another GPU sync before mesh generation
+<<<<<<< HEAD
                 torch.cuda.synchronize()
+=======
+                safe_synchronize(self.device)
+>>>>>>> backup-finalsprint3
                 
                 # Create a dummy motion filename (not used for single frame)
                 # Get base name without extension for flexibility
@@ -663,7 +733,11 @@ class FourDReconstructionHandler:
                 )
                 
                 # Force GPU sync after mesh generation
+<<<<<<< HEAD
                 torch.cuda.synchronize()
+=======
+                safe_synchronize(self.device)
+>>>>>>> backup-finalsprint3
             
             # AUTOGRAD FIX: Re-enable gradients with fresh state
             if self.decoder is not None:
@@ -687,7 +761,11 @@ class FourDReconstructionHandler:
                 
                 # AUTOGRAD FIX: Clean up tensor variables and free GPU memory
                 del c_s_vec, c_m_vec, phase_t
+<<<<<<< HEAD
                 torch.cuda.empty_cache()
+=======
+                safe_empty_cache(self.device)
+>>>>>>> backup-finalsprint3
                 
                 return output_file
             else:
@@ -696,7 +774,11 @@ class FourDReconstructionHandler:
         except Exception as e:
             print(f"Error generating mesh: {e}")
             # AUTOGRAD FIX: Clean up on error
+<<<<<<< HEAD
             torch.cuda.empty_cache()
+=======
+            safe_empty_cache(self.device)
+>>>>>>> backup-finalsprint3
             raise e
     
     def _convert_ply_to_obj(self, ply_file: str, obj_file: str):
@@ -916,6 +998,10 @@ class FourDReconstructionHandler:
             verbose_logging = kwargs.get('verbose_logging', False)
             
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
+<<<<<<< HEAD
+=======
+            print("[4D Reconstruction] Reconstruction started")
+>>>>>>> backup-finalsprint3
             print(f"ED frame index: {ed_frame_index}, Process all frames: {process_all_frames}")
             print(f"Export format: {export_format.upper()}")
             print(f"Optimization config: iterations={num_iterations}, reg_lambda={code_reg_lambda}")
@@ -1004,7 +1090,11 @@ class FourDReconstructionHandler:
                     try:
                         # AUTOGRAD FIX: Complete isolation for each frame processing
                         self._complete_model_reset()
+<<<<<<< HEAD
                         print(f"GPU memory before frame processing: {torch.cuda.memory_allocated() / 1024**2:.1f} MB")
+=======
+                        print(f"GPU memory before frame processing: {safe_memory_stats(self.device)['allocated_bytes'] / 1024**2:.1f} MB")
+>>>>>>> backup-finalsprint3
                         
                         # Extract contour for this frame
                         try:
@@ -1012,13 +1102,21 @@ class FourDReconstructionHandler:
                             
                             # Check if we got any points
                             if len(frame_point_cloud) == 0:
+<<<<<<< HEAD
                                 print(f"⚠️  Frame {original_frame_idx} has no contour points (likely apex/base slice). Skipping...")
+=======
+                                print(f"[WARN] Frame {original_frame_idx} has no contour points (likely apex/base slice). Skipping...")
+>>>>>>> backup-finalsprint3
                                 continue
                                 
                         except Exception as contour_error:
                             # Check if this is expected (no LVM in frame)
                             if "No LVM" in str(contour_error) or "apex or base" in str(contour_error):
+<<<<<<< HEAD
                                 print(f"⚠️  Frame {original_frame_idx} contains no myocardium (apex/base slice). Skipping...")
+=======
+                                print(f"[WARN] Frame {original_frame_idx} contains no myocardium (apex/base slice). Skipping...")
+>>>>>>> backup-finalsprint3
                                 continue
                             else:
                                 # Unexpected error, re-raise
@@ -1048,15 +1146,26 @@ class FourDReconstructionHandler:
                         mesh_files.append(frame_mesh_file)
                         processed_frame_indices.append(original_frame_idx)
                         
+<<<<<<< HEAD
                         print(f"✅ Successfully generated mesh for frame {original_frame_idx}: {os.path.basename(frame_mesh_file)}")
+=======
+                        print(f"[OK] Successfully generated mesh for frame {original_frame_idx}: {os.path.basename(frame_mesh_file)}")
+>>>>>>> backup-finalsprint3
                         
                         # AUTOGRAD FIX: Aggressive cleanup after frame processing
                         del frame_c_s, frame_c_m, frame_sdf_data, frame_point_cloud
                         self._force_gpu_sync()
+<<<<<<< HEAD
                         print(f"GPU memory after frame processing: {torch.cuda.memory_allocated() / 1024**2:.1f} MB")
                         
                     except Exception as e:
                         print(f"❌ Error processing frame {original_frame_idx}: {e}")
+=======
+                        print(f"GPU memory after frame processing: {safe_memory_stats(self.device)['allocated_bytes'] / 1024**2:.1f} MB")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Error processing frame {original_frame_idx}: {e}")
+>>>>>>> backup-finalsprint3
                         import traceback
                         traceback.print_exc()
                         
@@ -1124,6 +1233,10 @@ class FourDReconstructionHandler:
                 output_file = os.path.join(output_dir, f"{input_filename}_4D_ED{ed_frame_index:02d}.{file_extension}")
                 
                 primary_mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+<<<<<<< HEAD
+=======
+                print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
+>>>>>>> backup-finalsprint3
                 mesh_files = [primary_mesh_file]
                 processed_frame_indices = [ed_frame_index]
             

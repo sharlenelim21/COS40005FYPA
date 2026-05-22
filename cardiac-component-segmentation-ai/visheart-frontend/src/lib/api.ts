@@ -1,5 +1,11 @@
+<<<<<<< HEAD
 import axios from "axios";
 import { MetricData, S3Metrics, CostData } from "@/types/system-monitor";
+=======
+import axios, { AxiosError } from "axios";
+import { MetricData, S3Metrics, CostData } from "@/types/system-monitor";
+import { file } from "zod";
+>>>>>>> backup-finalsprint3
 
 // Create a pre-configured instance of axios.
 // This is a best practice for managing API calls in a structured way.
@@ -251,6 +257,7 @@ export const projectApi = {
 // Segmentation functions
 export const segmentationApi = {
   // Start segmentation for a project
+<<<<<<< HEAD
   startSegmentation: async (projectId: string) => {
     try {
       const response = await api.post(
@@ -260,6 +267,23 @@ export const segmentationApi = {
     } catch (error) {
       throw error;
     }
+=======
+  startSegmentation: async (
+    projectId: string,
+    segmentationModel: "medsam" | "unet" = "medsam",
+    deviceType: "cpu" | "cuda" | "auto" = "auto"
+  ) => {
+    const endpoint = `/segmentation/start-segmentation/${projectId}`;
+    const payload = { segmentationModel, deviceType };
+    console.log("[API] startSegmentation POST:", {
+      endpoint,
+      payload,
+    });
+
+    const response = await api.post(endpoint, payload);
+
+    return response.data;
+>>>>>>> backup-finalsprint3
   },
 
   // Get segmentation results for a project
@@ -323,6 +347,10 @@ export const segmentationApi = {
       name?: string;
       description?: string;
       frames?: any[];
+<<<<<<< HEAD
+=======
+      model?: string;
+>>>>>>> backup-finalsprint3
     },
   ) => {
     try {
@@ -358,6 +386,19 @@ export const segmentationApi = {
     }
   },
 
+<<<<<<< HEAD
+=======
+  // Trigger server-side bullseye computation for a mask (async, non-blocking)
+  triggerBullseye: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-bullseye/${maskId}`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+>>>>>>> backup-finalsprint3
   // Export project data
   exportProjectData: async (projectId: string) => {
     try {
@@ -419,6 +460,13 @@ export const reconstructionApi = {
       reconstructionDescription?: string;
       ed_frame?: number;
       export_format?: 'obj' | 'glb'; // User's choice for mesh export format
+<<<<<<< HEAD
+=======
+      // Which segmentation result the reconstruction should consume.
+      // Backend strictly scopes the editable-mask lookup to this model;
+      // omit to preserve legacy (model-agnostic) behaviour.
+      segmentationModel?: 'medsam' | 'unet';
+>>>>>>> backup-finalsprint3
       parameters?: {
         num_iterations?: number;
         resolution?: number;
@@ -496,6 +544,40 @@ export const reconstructionApi = {
       throw error;
     }
   },
+<<<<<<< HEAD
+=======
+
+  // Delete one reconstruction result by ID
+  deleteReconstruction: async (projectId: string, reconstructionId: string) => {
+    console.log('[API] Deleting reconstruction:', { projectId, reconstructionId });
+    try {
+      const response = await api.delete(
+        `/reconstruction/delete-reconstruction/${projectId}/${reconstructionId}`
+      );
+      console.log('[API] Delete reconstruction response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('[API] Delete reconstruction error:', error);
+      throw error;
+    }
+  },
+
+  // Delete reconstruction for a specific segmentation model (medsam or unet)
+  deleteModelReconstruction: async (projectId: string, segmentationModel: 'medsam' | 'unet') => {
+    console.log('[API] Deleting reconstruction for model:', { projectId, segmentationModel });
+    try {
+      const response = await api.delete(
+        `/reconstruction/delete-model-reconstruction/${projectId}`,
+        { params: { segmentationModel } }
+      );
+      console.log('[API] Delete model reconstruction response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('[API] Delete model reconstruction error:', error);
+      throw error;
+    }
+  },
+>>>>>>> backup-finalsprint3
 };
 
 // Define interfaces for the admin-specific responses
@@ -601,20 +683,49 @@ export const statusApi = {
   // Get GPU status
   getGpuStatus: async () => {
     try {
+<<<<<<< HEAD
       const response = await api.get("/status/gpu-status");
       return response.data;
     } catch (error) {
       throw error;
+=======
+      const response = await api.get("/status/gpu-status", {
+        validateStatus: () => true,
+      });
+      return response.data;
+    } catch (error) {
+      return {
+        message: error instanceof Error ? error.message : "Processing unit status unavailable",
+        status: "offline",
+        serviceOnline: false,
+        gpuAvailable: false,
+        mode: "unknown",
+        details: error,
+      };
+>>>>>>> backup-finalsprint3
     }
   },
 
   // Get GPU system status (CPU, RAM, Disk)
   getGpuSystemStatus: async () => {
     try {
+<<<<<<< HEAD
       const response = await api.get("/status/gpu-system-status");
       return response.data;
     } catch (error) {
       throw error;
+=======
+      const response = await api.get("/status/gpu-system-status", {
+        validateStatus: () => true,
+      });
+      return response.data;
+    } catch (error) {
+      return {
+        message: error instanceof Error ? error.message : "GPU system status unavailable",
+        status: "offline",
+        details: error,
+      };
+>>>>>>> backup-finalsprint3
     }
   },
 };
@@ -1240,4 +1351,8 @@ export const analyticsApi = {
   }
 };
 
+<<<<<<< HEAD
 export default api;
+=======
+export default api;
+>>>>>>> backup-finalsprint3

@@ -1,18 +1,27 @@
 # File: app/helpers/inference_jobs.py
 import asyncio
 import httpx
+import aiohttp
 import os, traceback, time, json, tempfile
 import re
+import logging
 from enum import Enum
 from functools import wraps
 from uuid import UUID
 from pydantic import HttpUrl, Field
 from urllib.parse import urlparse
-import torch
+#import torch
 import numpy as np
 import base64
 from typing import Dict, List, Union, Tuple, Any, TYPE_CHECKING
+
 from fastapi import HTTPException # <-- Add HTTPException
+
+from app.classes.device_runtime import (
+    get_backend,
+    safe_empty_cache,
+    safe_memory_stats,
+)
 
 def _extract_frame_index_from_filename(filename: str) -> int | None:
     """Extract frame index from filename like 'patient006_4d_gt_4D_frame02_ED.obj'"""
@@ -20,14 +29,14 @@ def _extract_frame_index_from_filename(filename: str) -> int | None:
     return int(match.group(1)) if match else None
 
 if TYPE_CHECKING:
-    from classes.pydantic_schema import FourDReconstructionJobRequest
+    from app.classes.pydantic_schema import FourDReconstructionJobRequest
 
 # File handler (now needs async usage)
-from classes.file_fetch_handler import FileFetchHandler
+from app.classes.file_fetch_handler import FileFetchHandler
 
 # Model handlers (methods are now async)
-from classes.yolo_handler import YoloHandler
-from dependencies.model_init import get_yolo_model
+from app.classes.yolo_handler import YoloHandler
+from app.dependencies.model_init import get_yolo_model
 
 def obj_to_npz_base64(obj_file_path: str) -> str:
     """
@@ -69,20 +78,91 @@ def obj_to_npz_base64(obj_file_path: str) -> str:
     base64_data = base64.b64encode(npz_data).decode('utf-8')
     
     return base64_data
-from classes.medsam_handler import MedSamHandler
-from dependencies.model_init import get_medsam_model
-from classes.fourdreconstruction_handler import FourDReconstructionHandler
-from dependencies.model_init import get_fourd_reconstruction_model
+from app.classes.medsam_handler import MedSamHandler
+from app.dependencies.model_init import get_medsam_model
+from app.helpers.landmark_inference_api import run_landmark_inference_from_nifti
+from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
+from app.dependencies.model_init import get_fourd_reconstruction_model
+from app.helpers.unet_inference_api import run_unet_inference_from_nifti
 
-from helpers.inference_helpers import (
+from app.helpers.inference_helpers import (
     filter_detections, encode_and_name_masks, sort_medsam_results,
 )
 
 # Import the new Pydantic models to be used for constructing the result
-from classes.pydantic_schema import ManualInputBox, ResultPerImageManual
+from app.classes.pydantic_schema import ManualInputBox, ResultPerImageManual
+
+
+def normalize_unet_result_to_medsam_shape(raw_mask_payload: Any) -> Dict[str, Dict[str, Any]]:
+    """
+    Normalize UNET output payload to match MedSAM result shape:
+    {
+        "<filename>.jpg": {
+            "boxes": [...],
+            "masks": {"rv": "<rle>", ...}
+        }
+    }
+    """
+    if not isinstance(raw_mask_payload, dict):
+        return {}
+
+    # Already MedSAM-like: keep as-is and normalize order.
+    if all(
+        isinstance(value, dict) and "boxes" in value and "masks" in value
+        for value in raw_mask_payload.values()
+    ):
+        return sort_medsam_results(raw_mask_payload)
+
+    frames = raw_mask_payload.get("frames")
+    if not isinstance(frames, list):
+        return {}
+
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for frame in frames:
+        if not isinstance(frame, dict):
+            continue
+
+        frame_idx = frame.get("frameindex", frame.get("frame_index", 0))
+        try:
+            frame_idx = int(frame_idx)
+        except (TypeError, ValueError):
+            frame_idx = 0
+
+        slices = frame.get("slices")
+        if not isinstance(slices, list):
+            continue
+
+        for slice_item in slices:
+            if not isinstance(slice_item, dict):
+                continue
+
+            slice_idx = slice_item.get("sliceindex", slice_item.get("slice_index", 0))
+            try:
+                slice_idx = int(slice_idx)
+            except (TypeError, ValueError):
+                slice_idx = 0
+
+            masks_list = slice_item.get("segmentationmasks")
+            if not isinstance(masks_list, list):
+                masks_list = []
+
+            masks: Dict[str, str] = {}
+            for mask_item in masks_list:
+                if not isinstance(mask_item, dict):
+                    continue
+                class_name = mask_item.get("class")
+                rle_value = mask_item.get("segmentationmaskcontents")
+                if isinstance(class_name, str) and isinstance(rle_value, str):
+                    masks[class_name] = rle_value
+
+            image_key = f"unet_prediction_{frame_idx}_{slice_idx}.jpg"
+            normalized[image_key] = {"boxes": [], "masks": masks}
+
+    return sort_medsam_results(normalized)
 
 # Constants
 serviceLocation = "Inference Service"
+logger = logging.getLogger("visheart")
 GPU_SEMAPHORE_COUNT = os.getenv("GPU_SEMAPHORE_COUNT", 1) # Default to 1 if not set
 # Ensure GPU_SEMAPHORE_COUNT is an int, handle potential ValueError
 try:
@@ -196,6 +276,7 @@ async def send_callback(
     success: bool,
     result: dict | None,
     error_detail: str | None,
+    segmentation_model: str = "medsam",
 ):
     """Sends the processing result back to the client's callback URL with enhanced error logging."""
     callback_payload = {
@@ -203,14 +284,32 @@ async def send_callback(
         "status": "completed" if success else "failed",
         "result": result if success else None,
         "error": error_detail if not success else None,
+        "segmentation_model": segmentation_model,
     }
     parsed_url = urlparse(str(callback_url))
     host = parsed_url.hostname
     port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
-    print(f"[{serviceLocation}] Attempting callback to {host}:{port} for job {uuid}")
+    logger.info(f"[{serviceLocation}] Attempting callback to {host}:{port} for job {uuid}")
+    print(f"[{serviceLocation}] Attempting callback to {host}:{port} for job {uuid}", flush=True)
     try:
         payload_size = len(json.dumps(callback_payload))
-        print(f"[{serviceLocation}] Callback payload size: {payload_size} bytes")
+        logger.info(f"[{serviceLocation}] Callback payload size: {payload_size} bytes")
+        print(f"[{serviceLocation}] Callback payload size: {payload_size} bytes", flush=True)
+        result_summary = None
+        if isinstance(result, dict):
+            result_summary = {
+                "top_level_keys": list(result.keys())[:10],
+                "top_level_count": len(result),
+                "has_frames": isinstance(result.get("frames"), list),
+                "frames_count": len(result.get("frames", [])) if isinstance(result.get("frames"), list) else None,
+            }
+        callback_summary = (
+            f"[{serviceLocation}] Callback payload summary for job {uuid}: "
+            f"status={callback_payload['status']}, model={segmentation_model}, "
+            f"success={success}, error={error_detail}, result_summary={result_summary}"
+        )
+        logger.info(callback_summary)
+        print(callback_summary, flush=True)
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "VisHeart-GPU-Service/1.0",
@@ -218,7 +317,11 @@ async def send_callback(
         }
         async with httpx.AsyncClient() as client:
             start_time = time.time()
-            print(f"[{serviceLocation}] Sending callback to {callback_url}")
+            logger.info(
+                f"[{serviceLocation}] Sending callback to {callback_url} "
+                f"for job {uuid} status={callback_payload['status']} error={error_detail}"
+            )
+            print(f"[{serviceLocation}] Sending callback to {callback_url}", flush=True)
             response = await client.post(
                 str(callback_url), json=callback_payload, headers=headers
             )
@@ -260,12 +363,17 @@ async def send_callback(
 
 def log_gpu_status(uuid, stage):
     """Log GPU status for debugging"""
-    if torch.cuda.is_available():
-        mem_allocated = torch.cuda.memory_allocated() / (1024**2)
-        mem_reserved = torch.cuda.memory_reserved() / (1024**2)
+    try:
+        backend = get_backend()
+        stats = safe_memory_stats()
+        mem_allocated = stats["allocated_bytes"] / (1024**2)
+        mem_reserved = stats["reserved_bytes"] / (1024**2)
         print(
-            f"[{serviceLocation}] Job {uuid} {stage} - GPU Memory: {mem_allocated:.2f}MB allocated, {mem_reserved:.2f}MB reserved"
+            f"[{serviceLocation}] Job {uuid} {stage} - backend={backend}, "
+            f"Memory: {mem_allocated:.2f}MB allocated, {mem_reserved:.2f}MB reserved"
         )
+    except Exception as e:
+        print(f"[{serviceLocation}] Job {uuid} {stage} - unable to read memory stats: {e}")
 
 # --- BBox Job (existing async callback version) ---
 async def process_bbox_job_with_semaphore(
@@ -401,10 +509,15 @@ async def _process_medsam_job(
                             masks = await medsam_handler.generate_mask(image_path, filtered_dets)
                             break
                         except RuntimeError as e:
-                            if "CUDA" in str(e) and retry_count < max_retries:
-                                print(f"[{serviceLocation}] CUDA error, retrying ({retry_count+1}/{max_retries})...")
+                            msg = str(e)
+                            is_runtime_device_error = any(k in msg.lower() for k in [
+                                "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                            ])
+
+                            if is_runtime_device_error and retry_count < max_retries:
+                                print(f"[{serviceLocation}] Device/backend runtime error, retrying ({retry_count+1}/{max_retries})... err={msg}")
                                 retry_count += 1
-                                torch.cuda.empty_cache()
+                                safe_empty_cache()
                                 await asyncio.sleep(1)
                             else:
                                 raise
@@ -444,10 +557,15 @@ async def _process_medsam_job(
                             masks = await medsam_handler.generate_mask(file_path, filtered_detections)
                             break
                         except RuntimeError as e:
-                            if "CUDA" in str(e) and retry_count < max_retries:
-                                print(f"[{serviceLocation}] CUDA error, retrying ({retry_count+1}/{max_retries})...")
+                            msg = str(e)
+                            is_runtime_device_error = any(k in msg.lower() for k in [
+                                "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                            ])
+
+                            if is_runtime_device_error and retry_count < max_retries:
+                                print(f"[{serviceLocation}] Device/backend runtime error, retrying ({retry_count+1}/{max_retries})... err={msg}")
                                 retry_count += 1
-                                torch.cuda.empty_cache()
+                                safe_empty_cache()
                                 await asyncio.sleep(1)
                             else:
                                 raise
@@ -493,6 +611,237 @@ async def _process_medsam_job(
             error_detail = f"An error occurred during inference: {str(e)}"
     finally:
         print(f"[{serviceLocation}] Sending final callback for job {uuid} with success={success}")
+        await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="medsam")
+
+
+async def process_unet_job_with_semaphore(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "auto",
+    checkpoint_path: str | None = None,
+):
+    logger.info(f"[{serviceLocation}] Job {uuid} waiting for GPU access (unet)...")
+    print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (unet)...", flush=True)
+    async with gpu_semaphore:
+        logger.info(f"[{serviceLocation}] Job {uuid} acquired GPU access (unet)")
+        print(f"[{serviceLocation}] Job {uuid} acquired GPU access (unet)", flush=True)
+        log_gpu_status(uuid, "start-unet")
+        try:
+            await _process_unet_job(input_url, uuid, callback_url, device, checkpoint_path)
+        finally:
+            log_gpu_status(uuid, "end-unet")
+            logger.info(f"[{serviceLocation}] Job {uuid} released GPU access (unet)")
+            print(f"[{serviceLocation}] Job {uuid} released GPU access (unet)", flush=True)
+
+
+async def _process_unet_job(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "auto",
+    checkpoint_path: str | None = None,
+):
+    logger.info(f"[{serviceLocation}] Starting UNET job {uuid}")
+    print(f"[{serviceLocation}] Starting UNET job {uuid}", flush=True)
+    result = None
+    error_detail = None
+    success = False
+    parsed_url = urlparse(str(input_url))
+
+    if not all([parsed_url.scheme, parsed_url.netloc]):
+        error_detail = "Invalid URL provided. Please check the URL format."
+        logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
+        await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
+        return
+
+    try:
+        async with FileFetchHandler(str(input_url)) as handler:
+            file_path = handler.get_file_path()
+            print(f"[{serviceLocation}] UNET job {uuid} downloaded input path: {file_path}")
+
+            if not file_path or not os.path.isfile(file_path):
+                error_detail = "No valid NIfTI file was found at the provided URL"
+                logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
+                await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
+                return
+
+            inference_output = await asyncio.to_thread(
+                run_unet_inference_from_nifti,
+                file_path,
+                device,
+                checkpoint_path,
+            )
+            if isinstance(inference_output, dict):
+                mask_payload = inference_output.get("mask")
+                frames_payload = (
+                    mask_payload.get("frames")
+                    if isinstance(mask_payload, dict)
+                    else inference_output.get("frames")
+                )
+                print(
+                    f"[{serviceLocation}] UNET inference output summary for job {uuid}: "
+                    f"success={inference_output.get('success')}, "
+                    f"keys={list(inference_output.keys())}, "
+                    f"error={inference_output.get('error')}, "
+                    f"mask_type={type(mask_payload).__name__}, "
+                    f"frames_count={len(frames_payload) if isinstance(frames_payload, list) else None}"
+                )
+            else:
+                print(
+                    f"[{serviceLocation}] UNET inference output for job {uuid} was not a dict: "
+                    f"type={type(inference_output).__name__}"
+                )
+
+            if not isinstance(inference_output, dict) or not inference_output.get("success"):
+                error_detail = (inference_output or {}).get("error", "UNET inference failed without detailed error.")
+                logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
+            else:
+                normalized_result = normalize_unet_result_to_medsam_shape(
+                    inference_output.get("mask")
+                )
+
+                if not normalized_result:
+                    error_detail = "UNET inference returned no parsable masks in expected structure."
+                    logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}")
+                    print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_detail}", flush=True)
+                else:
+                    result = normalized_result
+                    success = True
+                    print(
+                        f"[{serviceLocation}] Successfully processed UNET job {uuid}; "
+                        f"normalized_entries={len(normalized_result)}"
+                    )
+
+    except Exception as e:
+        error_details = traceback.format_exc()
+        logger.error(f"[{serviceLocation}] Error in UNET job {uuid}: {error_details}")
+        print(f"[{serviceLocation}] Error in UNET job {uuid}: {error_details}", flush=True)
+        if "403" in str(e):
+            error_detail = "Access denied (403). Presigned URL invalid/expired."
+        elif "download" in str(e).lower() or "extraction" in str(e).lower():
+            error_detail = f"Error downloading/extracting file: {str(e)}"
+        else:
+            error_detail = f"Error during UNET inference: {str(e)}"
+    finally:
+        logger.info(
+            f"[{serviceLocation}] Sending final callback for UNET job {uuid} "
+            f"with success={success} error={error_detail}"
+        )
+        print(f"[{serviceLocation}] Sending final callback for UNET job {uuid} with success={success}", flush=True)
+        await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
+
+
+async def process_landmark_job_with_semaphore(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "auto",
+    checkpoint_path: str | None = None,
+    seg_mask_url: str | None = None,
+):
+    print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (landmark)...")
+    async with gpu_semaphore:
+        print(f"[{serviceLocation}] Job {uuid} acquired GPU access (landmark)")
+        log_gpu_status(uuid, "start-landmark")
+        try:
+            await _process_landmark_job(input_url, uuid, callback_url, device, checkpoint_path, seg_mask_url)
+        finally:
+            log_gpu_status(uuid, "end-landmark")
+            print(f"[{serviceLocation}] Job {uuid} released GPU access (landmark)")
+
+
+async def _process_landmark_job(
+    input_url: HttpUrl,
+    uuid: UUID,
+    callback_url: HttpUrl,
+    device: str = "auto",
+    checkpoint_path: str | None = None,
+    seg_mask_url: str | None = None,
+):
+    print(f"[{serviceLocation}] Starting landmark job {uuid} (seg_mask={'yes' if seg_mask_url else 'no'})")
+    result = None
+    error_detail = None
+    success = False
+    seg_mask_path: str | None = None
+    parsed_url = urlparse(str(input_url))
+
+    if not all([parsed_url.scheme, parsed_url.netloc]):
+        error_detail = "Invalid URL provided. Please check the URL format."
+        await send_callback(callback_url, uuid, success, result, error_detail)
+        return
+
+    try:
+        if seg_mask_url:
+            seg_tmp = f"/tmp/seg_mask_{uuid}.nii.gz"
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(seg_mask_url) as resp:
+                        if resp.status == 200:
+                            with open(seg_tmp, "wb") as f:
+                                async for chunk in resp.content.iter_chunked(8192):
+                                    f.write(chunk)
+                            seg_mask_path = seg_tmp
+                            print(f"[{serviceLocation}] Seg mask downloaded → {seg_tmp}")
+                        else:
+                            print(f"[{serviceLocation}] Seg mask download failed HTTP {resp.status} — 1ch fallback")
+            except Exception as seg_exc:
+                print(f"[{serviceLocation}] Seg mask download error: {seg_exc} — 1ch fallback")
+
+        async with FileFetchHandler(str(input_url)) as handler:
+            file_path = handler.get_file_path()
+            if not file_path or not os.path.isfile(file_path):
+                error_detail = "No valid NIfTI file was found at the provided URL"
+                await send_callback(callback_url, uuid, success, result, error_detail)
+                return
+
+            inference_output = await asyncio.to_thread(
+                run_landmark_inference_from_nifti,
+                file_path,
+                seg_mask_path,
+                device,
+                checkpoint_path,
+            )
+
+            # New response format: direct dict with "slices", "avg_lm1", etc.
+            # Legacy format (from old inference.py): {"success": True, "landmarks": {...}}
+            if isinstance(inference_output, dict):
+                if "slices" in inference_output:
+                    # New format — return the whole dict as result
+                    result = inference_output
+                    success = True
+                elif inference_output.get("success"):
+                    # Legacy format
+                    result = inference_output.get("landmarks")
+                    success = True
+                else:
+                    error_detail = inference_output.get("error", "Landmark inference failed.")
+            else:
+                error_detail = "Unexpected output from landmark inference."
+
+            if success:
+                print(f"[{serviceLocation}] Successfully processed landmark job {uuid}")
+
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[{serviceLocation}] Error in landmark job {uuid}: {error_details}")
+        if "403" in str(e):
+            error_detail = "Access denied (403). Presigned URL invalid/expired."
+        elif "download" in str(e).lower() or "extraction" in str(e).lower():
+            error_detail = f"Error downloading/extracting file: {str(e)}"
+        else:
+            error_detail = f"Error during landmark inference: {str(e)}"
+    finally:
+        # Clean up downloaded seg mask temp file
+        if seg_mask_path and os.path.exists(seg_mask_path):
+            try:
+                os.remove(seg_mask_path)
+            except Exception:
+                pass
+        print(f"[{serviceLocation}] Sending final callback for landmark job {uuid} with success={success}")
         await send_callback(callback_url, uuid, success, result, error_detail)
 
 # --- MedSAM Manual Job (existing async callback version) ---
@@ -545,10 +894,15 @@ async def _process_medsam_manual_job(
                     )
                     break
                 except RuntimeError as e:
-                    if "CUDA" in str(e) and retry_count < max_retries:
-                        print(f"[{serviceLocation}] CUDA error, retrying ({retry_count+1}/{max_retries})...")
+                    msg = str(e)
+                    is_runtime_device_error = any(k in msg.lower() for k in [
+                        "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                    ])
+
+                    if is_runtime_device_error and retry_count < max_retries:
+                        print(f"[{serviceLocation}] Device/backend runtime error, retrying ({retry_count+1}/{max_retries})... err={msg}")
                         retry_count += 1
-                        torch.cuda.empty_cache()
+                        safe_empty_cache()
                         await asyncio.sleep(1)
                     else:
                         raise
@@ -621,21 +975,26 @@ async def execute_medsam_manual_job_synchronously(
                     )
                     break
                 except RuntimeError as e:
-                    if "CUDA" in str(e) and attempt < max_retries:
-                        print(f"[{serviceLocation}] SYNC Job {uuid}: CUDA error on attempt {attempt + 1}/{max_retries + 1} for {image_name}. Retrying... Error: {str(e)}")
-                        if torch.cuda.is_available(): torch.cuda.empty_cache()
+                    msg = str(e)
+                    is_runtime_device_error = any(k in msg.lower() for k in [
+                        "cuda", "cudnn", "hip", "rocm", "out of memory", "device-side"
+                    ])
+
+                    if is_runtime_device_error and attempt < max_retries:
+                        print(f"[{serviceLocation}] Device/backend runtime error, retrying ({attempt+1}/{max_retries+1})... err={msg}")
+                        safe_empty_cache()
                         await asyncio.sleep(1 + attempt)
-                    elif "Input image is None" in str(e) or "Failed to load image" in str(e):
-                        err_detail = f"MedSAM handler failed to load image: {image_name}. Underlying error: {str(e)}"
+                    elif "Input image is None" in msg or "Failed to load image" in msg:
+                        err_detail = f"MedSAM handler failed to load image: {image_name}. Underlying error: {msg}"
                         print(f"[{serviceLocation}] Error in SYNC job {uuid}: {err_detail} at '{target_image_path}'.")
                         log_gpu_status(uuid, "error-manual-sync-imgloadfail")
                         raise HTTPException(status_code=400, detail={"detail": err_detail, "uuid": str(uuid)})
                     else:
-                        err_detail = f"Error during MedSAM mask generation for {image_name}: {str(e)}"
+                        err_detail = f"Error during MedSAM mask generation for {image_name}: {msg}"
                         print(f"[{serviceLocation}] Error in SYNC job {uuid} during mask generation (attempt {attempt+1}): {err_detail}")
                         log_gpu_status(uuid, "error-manual-sync-maskgenruntime")
-                        if "CUDA" in str(e):
-                             raise HTTPException(status_code=503, detail={"detail": f"GPU error processing {image_name} after {max_retries +1} attempts: {str(e)}", "uuid": str(uuid)})
+                        if is_runtime_device_error:
+                            raise HTTPException(status_code=503, detail={"detail": f"GPU error processing {image_name} after {max_retries + 1} attempts: {msg}", "uuid": str(uuid)})
                         raise HTTPException(status_code=500, detail={"detail": err_detail, "uuid": str(uuid)})
                 except ValueError as e:
                     err_detail = f"Invalid input for MedSAM processing of {image_name}. Likely bad image or bbox. Error: {str(e)}"

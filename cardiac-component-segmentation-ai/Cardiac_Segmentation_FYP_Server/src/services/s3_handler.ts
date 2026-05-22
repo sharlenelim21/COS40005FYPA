@@ -131,6 +131,10 @@ export const uploadToS3 = async (
   fileHash: string,
   fileExtension: string,
   keyPrefix: string,
+<<<<<<< HEAD
+=======
+  objectKeyOverride?: string,
+>>>>>>> backup-finalsprint3
 ): Promise<string> => {
   if (!s3Client) {
     logger.error(`${serviceLocation}: AWS S3 client is not configured. Cannot upload to S3.`);
@@ -141,7 +145,11 @@ export const uploadToS3 = async (
     throw new Error("AWS_BUCKET_NAME is not configured.");
   }
 
+<<<<<<< HEAD
   const generatedFilename = `${keyPrefix}${userId}_${fileHash}${fileExtension}`;
+=======
+  const generatedFilename = objectKeyOverride || `${keyPrefix}${userId}_${fileHash}${fileExtension}`;
+>>>>>>> backup-finalsprint3
 
   let contentType: string;
   switch (fileExtension.toLowerCase()) { // ensure consistent casing for extension check
@@ -403,4 +411,8 @@ export const uploadMaskToS3 = async (
     }
     throw error;
   }
+<<<<<<< HEAD
 };
+=======
+};
+>>>>>>> backup-finalsprint3

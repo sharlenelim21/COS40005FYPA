@@ -163,6 +163,10 @@ export interface BaseSegmentationMask {
     segmentationmaskRLE: boolean;
     isMedSAMOutput: boolean;
     frames: FrameData[];
+<<<<<<< HEAD
+=======
+    bullseye?: BullseyeData;
+>>>>>>> backup-finalsprint3
 }
 
 /**
@@ -200,6 +204,35 @@ interface DecodedMaskSliceData {
     mask: Uint8Array; // Decoded mask as a Uint8Array
 }
 
+<<<<<<< HEAD
+=======
+/*==================================== Bullseye Section begins here ========================================*/
+
+export interface BullseyeSegmentMeta {
+    idx: number;
+    name: string;
+    ring: string;
+    value: number;
+}
+
+export interface BullseyeStats {
+    min: number;
+    max: number;
+    mean: number;
+    n_nan: number;
+}
+
+export interface BullseyeData {
+    segment_values: number[];
+    segment_metadata: BullseyeSegmentMeta[];
+    stats: BullseyeStats;
+    computed_at: string;
+    lv_centroid?: [number, number];
+}
+
+/*==================================== Bullseye Section ends here ==========================================*/
+
+>>>>>>> backup-finalsprint3
 /*==================================== Job Section begins here =============================================*/
 /**
  * Job status enum matching backend JobStatus.
@@ -276,6 +309,13 @@ export interface UserJob {
     projectId: string;
     status: JobStatus;
     queuePosition: number | null;
+<<<<<<< HEAD
+=======
+    message?: string;
+    segmentationModel?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+>>>>>>> backup-finalsprint3
 }
 
 /**

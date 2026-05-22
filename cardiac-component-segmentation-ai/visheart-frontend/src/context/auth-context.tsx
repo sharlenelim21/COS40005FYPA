@@ -46,7 +46,11 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<void>;
   guestLogin: () => Promise<void>;
   logout: () => Promise<void>;
+<<<<<<< HEAD
   checkAuthStatus: () => Promise<void>;
+=======
+  checkAuthStatus: () => Promise<User | null>;
+>>>>>>> backup-finalsprint3
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -62,12 +66,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuthStatus();
   }, []);
 
+<<<<<<< HEAD
   const checkAuthStatus = async () => {
     setLoading(true);
+=======
+  const fetchUserData = async (): Promise<User | null> => {
+>>>>>>> backup-finalsprint3
     try {
       const response = await authApi.fetchUser();
       if (response.fetch && response.user) {
         setUser(response.user);
+<<<<<<< HEAD
       } else {
         setUser(null);
       }
@@ -78,6 +87,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.error("Auth check failed:", err);
       }
       setUser(null);
+=======
+        return response.user;
+      } else {
+        setUser(null);
+        return null;
+      }
+    } catch (err) {
+      const errorStatus = (err as any)?.response?.status;
+      const isNetworkError = (err as any)?.code === "ERR_NETWORK" || (err as any)?.message === "Network Error";
+      if (errorStatus !== 401 && errorStatus !== 403 && !isNetworkError) {
+        console.error("Auth check failed:", err);
+      }
+      setUser(null);
+      return null;
+    }
+  };
+
+  const checkAuthStatus = async (): Promise<User | null> => {
+    setLoading(true);
+    try {
+      return await fetchUserData();
+>>>>>>> backup-finalsprint3
     } finally {
       setLoading(false);
     }
@@ -88,11 +119,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const response = await authApi.login(username, password);
+<<<<<<< HEAD
       if (response.login) {
         await checkAuthStatus(); // Refresh user data
       }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || "Login failed";
+=======
+      if (!response?.login) {
+        throw new Error("Login failed");
+      }
+
+      const authenticatedUser = await fetchUserData();
+      if (!authenticatedUser) {
+        throw new Error(
+          "Login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
+        );
+      }
+    } catch (err: any) {
+      const errorMessage =
+        err.response?.data?.message || err.message || "Login failed";
+>>>>>>> backup-finalsprint3
       setError(errorMessage);
       throw err;
     } finally {
@@ -105,7 +152,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await authApi.guestLogin();
+<<<<<<< HEAD
       await checkAuthStatus(); // Refresh user data
+=======
+      await fetchUserData();
+>>>>>>> backup-finalsprint3
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || "Guest login failed";
       setError(errorMessage);

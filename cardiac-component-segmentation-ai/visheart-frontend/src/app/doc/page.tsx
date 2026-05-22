@@ -1,11 +1,16 @@
 "use client";
 
+<<<<<<< HEAD
 import React, { useState } from "react";
 import Image from "next/image";
+=======
+import React, { FormEvent, useEffect, useState } from "react";
+>>>>>>> backup-finalsprint3
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+<<<<<<< HEAD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { BookOpen, Zap, Info, Users, Play, Menu, X } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -13,16 +18,213 @@ import { Button } from "@/components/ui/button";
 
 const DocPage = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+=======
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { BookOpen, Zap, Info, Users, Play, Menu, Loader2, Send, X, MapPin } from "lucide-react";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+interface DocSearchResult {
+  tab: string;
+  title: string;
+  excerpt: string;
+  keywords: string[];
+}
+
+interface FaqItem {
+  question: string;
+  answer: string;
+}
+
+interface DocImageProps {
+  src: string;
+  alt: string;
+  className?: string;
+}
+
+const DocImage: React.FC<DocImageProps> = ({ src, alt, className }) => {
+  const [errored, setErrored] = useState(false);
+
+  if (errored) {
+    return (
+      <div
+        className={`flex items-center justify-center bg-muted/50 rounded-md border text-muted-foreground text-sm ${className ?? ""}`}
+        style={{ minHeight: 120 }}
+        aria-label={alt}
+      >
+        <span className="px-4 py-6 text-center">{alt}</span>
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onError={() => setErrored(true)}
+    />
+  );
+};
+
+// ---------------------------------------------------------------------------
+// DocPage
+// ---------------------------------------------------------------------------
+const DocPage = () => {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showFAQ, setShowFAQ] = useState(false);
+  const [docSearch, setDocSearch] = useState("");
+  const [faqSearch, setFaqSearch] = useState("");
+  const [activeTab, setActiveTab] = useState("introduction");
+  const [docResults, setDocResults] = useState<DocSearchResult[]>([]);
+  const [docSearchLoading, setDocSearchLoading] = useState(false);
+  const [docSearchError, setDocSearchError] = useState<string | null>(null);
+  const [faqItems, setFaqItems] = useState<FaqItem[]>([]);
+  const [faqSenderName, setFaqSenderName] = useState("");
+  const [faqSenderEmail, setFaqSenderEmail] = useState("");
+  const [faqMessage, setFaqMessage] = useState("");
+  const [faqSendStatus, setFaqSendStatus] = useState<string | null>(null);
+  const [faqSendError, setFaqSendError] = useState<string | null>(null);
+  const [faqSending, setFaqSending] = useState(false);
+>>>>>>> backup-finalsprint3
 
   const navigationItems = [
     { value: "introduction", icon: Info, label: "Introduction" },
     { value: "getting-started", icon: BookOpen, label: "Getting Started" },
     { value: "accounts", icon: Users, label: "Accounts" },
     { value: "how-it-works", icon: Play, label: "How Segmentation Works" },
+<<<<<<< HEAD
     { value: "reconstruction", icon: Zap, label: "How Reconstruction Works" },
   ];
 
   const NavigationContent = ({ onItemClick }: { onItemClick?: () => void }) => (
+=======
+    {
+      value: "landmark-detection",
+      icon: MapPin,
+      label: "How Landmark Detection Works",
+    },
+    {
+      value: "reconstruction",
+      icon: Zap,
+      label: "How Reconstruction Works",
+    },
+  ];
+
+  useEffect(() => {
+    const query = docSearch.trim();
+    if (!query) {
+      setDocResults([]);
+      setDocSearchError(null);
+      setDocSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setDocSearchLoading(true);
+      setDocSearchError(null);
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/support/docs/search?q=${encodeURIComponent(query)}`,
+          { credentials: "include", signal: controller.signal },
+        );
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Documentation search failed.");
+        }
+        setDocResults(Array.isArray(data.results) ? data.results : []);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setDocSearchError(error instanceof Error ? error.message : "Documentation search failed.");
+          setDocResults([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) setDocSearchLoading(false);
+      }
+    }, 200);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [docSearch]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFaqs() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/support/faq`, { credentials: "include" });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "FAQ loading failed.");
+        }
+        if (!cancelled) setFaqItems(Array.isArray(data.faqs) ? data.faqs : []);
+      } catch {
+        if (!cancelled) setFaqItems([]);
+      }
+    }
+
+    loadFaqs();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredFAQ = faqItems.filter((item) =>
+    item.question.toLowerCase().includes(faqSearch.toLowerCase()) ||
+    item.answer.toLowerCase().includes(faqSearch.toLowerCase())
+  );
+
+  const handleFaqSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFaqSendStatus(null);
+    setFaqSendError(null);
+    setFaqSending(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/support/faq-message`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          senderName: faqSenderName,
+          senderEmail: faqSenderEmail,
+          message: faqMessage,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Could not send your FAQ message.");
+      }
+      setFaqSendStatus(data.message || "Your message has been sent to the admin.");
+      setFaqMessage("");
+    } catch (error) {
+      setFaqSendError(error instanceof Error ? error.message : "Could not send your FAQ message.");
+    } finally {
+      setFaqSending(false);
+    }
+  };
+
+  const NavigationContent = ({
+    onItemClick,
+  }: {
+    onItemClick?: () => void;
+  }) => (
+>>>>>>> backup-finalsprint3
     <>
       <div className="p-4 md:p-6 border-b">
         <h2 className="font-semibold text-lg">Documentation</h2>
@@ -52,14 +254,30 @@ const DocPage = () => {
   );
 
   return (
+<<<<<<< HEAD
     <div className="flex flex-col md:flex-row h-screen">
       <Tabs defaultValue="introduction" orientation="vertical" className="w-full flex flex-col md:flex-row">
+=======
+    <div className="flex h-[calc(100dvh-4rem)] flex-col md:flex-row">
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        orientation="vertical"
+        className="w-full flex flex-col md:flex-row"
+      >
+>>>>>>> backup-finalsprint3
         {/* Mobile Header with Menu Button */}
         <div className="md:hidden border-b bg-background sticky top-0 z-50">
           <div className="flex items-center justify-between p-4">
             <div>
               <h2 className="font-semibold text-lg">Documentation</h2>
+<<<<<<< HEAD
               <p className="text-sm text-muted-foreground">VisHeart Platform Guide</p>
+=======
+              <p className="text-sm text-muted-foreground">
+                VisHeart Platform Guide
+              </p>
+>>>>>>> backup-finalsprint3
             </div>
             <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
               <SheetTrigger asChild>
@@ -68,7 +286,13 @@ const DocPage = () => {
                 </Button>
               </SheetTrigger>
               <SheetContent side="left" className="w-72 p-0">
+<<<<<<< HEAD
                 <NavigationContent onItemClick={() => setMobileMenuOpen(false)} />
+=======
+                <NavigationContent
+                  onItemClick={() => setMobileMenuOpen(false)}
+                />
+>>>>>>> backup-finalsprint3
               </SheetContent>
             </Sheet>
           </div>
@@ -81,6 +305,7 @@ const DocPage = () => {
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
+<<<<<<< HEAD
           <TabsContent value="introduction" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
               <div className="p-4 md:p-8 w-full">
@@ -89,6 +314,63 @@ const DocPage = () => {
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">Introduction to VisHeart</h1>
                     <p className="text-muted-foreground mb-6">
                       VisHeart is a cutting-edge cardiac segmentation platform designed to revolutionize medical image analysis through advanced artificial intelligence and intuitive user interfaces.
+=======
+          <div className="p-4 border-b bg-background">
+            <Input
+              placeholder="Search help..."
+              value={docSearch}
+              onChange={(e) => setDocSearch(e.target.value)}
+            />
+          </div>
+
+          {docSearch.trim() && (
+            <div className="p-4 border-b bg-background space-y-2">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">Search Results</p>
+                {docSearchLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              </div>
+
+              {docSearchError ? (
+                <p className="text-sm text-destructive">{docSearchError}</p>
+              ) : docResults.length > 0 ? (
+                docResults.map((item) => (
+                  <button
+                    key={item.tab}
+                    onClick={() => {
+                      setActiveTab(item.tab);
+                      setDocSearch("");
+                    }}
+                    className="block w-full text-left rounded-md border p-3 hover:bg-muted"
+                  >
+                    <p className="font-medium">{item.title}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {item.excerpt}
+                    </p>
+                  </button>
+                ))
+              ) : !docSearchLoading ? (
+                <p className="text-sm text-muted-foreground">
+                  No matching documentation found.
+                </p>
+              ) : null}
+            </div>
+          )}
+
+          {/* ── INTRODUCTION ── */}
+          <TabsContent value="introduction" className="flex-1 m-0 h-full">
+            <ScrollArea className="h-full w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
+                <div className="space-y-6 max-w-none">
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold mb-4">
+                      Introduction to VisHeart
+                    </h1>
+                    <p className="text-muted-foreground mb-6">
+                      VisHeart is a cutting-edge cardiac segmentation platform
+                      designed to revolutionize medical image analysis through
+                      advanced artificial intelligence and intuitive user
+                      interfaces.
+>>>>>>> backup-finalsprint3
                     </p>
                   </div>
 
@@ -101,6 +383,7 @@ const DocPage = () => {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Our platform combines state-of-the-art deep learning algorithms with user-friendly visualization tools to provide accurate cardiac structure segmentation from medical imaging
                         data.
                       </p>
@@ -126,6 +409,50 @@ const DocPage = () => {
                           <div>
                             <h4 className="font-semibold">Fast Processing</h4>
                             <p className="text-sm text-muted-foreground">Efficient algorithms that deliver results in minutes, not hours.</p>
+=======
+                        Our platform combines state-of-the-art deep learning
+                        algorithms with user-friendly visualization tools to
+                        provide accurate cardiac structure segmentation from
+                        medical imaging data.
+                      </p>
+                      <div className="grid gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            AI
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">
+                              AI-Powered Analysis
+                            </h4>
+                            <p className="text-sm text-muted-foreground">
+                              Advanced neural networks trained on extensive
+                              cardiac imaging datasets.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            3D
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">3D Visualization</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Interactive 3D rendering of cardiac structures for
+                              comprehensive analysis.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            ⚡
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">Fast Processing</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Efficient algorithms that deliver results in
+                              minutes, not hours.
+                            </p>
+>>>>>>> backup-finalsprint3
                           </div>
                         </div>
                       </div>
@@ -140,9 +467,13 @@ const DocPage = () => {
                       <CardContent>
                         <ul className="space-y-2 text-sm">
                           <li>• Automated cardiac segmentation</li>
+<<<<<<< HEAD
                           <li>
                             • Real-time 3D visualization{" "}
                           </li>
+=======
+                          <li>• Real-time 3D visualization</li>
+>>>>>>> backup-finalsprint3
                           <li>• Multi-format support</li>
                           <li>• Cloud-based processing</li>
                           <li>• Export capabilities</li>
@@ -172,7 +503,11 @@ const DocPage = () => {
                           <li>• Diagnostic imaging</li>
                           <li>• Treatment planning</li>
                           <li>• Research studies</li>
+<<<<<<< HEAD
                           <li>• Education & training</li>
+=======
+                          <li>• Education &amp; training</li>
+>>>>>>> backup-finalsprint3
                           <li>• Clinical trials</li>
                         </ul>
                       </CardContent>
@@ -183,6 +518,7 @@ const DocPage = () => {
             </ScrollArea>
           </TabsContent>
 
+<<<<<<< HEAD
           <TabsContent value="getting-started" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
               <div className="p-4 md:p-8 w-full">
@@ -191,6 +527,21 @@ const DocPage = () => {
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">Getting Started with VisHeart</h1>
                     <p className="text-muted-foreground mb-6">
                       Welcome to VisHeart, a comprehensive cardiac segmentation platform that combines advanced AI-powered image analysis with intuitive visualization tools.
+=======
+          {/* ── GETTING STARTED ── */}
+          <TabsContent value="getting-started" className="flex-1 m-0 h-full">
+            <ScrollArea className="h-full w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
+                <div className="space-y-6 max-w-none">
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold mb-4">
+                      Getting Started with VisHeart
+                    </h1>
+                    <p className="text-muted-foreground mb-6">
+                      Welcome to VisHeart, a comprehensive cardiac segmentation
+                      platform that combines advanced AI-powered image analysis
+                      with intuitive visualization tools.
+>>>>>>> backup-finalsprint3
                     </p>
                   </div>
 
@@ -203,6 +554,7 @@ const DocPage = () => {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="grid gap-4">
+<<<<<<< HEAD
                         <div className="flex items-start gap-3">
                           <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium flex-shrink-0">1</div>
                           <div>
@@ -231,11 +583,48 @@ const DocPage = () => {
                             <p className="text-sm text-muted-foreground">Analyze the segmented results with our interactive visualization tools.</p>
                           </div>
                         </div>
+=======
+                        {[
+                          {
+                            n: "1",
+                            title: "Create an Account",
+                            desc: "Sign up for a new account or log in with existing credentials.",
+                          },
+                          {
+                            n: "2",
+                            title: "Upload Medical Images",
+                            desc: "Upload your NIfTI files for analysis.",
+                          },
+                          {
+                            n: "3",
+                            title: "Run Segmentation",
+                            desc: "Let our AI analyze your cardiac images automatically.",
+                          },
+                          {
+                            n: "4",
+                            title: "View Results",
+                            desc: "Analyze the segmented results with our interactive visualization tools.",
+                          },
+                        ].map((step) => (
+                          <div key={step.n} className="flex items-start gap-3">
+                            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium flex-shrink-0">
+                              {step.n}
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">{step.title}</h4>
+                              <p className="text-sm text-muted-foreground">
+                                {step.desc}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+>>>>>>> backup-finalsprint3
                       </div>
                     </CardContent>
                   </Card>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+<<<<<<< HEAD
                     <Card className="col-span-1 md:col-span-1 lg:col-span-1">
                       <CardHeader>
                         <CardTitle className="text-base md:text-lg">System Requirements</CardTitle>
@@ -243,15 +632,36 @@ const DocPage = () => {
                       <CardContent>
                         <ul className="space-y-2 text-sm">
                           <li>• Modern web browser (Chrome, Firefox, Safari, Edge)</li>
+=======
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base md:text-lg">
+                          System Requirements
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <ul className="space-y-2 text-sm">
+                          <li>
+                            • Modern web browser (Chrome, Firefox, Safari, Edge)
+                          </li>
+>>>>>>> backup-finalsprint3
                           <li>• Stable internet connection</li>
                           <li>• JavaScript enabled</li>
                           <li>• Minimum 4GB RAM recommended</li>
                         </ul>
                       </CardContent>
                     </Card>
+<<<<<<< HEAD
                     <Card className="col-span-1 md:col-span-1 lg:col-span-1">
                       <CardHeader>
                         <CardTitle className="text-base md:text-lg">Supported Formats</CardTitle>
+=======
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base md:text-lg">
+                          Supported Formats
+                        </CardTitle>
+>>>>>>> backup-finalsprint3
                       </CardHeader>
                       <CardContent>
                         <div className="flex flex-wrap gap-2">
@@ -266,6 +676,7 @@ const DocPage = () => {
             </ScrollArea>
           </TabsContent>
 
+<<<<<<< HEAD
           <TabsContent value="accounts" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
               <div className="p-4 md:p-8 w-full">
@@ -273,16 +684,38 @@ const DocPage = () => {
                   <div>
                     <h1 className="text-2xl md:text-3xl font-bold mb-4">Account Types</h1>
                     <p className="text-muted-foreground mb-6">Compare the features and capabilities available for Guest and Registered User accounts.</p>
+=======
+          {/* ── ACCOUNTS ── */}
+          <TabsContent value="accounts" className="flex-1 m-0 h-full">
+            <ScrollArea className="h-full w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
+                <div className="space-y-6 max-w-none">
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold mb-4">
+                      Account Types
+                    </h1>
+                    <p className="text-muted-foreground mb-6">
+                      Compare the features and capabilities available for Guest
+                      and Registered User accounts.
+                    </p>
+>>>>>>> backup-finalsprint3
                   </div>
 
                   <Card>
                     <CardHeader>
+<<<<<<< HEAD
                       <CardTitle className="text-lg md:text-xl">Feature Comparison</CardTitle>
+=======
+                      <CardTitle className="text-lg md:text-xl">
+                        Feature Comparison
+                      </CardTitle>
+>>>>>>> backup-finalsprint3
                     </CardHeader>
                     <CardContent className="overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
+<<<<<<< HEAD
                             <TableHead className="w-1/3 text-xs md:text-sm">Feature</TableHead>
                             <TableHead className="text-center text-xs md:text-sm">Guest Account</TableHead>
                             <TableHead className="text-center text-xs md:text-sm">User Account</TableHead>
@@ -329,6 +762,42 @@ const DocPage = () => {
                             <TableCell className="text-center text-xs md:text-sm">✗</TableCell>
                             <TableCell className="text-center text-xs md:text-sm">✓</TableCell>
                           </TableRow>
+=======
+                            <TableHead className="w-1/3 text-xs md:text-sm">
+                              Feature
+                            </TableHead>
+                            <TableHead className="text-center text-xs md:text-sm">
+                              Guest Account
+                            </TableHead>
+                            <TableHead className="text-center text-xs md:text-sm">
+                              User Account
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {[
+                            ["File Upload", "✓", "✓"],
+                            ["Cardiac Segmentation", "✓", "✓"],
+                            ["3D/4D Visualization", "✓", "✓"],
+                            ["Export Results", "✓", "✓"],
+                            ["File Saving", "✗", "✓"],
+                            ["Project Management", "✗", "✓"],
+                            ["Processing History", "✗", "✓"],
+                            ["Cloud Storage", "✗", "✓"],
+                          ].map(([feature, guest, user]) => (
+                            <TableRow key={feature}>
+                              <TableCell className="font-medium text-xs md:text-sm">
+                                {feature}
+                              </TableCell>
+                              <TableCell className="text-center text-xs md:text-sm">
+                                {guest}
+                              </TableCell>
+                              <TableCell className="text-center text-xs md:text-sm">
+                                {user}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+>>>>>>> backup-finalsprint3
                         </TableBody>
                       </Table>
                     </CardContent>
@@ -337,13 +806,26 @@ const DocPage = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                     <Card>
                       <CardHeader>
+<<<<<<< HEAD
                         <CardTitle className="text-base md:text-lg">Guest Account</CardTitle>
+=======
+                        <CardTitle className="text-base md:text-lg">
+                          Guest Account
+                        </CardTitle>
+>>>>>>> backup-finalsprint3
                         <Badge variant="secondary" className="w-fit">
                           Free
                         </Badge>
                       </CardHeader>
                       <CardContent>
+<<<<<<< HEAD
                         <p className="text-sm text-muted-foreground mb-4">Perfect for trying out the platform and performing quick analysis tasks.</p>
+=======
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Perfect for trying out the platform and performing
+                          quick analysis tasks.
+                        </p>
+>>>>>>> backup-finalsprint3
                         <ul className="space-y-2 text-sm">
                           <li>• Immediate access without registration</li>
                           <li>• Full segmentation capabilities</li>
@@ -354,13 +836,26 @@ const DocPage = () => {
                     </Card>
                     <Card>
                       <CardHeader>
+<<<<<<< HEAD
                         <CardTitle className="text-base md:text-lg">User Account</CardTitle>
+=======
+                        <CardTitle className="text-base md:text-lg">
+                          User Account
+                        </CardTitle>
+>>>>>>> backup-finalsprint3
                         <Badge variant="default" className="w-fit">
                           Free Registration
                         </Badge>
                       </CardHeader>
                       <CardContent>
+<<<<<<< HEAD
                         <p className="text-sm text-muted-foreground mb-4">Full platform access with data persistence and project management.</p>
+=======
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Full platform access with data persistence and project
+                          management.
+                        </p>
+>>>>>>> backup-finalsprint3
                         <ul className="space-y-2 text-sm">
                           <li>• All guest features included</li>
                           <li>• Save and organize projects</li>
@@ -375,6 +870,7 @@ const DocPage = () => {
             </ScrollArea>
           </TabsContent>
 
+<<<<<<< HEAD
           <TabsContent value="how-it-works" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
               <div className="p-4 md:p-8 w-full">
@@ -466,11 +962,99 @@ const DocPage = () => {
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">4</div>
+=======
+          {/* ── HOW SEGMENTATION WORKS ── */}
+          <TabsContent value="how-it-works" className="flex-1 m-0 h-full">
+            <ScrollArea className="h-full w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
+                <div className="space-y-6 md:space-y-8 max-w-none">
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold mb-4">
+                      How the Segmentation System Works
+                    </h1>
+                    <p className="text-muted-foreground mb-6">
+                      Follow this comprehensive guide to understand the complete
+                      workflow from project creation to cardiac segmentation
+                      results.
+                    </p>
+                  </div>
+
+                  {/* Steps 1-8 */}
+                  {[
+                    {
+                      num: "1",
+                      color: "bg-blue-500",
+                      title: "Welcome to VisHeart",
+                      desc: "Start your journey with VisHeart's intuitive homepage. Here you'll find the main entry points to access the platform.",
+                      src: "/images/doc/homescreen.png",
+                      alt: "VisHeart Homepage",
+                      caption:
+                        "The VisHeart homepage with key features highlighted and easy access to get started.",
+                    },
+                    {
+                      num: "2",
+                      color: "bg-blue-500",
+                      title: "Dashboard Overview",
+                      desc: "Your dashboard provides a comprehensive overview of your projects, GPU status, and system statistics.",
+                      src: "/images/doc/dashboard-overview.png",
+                      alt: "Dashboard Overview",
+                      caption:
+                        "Dashboard overview showing project statistics, GPU status, and quick access to new project creation.",
+                    },
+                    {
+                      num: "3",
+                      color: "bg-green-500",
+                      title: "Starting Fresh",
+                      desc: "When you first access the Projects tab, you'll see a clean interface ready for your first medical imaging project.",
+                      src: "/images/doc/dashboard-project-no-projects.png",
+                      alt: "Empty Projects Dashboard",
+                      caption:
+                        "Empty projects dashboard with clear call-to-action to upload your first project.",
+                    },
+                  ].map((step) => (
+                    <Card key={step.num}>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                          <div
+                            className={`w-8 h-8 rounded-full ${step.color} text-white flex items-center justify-center text-sm font-bold flex-shrink-0`}
+                          >
+                            {step.num}
+                          </div>
+                          {step.title}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                          {step.desc}
+                        </p>
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src={step.src}
+                            alt={step.alt}
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            {step.caption}
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+
+                  {/* Step 4 — two images */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          4
+                        </div>
+>>>>>>> backup-finalsprint3
                         Upload Your Medical Images
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         The upload process is straightforward - simply drag and drop or click to browse for your medical imaging files.
                       </p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -493,21 +1077,59 @@ const DocPage = () => {
                             className="w-full h-auto rounded-md border shadow-sm"
                           />
                           <p className="text-xs text-muted-foreground mt-2">Upload dialog showing selected file with metadata and project configuration options.</p>
+=======
+                        The upload process is straightforward — simply drag and
+                        drop or click to browse for your medical imaging files.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/dashboard-project-upload-new-project.png"
+                            alt="Upload Dialog"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Upload dialog with drag-and-drop interface for
+                            medical imaging files.
+                          </p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/dashboard-project-upload-new-project-with-file-added.png"
+                            alt="Upload Dialog with File"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Upload dialog showing selected file with metadata
+                            and project configuration options.
+                          </p>
+>>>>>>> backup-finalsprint3
                         </div>
                       </div>
                     </CardContent>
                   </Card>
 
+<<<<<<< HEAD
                   {/* Step 5: Project Management */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">5</div>
+=======
+                  {/* Step 5 — two images */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          5
+                        </div>
+>>>>>>> backup-finalsprint3
                         Project Management
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Once uploaded, your projects appear in the dashboard with detailed information and management options.
                       </p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -530,21 +1152,60 @@ const DocPage = () => {
                             className="w-full h-auto rounded-md border shadow-sm"
                           />
                           <p className="text-xs text-muted-foreground mt-2">Project card showing saved project with persistent storage status.</p>
+=======
+                        Once uploaded, your projects appear in the dashboard
+                        with detailed information and management options.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/dashboard-project-with-1-project.png"
+                            alt="Project Card"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Project card showing uploaded project with &quot;No
+                            Masks&quot; status, ready for segmentation.
+                          </p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/dashboard-project-with-1-project-saved.png"
+                            alt="Saved Project Card"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Project card showing saved project with persistent
+                            storage status.
+                          </p>
+>>>>>>> backup-finalsprint3
                         </div>
                       </div>
                     </CardContent>
                   </Card>
 
+<<<<<<< HEAD
                   {/* Step 6: Project Details & Segmentation */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">6</div>
                         Project Details & AI Segmentation
+=======
+                  {/* Step 6 — two images */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          6
+                        </div>
+                        Project Details &amp; AI Segmentation
+>>>>>>> backup-finalsprint3
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Access detailed project information and start the AI-powered segmentation process with a single click.
                       </p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -567,21 +1228,59 @@ const DocPage = () => {
                             className="w-full h-auto rounded-md border shadow-sm"
                           />
                           <p className="text-xs text-muted-foreground mt-2">Project view after successful segmentation showing available masks and editing options.</p>
+=======
+                        Access detailed project information and start the
+                        AI-powered segmentation process with a single click.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/project-overview.png"
+                            alt="Project Overview"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Detailed project overview showing technical
+                            specifications and segmentation controls.
+                          </p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/project-overview-segmentation-done.png"
+                            alt="Completed Segmentation"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Project view after successful segmentation showing
+                            available masks and editing options.
+                          </p>
+>>>>>>> backup-finalsprint3
                         </div>
                       </div>
                     </CardContent>
                   </Card>
 
+<<<<<<< HEAD
                   {/* Step 7: MRI Viewer (Pre-Segmentation) */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">7</div>
+=======
+                  {/* Step 7 */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          7
+                        </div>
+>>>>>>> backup-finalsprint3
                         MRI Viewer (Before Segmentation)
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         When segmentation masks are not yet available or processing is pending, the MRI viewer allows you to preview and examine your medical images.
                       </p>
                       <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
@@ -602,21 +1301,69 @@ const DocPage = () => {
                           <li>• Technical specifications display (dimensions, voxel size)</li>
                           <li>• Thumbnail overview of all frames</li>
                           <li>• Available when masks are not generated or processing is pending</li>
+=======
+                        When segmentation masks are not yet available or
+                        processing is pending, the MRI viewer allows you to
+                        preview and examine your medical images.
+                      </p>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                        <DocImage
+                          src="/images/doc/project-preview.png"
+                          alt="MRI Viewer"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          MRI viewer interface with frame navigation, zoom
+                          controls, and image display options.
+                        </p>
+                      </div>
+                      <div className="p-2 md:p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
+                        <p className="text-sm font-medium mb-1">
+                          📋 MRI Viewer Features
+                        </p>
+                        <ul className="text-sm text-muted-foreground space-y-1">
+                          <li>
+                            • Frame-by-frame navigation through medical image
+                            slices
+                          </li>
+                          <li>• Zoom and pan controls for detailed examination</li>
+                          <li>
+                            • Technical specifications display (dimensions, voxel
+                            size)
+                          </li>
+                          <li>• Thumbnail overview of all frames</li>
+                          <li>
+                            • Available when masks are not generated or processing
+                            is pending
+                          </li>
+>>>>>>> backup-finalsprint3
                         </ul>
                       </div>
                     </CardContent>
                   </Card>
 
+<<<<<<< HEAD
                   {/* Step 8: Segmentation Viewer (Post-Segmentation) */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">8</div>
                         Segmentation Viewer & Manual Editing
+=======
+                  {/* Step 8 */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          8
+                        </div>
+                        Segmentation Viewer &amp; Manual Editing
+>>>>>>> backup-finalsprint3
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Once AI segmentation is complete, the segmentation viewer becomes available with advanced editing tools. This viewer includes all MRI viewing capabilities plus mask editing features.
                       </p>
                       <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
@@ -645,6 +1392,56 @@ const DocPage = () => {
                         <p className="text-sm font-medium mb-1">💡 Important Note</p>
                         <p className="text-sm text-muted-foreground">
                           The original medical images remain fully accessible in the segmentation viewer. You can toggle between viewing the raw medical data and the segmented masks, or view them overlaid together for precise editing.
+=======
+                        Once AI segmentation is complete, the segmentation
+                        viewer becomes available with advanced editing tools.
+                      </p>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                        <DocImage
+                          src="/images/doc/project-segmentation.png"
+                          alt="Segmentation Viewer"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Segmentation viewer with precision drawing tools,
+                          brush settings, mask overlays, and full medical image
+                          access.
+                        </p>
+                      </div>
+                      <div className="p-2 md:p-4 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
+                        <p className="text-sm font-medium mb-1">
+                          🎨 Segmentation Viewer Features
+                        </p>
+                        <ul className="text-sm text-muted-foreground space-y-1">
+                          <li>
+                            •{" "}
+                            <strong>All MRI viewer capabilities</strong> — frame
+                            navigation, zoom, pan, thumbnails
+                          </li>
+                          <li>
+                            • Advanced drawing tools (brush, select, linear tool)
+                          </li>
+                          <li>
+                            • Mask overlay toggle and opacity controls
+                          </li>
+                          <li>• Brush size and opacity adjustments</li>
+                          <li>• Undo/redo functionality for precise editing</li>
+                          <li>• Real-time mask preview and editing</li>
+                          <li>
+                            • Available only after successful AI segmentation
+                          </li>
+                        </ul>
+                      </div>
+                      <div className="p-2 md:p-4 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                        <p className="text-sm font-medium mb-1">
+                          💡 Important Note
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          The original medical images remain fully accessible in
+                          the segmentation viewer. You can toggle between viewing
+                          the raw medical data and the segmented masks, or view
+                          them overlaid together for precise editing.
+>>>>>>> backup-finalsprint3
                         </p>
                       </div>
                     </CardContent>
@@ -660,6 +1457,7 @@ const DocPage = () => {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="grid gap-3">
+<<<<<<< HEAD
                         <div className="flex items-center gap-3 p-2 md:p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
                           <div className="w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold flex-shrink-0">1</div>
                           <span className="text-xs md:text-sm">Start from the homepage and navigate to the dashboard</span>
@@ -680,10 +1478,62 @@ const DocPage = () => {
                           <div className="w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center text-xs font-bold flex-shrink-0">5</div>
                           <span className="text-xs md:text-sm">Access segmentation viewer for advanced editing (after AI processing)</span>
                         </div>
+=======
+                        {[
+                          {
+                            n: "1",
+                            c: "bg-blue-500",
+                            bg: "bg-blue-50 dark:bg-blue-950/30",
+                            border: "border-blue-200 dark:border-blue-800",
+                            text: "Start from the homepage and navigate to the dashboard",
+                          },
+                          {
+                            n: "2",
+                            c: "bg-green-500",
+                            bg: "bg-green-50 dark:bg-green-950/30",
+                            border: "border-green-200 dark:border-green-800",
+                            text: "Upload your medical imaging files (NIfTI)",
+                          },
+                          {
+                            n: "3",
+                            c: "bg-purple-500",
+                            bg: "bg-purple-50 dark:bg-purple-950/30",
+                            border: "border-purple-200 dark:border-purple-800",
+                            text: "Review project details and start AI segmentation",
+                          },
+                          {
+                            n: "4",
+                            c: "bg-orange-500",
+                            bg: "bg-orange-50 dark:bg-orange-950/30",
+                            border: "border-orange-200 dark:border-orange-800",
+                            text: "Use MRI viewer to preview images (before segmentation)",
+                          },
+                          {
+                            n: "5",
+                            c: "bg-red-500",
+                            bg: "bg-red-50 dark:bg-red-950/30",
+                            border: "border-red-200 dark:border-red-800",
+                            text: "Access segmentation viewer for advanced editing (after AI processing)",
+                          },
+                        ].map((s) => (
+                          <div
+                            key={s.n}
+                            className={`flex items-center gap-3 p-2 md:p-3 rounded-lg ${s.bg} border ${s.border}`}
+                          >
+                            <div
+                              className={`w-6 h-6 rounded-full ${s.c} text-white flex items-center justify-center text-xs font-bold flex-shrink-0`}
+                            >
+                              {s.n}
+                            </div>
+                            <span className="text-xs md:text-sm">{s.text}</span>
+                          </div>
+                        ))}
+>>>>>>> backup-finalsprint3
                       </div>
                       <div className="p-2 md:p-4 rounded-lg bg-muted/50 border-l-4 border-primary">
                         <p className="text-sm font-medium mb-1">Pro Tip</p>
                         <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                           Register for a user account to save your projects permanently and access advanced project management features.
                           Guest accounts provide full functionality but projects are only available during your session.
                         </p>
@@ -693,6 +1543,12 @@ const DocPage = () => {
                         <p className="text-sm text-muted-foreground">
                           <strong>MRI Viewer:</strong> Available immediately after upload for image preview and examination.<br/>
                           <strong>Segmentation Viewer:</strong> Available only after AI processing completes, includes all MRI viewer features plus advanced editing tools.
+=======
+                          Register for a user account to save your projects
+                          permanently and access advanced project management
+                          features. Guest accounts provide full functionality but
+                          projects are only available during your session.
+>>>>>>> backup-finalsprint3
                         </p>
                       </div>
                     </CardContent>
@@ -702,6 +1558,7 @@ const DocPage = () => {
             </ScrollArea>
           </TabsContent>
 
+<<<<<<< HEAD
           <TabsContent value="reconstruction" className="flex-1 m-0 h-full">
             <ScrollArea className="h-full w-full">
               <div className="p-4 md:p-8 w-full">
@@ -715,6 +1572,199 @@ const DocPage = () => {
                   </div>
 
                   {/* Overview */}
+=======
+          {/* ── LANDMARK DETECTION ── */}
+          <TabsContent value="landmark-detection" className="flex-1 m-0 h-full">
+            <ScrollArea className="h-full w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
+                <div className="space-y-6 md:space-y-8 max-w-none">
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold mb-4">
+                      How Landmark Detection Works
+                    </h1>
+                    <p className="text-muted-foreground mb-6">
+                      Landmark detection identifies repeatable cardiac reference points across MRI frames so users can review motion, compare phases, and prepare strain-style reporting from a consistent anatomical layout.
+                    </p>
+                  </div>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <MapPin className="w-5 h-5 flex-shrink-0" />
+                        Overview
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        The landmark model reads the project MRI sequence and predicts key points such as RV insertion points, the left ventricular apex, basal references, and mid-ventricular references. These points are shown directly on the slice viewer and can be checked frame by frame.
+                      </p>
+                      <div className="grid gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            AI
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">Per-Frame Detection</h4>
+                            <p className="text-sm text-muted-foreground">
+                              UNetResNet34 landmark inference produces predictions for the cardiac frames returned by the project data.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            17
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">AHA-17 Review</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Bullseye and strain preview panels use a 17-segment layout to summarize regional behavior in a familiar cardiac reporting format.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            4D
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">Motion Review</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Playback controls let users compare landmark movement, bullseye color changes, and 4D reconstruction frames over time.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          1
+                        </div>
+                        Start Landmark Detection
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        Open a project and choose <strong>Landmark Detection</strong> from the project workflow card. The page loads the MRI frame data, available masks, model selector, and visualization panels.
+                      </p>
+                      <ul className="text-sm text-muted-foreground space-y-1">
+                        <li>Click <strong>Run Detection</strong> to send the project through the landmark endpoint.</li>
+                        <li>Use the default UNetResNet34 landmark model unless another model is added later.</li>
+                        <li>An optional replacement NIfTI file can be selected from the sidebar for testing.</li>
+                      </ul>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          2
+                        </div>
+                        Review Detected Landmarks
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        Detection results appear as colored points on the MRI slice. The sidebar lists every landmark and its coordinate for the current frame.
+                      </p>
+                      <ul className="text-sm text-muted-foreground space-y-1">
+                        <li>Scrub through frames or press play to inspect temporal consistency.</li>
+                        <li>Toggle individual landmark points if the image becomes crowded.</li>
+                        <li>Hide labels when checking point placement against the image and mask overlays.</li>
+                      </ul>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          3
+                        </div>
+                        Inspect Bullseye And Strain Preview
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        The analysis panels provide a bullseye/strain preview for demonstration and workflow review. Current strain values are dummy data until the strain calculation pipeline is connected.
+                      </p>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Metric</TableHead>
+                            <TableHead>Meaning</TableHead>
+                            <TableHead>Current Use</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          <TableRow>
+                            <TableCell className="font-medium">GLS</TableCell>
+                            <TableCell>Global Longitudinal Strain</TableCell>
+                            <TableCell>Dummy preview curve</TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium">GCS</TableCell>
+                            <TableCell>Global Circumferential Strain</TableCell>
+                            <TableCell>Dummy preview curve</TableCell>
+                          </TableRow>
+                          <TableRow>
+                            <TableCell className="font-medium">GRS</TableCell>
+                            <TableCell>Global Radial Strain</TableCell>
+                            <TableCell>Dummy preview curve</TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          4
+                        </div>
+                        Export Results
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        After reviewing the landmarks and preview panels, export a PDF report from the landmark page. The report summarizes the project, detected landmark workflow, frame review sequence, and placeholder strain metrics.
+                      </p>
+                      <div className="p-2 md:p-4 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                        <p className="text-sm font-medium mb-1">Preview Data Note</p>
+                        <p className="text-sm text-muted-foreground">
+                          Strain values in the current interface are for presentation and workflow testing. They should be replaced by computed strain values before clinical interpretation.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          {/* ── RECONSTRUCTION ── */}
+          <TabsContent value="reconstruction" className="flex-1 m-0 h-full">
+            <ScrollArea className="h-full w-full">
+              <div className="w-full p-4 pb-28 md:p-8 md:pb-32">
+                <div className="space-y-6 md:space-y-8 max-w-none">
+                  <div>
+                    <h1 className="text-2xl md:text-3xl font-bold mb-4">
+                      3D/4D Reconstruction
+                    </h1>
+                    <p className="text-muted-foreground mb-6">
+                      Follow this comprehensive guide to run 3D/4D
+                      reconstructions. It walks you through preparing your
+                      project, choosing a reference frame, submitting a
+                      reconstruction job, monitoring progress, and downloading
+                      results.
+                    </p>
+                  </div>
+
+>>>>>>> backup-finalsprint3
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
@@ -724,6 +1774,7 @@ const DocPage = () => {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Reconstruction converts segmentation masks into 3D meshes of cardiac structures (myocardium). 4D reconstruction produces
                         time-resolved mesh sequences across cardiac frames to represent motion. The system runs reconstructions on
                         the GPU inference service and stores results in cloud storage for download and further analysis.
@@ -742,22 +1793,68 @@ const DocPage = () => {
                           <div>
                             <h4 className="font-semibold">4D (Time-series) Reconstruction</h4>
                             <p className="text-sm text-muted-foreground">Mesh sequence generated for multiple frames to capture cardiac motion across time.</p>
+=======
+                        Reconstruction converts segmentation masks into 3D
+                        meshes of cardiac structures (myocardium). 4D
+                        reconstruction produces time-resolved mesh sequences
+                        across cardiac frames to represent motion. The system
+                        runs reconstructions on the GPU inference service and
+                        stores results in cloud storage for download and further
+                        analysis.
+                      </p>
+                      <div className="grid gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            3D
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">3D Reconstruction</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Single mesh reconstruction generated from a MRI
+                              scan with only one frame.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
+                            4D
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">
+                              4D (Time-series) Reconstruction
+                            </h4>
+                            <p className="text-sm text-muted-foreground">
+                              Mesh sequence generated for multiple frames to
+                              capture cardiac motion across time.
+                            </p>
+>>>>>>> backup-finalsprint3
                           </div>
                         </div>
                       </div>
                     </CardContent>
                   </Card>
 
+<<<<<<< HEAD
                   {/* Step 1: Starting Reconstruction */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">1</div>
+=======
+                  {/* Step 1 */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          1
+                        </div>
+>>>>>>> backup-finalsprint3
                         Starting a Reconstruction Job
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Ensure segmentation has been completed for your project first — reconstruction uses those results. Open the project and click <strong>Create 4D Reconstruction</strong>.
                       </p>
                       <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
@@ -769,20 +1866,48 @@ const DocPage = () => {
                           className="w-full h-auto rounded-md border shadow-sm"
                         />
                         <p className="text-xs text-muted-foreground mt-2">Project overview with Create 4D Reconstruction button to start the process.</p>
+=======
+                        Ensure segmentation has been completed for your project
+                        first — reconstruction uses those results. Open the
+                        project and click{" "}
+                        <strong>Create 4D Reconstruction</strong>.
+                      </p>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                        <DocImage
+                          src="/images/doc/project-reconstruction-overview.png"
+                          alt="Project reconstruction overview"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Project overview with Create 4D Reconstruction button
+                          to start the process.
+                        </p>
+>>>>>>> backup-finalsprint3
                       </div>
                     </CardContent>
                   </Card>
 
+<<<<<<< HEAD
                   {/* Step 2: Configure Parameters */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">2</div>
+=======
+                  {/* Step 2 */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          2
+                        </div>
+>>>>>>> backup-finalsprint3
                         Configure 4D Reconstruction
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Configure the parameters for generating your 4D cardiac reconstruction. Defaults are optimized to balance quality and speed.
                       </p>
                       
@@ -842,10 +1967,99 @@ const DocPage = () => {
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">3</div>
                         Inspect & Visualize Results
+=======
+                        Configure the parameters for generating your 4D cardiac
+                        reconstruction. Defaults are optimized to balance
+                        quality and speed.
+                      </p>
+                      <div className="grid gap-3">
+                        <div>
+                          <h4 className="font-semibold text-sm">
+                            Export format
+                          </h4>
+                          <div className="text-sm text-muted-foreground space-y-2 pl-3">
+                            <p>
+                              •{" "}
+                              <strong>GLB (Recommended)</strong> — Binary glTF
+                              2.0 optimized for web viewing.
+                            </p>
+                            <p>
+                              •{" "}
+                              <strong>OBJ (Wavefront)</strong> — Plain text
+                              format, widely supported.
+                            </p>
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="font-semibold text-sm">
+                            End-diastole frame
+                          </h4>
+                          <p className="text-sm text-muted-foreground">
+                            Default: <strong>Frame 1</strong>. Select the
+                            cardiac end-diastole frame representing the relaxed
+                            state of the heart.
+                          </p>
+                        </div>
+                        <div>
+                          <h4 className="font-semibold text-sm">
+                            Advanced settings
+                          </h4>
+                          <div className="text-sm text-muted-foreground space-y-2 pl-3">
+                            <p>
+                              • <strong>SDF optimizer iterations:</strong>{" "}
+                              Default 30 (range 10–200).
+                            </p>
+                            <p>
+                              • <strong>Marching cubes resolution:</strong>{" "}
+                              Default 32 (range 32–256).
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/project-reconstruction-configuration.png"
+                            alt="Configure modal"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Configuration panel with export format, ED frame
+                            selector, and basic parameters.
+                          </p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/project-reconstruction-configuration-advanced.png"
+                            alt="Advanced settings panel"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Advanced settings with SDF optimizer iterations and
+                            marching cubes resolution controls.
+                          </p>
+                        </div>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Click <strong>Start Reconstruction</strong> to submit.
+                      </p>
+                    </CardContent>
+                  </Card>
+
+                  {/* Step 3 */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          3
+                        </div>
+                        Inspect &amp; Visualize Results
+>>>>>>> backup-finalsprint3
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         After reconstruction completes, you can visualize the 4D model with playback controls and compare it side-by-side with segmentation.
                       </p>
                       
@@ -884,21 +2098,99 @@ const DocPage = () => {
                           <li>• If you make changes to your segmentation masks, you can <strong>re-run reconstruction</strong> to update the 4D model with the new segmentation data.</li>
                           <li>• You can also <strong>delete existing reconstructions</strong> and create new ones with different parameters or updated segmentation results.</li>
                           <li>• Reconstruction models are regenerated based on the current segmentation state, ensuring your 3D/4D meshes always reflect the latest edits.</li>
+=======
+                        After reconstruction completes, you can visualize the 4D
+                        model with playback controls and compare it side-by-side
+                        with segmentation.
+                      </p>
+                      <ul className="text-sm text-muted-foreground space-y-1">
+                        <li>
+                          • Inspect the 4D model with playback controls to
+                          review cardiac motion frame-by-frame
+                        </li>
+                        <li>
+                          • Toggle side-by-side view to compare segmentation
+                          masks and reconstructed mesh
+                        </li>
+                        <li>
+                          • Focus on full-screen 4D viewer with timeline
+                          controls for detailed analysis
+                        </li>
+                        <li>
+                          • If you re-edit segmentation masks, re-run
+                          reconstruction to update the 4D model
+                        </li>
+                      </ul>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4 mt-4">
+                        <DocImage
+                          src="/images/doc/project-reconstruction.png"
+                          alt="Reconstruction results"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Reconstruction results showing completed 4D
+                          reconstruction with metadata and view options.
+                        </p>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4 mt-4">
+                        <DocImage
+                          src="/images/doc/project-reconsturction-view.png"
+                          alt="4D reconstruction viewer"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Interactive 4D viewer with side-by-side segmentation
+                          comparison and playback timeline controls.
+                        </p>
+                      </div>
+                      <div className="p-2 md:p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 mt-4">
+                        <p className="text-sm font-medium mb-1">
+                          💡 Important Note
+                        </p>
+                        <ul className="text-sm text-muted-foreground space-y-1">
+                          <li>
+                            • If you make changes to your segmentation masks,
+                            you can{" "}
+                            <strong>re-run reconstruction</strong> to update the
+                            4D model.
+                          </li>
+                          <li>
+                            • You can also{" "}
+                            <strong>delete existing reconstructions</strong> and
+                            create new ones with different parameters.
+                          </li>
+                          <li>
+                            • Reconstruction models are regenerated based on the
+                            current segmentation state.
+                          </li>
+>>>>>>> backup-finalsprint3
                         </ul>
                       </div>
                     </CardContent>
                   </Card>
 
+<<<<<<< HEAD
                   {/* Step 4: Project Details & Management */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">4</div>
                         Complete Project Details & Management
+=======
+                  {/* Step 4 */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+                        <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+                          4
+                        </div>
+                        Complete Project Details &amp; Management
+>>>>>>> backup-finalsprint3
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
+<<<<<<< HEAD
                         Access comprehensive project information including segmentation masks, reconstruction details, job history, metadata, and storage statistics all in one place.
                       </p>
                       
@@ -960,6 +2252,45 @@ const DocPage = () => {
                         <p className="text-sm text-muted-foreground">
                           Using the <strong>Reset Masks</strong> option will permanently delete all segmentation masks and reconstruction data. 
                           This action cannot be undone. Use this feature when you need to start the segmentation process completely fresh.
+=======
+                        Access comprehensive project information including
+                        segmentation masks, reconstruction details, job history,
+                        metadata, and storage statistics all in one place.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/project-reconstruction-details.png"
+                            alt="Project details overview"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Comprehensive project details with metadata, storage
+                            statistics, and segmentation/reconstruction
+                            information.
+                          </p>
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                          <DocImage
+                            src="/images/doc/project-reconstruction-details2.png"
+                            alt="Project management actions"
+                            className="w-full h-auto rounded-md border shadow-sm"
+                          />
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Project management panel with export and reset
+                            options for easy data management.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="p-2 md:p-4 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 mt-4">
+                        <p className="text-sm font-medium mb-1">
+                          ⚠️ Reset Masks Warning
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          Using the <strong>Reset Masks</strong> option will
+                          permanently delete all segmentation masks and
+                          reconstruction data. This action cannot be undone.
+>>>>>>> backup-finalsprint3
                         </p>
                       </div>
                     </CardContent>
@@ -969,9 +2300,101 @@ const DocPage = () => {
             </ScrollArea>
           </TabsContent>
         </div>
+<<<<<<< HEAD
+=======
+
+        {/* FAQ Button */}
+        <Button
+          className="fixed bottom-6 right-6"
+          onClick={() => setShowFAQ(true)}
+        >
+          FAQ
+        </Button>
+
+        {showFAQ && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-background rounded-lg w-full max-w-[640px] max-h-[86vh] overflow-y-auto border shadow-lg">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-6 py-4">
+                <div>
+                  <h2 className="text-xl font-bold">FAQ</h2>
+                  <p className="text-sm text-muted-foreground">Search answers or send a question to the admin.</p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setShowFAQ(false)} aria-label="Close FAQ">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="space-y-5 p-6">
+              <Input
+                placeholder="Search FAQ."
+                value={faqSearch}
+                onChange={(e) => setFaqSearch(e.target.value)}
+              />
+              <div className="space-y-3">
+                {filteredFAQ.length > 0 ? filteredFAQ.map((item, index) => (
+                  <div key={index}>
+                    <p className="font-medium">{item.question}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {item.answer}
+                    </p>
+                  </div>
+                )) : (
+                  <p className="text-sm text-muted-foreground">
+                    No matching FAQ found.
+                  </p>
+                )}
+              </div>
+
+              <form className="space-y-3 rounded-lg border bg-muted/20 p-4" onSubmit={handleFaqSubmit}>
+                <div>
+                  <h3 className="text-sm font-semibold">Ask the admin</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Your message will be sent through the Docker-configured backend support endpoint.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    placeholder="Your name"
+                    value={faqSenderName}
+                    onChange={(e) => setFaqSenderName(e.target.value)}
+                  />
+                  <Input
+                    type="email"
+                    placeholder="Your email"
+                    value={faqSenderEmail}
+                    onChange={(e) => setFaqSenderEmail(e.target.value)}
+                  />
+                </div>
+                <Textarea
+                  placeholder="Write your question..."
+                  value={faqMessage}
+                  onChange={(e) => setFaqMessage(e.target.value)}
+                  rows={5}
+                  required
+                />
+                {faqSendError && <p className="text-sm text-destructive">{faqSendError}</p>}
+                {faqSendStatus && <p className="text-sm text-green-600">{faqSendStatus}</p>}
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={() => setShowFAQ(false)}>
+                    Close
+                  </Button>
+                  <Button type="submit" disabled={faqSending || faqMessage.trim().length < 5} className="gap-1.5">
+                    {faqSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    Send
+                  </Button>
+                </div>
+              </form>
+              </div>
+            </div>
+          </div>
+        )}
+>>>>>>> backup-finalsprint3
       </Tabs>
     </div>
   );
 };
 
+<<<<<<< HEAD
 export default DocPage;
+=======
+export default DocPage;
+>>>>>>> backup-finalsprint3

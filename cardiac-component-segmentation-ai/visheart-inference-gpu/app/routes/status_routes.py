@@ -3,28 +3,29 @@ from fastapi.responses import FileResponse
 import os
 import subprocess
 
+from app.classes.device_runtime import get_backend
+from app.dependencies import model_init
+
 router = APIRouter()
 
 def get_gpu_status():
     """
-    Retrieves the status and details of the GPU using the `nvidia-smi` command.
-
-    Returns:
-        dict: A dictionary containing the following keys:
-            - gpu_name (str): The name of the GPU.
-            - architecture (str): The compute capability (architecture) of the GPU.
-            - cuda_version (str or None): The CUDA version installed, or None if not found.
-            - memory_total_mb (int): Total GPU memory in megabytes.
-            - memory_used_mb (int): Used GPU memory in megabytes.
-            - gpu_utilization_percent (int): GPU utilization percentage.
-            - status (str): "ok" if GPU utilization is below 90%, otherwise "busy".
-            - error (str, optional): Error message if an exception occurs.
-
-    Raises:
-        Exception: If any subprocess call fails or outputs unexpected results.
+    Backend-aware GPU/device status.
+    - Uses nvidia-smi only on CUDA backend.
+    - Does not fail health on CPU/ROCm/non-NVIDIA environments.
     """
+    backend = get_backend()
+
+    # Non-NVIDIA backend: report gracefully
+    if backend in ("cpu", "mps", "rocm"):
+        return {
+            "backend": backend,
+            "status": "ok",
+            "message": f"{backend} backend active; nvidia-smi not required",
+        }
+
+    # CUDA backend: try nvidia-smi telemetry
     try:
-        # Get basic GPU memory and utilization info
         result_basic = subprocess.run(
             [
                 "nvidia-smi",
@@ -40,7 +41,6 @@ def get_gpu_status():
         gpu_name = parts[0]
         memory_total, memory_used, utilization = map(int, parts[1:])
 
-        # Get GPU architecture info
         result_arch = subprocess.run(
             ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader,nounits"],
             capture_output=True,
@@ -49,7 +49,6 @@ def get_gpu_status():
         )
         architecture = result_arch.stdout.strip()
 
-        # Get CUDA version
         result_cuda = subprocess.run(
             ["nvidia-smi", "--query", "--display=COMPUTE"],
             capture_output=True,
@@ -64,6 +63,7 @@ def get_gpu_status():
                 break
 
         return {
+            "backend": backend,
             "gpu_name": gpu_name,
             "architecture": architecture,
             "cuda_version": cuda_version,
@@ -73,7 +73,13 @@ def get_gpu_status():
             "status": "ok" if utilization < 90 else "busy",
         }
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        # Degraded telemetry, not full service failure
+        return {
+            "backend": backend,
+            "status": "degraded",
+            "message": "CUDA backend detected but nvidia-smi telemetry unavailable",
+            "error": str(e),
+        }
 
 
 @router.get("/gpu")
@@ -87,9 +93,16 @@ def gpu_status():
             - "gpu": A dictionary with detailed GPU status information retrieved from `get_gpu_status()`.
     """
     gpu_status = get_gpu_status()
+    backend = gpu_status.get("backend", "unknown")
+    if backend in ("cpu", "mps", "rocm"):
+        overall = "ok"
+    else:
+        overall = "ok" if gpu_status.get("status") in ("ok", "busy") else "degraded"
+
     return {
-        "status": "ok" if gpu_status.get("status") == "ok" else "degraded",
+        "status": overall,
         "gpu": gpu_status,
+        "backend": backend
     }
 
 
@@ -216,3 +229,28 @@ def environment_status():
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+@router.get("/models")
+def model_status():
+    """
+    Endpoint to check whether each inference model is loaded in memory.
+    """
+    return {
+        "status": "ok",
+        "models": {
+            "yolo": model_init.yolo_model is not None,
+            "medsam": model_init.medsam_model is not None,
+            "fourd_reconstruction": model_init.fourd_reconstruction_model is not None,
+        },
+        "skip_flags": {
+            "yolo": os.getenv("SKIP_YOLO_MODEL_LOAD", "false"),
+            "medsam": os.getenv("SKIP_MEDSAM_MODEL_LOAD", "false"),
+            "fourd_reconstruction": os.getenv("SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD", "false"),
+        },
+        "model_files": {
+            "yolo": os.getenv("YOLO_MODEL_NAME", "not_set"),
+            "medsam": os.getenv("MEDSAM_MODEL_NAME", "not_set"),
+            "fourd_reconstruction": os.getenv("FOURD_RECONSTRUCTION_MODEL_NAME", "not_set"),
+        },
+    }

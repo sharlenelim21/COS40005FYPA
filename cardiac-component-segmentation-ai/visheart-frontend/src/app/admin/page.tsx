@@ -1,5 +1,9 @@
 "use client";
 
+<<<<<<< HEAD
+=======
+import { useState } from "react";
+>>>>>>> backup-finalsprint3
 import { useAuth } from "@/context/auth-context";
 import {
   Card,
@@ -9,6 +13,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+<<<<<<< HEAD
+=======
+import { Button } from "@/components/ui/button";
+>>>>>>> backup-finalsprint3
 import {
   Users,
   Shield,
@@ -63,6 +71,7 @@ const recentActivities = [
 
 const quickActions = [
   {
+<<<<<<< HEAD
     title: "Add New User",
     description: "Create a new user account",
     href: "/admin/user-management",
@@ -80,10 +89,43 @@ const quickActions = [
   {
     title: "View Reports",
     description: "Check system analytics",
+=======
+    title: "User Management",
+    description: "Manage users, roles, and permissions",
+    href: "/admin/user-management",
+    icon: Users,
+    variant: "default" as const,
+    section: "core" as const,
+  },
+  {
+    title: "System Monitor & Configuration",
+    description: "Monitor system health, performance, and configure settings",
+    href: "/admin/system-monitor",
+    icon: Activity,
+    variant: "default" as const,
+    section: "core" as const,
+  },
+  {
+    title: "AWS Analytics",
+    description: "View AWS metrics and reports",
+>>>>>>> backup-finalsprint3
     href: "/admin/analytics",
     icon: TrendingUp,
     variant: "secondary" as const,
     disabled: true,
+<<<<<<< HEAD
+=======
+    section: "advanced" as const,
+  },
+  {
+    title: "Database Management",
+    description: "Manage database operations and backups",
+    href: "/admin/database",
+    icon: Shield,
+    variant: "secondary" as const,
+    disabled: true,
+    section: "advanced" as const,
+>>>>>>> backup-finalsprint3
   },
 ];
 
@@ -95,15 +137,28 @@ const quickActions = [
  */
 export default function AdminPageHome() {
   const { user } = useAuth();
+<<<<<<< HEAD
 
   return (
     <div className="space-y-8">
       {/* Welcome Section */}
+=======
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
+
+  const visibleQuickActions = quickActions.filter((action) => {
+    if (action.section === "core") return true;
+    return showAdvancedTools;
+  });
+
+  return (
+    <div className="space-y-8">
+>>>>>>> backup-finalsprint3
       <div className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight">
           Welcome back, {user?.username}
         </h1>
         <p className="text-muted-foreground">
+<<<<<<< HEAD
           Here's an overview of your VisHeart system.
         </p>
       </div>
@@ -111,6 +166,13 @@ export default function AdminPageHome() {
       {/* System Statistics Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {/* Total Users */}
+=======
+          Here&apos;s an overview of your VisHeart system.
+        </p>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+>>>>>>> backup-finalsprint3
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Users</CardTitle>
@@ -124,7 +186,10 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
+<<<<<<< HEAD
         {/* Active Users */}
+=======
+>>>>>>> backup-finalsprint3
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Users</CardTitle>
@@ -136,7 +201,10 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
+<<<<<<< HEAD
         {/* System Health */}
+=======
+>>>>>>> backup-finalsprint3
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">System Health</CardTitle>
@@ -152,7 +220,10 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
+<<<<<<< HEAD
         {/* Uptime */}
+=======
+>>>>>>> backup-finalsprint3
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Uptime</CardTitle>
@@ -165,9 +236,13 @@ export default function AdminPageHome() {
         </Card>
       </div>
 
+<<<<<<< HEAD
       {/* Two Column Layout for Activities and Quick Actions */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Recent Activities */}
+=======
+      <div className="grid gap-6 lg:grid-cols-2">
+>>>>>>> backup-finalsprint3
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -212,6 +287,7 @@ export default function AdminPageHome() {
           </CardContent>
         </Card>
 
+<<<<<<< HEAD
         {/* Quick Actions */}
         <Card>
           <CardHeader>
@@ -222,6 +298,32 @@ export default function AdminPageHome() {
             <div className="space-y-3">
               {quickActions.map((action) => {
                 const Icon = action.icon;
+=======
+        <Card>
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle>Quick Actions</CardTitle>
+              <CardDescription>Common administrative tasks</CardDescription>
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAdvancedTools((prev) => !prev)}
+              >
+                {showAdvancedTools ? "Hide" : "Show"} Analytics & Database
+              </Button>
+            </div>
+          </CardHeader>
+
+          <CardContent>
+            <div className="space-y-3">
+              {visibleQuickActions.map((action) => {
+                const Icon = action.icon;
+
+>>>>>>> backup-finalsprint3
                 return (
                   <div
                     key={action.title}
@@ -242,6 +344,10 @@ export default function AdminPageHome() {
                         </p>
                       </div>
                     </div>
+<<<<<<< HEAD
+=======
+
+>>>>>>> backup-finalsprint3
                     {action.disabled && (
                       <Badge variant="secondary" className="text-xs">
                         Coming Soon
@@ -251,11 +357,24 @@ export default function AdminPageHome() {
                 );
               })}
             </div>
+<<<<<<< HEAD
+=======
+
+            {!showAdvancedTools && (
+              <p className="text-muted-foreground mt-4 text-xs">
+                Analytics and Database Management are currently hidden based on
+                the latest client scope.
+              </p>
+            )}
+>>>>>>> backup-finalsprint3
           </CardContent>
         </Card>
       </div>
 
+<<<<<<< HEAD
       {/* System Information Footer */}
+=======
+>>>>>>> backup-finalsprint3
       <Card>
         <CardContent className="pt-6">
           <div className="text-muted-foreground flex items-center justify-between text-sm">
@@ -266,4 +385,8 @@ export default function AdminPageHome() {
       </Card>
     </div>
   );
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> backup-finalsprint3

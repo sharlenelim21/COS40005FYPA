@@ -152,7 +152,11 @@ export const convertNpzToObjTempFile = async (
     }
 
     try {
+<<<<<<< HEAD
       const command = `python "${pythonScript}" "${npzFilePath}" "${objFilePath}" --verbose`;
+=======
+      const command = `python3 "${pythonScript}" "${npzFilePath}" "${objFilePath}" --verbose`;
+>>>>>>> backup-finalsprint3
       logger.info(`${serviceLocation}: Executing Python conversion for job ${jobId}: ${command}`);
       
       const { stdout, stderr } = await execAsync(command, {

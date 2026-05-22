@@ -1,9 +1,20 @@
 import type { NextConfig } from "next";
 
+<<<<<<< HEAD
 const nextConfig: NextConfig = {
   /* config options here */
   // Enable standalone output for Docker deployment
   output: 'standalone',
+=======
+const isWindows = process.platform === "win32";
+
+const nextConfig: NextConfig = {
+  /* config options here */
+  // standalone output is required for Docker but causes symlink EPERM errors on Windows
+  // without Developer Mode enabled. Set NEXT_STANDALONE=1 in CI/Docker only.
+  output: process.env.NEXT_STANDALONE === '1' ? 'standalone' : undefined,
+  outputFileTracingRoot: process.cwd(),
+>>>>>>> backup-finalsprint3
   eslint: {
     // Warning: This allows production builds to successfully complete even if
     // your project has ESLint errors.

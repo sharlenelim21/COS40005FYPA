@@ -1,12 +1,19 @@
 // File: src/index.ts
 // Description: Main application entry point. Handles server startup and database connection.
 
+<<<<<<< HEAD
 import dotenv from 'dotenv';
+=======
+>>>>>>> backup-finalsprint3
 import path from 'path';
 import logger from './services/logger'; // Import Winston Logger
 import { connectRedis, checkRedisHealth } from './services/redis'; // Import Redis connection and health check
 import { scheduleGuestCleanup } from './jobs/guestcleanupjob'; // Import guest cleanup job
 import { scheduleInferenceJobCleanup } from './jobs/inferencejobcleanupjob'; // Import inference job cleanup CRON
+<<<<<<< HEAD
+=======
+import { loadEnvFromKnownLocations } from './utils/env';
+>>>>>>> backup-finalsprint3
 // Import the http module for graceful shutdown
 import http from 'http';
 
@@ -15,7 +22,11 @@ const serviceLocation = 'Main';
 
 // Load environment variables
 try {
+<<<<<<< HEAD
   dotenv.config({ path: path.join(__dirname, '../../.env'), override: true });
+=======
+  loadEnvFromKnownLocations(__dirname);
+>>>>>>> backup-finalsprint3
 } catch (error: unknown) {
   logger.error(`${serviceLocation}: Failed to load environment variables. Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   process.exit(1); // Fatal - exit if critical error occurs
@@ -124,4 +135,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 });
 
 // Note: The `export const app = express();` line is removed from here.
+<<<<<<< HEAD
 // All middleware and route setup is now handled in app.ts.
+=======
+// All middleware and route setup is now handled in app.ts.
+>>>>>>> backup-finalsprint3

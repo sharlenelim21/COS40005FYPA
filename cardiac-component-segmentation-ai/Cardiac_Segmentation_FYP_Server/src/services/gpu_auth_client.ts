@@ -50,10 +50,24 @@ let currentGPUConfig: GPUConfig | null = null;
  * @throws {Error} If both database and environment variable loading fail
  */
 async function loadGPUConfig(): Promise<GPUConfig> {
+<<<<<<< HEAD
   logger.info(`${serviceLocation}: Fetching GPU configuration from database.`);
 
   try {
     // Try to load from database first
+=======
+  logger.info(`${serviceLocation}: Loading GPU configuration...`);
+
+  // Local deployments should use the configured local GPU URL from the environment.
+  if ((process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false") {
+    logger.info(
+      `${serviceLocation}: Local GPU mode enabled, forcing GPU config from environment variables`
+    );
+    return loadConfigFromEnvironment();
+  }
+
+  try {
+>>>>>>> backup-finalsprint3
     const dbResult = await readGPUHost();
 
     if (dbResult.success && dbResult.gpuHost) {
@@ -61,7 +75,10 @@ async function loadGPUConfig(): Promise<GPUConfig> {
       const protocol = gpuHost.isHTTPS ? "https" : "http";
       const fullAddress = `${protocol}://${gpuHost.host}:${gpuHost.port}`;
 
+<<<<<<< HEAD
       // Extract plain object properties from the Mongoose document
+=======
+>>>>>>> backup-finalsprint3
       const config: GPUConfig = {
         host: gpuHost.host,
         port: gpuHost.port,
@@ -76,6 +93,7 @@ async function loadGPUConfig(): Promise<GPUConfig> {
         setBy: gpuHost.setBy,
       };
 
+<<<<<<< HEAD
       logger.info(
         `${serviceLocation}: Successfully loaded GPU configuration from database`
       );
@@ -114,6 +132,14 @@ async function loadGPUConfig(): Promise<GPUConfig> {
         `Database configuration load failed: ${dbResult.message}`
       );
     }
+=======
+      logger.info(`${serviceLocation}: Successfully loaded GPU configuration from database`);
+      logger.info(`${serviceLocation}: GPU Server Address: ${fullAddress}`);
+      return config;
+    }
+
+    throw new Error(`Database configuration load failed: ${dbResult.message}`);
+>>>>>>> backup-finalsprint3
   } catch (error: unknown) {
     logger.warn(
       `${serviceLocation}: Database configuration load failed, falling back to environment variables`
@@ -123,8 +149,11 @@ async function loadGPUConfig(): Promise<GPUConfig> {
       serviceLocation,
       `Error fetching GPU configuration from database`
     );
+<<<<<<< HEAD
 
     // Fallback to environment variables
+=======
+>>>>>>> backup-finalsprint3
     return loadConfigFromEnvironment();
   }
 }
@@ -143,7 +172,11 @@ function loadConfigFromEnvironment(): GPUConfig {
 
   // Load with defaults matching the database schema defaults
   const host = process.env.GPU_SERVER_URL || "localhost";
+<<<<<<< HEAD
   const port = parseInt(process.env.GPU_SERVER_PORT || "8000", 10);
+=======
+  const port = parseInt(process.env.GPU_SERVER_PORT || "8001", 10);
+>>>>>>> backup-finalsprint3
   const isHTTPS = process.env.GPU_SERVER_SSL === "true";
   const gpuServerAuthJwtSecret =
     process.env.GPU_SERVER_AUTH_JWT_SECRET || "change-this";

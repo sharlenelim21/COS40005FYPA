@@ -1,6 +1,10 @@
 "use client";
 
+<<<<<<< HEAD
 import { useParams, useRouter } from "next/navigation";
+=======
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+>>>>>>> backup-finalsprint3
 import { useState, useEffect } from "react";
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
@@ -10,6 +14,10 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
+<<<<<<< HEAD
+=======
+import { StrainBullseye, type StrainType } from "@/components/landmark/StrainVisualization";
+>>>>>>> backup-finalsprint3
 import { 
   ResizablePanelGroup, 
   ResizablePanel, 
@@ -28,6 +36,13 @@ import {
 export default function Standalone4DViewerPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+<<<<<<< HEAD
+=======
+  const searchParams = useSearchParams();
+  const modelParam = searchParams.get("model");
+  const selectedModel = modelParam === "medsam" || modelParam === "unet" ? modelParam : null;
+  const reconstructionIdParam = searchParams.get("reconstructionId");
+>>>>>>> backup-finalsprint3
 
   // Get data from ProjectContext
   const {
@@ -35,12 +50,30 @@ export default function Standalone4DViewerPage() {
     error,
     projectData,
     hasReconstructions,
+<<<<<<< HEAD
     reconstructionCacheReady,
     reconstructionCacheError,
     getReconstructionGLB,
     reconstructionMetadata,
   } = useProject();
 
+=======
+    reconstructionCacheError,
+    getReconstructionGLB,
+    reconstructionMetadata,
+    getReconstructionForModel,
+    getReconstructionById,
+    refreshReconstructions,
+  } = useProject();
+
+  const activeReconstruction = reconstructionIdParam
+    ? getReconstructionById(reconstructionIdParam) ||
+      (reconstructionMetadata?.reconstructionId === reconstructionIdParam ? reconstructionMetadata : null)
+    : selectedModel
+    ? getReconstructionForModel(selectedModel)
+    : reconstructionMetadata;
+
+>>>>>>> backup-finalsprint3
   // Update page title dynamically
   useEffect(() => {
     if (projectData?.name) {
@@ -54,12 +87,47 @@ export default function Standalone4DViewerPage() {
     };
   }, [projectData?.name]);
 
+<<<<<<< HEAD
+=======
+  // Poll for reconstruction when it doesn't exist yet (job was just started)
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+
+  useEffect(() => {
+    // Only poll after initial context load is done and reconstruction is missing
+    if (loading !== "done") return;
+    if (hasReconstructions && (!selectedModel || activeReconstruction)) return;
+    if (pollTimedOut) return;
+
+    setIsPolling(true);
+    let attempts = 0;
+    const maxAttempts = 60; // 2 minutes at 2s intervals
+
+    const interval = setInterval(async () => {
+      attempts++;
+      await refreshReconstructions();
+
+      if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        setIsPolling(false);
+        setPollTimedOut(true);
+      }
+    }, 2000);
+
+    return () => {
+      clearInterval(interval);
+      setIsPolling(false);
+    };
+  }, [loading, hasReconstructions, selectedModel, activeReconstruction, pollTimedOut, refreshReconstructions]);
+
+>>>>>>> backup-finalsprint3
   // Viewer state
   const [currentFrame, setCurrentFrame] = useState(0);
   const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(500); // ms per frame
+<<<<<<< HEAD
 
   // Get total frames from reconstruction metadata (more reliable than project dimensions for reconstructions)
   const totalFrames = reconstructionMetadata?.totalFrames || projectData?.dimensions?.frames || 0;
@@ -67,6 +135,21 @@ export default function Standalone4DViewerPage() {
   // Load 3D reconstruction model when frame changes
   useEffect(() => {
     if (!hasReconstructions || !reconstructionCacheReady) {
+=======
+  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GLS");
+
+  // Get total frames from reconstruction metadata (more reliable than project dimensions for reconstructions)
+  const totalFrames = activeReconstruction?.totalFrames || projectData?.dimensions?.frames || 0;
+
+  // Load 3D reconstruction model when frame changes
+  useEffect(() => {
+    if (!hasReconstructions) {
+      setReconstructionModelUrl(null);
+      return;
+    }
+
+    if (selectedModel && !activeReconstruction) {
+>>>>>>> backup-finalsprint3
       setReconstructionModelUrl(null);
       return;
     }
@@ -75,7 +158,11 @@ export default function Standalone4DViewerPage() {
       setIsLoadingModel(true);
       try {
         console.log(`[Standalone4DViewer] Loading model for frame ${currentFrame}...`);
+<<<<<<< HEAD
         const url = await getReconstructionGLB(currentFrame);
+=======
+        const url = await getReconstructionGLB(currentFrame, selectedModel || undefined, reconstructionIdParam || undefined);
+>>>>>>> backup-finalsprint3
         if (url) {
           console.log(`[Standalone4DViewer] ✅ Loaded model for frame ${currentFrame}`);
           setReconstructionModelUrl(url);
@@ -92,7 +179,11 @@ export default function Standalone4DViewerPage() {
     };
 
     loadModel();
+<<<<<<< HEAD
   }, [currentFrame, hasReconstructions, reconstructionCacheReady, getReconstructionGLB]);
+=======
+  }, [activeReconstruction, currentFrame, getReconstructionGLB, hasReconstructions, reconstructionIdParam, selectedModel]);
+>>>>>>> backup-finalsprint3
 
   // Playback animation
   useEffect(() => {
@@ -156,6 +247,7 @@ export default function Standalone4DViewerPage() {
     return <ErrorProject error="Failed to load project data" />;
   }
 
+<<<<<<< HEAD
   // No reconstruction data
   if (!hasReconstructions) {
     return (
@@ -169,13 +261,65 @@ export default function Standalone4DViewerPage() {
           Back to Project
         </Button>
         
+=======
+  // No reconstruction data — show waiting UI while polling, error only on timeout
+  if (!hasReconstructions || (selectedModel && !activeReconstruction)) {
+    if (isPolling) {
+      return (
+        <div className="container mx-auto p-6 max-w-4xl">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => router.back()}
+            className="mb-4 gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Project
+          </Button>
+
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-center py-12">
+                <Loader2 className="h-12 w-12 mx-auto text-primary mb-4 animate-spin" />
+                <h3 className="text-lg font-semibold mb-2">Generating 4D Reconstruction...</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {selectedModel
+                    ? `Building the ${selectedModel.toUpperCase()} 4D model. This may take several minutes.`
+                    : "Building the 4D model. This may take several minutes."}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
+    return (
+      <div className="container mx-auto p-6 max-w-4xl">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => router.back()}
+          className="mb-4 gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Project
+        </Button>
+
+>>>>>>> backup-finalsprint3
         <Card>
           <CardContent className="pt-6">
             <div className="text-center py-12">
               <AlertCircle className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold mb-2">No 4D Reconstruction Available</h3>
               <p className="text-sm text-muted-foreground mb-4">
+<<<<<<< HEAD
                 This project does not have a 4D reconstruction yet.
+=======
+                {selectedModel
+                  ? `This project does not have a ${selectedModel.toUpperCase()} 4D reconstruction yet.`
+                  : "This project does not have a 4D reconstruction yet."}
+>>>>>>> backup-finalsprint3
               </p>
               <Button onClick={() => router.push(`/project/${projectId}`)}>
                 Return to Project
@@ -191,12 +335,22 @@ export default function Standalone4DViewerPage() {
   if (reconstructionCacheError) {
     return (
       <div className="container mx-auto p-6 max-w-4xl">
+<<<<<<< HEAD
         <Button 
           variant="ghost" 
           onClick={() => router.back()}
           className="mb-4"
         >
           <ArrowLeft className="h-4 w-4 mr-2" />
+=======
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => router.back()}
+          className="mb-4 gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
+        >
+          <ArrowLeft className="h-4 w-4" />
+>>>>>>> backup-finalsprint3
           Back to Project
         </Button>
         
@@ -229,6 +383,7 @@ export default function Standalone4DViewerPage() {
         <ResizablePanel defaultSize={70} minSize={20}>
           <div className="h-full w-full p-4 relative">
             {/* Back Button - Positioned in top-left */}
+<<<<<<< HEAD
             <Button 
               variant="secondary" 
               size="sm"
@@ -238,6 +393,19 @@ export default function Standalone4DViewerPage() {
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back to Project
             </Button>
+=======
+            <div className="absolute top-6 left-6 z-20">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push(`/project/${projectId}`)}
+                className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md backdrop-blur-sm"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Back to Project</span>
+              </Button>
+            </div>
+>>>>>>> backup-finalsprint3
             
             <ReconstructionGLBViewer
               modelUrl={reconstructionModelUrl}
@@ -363,8 +531,66 @@ export default function Standalone4DViewerPage() {
                   />
                 </div>
 
+<<<<<<< HEAD
                 {/* Reconstruction Info */}
                 {reconstructionMetadata && (
+=======
+                {/* Dynamic Bullseye Visualization */}
+                <div className="pt-4 border-t space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      Frame Strain Analysis
+                    </p>
+                    <span className="text-xs text-foreground font-mono font-semibold">
+                      Frame {currentFrame + 1} / {totalFrames}
+                    </span>
+                  </div>
+                  
+                  {/* Strain type selector */}
+                  <div className="flex gap-2">
+                    {(["GLS", "GCS", "GRS"] as const).map((type) => (
+                      <Button
+                        key={type}
+                        variant={selectedStrainType === type ? "default" : "outline"}
+                        size="sm"
+                        className="flex-1 text-xs h-8"
+                        onClick={() => setSelectedStrainType(type)}
+                      >
+                        {type}
+                      </Button>
+                    ))}
+                  </div>
+
+                  {/* Bullseye chart */}
+                  <div className="rounded-lg border border-border bg-muted/10 p-2">
+                    <StrainBullseye
+                      selectedStrainType={selectedStrainType}
+                      frame={currentFrame}
+                      totalFrames={totalFrames}
+                      compact
+                    />
+                  </div>
+                  
+                  {/* Mini strain indicators */}
+                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                    <div className="rounded bg-red-100/50 dark:bg-red-950/20 p-2 text-center">
+                      <div className="text-muted-foreground">GLS</div>
+                      <div className="font-semibold text-red-600">-18.2%</div>
+                    </div>
+                    <div className="rounded bg-yellow-100/50 dark:bg-yellow-950/20 p-2 text-center">
+                      <div className="text-muted-foreground">GCS</div>
+                      <div className="font-semibold text-yellow-600">-17.6%</div>
+                    </div>
+                    <div className="rounded bg-green-100/50 dark:bg-green-950/20 p-2 text-center">
+                      <div className="text-muted-foreground">GRS</div>
+                      <div className="font-semibold text-green-600">+27.8%</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Reconstruction Info */}
+                {activeReconstruction && (
+>>>>>>> backup-finalsprint3
                   <div className="pt-4 border-t space-y-3">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                       Reconstruction Info
@@ -373,25 +599,41 @@ export default function Standalone4DViewerPage() {
                       <div>
                         <p className="text-muted-foreground">ED Frame</p>
                         <p className="font-mono font-semibold">
+<<<<<<< HEAD
                           Frame {reconstructionMetadata.metadata?.edFrameIndex || 1}
+=======
+                          Frame {activeReconstruction.metadata?.edFrameIndex || 1}
+>>>>>>> backup-finalsprint3
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Format</p>
                         <p className="font-mono font-semibold uppercase">
+<<<<<<< HEAD
                           {reconstructionMetadata.meshFormat || 'GLB'}
+=======
+                          {activeReconstruction.meshFormat || 'GLB'}
+>>>>>>> backup-finalsprint3
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Resolution</p>
                         <p className="font-mono">
+<<<<<<< HEAD
                           {reconstructionMetadata.metadata?.resolution || 32}³
+=======
+                          {activeReconstruction.metadata?.resolution || 32}³
+>>>>>>> backup-finalsprint3
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Iterations</p>
                         <p className="font-mono">
+<<<<<<< HEAD
                           {reconstructionMetadata.metadata?.numIterations || 30}
+=======
+                          {activeReconstruction.metadata?.numIterations || 30}
+>>>>>>> backup-finalsprint3
                         </p>
                       </div>
                     </div>

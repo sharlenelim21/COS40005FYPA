@@ -110,7 +110,11 @@ function AlertDialogDescription({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Description>) {
   return (
+<<<<<<< HEAD
     <AlertDialogPrimitive.Description
+=======
+    <div
+>>>>>>> backup-finalsprint3
       data-slot="alert-dialog-description"
       className={cn("text-muted-foreground text-sm", className)}
       {...props}

@@ -1,5 +1,21 @@
 # Docker Compose for LOCAL Deployment - Combined Container Version
 
+x-gpu-environment: &gpu-env
+  JWT_SECRET: dev-gpu-secret
+  YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
+  MEDSAM_MODEL_NAME: medsam_vit_b.pth
+  FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
+  GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
+  SERVER_USERNAME: visheart-gpu-inference
+  ALLOWED_NODE_USERNAME: visheart-node-server
+  ENV_TYPE: development
+  GPU_SEMAPHORE_COUNT: 3
+  RECONSTRUCTION_USE_FIXED_SEED: "true"
+  RECONSTRUCTION_RANDOM_SEED: "42"
+  LANDMARK_REPO_PATH: /app/UNETRESNET34
+  LANDMARK_MODEL_2CH_PATH: /app/UNETRESNET34/checkpoints/best_model_2ch.pth
+  LANDMARK_MODEL_1CH_PATH: /app/UNETRESNET34/checkpoints/best_model_1ch.pth
+
 services:
   # ============================================
   # Combined VisHeart Application
@@ -19,7 +35,7 @@ services:
       PORT: 5000
       
       # MongoDB Configuration
-      MONGODB_URI: "mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin"
+      MONGODB_URI: mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin
       
       # Redis Configuration
       REDIS_HOST: redis
@@ -42,23 +58,48 @@ services:
       S3_FORCE_PATH_STYLE: "true"
       
       # GPU Service Configuration
+      # The inference service runs as `gpu-cpu` or `gpu-nvidia` in this
+      # same compose file. Both share the docker-network alias `gpu`.
+      # The prebuilt image `sveltes/visheart-inference-gpu:faithful-latest`
+      # bakes a copy of start_server.py that binds uvicorn on **port
+      # 8001**, so the backend addresses it at http://gpu:8001. (The
+      # local source's start_server.py uses 8011, but that file is not
+      # what the prebuilt image runs.) If you ever rebuild the GPU image
+      # from local source, update this port + the gpu-* services'
+      # `ports:` mapping in lockstep.
       GPU_API_URL: http://gpu:8001
-      GPU_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
+      LOCAL_GPU_API_URL: http://gpu:8001
+      MEDSAM_USE_LOCALHOST: "true"
+      MEDSAM_LOCAL_BASE_URL: http://gpu:8001
+      GPU_JWT_SECRET: dev-gpu-secret
       GPU_SERVER_URL: gpu
       GPU_SERVER_PORT: 8001
       GPU_SERVER_SSL: "false"
-      GPU_SERVER_AUTH_JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
-      GPU_SERVER_ID_FOR_GPU_SERVER: default-server-id
-      GPU_SERVER_IDENTITY: default-gpu-server-identity
+      GPU_SERVER_AUTH_JWT_SECRET: dev-gpu-secret
+      GPU_SERVER_ID_FOR_GPU_SERVER: visheart-node
+      GPU_SERVER_IDENTITY: visheart-gpu
       GPU_SERVER_JWT_REFRESH_INTERVAL: 480000
       GPU_SERVER_JWT_LIFETIME_SECONDS: 600
 
       # Callback URL Configuration
-      CALLBACK_URL: http://visheart-app:5000
+      # GPU container calls back to the backend; host.docker.internal:5000
+      # is the host-side port mapping for the visheart-local container.
+      CALLBACK_URL: http://host.docker.internal:5000
+      LOCAL_CALLBACK_URL: http://visheart-app:5000
       
       # ========== Frontend Configuration ==========
       NEXT_PUBLIC_API_URL: http://localhost:5000
       NEXT_PUBLIC_ENV: development
+      NEXT_PUBLIC_LANDMARK_USE_STUB: "false"
+      NEXT_PUBLIC_LANDMARK_ENDPOINT: /landmark-detection
+      # Leave ADMIN_SUPPORT_EMAIL empty to use the admin user's email from MongoDB.
+      ADMIN_SUPPORT_EMAIL: ""
+      SMTP_FROM: meiqiliew334@gmail.com
+      SMTP_HOST: "smtp.gmail.com"
+      SMTP_PORT: "465"
+      SMTP_SECURE: "true"
+      SMTP_USER: "meiqiliew334@gmail.com"
+      SMTP_PASS: "ekqd vdiq bvwg kldk"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -66,8 +107,28 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      gpu:
-        condition: service_started
+      #gpu:
+      #  condition: service_started
+      # GPU dependency removed so profiles can boot dynamically without crashing
+    volumes:
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/authentication.js:/app/backend/dist/routes/authentication.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/webhook_routes.js:/app/backend/dist/routes/webhook_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/gpu_status.js:/app/backend/dist/routes/gpu_status.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/landmark_routes.js:/app/backend/dist/routes/landmark_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/reconstruction_routes.js:/app/backend/dist/routes/reconstruction_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/segmentation_routes.js:/app/backend/dist/routes/segmentation_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/routes/support_routes.js:/app/backend/dist/routes/support_routes.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/express_app.js:/app/backend/dist/services/express_app.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/gpu_auth_client.js:/app/backend/dist/services/gpu_auth_client.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/database.js:/app/backend/dist/services/database.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/utils/env.js:/app/backend/dist/utils/env.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/inference.js:/app/backend/dist/services/inference.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/reconstruction.js:/app/backend/dist/services/reconstruction.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/landmark_inference.js:/app/backend/dist/services/landmark_inference.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/unet_inference.js:/app/backend/dist/services/unet_inference.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/services/segmentation_export.js:/app/backend/dist/services/segmentation_export.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/types/database_types.js:/app/backend/dist/types/database_types.js:ro
+      - ../Cardiac_Segmentation_FYP_Server/src/python:/app/backend/src/python:ro
     networks:
       - visheart-network
     healthcheck:
@@ -96,7 +157,7 @@ services:
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD-SHELL", "mongosh -u \"admin\" -p \"P@ssw0rd123!\" --authenticationDatabase admin --quiet --eval \"quit(db.adminCommand('ping').ok ? 0 : 2)\""]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -109,8 +170,6 @@ services:
     image: redis:7-alpine
     container_name: visheart-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
@@ -168,36 +227,111 @@ services:
       - visheart-network
 
   # ============================================
-  # GPU Inference Service
+  # GPU Inference Service (PROFILE: CPU)
   # ============================================
-  gpu:
+  gpu-cpu:
     image: sveltes/visheart-inference-gpu:faithful-latest
-    container_name: visheart-gpu
+    container_name: visheart-gpu-cpu
+    profiles: ["cpu"]
     restart: unless-stopped
     ports:
+      # The prebuilt image's start_server.py binds uvicorn on port 8001.
+      # If you rebuild the GPU image from local source (which uses 8011),
+      # bump both this mapping and the visheart-app env block in lockstep.
       - "8001:8001"
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
     environment:
-      USE_GPU: "true" # Set to "true" if GPU is available
-      JWT_SECRET: LOCAL-GPU-JWT-SECRET-CHANGE-IN-PRODUCTION-67890
-      YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
-      MEDSAM_MODEL_NAME: medsam_vit_b.pth
-      FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
-      GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
-      SERVER_USERNAME: visheart-gpu-inference
-      ALLOWED_NODE_USERNAME: visheart-node-server
-      ENV_TYPE: development
-      GPU_SEMAPHORE_COUNT: 3
-      RECONSTRUCTION_USE_FIXED_SEED: "true"
-      RECONSTRUCTION_RANDOM_SEED: "42"
+      <<: *gpu-env
+      USE_GPU: "false" # Safely overrides for CPU
+    command: >
+      bash -lc 'python -c "import nibabel, timm" ||
+      pip install --no-cache-dir "nibabel>=5.0.0" timm;
+      exec bash ./docker/scripts/start.sh'
+    volumes:
+      - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
+      - ../visheart-inference-gpu/app/main.py:/app/app/main.py:ro
+      - ../visheart-inference-gpu/app/main_updated.py:/app/app/main_updated.py:ro
+      - ../visheart-inference-gpu/app/bullseye_analysis.py:/app/app/bullseye_analysis.py:ro
+      - ../visheart-inference-gpu/app/external_unet_inference.py:/app/app/external_unet_inference.py:ro
+      - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
+      - ../visheart-inference-gpu/app/classes/file_fetch_handler.py:/app/app/classes/file_fetch_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/fourdreconstruction_handler.py:/app/app/classes/fourdreconstruction_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/medsam_handler.py:/app/app/classes/medsam_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/pydantic_schema.py:/app/app/classes/pydantic_schema.py:ro
+      - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
+      - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
+      - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
+      - ../visheart-inference-gpu/app/helpers/unet_inference_api.py:/app/app/helpers/unet_inference_api.py:ro
+      - ../visheart-inference-gpu/app/routes/bullseye_route.py:/app/app/routes/bullseye_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route.py:/app/app/routes/inference_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route_old.py:/app/app/routes/inference_route_old.py:ro
+      - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
+      - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
+      - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
-      - visheart-network
+      visheart-network:
+        aliases:
+          - gpu
+
+  # ============================================
+  # GPU Inference Service (PROFILE: NVIDIA)
+  # ============================================
+  gpu-nvidia:
+    image: sveltes/visheart-inference-gpu:faithful-latest
+    container_name: visheart-gpu-nvidia
+    profiles: ["gpu"]
+    restart: unless-stopped
+    ports:
+      # See gpu-cpu service for the 8001-vs-8011 explanation.
+      - "8001:8001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      <<: *gpu-env
+      USE_GPU: "true"
+      UNET_INFERENCE_SCRIPT_PATH: /app/app/external_unet_inference.py
+    command: >
+      bash -lc 'python -c "import nibabel, timm" ||
+      pip install --no-cache-dir "nibabel>=5.0.0" timm;
+      exec bash ./docker/scripts/start.sh'
+    volumes:
+      - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
+      - ../visheart-inference-gpu/app/main.py:/app/app/main.py:ro
+      - ../visheart-inference-gpu/app/main_updated.py:/app/app/main_updated.py:ro
+      - ../visheart-inference-gpu/app/bullseye_analysis.py:/app/app/bullseye_analysis.py:ro
+      - ../visheart-inference-gpu/app/external_unet_inference.py:/app/app/external_unet_inference.py:ro
+      - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
+      - ../visheart-inference-gpu/app/classes/file_fetch_handler.py:/app/app/classes/file_fetch_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/fourdreconstruction_handler.py:/app/app/classes/fourdreconstruction_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/medsam_handler.py:/app/app/classes/medsam_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/pydantic_schema.py:/app/app/classes/pydantic_schema.py:ro
+      - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
+      - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
+      - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
+      - ../visheart-inference-gpu/app/helpers/unet_inference_api.py:/app/app/helpers/unet_inference_api.py:ro
+      - ../visheart-inference-gpu/app/routes/bullseye_route.py:/app/app/routes/bullseye_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route.py:/app/app/routes/inference_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route_old.py:/app/app/routes/inference_route_old.py:ro
+      - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
+      - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
+      - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
+    networks:
+      visheart-network:
+        aliases:
+          - gpu
 
 networks:
   visheart-network:

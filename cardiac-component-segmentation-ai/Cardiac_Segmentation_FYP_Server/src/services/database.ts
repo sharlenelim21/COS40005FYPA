@@ -5,6 +5,10 @@ import path from "path";
 import dotenv from "dotenv";
 import logger from "./logger";
 import * as bcrypt from "bcrypt";
+<<<<<<< HEAD
+=======
+import { loadEnvFromKnownLocations } from "../utils/env";
+>>>>>>> backup-finalsprint3
 
 // Import utility functions
 import LogError from "../utils/error_logger"; // Import the error logging utility
@@ -14,13 +18,21 @@ const serviceLocation = "Database"; // Service location for error logging
 import { IUser, IUserDocument, IUserSafe, UserRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
 import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
 import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat } from "../types/database_types"; // Import the project reconstruction types
+<<<<<<< HEAD
 import { JobStatus, IJob, IJobDocument, JobCrudResult } from "../types/database_types"; // Import the job types
+=======
+import { JobStatus, IJob, IJobDocument, JobCrudResult, SegmentationModel } from "../types/database_types"; // Import the job types
+>>>>>>> backup-finalsprint3
 import { IGPUHost, IGPUHostDocument, GPUHostCrudResult } from "../types/database_types"; // Import the GPU host types
 
 // Load environment variables from .env file
 try {
   // override: true allows to override cached environment variables
+<<<<<<< HEAD
   dotenv.config({ path: path.join(__dirname, "../../.env"), override: true });
+=======
+  loadEnvFromKnownLocations(__dirname);
+>>>>>>> backup-finalsprint3
 } catch (error: unknown) {
   LogError(error as Error, serviceLocation, "Error loading .env file.");
 };
@@ -165,7 +177,11 @@ const createAdminUser = async (): Promise<void> => {
       const admin: IUserDocument = new userModel({
         username: "admin",
         password: hashedPassword,
+<<<<<<< HEAD
         email: "admin@example.com",
+=======
+        email: "meiqiliew334@gmail.com",
+>>>>>>> backup-finalsprint3
         phone: "1234567890",
         role: UserRole.Admin,
       });
@@ -717,11 +733,22 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   name: { type: String, required: true }, // Name of the segmentation mask
   description: { type: String, required: false }, // Description of the segmentation mask
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is saved
+<<<<<<< HEAD
   segmentationmaskRLE: { type: Boolean, required: false }, // RLE of the segmentation mask (e.g., S3 bucket URL)
   isMedSAMOutput: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is a MedSAM output
   // Properties of extracted folder + location tracking
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
+=======
+  segmentationmaskRLE: { type: Boolean, required: true, default: true }, // RLE of the segmentation mask
+  isMedSAMOutput: { type: Boolean, required: true, default: false }, // Indicates if the segmentation mask is a MedSAM output
+  segmentationModel: { type: String, required: true, default: SegmentationModel.MEDSAM, enum: Object.values(SegmentationModel) }, // Optional model tag
+  model_used: { type: String, required: true, default: "medsam" }, // Compatibility field for external tools
+  // Properties of extracted folder + location tracking
+  // Index should be 0 based
+  frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
+  bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
+>>>>>>> backup-finalsprint3
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Create the model with proper typing
@@ -753,6 +780,10 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
   isSaved: { type: Boolean, required: true, default: false }, // Indicates if the reconstruction is saved
   isAIGenerated: { type: Boolean, required: true, default: false }, // Indicates if the reconstruction is AI generated
   meshFormat: { type: String, required: true, enum: Object.values(MeshFormat) }, // Format of the mesh file
+<<<<<<< HEAD
+=======
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional source model for the reconstruction
+>>>>>>> backup-finalsprint3
   
   // File properties
   filename: { type: String, required: true }, // Server-generated unique filename
@@ -1239,6 +1270,22 @@ const createProjectSegmentationMask = async (
 ): Promise<ProjectSegmentationMaskCrudResult> => {
   const operation = CRUDOperation.CREATE;
   const psm = projectsegmentationmask;
+<<<<<<< HEAD
+=======
+  
+  // Backwards-compatibility logic for segmentation model fields
+  if (!psm.segmentationModel) {
+    // Infer model from isMedSAMOutput if segmentationModel is missing
+    psm.segmentationModel = psm.isMedSAMOutput ? SegmentationModel.MEDSAM : SegmentationModel.UNET;
+  }
+  if (!psm.model_used && psm.segmentationModel) {
+    psm.model_used = psm.segmentationModel as unknown as string;
+  }
+  if (psm.segmentationmaskRLE === undefined) {
+    psm.segmentationmaskRLE = true;
+  }
+
+>>>>>>> backup-finalsprint3
   try {
     const projectid = projectsegmentationmask.projectid;
     const projectidexists = await projectModel.exists({ _id: projectid });
@@ -1698,7 +1745,11 @@ const readProjectReconstruction = async (
       }
       
       // Find reconstructions based on query
+<<<<<<< HEAD
       const reconstructions = await projectReconstructionModel.find(query);
+=======
+      const reconstructions = await projectReconstructionModel.find(query).sort({ createdAt: -1, updatedAt: -1 });
+>>>>>>> backup-finalsprint3
       
       if (reconstructions.length === 0) {
         const searchDesc = maskid ? `project ${projectid} and mask ${maskid}` : `project ${projectid}`;
@@ -1854,6 +1905,10 @@ const deleteProjectReconstruction = async (reconstructionid: string): Promise<Pr
 const jobSchema = new mongoose.Schema({
   userid: { type: String, required: true },
   projectid: { type: String, required: true },
+<<<<<<< HEAD
+=======
+  maskId: { type: String, required: false },
+>>>>>>> backup-finalsprint3
   uuid: { type: String, required: true, unique: true }, // Unique identifier for the job
   status: { type: String, required: true, enum: Object.values(JobStatus) },
   result: {
@@ -1863,7 +1918,13 @@ const jobSchema = new mongoose.Schema({
   message: { type: String, required: false }, // Message related to the job
   segmentationName: { type: String, required: false }, // Optional user-defined name
   segmentationDescription: { type: String, required: false }, // Optional user-defined description
+<<<<<<< HEAD
   segmentationSouce: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
+=======
+  segmentationSource: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model used for segmentation
+  model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
+>>>>>>> backup-finalsprint3
 }, { timestamps: true });
 const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 
@@ -1871,6 +1932,13 @@ const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 const createJob = async (job: IJob): Promise<JobCrudResult> => {
   const operation = CRUDOperation.CREATE;
   try {
+<<<<<<< HEAD
+=======
+    // Backwards-compatibility: ensure model_used is set from segmentationModel when missing
+    if (!('model_used' in job) && job.segmentationModel) {
+      (job as any).model_used = job.segmentationModel as unknown as string;
+    }
+>>>>>>> backup-finalsprint3
     const newJob = new jobModel(job);
     const results = await newJob.save();
     if (results._id) {
@@ -1998,7 +2066,11 @@ const seedGPUHost = async (): Promise<void> => {
     // Create a new GPU host configuration with default values
     const newGpuHostConfig: IGPUHost = {
       host: process.env.GPU_SERVER_URL || 'localhost',
+<<<<<<< HEAD
       port: parseInt(process.env.GPU_SERVER_PORT || '8000', 10),
+=======
+      port: parseInt(process.env.GPU_SERVER_PORT || '8001', 10),
+>>>>>>> backup-finalsprint3
       isHTTPS: process.env.GPU_SERVER_SSL === 'true',
       gpuServerAuthJwtSecret: process.env.GPU_SERVER_AUTH_JWT_SECRET || 'change-this',
       serverIdForGpuServer: process.env.GPU_SERVER_ID_FOR_GPU_SERVER || 'default-server-id',
@@ -2157,4 +2229,8 @@ export {
   // Job and GPU Host exports
   jobModel, createJob, readJob, updateJob, deleteJob, JobStatus, IJob, IJobDocument, IProjectSegmentationMaskDocument, ProjectSegmentationMaskCrudResult, ProjectCrudResult,
   readGPUHost, updateGPUHost, seedGPUHost, gpuHostModel, GPUHostCrudResult, IGPUHost, IGPUHostDocument
+<<<<<<< HEAD
 };
+=======
+};
+>>>>>>> backup-finalsprint3

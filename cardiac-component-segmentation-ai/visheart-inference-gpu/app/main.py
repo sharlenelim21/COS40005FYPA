@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=".env", override=True)
 
 # Import logging configuration
+<<<<<<< HEAD
 from utils.logging_config import setup_logging, log_startup_banner
 
 # Class imports
@@ -23,6 +24,25 @@ from dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, 
 
 # Import additional logging functions
 from utils.logging_config import log_startup_complete
+=======
+from app.utils.logging_config import setup_logging, log_startup_banner
+
+# Class imports
+from app.classes.yolo_handler import YoloHandler
+
+# Route imports
+from app.routes.inference_route import router as inference_router
+from app.routes.status_routes import router as status_router
+from app.routes.inference_route_old import router as inference_router_old
+from app.routes.bullseye_route import router as bullseye_router
+
+# Import the lifespans (custom dependencies)
+# Import the combined lifespan manager
+from app.dependencies.model_init import yolo_model_lifespan, medsam_model_lifespan, fourd_reconstruction_model_lifespan, landmark_model_lifespan
+
+# Import additional logging functions
+from app.utils.logging_config import log_startup_complete
+>>>>>>> backup-finalsprint3
 
 # Composite the lifespans
 @asynccontextmanager
@@ -33,10 +53,16 @@ async def lifespan(app: FastAPI):
     async with yolo_model_lifespan(app):
         async with medsam_model_lifespan(app):
             async with fourd_reconstruction_model_lifespan(app):
+<<<<<<< HEAD
                 # Log startup completion after all models are loaded
                 log_startup_complete()
                 # Add more lifespans, sequentially nested depend on load order
                 yield
+=======
+                async with landmark_model_lifespan(app):
+                    log_startup_complete()
+                    yield
+>>>>>>> backup-finalsprint3
 
 
 app = FastAPI(lifespan=lifespan)
@@ -55,6 +81,10 @@ models_info = {
 log_startup_banner(env_type, models_info)
 
 app.include_router(inference_router, prefix="/inference/v2")
+<<<<<<< HEAD
+=======
+app.include_router(bullseye_router, prefix="/bullseye")
+>>>>>>> backup-finalsprint3
 app.include_router(status_router, prefix="/status")
 # Kept for script compatibility
 if env_type == "development":

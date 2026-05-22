@@ -6,7 +6,12 @@ import { useProject } from "@/context/ProjectContext";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // API
+<<<<<<< HEAD
 import { projectApi, segmentationApi } from "@/lib/api";
+=======
+import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
+>>>>>>> backup-finalsprint3
 
 // UI Components
 import { Button } from "@/components/ui/button";
@@ -38,6 +43,10 @@ import {
   Layers, 
   Sparkles,
   Box,
+<<<<<<< HEAD
+=======
+  Crosshair,
+>>>>>>> backup-finalsprint3
   ChevronRight,
   Trash2
 } from "lucide-react";
@@ -53,10 +62,41 @@ import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/r
 // Types
 import * as ProjectTypes from "@/types/project";
 
+<<<<<<< HEAD
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
   const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, refreshReconstructions } = useProject();
+=======
+const ACTIVE_JOB_STALE_MS = 30 * 60 * 1000;
+
+const isActiveRecentJob = (job: ProjectTypes.UserJob): boolean => {
+  if (job.status !== ProjectTypes.JobStatus.PENDING && job.status !== ProjectTypes.JobStatus.IN_PROGRESS) {
+    return false;
+  }
+
+  const lastUpdate = job.updatedAt || job.createdAt;
+  if (!lastUpdate) {
+    return true;
+  }
+
+  const lastUpdateTime = new Date(lastUpdate).getTime();
+  if (Number.isNaN(lastUpdateTime)) {
+    return true;
+  }
+
+  return Date.now() - lastUpdateTime < ACTIVE_JOB_STALE_MS;
+};
+
+const isActiveSegmentationJob = isActiveRecentJob;
+const isActiveReconstructionJob = isActiveRecentJob;
+
+export default function ProjectPage() {
+  const { projectId } = useParams<{ projectId: string }>();
+  const router = useRouter();
+  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions } = useProject();
+  const { processingUnit } = useGpuStatus();
+>>>>>>> backup-finalsprint3
 
   // Update page title dynamically
   useEffect(() => {
@@ -93,6 +133,60 @@ export default function ProjectPage() {
   const [isDeletingReconstruction, setIsDeletingReconstruction] = useState(false);
   const [deleteReconstructionDialogOpen, setDeleteReconstructionDialogOpen] = useState(false);
 
+<<<<<<< HEAD
+=======
+  // Per-model reconstruction state
+  const [selectedModelForCreation, setSelectedModelForCreation] = useState<"medsam" | "unet" | null>(null);
+  const [selectedReconstructionForDeletion, setSelectedReconstructionForDeletion] = useState<any | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const [deleteModelDialogOpen, setDeleteModelDialogOpen] = useState(false);
+
+  // Reconstruction-source model availability — mirrors the segmentation
+  // page's `inferDocModel` so a doc whose explicit `segmentationModel`
+  // field was lost still resolves via name pattern. Only EDITABLE
+  // (`isMedSAMOutput === false`) docs count, because reconstruction
+  // consumes user-refined masks. Returns up to two entries — one per
+  // model that has a usable editable mask in this project.
+  const availableReconstructionModels = useMemo<Array<"medsam" | "unet">>(() => {
+    if (!undecodedMasks || undecodedMasks.length === 0) return [];
+    const inferDocModel = (m: any): "medsam" | "unet" | null => {
+      const tag = ((m?.segmentationModel || m?.model_used || "") + "").toLowerCase();
+      if (tag === "medsam" || tag === "unet") return tag;
+      const name = ((m?.name || "") + "").toLowerCase();
+      if (name.includes("unet")) return "unet";
+      if (name.includes("medsam")) return "medsam";
+      if (name.startsWith("ai output")) return "medsam";
+      if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+      return null;
+    };
+    const found = new Set<"medsam" | "unet">();
+    for (const m of undecodedMasks) {
+      if ((m as any).isMedSAMOutput !== false) continue; // editable only
+      const resolved = inferDocModel(m);
+      if (resolved) found.add(resolved);
+    }
+    return Array.from(found);
+  }, [undecodedMasks]);
+
+  // Default the dialog's model selection to whatever the user picked
+  // most recently on the segmentation page (sessionStorage), but only
+  // if that model actually has a cached editable mask. Otherwise fall
+  // back to the first available model (handled in the dialog itself).
+  const defaultReconstructionModel = useMemo<"medsam" | "unet" | undefined>(() => {
+    if (!projectId) return undefined;
+    let stored: string | null = null;
+    try {
+      stored = sessionStorage.getItem(`selectedModel_${projectId}`);
+    } catch {
+      // ignore storage read errors
+    }
+    const candidate = stored === "medsam" || stored === "unet" ? stored : undefined;
+    if (candidate && availableReconstructionModels.includes(candidate)) {
+      return candidate;
+    }
+    return availableReconstructionModels[0];
+  }, [projectId, availableReconstructionModels]);
+
+>>>>>>> backup-finalsprint3
   // Delete state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -160,9 +254,15 @@ export default function ProjectPage() {
 
   // Helper function to check if we should poll for reconstructions
   const shouldPollForReconstructions = useCallback((): boolean => {
+<<<<<<< HEAD
     // Poll if: no reconstructions exist AND there are reconstruction jobs (indicating reconstruction might be in progress)
     return !hasReconstructions && reconstructionJobs !== null && reconstructionJobs.length > 0 && loading === "done";
   }, [hasReconstructions, reconstructionJobs, loading]);
+=======
+    // Poll while any active reconstruction job exists, even if one model already has a reconstruction.
+    return reconstructionJobs !== null && reconstructionJobs.some(isActiveReconstructionJob) && loading === "done";
+  }, [reconstructionJobs, loading]);
+>>>>>>> backup-finalsprint3
 
   // Polling effect - check for reconstructions every 1 minute when conditions are met
   useEffect(() => {
@@ -213,13 +313,21 @@ export default function ProjectPage() {
 
   // Check if there are any active jobs (memoized for use in effects)
   const hasActiveJobs = useMemo(() => 
+<<<<<<< HEAD
     (jobs || []).some((job) => job.status === ProjectTypes.JobStatus.PENDING || job.status === ProjectTypes.JobStatus.IN_PROGRESS),
+=======
+    (jobs || []).some(isActiveSegmentationJob),
+>>>>>>> backup-finalsprint3
     [jobs]
   );
 
   // Check if there are any active reconstruction jobs (memoized for use in effects)
   const hasActiveReconstructionJobs = useMemo(() => 
+<<<<<<< HEAD
     (reconstructionJobs || []).some((job) => job.status === ProjectTypes.JobStatus.PENDING || job.status === ProjectTypes.JobStatus.IN_PROGRESS),
+=======
+    (reconstructionJobs || []).some(isActiveReconstructionJob),
+>>>>>>> backup-finalsprint3
     [reconstructionJobs]
   );
 
@@ -248,6 +356,73 @@ export default function ProjectPage() {
     });
   }, [reconstructionJobs, hasActiveReconstructionJobs, isStartingReconstruction]);
 
+<<<<<<< HEAD
+=======
+  // Refresh reconstruction metadata when active reconstruction jobs finish.
+  const prevHadActiveReconstructionJobsRef = useRef<boolean>(false);
+  useEffect(() => {
+    const prev = prevHadActiveReconstructionJobsRef.current;
+    if (prev && !hasActiveReconstructionJobs) {
+      refreshReconstructions().catch((err) => {
+        console.warn("[Project] Failed to refresh reconstructions after job completion:", err);
+      });
+    }
+    prevHadActiveReconstructionJobsRef.current = hasActiveReconstructionJobs;
+  }, [hasActiveReconstructionJobs, refreshReconstructions]);
+
+  const goToReconstructionViewer = useCallback((model?: "medsam" | "unet" | "unknown", reconstructionId?: string) => {
+    const params = new URLSearchParams();
+    if (model) {
+      params.set("model", model);
+    }
+    if (reconstructionId) {
+      params.set("reconstructionId", reconstructionId);
+    }
+    const query = params.toString();
+    router.push(`/project/${projectId}/standalone-4d-viewer${query ? `?${query}` : ""}`);
+  }, [projectId, router]);
+
+  const handleOpenReconstruction = useCallback(() => {
+    setReconstructionError(null);
+    setSelectedModelForCreation(null);
+    setShowReconstructionDialog(true);
+  }, []);
+
+  const reconstructionRows = useMemo(() => {
+    const rowsSource =
+      reconstructionResults && reconstructionResults.length > 0
+        ? reconstructionResults
+        : Object.values(reconstructionsByModel || {});
+    const rows = rowsSource.filter(
+      (recon: any) => !!recon?.reconstructionId // eslint-disable-line @typescript-eslint/no-explicit-any
+    ) as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    if (rows.length === 0 && reconstructionMetadata?.reconstructionId) {
+      rows.push({
+        ...reconstructionMetadata,
+        segmentationModel: reconstructionMetadata.segmentationModel || "unknown",
+      });
+    }
+
+    return rows.sort((a, b) => {
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [reconstructionMetadata, reconstructionResults, reconstructionsByModel]);
+
+  const existing4DModels = useMemo(() => {
+    const models = new Set<"medsam" | "unet">();
+    for (const reconstruction of reconstructionRows) {
+      const normalized = ((reconstruction?.segmentationModel || "") + "").toLowerCase();
+      if (normalized === "medsam" || normalized === "unet") {
+        models.add(normalized);
+      }
+    }
+    return models;
+  }, [reconstructionRows]);
+
+>>>>>>> backup-finalsprint3
   // Missing projectId handling
   if (!projectId) return <NoProjectFound message="Project ID is missing." />;
 
@@ -341,7 +516,29 @@ export default function ProjectPage() {
     setSegmentationError(null);
 
     try {
+<<<<<<< HEAD
       await segmentationApi.startSegmentation(projectId);
+=======
+      console.log('[Project] Start segmentation button clicked - current jobs state:', { jobs });
+      console.log('[Project] jobsError:', jobsError);
+
+      // CPU-safe default: only choose MedSAM when GPU is explicitly online.
+      const detectedMode = processingUnit.gpuAvailable ? "gpu" : "cpu";
+      const selectedModel: "medsam" | "unet" =
+        detectedMode === "gpu" ? "medsam" : "unet";
+
+      console.log("[Project] Start AI Segmentation mode/model:", {
+        processingUnit,
+        detectedMode,
+        selectedModel,
+      });
+
+      await segmentationApi.startSegmentation(
+        projectId,
+        selectedModel,
+        "auto"
+      );
+>>>>>>> backup-finalsprint3
       
       // Wait a moment for the backend to create the job, then refresh
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -408,10 +605,23 @@ export default function ProjectPage() {
   // Handle start reconstruction
   const handleStartReconstruction = async (config: ReconstructionConfig) => {
     console.log("[Project] Starting 4D reconstruction with config:", config);
+<<<<<<< HEAD
+=======
+
+    if (existing4DModels.has(config.segmentationModel)) {
+      const modelLabel = config.segmentationModel === "medsam" ? "MedSAM" : "UNet";
+      setReconstructionError(`A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`);
+      return;
+    }
+
+    setSelectedModelForCreation(config.segmentationModel);
+
+>>>>>>> backup-finalsprint3
     setIsStartingReconstruction(true);
     setReconstructionError(null);
 
     try {
+<<<<<<< HEAD
       const reconstructionApi = await import("@/lib/api").then(m => m.reconstructionApi);
       
       await reconstructionApi.startReconstruction(projectId, {
@@ -419,6 +629,15 @@ export default function ProjectPage() {
         reconstructionDescription: "Generated via configuration wizard",
         ed_frame: config.edFrame, // Pass 1-based ED frame from user selection
         export_format: config.exportFormat, // Pass user's format choice to backend
+=======
+      await reconstructionApi.startReconstruction(projectId, {
+        reconstructionName: `4D Cardiac Reconstruction (${config.segmentationModel.toUpperCase()}) - ${projectData.name}`,
+        reconstructionDescription: `Generated via configuration wizard from ${config.segmentationModel.toUpperCase()} segmentation`,
+        ed_frame: config.edFrame, // Pass 1-based ED frame from user selection
+        export_format: config.exportFormat, // Pass user's format choice to backend
+        // Tell the backend exactly which model's editable mask to consume.
+        segmentationModel: config.segmentationModel,
+>>>>>>> backup-finalsprint3
         parameters: {
           num_iterations: config.numIterations,
           resolution: config.resolution,
@@ -430,6 +649,10 @@ export default function ProjectPage() {
       
       // Close dialog
       setShowReconstructionDialog(false);
+<<<<<<< HEAD
+=======
+      goToReconstructionViewer(config.segmentationModel);
+>>>>>>> backup-finalsprint3
       
       // Poll for the job to appear - retry up to 5 times with 1 second delay
       console.log("[Project] 🔄 Polling for reconstruction job to appear...");
@@ -492,6 +715,36 @@ export default function ProjectPage() {
     }
   };
 
+<<<<<<< HEAD
+=======
+  const handleDeleteModelReconstruction = async () => {
+    if (!selectedReconstructionForDeletion?.reconstructionId) return;
+
+    console.log("[Project] Deleting reconstruction:", selectedReconstructionForDeletion.reconstructionId);
+    setIsDeletingReconstruction(true);
+
+    try {
+      const result = await reconstructionApi.deleteReconstruction(
+        projectId,
+        selectedReconstructionForDeletion.reconstructionId
+      );
+
+      console.log("[Project] Reconstruction deleted successfully:", result);
+      setDeleteModelDialogOpen(false);
+      setSelectedReconstructionForDeletion(null);
+      await refreshReconstructions();
+    } catch (error: unknown) {
+      console.error("[Project] ❌ Error deleting model reconstruction:", error);
+      alert(
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        "Failed to delete reconstruction. Please try again."
+      );
+    } finally {
+      setIsDeletingReconstruction(false);
+    }
+  };
+
+>>>>>>> backup-finalsprint3
   // Get job statistics
   const jobCounts = (jobs || []).reduce(
     (acc, job) => {
@@ -509,6 +762,28 @@ export default function ProjectPage() {
   const currentProjectName = localProjectName !== null ? localProjectName : projectData.name;
   const currentProjectDescription = localProjectDescription !== null ? localProjectDescription : projectData.description || "";
 
+<<<<<<< HEAD
+=======
+  const formatReconstructionModel = (model: unknown) => {
+    const normalized = (model ?? "").toString().toLowerCase();
+    if (normalized === "medsam") return "MedSAM";
+    if (normalized === "unet") return "UNet";
+    return "Legacy / Unknown";
+  };
+
+  const formatDateTime = (value?: string) => {
+    if (!value) return "N/A";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "N/A";
+    return date.toLocaleString();
+  };
+
+  const formatFileSize = (value?: number) => {
+    if (!value) return "N/A";
+    return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  };
+
+>>>>>>> backup-finalsprint3
   return (
     <div className="min-h-screen bg-background">
       {/* Hero Header Section */}
@@ -840,6 +1115,31 @@ export default function ProjectPage() {
                         </TooltipContent>
                       </Tooltip>
 
+<<<<<<< HEAD
+=======
+                      {/* Landmark Detection */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                            <Link href={`/project/${projectId}/landmark-detection`}>
+                              <div className="flex items-center gap-3 w-full">
+                                <Crosshair className="h-5 w-5 text-primary" />
+                                <div className="text-left flex-1">
+                                  <p className="font-semibold">Landmark Detection</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Detect landmarks, preview strain, and export reports
+                                  </p>
+                                </div>
+                              </div>
+                            </Link>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Run landmark detection, view strain previews, and export a PDF report</p>
+                        </TooltipContent>
+                      </Tooltip>
+
+>>>>>>> backup-finalsprint3
                       {/* Start Reconstruction */}
                       {hasActiveReconstructionJobs ? (
                         <Button disabled variant="secondary" size="lg" className="justify-start h-auto py-4">
@@ -855,10 +1155,17 @@ export default function ProjectPage() {
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
+<<<<<<< HEAD
                               onClick={() => setShowReconstructionDialog(true)}
                               size="lg"
                               className="justify-start h-auto py-4"
                               disabled={hasReconstructions || isStartingReconstruction}
+=======
+                              onClick={() => handleOpenReconstruction()}
+                              size="lg"
+                              className="justify-start h-auto py-4"
+                              disabled={isStartingReconstruction}
+>>>>>>> backup-finalsprint3
                             >
                               <div className="flex items-center gap-3 w-full">
                                 {isStartingReconstruction ? (
@@ -870,6 +1177,7 @@ export default function ProjectPage() {
                                   <p className="font-semibold">
                                     {isStartingReconstruction 
                                       ? 'Starting Reconstruction...' 
+<<<<<<< HEAD
                                       : hasReconstructions 
                                       ? 'Reconstruction Exists' 
                                       : 'Create 4D Reconstruction'}
@@ -878,17 +1186,27 @@ export default function ProjectPage() {
                                     {hasReconstructions 
                                       ? 'Delete existing reconstruction to create a new one' 
                                       : 'Generate 3D mesh models from segmentation'}
+=======
+                                      : 'Create 4D Reconstruction'}
+                                  </p>
+                                  <p className="text-xs opacity-90">
+                                    Generate model-scoped 4D meshes from segmentation
+>>>>>>> backup-finalsprint3
                                   </p>
                                 </div>
                               </div>
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
+<<<<<<< HEAD
                             <p>
                               {hasReconstructions 
                                 ? 'Only one reconstruction allowed - delete the existing one first' 
                                 : 'Build animated 4D cardiac models for visualization and analysis'}
                             </p>
+=======
+                            <p>Build animated 4D cardiac models for visualization and analysis</p>
+>>>>>>> backup-finalsprint3
                           </TooltipContent>
                         </Tooltip>
                       )}
@@ -964,6 +1282,7 @@ export default function ProjectPage() {
                         </TooltipContent>
                       </Tooltip>
 
+<<<<<<< HEAD
                       {/* View Reconstruction - Link to standalone 4D viewer */}
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -980,12 +1299,60 @@ export default function ProjectPage() {
                                   <p className="text-xs opacity-90">Explore your 3D cardiac reconstruction</p>
                                 </div>
                                 <ChevronRight className="h-4 w-4" />
+=======
+                      {/* Landmark Detection */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                            <Link href={`/project/${projectId}/landmark-detection`}>
+                              <div className="flex items-center gap-3 w-full">
+                                <Crosshair className="h-5 w-5 text-primary" />
+                                <div className="text-left flex-1">
+                                  <p className="font-semibold">Landmark Detection</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Detect landmarks, preview strain, and export reports
+                                  </p>
+                                </div>
+>>>>>>> backup-finalsprint3
                               </div>
                             </Link>
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
+<<<<<<< HEAD
                           <p>Interactive 3D viewer with animation controls</p>
+=======
+                          <p>Run landmark detection, view strain previews, and export a PDF report</p>
+                        </TooltipContent>
+                      </Tooltip>
+
+                      {/* Start Reconstruction */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            onClick={() => handleOpenReconstruction()}
+                            size="lg"
+                            className="justify-start h-auto py-4"
+                            disabled={isStartingReconstruction}
+                          >
+                            <div className="flex items-center gap-3 w-full">
+                              {isStartingReconstruction ? (
+                                <RefreshCw className="h-5 w-5 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-5 w-5" />
+                              )}
+                              <div className="text-left flex-1">
+                                <p className="font-semibold">
+                                  {isStartingReconstruction ? "Starting Reconstruction..." : "Create 4D Reconstruction"}
+                                </p>
+                                <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
+                              </div>
+                            </div>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Build animated 4D cardiac models for visualization and analysis</p>
+>>>>>>> backup-finalsprint3
                         </TooltipContent>
                       </Tooltip>
                     </div>
@@ -1126,15 +1493,24 @@ export default function ProjectPage() {
               </CardContent>
             </Card>
 
+<<<<<<< HEAD
             {/* Reconstruction Details Section - NEW */}
             {hasReconstructions && reconstructionMetadata && (
               <Card>
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
+=======
+            {/* Reconstruction Details Section - result/history only */}
+            {hasReconstructions && reconstructionRows.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between gap-3">
+>>>>>>> backup-finalsprint3
                     <CardTitle className="text-base flex items-center gap-2">
                       <Box className="h-4 w-4" />
                       4D Reconstruction
                     </CardTitle>
+<<<<<<< HEAD
                     <Badge variant="default">Available</Badge>
                   </div>
                 </CardHeader>
@@ -1221,10 +1597,111 @@ export default function ProjectPage() {
                       </div>
                     )}
                   </div>
+=======
+                    <Badge variant="default">{reconstructionRows.length} Available</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {reconstructionRows.map((recon) => {
+                    const model = (recon.segmentationModel || "unknown").toString().toLowerCase();
+                    const viewModel = model === "medsam" || model === "unet" ? model : "unknown";
+                    const edFrame = recon.metadata?.edFrameIndex ?? recon.ed_frame ?? 1;
+                    const resolution = recon.metadata?.resolution;
+                    const iterations = recon.metadata?.numIterations;
+                    const processingTime = recon.metadata?.reconstructionTime;
+
+                    return (
+                      <div key={recon.reconstructionId} className="rounded-lg border p-4 space-y-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold truncate">{recon.name || "4D Reconstruction"}</p>
+                              <Badge variant="outline">{formatReconstructionModel(model)}</Badge>
+                              <Badge variant="secondary">{recon.status || "Ready"}</Badge>
+                            </div>
+                            <div className="grid gap-3 text-sm sm:grid-cols-2">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Segmentation Model Used</p>
+                                <p>{formatReconstructionModel(model)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Updated</p>
+                                <p>{formatDateTime(recon.updatedAt || recon.createdAt)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">ED Frame</p>
+                                <p className="font-mono">Frame {edFrame}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Export Format</p>
+                                <p className="font-mono uppercase">{recon.meshFormat || "GLB"}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Size</p>
+                                <p>{formatFileSize(recon.meshFileSize)}</p>
+                              </div>
+                              {(resolution || iterations) && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Resolution / Iterations</p>
+                                  <p className="font-mono">
+                                    {resolution ? `${resolution}^3` : "N/A"} / {iterations ?? "N/A"}
+                                  </p>
+                                </div>
+                              )}
+                              {processingTime && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Processing Time</p>
+                                  <p>{processingTime.toFixed(1)}s</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 lg:justify-end">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => goToReconstructionViewer(viewModel, recon.reconstructionId)}
+                                  >
+                                    <Eye className="h-4 w-4 mr-2" />
+                                    View 4D
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Interactive 3D viewer with animation controls</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                            <ShowForRegisteredUser>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setSelectedReconstructionForDeletion(recon);
+                                  setDeleteModelDialogOpen(true);
+                                }}
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete
+                              </Button>
+                            </ShowForRegisteredUser>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+>>>>>>> backup-finalsprint3
                 </CardContent>
               </Card>
             )}
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> backup-finalsprint3
             {/* Jobs Section - Redesigned */}
             <Card>
               <CardHeader className="pb-3">
@@ -1346,8 +1823,58 @@ export default function ProjectPage() {
         onStart={handleStartReconstruction}
         isLoading={isStartingReconstruction}
         totalFrames={projectData?.dimensions?.frames || 1}
+<<<<<<< HEAD
       />
 
+=======
+        availableModels={availableReconstructionModels}
+        blockedModels={Array.from(existing4DModels)}
+        defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
+      />
+
+      {/* Delete Model Reconstruction Confirmation Dialog */}
+      <AlertDialog open={deleteModelDialogOpen} onOpenChange={setDeleteModelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete 4D Reconstruction
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p>
+                Are you sure you want to delete &quot;{selectedReconstructionForDeletion?.name || "this 4D reconstruction"}&quot; for &quot;{currentProjectName}&quot;?
+              </p>
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                <p className="text-sm text-amber-900 dark:text-amber-100">
+                  <strong>Note:</strong> This will permanently delete only this selected 4D result. Other reconstruction results, if present, will remain unchanged.
+                </p>
+              </div>
+              <p className="font-semibold text-sm">This action cannot be undone.</p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingReconstruction}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteModelReconstruction}
+              disabled={isDeletingReconstruction || !selectedReconstructionForDeletion?.reconstructionId}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeletingReconstruction ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+>>>>>>> backup-finalsprint3
       {/* Delete Reconstruction Confirmation Dialog */}
       <AlertDialog open={deleteReconstructionDialogOpen} onOpenChange={setDeleteReconstructionDialogOpen}>
         <AlertDialogContent>

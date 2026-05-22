@@ -22,12 +22,22 @@ import LogError from "../utils/error_logger"; // Import error logging utility
 const serviceLocation = "API(Upload)";
 const router = express.Router();
 
+<<<<<<< HEAD
+=======
+const toSingleString = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value;
+
+>>>>>>> backup-finalsprint3
 // Get project information route
 router.get(
   "/get-project-info/:projectId",
   isAuth,
   async (req: Request, res: Response) => {
+<<<<<<< HEAD
     const { projectId } = req.params;
+=======
+    const projectId = toSingleString(req.params.projectId);
+>>>>>>> backup-finalsprint3
     const userId = (req.user as any)?._id;
 
     if (!projectId) {
@@ -176,10 +186,17 @@ router.get(
         daterange
       );
 
+<<<<<<< HEAD
       if (result.success && result.projects) {
         // Sanitize the projects and fetch reconstruction metadata for each
         const sanitized_results = await Promise.all(
           result.projects.map(async (project) => {
+=======
+      if (result.success) {
+        // Sanitize the projects and fetch reconstruction metadata for each
+        const sanitized_results = await Promise.all(
+          (result.projects ?? []).map(async (project) => {
+>>>>>>> backup-finalsprint3
             // Fetch reconstruction data for the project
             let reconstructionMetadata = null;
             try {
@@ -516,7 +533,11 @@ router.delete(
   "/user-delete-project/:projectId",
   isAuthAndNotGuest,
   async (req: Request, res: Response) => {
+<<<<<<< HEAD
     const { projectId } = req.params;
+=======
+    const projectId = toSingleString(req.params.projectId);
+>>>>>>> backup-finalsprint3
     const userId = req.user?._id;
 
     logger.info(
@@ -660,7 +681,11 @@ router.delete(
   "/admin-delete-project/:projectId",
   isAuthAndAdmin,
   async (req: Request, res: Response) => {
+<<<<<<< HEAD
     const { projectId } = req.params;
+=======
+    const projectId = toSingleString(req.params.projectId);
+>>>>>>> backup-finalsprint3
     const adminUserId = req.user?._id; // For logging who performed the action
 
     logger.info(

@@ -43,7 +43,11 @@ export interface INiftiMetadata {
 export async function extractNiftiMetadata(niftiPath: string): Promise<INiftiMetadata> {
     try {
         // Execute the Python script with the given NIfTI path
+<<<<<<< HEAD
         const { stdout } = await execFileAsync('python', [PYTHON_SCRIPT, niftiPath]);
+=======
+        const { stdout } = await execFileAsync('python3', [PYTHON_SCRIPT, niftiPath]);
+>>>>>>> backup-finalsprint3
         // Parse and return the metadata JSON output from the Python script
         const parsed: INiftiMetadata = JSON.parse(stdout);
         return parsed;

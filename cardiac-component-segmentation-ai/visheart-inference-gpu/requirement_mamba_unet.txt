@@ -1,0 +1,17 @@
+# requirements_mamba_unet.txt
+# Core PyTorch (matching your existing CUDA architecture base)
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+
+# Client specific dependencies for v2-UNet
+timm>=0.9.0
+monai>=1.3.0
+nibabel>=5.0.0
+torchsummary>=1.5.1
+numpy>=1.26.0
+
+# Dependencies overlapping with your existing ones
+ultralytics
+fastapi
+uvicorn

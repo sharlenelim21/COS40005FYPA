@@ -303,6 +303,14 @@ function extractIndicesFromFilename(filename: string): { frame: number; slice: n
   return { frame: Math.abs(hash) % 100, slice: Math.abs(hash >> 16) % 100 };
 }
 
+<<<<<<< HEAD
+=======
+// Module-level set that survives React unmounts for the entire browser session.
+// Tracks which projectIds have images confirmed in IndexedDB so re-entering a
+// project page skips the tar download entirely.
+const _projectReadySet = new Set<string>();
+
+>>>>>>> backup-finalsprint3
 /**
  * Main cache management class with URL optimization and debug capabilities
  * Coordinates between IndexedDB storage and in-memory URL caching for optimal performance
@@ -512,6 +520,12 @@ export class TarImageCache {
         try {
           const { frame, slice } = extractIndicesFromFilename(file.name);
           const imageId = `${projectId}_f${frame}_s${slice}`;
+<<<<<<< HEAD
+=======
+          if (storedCount < 3) {
+            console.log(`[TarImageCache] Sample stored key: filename="${file.name}" → id="${imageId}"`);
+          }
+>>>>>>> backup-finalsprint3
 
           const blob = new Blob([file.buffer], {
             type: this.getMimeType(file.name)
@@ -541,11 +555,24 @@ export class TarImageCache {
       this.debugInfo.cacheErrors.push(...errors);
 
       const cacheSize = await this.db.getCacheSize();
+<<<<<<< HEAD
 
       console.log(`[TarImageCache] Successfully stored ${storedCount}/${imageFiles.length} images`);
 
       return {
         success: storedCount > 0,
+=======
+      const success = storedCount > 0;
+
+      console.log(`[TarImageCache] Successfully stored ${storedCount}/${imageFiles.length} images`);
+
+      if (success) {
+        this.markProjectReady(projectId);
+      }
+
+      return {
+        success,
+>>>>>>> backup-finalsprint3
         totalImages: imageFiles.length,
         extractedImages: storedCount,
         errors,
@@ -619,20 +646,36 @@ export class TarImageCache {
   async getImageURL(projectId: string, frame: number, slice: number): Promise<string | null> {
     this.checkInitialization();
     const imageId = `${projectId}_f${frame}_s${slice}`;
+<<<<<<< HEAD
 
     // Check URL cache first to avoid creating duplicate URLs for same blob
     if (this.urlCache.has(imageId)) {
+=======
+    console.log(`[TarImageCache] getImageURL: looking up key="${imageId}"`);
+
+    // Check URL cache first to avoid creating duplicate URLs for same blob
+    if (this.urlCache.has(imageId)) {
+      console.log(`[TarImageCache] getImageURL: found in URL cache`);
+>>>>>>> backup-finalsprint3
       return this.urlCache.get(imageId)!;
     }
 
     // Retrieve blob from IndexedDB and create object URL
     const blob = await this.getImageBlob(projectId, frame, slice);
     if (blob) {
+<<<<<<< HEAD
+=======
+      console.log(`[TarImageCache] getImageURL: blob found in IndexedDB, creating object URL`);
+>>>>>>> backup-finalsprint3
       const url = URL.createObjectURL(blob);
       this.urlCache.set(imageId, url); // Cache URL to prevent duplicates
       return url;
     }
 
+<<<<<<< HEAD
+=======
+    console.warn(`[TarImageCache] getImageURL: key="${imageId}" NOT found in IndexedDB`);
+>>>>>>> backup-finalsprint3
     return null; // Image not found in cache
   }
 
@@ -649,6 +692,7 @@ export class TarImageCache {
   }
 
   /**
+<<<<<<< HEAD
    * Clear all cached images and URLs for a specific project
    * Essential for memory management and preventing URL leaks
    * 
@@ -659,15 +703,42 @@ export class TarImageCache {
    * 4. Delete images from IndexedDB storage
    * 
    * @param projectId - Project identifier to clear
+=======
+   * Returns true if this project's images were already extracted and stored in
+   * IndexedDB during this browser session. Checked before any network request so
+   * re-entering a project page is instant.
+   */
+  isProjectReady(projectId: string): boolean {
+    return _projectReadySet.has(projectId);
+  }
+
+  /** Called internally after a successful extraction to record readiness. */
+  markProjectReady(projectId: string): void {
+    _projectReadySet.add(projectId);
+  }
+
+  /**
+   * Clear all cached images and URLs for a specific project.
+   * Also evicts the project from the session-level ready set so the next visit
+   * triggers a fresh download (used after new segmentation or explicit reset).
+>>>>>>> backup-finalsprint3
    */
   async clearProjectCache(projectId: string): Promise<void> {
     this.checkInitialization();
 
+<<<<<<< HEAD
     // First pass: collect URLs that need to be revoked
+=======
+    // Remove from session-level ready set so next visit re-fetches
+    _projectReadySet.delete(projectId);
+
+    // Collect and revoke object URLs to free browser memory
+>>>>>>> backup-finalsprint3
     const urlsToRevoke: string[] = [];
     for (const [key, url] of this.urlCache.entries()) {
       if (key.startsWith(projectId)) {
         urlsToRevoke.push(url);
+<<<<<<< HEAD
         this.urlCache.delete(key); // Remove from cache
       }
     }
@@ -676,6 +747,12 @@ export class TarImageCache {
     urlsToRevoke.forEach(url => {
       URL.revokeObjectURL(url);
     });
+=======
+        this.urlCache.delete(key);
+      }
+    }
+    urlsToRevoke.forEach(url => URL.revokeObjectURL(url));
+>>>>>>> backup-finalsprint3
 
     // Clear images from persistent IndexedDB storage
     await this.db.clearProject(projectId);
