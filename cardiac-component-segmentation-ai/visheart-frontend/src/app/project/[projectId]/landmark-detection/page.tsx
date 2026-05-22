@@ -45,7 +45,6 @@ import {
   getStrainColor,
   type StrainType,
 } from "@/components/landmark/StrainVisualization";
-import { StrainBullseye, type StrainType } from "@/components/landmark/StrainVisualization";
 import { fmt } from "@/lib/format-utils";
 
 const LandmarkSliceViewer = dynamic(
@@ -148,7 +147,7 @@ export default function LandmarkDetectionPage() {
   // Bullseye data + model selector state
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
-  const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("unet");
+  const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("medsam");
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
   const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
@@ -159,7 +158,14 @@ export default function LandmarkDetectionPage() {
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<Record<keyof FramePrediction, [number, number]>>>>({});
 
+  const bullseyePollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const fetchBullseye = useCallback(async (preferredModel?: "medsam" | "unet", triggerIfMissing = true) => {
+    // Cancel any pending poll before starting a new fetch
+    if (bullseyePollRef.current) {
+      clearTimeout(bullseyePollRef.current);
+      bullseyePollRef.current = null;
+    }
     setBullseyeLoading(true);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
@@ -167,53 +173,46 @@ export default function LandmarkDetectionPage() {
       const segs = (res.segmentations ?? []) as SegItem[];
 
       const editables = segs.filter((m) => !m.isMedSAMOutput);
-      const medsamMasks = editables.filter((m) => inferMaskModel(m.name ?? "") === "medsam");
-      const unetMasks = editables.filter((m) => inferMaskModel(m.name ?? "") === "unet");
       const medsamMasks = editables.filter((m) => maskBelongsTo(m, "medsam"));
       const unetMasks   = editables.filter((m) => maskBelongsTo(m, "unet"));
 
       const medsamWithBullseye = medsamMasks.find((m) => m.bullseye != null);
       const unetWithBullseye = unetMasks.find((m) => m.bullseye != null);
 
-      // Whether bullseye is computed for each model
-      const newAvailable = { medsam: !!medsamWithBullseye, unet: !!unetWithBullseye };
-      setAvailableBullseyeModels(newAvailable);
-      // Whether the editable mask itself exists (regardless of bullseye state)
+      setAvailableBullseyeModels({ medsam: !!medsamWithBullseye, unet: !!unetWithBullseye });
       setExistingSegModels({ medsam: medsamMasks.length > 0, unet: unetMasks.length > 0 });
 
-      // Choose which model to display: use preferredModel, fall back to whatever has data
+      // Pick which model's bullseye to show — prefer the requested one, show whatever has data
       const effective = preferredModel ?? selectedBullseyeModel;
-      let selectedMask: SegItem | undefined;
-      if (effective === "unet") {
-        selectedMask = unetWithBullseye ?? medsamWithBullseye;
-      } else {
-        selectedMask = medsamWithBullseye ?? unetWithBullseye;
-      }
+      const preferredResult = effective === "unet" ? unetWithBullseye : medsamWithBullseye;
+      const fallbackResult  = effective === "unet" ? medsamWithBullseye : unetWithBullseye;
+      const selectedMask = preferredResult ?? fallbackResult;
 
       if (selectedMask) {
-        const resolvedModel = selectedMask === unetWithBullseye ? "unet" : "medsam";
-        setSelectedBullseyeModel(resolvedModel);
+        // Auto-switch display model to match actual data source
+        setSelectedBullseyeModel(selectedMask === unetWithBullseye ? "unet" : "medsam");
         setBullseyeData(selectedMask.bullseye!);
         setBullseyeLoading(false);
         return;
       }
 
-      // No bullseye yet for the preferred model.
-      // Trigger computation for the CORRECT model's editable mask.
-      // Each model triggers independently so switching models always
-      // computes bullseye for the selected model even if another model
-      // already had a trigger run earlier.
-      const targetMasks = effective === "unet" ? unetMasks : medsamMasks;
-      const triggerTarget = targetMasks[0] ?? editables[0];
+      // No bullseye data yet — pick the best mask to trigger computation on
+      let targetMasks = effective === "unet" ? unetMasks : medsamMasks;
+      if (targetMasks.length === 0) {
+        targetMasks = effective === "unet" ? medsamMasks : unetMasks;
+        if (targetMasks.length > 0) setSelectedBullseyeModel(effective === "unet" ? "medsam" : "unet");
+      }
+      const triggerTarget = targetMasks[0];
+
       if (triggerTarget?._id && triggerIfMissing) {
         try {
           await segmentationApi.triggerBullseye(triggerTarget._id);
-          // Re-fetch after ~8s; keep loading=true during the wait
-          setTimeout(() => fetchBullseye(preferredModel, false), 8000);
-          return;
         } catch {
           // trigger failed; fall through to show null
         }
+        // Poll once after 8s regardless of trigger success
+        bullseyePollRef.current = setTimeout(() => fetchBullseye(preferredModel, false), 8000);
+        return;
       }
       setBullseyeData(null);
       setBullseyeLoading(false);
@@ -221,7 +220,6 @@ export default function LandmarkDetectionPage() {
       setBullseyeData(null);
       setBullseyeLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, selectedBullseyeModel]);
 
   useEffect(() => {
@@ -560,7 +558,6 @@ export default function LandmarkDetectionPage() {
             type="button"
             className="text-xs underline hover:no-underline"
             onClick={() => runDetectionAndResetEdits(selectedModel)}
-            onClick={() => handleRunDetection(selectedModel, selectedBullseyeModel)}
           >
             Try again
           </button>
@@ -610,7 +607,6 @@ export default function LandmarkDetectionPage() {
             onSliderChange={handleSliderChange}
             onPlaybackSpeedChange={handlePlaybackSpeedChange}
             onRerun={() => rerunDetectionAndResetEdits(selectedModel)}
-            onRerun={() => handleRerunDetection(selectedModel, selectedBullseyeModel)}
             onReset={handleReset}
             onFileSelect={handleFileSelect}
             onClearReplacementFile={handleClearReplacementFile}
@@ -632,31 +628,6 @@ export default function LandmarkDetectionPage() {
           direction="horizontal"
           className="h-full w-full rounded-xl border shadow-sm"
         >
-          <ResizablePanel defaultSize={39} minSize={32} maxSize={48}>
-            <div className="w-full min-w-[520px] bg-background p-4 flex flex-col" style={{ height: "calc(100vh - 120px)" }}>
-              <div className="mb-3 flex flex-shrink-0 flex-col gap-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="truncate text-sm font-semibold text-foreground">
-                      {leftPanelView === "bullseye" ? "AHA Bullseye Review" : "Strain Review"}
-                    </h3>
-                    <p className="text-[10px] text-muted-foreground">
-                      {hasPredictions ? "Detection-linked measurements" : "Preview values before detection"}
-                    </p>
-                  </div>
-                  <span
-                    className={cn(
-                      "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                      hasPredictions
-                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-                        : "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
-                    )}
-                  >
-                    {hasPredictions ? "Detected" : "Preview"}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="grid grid-cols-2 rounded-lg border border-border bg-muted/30 p-0.5">
           <ResizablePanel defaultSize={28} minSize={0} maxSize={55}>
             <div className="w-full h-full bg-background p-4 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
@@ -783,11 +754,6 @@ export default function LandmarkDetectionPage() {
           <ResizableHandle withHandle />
 
           {/* CENTER: 2D MRI slice viewer + landmark overlay */}
-          <ResizablePanel defaultSize={36}>
-            <div
-              className="w-full relative bg-muted/40 p-4 flex flex-col gap-3"
-              style={{ height: "calc(100vh - 120px)" }}
-            >
           <ResizablePanel defaultSize={47}>
             <div className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden">
               {state.status === "idle" && !isRunning && (
@@ -856,8 +822,7 @@ export default function LandmarkDetectionPage() {
                 onPrevFrame={handlePrevFrame}
                 onSliderChange={handleSliderChange}
                 onPlaybackSpeedChange={handlePlaybackSpeedChange}
-            onRerun={() => rerunDetectionAndResetEdits(selectedModel)}
-                onRerun={() => handleRerunDetection(selectedModel, selectedBullseyeModel)}
+                onRerun={() => rerunDetectionAndResetEdits(selectedModel)}
                 onReset={handleReset}
                 onFileSelect={handleFileSelect}
                 onClearReplacementFile={handleClearReplacementFile}
@@ -963,8 +928,6 @@ function AhaBullseyePanel({
         </div>
       ) : !displayBullseyeData ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
-      ) : !bullseyeData ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
           <p className="text-xs text-muted-foreground">
             No bullseye data for this segmentation model yet.
@@ -998,20 +961,12 @@ function AhaBullseyePanel({
           <div className="rounded-lg bg-slate-50 p-4 dark:bg-zinc-900">
             <div className="flex min-h-[330px] items-center justify-center">
               <AhaBullseyeChart
-              bullseyeData={displayBullseyeData}
-        <>
-          <p className="text-[10px] text-muted-foreground mb-2 flex-shrink-0">
-            Frame {Math.min(currentFrame + 1, Math.max(frameCount, 1))} of {Math.max(frameCount, 1)}
-          </p>
-          {/* Chart — fills available space, never overflows into legend */}
-          <div className="flex-1 min-h-0 rounded-lg bg-zinc-900/30 p-2 flex items-center justify-center overflow-hidden">
-            <AhaBullseyeChart
-              bullseyeData={bullseyeData}
-              referenceAngleDeg={referenceAngleDeg}
-              size={390}
-              currentFrame={currentFrame}
-              frameCount={frameCount}
-            />
+                bullseyeData={displayBullseyeData}
+                referenceAngleDeg={referenceAngleDeg}
+                size={390}
+                currentFrame={currentFrame}
+                frameCount={frameCount}
+              />
             </div>
           </div>
           <div className="mt-3 space-y-2">
@@ -1019,12 +974,6 @@ function AhaBullseyePanel({
               <span className="text-[10px] text-muted-foreground tabular-nums">{displayBullseyeData.stats.min.toFixed(1)}%</span>
               <div
                 className="h-2.5 flex-1 rounded-full shadow-inner"
-          {/* Color scale + stats — fixed height, never shrinks */}
-          <div className="flex-shrink-0 pt-2 border-t border-border mt-1 space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground tabular-nums">{fmt(bullseyeData.stats.min, 1)}</span>
-              <div
-                className="flex-1 h-2.5 rounded-full"
                 style={{
                   background: "linear-gradient(to right, #d73027, #fc8d59, #fee08b, #d9ef8b, #91cf60, #1a9850)",
                   border: "1px solid hsl(var(--border))",
@@ -1071,38 +1020,6 @@ function MetricTile({
       className={cn(
         "rounded-md border border-border bg-muted/30 px-2 py-2 text-center",
         emphasized && "bg-primary/10 text-primary",
-              <span className="text-[10px] text-muted-foreground tabular-nums">{fmt(bullseyeData.stats.max, 1)}</span>
-            </div>
-            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>Min: <span className="font-mono font-semibold text-foreground">{fmt(bullseyeData.stats.min)}</span></span>
-              <span className="text-zinc-600">|</span>
-              <span>Mean: <span className="font-mono font-semibold text-foreground">{fmt(bullseyeData.stats.mean)}</span></span>
-              <span className="text-zinc-600">|</span>
-              <span>Max: <span className="font-mono font-semibold text-foreground">{fmt(bullseyeData.stats.max)}</span></span>
-            </div>
-            {bullseyeData.stats.n_nan > 0 && (
-              <p className="text-[10px] text-amber-500">
-                ⚠ {bullseyeData.stats.n_nan} segment{bullseyeData.stats.n_nan > 1 ? "s" : ""} missing data
-              </p>
-            )}
-          </div>
-          {/* Segment legend — scrollable so it never pushes chart */}
-          <div className="flex-shrink-0 max-h-28 overflow-y-auto mt-1">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-              {bullseyeData.segment_metadata.map((seg) => (
-                <div key={seg.idx} className="flex items-center gap-1.5 min-w-0 text-[10px] text-muted-foreground">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full shrink-0"
-                    style={{ backgroundColor: segmentColor(seg.value, bullseyeData.stats.min, bullseyeData.stats.max) }}
-                  />
-                  <span className="truncate" title={`${seg.name}: ${fmt(seg.value)} px`}>
-                    {seg.idx}. {seg.name}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
       )}
     >
       <p className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
@@ -1236,15 +1153,6 @@ function AhaBullseyeChart({
   const frameValues = getFrameBullseyeValues(bullseyeData, currentFrame, frameCount);
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
-  const { segment_values, segment_metadata } = bullseyeData;
-  const phase = frameCount > 1 ? currentFrame / (frameCount - 1) : 0;
-  const beat = Math.sin(phase * Math.PI);
-  const frameValues = segment_values.map((value, index) =>
-    value == null ? null : value + Math.sin(index * 0.7 + currentFrame * 0.45) * 0.9 + beat * 1.2
-  );
-  const finiteFrameValues = frameValues.filter((v): v is number => v != null);
-  const frameMin = finiteFrameValues.length ? Math.min(...finiteFrameValues) : 0;
-  const frameMax = finiteFrameValues.length ? Math.max(...finiteFrameValues) : 1;
 
   // Cardinal label positions are fixed (anatomically correct, do not rotate with segments).
   const anteriorPt  = polarPoint(center, 135, -90);  // 12 o'clock
@@ -1400,8 +1308,7 @@ function BullseyeSegment({
         style={{ transition: "fill 240ms ease" }}
       >
         {tooltip && (
-          <title>{tooltip.name}: {tooltip.value.toFixed(2)}%</title>
-          <title>{tooltip.name}: {fmt(tooltip.value)} px</title>
+          <title>{tooltip.name}: {tooltip.value != null ? tooltip.value.toFixed(2) : "N/A"}%</title>
         )}
       </path>
       <text

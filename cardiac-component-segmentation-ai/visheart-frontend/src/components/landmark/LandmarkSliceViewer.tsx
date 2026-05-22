@@ -105,9 +105,8 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
         const [cx, cy] = toCanvas(coord, cw, ch);
-        drawDot(ctx, cx, cy, def, showLabels, highlightedLandmarkId === def.id);
         // Collapsed: draw RV1/RV2 faded and without labels (mean point label replaces them)
-        drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, isLowConfidence || isCollapsed);
+        drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, highlightedLandmarkId === def.id, isLowConfidence || isCollapsed);
       }
 
       // Collapsed: draw mean point on top with its own label
@@ -121,8 +120,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
       }
     },
-    [prediction, visibleLandmarks, showLabels, highlightedLandmarkId, toCanvas, maskOverlays, imageDimensions],
-    [prediction, visibleLandmarks, showLabels, toCanvas, maskOverlays, effectiveMaskDimensions],
+    [prediction, visibleLandmarks, showLabels, highlightedLandmarkId, toCanvas, maskOverlays, effectiveMaskDimensions],
   );
 
   const canvasToImageCoord = useCallback((event: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
@@ -222,8 +220,6 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       <canvas
         ref={canvasRef}
         className={cn("block max-w-full max-h-full", editableLandmarks && "cursor-crosshair")}
-        style={{ imageRendering: "pixelated" }}
-        className="block max-w-full max-h-full"
         style={{ imageRendering: "auto" }}
         aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
         onPointerDown={(event) => {
