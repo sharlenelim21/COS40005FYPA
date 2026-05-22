@@ -456,7 +456,4 @@ export const generateAISegmentationForReconstruction = async (
             await fs.remove(baseTempDir);
         }
     }
-<<<<<<< HEAD
-};
-=======
 };

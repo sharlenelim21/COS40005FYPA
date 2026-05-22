@@ -112,6 +112,7 @@ class LandmarkInferenceRequest(BaseModel):
     model: str = Field(default="unetresnet34-landmark", description="Landmark model tag")
     device: Literal["cpu", "cuda", "auto"] = Field(default="auto", description="Compute device: cpu, cuda, or auto")
     checkpoint_path: str | None = Field(default=None, description="Optional checkpoint override path")
+    seg_mask_url: str | None = Field(default=None, description="Presigned URL for segmentation mask NIfTI (enables 2-ch inference)")
 
     @field_validator('device')
     @classmethod
@@ -237,6 +238,7 @@ async def landmark_detection_async(
         callback_url=request.callback_url,
         device=request.device,
         checkpoint_path=request.checkpoint_path,
+        seg_mask_url=request.seg_mask_url,
     )
 
     print(f"[{request.uuid}] Landmark async task added.")

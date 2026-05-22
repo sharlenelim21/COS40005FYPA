@@ -2,14 +2,6 @@
 // Description: Utility functions for formatting data
 
 /**
- * Format a nullable number to a fixed decimal string, or "—" if null/undefined/NaN.
- */
-export function fmt(value: number | null | undefined, decimals = 2): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return value.toFixed(decimals);
-}
-
-/**
  * Format bytes into human-readable format (KB, MB, GB)
  * @param bytes - Number of bytes
  * @param decimals - Number of decimal places (default: 1)
@@ -48,4 +40,13 @@ export function formatMetricValue(value: number, unit: 'bytes' | 'percentage' = 
     return `${value}%`;
   }
   return formatBytes(value);
+}
+
+/**
+ * Safely format a nullable number to a fixed-decimal string.
+ * Returns "—" for null/undefined/NaN/Infinity.
+ */
+export function fmt(v: number | null | undefined, digits = 2): string {
+  if (v == null || !isFinite(v)) return "—";
+  return v.toFixed(digits);
 }

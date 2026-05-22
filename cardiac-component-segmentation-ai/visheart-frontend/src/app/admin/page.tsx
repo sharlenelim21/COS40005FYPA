@@ -298,7 +298,4 @@ export default function AdminPageHome() {
       </Card>
     </div>
   );
-<<<<<<< HEAD
-}
-=======
 }

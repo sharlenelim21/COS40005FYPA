@@ -228,6 +228,7 @@ export function useLandmarkDetection(
 
   const handlePlay = useCallback(() => {
     if (state.status !== "done" || state.totalFrames < 2) return;
+    // Compute confident indices — flag=normal AND confidence=high
     const confident = state.predictions
       .map((p, i) => ({ p, i }))
       .filter(({ p }) => p.flag === "normal" && p.confidence === "high")

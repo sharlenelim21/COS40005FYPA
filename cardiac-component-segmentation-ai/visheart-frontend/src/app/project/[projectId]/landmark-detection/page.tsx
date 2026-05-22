@@ -36,7 +36,6 @@ import { AHA_SEGMENT_COLORS, LANDMARK_DEFINITIONS } from "@/types/landmark";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
 import { segmentationApi } from "@/lib/api";
-import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
 import { StrainBullseye, type StrainType } from "@/components/landmark/StrainVisualization";
 import { fmt } from "@/lib/format-utils";
@@ -119,11 +118,11 @@ export default function LandmarkDetectionPage() {
     state,
     replacementFileError,
     currentPrediction,
-    confidentCount,
     handleRunDetection,
     handleRerunDetection,
     handleFileSelect,
     handleClearReplacementFile,
+    confidentCount,
     handleTogglePlay,
     handleNextFrame,
     handlePrevFrame,
@@ -138,10 +137,6 @@ export default function LandmarkDetectionPage() {
     },
   );
 
-  // GPU availability — mirrors segmentation page pattern (async, false on first render)
-  const { processingUnit, isLoading: gpuLoading } = useGpuStatus();
-  const isGpuMode = processingUnit.gpuAvailable;
-
   // Bullseye data + model selector state
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
@@ -149,46 +144,8 @@ export default function LandmarkDetectionPage() {
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
   const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
-  const [calculatingModels, setCalculatingModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
-  const [calcCountdown, setCalcCountdown] = useState(15);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [leftPanelView, setLeftPanelView] = useState<"bullseye" | "strain">("bullseye");
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GLS");
-
-  // Correct the bullseye model default once the GPU probe resolves.
-  // Guard on gpuLoading: isGpuMode starts false before the fetch completes,
-  // so without the guard this fires immediately and locks GPU users on UNet.
-  useEffect(() => {
-    if (gpuLoading) return;
-    setSelectedBullseyeModel(isGpuMode ? "medsam" : "unet");
-  }, [isGpuMode, gpuLoading]);
-
-  // Countdown timer — ticks while any model is still calculating its bullseye.
-  // Resets to 15 each time calculatingModels changes (i.e. on each fetchBullseye cycle).
-  useEffect(() => {
-    const anyCalculating = calculatingModels.medsam || calculatingModels.unet;
-    if (countdownRef.current) clearInterval(countdownRef.current);
-    if (!anyCalculating) {
-      setCalcCountdown(15);
-      return;
-    }
-    setCalcCountdown(15);
-    countdownRef.current = setInterval(() => {
-      setCalcCountdown((prev) => {
-        if (prev <= 1) {
-          if (countdownRef.current) clearInterval(countdownRef.current);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => {
-      if (countdownRef.current) clearInterval(countdownRef.current);
-    };
-  }, [calculatingModels.medsam, calculatingModels.unet]);
-
-  // Tracks which mask IDs have already had bullseye auto-triggered this session
-  const autoTriggeredBullseyeMasks = useRef<Set<string>>(new Set());
 
   const fetchBullseye = useCallback(async (preferredModel?: "medsam" | "unet", triggerIfMissing = true) => {
     setBullseyeLoading(true);
@@ -197,7 +154,6 @@ export default function LandmarkDetectionPage() {
       type SegItem = { _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData };
       const segs = (res.segmentations ?? []) as SegItem[];
 
-      // Editable masks only (isMedSAMOutput === false), split by inferred model
       const editables = segs.filter((m) => !m.isMedSAMOutput);
       const medsamMasks = editables.filter((m) => maskBelongsTo(m, "medsam"));
       const unetMasks   = editables.filter((m) => maskBelongsTo(m, "unet"));
@@ -205,15 +161,11 @@ export default function LandmarkDetectionPage() {
       const medsamWithBullseye = medsamMasks.find((m) => m.bullseye != null);
       const unetWithBullseye = unetMasks.find((m) => m.bullseye != null);
 
-      const medsamHasBullseye = !!medsamWithBullseye;
-      const unetHasBullseye = !!unetWithBullseye;
-      setAvailableBullseyeModels({ medsam: medsamHasBullseye, unet: unetHasBullseye });
+      // Whether bullseye is computed for each model
+      const newAvailable = { medsam: !!medsamWithBullseye, unet: !!unetWithBullseye };
+      setAvailableBullseyeModels(newAvailable);
       // Whether the editable mask itself exists (regardless of bullseye state)
       setExistingSegModels({ medsam: medsamMasks.length > 0, unet: unetMasks.length > 0 });
-      setCalculatingModels({
-        medsam: medsamMasks.length > 0 && !medsamHasBullseye,
-        unet: unetMasks.length > 0 && !unetHasBullseye,
-      });
 
       // Choose which model to display: use preferredModel, fall back to whatever has data
       const effective = preferredModel ?? selectedBullseyeModel;
@@ -224,32 +176,29 @@ export default function LandmarkDetectionPage() {
         selectedMask = medsamWithBullseye ?? unetWithBullseye;
       }
 
-      // Auto-trigger bullseye for every editable mask that has no data yet,
-      // using a session ref so each mask is triggered at most once.
-      if (triggerIfMissing) {
-        const masksNeedingBullseye = editables.filter(
-          (m) => m._id && !m.bullseye && !autoTriggeredBullseyeMasks.current.has(m._id)
-        );
-        for (const mask of masksNeedingBullseye) {
-          const maskId = mask._id as string;
-          autoTriggeredBullseyeMasks.current.add(maskId);
-          segmentationApi.triggerBullseye(maskId).catch(() => {
-            // Allow retry on next page visit by removing from the set
-            autoTriggeredBullseyeMasks.current.delete(maskId);
-          });
-        }
-        if (masksNeedingBullseye.length > 0) {
-          // Re-fetch after ~15s to pick up newly computed bullseye data
-          setTimeout(() => fetchBullseye(preferredModel, false), 15000);
-        }
-      }
-
       if (selectedMask) {
         setBullseyeData(selectedMask.bullseye!);
         setBullseyeLoading(false);
         return;
       }
 
+      // No bullseye yet for the preferred model.
+      // Trigger computation for the CORRECT model's editable mask.
+      // Each model triggers independently so switching models always
+      // computes bullseye for the selected model even if another model
+      // already had a trigger run earlier.
+      const targetMasks = effective === "unet" ? unetMasks : medsamMasks;
+      const triggerTarget = targetMasks[0] ?? editables[0];
+      if (triggerTarget?._id && triggerIfMissing) {
+        try {
+          await segmentationApi.triggerBullseye(triggerTarget._id);
+          // Re-fetch after ~8s; keep loading=true during the wait
+          setTimeout(() => fetchBullseye(preferredModel, false), 8000);
+          return;
+        } catch {
+          // trigger failed; fall through to show null
+        }
+      }
       setBullseyeData(null);
       setBullseyeLoading(false);
     } catch {
@@ -332,7 +281,7 @@ export default function LandmarkDetectionPage() {
       filtered.reduce((s, a) => s + Math.cos(a), 0),
     );
     setAhaAlignmentAngle(finalRad * (180 / Math.PI));
-  }, [state.predictions, state.avgLm1, state.avgLm2]);
+  }, [state.predictions]);
 
   const handleResetAlignment = useCallback(() => {
     setAhaAlignmentAngle(null);
@@ -344,17 +293,12 @@ export default function LandmarkDetectionPage() {
   const isRunning     = state.status === "running";
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
 
-  const imageDimensions =
-    state.imageDimensions.width > 0
-      ? state.imageDimensions
-      : {
-          width:  projectData?.dimensions?.width  ?? 256,
-          height: projectData?.dimensions?.height ?? 256,
-        };
-
-  const maskDimensions = {
-    width:  projectData?.dimensions?.width  ?? imageDimensions.width,
-    height: projectData?.dimensions?.height ?? imageDimensions.height,
+  // Always prefer projectData dimensions (actual DICOM W×H) over the hook's
+  // default 256×256 placeholder. GPU coords are in NIfTI space which matches
+  // projectData.dimensions exactly.
+  const imageDimensions = {
+    width:  projectData?.dimensions?.width  ?? state.imageDimensions.width,
+    height: projectData?.dimensions?.height ?? state.imageDimensions.height,
   };
 
   const currentImageFrame = currentPrediction?.frame_id ?? state.currentFrame;
@@ -381,6 +325,11 @@ export default function LandmarkDetectionPage() {
     };
   }, [hasPredictions, getMRIImage, currentImageFrame, currentImageSlice, projectId]);
 
+  const maskDimensions = {
+    width:  projectData?.dimensions?.width  ?? imageDimensions.width,
+    height: projectData?.dimensions?.height ?? imageDimensions.height,
+  };
+
   const currentMaskOverlays = useMemo<LandmarkMaskOverlay[]>(() => {
     if (!decodedMasks || !hasPredictions) return [];
 
@@ -397,19 +346,15 @@ export default function LandmarkDetectionPage() {
           (key) => key.includes(frameSlice) && key.toLowerCase().endsWith(`_${label}`),
         );
       const mask = matchedKey ? decodedMasks[matchedKey] : null;
-
-      if (mask) {
-        overlays.push({ label: label as AnatomicalLabel, mask });
-      }
+      if (mask) overlays.push({ label: label as AnatomicalLabel, mask });
     }
-
     return overlays;
   }, [decodedMasks, hasPredictions, currentImageFrame, currentImageSlice]);
 
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
 
-  // Render
+  // Render 
   return (
     <div className="flex flex-col bg-background" style={{ height: "calc(100vh - 64px)" }}>
       <header className="flex items-center gap-3 px-4 py-2 border-b border-border bg-background flex-shrink-0 flex-wrap">
@@ -672,27 +617,17 @@ export default function LandmarkDetectionPage() {
                       <SelectContent className="rounded-xl p-1 shadow-lg">
                         <SelectItem
                           value="medsam"
-                          disabled={!existingSegModels.medsam || (!isGpuMode && !availableBullseyeModels.medsam)}
+                          disabled={!existingSegModels.medsam}
                           className="rounded-lg py-1.5 text-xs"
                         >
-                          MedSAM{
-                            !isGpuMode && !availableBullseyeModels.medsam ? " (GPU only)" :
-                            calculatingModels.medsam ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.medsam ? " (computing…)" :
-                            ""
-                          }
+                          MedSAM{!existingSegModels.medsam ? " (no data)" : !availableBullseyeModels.medsam ? " (computing…)" : ""}
                         </SelectItem>
                         <SelectItem
                           value="unet"
                           disabled={!existingSegModels.unet}
                           className="rounded-lg py-1.5 text-xs"
                         >
-                          UNet{
-                            !existingSegModels.unet ? " (no data)" :
-                            calculatingModels.unet ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.unet ? " (computing…)" :
-                            ""
-                          }
+                          UNet{!existingSegModels.unet ? " (no data)" : !availableBullseyeModels.unet ? " (computing…)" : ""}
                         </SelectItem>
                       </SelectContent>
                     </Select>
@@ -728,19 +663,7 @@ export default function LandmarkDetectionPage() {
                   </div>
                 )}
               </div>
-              {!hasPredictions ? (
-                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
-                  <div className="h-16 w-16 rounded-full border-2 border-dashed border-muted-foreground/30 flex items-center justify-center">
-                    <span className="text-2xl opacity-30">♥</span>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">No landmark data yet</p>
-                    <p className="text-xs mt-1 opacity-70">
-                      Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the AHA 17-Segment Bullseye.
-                    </p>
-                  </div>
-                </div>
-              ) : leftPanelView === "bullseye" ? (
+              {leftPanelView === "bullseye" ? (
                 <AhaBullseyePanel
                   bullseyeData={bullseyeData}
                   loading={bullseyeLoading}
@@ -775,9 +698,7 @@ export default function LandmarkDetectionPage() {
 
           {/* CENTER: 2D MRI slice viewer + landmark overlay */}
           <ResizablePanel defaultSize={47}>
-            <div
-              className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden"
-            >
+            <div className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden">
               {state.status === "idle" && !isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10 pointer-events-none">
                   <div className="flex flex-col items-center gap-3 text-center">
@@ -816,7 +737,7 @@ export default function LandmarkDetectionPage() {
                   imageDimensions={imageDimensions}
                   frameImageUrl={frameImageUrl}
                   maskOverlays={currentMaskOverlays}
-                  maskDimensions={maskDimensions}
+            maskDimensions={maskDimensions}
                   visibleLandmarks={visibleLandmarks}
                   showLabels={showLabels}
                 />
@@ -855,7 +776,6 @@ export default function LandmarkDetectionPage() {
                 currentPrediction={currentPrediction}
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
-                confidentCount={confidentCount}
                 onToggleLandmark={handleToggleLandmark}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}
@@ -895,6 +815,7 @@ function segmentColor(value: number | null | undefined, min: number | null | und
   const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
   return rdYlGn(t);
 }
+
 
 function AhaBullseyePanel({
   bullseyeData,

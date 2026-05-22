@@ -108,11 +108,12 @@ def classify_slices(
 
     # 1 apex slice for short stacks, 2 for longer stacks
     n_apex = 2 if n_valid >= 15 else 1
-    n_remaining = n_valid - n_apex
-
-    n_basal = max(1, round(n_remaining / 3))
-    n_mid   = max(1, round(n_remaining / 3))
-    n_apical = n_remaining - n_basal - n_mid
+    n_remaining = max(n_valid - n_apex, 3)  # need at least 1 per ring
+    n_basal  = max(1, round(n_remaining / 3))
+    n_mid    = max(1, round(n_remaining / 3))
+    n_apical = max(1, n_remaining - n_basal - n_mid)
+    while n_basal + n_mid + n_apical > n_remaining and n_basal > 1:
+        n_basal -= 1
 
     boundaries = [
         (0,                          n_basal,                        "basal"),
