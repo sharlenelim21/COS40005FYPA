@@ -16,6 +16,7 @@ interface LandmarkSliceViewerProps {
   currentFrame: number;
   totalFrames: number;
   imageDimensions: { width: number; height: number };
+  maskDimensions?: { width: number; height: number };
   frameImageUrl?: string | null;
   maskOverlays?: LandmarkMaskOverlay[];
   visibleLandmarks: Set<string>;
@@ -38,6 +39,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   currentFrame,
   totalFrames,
   imageDimensions,
+  maskDimensions,
   frameImageUrl,
   maskOverlays = [],
   visibleLandmarks,
@@ -47,6 +49,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   onLandmarkMove,
   className,
 }: LandmarkSliceViewerProps) {
+  const effectiveMaskDimensions = maskDimensions ?? imageDimensions;
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
@@ -60,6 +63,9 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
   const toCanvas = useCallback(
     (coord: [number, number], cw: number, ch: number): [number, number] => {
+      // GPU coords are in NIfTI space: x ∈ [0, W_nifti], y ∈ [0, H_nifti].
+      // Canvas is always sized to the actual image aspect so cw/imageDimensions.width
+      // gives the correct pixel-per-unit scale.
       const sx = cw / imageDimensions.width;
       const sy = ch / imageDimensions.height;
       return [Math.round(coord[0] * sx), Math.round(coord[1] * sy)];
@@ -82,18 +88,19 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       }
 
       for (const overlay of maskOverlays) {
-        drawMaskOverlay(ctx, overlay, imageDimensions.width, imageDimensions.height, cw, ch);
+        drawMaskOverlay(ctx, overlay, effectiveMaskDimensions.width, effectiveMaskDimensions.height, cw, ch);
       }
 
       if (!prediction) return;
 
-      const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
+      const isCollapsed     = prediction.flag === "collapsed_to_mean";
+      const isLowConfidence = prediction.flag === "normal" && prediction.confidence === "low";
 
+      const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
       for (const def of sorted) {
         if (!visibleLandmarks.has(def.id)) continue;
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
-
         const [cx, cy] = toCanvas(coord, cw, ch);
         drawDot(ctx, cx, cy, def, showLabels, highlightedLandmarkId === def.id);
       }
@@ -155,6 +162,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     img.onload = () => {
       if (cancelled) return;
       frameImgRef.current = img;
+      imgPixelDimsRef.current = { w: img.naturalWidth, h: img.naturalHeight };
       const canvas = canvasRef.current;
       if (canvas) draw(canvas);
     };
@@ -233,13 +241,22 @@ function drawDot(
   showLabel: boolean,
   highlighted = false,
 ) {
+  // Low-confidence: keep original colour but reduce opacity so dots remain distinguishable
+  const dotColor  = def.color;
+  const glowAlpha = "2a";
+  const alpha     = 1.0;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
   // Outer glow
   ctx.beginPath();
   ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
   ctx.fillStyle = highlighted ? def.color + "55" : def.color + "2a";
   ctx.fill();
 
-  // Crosshair lines
+  // Crosshair lines — clipped tightly around the dot
+  const arm = DOT_R + CROSS_EXT;
   ctx.beginPath();
   ctx.moveTo(cx - DOT_R - CROSS_EXT, cy);
   ctx.lineTo(cx + DOT_R + CROSS_EXT, cy);
@@ -252,7 +269,7 @@ function drawDot(
   // Dot fill
   ctx.beginPath();
   ctx.arc(cx, cy, DOT_R, 0, Math.PI * 2);
-  ctx.fillStyle = def.color;
+  ctx.fillStyle = dotColor;
   ctx.fill();
 
   // White border
@@ -291,6 +308,44 @@ function drawDot(
   ctx.fillStyle = "#ffffff";
   ctx.textBaseline = "middle";
   ctx.fillText(text, lx + LABEL_PAD_X, cy);
+  ctx.restore();
+}
+
+function drawMeanDot(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  showLabel: boolean,
+) {
+  const MEAN_R = 4; // smaller than regular DOT_R (6)
+  const color  = "#e2e8f0"; // slate-200 — bright enough to see on dark MRI
+
+  // Small solid dot
+  ctx.beginPath();
+  ctx.arc(cx, cy, MEAN_R, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  // Thin dashed ring just outside
+  ctx.save();
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, MEAN_R + 3, 0, Math.PI * 2);
+  ctx.strokeStyle = color + "99";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+
+  if (!showLabel) return;
+
+  // Small inline label to the right, no pill background — just text with a shadow
+  ctx.font = "10px/1 system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor   = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur    = 3;
+  ctx.fillStyle = color;
+  ctx.fillText("Mean", cx + MEAN_R + 5, cy);
+  ctx.shadowBlur = 0;
 }
 
 function drawMaskOverlay(

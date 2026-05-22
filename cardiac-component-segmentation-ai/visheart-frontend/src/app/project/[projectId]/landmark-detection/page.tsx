@@ -85,6 +85,21 @@ const AHA_SEGMENTS = [
   "Apex",
 ] as const;
 
+/** Resolve which segmentation model produced an editable mask.
+ *  Prefers the explicit segmentationModel field; falls back to name heuristics. */
+function maskBelongsTo(
+  m: { name?: string; [key: string]: unknown },
+  target: "medsam" | "unet",
+): boolean {
+  const field = (m.segmentationModel as string | undefined)?.toLowerCase();
+  if (field === "medsam" || field === "unet") return field === target;
+  const name = (m.name ?? "").toLowerCase();
+  if (name.includes("unet")) return target === "unet";
+  if (name.includes("medsam")) return target === "medsam";
+  // untagged masks default to medsam bucket
+  return target === "medsam";
+}
+
 export default function LandmarkDetectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
 
@@ -110,6 +125,7 @@ export default function LandmarkDetectionPage() {
     state,
     replacementFileError,
     currentPrediction,
+    confidentCount,
     handleRunDetection,
     handleRerunDetection,
     handleFileSelect,
@@ -137,6 +153,8 @@ export default function LandmarkDetectionPage() {
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
   const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("unet");
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
+  const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   const [calculatingModels, setCalculatingModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   const [calcCountdown, setCalcCountdown] = useState(15);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -179,13 +197,8 @@ export default function LandmarkDetectionPage() {
     };
   }, [calculatingModels.medsam, calculatingModels.unet]);
 
-  // Infer which segmentation model produced a mask from its name (matches backend inferMaskModelForExport).
-  const inferMaskModel = (name: string): "medsam" | "unet" | null => {
-    const n = name.toLowerCase();
-    if (n.includes("unet")) return "unet";
-    if (n.includes("medsam")) return "medsam";
-    return null;
-  };
+  // Tracks which mask IDs have already had bullseye auto-triggered this session
+  const autoTriggeredBullseyeMasks = useRef<Set<string>>(new Set());
 
   const fetchBullseye = useCallback(async (preferredModel?: "medsam" | "unet", triggerIfMissing = true) => {
     setBullseyeLoading(true);
@@ -205,6 +218,8 @@ export default function LandmarkDetectionPage() {
       const medsamHasBullseye = !!medsamWithBullseye;
       const unetHasBullseye = !!unetWithBullseye;
       setAvailableBullseyeModels({ medsam: medsamHasBullseye, unet: unetHasBullseye });
+      // Whether the editable mask itself exists (regardless of bullseye state)
+      setExistingSegModels({ medsam: medsamMasks.length > 0, unet: unetMasks.length > 0 });
       setCalculatingModels({
         medsam: medsamMasks.length > 0 && !medsamHasBullseye,
         unet: unetMasks.length > 0 && !unetHasBullseye,
@@ -276,9 +291,6 @@ export default function LandmarkDetectionPage() {
   // AHA alignment
   const [ahaAlignmentAngle, setAhaAlignmentAngle] = useState<number | null>(null);
 
-  // Tracks which mask IDs have already had bullseye auto-triggered this session
-  const autoTriggeredBullseyeMasks = useRef<Set<string>>(new Set());
-
   // Refetch bullseye after detection finishes; clear alignment on new run
   const prevStatus = useRef(state.status);
   useEffect(() => {
@@ -294,6 +306,15 @@ export default function LandmarkDetectionPage() {
   }, [state.status, fetchBullseye, selectedBullseyeModel]);
 
   const handleApplyAlignment = useCallback(() => {
+    // Prefer avg_lm1/avg_lm2 from the new GPU response — more stable than per-slice mean.
+    // Fall back to the existing per-slice approach when those fields are absent.
+    if (state.avgLm1 && state.avgLm2) {
+      const dx = state.avgLm2.x - state.avgLm1.x;
+      const dy = state.avgLm2.y - state.avgLm1.y;
+      setAhaAlignmentAngle(Math.atan2(-dx, dy) * (180 / Math.PI));
+      return;
+    }
+
     const validPreds = state.predictions.filter(
       (p) => p.rv_insertion_1 && p.rv_insertion_2,
     );
@@ -323,7 +344,7 @@ export default function LandmarkDetectionPage() {
       filtered.reduce((s, a) => s + Math.cos(a), 0),
     );
     setAhaAlignmentAngle(finalRad * (180 / Math.PI));
-  }, [state.predictions]);
+  }, [state.predictions, state.avgLm1, state.avgLm2]);
 
   const handleResetAlignment = useCallback(() => {
     setAhaAlignmentAngle(null);
@@ -363,6 +384,11 @@ export default function LandmarkDetectionPage() {
           width:  projectData?.dimensions?.width  ?? 256,
           height: projectData?.dimensions?.height ?? 256,
         };
+
+  const maskDimensions = {
+    width:  projectData?.dimensions?.width  ?? imageDimensions.width,
+    height: projectData?.dimensions?.height ?? imageDimensions.height,
+  };
 
   const currentImageFrame = currentPrediction?.frame_id ?? state.currentFrame;
   const currentImageSlice = currentPrediction?.slice_id ?? 0;
@@ -440,7 +466,7 @@ export default function LandmarkDetectionPage() {
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
 
-  // Render 
+  // Render
   return (
     <div className="flex flex-col bg-background" style={{ height: "calc(100vh - 64px)" }}>
       <header className="flex items-center gap-3 px-4 py-2 border-b border-border bg-background flex-shrink-0 flex-wrap">
@@ -565,6 +591,14 @@ export default function LandmarkDetectionPage() {
           </button>
         </div>
       )}
+      {hasPredictions && (
+        <LandmarkSummaryStats
+          nTotal={state.nTotal}
+          nCollapsed={state.nCollapsed}
+          n2ch={state.n2ch}
+          n1chFallback={state.n1chFallback}
+        />
+      )}
 
       {/* Mobile layout */}
       <div className="lg:hidden flex-1 overflow-y-auto p-3 space-y-3">
@@ -577,6 +611,7 @@ export default function LandmarkDetectionPage() {
             imageDimensions={imageDimensions}
             frameImageUrl={frameImageUrl}
             maskOverlays={currentMaskOverlays}
+            maskDimensions={maskDimensions}
             visibleLandmarks={visibleLandmarks}
             showLabels={showLabels}
             editableLandmarks={editableLandmarks}
@@ -592,6 +627,7 @@ export default function LandmarkDetectionPage() {
             currentPrediction={adjustedCurrentPrediction}
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
+            confidentCount={confidentCount}
             onToggleLandmark={handleToggleLandmark}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
@@ -684,18 +720,27 @@ export default function LandmarkDetectionPage() {
                         <SelectValue placeholder="Model" />
                       </SelectTrigger>
                       <SelectContent className="rounded-xl p-1 shadow-lg">
-                        <SelectItem value="medsam" disabled={!availableBullseyeModels.medsam || !isGpuMode} className="rounded-lg py-1.5 text-xs">
+                        <SelectItem
+                          value="medsam"
+                          disabled={!existingSegModels.medsam || (!isGpuMode && !availableBullseyeModels.medsam)}
+                          className="rounded-lg py-1.5 text-xs"
+                        >
                           MedSAM{
-                            !isGpuMode ? " (GPU only)" :
+                            !isGpuMode && !availableBullseyeModels.medsam ? " (GPU only)" :
                             calculatingModels.medsam ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.medsam ? " (no data)" :
+                            !availableBullseyeModels.medsam ? " (computing…)" :
                             ""
                           }
                         </SelectItem>
-                        <SelectItem value="unet" disabled={!availableBullseyeModels.unet} className="rounded-lg py-1.5 text-xs">
+                        <SelectItem
+                          value="unet"
+                          disabled={!existingSegModels.unet}
+                          className="rounded-lg py-1.5 text-xs"
+                        >
                           UNet{
+                            !existingSegModels.unet ? " (no data)" :
                             calculatingModels.unet ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.unet ? " (no data)" :
+                            !availableBullseyeModels.unet ? " (computing…)" :
                             ""
                           }
                         </SelectItem>
@@ -706,6 +751,32 @@ export default function LandmarkDetectionPage() {
                     <Activity className="h-3.5 w-3.5 text-muted-foreground" />
                   )}
                 </div>
+                {/* AHA alignment controls — visible once landmarks are detected */}
+                {leftPanelView === "bullseye" && hasPredictions && (
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {ahaAlignmentAngle === null ? (
+                      <button
+                        type="button"
+                        onClick={handleApplyAlignment}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+                        title="Rotate bullseye to match detected RV insertion points"
+                      >
+                        <CheckCircle2 className="h-3 w-3 text-green-500" />
+                        Align
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleResetAlignment}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+                        title="Reset bullseye rotation"
+                      >
+                        <RefreshCw className="h-3 w-3 text-muted-foreground" />
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               {!hasPredictions ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
@@ -724,6 +795,7 @@ export default function LandmarkDetectionPage() {
                   bullseyeData={hasPredictions ? bullseyeData : null}
                   loading={hasPredictions ? bullseyeLoading : isRunning}
                   referenceAngleDeg={ahaAlignmentAngle ?? 0}
+                  onCompute={() => fetchBullseye(selectedBullseyeModel, true)}
                   currentFrame={state.currentFrame}
                   frameCount={bullseyeFrameCount}
                   previewMode={!hasPredictions && !isRunning}
@@ -751,8 +823,7 @@ export default function LandmarkDetectionPage() {
           {/* CENTER: 2D MRI slice viewer + landmark overlay */}
           <ResizablePanel defaultSize={36}>
             <div
-              className="w-full relative bg-muted/40 p-4 flex flex-col gap-3"
-              style={{ height: "calc(100vh - 120px)" }}
+              className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden"
             >
               {state.status === "idle" && !isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10 pointer-events-none">
@@ -792,6 +863,7 @@ export default function LandmarkDetectionPage() {
                   imageDimensions={imageDimensions}
                   frameImageUrl={frameImageUrl}
                   maskOverlays={currentMaskOverlays}
+                  maskDimensions={maskDimensions}
                   visibleLandmarks={visibleLandmarks}
                   showLabels={showLabels}
                   editableLandmarks={editableLandmarks}
@@ -813,6 +885,7 @@ export default function LandmarkDetectionPage() {
                 currentPrediction={adjustedCurrentPrediction}
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
+                confidentCount={confidentCount}
                 onToggleLandmark={handleToggleLandmark}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}
@@ -852,7 +925,8 @@ function rdYlGn(t: number): string {
   return `rgb(${ri},${gi},0)`;
 }
 
-function segmentColor(value: number, min: number, max: number): string {
+function segmentColor(value: number | null | undefined, min: number | null | undefined, max: number | null | undefined): string {
+  if (value == null || min == null || max == null) return "#444444";
   if (max === min) return AHA_SEGMENT_COLORS[0];
   const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
   return rdYlGn(t);
@@ -917,15 +991,25 @@ function AhaBullseyePanel({
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
-            <span className="text-xs">Loading bullseye…</span>
+            <span className="text-xs">Computing bullseye…</span>
           </div>
         </div>
       ) : !displayBullseyeData ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
           <p className="text-xs text-muted-foreground">
-            No bullseye data available for this project. Bullseye analysis is generated automatically during segmentation.
+            No bullseye data for this segmentation model yet.
           </p>
+          {onCompute && (
+            <button
+              type="button"
+              onClick={onCompute}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Compute Bullseye
+            </button>
+          )}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
@@ -1245,7 +1329,7 @@ function AhaBullseyeChart({
         fill="black"
         style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.55))" }}
       >
-        {frameValues[16].toFixed(1)}
+        {fmt(frameValues[16], 1)}
       </text>
     </svg>
   );
@@ -1269,8 +1353,8 @@ function BullseyeSegment({
   outerRadius: number;
   startAngle: number;
   endAngle: number;
-  value: number;
-  tooltip: { name: string; value: number } | undefined;
+  value: number | null;
+  tooltip: { name: string; value: number | null } | undefined;
   min: number;
   max: number;
 }) {
@@ -1318,7 +1402,7 @@ function BullseyeSegment({
           fill="black"
           style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.55))" }}
         >
-          {value.toFixed(1)}
+          {fmt(value, 1)}
         </text>
       )}
     </g>
@@ -1520,6 +1604,48 @@ function InfoPill({ label, value }: { label: string; value: string }) {
     <div className="flex items-center gap-1 tabular-nums">
       <span className="text-muted-foreground/60">{label}:</span>
       <span className="font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
+/** One-line summary of GPU inference quality stats. */
+function LandmarkSummaryStats({
+  nTotal,
+  nCollapsed,
+  n2ch,
+  n1chFallback,
+}: {
+  nTotal?: number;
+  nCollapsed?: number;
+  n2ch?: number;
+  n1chFallback?: number;
+}) {
+  if (!nTotal) return null;
+  const confident = nTotal - (nCollapsed ?? 0);
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-0.5 px-4 py-1.5 border-b border-border bg-muted/30 text-[11px] text-muted-foreground flex-shrink-0">
+      <span>
+        <span className="font-medium text-green-600 dark:text-green-400">{confident}/{nTotal}</span>
+        {" slices confident"}
+      </span>
+      {(nCollapsed ?? 0) > 0 && (
+        <span>
+          <span className="font-medium text-zinc-500">{nCollapsed}/{nTotal}</span>
+          {" mean point used"}
+        </span>
+      )}
+      {(n2ch ?? 0) > 0 && (
+        <span>
+          <span className="font-medium text-blue-500">{n2ch}/{nTotal}</span>
+          {" seg-guided (2ch)"}
+        </span>
+      )}
+      {(n1chFallback ?? 0) > 0 && (
+        <span>
+          <span className="font-medium text-amber-500">{n1chFallback}/{nTotal}</span>
+          {" MRI-only (1ch)"}
+        </span>
+      )}
     </div>
   );
 }

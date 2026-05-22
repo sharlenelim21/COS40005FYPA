@@ -13,6 +13,7 @@ import {
 import {
   segmentationSource,
 } from "../types/database_types";
+import { generateAISegmentationForReconstruction } from "./segmentation_export";
 import logger from "./logger";
 
 const serviceLocation = "LandmarkInference";
@@ -21,7 +22,9 @@ interface LandmarkModelConfig {
   model?: string;
   deviceType?: "cpu" | "cuda" | "auto";
   checkpointPath?: string;
+  segmentationModel?: string;
 }
+
 
 const uniqueBaseUrls = (urls: Array<string | null | undefined>): string[] => {
   const seen = new Set<string>();
@@ -54,7 +57,7 @@ const resolveGpuBaseUrlCandidates = async (): Promise<string[]> => {
     directGpuApiUrl,
     localhostUrl,
     "http://host.docker.internal:8001",
-    "http://host.docker.internal:8011",
+    "http://host.docker.internal:8001",
   ]);
 };
 
@@ -114,6 +117,40 @@ export async function startLandmarkInference(
     };
   }
 
+  // --- Seg mask NIfTI (best-effort: missing mask never blocks landmark detection) ---
+  // Uses the same generateAISegmentationForReconstruction path as 4D reconstruction —
+  // masks are stored as RLE in MongoDB, so a NIfTI must be generated from them.
+  const requestedSegModel = (
+    (modelConfig?.segmentationModel ?? "medsam").toLowerCase() === "unet"
+      ? "unet"
+      : "medsam"
+  ) as "medsam" | "unet";
+
+  let segMaskPresignedUrl: string | null = null;
+  try {
+    const segResult = await generateAISegmentationForReconstruction(
+      projectId,
+      user?._id?.toString(),
+      requestedSegModel,
+    );
+    if (segResult.success && segResult.s3Url) {
+      segMaskPresignedUrl = segResult.s3Url;
+      logger.info(
+        `${serviceLocation}: Generated ${requestedSegModel.toUpperCase()} seg mask NIfTI for project ${projectId} — GPU will use 2ch model.`
+      );
+    } else {
+      logger.warn(
+        `${serviceLocation}: Could not generate ${requestedSegModel.toUpperCase()} seg mask NIfTI for project ${projectId} — GPU will use 1ch fallback. Reason: ${segResult.message ?? "unknown"}`
+      );
+    }
+  } catch (segErr: any) {
+    logger.warn(
+      `${serviceLocation}: Error generating seg mask NIfTI for project ${projectId} — GPU will use 1ch fallback. Error: ${segErr?.message}`
+    );
+  }
+  // Landmark detection ALWAYS proceeds regardless of seg mask availability.
+  // GPU handles null seg_mask_url by using the 1ch model automatically.
+
   const gpuBaseUrls = await resolveGpuBaseUrlCandidates();
   if (!gpuBaseUrls.length) {
     return { success: false, message: "GPU API URL is not configured." };
@@ -150,6 +187,7 @@ export async function startLandmarkInference(
         endpoint,
         {
           url: niftiPresignedUrl,
+          ...(segMaskPresignedUrl ? { seg_mask_url: segMaskPresignedUrl } : {}),
           uuid: jobUuid,
           callback_url: callbackUrl,
           model: modelConfig?.model || "unetresnet34-landmark",

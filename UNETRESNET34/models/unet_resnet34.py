@@ -138,8 +138,36 @@ class _FallbackUNet(nn.Module):
         return self.final(d1)
 
 
+def _replace_bn(module: nn.Module, mode: str, num_groups: int = 8) -> nn.Module:
+    """Recursively replace BatchNorm2d in-place. mode: 'instance' | 'group'."""
+    for name, child in module.named_children():
+        if isinstance(child, nn.BatchNorm2d):
+            C = child.num_features
+            if mode == "instance":
+                new = nn.InstanceNorm2d(C, affine=True, track_running_stats=False)
+            else:
+                g = min(num_groups, C)
+                while C % g != 0 and g > 1:
+                    g -= 1
+                new = nn.GroupNorm(g, C, affine=True)
+            setattr(module, name, new)
+        else:
+            _replace_bn(child, mode, num_groups)
+    return module
+
+
+# Convenience aliases kept for call-site compatibility
+def _replace_bn_with_in(module: nn.Module) -> nn.Module:
+    return _replace_bn(module, "instance")
+
+
+def _replace_bn_with_gn(module: nn.Module, num_groups: int = 8) -> nn.Module:
+    return _replace_bn(module, "group", num_groups)
+
+
 class ResNetUNet(nn.Module):
-    def __init__(self, num_classes=2, dropout=0.2, pretrained=True):
+    def __init__(self, in_channels=1, num_classes=2, dropout=0.2, pretrained=True,
+                 use_instance_norm=False, use_group_norm=False):
         super().__init__()
         if not TORCHVISION_AVAILABLE:
             raise ImportError("torchvision not installed.")
@@ -147,11 +175,24 @@ class ResNetUNet(nn.Module):
         weights  = ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = resnet34(weights=weights)
 
-        orig  = backbone.conv1
-        new_c = nn.Conv2d(1, 64, 7, stride=2, padding=3, bias=False)
-        with torch.no_grad():
-            new_c.weight = nn.Parameter(orig.weight.mean(dim=1, keepdim=True))
+        # ── First conv: adapt from 3-ch ImageNet weights → 1 or 2 channels ──
+        orig = backbone.conv1  # shape: [64, 3, 7, 7]
+        if in_channels == 1:
+            new_c = nn.Conv2d(1, 64, 7, stride=2, padding=3, bias=False)
+            with torch.no_grad():
+                # Average across RGB → [64, 1, 7, 7]
+                new_c.weight.copy_(orig.weight.mean(dim=1, keepdim=True))
+        elif in_channels == 2:
+            new_c = nn.Conv2d(2, 64, 7, stride=2, padding=3, bias=False)
+            with torch.no_grad():
+                # Average across RGB → [64, 1, 7, 7], split across 2 channels
+                # Scale by 0.5 so summed activation magnitude matches 1ch case
+                avg_w = orig.weight.mean(dim=1, keepdim=True)  # [64, 1, 7, 7]
+                new_c.weight.copy_(torch.cat([avg_w * 0.5, avg_w * 0.5], dim=1))
+        else:
+            raise ValueError(f"in_channels must be 1 or 2, got {in_channels}")
         backbone.conv1 = new_c
+        # ──────────────────────────────────────────────────────────────────────
 
         self.enc0 = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu)
         self.pool = backbone.maxpool
@@ -159,6 +200,13 @@ class ResNetUNet(nn.Module):
         self.enc2 = backbone.layer2   # 128
         self.enc3 = backbone.layer3   # 256
         self.enc4 = backbone.layer4   # 512
+
+        if use_instance_norm:
+            for enc in (self.enc0, self.enc1, self.enc2, self.enc3, self.enc4):
+                _replace_bn_with_in(enc)
+        elif use_group_norm:
+            for enc in (self.enc0, self.enc1, self.enc2, self.enc3, self.enc4):
+                _replace_bn_with_gn(enc)
 
         self.bottleneck = nn.Sequential(DoubleConv(512, 512, dropout=dropout), CBAM(512))
 
@@ -183,6 +231,16 @@ class ResNetUNet(nn.Module):
         self._aux_feat1 = None
         self._aux_feat2 = None
 
+        # Apply norm replacement to bottleneck, decoder, and aux heads
+        _decoder_modules = (self.bottleneck, self.dec4, self.dec3, self.dec2,
+                            self.dec1, self.dec0, self.aux_head1, self.aux_head2)
+        if use_instance_norm:
+            for m in _decoder_modules:
+                _replace_bn_with_in(m)
+        elif use_group_norm:
+            for m in _decoder_modules:
+                _replace_bn_with_gn(m)
+
     def forward(self, x):
         e0 = self.enc0(x)
         e1 = self.enc1(self.pool(e0))
@@ -205,8 +263,9 @@ class _CardiacResNetEncoder(nn.Module):
     FILE = "resnet34_2d.pth"
 
     @classmethod
-    def try_load(cls, num_classes=2, dropout=0.2):
-        model = ResNetUNet(num_classes=num_classes, dropout=dropout, pretrained=True)
+    def try_load(cls, in_channels=1, num_classes=2, dropout=0.2):
+        model = ResNetUNet(in_channels=in_channels, num_classes=num_classes,
+                           dropout=dropout, pretrained=True)
         if not HF_AVAILABLE:
             print("Warning: huggingface_hub not installed - using ImageNet weights.")
             return model
@@ -228,12 +287,22 @@ class _CardiacResNetEncoder(nn.Module):
 
 
 def UNetResNet34(in_channels=1, num_classes=2, dropout=0.2,
-           pretrained=True, cardiac_pretrained=True):
+                 pretrained=True, cardiac_pretrained=True,
+                 use_instance_norm=False, use_group_norm=False):
     if not TORCHVISION_AVAILABLE:
         print("torchvision not found - using attention UNet fallback")
         return _FallbackUNet(in_channels=in_channels, num_classes=num_classes, dropout=dropout)
     if cardiac_pretrained and pretrained:
-        #print("Attempting cardiac-pretrained ResNet-34 encoder...")
-        return _CardiacResNetEncoder.try_load(num_classes=num_classes, dropout=dropout)
-    print("Using ResNet-34 ImageNet pretrained encoder")
-    return ResNetUNet(num_classes=num_classes, dropout=dropout, pretrained=pretrained)
+        return _CardiacResNetEncoder.try_load(
+            in_channels=in_channels, num_classes=num_classes, dropout=dropout)
+    if use_instance_norm:
+        norm_tag = "InstanceNorm"
+    elif use_group_norm:
+        norm_tag = "GroupNorm(8)"
+    else:
+        norm_tag = "BatchNorm"
+    print(f"Using ResNet-34 ImageNet pretrained encoder  [{norm_tag}]")
+    return ResNetUNet(in_channels=in_channels, num_classes=num_classes,
+                      dropout=dropout, pretrained=pretrained,
+                      use_instance_norm=use_instance_norm,
+                      use_group_norm=use_group_norm)

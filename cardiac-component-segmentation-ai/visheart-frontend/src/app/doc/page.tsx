@@ -1635,4 +1635,5 @@ const DocPage = () => {
   );
 };
 
+<<<<<<< HEAD
 export default DocPage;

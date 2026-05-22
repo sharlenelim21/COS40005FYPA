@@ -441,4 +441,7 @@ export const startReconstruction = async (
         logger.error(`${serviceLocation}: Critical error starting 4D reconstruction for project ${projectId}:`, error);
         return { success: false, message: `Error starting 4D reconstruction: ${error.message}` };
     }
+<<<<<<< HEAD
+};
+=======
 };

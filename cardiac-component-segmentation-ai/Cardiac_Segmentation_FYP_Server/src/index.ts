@@ -124,4 +124,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 });
 
 // Note: The `export const app = express();` line is removed from here.
+<<<<<<< HEAD
+// All middleware and route setup is now handled in app.ts.
+=======
 // All middleware and route setup is now handled in app.ts.

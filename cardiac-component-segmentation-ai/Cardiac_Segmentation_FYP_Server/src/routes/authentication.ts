@@ -131,6 +131,15 @@ router.post("/login",
         return res.status(500).json({ message: "Internal error" });
       }
       if (!user) {
+<<<<<<< HEAD
+=======
+        logger.warn(
+          `${serviceLocation}: Failed login attempt - ` +
+          `username=${req.body.username} ` +
+          `ip=${req.ip} ` +
+          `timestamp=${new Date().toISOString()}`
+        );
+>>>>>>> backup-finalsprint3
         return res.status(401).json({ login: false, message: info?.message });
       }
 

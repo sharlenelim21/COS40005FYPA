@@ -234,7 +234,10 @@ services:
   # GPU Inference Service (PROFILE: CPU)
   # ============================================
   gpu-cpu:
-    image: sveltes/visheart-inference-gpu:faithful-latest
+    build:
+      context: ../visheart-inference-gpu
+      dockerfile: Dockerfile
+    image: visheart-inference-gpu:local
     container_name: visheart-gpu-cpu
     profiles: ["cpu"]
     restart: unless-stopped
@@ -263,7 +266,10 @@ services:
   # GPU Inference Service (PROFILE: NVIDIA)
   # ============================================
   gpu-nvidia:
-    image: sveltes/visheart-inference-gpu:faithful-latest
+    build:
+      context: ../visheart-inference-gpu
+      dockerfile: Dockerfile
+    image: visheart-inference-gpu:local
     container_name: visheart-gpu-nvidia
     profiles: ["gpu"]
     restart: unless-stopped

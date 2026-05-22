@@ -1,6 +1,7 @@
 # File: app/helpers/inference_jobs.py
 import asyncio
 import httpx
+import aiohttp
 import os, traceback, time, json, tempfile
 import re
 import logging

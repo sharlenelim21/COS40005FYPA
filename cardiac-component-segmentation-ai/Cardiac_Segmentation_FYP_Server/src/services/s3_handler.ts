@@ -404,4 +404,7 @@ export const uploadMaskToS3 = async (
     }
     throw error;
   }
+<<<<<<< HEAD
+};
+=======
 };

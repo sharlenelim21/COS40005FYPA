@@ -30,7 +30,10 @@ async def lifespan(app: FastAPI):
     """
     start_model_bootstrap()
     yield
-
+                # Log startup completion after all models are loaded
+                log_startup_complete()
+                # Add more lifespans, sequentially nested depend on load order
+                yield
 
 app = FastAPI(lifespan=lifespan)
 

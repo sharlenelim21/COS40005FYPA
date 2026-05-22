@@ -29,8 +29,9 @@ export const landmarkApi = {
   runDetectionByProject: async (
     projectId: string,
     model = DEFAULT_MODEL,
+    segmentationModel = "medsam",
   ): Promise<LandmarkInferenceResponse> => {
-    const key = `${projectId}::${model}`;
+    const key = `${projectId}::${model}::${segmentationModel}`;
 
     if (predictionCache.has(key)) {
       if (process.env.NODE_ENV === "development") {
@@ -57,6 +58,7 @@ export const landmarkApi = {
         uuid?: string;
       }>(`${ENDPOINT}/start/${projectId}`, {
         model,
+        segmentationModel,
         deviceType: "auto",
       });
 
