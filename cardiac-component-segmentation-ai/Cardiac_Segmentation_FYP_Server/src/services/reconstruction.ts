@@ -1,17 +1,9 @@
 // File: src/services/reconstruction.ts
-<<<<<<< HEAD
-// Description: Service layer for initiating 4D reconstruction process, including Cloud GPU communication.
-
-import { IUserSafe, ProjectCrudResult } from "../types/database_types";
-import logger from "./logger";
-import { readProject, readProjectSegmentationMask } from "./database";
-=======
 // Description: Service layer for initiating 4D reconstruction process, including GPU service communication.
 
 import { IUserSafe, ProjectCrudResult, IProjectSegmentationMask, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
 import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask } from "./database";
->>>>>>> backup-finalsprint3
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
@@ -23,9 +15,6 @@ import { generateAISegmentationForReconstruction } from "./segmentation_export";
 const serviceLocation = 'Reconstruction';
 
 /**
-<<<<<<< HEAD
- * Sends 4D reconstruction request to Cloud GPU server
-=======
  * Resolve which segmentation model a mask document belongs to.
  * Mirrors the frontend's `inferDocModel` so a doc whose explicit
  * `segmentationModel` field was lost in transit is still classified
@@ -48,8 +37,9 @@ const inferMaskModel = (
     const name = (mask.name || "").toString().toLowerCase();
     if (name.includes("unet")) return "unet";
     if (name.includes("medsam")) return "medsam";
-    if (name.startsWith("ai output")) return "medsam";
-    if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
+    // Do not guess "medsam" for generic names like "ai output" or "manual edit" —
+    // these patterns predate per-model tagging and could belong to either model.
+    // Without an explicit tag or model word in the name, the origin is unknown.
     return null;
 };
 
@@ -63,7 +53,6 @@ const normalizeStoredModel = (value: unknown): "medsam" | "unet" | null => {
 
 /**
  * Sends 4D reconstruction request to the configured GPU server
->>>>>>> backup-finalsprint3
  * Communicates with GPU inference server to start cardiac reconstruction processing
  * 
  * @param reconstructionData - Reconstruction parameters and data URLs
@@ -84,30 +73,17 @@ const sendReconstructionRequestToCloudGpu = async (
     },
     gpuAuthToken: string
 ): Promise<{ success: boolean; jobId?: string; error?: string }> => {
-<<<<<<< HEAD
-    // Get GPU server configuration from database
-    const cloudGpuBaseUrl = await getFreshGPUServerAddress();
-    if (!cloudGpuBaseUrl) {
-        logger.error(`${serviceLocation}: GPU server configuration not available`);
-        return { success: false, error: "Cloud GPU URL not configured." };
-=======
     // Get GPU server configuration
     const cloudGpuBaseUrl = await getFreshGPUServerAddress();
     if (!cloudGpuBaseUrl) {
         logger.error(`${serviceLocation}: GPU server configuration not available`);
         return { success: false, error: "GPU service URL not configured." };
->>>>>>> backup-finalsprint3
     }
 
     // Validate GPU authentication token
     if (!gpuAuthToken) {
-<<<<<<< HEAD
-        logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send 4D reconstruction request to Cloud GPU.`);
-        return { success: false, error: "Authentication token for Cloud GPU is missing." };
-=======
         logger.error(`${serviceLocation}: gpuAuthToken is missing. Cannot send 4D reconstruction request to GPU service.`);
         return { success: false, error: "Authentication token for GPU service is missing." };
->>>>>>> backup-finalsprint3
     }
 
     const reconstructionEndpoint = `${cloudGpuBaseUrl}/inference/v2/4d-reconstruction`;
@@ -145,15 +121,6 @@ const sendReconstructionRequestToCloudGpu = async (
                 return { success: true, jobId: reconstructionData.uuid };
             }
         } else {
-<<<<<<< HEAD
-            const gpuError = response.data?.error || `Cloud GPU responded with status ${response.status}.`;
-            logger.error(`${serviceLocation}: Error from Cloud GPU: ${gpuError}`, response.data);
-            return { success: false, error: `Cloud GPU error: ${gpuError}` };
-        }
-    } catch (error: any) {
-        logger.error(`${serviceLocation}: Error sending 4D reconstruction request to ${reconstructionEndpoint}: ${error.message}`, { error });
-        let errorMessage = `Error communicating with Cloud GPU: ${error.message}`;
-=======
             const gpuError = response.data?.error || `GPU service responded with status ${response.status}.`;
             logger.error(`${serviceLocation}: Error from GPU service: ${gpuError}`, response.data);
             return { success: false, error: `GPU service error: ${gpuError}` };
@@ -161,7 +128,6 @@ const sendReconstructionRequestToCloudGpu = async (
     } catch (error: any) {
         logger.error(`${serviceLocation}: Error sending 4D reconstruction request to ${reconstructionEndpoint}: ${error.message}`, { error });
         let errorMessage = `Error communicating with GPU service: ${error.message}`;
->>>>>>> backup-finalsprint3
         if (error.response?.status) {
             errorMessage += ` (Status: ${error.response.status})`;
         }
@@ -182,10 +148,6 @@ const sendReconstructionRequestToCloudGpu = async (
  * @param export_format - Export format for mesh files ('glb' or 'obj')
  * @returns Promise with success status, message, and job UUID
  */
-<<<<<<< HEAD
-export const startReconstruction = async (projectId: string, user?: IUserSafe, reconstructionName?: string, reconstructionDescription?: string, parameters?: any, ed_frame?: number, export_format?: string): Promise<{ success: boolean; message: string; uuid?: string }> => {
-    logger.info(`${serviceLocation}: Starting 4D reconstruction for project ${projectId} by user ${user?.username} with export_format: ${export_format || 'default'}`);
-=======
 export const startReconstruction = async (
     projectId: string,
     user?: IUserSafe,
@@ -213,7 +175,6 @@ export const startReconstruction = async (
     logger.info(
         `${serviceLocation}: Starting 4D reconstruction for project ${projectId} by user ${user?.username} with export_format: ${export_format || 'default'}, requestedModel: ${requestedModel ?? "<none — legacy>"}`
     );
->>>>>>> backup-finalsprint3
     
     // Get current GPU authentication token
     const gpuAuthToken = getCurrentToken();
@@ -251,8 +212,6 @@ export const startReconstruction = async (
             return { success: false, message: "Access denied to this project" };
         }
 
-<<<<<<< HEAD
-=======
         if (requestedModel) {
             const existingReconstructions = await readProjectReconstruction(projectId);
             if (existingReconstructions.success && existingReconstructions.projectreconstructions) {
@@ -290,7 +249,6 @@ export const startReconstruction = async (
             }
         }
 
->>>>>>> backup-finalsprint3
         // Validate that project has segmentation masks (required for 4D reconstruction)
         const hasMasksResult = await readProjectSegmentationMask(projectId);
         if (!hasMasksResult.projectsegmentationmasks || hasMasksResult.projectsegmentationmasks.length === 0) {
@@ -300,20 +258,6 @@ export const startReconstruction = async (
 
         logger.info(`${serviceLocation}: Found ${hasMasksResult.projectsegmentationmasks.length} segmentation mask(s) for project ${projectId}. Proceeding with 4D reconstruction.`);
 
-<<<<<<< HEAD
-        // Filter for editable/manual masks (isMedSAMOutput: false) - reconstruction uses user-edited masks for better accuracy
-        const editableMasks = hasMasksResult.projectsegmentationmasks.filter(mask => mask.isMedSAMOutput === false);
-        
-        if (editableMasks.length === 0) {
-            logger.warn(`${serviceLocation}: No editable segmentation masks found for project ${projectId}. 4D reconstruction requires editable masks (user-refined segmentation).`);
-            return { success: false, message: "4D reconstruction requires editable segmentation masks. Please complete or refine segmentation before starting reconstruction." };
-        }
-
-        // Extract mask ID from the first editable segmentation mask
-        const firstEditableMask = editableMasks[0];
-        const maskId = firstEditableMask._id?.toString();
-        logger.info(`${serviceLocation}: Using editable segmentation mask ID ${maskId} for reconstruction of project ${projectId} (${editableMasks.length} editable mask(s) available)`);
-=======
         // Filter for editable/manual masks (isMedSAMOutput: false) — reconstruction uses user-edited masks for accuracy.
         const allEditableMasks = hasMasksResult.projectsegmentationmasks.filter(
             mask => mask.isMedSAMOutput === false
@@ -367,7 +311,6 @@ export const startReconstruction = async (
         logger.info(
             `${serviceLocation}: Using editable segmentation mask ID ${maskId} (resolvedModel=${resolvedModelForChosenMask ?? "<unresolved>"}) for reconstruction of project ${projectId}. Candidates after model scoping: ${editableMasks.length}, total editable in project: ${allEditableMasks.length}, requestedModel: ${requestedModel ?? "<none — legacy>"}`
         );
->>>>>>> backup-finalsprint3
 
         // Validate ed_frame parameter if provided
         if (ed_frame !== undefined) {
@@ -385,11 +328,6 @@ export const startReconstruction = async (
         }
 
         // Generate segmentation NIfTI file directly (no HTTP call needed)
-<<<<<<< HEAD
-        logger.info(`${serviceLocation}: Generating segmentation NIfTI for project ${projectId}`);
-        
-        const segmentationResult = await generateAISegmentationForReconstruction(projectId, user?._id);
-=======
         logger.info(`${serviceLocation}: Reconstruction started - generating segmentation NIfTI for project ${projectId}`);
         
         const segmentationResult = await generateAISegmentationForReconstruction(
@@ -397,7 +335,6 @@ export const startReconstruction = async (
             user?._id,
             requestedModel ?? undefined
         );
->>>>>>> backup-finalsprint3
         
         if (!segmentationResult.success || !segmentationResult.s3Key) {
             logger.error(`${serviceLocation}: Failed to generate segmentation NIfTI for project ${projectId}: ${segmentationResult.message}`);
@@ -412,11 +349,7 @@ export const startReconstruction = async (
             return { success: false, message: "Failed to prepare segmentation file for GPU access." };
         }
 
-<<<<<<< HEAD
-        logger.info(`${serviceLocation}: Successfully generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
-=======
         logger.info(`${serviceLocation}: Reconstruction saving output - generated segmentation NIfTI for project ${projectId}. File size: ${segmentationResult.fileSizeBytes} bytes, S3 Key: ${segmentationResult.s3Key}`);
->>>>>>> backup-finalsprint3
 
         // Generate job UUID
         const jobUuid = uuidv4();
@@ -467,24 +400,12 @@ export const startReconstruction = async (
         const reconstructionResult = await sendReconstructionRequestToCloudGpu(reconstructionPayload, gpuAuthToken);
 
         if (reconstructionResult.success && reconstructionResult.jobId) {
-<<<<<<< HEAD
-            logger.info(`${serviceLocation}: Reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
-=======
             logger.info(`${serviceLocation}: Callback sent - reconstruction request sent successfully for project ${projectId}. GPU Job ID: ${reconstructionResult.jobId}, Local UUID: ${jobUuid}.`);
->>>>>>> backup-finalsprint3
 
             // Create job record AFTER successful GPU submission
             const jobData: Partial<IJob> = {
                 userid: user?._id,
                 projectid: projectId,
-<<<<<<< HEAD
-                uuid: jobUuid,
-                status: JobStatus.PENDING,  // Set to PENDING since GPU already accepted
-                result: `GPU Job ID: ${reconstructionResult.jobId}${maskId ? `, Mask ID: ${maskId}` : ''}`,
-                message: "4D reconstruction submitted to GPU server",
-                segmentationName: reconstructionName || `4D Reconstruction - ${new Date().toISOString()}`,
-                segmentationDescription: reconstructionDescription || "4D cardiac reconstruction using SDF model"
-=======
                 maskId,
                 uuid: jobUuid,
                 status: JobStatus.PENDING,  // Set to PENDING since GPU already accepted
@@ -498,7 +419,6 @@ export const startReconstruction = async (
                     : persistedSegmentationModel === "unet"
                     ? SegmentationModel.UNET
                     : undefined
->>>>>>> backup-finalsprint3
             };
 
             const jobCreationResult = await createJob(jobData as IJob);
@@ -525,4 +445,3 @@ export const startReconstruction = async (
 };
 =======
 };
->>>>>>> backup-finalsprint3

@@ -1,10 +1,6 @@
 ﻿"use client";
 
-<<<<<<< HEAD
-import { useState } from "react";
-=======
 import { useEffect, useMemo, useState } from "react";
->>>>>>> backup-finalsprint3
 import {
   Dialog,
   DialogContent,
@@ -28,25 +24,18 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-<<<<<<< HEAD
-import { ChevronDown, Settings, Sparkles } from "lucide-react";
-=======
 import { ChevronDown, Settings, Sparkles, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type ReconstructionSegmentationModel = "medsam" | "unet";
->>>>>>> backup-finalsprint3
 
 export interface ReconstructionConfig {
   exportFormat: "obj" | "glb";
   edFrame: number; // 1-based frame index for user selection
   numIterations: number;
   resolution: number;
-<<<<<<< HEAD
-=======
   // Which segmentation result this reconstruction should consume.
   segmentationModel: ReconstructionSegmentationModel;
->>>>>>> backup-finalsprint3
 }
 
 interface ReconstructionConfigDialogProps {
@@ -55,10 +44,6 @@ interface ReconstructionConfigDialogProps {
   onStart: (config: ReconstructionConfig) => void;
   isLoading?: boolean;
   totalFrames?: number; // Total number of frames in the project
-<<<<<<< HEAD
-}
-
-=======
   /**
    * Models that have a usable cached editable/manual segmentation
    * for this project. Anything not in the set is rendered disabled
@@ -79,6 +64,12 @@ interface ReconstructionConfigDialogProps {
    * the requested default is unavailable.
    */
   defaultSelectedModel?: ReconstructionSegmentationModel;
+  /**
+   * Whether a GPU is available in the current environment.
+   * When false, MedSAM cards show "GPU required" instead of
+   * "Run MedSAM segmentation first", so CPU users are not misled.
+   */
+  gpuAvailable?: boolean;
 }
 
 const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
@@ -92,19 +83,16 @@ const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; descr
   },
 };
 
->>>>>>> backup-finalsprint3
 export function ReconstructionConfigDialog({
   open,
   onOpenChange,
   onStart,
   isLoading = false,
   totalFrames = 1,
-<<<<<<< HEAD
-=======
   availableModels,
   blockedModels,
   defaultSelectedModel,
->>>>>>> backup-finalsprint3
+  gpuAvailable = true,
 }: ReconstructionConfigDialogProps) {
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
@@ -112,9 +100,6 @@ export function ReconstructionConfigDialog({
   const [resolution, setResolution] = useState(32);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-<<<<<<< HEAD
-  const handleStart = () => {
-=======
   // Derive a stable Set for membership checks.
   const availableSet = useMemo(
     () => new Set<ReconstructionSegmentationModel>(availableModels ?? []),
@@ -158,16 +143,12 @@ export function ReconstructionConfigDialog({
 
   const handleStart = () => {
     if (startDisabled) return;
->>>>>>> backup-finalsprint3
     onStart({
       exportFormat,
       edFrame,
       numIterations,
       resolution,
-<<<<<<< HEAD
-=======
       segmentationModel: selectedModel,
->>>>>>> backup-finalsprint3
     });
   };
 
@@ -185,8 +166,6 @@ export function ReconstructionConfigDialog({
         </DialogHeader>
 
         <div className="space-y-6 py-4">
-<<<<<<< HEAD
-=======
           {/* Segmentation source (model) — choose which cached segmentation
               the reconstruction will consume. Disabled cards represent
               models with no editable mask available for this project. */}
@@ -210,6 +189,8 @@ export function ReconstructionConfigDialog({
                         ? `A 4D reconstruction already exists for ${MODEL_META[m].label}. Delete the existing result before creating a new one.`
                         : isAvailable
                         ? `Use cached ${MODEL_META[m].label} segmentation as input`
+                        : (!gpuAvailable && m === "medsam")
+                        ? "MedSAM requires an NVIDIA GPU. Only UNet is available in CPU mode."
                         : `No cached segmentation found for ${MODEL_META[m].label}. Run ${MODEL_META[m].label} segmentation first.`
                     }
                     className={cn(
@@ -250,7 +231,9 @@ export function ReconstructionConfigDialog({
                     )}
                     {!hasSegmentation && (
                       <div className="text-[11px] text-muted-foreground mt-1.5">
-                        No cached segmentation
+                        {!gpuAvailable && m === "medsam"
+                          ? "GPU required"
+                          : "No cached segmentation"}
                       </div>
                     )}
                   </button>
@@ -286,17 +269,12 @@ export function ReconstructionConfigDialog({
             )}
           </div>
 
->>>>>>> backup-finalsprint3
           {/* Export Format Selection */}
           <div className="space-y-2">
             <Label htmlFor="format">Export Format</Label>
             <Select
               value={exportFormat}
-<<<<<<< HEAD
-              onValueChange={(value) => setExportFormat(value as "obj" | "glb")}
-=======
               onValueChange={(value: string) => setExportFormat(value as "obj" | "glb")}
->>>>>>> backup-finalsprint3
             >
               <SelectTrigger id="format">
                 <SelectValue placeholder="Select format" />
@@ -436,10 +414,6 @@ export function ReconstructionConfigDialog({
           >
             Cancel
           </Button>
-<<<<<<< HEAD
-          <Button onClick={handleStart} disabled={isLoading}>
-            {isLoading ? "Starting..." : "Start Reconstruction"}
-=======
           <Button
             onClick={handleStart}
             disabled={startDisabled}
@@ -462,7 +436,6 @@ export function ReconstructionConfigDialog({
                     ? ` (${MODEL_META[selectedModel].label})`
                     : ""
                 }`}
->>>>>>> backup-finalsprint3
           </Button>
         </DialogFooter>
       </DialogContent>

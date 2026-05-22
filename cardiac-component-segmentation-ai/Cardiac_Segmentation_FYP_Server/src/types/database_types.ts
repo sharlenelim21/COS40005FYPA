@@ -1,14 +1,11 @@
 import { Document } from "mongoose";
 
-<<<<<<< HEAD
-=======
 // Enum for segmentation model selection.
 export enum SegmentationModel {
   MEDSAM = "medsam",
   UNET = "unet"
 }
 
->>>>>>> backup-finalsprint3
 /* Interfaces */
 // Enumeration for user roles
 /**
@@ -228,10 +225,7 @@ export enum ComponentBoundingBoxesClass {
  * @property {string} frames.slices.segmentationmasks.segmentationmaskcontents - The contents of the segmentation mask (e.g., RLE format).
  */
 export interface IProjectSegmentationMask {
-<<<<<<< HEAD
-=======
   
->>>>>>> backup-finalsprint3
   // Identifiers
   _id?: any; // Allow _id to be compatible with the transformed object for new segmentations
   projectid: string; // MongoDB Project ID of the project to which the segmentation mask belongs
@@ -240,13 +234,9 @@ export interface IProjectSegmentationMask {
   description?: string; // Description of the segmentation mask
   isSaved: boolean; // Indicates if the segmentation mask is saved in the database
   segmentationmaskRLE: boolean; // Indicates if the mask is in RLE format
-<<<<<<< HEAD
-  isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (should not delete if its the output of MedSAM)
-=======
   isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (kept for backward compatibility)
   segmentationModel?: SegmentationModel; // Optional model tag for future extensibility
   model_used?: string; // Compatibility field: stores model name as string (e.g., 'medsam' or 'unet')
->>>>>>> backup-finalsprint3
   // Properties of the bounding box coordinates used to input into MedSAM for segmentation
   // If the segmentation mask is a single frame, there will be only one entry in the frames array
   frames: {
@@ -269,8 +259,6 @@ export interface IProjectSegmentationMask {
       }[];
     }[];
   }[];
-<<<<<<< HEAD
-=======
   bullseye?: {
     segment_values: number[];
     segment_metadata: { idx: number; name: string; ring: string; value: number }[];
@@ -278,16 +266,11 @@ export interface IProjectSegmentationMask {
     computed_at: string;
     lv_centroid?: [number, number];
   };
->>>>>>> backup-finalsprint3
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)
 export interface IProjectSegmentationMaskDocument
   extends IProjectSegmentationMask,
-<<<<<<< HEAD
-    Document {
-=======
     Omit<Document, "model"> {
->>>>>>> backup-finalsprint3
   _id: any; // Ensure _id is part of the document type
 }
 
@@ -358,10 +341,7 @@ export interface IProjectReconstruction {
   isSaved: boolean; // Indicates if the 4D reconstruction is saved in the database
   isAIGenerated: boolean; // Indicates if the reconstruction is AI-generated (should not delete if it's AI output)
   meshFormat: MeshFormat; // Format of the 4D mesh file
-<<<<<<< HEAD
-=======
   segmentationModel?: string; // Which segmentation model was used to generate this reconstruction (medsam or unet)
->>>>>>> backup-finalsprint3
   
   // File properties 
   filename: string; // Server-generated reconstruction filename (e.g., projectid_reconstructionid_4d)
@@ -415,10 +395,7 @@ export enum segmentationSource {
 export interface IJob {
   userid: string; // ID of the user who created the job
   projectid: string; // ID of the project associated with the job
-<<<<<<< HEAD
-=======
   maskId?: string; // ID of the segmentation mask selected for the job
->>>>>>> backup-finalsprint3
   uuid: string; // UUID of the job (for tracking purposes)
   status: JobStatus; // Current status of the job (e.g., pending, in_progress, completed, failed)
   result?: string; // Result of the job (e.g., path to the output file, success message, etc.)
@@ -426,11 +403,8 @@ export interface IJob {
   segmentationName?: string; // Optional user-defined name for the resulting segmentation
   segmentationDescription?: string; // Optional user-defined description for the resulting segmentation
   segmentationSource?: segmentationSource; // Source of the image for segmentation
-<<<<<<< HEAD
-=======
   segmentationModel?: SegmentationModel; // Track which model was used
   model_used?: string; // Compatibility field mirrored to DB for external tools (string)
->>>>>>> backup-finalsprint3
 }
 export interface IJobDocument extends IJob, Document {}
 

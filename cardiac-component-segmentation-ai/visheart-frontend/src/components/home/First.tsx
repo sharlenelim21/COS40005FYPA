@@ -2,11 +2,7 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
-<<<<<<< HEAD
-import { CheckCircle, Zap, Settings, Box, Activity, BookOpen } from "lucide-react";
-=======
 import { CheckCircle, Zap, Settings, Box, Activity, BookOpen, MapPin } from "lucide-react";
->>>>>>> backup-finalsprint3
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { motion } from "framer-motion";
@@ -22,13 +18,8 @@ interface FirstSectionProps {
 
 export default function FirstSection({
   title = "Welcome to VisHeart",
-<<<<<<< HEAD
-  subtitle = "A 2D Cardiac MRI Segmentation and 4D Reconstruction Platform",
-  description = "Experience GPU-powered cardiac imaging analysis with cutting-edge AI technology. From precise segmentation to dynamic 4D reconstruction - intuitive, fast, and designed for clinical workflow.",
-=======
   subtitle = "A 2D Cardiac MRI Segmentation, Landmark Detection, and 4D Reconstruction Platform",
   description = "Experience GPU-powered cardiac imaging analysis with AI segmentation, cardiac landmark detection, AHA bullseye review, dummy strain reporting, and dynamic 4D reconstruction in one clinical workflow.",
->>>>>>> backup-finalsprint3
   className = "",
 }: FirstSectionProps) {
   const { user } = useAuth();
@@ -93,11 +84,7 @@ export default function FirstSection({
           </motion.div>
 
           {/* Optional Feature Highlights */}
-<<<<<<< HEAD
-          <motion.div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mt-16" initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, delay: 1 }}>
-=======
           <motion.div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 mt-16" initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, delay: 1 }}>
->>>>>>> backup-finalsprint3
             <motion.div className="text-center" whileHover={{ y: -10 }} transition={{ duration: 0.3 }}>
               <motion.div className="w-16 h-16 mx-auto mb-4 bg-primary/10 rounded-full flex items-center justify-center" whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
                 <CheckCircle className="w-8 h-8 text-primary" />
@@ -108,8 +95,6 @@ export default function FirstSection({
 
             <motion.div className="text-center" whileHover={{ y: -10 }} transition={{ duration: 0.3 }}>
               <motion.div className="w-16 h-16 mx-auto mb-4 bg-primary/10 rounded-full flex items-center justify-center" whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
-<<<<<<< HEAD
-=======
                 <MapPin className="w-8 h-8 text-primary" />
               </motion.div>
               <h3 className="text-xl font-semibold text-foreground mb-2">Landmark Detection</h3>
@@ -118,7 +103,6 @@ export default function FirstSection({
 
             <motion.div className="text-center" whileHover={{ y: -10 }} transition={{ duration: 0.3 }}>
               <motion.div className="w-16 h-16 mx-auto mb-4 bg-primary/10 rounded-full flex items-center justify-center" whileHover={{ rotate: 360 }} transition={{ duration: 0.6 }}>
->>>>>>> backup-finalsprint3
                 <Zap className="w-8 h-8 text-primary" />
               </motion.div>
               <h3 className="text-xl font-semibold text-foreground mb-2">GPU-Powered Speed</h3>

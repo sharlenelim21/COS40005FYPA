@@ -7,10 +7,7 @@ import { tarImageCache } from "@/lib/tar-image-cache";
 import { reconstructionCache } from "@/lib/reconstruction-cache";
 import * as ProjectTypes from "@/types/project";
 import { LoadingStage } from "@/types/project";
-<<<<<<< HEAD
-=======
 import { usePathname, useSearchParams } from "next/navigation";
->>>>>>> backup-finalsprint3
 
 interface ProjectContextType {
   // Loading states
@@ -42,15 +39,6 @@ interface ProjectContextType {
   getAvailableFramesAndSlices: () => Promise<{ frames: number[]; slices: number[] }>;
   fetchAndExtractProjectImages: () => Promise<{ success: boolean; extractedImages: number; totalImages: number; errors: string[] }>;
   clearProjectCache: () => Promise<void>;
-<<<<<<< HEAD
-  
-  // NEW: Reconstruction cache management (4D GLB models)
-  hasReconstructions: boolean;
-  reconstructionMetadata: any | null; // eslint-disable-line @typescript-eslint/no-explicit-any
-  reconstructionCacheReady: boolean;
-  reconstructionCacheError: string | null;
-  getReconstructionGLB: (frame: number) => Promise<string | null>;
-=======
 
   // NEW: Reconstruction cache management (4D GLB models)
   hasReconstructions: boolean;
@@ -62,50 +50,31 @@ interface ProjectContextType {
   getReconstructionGLB: (frame: number, model?: "medsam" | "unet", reconstructionId?: string) => Promise<string | null>;
   getReconstructionForModel: (model: string) => any | null; // eslint-disable-line @typescript-eslint/no-explicit-any
   getReconstructionById: (reconstructionId: string) => any | null; // eslint-disable-line @typescript-eslint/no-explicit-any
->>>>>>> backup-finalsprint3
   preloadReconstructionModels: () => Promise<void>;
   fetchAndExtractProjectModels: () => Promise<{ success: boolean; extractedModels: number; totalModels: number; errors: string[] }>;
   clearReconstructionCache: () => Promise<void>;
   refreshReconstructions: () => Promise<void>;
-<<<<<<< HEAD
-  
-=======
 
->>>>>>> backup-finalsprint3
   // NEW: URL Preloading for smooth playback
   preloadAllModelURLs: (onProgress?: (current: number, total: number) => void) => Promise<number>;
   isPreloading: boolean;
   preloadProgress: { current: number; total: number } | null;
   isFullyPreloaded: boolean;
-<<<<<<< HEAD
-  
-=======
 
->>>>>>> backup-finalsprint3
   // NEW: Three.js Aggressive Preloading (parse all GLB models)
   preloadAllThreeJSModels: (onProgress?: (current: number, total: number) => void) => Promise<number>;
   isThreeJSPreloading: boolean;
   threeJSPreloadProgress: { current: number; total: number } | null;
-<<<<<<< HEAD
-  
-=======
 
->>>>>>> backup-finalsprint3
   // Cache invalidation
   refreshMasks: () => Promise<void>;
   refreshJobs: () => Promise<void>;
   refreshReconstructionJobs: () => Promise<void>;
-<<<<<<< HEAD
-  
-=======
 
->>>>>>> backup-finalsprint3
   // Optimistic updates
   updateContextMasks: (newMasks: Record<string, Uint8Array>) => void;
 }
 
-<<<<<<< HEAD
-=======
 const normalizeReconstructionModel = (value: unknown): "medsam" | "unet" | "unknown" => {
   const normalized = (value ?? "").toString().toLowerCase();
   if (normalized === "medsam" || normalized === "unet") {
@@ -114,7 +83,6 @@ const normalizeReconstructionModel = (value: unknown): "medsam" | "unet" | "unkn
   return "unknown";
 };
 
->>>>>>> backup-finalsprint3
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
 export function useProject() {
@@ -131,15 +99,12 @@ interface ProjectProviderProps {
 }
 
 export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
-<<<<<<< HEAD
-=======
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const isDocPage = pathname?.startsWith("/doc");
   const isProjectOverviewPage = !!pathname && /^\/project\/[^/]+$/.test(pathname);
   const shouldSkipReconstructionPreload = isDocPage || isProjectOverviewPage;
 
->>>>>>> backup-finalsprint3
   const [loading, setLoading] = useState<LoadingStage>("idle");
 
   // Performance monitoring effect - logs loading time metrics
@@ -182,11 +147,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   // 5. Reconstruction cache state - NEW
   const [hasReconstructions, setHasReconstructions] = useState<boolean>(false);
   const [reconstructionMetadata, setReconstructionMetadata] = useState<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
-<<<<<<< HEAD
-=======
   const [reconstructionResults, setReconstructionResults] = useState<any[]>([]); // eslint-disable-line @typescript-eslint/no-explicit-any
   const [reconstructionsByModel, setReconstructionsByModel] = useState<Record<string, any>>({}); // eslint-disable-line @typescript-eslint/no-explicit-any
->>>>>>> backup-finalsprint3
   const [reconstructionCacheReady, setReconstructionCacheReady] = useState<boolean>(false);
   const [reconstructionCacheError, setReconstructionCacheError] = useState<string | null>(null);
 
@@ -203,19 +165,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   const loadingRef = useRef<LoadingStage>("idle");
   const projectDataRef = useRef<ProjectTypes.ProjectData | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-<<<<<<< HEAD
-  
-  // Refs to track if jobs have been fetched (prevents redundant API calls during polling)
-  const jobsFetchedRef = useRef<boolean>(false);
-  const reconstructionJobsFetchedRef = useRef<boolean>(false);
-=======
 
   // Refs to track if jobs have been fetched (prevents redundant API calls during polling)
   const jobsFetchedRef = useRef<boolean>(false);
   const reconstructionJobsFetchedRef = useRef<boolean>(false);
   const lastReconstructionInitKeyRef = useRef<string | null>(null);
   const lastAutoPreloadKeyRef = useRef<string | null>(null);
->>>>>>> backup-finalsprint3
 
   // Update refs when state changes
   useEffect(() => {
@@ -226,8 +181,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     projectDataRef.current = projectData;
   }, [projectData]);
 
-<<<<<<< HEAD
-=======
   const buildReconstructionsByModel = useCallback((reconstructions: Array<Record<string, unknown>>) => {
     const byModel: Record<string, any> = {}; // eslint-disable-line @typescript-eslint/no-explicit-any
     for (const recon of reconstructions) {
@@ -307,30 +260,18 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     projectId,
   ]);
 
->>>>>>> backup-finalsprint3
   // Tar cache methods - NEW - Memoized for performance
   const getMRIImage = useCallback(
     async (frame: number, slice: number): Promise<string | null> => {
       if (!projectId) return null;
       try {
-<<<<<<< HEAD
         return await tarImageCache.getImageURL(projectId, frame, slice);
-=======
-        console.log(`[ProjectContext] getMRIImage: projectId=${projectId} frame=${frame} slice=${slice} tarCacheReady=${tarCacheReady}`);
-        const url = await tarImageCache.getImageURL(projectId, frame, slice);
-        console.log(`[ProjectContext] getMRIImage result: ${url ? 'found' : 'null (not in cache)'}`);
-        return url;
->>>>>>> backup-finalsprint3
       } catch (error) {
         console.error("[ProjectContext] Failed to get MRI image:", error);
         return null;
       }
     },
-<<<<<<< HEAD
     [projectId],
-=======
-    [projectId, tarCacheReady],
->>>>>>> backup-finalsprint3
   );
 
   const getMRIImageFilename = useCallback(
@@ -350,25 +291,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     if (!projectId || !projectData) return;
 
     try {
-<<<<<<< HEAD
-=======
-      await tarImageCache.init();
-
-      // Skip download if already ready this session
-      if (tarImageCache.isProjectReady(projectId)) {
-        setTarCacheReady(true);
-        return;
-      }
-
-      // Skip download if IndexedDB already has images (e.g. came from segmentation page)
-      const { frames, slices } = await tarImageCache.getAvailableFramesAndSlices(projectId);
-      if (frames.length > 0 && slices.length > 0) {
-        tarImageCache.markProjectReady(projectId);
-        setTarCacheReady(true);
-        return;
-      }
-
->>>>>>> backup-finalsprint3
       const result = await tarImageCache.fetchAndExtractProjectImages(projectId, projectApi.getProjectPresignedUrl);
       if (result.success) {
         setTarCacheReady(true);
@@ -431,15 +353,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
   // Reconstruction cache methods - NEW
   const getReconstructionGLB = useCallback(
-<<<<<<< HEAD
-    async (frame: number): Promise<string | null> => {
-      if (!projectId || !reconstructionMetadata?.reconstructionId) {
-        console.warn("[ProjectContext] Cannot get GLB: missing projectId or reconstructionId");
-        return null;
-      }
-      try {
-        return await reconstructionCache.getModelURL(projectId, reconstructionMetadata.reconstructionId, frame);
-=======
     async (frame: number, model?: "medsam" | "unet", requestedReconstructionId?: string): Promise<string | null> => {
       const normalizedModel = model ? normalizeReconstructionModel(model) : null;
       const targetRecon = requestedReconstructionId
@@ -470,19 +383,11 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           targetRecon.segmentationModel || normalizedModel || undefined,
         );
         return await reconstructionCache.getModelURL(projectId, reconstructionId, frame);
->>>>>>> backup-finalsprint3
       } catch (error) {
         console.error("[ProjectContext] Failed to get reconstruction GLB:", error);
         return null;
       }
     },
-<<<<<<< HEAD
-    [projectId, reconstructionMetadata],
-  );
-
-  const preloadReconstructionModels = useCallback(async (): Promise<void> => {
-    if (!projectId || !reconstructionMetadata?.reconstructionId) {
-=======
     [activeReconstructionTarget, getReconstructionById, projectId, reconstructionMetadata, reconstructionsByModel, resolveReconstructionDownload],
   );
 
@@ -544,29 +449,20 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
   const preloadReconstructionModels = useCallback(async (): Promise<void> => {
     if (!projectId || !activeReconstructionTarget?.reconstructionId) {
->>>>>>> backup-finalsprint3
       console.warn("[ProjectContext] ⚠️ Cannot preload models: missing projectId or reconstructionId");
       return;
     }
 
     const startTime = performance.now();
     console.log(`[ProjectContext] 🚀 Starting reconstruction models preload...`);
-<<<<<<< HEAD
-    console.log(`[ProjectContext] 📋 Target: Project ${projectId}, Reconstruction ${reconstructionMetadata.reconstructionId}`);
-=======
     console.log(`[ProjectContext] 📋 Target: Project ${projectId}, Reconstruction ${activeReconstructionTarget.reconstructionId}`);
->>>>>>> backup-finalsprint3
 
     try {
       // Create wrapper function that matches expected signature
       const getPresignedUrl = async (pid: string, rid: string) => {
         console.log(`[ProjectContext] 🔗 Fetching presigned URL from backend...`);
         const response = await reconstructionApi.getReconstructionResults(pid);
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         if (!response.success || !response.reconstructions || response.reconstructions.length === 0) {
           console.error(`[ProjectContext] ❌ Failed to get presigned URL: ${response.message || "No reconstructions found"}`);
           return {
@@ -574,11 +470,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
             message: response.message || "No reconstructions found"
           };
         }
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         // Find the reconstruction matching the ID
         // Backend returns 'reconstructionId' not '_id'
         const reconstruction = response.reconstructions.find((r: any) => r.reconstructionId === rid); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -586,15 +478,9 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           console.error(`[ProjectContext] ❌ Reconstruction not found or missing presigned URL`);
           console.error(`[ProjectContext] 🔍 Looking for reconstructionId: ${rid}`);
           console.error(`[ProjectContext] 📋 Available reconstructions:`, response.reconstructions.map((r: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
-<<<<<<< HEAD
-            id: r.reconstructionId, 
-            name: r.name, 
-            hasDownloadUrl: !!r.downloadUrl 
-=======
             id: r.reconstructionId,
             name: r.name,
             hasDownloadUrl: !!r.downloadUrl
->>>>>>> backup-finalsprint3
           })));
           return {
             success: false,
@@ -604,11 +490,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         console.log(`[ProjectContext] ✅ Presigned URL obtained successfully`);
         console.log(`[ProjectContext] 🔒 URL will expire in 1 hour from now`);
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         return {
           success: true,
           presignedUrl: reconstruction.downloadUrl, // Backend returns 'downloadUrl'
@@ -616,13 +498,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         };
       };
 
-<<<<<<< HEAD
-      console.log(`[ProjectContext] 📦 Initiating TAR download and extraction...`);
-      const result = await reconstructionCache.fetchAndExtractProjectModels(
-        projectId,
-        reconstructionMetadata.reconstructionId,
-        getPresignedUrl
-=======
       const selectedGetPresignedUrl = async (pid: string, rid: string) => {
         console.log(`[ProjectContext] Fetching presigned URL from selected reconstruction...`);
         const result = await resolveReconstructionDownload(pid, rid, activeReconstructionTarget);
@@ -639,7 +514,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         activeReconstructionTarget.reconstructionId,
         selectedGetPresignedUrl,
         activeReconstructionTarget.segmentationModel
->>>>>>> backup-finalsprint3
       );
 
       const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(2);
@@ -650,26 +524,16 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.log(`[ProjectContext] ✅ Successfully preloaded ${result.extractedModels}/${result.totalModels} GLB models`);
         console.log(`[ProjectContext] ⚡ Total preload time: ${elapsedTime}s`);
         console.log(`[ProjectContext] 💾 Models cached in IndexedDB for instant access`);
-<<<<<<< HEAD
-        
-        // Get detailed frame mapping info
-        const mappingInfo = await reconstructionCache.getFrameMappingInfo(reconstructionMetadata.reconstructionId);
-=======
 
         // Get detailed frame mapping info
         const mappingInfo = await reconstructionCache.getFrameMappingInfo(activeReconstructionTarget.reconstructionId);
->>>>>>> backup-finalsprint3
         console.log(`[ProjectContext] 📊 Frame Mapping:`, {
           totalFrames: mappingInfo.totalFrames,
           sequentialIndices: mappingInfo.sequentialIndices,
           actualFrameIndices: mappingInfo.actualFrameIndices,
           filenames: mappingInfo.filenames
         });
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         // Get debug info from cache
         const debugInfo = reconstructionCache.getDebugInfo();
         console.log(`[ProjectContext] � Download stats:`, {
@@ -692,26 +556,15 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       console.error(`[ProjectContext] 💥 Error details:`, {
         message: errorMessage,
         projectId,
-<<<<<<< HEAD
-        reconstructionId: reconstructionMetadata.reconstructionId,
-=======
         reconstructionId: activeReconstructionTarget.reconstructionId,
->>>>>>> backup-finalsprint3
         stack: error instanceof Error ? error.stack : undefined
       });
       setReconstructionCacheError(errorMessage);
     }
-<<<<<<< HEAD
-  }, [projectId, reconstructionMetadata]);
-
-  const fetchAndExtractProjectModels = useCallback(async (): Promise<{ success: boolean; extractedModels: number; totalModels: number; errors: string[] }> => {
-    if (!projectId || !reconstructionMetadata?.reconstructionId) {
-=======
   }, [activeReconstructionTarget, projectId, resolveReconstructionDownload]);
 
   const fetchAndExtractProjectModels = useCallback(async (): Promise<{ success: boolean; extractedModels: number; totalModels: number; errors: string[] }> => {
     if (!projectId || !activeReconstructionTarget?.reconstructionId) {
->>>>>>> backup-finalsprint3
       return { success: false, extractedModels: 0, totalModels: 0, errors: ["Missing projectId or reconstructionId"] };
     }
 
@@ -725,11 +578,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
             message: response.message || "No reconstructions found"
           };
         }
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         // Backend returns 'reconstructionId' not '_id'
         const reconstruction = response.reconstructions.find((r: any) => r.reconstructionId === rid); // eslint-disable-line @typescript-eslint/no-explicit-any
         if (!reconstruction || !reconstruction.downloadUrl) {
@@ -746,12 +595,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         };
       };
 
-<<<<<<< HEAD
-      const result = await reconstructionCache.fetchAndExtractProjectModels(
-        projectId,
-        reconstructionMetadata.reconstructionId,
-        getPresignedUrl
-=======
       const selectedGetPresignedUrl = async (pid: string, rid: string) =>
         resolveReconstructionDownload(pid, rid, activeReconstructionTarget);
 
@@ -760,7 +603,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         activeReconstructionTarget.reconstructionId,
         selectedGetPresignedUrl,
         activeReconstructionTarget.segmentationModel
->>>>>>> backup-finalsprint3
       );
 
       if (result.success) {
@@ -776,11 +618,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       console.error("[ProjectContext] Extraction error:", error);
       return { success: false, extractedModels: 0, totalModels: 0, errors: [errorMessage] };
     }
-<<<<<<< HEAD
-  }, [projectId, reconstructionMetadata]);
-=======
   }, [activeReconstructionTarget, projectId, resolveReconstructionDownload]);
->>>>>>> backup-finalsprint3
 
   const clearReconstructionCache = useCallback(async (): Promise<void> => {
     if (!projectId) return;
@@ -800,11 +638,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   // NEW: Preload all model URLs for smooth playback
   const preloadAllModelURLs = useCallback(
     async (onProgress?: (current: number, total: number) => void): Promise<number> => {
-<<<<<<< HEAD
-      if (!projectId || !reconstructionMetadata?.reconstructionId) {
-=======
       if (!projectId || !activeReconstructionTarget?.reconstructionId) {
->>>>>>> backup-finalsprint3
         console.warn("[ProjectContext] ⚠️ Cannot preload URLs: missing projectId or reconstructionId");
         return 0;
       }
@@ -822,19 +656,11 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         const count = await reconstructionCache.preloadAllModelURLs(
           projectId,
-<<<<<<< HEAD
-          reconstructionMetadata.reconstructionId,
-          (current, total) => {
-            // Update internal progress state
-            setPreloadProgress({ current, total });
-            
-=======
           activeReconstructionTarget.reconstructionId,
           (current, total) => {
             // Update internal progress state
             setPreloadProgress({ current, total });
 
->>>>>>> backup-finalsprint3
             // Call external progress callback if provided
             if (onProgress) {
               onProgress(current, total);
@@ -845,11 +671,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.log(`[ProjectContext] ✅ Preloaded ${count} model URLs`);
         setIsFullyPreloaded(true);
         setPreloadProgress(null);
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         return count;
       } catch (error) {
         console.error("[ProjectContext] ❌ Failed to preload model URLs:", error);
@@ -859,21 +681,13 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         setIsPreloading(false);
       }
     },
-<<<<<<< HEAD
-    [projectId, reconstructionMetadata, reconstructionCacheReady]
-=======
     [activeReconstructionTarget, projectId, reconstructionCacheReady]
->>>>>>> backup-finalsprint3
   );
 
   // NEW: Aggressive Three.js preloading - parse all GLB models into Three.js cache
   const preloadAllThreeJSModels = useCallback(
     async (onProgress?: (current: number, total: number) => void): Promise<number> => {
-<<<<<<< HEAD
-      if (!projectId || !reconstructionMetadata?.reconstructionId) {
-=======
       if (!projectId || !activeReconstructionTarget?.reconstructionId) {
->>>>>>> backup-finalsprint3
         console.warn("[ProjectContext] ⚠️ Cannot preload Three.js models: missing projectId or reconstructionId");
         return 0;
       }
@@ -895,11 +709,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         // Get all model URLs from cache
         const modelURLs = await reconstructionCache.getAllModelURLs(
           projectId,
-<<<<<<< HEAD
-          reconstructionMetadata.reconstructionId
-        );
-
-=======
           activeReconstructionTarget.reconstructionId
         );
 
@@ -909,7 +718,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           return 0;
         }
 
->>>>>>> backup-finalsprint3
         const total = modelURLs.length;
         let loaded = 0;
 
@@ -917,37 +725,22 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         // Import useGLTF from drei for proper React Three Fiber caching
         const { useGLTF } = await import('@react-three/drei');
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         // Dynamically import OBJLoader for OBJ files
         const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
         const objLoader = new OBJLoader();
 
         // Load all models with concurrency limit to avoid memory issues
         const CONCURRENT_LOADS = 3; // Load 3 models at a time
-<<<<<<< HEAD
-        
-        for (let i = 0; i < modelURLs.length; i += CONCURRENT_LOADS) {
-          const batch = modelURLs.slice(i, i + CONCURRENT_LOADS);
-          
-=======
 
         for (let i = 0; i < modelURLs.length; i += CONCURRENT_LOADS) {
           const batch = modelURLs.slice(i, i + CONCURRENT_LOADS);
 
->>>>>>> backup-finalsprint3
           await Promise.all(
             batch.map(async ({ frame, url, filename }) => {
               try {
                 const isOBJ = filename.toLowerCase().endsWith('.obj');
-<<<<<<< HEAD
-                
-=======
 
->>>>>>> backup-finalsprint3
                 if (isOBJ) {
                   // For OBJ files, use OBJLoader
                   await new Promise<void>((resolve) => {
@@ -999,11 +792,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.log(`[ProjectContext] ✅ Preloaded ${loaded}/${total} models into Three.js cache`);
         console.log(`[ProjectContext] 🎯 All models should now load instantly when displayed!`);
         setThreeJSPreloadProgress(null);
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         return loaded;
       } catch (error) {
         console.error("[ProjectContext] ❌ Failed to preload Three.js models:", error);
@@ -1013,11 +802,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         setIsThreeJSPreloading(false);
       }
     },
-<<<<<<< HEAD
-    [projectId, reconstructionMetadata, reconstructionCacheReady, preloadAllModelURLs]
-=======
     [activeReconstructionTarget, projectId, reconstructionCacheReady, preloadAllModelURLs]
->>>>>>> backup-finalsprint3
   );
 
   const refreshReconstructions = useCallback(async (): Promise<void> => {
@@ -1031,19 +816,11 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       const response = await reconstructionApi.getReconstructionResults(projectId);
 
       if (response.success && response.reconstructions && response.reconstructions.length > 0) {
-<<<<<<< HEAD
-=======
         setReconstructionResults(response.reconstructions);
->>>>>>> backup-finalsprint3
         // Use the most recent reconstruction
         const latestReconstruction = response.reconstructions[0];
         setReconstructionMetadata(latestReconstruction);
         setHasReconstructions(true);
-<<<<<<< HEAD
-        console.log("[ProjectContext] Reconstructions refreshed successfully");
-      } else {
-        setReconstructionMetadata(null);
-=======
 
         const byModel = buildReconstructionsByModel(response.reconstructions);
         setReconstructionsByModel(byModel);
@@ -1052,18 +829,13 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         setReconstructionMetadata(null);
         setReconstructionResults([]);
         setReconstructionsByModel({});
->>>>>>> backup-finalsprint3
         setHasReconstructions(false);
         console.log("[ProjectContext] No reconstructions found");
       }
     } catch (error) {
       console.error("[ProjectContext] Failed to refresh reconstructions:", error);
     }
-<<<<<<< HEAD
-  }, [projectId]);
-=======
   }, [buildReconstructionsByModel, projectId]);
->>>>>>> backup-finalsprint3
 
   // 1. Fetch project data from backend - Optimized with abort controller
   useEffect(() => {
@@ -1226,11 +998,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     }
 
     setLoading("job");
-<<<<<<< HEAD
-    
-=======
 
->>>>>>> backup-finalsprint3
     // Mark that we're fetching jobs to prevent redundant calls
     jobsFetchedRef.current = true;
 
@@ -1255,16 +1023,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         // Filter jobs by current project ID
         const projectJobs = response.jobs.filter((job: ProjectTypes.UserJob) => job.projectId === projectId);
-<<<<<<< HEAD
-        setJobs(projectJobs);
-        console.log(`Found ${projectJobs.length} jobs for project ${projectId}:`, projectJobs);
-
-        // Check for logical errors: completed jobs should have masks
-        const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
-        if (completedJobs.length > 0 && !hasMasks) {
-          console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
-          setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
-=======
         console.log(`Found ${projectJobs.length} jobs for project ${projectId}:`, projectJobs);
 
         // If all returned jobs are failed and no masks exist, treat them as stale so users can re-run segmentation locally.
@@ -1283,7 +1041,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
             console.warn(`Warning: Found ${completedJobs.length} completed job(s) but no masks for project ${projectId}. This may indicate a server-side issue.`);
             setJobsError(`Found completed segmentation job(s) but no results. Please contact support or try re-creating the project.`);
           }
->>>>>>> backup-finalsprint3
         }
       })
       .catch((error: unknown) => {
@@ -1352,13 +1109,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         setReconstructionJobs(projectJobs);
         console.log(`Found ${projectJobs.length} reconstruction jobs for project ${projectId}:`, projectJobs);
 
-<<<<<<< HEAD
-        // Check for logical errors: completed jobs should have reconstructions
-        const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
-        if (completedJobs.length > 0 && !hasReconstructions) {
-          console.warn(`Warning: Found ${completedJobs.length} completed reconstruction job(s) but no reconstructions for project ${projectId}. This may indicate a server-side issue.`);
-          setReconstructionJobsError(`Found completed reconstruction job(s) but no results. Please contact support or try re-creating the reconstruction.`);
-=======
         // Only log a dev-mode warning if completed reconstruction jobs exist but no reconstruction
         // documents were found. This is expected when old jobs were deleted and re-run; we do NOT
         // surface this as a UI error because the reconstruction API is the authoritative source of
@@ -1366,7 +1116,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         const completedJobs = projectJobs.filter((job: ProjectTypes.UserJob) => job.status === ProjectTypes.JobStatus.COMPLETED);
         if (completedJobs.length > 0 && !hasReconstructions) {
           console.warn(`[ProjectContext] Found ${completedJobs.length} completed reconstruction job(s) but hasReconstructions=false for project ${projectId}. This is expected if old jobs were deleted. Reconstruction API is authoritative.`);
->>>>>>> backup-finalsprint3
         }
       })
       .catch((error: unknown) => {
@@ -1392,30 +1141,10 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       return;
     }
 
-<<<<<<< HEAD
-    // Set loading to tar-cache stage when we start tar cache initialization
-    setLoading("tar-cache");
-
-=======
->>>>>>> backup-finalsprint3
     const initializeTarCache = async () => {
       try {
         console.log(`[ProjectContext] Initializing tar cache for project ${projectId}`);
 
-<<<<<<< HEAD
-        // Initialize tar cache system
-        await tarImageCache.init();
-
-        // Check if images are already cached
-        const { frames, slices } = await tarImageCache.getAvailableFramesAndSlices(projectId);
-        if (frames.length > 0 && slices.length > 0) {
-          console.log(`[ProjectContext] Found ${frames.length} frames and ${slices.length} slices in tar cache`);
-          setTarCacheReady(true);
-          setTarCacheError(null);
-        } else {
-          console.log("[ProjectContext] No cached images found, will attempt to extract from tar");
-          // Attempt to fetch and extract images in background
-=======
         // Initialize tar cache system (no-op if already done)
         await tarImageCache.init();
 
@@ -1441,7 +1170,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           setTarCacheError(null);
         } else {
           console.log("[ProjectContext] No cached images found, fetching tar from MinIO");
->>>>>>> backup-finalsprint3
           const result = await tarImageCache.fetchAndExtractProjectImages(projectId, projectApi.getProjectPresignedUrl);
           if (result.success) {
             console.log(`[ProjectContext] Successfully extracted ${result.extractedImages} images to cache`);
@@ -1463,17 +1191,9 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     initializeTarCache();
 
-<<<<<<< HEAD
-    // Cleanup function - clear project-specific cache when component unmounts or project changes
-    return () => {
-      console.log(`[ProjectContext] Cleaning up tar cache for project ${projectId}`);
-      tarImageCache.clearProjectCache(projectId).catch((error) => console.warn(`[ProjectContext] Cleanup error for project ${projectId}:`, error));
-    };
-=======
     // No cleanup: the module-level singleton and IndexedDB persist across React
     // unmounts intentionally so re-entering a project is instant. Explicit cache
     // invalidation is available via the clearProjectCache context method.
->>>>>>> backup-finalsprint3
   }, [projectData, projectId, maskFetchDone]);
 
   // 4b. Fetch reconstruction metadata when project is loaded - NEW
@@ -1481,11 +1201,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     if (!projectId || !projectData) {
       setHasReconstructions(false);
       setReconstructionMetadata(null);
-<<<<<<< HEAD
-=======
       setReconstructionResults([]);
       setReconstructionsByModel({});
->>>>>>> backup-finalsprint3
       return;
     }
 
@@ -1495,19 +1212,11 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         const response = await reconstructionApi.getReconstructionResults(projectId);
 
         if (response.success && response.reconstructions && response.reconstructions.length > 0) {
-<<<<<<< HEAD
-=======
           setReconstructionResults(response.reconstructions);
->>>>>>> backup-finalsprint3
           // Use the most recent reconstruction
           const latestReconstruction = response.reconstructions[0];
           setReconstructionMetadata(latestReconstruction);
           setHasReconstructions(true);
-<<<<<<< HEAD
-          console.log(`[ProjectContext] Found reconstruction: ${latestReconstruction.reconstructionId}`);
-        } else {
-          setReconstructionMetadata(null);
-=======
 
           const byModel = buildReconstructionsByModel(response.reconstructions);
           setReconstructionsByModel(byModel);
@@ -1516,30 +1225,19 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           setReconstructionMetadata(null);
           setReconstructionResults([]);
           setReconstructionsByModel({});
->>>>>>> backup-finalsprint3
           setHasReconstructions(false);
           console.log("[ProjectContext] No reconstructions found for project");
         }
       } catch (error) {
         console.error("[ProjectContext] Failed to fetch reconstruction metadata:", error);
         setReconstructionMetadata(null);
-<<<<<<< HEAD
-=======
         setReconstructionResults([]);
         setReconstructionsByModel({});
->>>>>>> backup-finalsprint3
         setHasReconstructions(false);
       }
     };
 
     fetchReconstructionMetadata();
-<<<<<<< HEAD
-  }, [projectId, projectData]);
-
-  // 4c. Initialize reconstruction cache when reconstruction metadata is available - NEW
-  useEffect(() => {
-    if (!projectId || !reconstructionMetadata || !reconstructionMetadata.reconstructionId) {
-=======
   }, [buildReconstructionsByModel, projectId, projectData, shouldSkipReconstructionPreload]);
 
   // 4c. Initialize reconstruction cache when reconstruction metadata is available - NEW
@@ -1547,14 +1245,11 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     if (shouldSkipReconstructionPreload) {
       lastReconstructionInitKeyRef.current = null;
       lastAutoPreloadKeyRef.current = null;
->>>>>>> backup-finalsprint3
       setReconstructionCacheReady(false);
       setReconstructionCacheError(null);
       return;
     }
 
-<<<<<<< HEAD
-=======
     if (!projectId || !activeReconstructionTarget || !activeReconstructionTarget.reconstructionId || !activeReconstructionCacheKey) {
       lastReconstructionInitKeyRef.current = null;
       lastAutoPreloadKeyRef.current = null;
@@ -1570,7 +1265,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     lastReconstructionInitKeyRef.current = activeReconstructionCacheKey;
     lastAutoPreloadKeyRef.current = null;
 
->>>>>>> backup-finalsprint3
     // Set loading stage to reconstruction-cache
     setLoading("reconstruction-cache");
 
@@ -1578,14 +1272,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       const startTime = performance.now();
       try {
         console.log(`[ProjectContext] 🔷 Starting reconstruction cache initialization for project ${projectId}`);
-<<<<<<< HEAD
-        console.log(`[ProjectContext] 📋 Reconstruction ID: ${reconstructionMetadata.reconstructionId}`);
-        console.log(`[ProjectContext] 📦 Reconstruction metadata:`, {
-          id: reconstructionMetadata._id,
-          name: reconstructionMetadata.name,
-          createdAt: reconstructionMetadata.createdAt,
-          frameCount: reconstructionMetadata.frameCount || 'unknown'
-=======
         console.log(`[ProjectContext] 📋 Reconstruction ID: ${activeReconstructionTarget.reconstructionId}`);
         console.log(`[ProjectContext] 📦 Reconstruction metadata:`, {
           id: activeReconstructionTarget._id,
@@ -1593,7 +1279,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           model: activeReconstructionTarget.segmentationModel,
           createdAt: activeReconstructionTarget.createdAt,
           frameCount: activeReconstructionTarget.frameCount || 'unknown'
->>>>>>> backup-finalsprint3
         });
 
         // Initialize reconstruction cache system
@@ -1603,16 +1288,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         // Check if models are already cached
         console.log(`[ProjectContext] 🔍 Checking for cached GLB models...`);
-<<<<<<< HEAD
-        const frames = await reconstructionCache.getAvailableFrames(reconstructionMetadata.reconstructionId);
-        
-        if (frames.length > 0) {
-          const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(2);
-          console.log(`[ProjectContext] ✅ Found ${frames.length} cached GLB models in IndexedDB`);
-          
-          // Get detailed frame mapping info for debugging
-          const mappingInfo = await reconstructionCache.getFrameMappingInfo(reconstructionMetadata.reconstructionId);
-=======
         const frames = await reconstructionCache.getAvailableFrames(activeReconstructionTarget.reconstructionId);
 
         if (frames.length > 0) {
@@ -1621,7 +1296,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
           // Get detailed frame mapping info for debugging
           const mappingInfo = await reconstructionCache.getFrameMappingInfo(activeReconstructionTarget.reconstructionId);
->>>>>>> backup-finalsprint3
           console.log(`[ProjectContext] 📊 Frame Mapping:`, {
             totalFrames: mappingInfo.totalFrames,
             sequentialIndices: mappingInfo.sequentialIndices,
@@ -1634,17 +1308,10 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         } else {
           console.log(`[ProjectContext] 📥 No cached models found - starting TAR download and extraction...`);
           console.log(`[ProjectContext] 🌐 Fetching presigned URL for reconstruction TAR file...`);
-<<<<<<< HEAD
-          
-          // Preload models in background
-          await preloadReconstructionModels();
-          
-=======
 
           // Preload models in background
           await preloadReconstructionModels();
 
->>>>>>> backup-finalsprint3
           const elapsedTime = ((performance.now() - startTime) / 1000).toFixed(2);
           console.log(`[ProjectContext] ✅ Reconstruction cache initialization completed in ${elapsedTime}s`);
         }
@@ -1655,11 +1322,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.error(`[ProjectContext] 💥 Error details:`, {
           message: errorMessage,
           projectId,
-<<<<<<< HEAD
-          reconstructionId: reconstructionMetadata.reconstructionId,
-=======
           reconstructionId: activeReconstructionTarget.reconstructionId,
->>>>>>> backup-finalsprint3
           stack: error instanceof Error ? error.stack : undefined
         });
         setReconstructionCacheError(errorMessage);
@@ -1668,26 +1331,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     };
 
     initializeReconstructionCache();
-<<<<<<< HEAD
-
-    // Cleanup function - clear project-specific cache when component unmounts or project changes
-    return () => {
-      console.log(`[ProjectContext] 🧹 Cleaning up reconstruction cache for project ${projectId}`);
-      reconstructionCache.clearProjectModels(projectId).catch((error) => console.warn(`[ProjectContext] ⚠️ Reconstruction cleanup error:`, error));
-    };
-  }, [projectId, reconstructionMetadata, preloadReconstructionModels]);
-
-  // 4d. Auto-preload ALL models (URLs + Three.js cache) when reconstruction cache is ready - ZERO-LAG SYSTEM
-  useEffect(() => {
-    if (!reconstructionCacheReady || isPreloading || isThreeJSPreloading) {
-      return;
-    }
-
-    if (!projectId || !reconstructionMetadata?.reconstructionId) {
-      return;
-    }
-
-=======
     // No cleanup: the module-level singleton and IndexedDB persist across React unmounts
     // intentionally so re-entering a project's 4D viewer is instant without re-downloading the tar.
   }, [activeReconstructionCacheKey, activeReconstructionTarget, projectId, preloadReconstructionModels, shouldSkipReconstructionPreload]);
@@ -1713,7 +1356,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     lastAutoPreloadKeyRef.current = activeReconstructionCacheKey;
 
->>>>>>> backup-finalsprint3
     // Auto-preload everything for instant, zero-lag frame switching
     const autoPreloadComplete = async () => {
       console.log(`[ProjectContext] 🚀 Auto-preloading all models for zero-lag playback...`);
@@ -1722,20 +1364,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.log(`[ProjectContext] 📦 Step 1/2: Preloading URLs...`);
         const urlCount = await preloadAllModelURLs();
         console.log(`[ProjectContext] ✅ Step 1 complete: ${urlCount} URLs cached`);
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         // Step 2: Preload Three.js models (slower - parses GLB files)
         console.log(`[ProjectContext] 🎮 Step 2/2: Preloading Three.js models...`);
         const threeJSCount = await preloadAllThreeJSModels();
         console.log(`[ProjectContext] ✅ Step 2 complete: ${threeJSCount} models parsed`);
-<<<<<<< HEAD
-        
-=======
 
->>>>>>> backup-finalsprint3
         console.log(`[ProjectContext] 🎯 ZERO-LAG PRELOAD COMPLETE! All frames will load instantly.`);
       } catch (error) {
         console.error(`[ProjectContext] ❌ Auto-preload failed:`, error);
@@ -1746,11 +1380,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     const timeoutId = setTimeout(autoPreloadComplete, 500);
 
     return () => clearTimeout(timeoutId);
-<<<<<<< HEAD
-  }, [reconstructionCacheReady, isPreloading, isThreeJSPreloading, projectId, reconstructionMetadata, preloadAllModelURLs, preloadAllThreeJSModels]);
-=======
   }, [activeReconstructionCacheKey, activeReconstructionTarget, projectId, preloadAllModelURLs, preloadAllThreeJSModels, reconstructionCacheReady, shouldSkipReconstructionPreload]);
->>>>>>> backup-finalsprint3
 
   // 5. Optimized final loading state management - set to done when all components are ready or there's an error
   useEffect(() => {
@@ -1758,17 +1388,11 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     // 1. There's an error (project not found, etc.)
     // 2. OR we have project data, masks are fetched, tar cache is ready (or has error)
     // 3. AND if reconstructions exist, reconstruction cache should be ready or have error
-<<<<<<< HEAD
-    const reconstructionCondition = hasReconstructions 
-      ? (reconstructionCacheReady || reconstructionCacheError)
-      : true; // If no reconstructions, don't wait for cache
-=======
     //    UNLESS shouldSkipReconstructionPreload is true (e.g. project overview page),
     //    in which case we never load the reconstruction cache and should not wait for it.
     const reconstructionCondition = !hasReconstructions || shouldSkipReconstructionPreload
       ? true
       : (reconstructionCacheReady || reconstructionCacheError);
->>>>>>> backup-finalsprint3
 
     if (error || (projectData && maskFetchDone && (tarCacheReady || tarCacheError) && reconstructionCondition && loading !== "done")) {
       console.log(`[ProjectContext] 🎉 All loading complete - setting stage to "done"`);
@@ -1782,11 +1406,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       });
       setLoading("done");
     }
-<<<<<<< HEAD
-  }, [error, projectData, maskFetchDone, tarCacheReady, tarCacheError, hasReconstructions, reconstructionCacheReady, reconstructionCacheError, loading]);
-=======
   }, [error, projectData, maskFetchDone, tarCacheReady, tarCacheError, hasReconstructions, reconstructionCacheReady, reconstructionCacheError, loading, shouldSkipReconstructionPreload]);
->>>>>>> backup-finalsprint3
 
   // Cache invalidation function to refresh masks from backend
   const refreshMasks = useCallback(async () => {
@@ -1796,11 +1416,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     }
 
     console.log("[ProjectContext] Refreshing masks from backend...");
-<<<<<<< HEAD
-    
-=======
 
->>>>>>> backup-finalsprint3
     try {
       // Clear current mask cache
       setUndecodedMasks(null);
@@ -1810,11 +1426,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
       // Fetch fresh masks from backend
       const response = await segmentationApi.getSegmentationResults(projectId);
-<<<<<<< HEAD
-      
-=======
 
->>>>>>> backup-finalsprint3
       console.log("[ProjectContext] Fresh masks response:", response);
 
       if (!response.success) {
@@ -1828,22 +1440,13 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       setUndecodedMasks(response.segmentations);
       const hasAnyMasks = Array.isArray(response.segmentations) && response.segmentations.length > 0;
       setHasMasks(hasAnyMasks);
-<<<<<<< HEAD
-      
-=======
 
->>>>>>> backup-finalsprint3
       // Decode the fresh masks
       if (projectData.dimensions.width && projectData.dimensions.height) {
         console.log("[ProjectContext] Decoding fresh masks with dimensions:", projectData.dimensions);
         const decodedResult = decodeSegmentationMasks(
-<<<<<<< HEAD
-          response.segmentations, 
-          projectData.dimensions.width, 
-=======
           response.segmentations,
           projectData.dimensions.width,
->>>>>>> backup-finalsprint3
           projectData.dimensions.height
         );
         setDecodedMasks(decodedResult.masks);
@@ -1863,15 +1466,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     }
 
     console.log("[ProjectContext] Manually refreshing segmentation jobs...");
-<<<<<<< HEAD
-    
-    // Reset the fetch flag to allow refetching
-    jobsFetchedRef.current = false;
-    
-    try {
-      const response = await segmentationApi.getUserJobs();
-      
-=======
 
     // Reset the fetch flag to allow refetching
     jobsFetchedRef.current = false;
@@ -1879,7 +1473,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     try {
       const response = await segmentationApi.getUserJobs();
 
->>>>>>> backup-finalsprint3
       if (!response.success) {
         setJobsError(response.message);
         console.warn("[ProjectContext] Failed to refresh jobs:", response.message);
@@ -1890,11 +1483,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       const projectJobs = response.jobs.filter((job: ProjectTypes.UserJob) => job.projectId === projectId);
       setJobs(projectJobs);
       console.log(`[ProjectContext] Refreshed jobs - found ${projectJobs.length} for project ${projectId}`);
-<<<<<<< HEAD
-      
-=======
 
->>>>>>> backup-finalsprint3
       // Mark as fetched
       jobsFetchedRef.current = true;
     } catch (error) {
@@ -1912,15 +1501,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     }
 
     console.log("[ProjectContext] Manually refreshing reconstruction jobs...");
-<<<<<<< HEAD
-    
-    // Reset the fetch flag to allow refetching
-    reconstructionJobsFetchedRef.current = false;
-    
-    try {
-      const response = await reconstructionApi.getUserReconstructionJobs();
-      
-=======
 
     // Reset the fetch flag to allow refetching
     reconstructionJobsFetchedRef.current = false;
@@ -1928,7 +1508,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     try {
       const response = await reconstructionApi.getUserReconstructionJobs();
 
->>>>>>> backup-finalsprint3
       if (!response.success) {
         setReconstructionJobsError(response.message || "Failed to refresh reconstruction jobs");
         console.warn("[ProjectContext] Failed to refresh reconstruction jobs:", response.message);
@@ -1939,11 +1518,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       const projectJobs = response.jobs.filter((job: ProjectTypes.UserJob) => job.projectId === projectId);
       setReconstructionJobs(projectJobs);
       console.log(`[ProjectContext] Refreshed reconstruction jobs - found ${projectJobs.length} for project ${projectId}`);
-<<<<<<< HEAD
-      
-=======
 
->>>>>>> backup-finalsprint3
       // Mark as fetched
       reconstructionJobsFetchedRef.current = true;
     } catch (error) {
@@ -1988,11 +1563,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       // NEW: Reconstruction cache properties and methods (4D GLB models)
       hasReconstructions,
       reconstructionMetadata,
-<<<<<<< HEAD
-      reconstructionCacheReady,
-      reconstructionCacheError,
-      getReconstructionGLB,
-=======
       reconstructionResults,
       reconstructionsByModel,
       reconstructionCacheReady,
@@ -2000,7 +1570,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       getReconstructionGLB,
       getReconstructionForModel,
       getReconstructionById,
->>>>>>> backup-finalsprint3
       preloadReconstructionModels,
       fetchAndExtractProjectModels,
       clearReconstructionCache,
@@ -2043,11 +1612,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       clearProjectCache,
       hasReconstructions,
       reconstructionMetadata,
-<<<<<<< HEAD
-      reconstructionCacheReady,
-      reconstructionCacheError,
-      getReconstructionGLB,
-=======
       reconstructionResults,
       reconstructionsByModel,
       reconstructionCacheReady,
@@ -2055,7 +1619,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       getReconstructionGLB,
       getReconstructionForModel,
       getReconstructionById,
->>>>>>> backup-finalsprint3
       preloadReconstructionModels,
       fetchAndExtractProjectModels,
       clearReconstructionCache,

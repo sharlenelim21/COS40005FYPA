@@ -1,22 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-<<<<<<< HEAD
-import { Loader2, RefreshCw } from "lucide-react";
-=======
 import { Loader2, RefreshCw, ArrowLeft } from "lucide-react";
->>>>>>> backup-finalsprint3
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 // Backend integration
 import { segmentationApi } from "@/lib/api";
-<<<<<<< HEAD
-import { createFramesStructureFromEditableMasks } from "@/lib/decode-RLE";
-=======
 import { createFramesStructureFromEditableMasks, decodeSegmentationMasks } from "@/lib/decode-RLE";
->>>>>>> backup-finalsprint3
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { SegmentationSidebar } from "@/components/segmentation/segmentation-sidebar";
@@ -28,8 +20,6 @@ import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-<<<<<<< HEAD
-=======
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
@@ -43,7 +33,6 @@ const MODEL_OPTIONS: { value: SegmentationModelId; label: string }[] = [
 
 const isValidModel = (v: string | null): v is SegmentationModelId =>
   v === "medsam" || v === "unet";
->>>>>>> backup-finalsprint3
 
 const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas").then((mod) => mod.ImageCanvas), {
   ssr: false,
@@ -57,14 +46,9 @@ const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas
 export default function SegmentationResultsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
-<<<<<<< HEAD
-
-  // Get data from ProjectContext (eliminates duplicate API calls and state)
-=======
-  const { processingUnit } = useGpuStatus();
+  const { processingUnit, isLoading: gpuStatusLoading } = useGpuStatus();
   const isGpuMode = processingUnit.gpuAvailable;
 
->>>>>>> backup-finalsprint3
   const {
     loading,
     error,
@@ -72,10 +56,7 @@ export default function SegmentationResultsPage() {
     decodedMasks: contextDecodedMasks,
     undecodedMasks,
     hasMasks,
-<<<<<<< HEAD
-=======
     maskFetchDone,
->>>>>>> backup-finalsprint3
     segmentationError,
     tarCacheReady,
     tarCacheError,
@@ -83,15 +64,9 @@ export default function SegmentationResultsPage() {
     hasReconstructions,
     reconstructionCacheReady,
     getReconstructionGLB,
-<<<<<<< HEAD
-  } = useProject();
-
-  // Update page title dynamically
-=======
     getReconstructionForModel,
   } = useProject();
 
->>>>>>> backup-finalsprint3
   useEffect(() => {
     if (projectData?.name) {
       document.title = `VisHeart | ${projectData.name} - Segmentation`;
@@ -104,46 +79,23 @@ export default function SegmentationResultsPage() {
     };
   }, [projectData?.name]);
 
-<<<<<<< HEAD
-  // Segmentation-specific state (not duplicated in context)
-  const [masksInitialized, setMasksInitialized] = useState(false);
-  const [localDecodedMasks, setLocalDecodedMasks] = useState<Record<string, Uint8Array> | null>(null);
-
-  // Use local decoded masks if available (for edits), otherwise use context masks
-  const decodedMasks = localDecodedMasks || contextDecodedMasks;
-  const setDecodedMasks = setLocalDecodedMasks;
-
-  // After loading guard, we know contextDecodedMasks is available, so create a safe version
-  const safeDecodedMasks = decodedMasks || {};
-
-  // Debug: Log mask data flow for troubleshooting (only in development)
-=======
   const [masksInitialized, setMasksInitialized] = useState(false);
   const [localDecodedMasks, setLocalDecodedMasks] = useState<Record<string, Uint8Array> | null>(null);
 
   // `setDecodedMasks` is the writer used by brush/save/history flows.
   const setDecodedMasks = setLocalDecodedMasks;
 
->>>>>>> backup-finalsprint3
   useEffect(() => {
     if (process.env.NODE_ENV === 'development') {
       console.log("[Segmentation Debug] Data flow check:", {
         contextMasks: contextDecodedMasks ? Object.keys(contextDecodedMasks).length : 0,
         localMasks: localDecodedMasks ? Object.keys(localDecodedMasks).length : 0,
-<<<<<<< HEAD
-        finalMasks: decodedMasks ? Object.keys(decodedMasks).length : 0,
-=======
->>>>>>> backup-finalsprint3
         masksInitialized,
         tarCacheReady,
         tarCacheError
       });
     }
-<<<<<<< HEAD
-  }, [contextDecodedMasks, localDecodedMasks, decodedMasks, masksInitialized, tarCacheReady, tarCacheError]);
-=======
   }, [contextDecodedMasks, localDecodedMasks, masksInitialized, tarCacheReady, tarCacheError]);
->>>>>>> backup-finalsprint3
 
   // UI state
   const [activeLabel, setActiveLabel] = useState<AnatomicalLabel>("lvc");
@@ -157,16 +109,6 @@ export default function SegmentationResultsPage() {
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [resetTrigger, setResetTrigger] = useState<number>(0);
   const [revertDialogOpen, setRevertDialogOpen] = useState(false);
-<<<<<<< HEAD
-
-  // 3D Viewer state
-  const [reconstructionModelUrl, setReconstructionModelUrl] = useState<string | null>(null);
-  const [isLoadingModel, setIsLoadingModel] = useState(false);
-
-  // Load 3D reconstruction model when frame changes
-  useEffect(() => {
-    if (!hasReconstructions || !reconstructionCacheReady) {
-=======
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [runSegmentationLoading, setRunSegmentationLoading] = useState(false);
   const [runSegmentationError, setRunSegmentationError] = useState<string | null>(null);
@@ -197,6 +139,11 @@ export default function SegmentationResultsPage() {
     // project has any masks yet (otherwise we may pick the env default
     // before the latest-mask data has arrived).
     if (!maskFetchDone) return;
+    // Wait for the GPU probe to resolve so isGpuMode reflects the real
+    // hardware state. Without this guard, new projects (no masks) hit the
+    // else-branch with isGpuMode=false and get locked on UNet before the
+    // probe comes back.
+    if (gpuStatusLoading) return;
 
     // Priority 0: explicit user choice from this tab session. Both
     // `handleModelSelect` and `handleRunSegmentation` write the user's
@@ -299,7 +246,7 @@ export default function SegmentationResultsPage() {
         setSelectedModel(resolvedModel);
       }
     }
-  }, [maskFetchDone, undecodedMasks, isGpuMode, selectedModel, modelSessionKey]);
+  }, [maskFetchDone, undecodedMasks, isGpuMode, gpuStatusLoading, selectedModel, modelSessionKey]);
 
   // NOTE: The previous "CPU-guard" effect that eagerly forced unet whenever
   // !isGpuMode has been removed. `useGpuStatus` returns `false` on first
@@ -510,7 +457,6 @@ export default function SegmentationResultsPage() {
   // Load GLB model when frame or model-specific reconstruction changes
   useEffect(() => {
     if (!reconstructionMetadataForModel) {
->>>>>>> backup-finalsprint3
       setReconstructionModelUrl(null);
       return;
     }
@@ -518,15 +464,6 @@ export default function SegmentationResultsPage() {
     const loadModel = async () => {
       setIsLoadingModel(true);
       try {
-<<<<<<< HEAD
-        console.log(`[Segmentation 3D] Loading model for frame ${currentFrame}...`);
-        const url = await getReconstructionGLB(currentFrame);
-        if (url) {
-          console.log(`[Segmentation 3D] ✅ Loaded model for frame ${currentFrame}`);
-          setReconstructionModelUrl(url);
-        } else {
-          console.warn(`[Segmentation 3D] ❌ No model URL for frame ${currentFrame}`);
-=======
         // Pass the model name so getReconstructionGLB resolves via reconstructionsByModel,
         // which is guaranteed to have the same object reference as reconstructionMetadataForModel.
         const url = await getReconstructionGLB(
@@ -536,7 +473,6 @@ export default function SegmentationResultsPage() {
         if (url) {
           setReconstructionModelUrl(url);
         } else {
->>>>>>> backup-finalsprint3
           setReconstructionModelUrl(null);
         }
       } catch (error) {
@@ -548,22 +484,13 @@ export default function SegmentationResultsPage() {
     };
 
     loadModel();
-<<<<<<< HEAD
-  }, [currentFrame, hasReconstructions, reconstructionCacheReady, getReconstructionGLB]);
-
-  // Reset zoom and position
-=======
   }, [currentFrame, reconstructionMetadataForModel, selectedModel, getReconstructionGLB]);
 
->>>>>>> backup-finalsprint3
   const handleReset = useCallback(() => {
     setZoomLevel(1);
     setResetTrigger(prev => prev + 1);
   }, []);
 
-<<<<<<< HEAD
-  // Use custom history hook to simplify state management
-=======
   // Poll `/segmentation-results/:projectId` for a new mask doc whose
   // `segmentationModel` matches `expectedModel` and whose `_id` is not in
   // `preIds`. Returns true as soon as a new doc is seen; false on
@@ -743,7 +670,6 @@ export default function SegmentationResultsPage() {
     dispatchRunSegmentation();
   }, [dispatchRunSegmentation]);
 
->>>>>>> backup-finalsprint3
   const {
     currentHistory,
     currentStep: currentHistoryStep,
@@ -764,25 +690,14 @@ export default function SegmentationResultsPage() {
 
   const [visibleMasks, setVisibleMasks] = useState<Set<AnatomicalLabel>>(new Set(["lvc", "rv", "myo"]));
 
-<<<<<<< HEAD
-  // Memoize mask changes calculation using editable key format
-=======
->>>>>>> backup-finalsprint3
   const calculateMaskChanges = useCallback(
     (oldMasks: Record<string, Uint8Array>, newMasks: Record<string, Uint8Array>, label: string): HistoryEntry["maskChanges"] => {
       const editableMaskKey = generateMaskKey(currentFrame, currentSlice, label as AnatomicalLabel);
       const oldMask = oldMasks[editableMaskKey];
       const newMask = newMasks[editableMaskKey];
 
-<<<<<<< HEAD
-      // If newMask doesn't exist, no changes to track
       if (!newMask) return undefined;
 
-      // Treat missing oldMask as an empty mask (all zeros) to properly track initial drawing
-=======
-      if (!newMask) return undefined;
-
->>>>>>> backup-finalsprint3
       let added = 0;
       let removed = 0;
 
@@ -800,37 +715,20 @@ export default function SegmentationResultsPage() {
     [currentFrame, currentSlice],
   );
 
-<<<<<<< HEAD
-  // Update Masks with History Tracking - Frame/Slice Specific
-=======
->>>>>>> backup-finalsprint3
   const updateMasksWithHistory = useCallback(
     (newMasks: Record<string, Uint8Array>, actionType: HistoryEntry["type"] = "brush", description?: string) => {
       if (!decodedMasks) return;
 
       const maskChanges = calculateMaskChanges(decodedMasks, newMasks, activeLabel);
       
-<<<<<<< HEAD
-      // CRITICAL: Snapshot the CURRENT state (before change) so undo can restore to it
-      // This allows undoing back to the initial empty state
-      const newEntry = createHistoryEntry(
-        actionType, 
-        description || `${actionType} action on ${activeLabel.toUpperCase()}`, 
-        decodedMasks, // Capture state BEFORE change, not after!
-=======
       const newEntry = createHistoryEntry(
         actionType, 
         description || `${actionType} action on ${activeLabel.toUpperCase()}`, 
         decodedMasks,
->>>>>>> backup-finalsprint3
         maskChanges, 
         activeLabel
       );
 
-<<<<<<< HEAD
-      // Add to history using our custom hook
-=======
->>>>>>> backup-finalsprint3
       addToHistory(newEntry);
 
       setDecodedMasks(newMasks);
@@ -841,44 +739,22 @@ export default function SegmentationResultsPage() {
     [decodedMasks, activeLabel, createHistoryEntry, addToHistory, calculateMaskChanges, setDecodedMasks],
   );
 
-<<<<<<< HEAD
-  // Compute canvas dimensions based on project data
-  const canvasDimensions = useMemo(() => {
-    // Define database dimensions (original stored values)
-    const dbWidth = projectData?.dimensions?.width || 512;
-    const dbHeight = projectData?.dimensions?.height || 512;
-
-    // Define canvas dimensions
-=======
   const canvasDimensions = useMemo(() => {
     const dbWidth = projectData?.dimensions?.width || 512;
     const dbHeight = projectData?.dimensions?.height || 512;
 
->>>>>>> backup-finalsprint3
     return {
       width: dbWidth,
       height: dbHeight,
     };
   }, [projectData?.dimensions]);
 
-<<<<<<< HEAD
-  // Optimized function to restore masks from history entry
-  const restoreMasksFromHistory = useCallback((entry: HistoryEntry | null) => {
-    if (!entry || !entry.masksSnapshot || !decodedMasks) return;
-
-    // Only restore masks for current frame/slice
-    const currentFrameSlicePrefix = `editable_frame_${currentFrame}_slice_${currentSlice}_`;
-    const mergedMasks = { ...decodedMasks };
-
-    // Step 1: Remove current frame/slice masks that don't exist in snapshot (deleted masks)
-=======
   const restoreMasksFromHistory = useCallback((entry: HistoryEntry | null) => {
     if (!entry || !entry.masksSnapshot || !decodedMasks) return;
 
     const currentFrameSlicePrefix = `editable_frame_${currentFrame}_slice_${currentSlice}_`;
     const mergedMasks = { ...decodedMasks };
 
->>>>>>> backup-finalsprint3
     for (const key of Object.keys(mergedMasks)) {
       if (key.startsWith(currentFrameSlicePrefix) && !(key in entry.masksSnapshot)) {
         delete mergedMasks[key];
@@ -886,10 +762,6 @@ export default function SegmentationResultsPage() {
       }
     }
 
-<<<<<<< HEAD
-    // Step 2: Add/update masks from snapshot
-=======
->>>>>>> backup-finalsprint3
     for (const [key, maskData] of Object.entries(entry.masksSnapshot)) {
       if (key.startsWith(currentFrameSlicePrefix) && maskData) {
         try {
@@ -904,10 +776,6 @@ export default function SegmentationResultsPage() {
     setHasUnsavedChanges(true);
   }, [decodedMasks, currentFrame, currentSlice, setDecodedMasks]);
 
-<<<<<<< HEAD
-  // Enhanced history step change handler that updates masks
-=======
->>>>>>> backup-finalsprint3
   const handleHistoryStepChangeWithMasks = useCallback((step: number) => {
     console.log(`[Segmentation] Navigating to history step ${step}`);
     const entry = handleHistoryStepChange(step);
@@ -918,10 +786,6 @@ export default function SegmentationResultsPage() {
     return entry;
   }, [handleHistoryStepChange, restoreMasksFromHistory]);
 
-<<<<<<< HEAD
-  // Undo Handler - uses custom hook
-=======
->>>>>>> backup-finalsprint3
   const handleUndo = useCallback(() => {
     if (!canUndo || !decodedMasks) return;
     
@@ -931,10 +795,6 @@ export default function SegmentationResultsPage() {
     }
   }, [canUndo, decodedMasks, handleHistoryStepChangeWithMasks, currentHistoryStep]);
 
-<<<<<<< HEAD
-  // Redo Handler - uses custom hook  
-=======
->>>>>>> backup-finalsprint3
   const handleRedo = useCallback(() => {
     if (!canRedo || !decodedMasks) return;
     
@@ -942,11 +802,7 @@ export default function SegmentationResultsPage() {
     if (nextEntry) {
       console.log(`[Segmentation] Redo operation completed`);
     }
-<<<<<<< HEAD
-  }, [canRedo, decodedMasks, handleHistoryStepChangeWithMasks, currentHistoryStep]);  // Clear Handler
-=======
   }, [canRedo, decodedMasks, handleHistoryStepChangeWithMasks, currentHistoryStep]); 
->>>>>>> backup-finalsprint3
   const handleClear = useCallback(() => {
     if (!decodedMasks) return;
 
@@ -959,38 +815,20 @@ export default function SegmentationResultsPage() {
     }
   }, [decodedMasks, currentFrame, currentSlice, activeLabel, updateMasksWithHistory]);
 
-<<<<<<< HEAD
-  // History Checkpoint Handler - creates manual checkpoint
   const handleHistoryCheckpoint = useCallback(() => {
     if (!decodedMasks) return;
 
-    // Get the next checkpoint number for current frame/slice
-=======
-  const handleHistoryCheckpoint = useCallback(() => {
-    if (!decodedMasks) return;
-
->>>>>>> backup-finalsprint3
     const existingCheckpoints = currentHistory.filter((entry) => entry.type === "checkpoint").length;
     const nextCheckpointNum = existingCheckpoints + 1;
 
     updateMasksWithHistory(decodedMasks, "checkpoint", `Manual checkpoint #${nextCheckpointNum} created`);
   }, [decodedMasks, currentHistory, updateMasksWithHistory]);
 
-<<<<<<< HEAD
-  // Save Handler - only save editable masks with proper RLE encoding
-  const handleSave = useCallback(async () => {
-    if (!decodedMasks || !projectId || isSaving) return;
-
-    setIsSaving(true);
-    try {
-      // Filter only editable masks for saving
-=======
   const handleSave = useCallback(async () => {
     if (!decodedMasks || !projectId || isSaving) return;
     
     setIsSaving(true);
     try {
->>>>>>> backup-finalsprint3
       const editableMasks = Object.entries(decodedMasks)
         .filter(([key]) => key.startsWith("editable_"))
         .reduce(
@@ -1003,18 +841,10 @@ export default function SegmentationResultsPage() {
 
       console.log("[Segmentation] Saving editable masks:", Object.keys(editableMasks));
 
-<<<<<<< HEAD
-      // Convert masks to the proper backend format with RLE encoding
-=======
->>>>>>> backup-finalsprint3
       const frames = createFramesStructureFromEditableMasks(editableMasks);
 
       console.log("[Segmentation] Converted to backend frames format:", frames);
 
-<<<<<<< HEAD
-      // Temporary: Test RLE encoding to verify it works
-=======
->>>>>>> backup-finalsprint3
       if (frames.length > 0 && frames[0].slices && frames[0].slices.length > 0) {
         const firstMask = frames[0].slices[0].segmentationmasks?.[0];
         if (firstMask) {
@@ -1027,28 +857,15 @@ export default function SegmentationResultsPage() {
         name: `Manual Segmentation - ${new Date().toISOString()}`,
         description: "Manually edited segmentation masks with RLE encoding",
         frames: frames,
-<<<<<<< HEAD
-=======
         model: selectedModel,
->>>>>>> backup-finalsprint3
       });
 
       console.log("[Segmentation] Successfully saved masks to backend");
 
-<<<<<<< HEAD
-      // Optimistic update - update context directly with current masks
-      // This eliminates the need for refreshMasks and prevents UI reload
-      updateContextMasks(decodedMasks);
-
-      // Clear local changes state immediately
-      setHasUnsavedChanges(false);
-      setLocalDecodedMasks(null); // Clear local edits since they're now saved in context
-=======
       updateContextMasks(decodedMasks);
 
       setHasUnsavedChanges(false);
       setLocalDecodedMasks(null); 
->>>>>>> backup-finalsprint3
 
       console.log("[Segmentation] Successfully saved and updated context with optimistic approach");
     } catch (err) {
@@ -1058,19 +875,11 @@ export default function SegmentationResultsPage() {
     }
   }, [decodedMasks, projectId, isSaving, updateContextMasks]);
 
-<<<<<<< HEAD
-  // Revert to AI Handler - copies AI mask data to editable mask and saves
-=======
->>>>>>> backup-finalsprint3
   const handleRevertToAI = useCallback(async () => {
     if (!projectId || isSaving || !undecodedMasks) return;
 
     setIsSaving(true);
     try {
-<<<<<<< HEAD
-      // 1. Find AI mask and editable mask from context
-=======
->>>>>>> backup-finalsprint3
       const aiMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === true);
       const editableMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === false);
 
@@ -1086,24 +895,14 @@ export default function SegmentationResultsPage() {
         frameCount: aiMask.frames?.length || 0,
       });
 
-<<<<<<< HEAD
-      // 2. Copy AI mask's frames to editable mask using existing save API
-      const revertData = {
-        frames: aiMask.frames, // Full frame array with slices and RLE data
-=======
       const revertData = {
         frames: aiMask.frames, 
->>>>>>> backup-finalsprint3
       };
 
       await segmentationApi.saveManualSegmentation(projectId, revertData);
 
       console.log("[Segmentation] ✅ Successfully reverted to AI mask");
 
-<<<<<<< HEAD
-      // 3. Reload window to refresh all mask data
-=======
->>>>>>> backup-finalsprint3
       setTimeout(() => {
         window.location.reload();
       }, 500);
@@ -1115,22 +914,11 @@ export default function SegmentationResultsPage() {
     }
   }, [projectId, isSaving, undecodedMasks]);
 
-<<<<<<< HEAD
-  // Keyboard shortcuts handler
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Ctrl+S to save
-      if (event.ctrlKey && event.key === 's') {
-        event.preventDefault(); // Prevent browser's default save dialog
-        
-        // Only save if there are unsaved changes and not currently saving
-=======
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.key === 's') {
         event.preventDefault(); 
         
->>>>>>> backup-finalsprint3
         if (hasUnsavedChanges && !isSaving) {
           console.log('[Segmentation] Ctrl+S shortcut triggered - saving changes...');
           handleSave();
@@ -1138,35 +926,18 @@ export default function SegmentationResultsPage() {
       }
     };
 
-<<<<<<< HEAD
-    // Add event listener
     window.addEventListener('keydown', handleKeyDown);
 
-    // Cleanup on unmount
-=======
-    window.addEventListener('keydown', handleKeyDown);
-
->>>>>>> backup-finalsprint3
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [hasUnsavedChanges, isSaving, handleSave]);
 
-<<<<<<< HEAD
-  // Export history timeline handler
-=======
->>>>>>> backup-finalsprint3
   const handleHistoryExport = useCallback(() => {
     console.log("Export triggered from page level");
   }, []);
 
-<<<<<<< HEAD
-  // Initialize history when masks become available from context - ONLY ONCE
   useEffect(() => {
-    // Only initialize history if we have masks from context and haven't initialized yet
-=======
-  useEffect(() => {
->>>>>>> backup-finalsprint3
     if (contextDecodedMasks && !masksInitialized) {
       console.log("[Segmentation] Initializing history with context masks");
       initializeHistory(contextDecodedMasks);
@@ -1174,10 +945,6 @@ export default function SegmentationResultsPage() {
     }
   }, [contextDecodedMasks, masksInitialized, initializeHistory]);
 
-<<<<<<< HEAD
-  // Auto-initialize history for new frame/slice combinations
-=======
->>>>>>> backup-finalsprint3
   useEffect(() => {
     if (masksInitialized && decodedMasks) {
       console.log(`[Segmentation] Auto-initializing history for new frame/slice if needed`);
@@ -1185,35 +952,18 @@ export default function SegmentationResultsPage() {
     }
   }, [currentFrame, currentSlice, masksInitialized, decodedMasks, initializeHistory]);
 
-<<<<<<< HEAD
-  // Loading states - now much simpler since ProjectContext handles main data loading
-=======
->>>>>>> backup-finalsprint3
   if (!projectId) return <ErrorProject error="Project ID is missing." />;
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error) return <ErrorProject error={error} />;
   if (segmentationError && !hasMasks) return <ErrorProject error={segmentationError} />;
-<<<<<<< HEAD
-
-  // Don't show error if we're currently saving (refreshing masks) - show loading instead
   if (!projectData || (!contextDecodedMasks && !isSaving)) {
     return <ErrorProject error="No data available" />;
   }
-
-  // Show loading state while saving/refreshing masks
-=======
-  if (!projectData || (!contextDecodedMasks && !isSaving)) {
-    return <ErrorProject error="No data available" />;
-  }
->>>>>>> backup-finalsprint3
   if (isSaving && !contextDecodedMasks) {
     return <LoadingProject loadingStage="mask" />;
   }
 
   return (
-<<<<<<< HEAD
-    <div className="h-full w-full bg-background">
-=======
     <div className="h-full w-full bg-background flex flex-col">
       {/* Back to Project Button */}
       <div className="px-4 pt-3 pb-2">
@@ -1338,7 +1088,6 @@ export default function SegmentationResultsPage() {
 
       {/* Main segmentation layout */}
       <div className="flex-1 min-h-0 overflow-hidden">
->>>>>>> backup-finalsprint3
       {/* Mobile: Stack vertically */}
       <div className="lg:hidden w-full h-full p-4 flex flex-col gap-4">
         <div className="flex-1 relative bg-muted/40 rounded-xl border shadow-sm p-4 flex items-center justify-center overflow-hidden">
@@ -1360,10 +1109,7 @@ export default function SegmentationResultsPage() {
             zoomLevel={zoomLevel}
             setZoomLevel={setZoomLevel}
             resetTrigger={resetTrigger}
-<<<<<<< HEAD
-=======
             selectedModel={selectedModel}
->>>>>>> backup-finalsprint3
           />
         </div>
         
@@ -1403,13 +1149,10 @@ export default function SegmentationResultsPage() {
             zoomLevel={zoomLevel}
             setZoomLevel={setZoomLevel}
             onReset={handleReset}
-<<<<<<< HEAD
-=======
             selectedModel={selectedModel}
             onModelChange={handleModelSelect}
             isModelActive={hasMasks}
             isModelRunning={runSegmentationLoading}
->>>>>>> backup-finalsprint3
           />
         </div>
       </div>
@@ -1423,57 +1166,31 @@ export default function SegmentationResultsPage() {
           {/* Canvas Panel with horizontal split for 3D viewer */}
           <ResizablePanel defaultSize={70} minSize={20}>
             <ResizablePanelGroup direction="horizontal">
-<<<<<<< HEAD
-              {/* 3D Viewer (Left) - Only show if reconstructions exist */}
-              {hasReconstructions && (
-=======
               {/* 3D Viewer (Left) — only shown when a 4D reconstruction exists for the selected model */}
               {reconstructionMetadataForModel && (
->>>>>>> backup-finalsprint3
                 <>
                   <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
                     <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
                       <div className="flex items-center justify-between mb-2 flex-shrink-0">
                         <h3 className="text-sm font-semibold">3D Reconstruction of Left Ventricle Myocardium</h3>
-<<<<<<< HEAD
-                        {isLoadingModel && (
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Loading model...
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-h-0 max-h-full">
-                        <ReconstructionGLBViewer
-                          modelUrl={reconstructionModelUrl}
-                          frame={currentFrame+1} // 1-based index for user friendliness
-=======
                       </div>
 
                       <div className="flex-1 min-h-0 max-h-full">
                         <ReconstructionGLBViewer
                           modelUrl={reconstructionModelUrl}
                           frame={currentFrame + 1}
->>>>>>> backup-finalsprint3
                           className="w-full h-full"
                         />
                       </div>
                     </div>
                   </ResizablePanel>
-<<<<<<< HEAD
-=======
 
->>>>>>> backup-finalsprint3
                   <ResizableHandle withHandle />
                 </>
               )}
 
               {/* 2D Canvas (Right) */}
-<<<<<<< HEAD
-              <ResizablePanel defaultSize={hasReconstructions ? 65 : 100} minSize={0}>
-=======
               <ResizablePanel defaultSize={65}>
->>>>>>> backup-finalsprint3
                 <div className="w-full relative bg-muted/40 p-4 flex items-center justify-center" style={{ height: 'calc(100vh - 120px)' }}>
                   <ImageCanvas
                     projectData={projectData}
@@ -1493,10 +1210,7 @@ export default function SegmentationResultsPage() {
                     zoomLevel={zoomLevel}
                     setZoomLevel={setZoomLevel}
                     resetTrigger={resetTrigger}
-<<<<<<< HEAD
-=======
                     selectedModel={selectedModel}
->>>>>>> backup-finalsprint3
                   />
                 </div>
               </ResizablePanel>
@@ -1544,21 +1258,16 @@ export default function SegmentationResultsPage() {
                 zoomLevel={zoomLevel}
                 setZoomLevel={setZoomLevel}
                 onReset={handleReset}
-<<<<<<< HEAD
-=======
                 selectedModel={selectedModel}
                 onModelChange={handleModelSelect}
                 isModelActive={hasMasks}
                 isModelRunning={runSegmentationLoading}
->>>>>>> backup-finalsprint3
               />
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
 
-<<<<<<< HEAD
-=======
       {/* Re-run Segmentation Confirmation Dialog */}
       <AlertDialog open={rerunDialogOpen} onOpenChange={setRerunDialogOpen}>
         <AlertDialogContent>
@@ -1604,7 +1313,6 @@ export default function SegmentationResultsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
->>>>>>> backup-finalsprint3
       {/* Revert to AI Confirmation Dialog */}
       <AlertDialog open={revertDialogOpen} onOpenChange={setRevertDialogOpen}>
         <AlertDialogContent>
@@ -1644,11 +1352,8 @@ export default function SegmentationResultsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-<<<<<<< HEAD
-=======
 
       </div>
->>>>>>> backup-finalsprint3
     </div>
   );
 }

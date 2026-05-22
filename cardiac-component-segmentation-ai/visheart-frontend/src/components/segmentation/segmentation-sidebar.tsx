@@ -3,20 +3,13 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-<<<<<<< HEAD
-import { Brush, History, Save, Eye, EyeOff, Loader2, RefreshCw } from 'lucide-react';
-=======
 import { Brush, History, Save, Eye, EyeOff, Loader2, RefreshCw, Brain } from 'lucide-react';
->>>>>>> backup-finalsprint3
 import { cn } from '@/lib/utils';
 
 // Import shared types and constants
 import type { SegmentationSidebarProps, AnatomicalLabel } from "@/types/segmentation";
 import { LABEL_COLORS, LABEL_NAMES, ANATOMICAL_LABELS } from "@/types/segmentation";
-<<<<<<< HEAD
-=======
 import type { SegmentationModelId } from "@/app/project/[projectId]/segmentation/page";
->>>>>>> backup-finalsprint3
 import { DrawingPanel } from './drawing-panel';
 import { HistoryPanel } from './history-panel';
 import { useMaskStats } from '@/hooks/useMaskStats';
@@ -444,9 +437,6 @@ export function SegmentationSidebar({
   zoomLevel,
   setZoomLevel,
   onReset,
-<<<<<<< HEAD
-}: SegmentationSidebarProps) {
-=======
   selectedModel = "medsam",
   onModelChange,
   isModelActive = false,
@@ -457,7 +447,6 @@ export function SegmentationSidebar({
   isModelActive?: boolean;
   isModelRunning?: boolean;
 }) {
->>>>>>> backup-finalsprint3
   const [activeTab, setActiveTab] = useState<TabKey>('tools');
 
   // Memoized tab change handler
@@ -496,8 +485,6 @@ export function SegmentationSidebar({
         ))}
       </div>
 
-<<<<<<< HEAD
-=======
       {/* ── Active model indicator ───────────────────────────────────────────
           Read-only strip that shows which AI model is currently selected.
           The dropdown to change it lives in the top bar of the page.
@@ -528,7 +515,6 @@ export function SegmentationSidebar({
         </span>
       </div>
 
->>>>>>> backup-finalsprint3
       {/* Save Button - Moved to top for better accessibility */}
       <div className="p-4 border-b border-[var(--sidebar-border)]">
         <div className="flex gap-2">
@@ -617,8 +603,4 @@ export function SegmentationSidebar({
       </div>
     </div>
   );
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> backup-finalsprint3

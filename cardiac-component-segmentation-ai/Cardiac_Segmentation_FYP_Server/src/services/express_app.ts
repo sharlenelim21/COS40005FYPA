@@ -9,13 +9,9 @@ import webhookRoute from '../routes/webhook_routes';
 import debugRoute from '../routes/debug_routes';
 import segmentationRoutes from '../routes/segmentation_routes';
 import reconstructionRoutes from '../routes/reconstruction_routes';
-<<<<<<< HEAD
-import gpuStatusRoute from '../routes/gpu_status';
-=======
 import landmarkRoutes from '../routes/landmark_routes';
 import gpuStatusRoute from '../routes/gpu_status';
 import supportRoutes from '../routes/support_routes';
->>>>>>> backup-finalsprint3
 import adminToolsRoute from '../routes/admin_tools';
 import sampleNiftiRoute from '../routes/sample_nifti';
 import cpuMetricsRoute from '../routes/cpu_metrics';
@@ -149,11 +145,6 @@ app.use('/segmentation', segmentationRoutes); // Mount the segmentation routes
 // 4D Reconstruction Routes
 app.use('/reconstruction', reconstructionRoutes); // Mount the 4D reconstruction routes
 
-<<<<<<< HEAD
-// Status Routes (mount under '/status')
-app.use('/status', gpuStatusRoute); // Mount GPU status routes
-
-=======
 // Landmark Detection Routes
 app.use('/landmark-detection', landmarkRoutes);
 
@@ -163,7 +154,6 @@ app.use('/status', gpuStatusRoute); // Mount GPU status routes
 // Support and documentation routes
 app.use('/support', supportRoutes);
 
->>>>>>> backup-finalsprint3
 // Admin Tool Routes
 app.use('/admintools', adminToolsRoute);
 

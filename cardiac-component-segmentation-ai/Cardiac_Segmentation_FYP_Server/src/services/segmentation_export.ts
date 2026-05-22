@@ -1,12 +1,6 @@
 // File: src/services/segmentation_export.ts
 // Description: Service layer for segmentation NIfTI export functionality - extracted from routes for reuse.
 
-<<<<<<< HEAD
-import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
-import { readProject, readProjectSegmentationMask } from "./database";
-import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
-import { uploadMaskToS3, downloadFromS3, extractS3KeyFromUrl } from "./s3_handler";
-=======
 import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
 import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask } from "./database";
@@ -14,22 +8,16 @@ import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import axios from 'axios';
 import FormData from 'form-data';
->>>>>>> backup-finalsprint3
 import logger from "./logger";
 import fs from 'fs-extra';
 import path from 'path';
 import { exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
-<<<<<<< HEAD
-=======
 import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
->>>>>>> backup-finalsprint3
 
 const serviceLocation = 'SegmentationExport';
 
 /**
-<<<<<<< HEAD
-=======
  * Compute AHA 17-segment bullseye analysis directly from the mask's RLE frame data
  * using the local Python script. No GPU or NIfTI file required.
  * Stores the result in MongoDB on the segmentation mask document.
@@ -151,7 +139,6 @@ export const computeBullseyeAndStore = async (
 };
 
 /**
->>>>>>> backup-finalsprint3
  * Generates a segmentation NIfTI file specifically for 4D reconstruction
  * Uses editable masks (user-refined segmentation) for better reconstruction accuracy
  * 
@@ -159,15 +146,6 @@ export const computeBullseyeAndStore = async (
  * @param userId - The user ID (for access validation)
  * @returns Promise with success status, S3 URL, and metadata
  */
-<<<<<<< HEAD
-export const generateAISegmentationForReconstruction = async (
-    projectId: string, 
-    userId?: string
-): Promise<{ 
-    success: boolean; 
-    message?: string; 
-    s3Url?: string; 
-=======
 /**
  * Resolve a mask doc to a model. Mirrors the frontend `inferDocModel`
  * and the backend reconstruction.ts copy so behaviour is consistent
@@ -205,7 +183,6 @@ export const generateAISegmentationForReconstruction = async (
     success: boolean;
     message?: string;
     s3Url?: string;
->>>>>>> backup-finalsprint3
     fileSizeBytes?: number;
     s3Key?: string;
 }> => {
@@ -214,13 +191,9 @@ export const generateAISegmentationForReconstruction = async (
     const segmentationsJsonPath = path.join(baseTempDir, 'segmentations.json');
     const localOutputSegmentationNiftiPath = path.join(baseTempDir, `reconstruction_${tempExportId}.nii.gz`);
 
-<<<<<<< HEAD
-        logger.info(`${serviceLocation}: Generating AI segmentation NIfTI for project ${projectId}`);    try {
-=======
     logger.info(`${serviceLocation}: Generating AI segmentation NIfTI for project ${projectId}`);
 
     try {
->>>>>>> backup-finalsprint3
         const s3BucketName = process.env.AWS_BUCKET_NAME;
         if (!s3BucketName) {
             return { success: false, message: "AWS S3 bucket configuration is missing." };
@@ -228,11 +201,7 @@ export const generateAISegmentationForReconstruction = async (
 
         await fs.ensureDir(baseTempDir);
 
-<<<<<<< HEAD
-        // 1. Validate editable segmentation masks exist
-=======
         // 1. Validate segmentation masks exist
->>>>>>> backup-finalsprint3
         const hasMasksResult = await readProjectSegmentationMask(projectId);
         if (!hasMasksResult.projectsegmentationmasks || hasMasksResult.projectsegmentationmasks.length === 0) {
             return { success: false, message: "No segmentation masks found. Run AI segmentation first for reconstruction." };
@@ -255,16 +224,6 @@ export const generateAISegmentationForReconstruction = async (
         const planeHeightForRLE = project.dimensions.height;
         const planeWidthForRLE = project.dimensions.width;
 
-<<<<<<< HEAD
-        // 3. Select ONLY editable masks (user-refined segmentation) for reconstruction
-        let segmentationsToProcess: IProjectSegmentationMask[] = [];
-
-        // Select only editable masks for reconstruction accuracy
-        const editableMask = hasMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === false);
-        if (editableMask) {
-            segmentationsToProcess = [editableMask];
-            logger.info(`${serviceLocation}: Using editable mask for reconstruction`);
-=======
         // 3. Select the best reconstruction mask set.
         // Prefer the editable mask, but fall back to the AI mask if the editable export is missing myocardium labels.
         // When `segmentationModel` is provided, candidates are restricted
@@ -314,48 +273,32 @@ export const generateAISegmentationForReconstruction = async (
         } else if (editableMask) {
             logger.error(`${serviceLocation}: No myocardium (myo/label 2) found in editable or AI masks for project ${projectId}`);
             return { success: false, message: "Reconstruction requires myocardium labels in the segmentation masks. Please re-run segmentation or verify the saved masks." };
->>>>>>> backup-finalsprint3
         } else {
             logger.error(`${serviceLocation}: No editable mask found for project ${projectId}`);
             return { success: false, message: "No editable segmentation mask available for reconstruction. Please complete or refine segmentation first." };
         }
 
-<<<<<<< HEAD
-=======
         if (!exportMask) {
             throw new Error("Editable mask not found for this segmentation export");
         }
 
->>>>>>> backup-finalsprint3
         // Write segmentation data for Python processing
         await fs.writeJson(segmentationsJsonPath, segmentationsToProcess, { spaces: 2 });
         
         // Log segmentation data being processed
         const maskStructure = {
-<<<<<<< HEAD
-            maskId: editableMask._id,
-            frameCount: editableMask.frames?.length || 0,
-            isMedSAMOutput: editableMask.isMedSAMOutput,
-            firstFrameIndex: editableMask.frames?.[0]?.frameindex,
-            lastFrameIndex: editableMask.frames?.[editableMask.frames.length - 1]?.frameindex
-=======
             maskId: exportMask._id,
             frameCount: exportMask.frames?.length || 0,
             isMedSAMOutput: exportMask.isMedSAMOutput,
             firstFrameIndex: exportMask.frames?.[0]?.frameindex,
             lastFrameIndex: exportMask.frames?.[exportMask.frames.length - 1]?.frameindex
->>>>>>> backup-finalsprint3
         };
         logger.info(`${serviceLocation}: Segmentation mask structure for project ${projectId}: ${JSON.stringify(maskStructure)}`);
         
         // Log detailed class distribution across frames for debugging
         const classDistribution: Record<string, number> = {};
         let totalMasks = 0;
-<<<<<<< HEAD
-        editableMask.frames?.forEach(frame => {
-=======
         exportMask.frames?.forEach(frame => {
->>>>>>> backup-finalsprint3
             frame.slices?.forEach(slice => {
                 slice.segmentationmasks?.forEach(mask => {
                     const className = mask.class || 'unknown';
@@ -399,11 +342,7 @@ export const generateAISegmentationForReconstruction = async (
             };
             logger.info(`${serviceLocation}: NIfTI generation parameters for project ${projectId}: ${JSON.stringify(niftiParams)}`);
 
-<<<<<<< HEAD
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
-=======
             pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
->>>>>>> backup-finalsprint3
         } else {
             // Use download and extract approach (legacy)
             logger.info(`${serviceLocation}: No stored affine matrix found for reconstruction of project ${projectId}. Using download approach.`);
@@ -415,17 +354,10 @@ export const generateAISegmentationForReconstruction = async (
                 return { success: false, message: "Project has no associated S3 file path." };
             }
 
-<<<<<<< HEAD
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
-        }
-
-        logger.info(`${serviceLocation}: Executing Python script for reconstruction NIfTI generation of project ${projectId}`);
-=======
             pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
         }
 
         logger.info(`${serviceLocation}: Saving output - executing Python script for reconstruction NIfTI generation of project ${projectId}`);
->>>>>>> backup-finalsprint3
         logger.debug(`${serviceLocation}: Python command: ${pythonCommand}`);
 
         const pythonResult = await new Promise<{ success: boolean; stdout?: string; stderr?: string; error?: string }>((resolve) => {
@@ -479,47 +411,34 @@ export const generateAISegmentationForReconstruction = async (
             return { success: false, message: "Failed to extract S3 key after upload." };
         }
 
-<<<<<<< HEAD
-        logger.info(`${serviceLocation}: Successfully uploaded reconstruction NIfTI to S3`);
-
-        // Generate presigned URL for GPU server access
-        const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);
-        
-=======
         logger.info(`${serviceLocation}: Saving output - successfully uploaded reconstruction NIfTI to S3`);
 
         // Generate presigned URL for GPU server access
         const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);
 
-        // Fire bullseye analysis non-blocking for ALL editable masks in the project
-        // (not just exportMask) so both MedSAM and UNet editable masks get bullseye data.
+        // Fire bullseye analysis non-blocking for ALL editable masks in the project,
+        // using each mask's own RLE frame data so MedSAM and UNet produce independent results.
         const allEditableMasks = hasMasksResult.projectsegmentationmasks!.filter(
             m => m.isMedSAMOutput === false
         );
         for (const editableMaskForBullseye of allEditableMasks) {
             const bullseyeMaskId = editableMaskForBullseye._id?.toString();
             if (!bullseyeMaskId) continue;
-            const bullseyeTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_${bullseyeMaskId}_${tempExportId}`);
-            const bullseyeCopyPath = path.join(bullseyeTempDir, 'input.nii.gz');
-            try {
-                await fs.ensureDir(bullseyeTempDir);
-                await fs.copy(localOutputSegmentationNiftiPath, bullseyeCopyPath);
-                // Launch async — intentionally not awaited; cleans up its own temp dir
-                (async () => {
-                    try {
-                        await computeBullseyeAndStore(bullseyeCopyPath, bullseyeMaskId, projectId);
-                    } finally {
-                        try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
-                    }
-                })();
-                logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
-            } catch (bullseyeCopyErr: any) {
-                logger.warn(`${serviceLocation}: [Bullseye] Failed to copy NIfTI for bullseye on mask ${bullseyeMaskId} — skipping: ${bullseyeCopyErr?.message}`);
-                try { await fs.remove(bullseyeTempDir); } catch { /* ignore */ }
+
+            const maskFrames = editableMaskForBullseye.frames ?? [];
+            if (!maskFrames.length) {
+                logger.warn(`${serviceLocation}: [Bullseye] Skipping mask ${bullseyeMaskId} (${editableMaskForBullseye.name}) — no frame data`);
+                continue;
             }
+
+            // Use each mask's own RLE frame data (not the shared reconstruction NIfTI)
+            computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE)
+                .catch((err: any) => {
+                    logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
+                });
+            logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
         }
 
->>>>>>> backup-finalsprint3
         return {
             success: true,
             message: "AI segmentation NIfTI generated successfully for reconstruction.",
@@ -541,4 +460,3 @@ export const generateAISegmentationForReconstruction = async (
 };
 =======
 };
->>>>>>> backup-finalsprint3

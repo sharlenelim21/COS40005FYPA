@@ -73,7 +73,7 @@ export interface LandmarkPageState {
   predictions: FramePrediction[];
   totalFrames: number;
   imageDimensions: { width: number; height: number };
-  currentFrame: number;
+  currentFrame: number;   
   isPlaying: boolean;
   playbackFps: number;
   error: string | null;

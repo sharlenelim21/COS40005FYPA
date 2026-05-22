@@ -46,21 +46,14 @@ interface UntarFile {
 
 // Represents a single cached GLB model entry in IndexedDB
 export interface ModelCacheEntry {
-<<<<<<< HEAD
-  id: string; // Unique identifier: projectId_reconstructionId_frameIndex
-=======
   id: string; // Unique identifier: projectId_reconstructionId_segmentationModel_frameIndex
->>>>>>> backup-finalsprint3
   blob: Blob; // Binary GLB model data stored as blob
   filename: string; // Original filename from tar file
   frameIndex: number; // Extracted frame number from filename
   timestamp: number; // Cache timestamp for cleanup operations
   projectId: string; // Project identifier for organization
   reconstructionId: string; // Reconstruction ID for tracking which 4D model this belongs to
-<<<<<<< HEAD
-=======
   segmentationModel?: string; // Model source, e.g. "medsam" | "unet"
->>>>>>> backup-finalsprint3
 }
 
 // Result object for tar extraction operations
@@ -404,11 +397,6 @@ export class ReconstructionCache {
   }
 
   // Validation helper to ensure cache is initialized before operations
-<<<<<<< HEAD
-  private checkInitialization(): void {
-    if (!this.isInitialized) {
-      throw new Error('ReconstructionCache not initialized. Call init() first.');
-=======
   /**
    * Ensure the cache is initialized. If not, attempt to initialize.
    * This prevents race conditions where callers use the cache before
@@ -420,7 +408,6 @@ export class ReconstructionCache {
       await this.init();
     } catch (error) {
       throw error;
->>>>>>> backup-finalsprint3
     }
   }
 
@@ -429,8 +416,6 @@ export class ReconstructionCache {
     return { ...this.debugInfo };
   }
 
-<<<<<<< HEAD
-=======
   private async findModelEntry(
     projectId: string,
     reconstructionId: string,
@@ -447,7 +432,6 @@ export class ReconstructionCache {
     );
   }
 
->>>>>>> backup-finalsprint3
   /**
    * Main method to fetch and extract all GLB models from a tar file
    * This is the core functionality that handles the entire workflow:
@@ -468,16 +452,10 @@ export class ReconstructionCache {
   async fetchAndExtractProjectModels(
     projectId: string,
     reconstructionId: string,
-<<<<<<< HEAD
-    getPresignedUrl: (projectId: string, reconstructionId: string) => Promise<{ success: boolean; presignedUrl?: string; expiresAt?: number; message?: string }>
-  ): Promise<TarExtractionResult> {
-    this.checkInitialization();
-=======
     getPresignedUrl: (projectId: string, reconstructionId: string) => Promise<{ success: boolean; presignedUrl?: string; expiresAt?: number; message?: string }>,
     segmentationModel?: string,
   ): Promise<TarExtractionResult> {
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     // Start performance tracking
     const startTime = performance.now();
@@ -552,11 +530,7 @@ export class ReconstructionCache {
 
       // Step 3: Extract and store models
       console.log(`[ReconstructionCache] 📂 Starting TAR extraction and model caching...`);
-<<<<<<< HEAD
-      const extractionResult = await this.extractAndStoreModels(projectId, reconstructionId, tarBlob);
-=======
       const extractionResult = await this.extractAndStoreModels(projectId, reconstructionId, tarBlob, segmentationModel);
->>>>>>> backup-finalsprint3
 
       this.debugInfo.processingTime = performance.now() - startTime;
       const totalTime = (this.debugInfo.processingTime / 1000).toFixed(2);
@@ -579,11 +553,7 @@ export class ReconstructionCache {
     }
   }
 
-<<<<<<< HEAD
-  private async extractAndStoreModels(projectId: string, reconstructionId: string, tarBlob: Blob): Promise<TarExtractionResult> {
-=======
   private async extractAndStoreModels(projectId: string, reconstructionId: string, tarBlob: Blob, segmentationModel?: string): Promise<TarExtractionResult> {
->>>>>>> backup-finalsprint3
     this.debugInfo.extractionStarted = true;
     const extractionStartTime = performance.now();
 
@@ -671,12 +641,8 @@ export class ReconstructionCache {
             continue;
           }
 
-<<<<<<< HEAD
-          const modelId = `${projectId}_${reconstructionId}_f${frameIndex}`;
-=======
           const normalizedModel = (segmentationModel || "unknown").toLowerCase();
           const modelId = `${projectId}_${reconstructionId}_${normalizedModel}_f${frameIndex}`;
->>>>>>> backup-finalsprint3
           const modelSizeMB = (file.buffer.byteLength / 1024 / 1024).toFixed(2);
 
           // Detect file type from extension and set appropriate MIME type
@@ -695,10 +661,7 @@ export class ReconstructionCache {
             timestamp: Date.now(),
             projectId,
             reconstructionId,
-<<<<<<< HEAD
-=======
             segmentationModel: normalizedModel,
->>>>>>> backup-finalsprint3
           };
 
           await this.db.storeModel(entry);
@@ -766,11 +729,7 @@ export class ReconstructionCache {
   }
 
   async getModelBlob(projectId: string, reconstructionId: string, frame: number): Promise<Blob | null> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
     
     console.log(`[ReconstructionCache] 🔍 Looking up model blob (sequential frame ${frame}):`, {
       projectId,
@@ -788,21 +747,12 @@ export class ReconstructionCache {
     
     console.log(`[ReconstructionCache] 🔄 Mapped sequential frame ${frame} → actual frame ${actualFrame}`);
     
-<<<<<<< HEAD
-    const modelId = `${projectId}_${reconstructionId}_f${actualFrame}`;
-    const entry = await this.db.getModel(modelId);
-    
-    if (entry) {
-      console.log(`[ReconstructionCache] ✅ Model blob found:`, {
-        modelId,
-=======
     const legacyModelId = `${projectId}_${reconstructionId}_f${actualFrame}`;
     const entry = await this.findModelEntry(projectId, reconstructionId, actualFrame);
     
     if (entry) {
       console.log(`[ReconstructionCache] ✅ Model blob found:`, {
         modelId: entry.id,
->>>>>>> backup-finalsprint3
         filename: entry.filename,
         blobSize: `${(entry.blob.size / 1024 / 1024).toFixed(2)} MB`,
         blobType: entry.blob.type,
@@ -811,11 +761,7 @@ export class ReconstructionCache {
       });
     } else {
       console.warn(`[ReconstructionCache] ❌ Model blob NOT found:`, {
-<<<<<<< HEAD
-        modelId,
-=======
         modelId: legacyModelId,
->>>>>>> backup-finalsprint3
         projectId,
         reconstructionId,
         frame
@@ -872,11 +818,7 @@ export class ReconstructionCache {
    * @returns Original filename from tar archive or null if not found
    */
   async getModelFilename(projectId: string, reconstructionId: string, frame: number): Promise<string | null> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
     
     // Map sequential frame to actual stored frame
     const actualFrame = await this.mapSequentialToActualFrame(reconstructionId, frame);
@@ -884,12 +826,7 @@ export class ReconstructionCache {
       return null;
     }
     
-<<<<<<< HEAD
-    const modelId = `${projectId}_${reconstructionId}_f${actualFrame}`;
-    const entry = await this.db.getModel(modelId);
-=======
     const entry = await this.findModelEntry(projectId, reconstructionId, actualFrame);
->>>>>>> backup-finalsprint3
     return entry?.filename || null;
   }
 
@@ -907,11 +844,7 @@ export class ReconstructionCache {
    * @returns Promise resolving to blob URL string or null if not found
    */
   async getModelURL(projectId: string, reconstructionId: string, frame: number): Promise<string | null> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     console.log(`[ReconstructionCache] 🎯 getModelURL called (sequential frame ${frame}):`, {
       projectId,
@@ -940,12 +873,8 @@ export class ReconstructionCache {
 
     console.log(`[ReconstructionCache] 🔄 Mapped sequential frame ${frame} → actual frame ${actualFrame}`);
     
-<<<<<<< HEAD
-    const modelId = `${projectId}_${reconstructionId}_f${actualFrame}`;
-=======
     const entry = await this.findModelEntry(projectId, reconstructionId, actualFrame);
     const modelId = entry?.id || `${projectId}_${reconstructionId}_f${actualFrame}`;
->>>>>>> backup-finalsprint3
     
     console.log(`[ReconstructionCache] 🆔 Model ID:`, modelId);
 
@@ -962,17 +891,6 @@ export class ReconstructionCache {
     console.log(`[ReconstructionCache] 📥 URL not cached, fetching blob from IndexedDB...`);
 
     // Retrieve blob from IndexedDB and create object URL
-<<<<<<< HEAD
-    const blob = await this.getModelBlob(projectId, reconstructionId, frame);
-    if (blob) {
-      console.log(`[ReconstructionCache] 🔗 Creating object URL for blob:`, {
-        modelId,
-        blobSize: `${(blob.size / 1024 / 1024).toFixed(2)} MB`,
-        blobType: blob.type
-      });
-      
-      const url = URL.createObjectURL(blob);
-=======
     if (entry?.blob) {
       console.log(`[ReconstructionCache] 🔗 Creating object URL for blob:`, {
         modelId,
@@ -981,7 +899,6 @@ export class ReconstructionCache {
       });
       
       const url = URL.createObjectURL(entry.blob);
->>>>>>> backup-finalsprint3
       this.urlCache.set(modelId, url); // Cache URL to prevent duplicates
       
       console.log(`[ReconstructionCache] ✅ Object URL created and cached:`, {
@@ -993,16 +910,7 @@ export class ReconstructionCache {
       return url;
     }
 
-<<<<<<< HEAD
-    console.error(`[ReconstructionCache] ❌ Failed to get model URL - blob not found:`, {
-      modelId,
-      projectId,
-      reconstructionId,
-      frame
-    });
-=======
     console.warn(`[ReconstructionCache] No blob found for model ${modelId} — reconstruction may not exist yet`);
->>>>>>> backup-finalsprint3
 
     return null; // Model not found in cache
   }
@@ -1019,11 +927,7 @@ export class ReconstructionCache {
    * @returns Array of sequential frame indices (e.g., [0, 1, 2, 3, 4])
    */
   async getAvailableFrames(reconstructionId: string): Promise<number[]> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
     const models = await this.db.getModelsByReconstruction(reconstructionId);
     
     // Sort by actual frame index to establish order
@@ -1046,11 +950,7 @@ export class ReconstructionCache {
     actualFrameIndices: number[];
     filenames: string[];
   }> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
     const models = await this.db.getModelsByReconstruction(reconstructionId);
     
     // Sort by actual frame index
@@ -1077,11 +977,7 @@ export class ReconstructionCache {
    * @param projectId - Project identifier to clear
    */
   async clearProjectModels(projectId: string): Promise<void> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     // First pass: collect URLs that need to be revoked
     const urlsToRevoke: string[] = [];
@@ -1106,11 +1002,7 @@ export class ReconstructionCache {
    * @param reconstructionId - Reconstruction ID to clear
    */
   async clearReconstructionModels(reconstructionId: string): Promise<void> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     // First pass: collect URLs that need to be revoked
     const urlsToRevoke: string[] = [];
@@ -1135,11 +1027,7 @@ export class ReconstructionCache {
    * Useful for monitoring cache size and storage usage
    */
   async getCacheSize(): Promise<number> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
     return await this.db.getCacheSize();
   }
 
@@ -1164,11 +1052,7 @@ export class ReconstructionCache {
     reconstructionId: string,
     onProgress?: (current: number, total: number) => void
   ): Promise<number> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     console.log(`[ReconstructionCache] 🚀 Starting URL preload for reconstruction ${reconstructionId}...`);
     const startTime = performance.now();
@@ -1224,11 +1108,7 @@ export class ReconstructionCache {
    * @returns True if all models are cached in memory
    */
   async isFullyPreloaded(projectId: string, reconstructionId: string): Promise<boolean> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     const models = await this.db.getModelsByReconstruction(reconstructionId);
     
@@ -1238,12 +1118,7 @@ export class ReconstructionCache {
 
     // Check if all models have cached URLs
     for (const model of models) {
-<<<<<<< HEAD
-      const modelId = `${projectId}_${reconstructionId}_f${model.frameIndex}`;
-      if (!this.urlCache.has(modelId)) {
-=======
       if (!this.urlCache.has(model.id)) {
->>>>>>> backup-finalsprint3
         return false;
       }
     }
@@ -1264,11 +1139,7 @@ export class ReconstructionCache {
     isFullyPreloaded: boolean;
     preloadPercentage: number;
   }> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     const models = await this.db.getModelsByReconstruction(reconstructionId);
     const totalModels = models.length;
@@ -1285,12 +1156,7 @@ export class ReconstructionCache {
     // Count preloaded models
     let preloadedModels = 0;
     for (const model of models) {
-<<<<<<< HEAD
-      const modelId = `${projectId}_${reconstructionId}_f${model.frameIndex}`;
-      if (this.urlCache.has(modelId)) {
-=======
       if (this.urlCache.has(model.id)) {
->>>>>>> backup-finalsprint3
         preloadedModels++;
       }
     }
@@ -1314,11 +1180,7 @@ export class ReconstructionCache {
    * @returns Array of { frame: number, url: string } objects
    */
   async getAllModelURLs(projectId: string, reconstructionId: string): Promise<Array<{ frame: number; url: string; filename: string }>> {
-<<<<<<< HEAD
-    this.checkInitialization();
-=======
     await this.ensureInitialized();
->>>>>>> backup-finalsprint3
 
     const models = await this.db.getModelsByReconstruction(reconstructionId);
     const sortedModels = models.sort((a, b) => a.frameIndex - b.frameIndex);

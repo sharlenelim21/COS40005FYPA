@@ -6,10 +6,7 @@ import {
     jobModel,
     JobStatus,
     readProjectReconstruction,
-<<<<<<< HEAD
-=======
     readProjectSegmentationMask,
->>>>>>> backup-finalsprint3
     projectReconstructionModel,
     readProject,
     IProjectDocument,
@@ -23,12 +20,6 @@ import LogError from "../utils/error_logger";
 const router = Router();
 const serviceLocation = "ReconstructionRoutes";
 
-<<<<<<< HEAD
-/**
- * Start 4D cardiac reconstruction job
- * Follows the same pattern as segmentation routes - delegates to service layer
- * 
-=======
 const toSingleString = (value: string | string[] | undefined): string | undefined =>
     Array.isArray(value) ? value[0] : value;
 
@@ -44,7 +35,6 @@ const normalizeSegmentationModel = (value: unknown): "medsam" | "unet" | null =>
  * Start 4D cardiac reconstruction job
  * Follows the same pattern as segmentation routes - delegates to service layer
  *
->>>>>>> backup-finalsprint3
  * @route POST /reconstruction/start-4d/:projectId
  * @access Private (authenticated users only)
  */
@@ -53,19 +43,6 @@ router.post("/start-reconstruction/:projectId",
     isAuthAndNotGuest,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
-<<<<<<< HEAD
-        const { projectId } = req.params;
-        const { reconstructionName, reconstructionDescription, parameters, ed_frame, export_format } = req.body;
-        
-        logger.info(`${serviceLocation}: Received start 4D reconstruction request for project ${projectId} with ed_frame ${ed_frame}, export_format ${export_format || 'default'} by user ${req.user?.username} with id ${req.user?._id}`);
-        
-        try {
-            const result = await startReconstruction(projectId, req.user, reconstructionName, reconstructionDescription, parameters, ed_frame, export_format);
-            if (result.success) {
-                res.status(200).json({ message: result.message, uuid: result.uuid });
-            } else {
-                res.status(500).json({ message: result.message });
-=======
         const projectId = toSingleString(req.params.projectId);
         if (!projectId) {
             return res.status(400).json({ message: "Project ID is required." });
@@ -102,7 +79,6 @@ router.post("/start-reconstruction/:projectId",
                 res.status(200).json({ message: result.message, uuid: result.uuid });
             } else {
                 res.status(result.statusCode || 500).json({ message: result.message });
->>>>>>> backup-finalsprint3
             }
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, "Error starting 4D reconstruction");
@@ -115,20 +91,12 @@ router.post("/start-reconstruction/:projectId",
 /**
  * Get reconstruction results for a project
  * Follows the exact pattern of /segmentation/segmentation-results/:projectId
-<<<<<<< HEAD
- * 
-=======
  *
->>>>>>> backup-finalsprint3
  * @route GET /reconstruction/reconstruction-results/:projectId
  * @access Private (authenticated users only)
  */
 router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, res: Response) => {
-<<<<<<< HEAD
-    const { projectId } = req.params;
-=======
     const projectId = toSingleString(req.params.projectId);
->>>>>>> backup-finalsprint3
 
     if (!projectId) {
         logger.warn(`${serviceLocation}: Project ID is required to fetch reconstruction results.`);
@@ -155,16 +123,6 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
         }
 
         // Generate presigned URLs for each reconstruction's mesh.tar file
-<<<<<<< HEAD
-        const reconstructionsWithUrls = await Promise.all(
-            result.projectreconstructions.map(async (recon) => {
-                let downloadUrl = null;
-                
-                // Generate presigned URL if mesh file exists
-                if (recon.reconstructedMesh?.path) {
-                    try {
-                        const s3Key = extractS3KeyFromUrl(recon.reconstructedMesh.path);
-=======
         const masksResult = await readProjectSegmentationMask(projectId);
         const masksById = new Map<string, { segmentationModel?: string; model_used?: string; name?: string }>();
         if (masksResult.success && masksResult.projectsegmentationmasks) {
@@ -192,24 +150,15 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                 if (recon.reconstructedMesh?.path) {
                     try {
                         const s3Key = outputKey;
->>>>>>> backup-finalsprint3
                         if (s3Key) {
                             const awsBucketName = process.env.AWS_BUCKET_NAME;
                             if (awsBucketName) {
                                 downloadUrl = await generatePresignedGetUrl(
-<<<<<<< HEAD
-                                    awsBucketName, 
-                                    s3Key, 
-                                    3600 // 1 hour expiry
-                                );
-                            }
-=======
                                     awsBucketName,
                                     s3Key,
                                     3600 // 1 hour expiry
                                 );
                                                             }
->>>>>>> backup-finalsprint3
                         }
                     } catch (urlError) {
                         logger.warn(`${serviceLocation}: Failed to generate presigned URL for reconstruction ${recon._id}: ${(urlError as Error).message}`);
@@ -217,24 +166,15 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                 }
 
                 return {
-<<<<<<< HEAD
-                    reconstructionId: recon._id,
-                    name: recon.name,
-                    description: recon.description,
-=======
                     reconstructionId: String(recon._id),
                     maskId: recon.maskId ? String(recon.maskId) : null,
                     name: recon.name,
                     description: recon.description,
                     status: "completed",
->>>>>>> backup-finalsprint3
                     isSaved: recon.isSaved,
                     isAIGenerated: recon.isAIGenerated,
                     meshFormat: recon.meshFormat,
                     meshFileSize: recon.reconstructedMesh?.filesize,
-<<<<<<< HEAD
-                    downloadUrl, // Presigned URL for download
-=======
                     reconstructedMeshPath: recon.reconstructedMesh?.path || null,
                     outputPath: recon.reconstructedMesh?.path || null,
                     outputKey,
@@ -243,7 +183,6 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                     downloadUrl, // Presigned URL for download
                     tarUrl: downloadUrl,
                     segmentationModel: inferredModel, // Model used for this reconstruction (medsam, unet, etc)
->>>>>>> backup-finalsprint3
                     metadata: {
                         edFrameIndex: recon.ed_frame,
                         reconstructionTime: recon.reconstructedMesh?.reconstructionTime,
@@ -270,28 +209,13 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
 /**
  * Check all reconstruction jobs for current user
  * Matches segmentation pattern: /segmentation/user-check-jobs
-<<<<<<< HEAD
- * 
-=======
  *
->>>>>>> backup-finalsprint3
  * @route GET /reconstruction/user-check-jobs
  * @access Private (authenticated users only)
  */
 router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
     const userId = req.user?._id;
     logger.info(`${serviceLocation}: Fetching all reconstruction jobs for user ${req.user?.username}`);
-<<<<<<< HEAD
-    
-    try {
-        const jobs = await jobModel.find({ userid: userId }).sort({ createdAt: -1 }).limit(20);
-        const pendingJobs = await jobModel.find({ status: JobStatus.PENDING }).sort({ createdAt: 1 });
-        const activeJobCount = await jobModel.countDocuments({
-            userid: userId,
-            status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] }
-        });
-        
-=======
 
     try {
         const reconstructionJobFilter = {
@@ -313,7 +237,6 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
             status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] }
         });
 
->>>>>>> backup-finalsprint3
         return res.status(200).json({
             success: true,
             activeJobCount,
@@ -326,12 +249,6 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                 return {
                     jobId: job.uuid,
                     projectId: job.projectid,
-<<<<<<< HEAD
-                    status: job.status,
-                    name: job.segmentationName,
-                    description: job.segmentationDescription,
-                    queuePosition: queuePosition
-=======
                     maskId: (job as any).maskId || null,
                     segmentationModel: (job as any).segmentationModel || null,
                     status: job.status,
@@ -341,7 +258,6 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     message: job.message || "",
                     createdAt: (job as any).createdAt?.toISOString?.() || null,
                     updatedAt: (job as any).updatedAt?.toISOString?.() || null
->>>>>>> backup-finalsprint3
                 };
             })
         });
@@ -357,11 +273,7 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
 /**
  * Batch endpoint for checking reconstruction status of multiple projects
  * Matches segmentation pattern: /segmentation/batch-segmentation-status
-<<<<<<< HEAD
- * 
-=======
  *
->>>>>>> backup-finalsprint3
  * @route POST /reconstruction/batch-reconstruction-status
  * @access Private (authenticated users only)
  */
@@ -407,11 +319,7 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
             });
         }
 
-<<<<<<< HEAD
-        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => (p._id as string).toString());
-=======
         const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => String(p._id));
->>>>>>> backup-finalsprint3
         const unauthorizedProjects = projectIds.filter((id: string) => !userProjectIds.includes(id));
 
         if (unauthorizedProjects.length > 0) {
@@ -474,11 +382,7 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
  * Delete all reconstructions for a project
  * Designed for workflow where masks are re-edited - only keep 1 reconstruction at a time
  * Deletes both database records and S3 mesh files
-<<<<<<< HEAD
- * 
-=======
  *
->>>>>>> backup-finalsprint3
  * @route DELETE /reconstruction/delete-project-reconstructions/:projectId
  * @access Private (authenticated users only, project owner)
  */
@@ -486,11 +390,7 @@ router.delete("/delete-project-reconstructions/:projectId",
     isAuth,
     isAuthAndNotGuest,
     async (req: Request, res: Response) => {
-<<<<<<< HEAD
-        const { projectId } = req.params;
-=======
         const projectId = toSingleString(req.params.projectId);
->>>>>>> backup-finalsprint3
         const userId = (req.user as any)?._id?.toString();
 
         logger.info(`${serviceLocation}: Received request to delete all reconstructions for project ${projectId} by user ${req.user?.username}`);
@@ -590,9 +490,6 @@ router.delete("/delete-project-reconstructions/:projectId",
         }
     });
 
-<<<<<<< HEAD
-export default router;
-=======
 /**
  * Delete one reconstruction result by ID.
  *
@@ -811,4 +708,3 @@ router.delete("/delete-model-reconstruction/:projectId",
     });
 
 export default router;
->>>>>>> backup-finalsprint3

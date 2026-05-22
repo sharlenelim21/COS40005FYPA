@@ -1,13 +1,8 @@
 import { Request, Response, Router } from "express";
 import logger from "../services/logger";
-<<<<<<< HEAD
-import { startInference } from "../services/inference";
-import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-=======
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import { computeBullseyeFromMaskDoc } from "../services/segmentation_export";
->>>>>>> backup-finalsprint3
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -20,11 +15,7 @@ import {
 } from "../services/database";
 import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
 import LogError from "../utils/error_logger";
-<<<<<<< HEAD
-import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument } from "../types/database_types";
-=======
 import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument, SegmentationModel } from "../types/database_types";
->>>>>>> backup-finalsprint3
 import fs from 'fs-extra'; // Use fs-extra for easier directory handling and tar extraction
 import path from 'path';
 import { exec } from 'child_process';
@@ -37,8 +28,6 @@ import { getFreshGPUServerAddress } from "../services/gpu_auth_client"; // Impor
 const router = Router();
 const serviceLocation = "SegmentationRoutes";
 
-<<<<<<< HEAD
-=======
 const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
     const useLocalhost = (process.env.MEDSAM_USE_LOCALHOST ?? "true").toLowerCase() !== "false";
     if (useLocalhost) {
@@ -61,7 +50,6 @@ const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
 const toSingleString = (value: string | string[] | undefined): string | undefined =>
     Array.isArray(value) ? value[0] : value;
 
->>>>>>> backup-finalsprint3
 interface GpuManualInferenceResponse {
     uuid: string;
     status: string;
@@ -82,17 +70,6 @@ router.post("/start-segmentation/:projectId",
     isAuth,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
-<<<<<<< HEAD
-        const { projectId } = req.params;
-        logger.info(`${serviceLocation}: Received start inference request for project ${projectId} by user ${req.user?.username} with id ${req.user?._id}`);
-        try {
-            const result = await startInference(projectId, req.user, res.locals.gpuAuthToken);
-            if (result.success) {
-                res.status(200).json({ message: result.message, uuid: result.uuid });
-            } else {
-                res.status(500).json({ message: result.message });
-            }
-=======
         console.log("=== LOCAL BACKEND HIT /start-segmentation ===");
         const projectId = toSingleString(req.params.projectId);
         if (!projectId) {
@@ -137,7 +114,6 @@ router.post("/start-segmentation/:projectId",
                 return res.status(200).json({ message: result.message, uuid: result.uuid });
             }
             return res.status(500).json({ message: result.message });
->>>>>>> backup-finalsprint3
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, "Error starting inference");
             if (!res.headersSent) {
@@ -147,11 +123,7 @@ router.post("/start-segmentation/:projectId",
     });
 
 router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res: Response) => {
-<<<<<<< HEAD
-    const { projectId } = req.params;
-=======
     const projectId = toSingleString(req.params.projectId);
->>>>>>> backup-finalsprint3
 
     if (!projectId) {
         logger.warn(`${serviceLocation}: Project ID is required to fetch segmentation masks.`);
@@ -188,14 +160,10 @@ router.post("/start-manual-segmentation/:projectId",
     isAuth,
     injectGpuAuthToken,
     async (req: Request, res: Response) => {
-<<<<<<< HEAD
-        const { projectId } = req.params;
-=======
         const projectId = toSingleString(req.params.projectId);
         if (!projectId) {
             return res.status(400).json({ success: false, message: "Project ID is required." });
         }
->>>>>>> backup-finalsprint3
         const userId = req.user?._id;
         const {
             image_name,
@@ -251,16 +219,6 @@ router.post("/start-manual-segmentation/:projectId",
 
             const gpuRequestId = uuidv4();
 
-<<<<<<< HEAD
-            // Get fresh GPU server configuration from database
-            const gpuServerAddress = await getFreshGPUServerAddress();
-            if (!gpuServerAddress) {
-                logger.error(`${serviceLocation}: GPU server configuration is not available.`);
-                return res.status(500).json({ success: false, message: "Server configuration error: GPU server details missing." });
-            }
-
-            const gpuServerUrl = `${gpuServerAddress}/inference/v2/medsam-inference-manual`;
-=======
             const medsamBaseUrl = await resolveMedsamServerBaseUrl();
             if (!medsamBaseUrl) {
                 logger.error(`${serviceLocation}: MedSAM server URL could not be resolved from local/remote configuration.`);
@@ -268,7 +226,6 @@ router.post("/start-manual-segmentation/:projectId",
             }
 
             const gpuServerUrl = `${medsamBaseUrl}/inference/v2/medsam-inference-manual`;
->>>>>>> backup-finalsprint3
             logger.info(`${serviceLocation}: Sending request to GPU server ${gpuServerUrl} for image ${image_name} with UUID ${gpuRequestId}.`);
             const gpuServerPayload = { url: presignedUrl, uuid: gpuRequestId, image_name: image_name, bbox: bbox };
 
@@ -403,15 +360,11 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     jobId: job.uuid,
                     projectId: job.projectid,
                     status: job.status,
-<<<<<<< HEAD
-                    queuePosition: queuePosition
-=======
                     queuePosition: queuePosition,
                     message: job.message || "",
                     segmentationModel: job.segmentationModel || job.model_used || null,
                     createdAt: (job as any).createdAt?.toISOString?.() || null,
                     updatedAt: (job as any).updatedAt?.toISOString?.() || null
->>>>>>> backup-finalsprint3
                 };
             })
         });
@@ -584,14 +537,6 @@ function mergeFramesData(
 router.put("/save-manual-segmentation/:projectId",
     isAuthAndNotGuest,
     async (req: Request, res: Response) => {
-<<<<<<< HEAD
-        const { projectId } = req.params;
-        const userId = req.user?._id;
-        const { name, description, frames: framesFromBody } = req.body as {
-            name?: string;
-            description?: string;
-            frames?: IProjectSegmentationMask['frames'];
-=======
         const projectId = toSingleString(req.params.projectId);
         const userId = req.user?._id;
         const { name, description, frames: framesFromBody, model } = req.body as {
@@ -599,7 +544,6 @@ router.put("/save-manual-segmentation/:projectId",
             description?: string;
             frames?: IProjectSegmentationMask['frames'];
             model?: string;
->>>>>>> backup-finalsprint3
         };
 
         logger.info(`${serviceLocation}: Received request to update manual segmentation for project ${projectId} by user ${userId}`);
@@ -631,18 +575,6 @@ router.put("/save-manual-segmentation/:projectId",
                 return res.status(500).json({ success: false, message: masksResult.message || "Error finding segmentation masks." });
             }
 
-<<<<<<< HEAD
-            const editableMask = masksResult.projectsegmentationmasks.find(mask => !mask.isMedSAMOutput) as IProjectSegmentationMaskDocument | undefined;
-
-            if (!editableMask || !editableMask._id) {
-                logger.warn(`${serviceLocation}: No editable (isMedSAMOutput: false) segmentation mask found for project ${projectId}.`);
-                return res.status(404).json({ success: false, message: "No editable segmentation mask found for this project." });
-            }
-
-            logger.info(`${serviceLocation}: Found editable segmentation mask with ID ${editableMask._id} for project ${projectId}.`);
-
-            const updatePayload: Partial<IProjectSegmentationMaskDocument> = {
-=======
             // Scope the editable-mask lookup to the model the request is
             // targeting. With per-model Manual docs (one for MedSAM, one for
             // UNET), a plain `!isMedSAMOutput` filter would non-deterministically
@@ -680,7 +612,6 @@ router.put("/save-manual-segmentation/:projectId",
             logger.info(`${serviceLocation}: Found editable segmentation mask with ID ${editableMask._id} for project ${projectId} (requestedModel=${requestedModel ?? "<none>"}, matchedByModel=${!!modelMatchedMask}).`);
 
             const updatePayload: Partial<IProjectSegmentationMask> & { model?: string } = {
->>>>>>> backup-finalsprint3
                 isSaved: true,
             };
 
@@ -696,13 +627,10 @@ router.put("/save-manual-segmentation/:projectId",
                 updatePayload.description = editableMask.description;
             }
 
-<<<<<<< HEAD
-=======
             if (model !== undefined) {
                 updatePayload.model = model;
             }
 
->>>>>>> backup-finalsprint3
             if (framesFromBody !== undefined) {
                 if (Array.isArray(framesFromBody)) {
                     updatePayload.frames = mergeFramesData(editableMask.frames, framesFromBody);
@@ -714,14 +642,10 @@ router.put("/save-manual-segmentation/:projectId",
                 updatePayload.frames = editableMask.frames;
             }
 
-<<<<<<< HEAD
-            const segmentationDbUpdateResult = await updateProjectSegmentationMask(editableMask._id.toString(), updatePayload);
-=======
             const segmentationDbUpdateResult = await updateProjectSegmentationMask(
                 editableMask._id.toString(),
                 updatePayload as Partial<IProjectSegmentationMaskDocument>
             );
->>>>>>> backup-finalsprint3
 
             if (!segmentationDbUpdateResult.success || !segmentationDbUpdateResult.projectsegmentationmask) {
                 logger.error(`${serviceLocation}: Failed to update manual segmentation mask ${editableMask._id} in database. Message: ${segmentationDbUpdateResult.message}`);
@@ -764,11 +688,7 @@ router.put("/save-manual-segmentation/:projectId",
 
 // Route to export project data as a NIfTI segmentation mask
 router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: Response) => {
-<<<<<<< HEAD
-    const { projectId } = req.params;
-=======
     const projectId = toSingleString(req.params.projectId);
->>>>>>> backup-finalsprint3
     const userId = req.user?._id;
     const serviceLocationExport = `${serviceLocation}/exportProjectDataNifti`;
     const tempExportId = uuidv4();
@@ -1015,11 +935,7 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
             });
         }
 
-<<<<<<< HEAD
-        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => (p._id as string).toString());
-=======
         const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => String(p._id));
->>>>>>> backup-finalsprint3
         const unauthorizedProjects = projectIds.filter((id: string) => !userProjectIds.includes(id));
 
         if (unauthorizedProjects.length > 0) {
@@ -1078,9 +994,6 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
     }
 });
 
-<<<<<<< HEAD
-export default router;
-=======
 // Trigger bullseye computation for a single mask from its stored RLE data.
 // POST /segmentation/trigger-bullseye/:maskId
 router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Response) => {
@@ -1126,4 +1039,3 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
 });
 
 export default router;
->>>>>>> backup-finalsprint3

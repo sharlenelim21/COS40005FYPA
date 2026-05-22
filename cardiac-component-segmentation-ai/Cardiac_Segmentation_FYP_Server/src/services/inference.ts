@@ -1,18 +1,10 @@
 // File: src/services/inference.ts
 // Description: Service layer for initiating the inference process, including Cloud GPU communication.
 
-<<<<<<< HEAD
-import { IUserSafe, ProjectCrudResult, segmentationSource } from "../types/database_types";
-import logger from "./logger";
-import { readProject } from "./database";
-import { v4 as uuidv4 } from 'uuid';
-import { createJob, IJob, JobStatus } from "../services/database";
-=======
 import { IUserSafe, ProjectCrudResult, segmentationSource, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
 import { createJob, IJob, JobStatus, readProject, updateJob } from "./database";
 import { v4 as uuidv4 } from 'uuid';
->>>>>>> backup-finalsprint3
 import axios from 'axios';
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import { URL } from 'url';
@@ -20,8 +12,6 @@ import { getFreshGPUServerAddress } from "./gpu_auth_client"; // Import fresh GP
 
 const serviceLocation = "Inference";
 
-<<<<<<< HEAD
-=======
 /**
  * Resolve the MedSAM server base URL.
  *
@@ -52,7 +42,6 @@ const resolveMedsamBaseUrl = async (): Promise<string | null> => {
     return remoteBaseUrl ? remoteBaseUrl.replace(/\/$/, "") : null;
 };
 
->>>>>>> backup-finalsprint3
 // Interface for the expected GPU response for direct manual segmentation
 interface GpuManualPredictionResponseData {
     uuid?: string; // GPU's internal request/job ID
@@ -69,15 +58,6 @@ interface GpuManualPredictionResponseData {
     error?: string | null;
 }
 
-<<<<<<< HEAD
-const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: string): Promise<{ success: boolean; jobId?: string; error?: string }> => {
-    // Get fresh GPU server configuration from database
-    const cloudGpuBaseUrl = await getFreshGPUServerAddress();
-    if (!cloudGpuBaseUrl) {
-        logger.info(`${serviceLocation}: Currently configured Cloud GPU URL: ${cloudGpuBaseUrl}`);
-        logger.error(`${serviceLocation}: GPU server configuration is not available from database.`);
-        return { success: false, error: "Cloud GPU URL not configured." };
-=======
 interface UnetApiResponse {
     uuid?: string;
     job_id?: string;
@@ -91,7 +71,6 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
     if (!medsamBaseUrl) {
         logger.error(`${serviceLocation}: MedSAM server URL could not be resolved from local/remote configuration.`);
         return { success: false, error: "MedSAM server URL is not configured." };
->>>>>>> backup-finalsprint3
     }
 
     // For debugging: Log the token being used. Mask or remove in production.
@@ -102,11 +81,7 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
         return { success: false, error: "Authentication token for Cloud GPU is missing." };
     }
 
-<<<<<<< HEAD
-    const inferenceEndpoint = `${cloudGpuBaseUrl}/inference/v2/medsam-inference`; // Adjust the endpoint as needed
-=======
     const inferenceEndpoint = `${medsamBaseUrl}/inference/v2/medsam-inference`;
->>>>>>> backup-finalsprint3
 
     try {
         const response = await axios.post(inferenceEndpoint, inferenceData, {
@@ -151,11 +126,6 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
         }
     } catch (error: any) {
         logger.error(`${serviceLocation}: Error sending inference request to ${inferenceEndpoint}: ${error.message}`, { error });
-<<<<<<< HEAD
-        let errorMessage = `Error communicating with Cloud GPU: ${error.message}`;
-        if (error.response?.status) {
-            errorMessage += ` (Status: ${error.response.status})`;
-=======
         // Cloud GPU is no longer used — all inference goes to the local
         // visheart-inference-gpu service. Use a clear, actionable error
         // message so users know to start the local GPU server, not chase
@@ -174,7 +144,6 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
             if (error.response?.data) {
                 errorMessage += ` Response: ${JSON.stringify(error.response.data)}`;
             }
->>>>>>> backup-finalsprint3
         }
         return { success: false, error: errorMessage };
     }
@@ -188,14 +157,9 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         return { success: false, message: "GPU authentication token is missing. Cannot start inference." };
     }
 
-<<<<<<< HEAD
-    // Build full callback URL by appending segmentation webhook path to base URL
-    const callback_base_url = process.env.CALLBACK_URL;
-=======
     // Build full callback URL — prefer LOCAL_CALLBACK_URL so Docker-internal hostnames
     // (visheart-app) are used when the GPU container calls back, not host.docker.internal
     const callback_base_url = process.env.LOCAL_CALLBACK_URL || process.env.CALLBACK_URL;
->>>>>>> backup-finalsprint3
     if (!callback_base_url) {
         logger.error(`${serviceLocation}: CALLBACK_URL is not set in environment variables. Cannot start inference for project ${projectId}.`);
         return { success: false, message: "Callback URL not configured for inference." };
@@ -263,39 +227,23 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
         const inferenceResult = await sendInferenceRequestToCloudGpu(inferenceData, gpuAuthToken);
 
         if (inferenceResult.success && inferenceResult.jobId) {
-<<<<<<< HEAD
-            logger.info(`${serviceLocation}: Inference request sent successfully for project ${projectId}. GPU Job ID: ${inferenceResult.jobId}, Local UUID: ${jobUuid}.`);
-=======
             const trackedJobUuid = inferenceResult.jobId || jobUuid;
             logger.info(`${serviceLocation}: Inference request sent successfully for project ${projectId}. GPU Job ID: ${inferenceResult.jobId}, Local UUID: ${jobUuid}, Tracked UUID: ${trackedJobUuid}.`);
->>>>>>> backup-finalsprint3
 
             const jobData: IJob = {
                 userid: user?._id?.toString() || 'unknown',
                 projectid: projectId,
-<<<<<<< HEAD
-                uuid: jobUuid,
-                status: JobStatus.PENDING,
-=======
                 uuid: trackedJobUuid,
                 status: JobStatus.IN_PROGRESS,
->>>>>>> backup-finalsprint3
                 segmentationSource: segmentationSource.AI_INFERENCE
             };
             const jobCreationResult = await createJob(jobData);
 
             if (jobCreationResult.success) {
-<<<<<<< HEAD
-                return { success: true, message: `Inference job accepted. UUID: ${jobUuid}`, uuid: jobUuid };
-            } else {
-                logger.error(`${serviceLocation}: Failed to create job record for ${jobUuid}: ${jobCreationResult.message || 'Unknown error'}`);
-                return { success: true, message: `Inference accepted by GPU (Job ID: ${inferenceResult.jobId}), but failed to track job locally. UUID: ${jobUuid}`, uuid: jobUuid };
-=======
                 return { success: true, message: `Inference job accepted. UUID: ${trackedJobUuid}`, uuid: trackedJobUuid };
             } else {
                 logger.error(`${serviceLocation}: Failed to create job record for ${trackedJobUuid}: ${jobCreationResult.message || 'Unknown error'}`);
                 return { success: true, message: `Inference accepted by GPU (Job ID: ${inferenceResult.jobId}), but failed to track job locally. UUID: ${trackedJobUuid}`, uuid: trackedJobUuid };
->>>>>>> backup-finalsprint3
             }
         } else if (inferenceResult.success) {
             logger.warn(`${serviceLocation}: Inference request reported success for project ${projectId} but no definite Job ID was returned from GPU. Local UUID: ${jobUuid}`);
@@ -311,8 +259,6 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
     }
 };
 
-<<<<<<< HEAD
-=======
 const sendUnetInferenceRequestToApi = async (
     inferenceData: {
         url: string;
@@ -542,7 +488,6 @@ export async function startModel2Inference(
     }
 }
 
->>>>>>> backup-finalsprint3
 // This function is for direct synchronous GPU prediction if needed, not used by the job-based startManualInference below.
 const getDirectGpuManualPrediction = async (
     inferenceData: {
@@ -566,16 +511,6 @@ const getDirectGpuManualPrediction = async (
 }> => {
     const serviceLocationDirectGpu = `${serviceLocation}_DirectGpuManualPrediction`;
 
-<<<<<<< HEAD
-    // Get fresh GPU server configuration from database
-    const cloudGpuBaseUrl = await getFreshGPUServerAddress();
-    if (!cloudGpuBaseUrl) {
-        logger.error(`${serviceLocationDirectGpu}: GPU server configuration is not available from database.`);
-        return { success: false, error: "Cloud GPU URL not configured." };
-    }
-
-    const inferenceEndpoint = `${cloudGpuBaseUrl}/inference/v2/medsam-inference-manual`;
-=======
     const medsamBaseUrl = await resolveMedsamBaseUrl();
     if (!medsamBaseUrl) {
         logger.error(`${serviceLocationDirectGpu}: MedSAM server URL could not be resolved from local/remote configuration.`);
@@ -583,7 +518,6 @@ const getDirectGpuManualPrediction = async (
     }
 
     const inferenceEndpoint = `${medsamBaseUrl}/inference/v2/medsam-inference-manual`;
->>>>>>> backup-finalsprint3
 
     logger.info(`${serviceLocationDirectGpu}: Sending direct manual prediction request to ${inferenceEndpoint} for image ${inferenceData.image_name}, internal UUID ${inferenceData.uuid}`);
     logger.debug(`${serviceLocationDirectGpu}: Payload for GPU:`, inferenceData);
