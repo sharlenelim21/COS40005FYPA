@@ -385,13 +385,14 @@ export const segmentationApi = {
   },
 
   // Export project data
-  exportProjectData: async (projectId: string) => {
+  exportProjectData: async (projectId: string, model?: "medsam" | "unet") => {
     try {
-      console.log(`[API] Starting export for project: ${projectId}`);
+      console.log(`[API] Starting export for project: ${projectId}, model: ${model ?? "unspecified"}`);
 
       // First, get the presigned URL from the backend
       const response = await api.get(
         `/segmentation/export-project-data/${projectId}`,
+        { params: model ? { model } : {} },
       );
 
       console.log(`[API] Backend response:`, response.data);
