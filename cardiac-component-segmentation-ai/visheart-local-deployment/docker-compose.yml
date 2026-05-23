@@ -230,7 +230,9 @@ services:
       - "8001:8001"
     environment:
       <<: *gpu-env
-      USE_GPU: "false" # Safely overrides for CPU
+      USE_GPU: "false"
+      SKIP_MEDSAM_MODEL_LOAD: "true"
+      VISHEART_DEVICE: "cpu"
     command: >
       bash -lc 'python -c "import nibabel, timm" ||
       pip install --no-cache-dir "nibabel>=5.0.0" timm;

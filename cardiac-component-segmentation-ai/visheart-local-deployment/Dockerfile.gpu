@@ -13,8 +13,14 @@
 
 FROM sveltes/visheart-inference-gpu:faithful-latest
 
-# Copy landmark detection model weights into the image.
-# Source path is relative to the build context (repo root COS40005FYPA/).
+# Copy landmark detection model weights.
+# Source paths are relative to the build context (repo root COS40005FYPA/).
 COPY UNETRESNET34/checkpoints/best_model_1ch.pth /app/UNETRESNET34/checkpoints/best_model_1ch.pth
 COPY UNETRESNET34/checkpoints/best_model_2ch.pth /app/UNETRESNET34/checkpoints/best_model_2ch.pth
 COPY UNETRESNET34/models/unet_resnet34.py /app/UNETRESNET34/models/unet_resnet34.py
+
+# Copy inference model weights (UNet segmentation + 4D reconstruction).
+# These may or may not be present in the base image — baking them in
+# guarantees teammates don't need the local visheart-inference-gpu repo.
+COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/unet.pth /app/app/models/unet.pth
+COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/fourd_model_epoch_250.pth /app/app/models/fourd_model_epoch_250.pth
