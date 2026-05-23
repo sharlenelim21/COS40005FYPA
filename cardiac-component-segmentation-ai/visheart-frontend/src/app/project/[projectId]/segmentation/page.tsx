@@ -72,6 +72,7 @@ function SegmentationResultsPageInner() {
     reconstructionCacheReady,
     getReconstructionGLB,
     getReconstructionForModel,
+    setSelectedSegmentationModel,
   } = useProject();
 
   // Write the show-condition key whenever masks exist — covers both:
@@ -137,6 +138,11 @@ function SegmentationResultsPageInner() {
   // We deliberately do NOT seed from localStorage — that caused the dropdown
   // to "stick" on whatever the previous test session wrote.
   const [selectedModel, setSelectedModel] = useState<SegmentationModelId>("medsam");
+
+  // Keep ProjectContext in sync so ProjectDashboardBar can read the active model for export.
+  useEffect(() => {
+    setSelectedSegmentationModel(selectedModel as "medsam" | "unet");
+  }, [selectedModel, setSelectedSegmentationModel]);
 
   // Locked once the user has explicitly chosen a model (clicked dropdown or
   // clicked Run Segmentation), or once the auto-pick has fired. Prevents

@@ -240,7 +240,7 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
         </button>
       </div>
       <ZoomPanContainer className="min-h-0 flex-1 w-full" onResetRef={(fn) => { strainZoomResetRef.current = fn; }}>
-      <svg viewBox="0 0 300 300" className="h-full w-full" role="img" aria-label={`${selectedStrainType} strain bullseye`}>
+      <svg viewBox="0 0 300 300" className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`${selectedStrainType} strain bullseye`}>
         <circle cx={center} cy={center} r="112" fill="#f8fafc" stroke="#e2e8f0" strokeWidth="1" />
 
         {Array.from({ length: 6 }, (_, index) => (
@@ -311,10 +311,10 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
           {segmentValue(16).toFixed(1)}
         </text>
 
-        <text x="150" y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Anterior</text>
-        <text x="298" y="154" textAnchor="end" fontSize="11" fontWeight="700" fill="#475569">Septal</text>
-        <text x="150" y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Inferior</text>
-        <text x="2" y="154" textAnchor="start" fontSize="11" fontWeight="700" fill="#475569">Lateral</text>
+        <text x="150" y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Anterior</text>
+        <text x="298" y="154" textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
+        <text x="150" y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Inferior</text>
+        <text x="2" y="154" textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
       </svg>
       </ZoomPanContainer>
 

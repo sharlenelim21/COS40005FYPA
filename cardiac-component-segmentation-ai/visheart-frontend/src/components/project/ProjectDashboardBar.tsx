@@ -27,17 +27,18 @@ import { cn } from "@/lib/utils";
 
 export function ProjectDashboardBar() {
   const router = useRouter();
-  const { 
-    projectData, 
-    loading, 
-    hasMasks, 
-    undecodedMasks, 
-    jobs, 
+  const {
+    projectData,
+    loading,
+    hasMasks,
+    undecodedMasks,
+    jobs,
     error,
     hasReconstructions,
     reconstructionMetadata,
     reconstructionCacheReady,
-    reconstructionCacheError
+    reconstructionCacheError,
+    selectedSegmentationModel,
   } = useProject();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const lastScrollY = useRef(0);
@@ -69,8 +70,8 @@ export function ProjectDashboardBar() {
     if (!projectData?.projectId) return;
     
     try {
-      console.log(`[Export] Starting segmentation export for project: ${projectData.projectId}`);
-      const exportResult = await segmentationApi.exportProjectData(projectData.projectId);
+      console.log(`[Export] Starting segmentation export for project: ${projectData.projectId}, model: ${selectedSegmentationModel}`);
+      const exportResult = await segmentationApi.exportProjectData(projectData.projectId, selectedSegmentationModel);
       console.log(`[Export] Received export result:`, { 
         blobSize: exportResult.blob.size, 
         blobType: exportResult.blob.type,
@@ -224,16 +225,17 @@ export function ProjectDashboardBar() {
                 </Button>
 
                 {/* Export Segmentation Masks */}
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="h-8 text-xs" 
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
                   disabled={!hasMasks}
                   onClick={handleExportProject}
-                  title={hasMasks ? "Export segmentation masks as NIfTI" : "No segmentation masks available"}
+                  title={hasMasks ? `Export ${selectedSegmentationModel.toUpperCase()} segmentation masks as NIfTI` : "No segmentation masks available"}
                 >
                   <Download className="h-3 w-3 mr-1.5" />
                   Export Masks
+                  <span className="ml-1 opacity-60">({selectedSegmentationModel.toUpperCase()})</span>
                 </Button>
 
                 {/* Export Reconstruction Meshes */}

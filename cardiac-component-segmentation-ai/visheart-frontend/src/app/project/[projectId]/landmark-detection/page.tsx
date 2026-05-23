@@ -996,6 +996,24 @@ function AhaBullseyePanel({
   const displayBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
   const heartZoomRef = useRef<((delta: number) => void) | null>(null);
 
+  // Fix 1: bullseye segment hover tooltip
+  const [bullseyeTooltip, setBullseyeTooltip] = useState<{
+    x: number; y: number; name: string; valueMm: number; pct: number;
+  } | null>(null);
+
+  // Fix 3: selected 2D segment drives 3D camera pan + blink (0-based, -1=none)
+  const [selectedBullseyeSegment, setSelectedBullseyeSegment] = useState(-1);
+
+  // Fix 2: per-frame min/max for colorbar percentages
+  const frameValues = displayBullseyeData
+    ? getFrameBullseyeValues(displayBullseyeData, currentFrame, frameCount)
+    : null;
+  const frameMin = frameValues ? Math.min(...frameValues) : 0;
+  const frameMax = frameValues ? Math.max(...frameValues) : 0;
+  const meanPct = frameMax > frameMin && displayBullseyeData
+    ? Math.round((displayBullseyeData.stats.mean - frameMin) / (frameMax - frameMin) * 100)
+    : 50;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
       {loading ? (
@@ -1043,12 +1061,25 @@ function AhaBullseyePanel({
                 referenceAngleDeg={referenceAngleDeg}
                 currentFrame={currentFrame}
                 frameCount={frameCount}
+                onSegmentHover={setBullseyeTooltip}
+                onSegmentLeave={() => setBullseyeTooltip(null)}
+                selectedSegment={selectedBullseyeSegment}
+                onSegmentClick={(idx) => setSelectedBullseyeSegment((prev) => prev === idx ? -1 : idx)}
               />
             </ZoomPanContainer>
+            {bullseyeTooltip && (
+              <div
+                className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                style={{ left: bullseyeTooltip.x + 14, top: bullseyeTooltip.y - 10 }}
+              >
+                <div className="font-semibold">{bullseyeTooltip.name}</div>
+                <div>{bullseyeTooltip.valueMm.toFixed(1)} mm ({bullseyeTooltip.pct}%)</div>
+              </div>
+            )}
             {/* Compact stats below chart */}
             <div className="flex-shrink-0 pt-1.5 space-y-1">
               <div className="flex items-center gap-1.5">
-                <span className="text-[9px] text-muted-foreground tabular-nums">{displayBullseyeData.stats.min.toFixed(1)}</span>
+                <span className="text-[9px] text-muted-foreground tabular-nums">{frameMin.toFixed(1)}</span>
                 <div
                   className="h-1.5 flex-1 rounded-full"
                   style={{
@@ -1056,20 +1087,20 @@ function AhaBullseyePanel({
                     border: "1px solid hsl(var(--border))",
                   }}
                 />
-                <span className="text-[9px] text-muted-foreground tabular-nums">{displayBullseyeData.stats.max.toFixed(1)}</span>
+                <span className="text-[9px] text-muted-foreground tabular-nums">{frameMax.toFixed(1)}</span>
               </div>
               <div className="flex justify-between text-center text-[9px]">
                 <div>
                   <p className="text-muted-foreground">Min</p>
-                  <p className="font-semibold tabular-nums">{displayBullseyeData.stats.min.toFixed(1)}%</p>
+                  <p className="font-semibold tabular-nums">{frameMin.toFixed(1)} mm <span className="text-muted-foreground font-normal">(0%)</span></p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Mean</p>
-                  <p className="font-semibold tabular-nums text-primary">{displayBullseyeData.stats.mean.toFixed(1)}%</p>
+                  <p className="font-semibold tabular-nums text-primary">{displayBullseyeData.stats.mean.toFixed(1)} mm <span className="text-muted-foreground font-normal">({meanPct}%)</span></p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Max</p>
-                  <p className="font-semibold tabular-nums">{displayBullseyeData.stats.max.toFixed(1)}%</p>
+                  <p className="font-semibold tabular-nums">{frameMax.toFixed(1)} mm <span className="text-muted-foreground font-normal">(100%)</span></p>
                 </div>
               </div>
               {displayBullseyeData.stats.n_nan > 0 && (
@@ -1091,6 +1122,7 @@ function AhaBullseyePanel({
               currentFrame={currentFrame}
               frameCount={frameCount}
               previewMode={previewMode}
+              selectedSegment={selectedBullseyeSegment}
               onZoomChange={(fn) => { heartZoomRef.current = fn; }}
               onResetZoom={(fn) => { if (onHeartResetRef) onHeartResetRef(fn); }}
             />
@@ -1189,6 +1221,7 @@ function AhaHeartProjection({
   currentFrame,
   frameCount,
   previewMode = false,
+  selectedSegment = -1,
   onZoomChange,
   onResetZoom,
 }: {
@@ -1196,18 +1229,22 @@ function AhaHeartProjection({
   currentFrame: number;
   frameCount: number;
   previewMode?: boolean;
+  selectedSegment?: number;
   onZoomChange?: (fn: (delta: number) => void) => void;
   onResetZoom?: (fn: () => void) => void;
 }) {
   const frameValues = getFrameBullseyeValues(bullseyeData, currentFrame, frameCount);
+  // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
+  const frameMin = Math.min(...frameValues);
+  const frameMax = Math.max(...frameValues);
 
   return (
     <ClientHeartModel
       values={frameValues}
-      min={bullseyeData.stats.min}
-      mid={bullseyeData.stats.mean}
-      max={bullseyeData.stats.max}
+      min={frameMin}
+      max={frameMax}
       className="flex-1 min-h-0 w-full"
+      selectedSegment={selectedSegment}
       onZoomChange={onZoomChange}
       onResetZoom={onResetZoom}
     />
@@ -1290,6 +1327,9 @@ function ZoomPanContainer({
     };
 
     const onPointerDown = (e: PointerEvent) => {
+      // Only capture pointer (and block click) when zoomed in so panning is possible.
+      // At scale=1 we let events through so SVG segment onClick fires normally.
+      if (transformRef.current.scale <= 1) return;
       e.preventDefault();
       activePtr.current = e.pointerId;
       el.setPointerCapture(e.pointerId);
@@ -1351,11 +1391,19 @@ function AhaBullseyeChart({
   referenceAngleDeg = 0,
   currentFrame = 0,
   frameCount = 1,
+  onSegmentHover,
+  onSegmentLeave,
+  selectedSegment = -1,
+  onSegmentClick,
 }: {
   bullseyeData: BullseyeData;
   referenceAngleDeg?: number;
   currentFrame?: number;
   frameCount?: number;
+  onSegmentHover?: (t: { x: number; y: number; name: string; valueMm: number; pct: number }) => void;
+  onSegmentLeave?: () => void;
+  selectedSegment?: number;
+  onSegmentClick?: (index: number) => void;
 }) {
   const center = 150;
   const basalOuter = 108;
@@ -1402,6 +1450,10 @@ function AhaBullseyeChart({
           tooltip={segment_metadata[index]}
           min={frameMin}
           max={frameMax}
+          selected={selectedSegment === index}
+          onSegmentHover={onSegmentHover}
+          onSegmentLeave={onSegmentLeave}
+          onSegmentClick={onSegmentClick}
         />
       ))}
       {Array.from({ length: 6 }, (_, index) => (
@@ -1417,6 +1469,10 @@ function AhaBullseyeChart({
           tooltip={segment_metadata[index + 6]}
           min={frameMin}
           max={frameMax}
+          selected={selectedSegment === index + 6}
+          onSegmentHover={onSegmentHover}
+          onSegmentLeave={onSegmentLeave}
+          onSegmentClick={onSegmentClick}
         />
       ))}
       {Array.from({ length: 4 }, (_, index) => (
@@ -1432,6 +1488,10 @@ function AhaBullseyeChart({
           tooltip={segment_metadata[index + 12]}
           min={frameMin}
           max={frameMax}
+          selected={selectedSegment === index + 12}
+          onSegmentHover={onSegmentHover}
+          onSegmentLeave={onSegmentLeave}
+          onSegmentClick={onSegmentClick}
         />
       ))}
       <circle
@@ -1439,12 +1499,18 @@ function AhaBullseyeChart({
         cy={center}
         r={apicalInner}
         fill={segmentColor(frameValues[16], frameMin, frameMax)}
-        stroke="rgba(0,0,0,0.9)"
-        strokeWidth="1"
-        style={{ transition: "fill 240ms ease" }}
-      >
-        <title>{segment_metadata[16]?.name}: {frameValues[16]?.toFixed(2)}%</title>
-      </circle>
+        stroke={selectedSegment === 16 ? "white" : "rgba(0,0,0,0.9)"}
+        strokeWidth={selectedSegment === 16 ? 2.5 : 1}
+        style={{ transition: "fill 240ms ease", cursor: "pointer" }}
+        onMouseMove={onSegmentHover ? (e) => {
+          const val = frameValues[16];
+          const pct = frameMax > frameMin ? Math.round((val - frameMin) / (frameMax - frameMin) * 100) : 0;
+          onSegmentHover({ x: e.clientX, y: e.clientY, name: segment_metadata[16]?.name ?? "Apex", valueMm: val, pct });
+        } : undefined}
+        onMouseLeave={onSegmentLeave}
+        onClick={onSegmentClick ? () => onSegmentClick(16) : undefined}
+      />
+
       <text
         x={center}
         y={center - 2}
@@ -1484,6 +1550,10 @@ function BullseyeSegment({
   tooltip,
   min,
   max,
+  selected = false,
+  onSegmentHover,
+  onSegmentLeave,
+  onSegmentClick,
 }: {
   index: number;
   center: number;
@@ -1495,6 +1565,10 @@ function BullseyeSegment({
   tooltip: { name: string; value: number | null } | undefined;
   min: number;
   max: number;
+  selected?: boolean;
+  onSegmentHover?: (t: { x: number; y: number; name: string; valueMm: number; pct: number }) => void;
+  onSegmentLeave?: () => void;
+  onSegmentClick?: (index: number) => void;
 }) {
   const midAngle = (startAngle + endAngle) / 2;
   const labelRadius = (innerRadius + outerRadius) / 2;
@@ -1509,14 +1583,16 @@ function BullseyeSegment({
       <path
         d={annularSectorPath(center, innerRadius, outerRadius, startAngle, endAngle)}
         fill={fill}
-        stroke="rgba(0,0,0,0.9)"
-        strokeWidth="1"
-        style={{ transition: "fill 240ms ease" }}
-      >
-        {tooltip && (
-          <title>{tooltip.name}: {tooltip.value != null ? tooltip.value.toFixed(2) : "—"}%</title>
-        )}
-      </path>
+        stroke={selected ? "white" : "rgba(0,0,0,0.9)"}
+        strokeWidth={selected ? 2.5 : 1}
+        style={{ transition: "fill 240ms ease", cursor: "pointer" }}
+        onMouseMove={onSegmentHover && value != null ? (e) => {
+          const pct = max > min ? Math.round((value - min) / (max - min) * 100) : 0;
+          onSegmentHover({ x: e.clientX, y: e.clientY, name: tooltip?.name ?? `Segment ${index + 1}`, valueMm: value, pct });
+        } : undefined}
+        onMouseLeave={onSegmentLeave}
+        onClick={onSegmentClick ? () => onSegmentClick(index) : undefined}
+      />
       <text
         x={label.x}
         y={label.y + (showValue ? 0 : 4)}

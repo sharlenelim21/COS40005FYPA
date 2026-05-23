@@ -73,6 +73,10 @@ interface ProjectContextType {
 
   // Optimistic updates
   updateContextMasks: (newMasks: Record<string, Uint8Array>) => void;
+
+  // Active segmentation model (shared so ProjectDashboardBar can read it for export)
+  selectedSegmentationModel: "medsam" | "unet";
+  setSelectedSegmentationModel: (model: "medsam" | "unet") => void;
 }
 
 const normalizeReconstructionModel = (value: unknown): "medsam" | "unet" | "unknown" => {
@@ -106,6 +110,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   const shouldSkipReconstructionPreload = isDocPage || isProjectOverviewPage;
 
   const [loading, setLoading] = useState<LoadingStage>("idle");
+  const [selectedSegmentationModel, setSelectedSegmentationModel] = useState<"medsam" | "unet">("medsam");
 
   // Performance monitoring effect - logs loading time metrics
   useEffect(() => {
@@ -1617,6 +1622,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       refreshJobs,
       refreshReconstructionJobs,
       updateContextMasks,
+      selectedSegmentationModel,
+      setSelectedSegmentationModel,
     }),
     [
       loading,
@@ -1663,6 +1670,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       refreshJobs,
       refreshReconstructionJobs,
       updateContextMasks,
+      selectedSegmentationModel,
     ],
   );
 

@@ -738,16 +738,36 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
         const segmentationMasksResult = await readProjectSegmentationMask(projectId);
         let segmentationsToProcess: IProjectSegmentationMask[] = [];
 
-        // Prioritize the mask that is NOT an AI output (manual/edited mask)
-        const manualMask = segmentationMasksResult.projectsegmentationmasks!.find(mask => mask.isMedSAMOutput === false);
-        if (manualMask) {
-            logger.info(`${serviceLocationExport}: Found manual segmentation mask (isMedSAMOutput: false) for project ${projectId}. Using it for export.`);
-            segmentationsToProcess = [manualMask];
-        } else {
-            // Fallback to the first available mask if no manual mask is found
-            logger.info(`${serviceLocationExport}: No manual segmentation mask found for project ${projectId}. Using the first available AI segmentation mask.`);
-            segmentationsToProcess = [segmentationMasksResult.projectsegmentationmasks![0]];
-        }
+        // Optional model query param (medsam | unet) — prefer an editable mask
+        // tagged with that model; fall back to first editable; fall back to first mask.
+        const requestedExportModel = typeof req.query.model === "string"
+            ? req.query.model.toLowerCase()
+            : undefined;
+
+        const editableMasks = segmentationMasksResult.projectsegmentationmasks!.filter(
+            mask => mask.isMedSAMOutput === false
+        );
+
+        const modelMatchedMask = requestedExportModel
+            ? editableMasks.find(mask => {
+                  const tag = (
+                      (mask as any).segmentationModel ||
+                      (mask as any).model_used ||
+                      ""
+                  ).toString().toLowerCase();
+                  return tag === requestedExportModel;
+              })
+            : undefined;
+
+        const chosenMask = modelMatchedMask ?? editableMasks[0] ?? segmentationMasksResult.projectsegmentationmasks![0];
+
+        logger.info(
+            `${serviceLocationExport}: Exporting mask for project ${projectId} ` +
+            `(requestedModel=${requestedExportModel ?? "<none>"}, ` +
+            `matchedByModel=${!!modelMatchedMask}, ` +
+            `maskId=${(chosenMask as any)?._id ?? "<unknown>"}).`
+        );
+        segmentationsToProcess = [chosenMask];
 
         await fs.writeJson(segmentationsJsonPath, segmentationsToProcess, { spaces: 2 });
         logger.info(`${serviceLocationExport}: Created segmentations.json for project ${projectId} at ${segmentationsJsonPath}`);
