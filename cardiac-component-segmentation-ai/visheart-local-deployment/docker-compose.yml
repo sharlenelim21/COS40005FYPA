@@ -110,10 +110,12 @@ services:
       #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
     volumes:
-      - backend_temp_jpeg:/app/backend/dist/temp_jpeg
-      - backend_temp_exports:/app/backend/dist/temp_exports
-      - backend_temp_mesh:/app/backend/dist/temp_mesh
-      - backend_temp_upload:/app/backend/dist/temp_upload
+      - ../Cardiac_Segmentation_FYP_Server/dist:/app/backend/dist:ro
+      - ../Cardiac_Segmentation_FYP_Server/src/python:/app/backend/src/python:ro
+      - ../Cardiac_Segmentation_FYP_Server/dist/temp_jpeg:/app/backend/dist/temp_jpeg
+      - ../Cardiac_Segmentation_FYP_Server/dist/temp_exports:/app/backend/dist/temp_exports
+      - ../Cardiac_Segmentation_FYP_Server/dist/temp_mesh:/app/backend/dist/temp_mesh
+      - ../Cardiac_Segmentation_FYP_Server/dist/temp_upload:/app/backend/dist/temp_upload
     networks:
       - visheart-network
     healthcheck:
@@ -234,6 +236,30 @@ services:
       bash -lc 'python -c "import nibabel, timm" ||
       pip install --no-cache-dir "nibabel>=5.0.0" timm;
       exec bash ./docker/scripts/start.sh'
+    volumes:
+      - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
+      - ../visheart-inference-gpu/app/main.py:/app/app/main.py:ro
+      - ../visheart-inference-gpu/app/main_updated.py:/app/app/main_updated.py:ro
+      - ../visheart-inference-gpu/app/bullseye_analysis.py:/app/app/bullseye_analysis.py:ro
+      - ../visheart-inference-gpu/app/external_unet_inference.py:/app/app/external_unet_inference.py:ro
+      - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
+      - ../visheart-inference-gpu/app/classes/file_fetch_handler.py:/app/app/classes/file_fetch_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/fourdreconstruction_handler.py:/app/app/classes/fourdreconstruction_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/medsam_handler.py:/app/app/classes/medsam_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/pydantic_schema.py:/app/app/classes/pydantic_schema.py:ro
+      - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
+      - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
+      - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
+      - ../visheart-inference-gpu/app/helpers/unet_inference_api.py:/app/app/helpers/unet_inference_api.py:ro
+      - ../visheart-inference-gpu/app/routes/bullseye_route.py:/app/app/routes/bullseye_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route.py:/app/app/routes/inference_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route_old.py:/app/app/routes/inference_route_old.py:ro
+      - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
+      - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
+      - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
     networks:
       visheart-network:
         aliases:
@@ -265,6 +291,31 @@ services:
       bash -lc 'python -c "import nibabel, timm" ||
       pip install --no-cache-dir "nibabel>=5.0.0" timm;
       exec bash ./docker/scripts/start.sh'
+    volumes:
+      - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
+      - ../visheart-inference-gpu/app/main.py:/app/app/main.py:ro
+      - ../visheart-inference-gpu/app/main_updated.py:/app/app/main_updated.py:ro
+      - ../visheart-inference-gpu/app/bullseye_analysis.py:/app/app/bullseye_analysis.py:ro
+      - ../visheart-inference-gpu/app/external_unet_inference.py:/app/app/external_unet_inference.py:ro
+      - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
+      - ../visheart-inference-gpu/app/classes/file_fetch_handler.py:/app/app/classes/file_fetch_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/fourdreconstruction_handler.py:/app/app/classes/fourdreconstruction_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/medsam_handler.py:/app/app/classes/medsam_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/pydantic_schema.py:/app/app/classes/pydantic_schema.py:ro
+      - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
+      - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
+      - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
+      - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
+      - ../visheart-inference-gpu/app/helpers/unet_inference_api.py:/app/app/helpers/unet_inference_api.py:ro
+      - ../visheart-inference-gpu/app/routes/bullseye_route.py:/app/app/routes/bullseye_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route.py:/app/app/routes/inference_route.py:ro
+      - ../visheart-inference-gpu/app/routes/inference_route_old.py:/app/app/routes/inference_route_old.py:ro
+      - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
+      - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
+      - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      - ../visheart-inference-gpu/app/models:/app/app/models:ro
     networks:
       visheart-network:
         aliases:
@@ -282,12 +333,4 @@ volumes:
   redis_data:
     driver: local
   minio_data:
-    driver: local
-  backend_temp_jpeg:
-    driver: local
-  backend_temp_exports:
-    driver: local
-  backend_temp_mesh:
-    driver: local
-  backend_temp_upload:
     driver: local
