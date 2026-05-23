@@ -37,7 +37,7 @@ def load_experiment_specifications(experiment_directory):
     return json.load(open(filename))
 
 
-def load_model_parameters(experiment_directory, checkpoint, decoder):
+def load_model_parameters(experiment_directory, checkpoint, decoder, device=None):
 
     filename = os.path.join(
         experiment_directory, model_params_subdir, checkpoint + ".pth"
@@ -46,7 +46,8 @@ def load_model_parameters(experiment_directory, checkpoint, decoder):
     if not os.path.isfile(filename):
         raise Exception('model state dict "{}" does not exist'.format(filename))
 
-    data = torch.load(filename)
+    map_location = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    data = torch.load(filename, map_location=map_location)
 
     decoder.load_state_dict(data["model_state_dict"])
 
@@ -116,10 +117,9 @@ def load_pre_trained_latent_vectors(experiment_directory, checkpoint, device=Non
             + " for checkpoint '{}'".format(experiment_directory, checkpoint)
         )
 
-    data = torch.load(filename)
-    
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    data = torch.load(filename, map_location=device)
 
     if isinstance(data["latent_codes"], torch.Tensor):
 
@@ -150,7 +150,7 @@ def load_latent_vectors(experiment_directory, filename, lat_vecs):
     if not os.path.isfile(full_filename):
         raise Exception('latent state file "{}" does not exist'.format(full_filename))
 
-    data = torch.load(full_filename)
+    data = torch.load(full_filename, map_location=lambda storage, loc: storage)
 
     if isinstance(data["latent_codes"], torch.Tensor):
 
@@ -205,7 +205,7 @@ def load_optimizer(experiment_directory, filename, optimizer):
             'optimizer state dict "{}" does not exist'.format(full_filename)
         )
 
-    data = torch.load(full_filename)
+    data = torch.load(full_filename, map_location=lambda storage, loc: storage)
 
     optimizer.load_state_dict(data["optimizer_state_dict"])
 
@@ -254,7 +254,7 @@ def load_logs(experiment_directory):
     if not os.path.isfile(full_filename):
         raise Exception('log file "{}" does not exist'.format(full_filename))
 
-    data = torch.load(full_filename)
+    data = torch.load(full_filename, map_location=lambda storage, loc: storage)
 
     return (
         data["loss"],
