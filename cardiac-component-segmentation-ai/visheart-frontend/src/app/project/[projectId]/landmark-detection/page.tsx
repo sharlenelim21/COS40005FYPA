@@ -547,9 +547,17 @@ export default function LandmarkDetectionPage() {
           </Select>
         </div>
 
-        {/* Export buttons */}
+        {/* Re-run + Export buttons */}
         {hasPredictions && (
           <div className="flex items-center gap-2 shrink-0">
+            <Button
+              size="sm"
+              className="text-xs gap-1.5"
+              onClick={() => rerunDetectionAndResetEdits(selectedModel)}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Re-run
+            </Button>
             <Button
               variant="outline"
               size="sm"
