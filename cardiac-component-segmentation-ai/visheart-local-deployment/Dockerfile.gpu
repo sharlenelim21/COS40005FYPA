@@ -24,3 +24,7 @@ COPY UNETRESNET34/models/unet_resnet34.py /app/UNETRESNET34/models/unet_resnet34
 # guarantees teammates don't need the local visheart-inference-gpu repo.
 COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/unet.pth /app/app/models/unet.pth
 COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/fourd_model_epoch_250.pth /app/app/models/fourd_model_epoch_250.pth
+
+# Override deep_sdf files that had hardcoded .cuda() calls in the base image.
+# Local versions have these replaced with device-aware calls that work on CPU too.
+COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py /app/app/dependencies/deep_sdf/mesh.py
