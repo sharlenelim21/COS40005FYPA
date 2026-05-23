@@ -53,6 +53,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
+  const imgPixelDimsRef = useRef<{ w: number; h: number } | null>(null);
   const draggingLandmarkRef = useRef<string | null>(null);
 
   // Keep frame label values in refs so changing frame doesn't recreate `draw`
@@ -93,8 +94,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
       if (!prediction) return;
 
-      const isCollapsed     = prediction.flag === "collapsed_to_mean";
-      const isLowConfidence = prediction.flag === "normal" && prediction.confidence === "low";
+      const isCollapsed = prediction.flag === "collapsed_to_mean";
 
       const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
       for (const def of sorted) {
@@ -102,7 +102,16 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
         const [cx, cy] = toCanvas(coord, cw, ch);
-        drawDot(ctx, cx, cy, def, showLabels, highlightedLandmarkId === def.id);
+        // Collapsed slice: show dots but suppress "RV Insertion" text labels
+        drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, highlightedLandmarkId === def.id);
+      }
+      // Collapsed slice: draw the "Mean" label at the mean position on top
+      if (isCollapsed && prediction.display_mean) {
+        const [cx, cy] = toCanvas(
+          [prediction.display_mean.x, prediction.display_mean.y],
+          cw, ch,
+        );
+        drawMeanDot(ctx, cx, cy, true);
       }
 
       if (totalFramesRef.current > 0) {
@@ -126,6 +135,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
   const hitTestLandmark = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!prediction || !editableLandmarks) return null;
+    if (prediction.flag === "collapsed_to_mean") return null;
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();

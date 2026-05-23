@@ -40,6 +40,7 @@ import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
 import type { FramePrediction } from "@/types/landmark";
 import { segmentationApi } from "@/lib/api";
+import { fmt } from "@/lib/format-utils";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
 import {
@@ -217,8 +218,8 @@ export default function LandmarkDetectionPage() {
 
       // Editable masks only (isMedSAMOutput === false), split by inferred model
       const editables = segs.filter((m) => !m.isMedSAMOutput);
-      const medsamMasks = editables.filter((m) => inferMaskModel(m.name ?? "") === "medsam");
-      const unetMasks = editables.filter((m) => inferMaskModel(m.name ?? "") === "unet");
+      const medsamMasks = editables.filter((m) => maskBelongsTo(m, "medsam"));
+      const unetMasks = editables.filter((m) => maskBelongsTo(m, "unet"));
 
       const medsamWithBullseye = medsamMasks.find((m) => m.bullseye != null);
       const unetWithBullseye = unetMasks.find((m) => m.bullseye != null);
@@ -1235,7 +1236,6 @@ function BullseyeFrameGrid({
             <AhaBullseyeChart
               bullseyeData={bullseyeData}
               referenceAngleDeg={referenceAngleDeg}
-              size={240}
             />
           </div>
         ))}
@@ -1514,7 +1514,7 @@ function BullseyeSegment({
         style={{ transition: "fill 240ms ease" }}
       >
         {tooltip && (
-          <title>{tooltip.name}: {tooltip.value.toFixed(2)}%</title>
+          <title>{tooltip.name}: {tooltip.value != null ? tooltip.value.toFixed(2) : "—"}%</title>
         )}
       </path>
       <text

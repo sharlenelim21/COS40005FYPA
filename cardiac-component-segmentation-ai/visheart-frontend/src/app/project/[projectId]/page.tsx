@@ -84,9 +84,9 @@ function ProjectPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const highlight = searchParams.get("highlight"); // "reconstruction" | "landmark" | "segmentation" | null
-  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions } = useProject();
+  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache } = useProject();
   // Glow "Start AI Segmentation" when there are no masks and no active jobs
-  const glowStartSegmentation = loading === "done" && !hasMasks && jobs.filter(j => j.status === ProjectTypes.JobStatus.PENDING || j.status === ProjectTypes.JobStatus.IN_PROGRESS).length === 0;
+  const glowStartSegmentation = loading === "done" && !hasMasks && (jobs ?? []).filter(j => j.status === ProjectTypes.JobStatus.PENDING || j.status === ProjectTypes.JobStatus.IN_PROGRESS).length === 0;
 
   // Glow "Edit Segmentation Masks" when masks just finished processing on this page
   // (hasMasks flipped true while user was here) OR via ?highlight=segmentation URL param
