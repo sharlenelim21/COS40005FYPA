@@ -58,8 +58,8 @@ export const landmarkApi = {
         uuid?: string;
       }>(`${ENDPOINT}/start/${projectId}`, {
         model,
-        segmentationModel,
         deviceType: "auto",
+        segmentationModel,
       });
 
       if (!startResponse.data.success || !startResponse.data.uuid) {
@@ -70,7 +70,7 @@ export const landmarkApi = {
       }
 
       const result = await pollLandmarkResult(projectId, startResponse.data.uuid);
-      if (!result.predictions?.length) {
+      if (!result?.predictions?.length) {
         throw new LandmarkApiError(
           "empty_predictions",
           "The model returned no landmark predictions for this project.",
@@ -188,8 +188,9 @@ async function pollLandmarkResult(
       params: { jobUuid },
     });
 
-    if (response.data.result?.predictions?.length) {
-      return response.data.result;
+    const polledResult = response.data.result;
+    if (polledResult?.predictions?.length) {
+      return polledResult;
     }
 
     if (response.data.job?.status === "failed") {

@@ -103,7 +103,6 @@ export const projectUploadFilter = multer({
   storage,
   limits: {
     // 500MB limit - realistic for cardiac MRI NIfTI files (typical 10-100MB)
-    // 200GB original limit was a DoS risk
     fileSize: 500 * 1024 * 1024,
     files: 10 // Maximum 10 files per request
   },

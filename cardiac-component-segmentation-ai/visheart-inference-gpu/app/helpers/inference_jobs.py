@@ -741,13 +741,14 @@ async def process_landmark_job_with_semaphore(
     callback_url: HttpUrl,
     device: str = "auto",
     checkpoint_path: str | None = None,
+    seg_mask_url: str | None = None,
 ):
     print(f"[{serviceLocation}] Job {uuid} waiting for GPU access (landmark)...")
     async with gpu_semaphore:
         print(f"[{serviceLocation}] Job {uuid} acquired GPU access (landmark)")
         log_gpu_status(uuid, "start-landmark")
         try:
-            await _process_landmark_job(input_url, uuid, callback_url, device, checkpoint_path)
+            await _process_landmark_job(input_url, uuid, callback_url, device, checkpoint_path, seg_mask_url)
         finally:
             log_gpu_status(uuid, "end-landmark")
             print(f"[{serviceLocation}] Job {uuid} released GPU access (landmark)")
@@ -759,11 +760,13 @@ async def _process_landmark_job(
     callback_url: HttpUrl,
     device: str = "auto",
     checkpoint_path: str | None = None,
+    seg_mask_url: str | None = None,
 ):
-    print(f"[{serviceLocation}] Starting landmark job {uuid}")
+    print(f"[{serviceLocation}] Starting landmark job {uuid} (seg_mask={'yes' if seg_mask_url else 'no'})")
     result = None
     error_detail = None
     success = False
+    seg_mask_path: str | None = None
     parsed_url = urlparse(str(input_url))
 
     if not all([parsed_url.scheme, parsed_url.netloc]):
@@ -772,6 +775,22 @@ async def _process_landmark_job(
         return
 
     try:
+        if seg_mask_url:
+            seg_tmp = f"/tmp/seg_mask_{uuid}.nii.gz"
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(seg_mask_url) as resp:
+                        if resp.status == 200:
+                            with open(seg_tmp, "wb") as f:
+                                async for chunk in resp.content.iter_chunked(8192):
+                                    f.write(chunk)
+                            seg_mask_path = seg_tmp
+                            print(f"[{serviceLocation}] Seg mask downloaded → {seg_tmp}")
+                        else:
+                            print(f"[{serviceLocation}] Seg mask download failed HTTP {resp.status} — 1ch fallback")
+            except Exception as seg_exc:
+                print(f"[{serviceLocation}] Seg mask download error: {seg_exc} — 1ch fallback")
+
         async with FileFetchHandler(str(input_url)) as handler:
             file_path = handler.get_file_path()
             if not file_path or not os.path.isfile(file_path):
@@ -782,15 +801,28 @@ async def _process_landmark_job(
             inference_output = await asyncio.to_thread(
                 run_landmark_inference_from_nifti,
                 file_path,
+                seg_mask_path,
                 device,
                 checkpoint_path,
             )
 
-            if not isinstance(inference_output, dict) or not inference_output.get("success"):
-                error_detail = (inference_output or {}).get("error", "Landmark inference failed without detailed error.")
+            # New response format: direct dict with "slices", "avg_lm1", etc.
+            # Legacy format (from old inference.py): {"success": True, "landmarks": {...}}
+            if isinstance(inference_output, dict):
+                if "slices" in inference_output:
+                    # New format — return the whole dict as result
+                    result = inference_output
+                    success = True
+                elif inference_output.get("success"):
+                    # Legacy format
+                    result = inference_output.get("landmarks")
+                    success = True
+                else:
+                    error_detail = inference_output.get("error", "Landmark inference failed.")
             else:
-                result = inference_output.get("landmarks")
-                success = True
+                error_detail = "Unexpected output from landmark inference."
+
+            if success:
                 print(f"[{serviceLocation}] Successfully processed landmark job {uuid}")
 
     except Exception as e:
@@ -803,6 +835,12 @@ async def _process_landmark_job(
         else:
             error_detail = f"Error during landmark inference: {str(e)}"
     finally:
+        # Clean up downloaded seg mask temp file
+        if seg_mask_path and os.path.exists(seg_mask_path):
+            try:
+                os.remove(seg_mask_path)
+            except Exception:
+                pass
         print(f"[{serviceLocation}] Sending final callback for landmark job {uuid} with success={success}")
         await send_callback(callback_url, uuid, success, result, error_detail)
 

@@ -1,9 +1,0 @@
-allowBuilds:
-  bcrypt: true
-  core-js: true
-  mongodb-memory-server: true
-  unrs-resolver: true
-onlyBuiltDependencies:
-  - bcrypt
-  - mongodb-memory-server
-  - unrs-resolver

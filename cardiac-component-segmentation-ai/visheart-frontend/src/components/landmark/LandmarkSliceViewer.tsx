@@ -222,8 +222,11 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
           onLandmarkMove?.(draggingLandmarkRef.current, canvasToImageCoord(event));
         }}
         onPointerUp={(event) => {
+          const hasActiveDrag = !!draggingLandmarkRef.current;
           draggingLandmarkRef.current = null;
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          if (hasActiveDrag && event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
         }}
         onPointerCancel={() => {
           draggingLandmarkRef.current = null;

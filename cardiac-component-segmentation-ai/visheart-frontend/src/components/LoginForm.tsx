@@ -18,6 +18,11 @@ export const LoginForm = () => {
 
   const [showPassword, setShowPassword] = useState(false);
 
+  const isBlocked = typeof error === "string" && (
+    error.toLowerCase().includes("too many login") ||
+    error.toLowerCase().includes("account locked")
+  );
+
   // Show redirecting state after successful login
   if (isRedirecting) {
     return (
@@ -77,7 +82,7 @@ export const LoginForm = () => {
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Enter your username"
                   required
-                  disabled={loading}
+                  disabled={loading || isBlocked}
                   className="focus:border-primary group-hover:border-primary/50 h-12 border-2 pr-4 pl-4 text-base transition-all duration-200"
                 />
               </div>
@@ -99,7 +104,7 @@ export const LoginForm = () => {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
                   required
-                  disabled={loading}
+                  disabled={loading || isBlocked}
                   className="focus:border-primary group-hover:border-primary/50 h-12 border-2 pr-12 pl-4 text-base transition-all duration-200"
                 />
                 <button
@@ -115,7 +120,7 @@ export const LoginForm = () => {
             {/* Sign In Button */}
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || isBlocked}
               className="from-primary to-primary/90 hover:from-primary/90 hover:to-primary/80 h-12 w-full bg-gradient-to-r text-base font-semibold shadow-lg transition-all duration-200 hover:cursor-pointer hover:shadow-xl"
             >
               {loading ? (

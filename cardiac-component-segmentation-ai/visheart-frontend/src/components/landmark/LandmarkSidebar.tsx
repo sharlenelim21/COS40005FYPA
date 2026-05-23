@@ -257,7 +257,7 @@ export function LandmarkSidebar({
   );
 }
 
-// Playback bar
+// Playback bar 
 function PlaybackBar({
   currentFrame,
   totalFrames,

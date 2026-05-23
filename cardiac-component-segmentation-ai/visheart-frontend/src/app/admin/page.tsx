@@ -267,4 +267,3 @@ export default function AdminPageHome() {
     </div>
   );
 }
-}
