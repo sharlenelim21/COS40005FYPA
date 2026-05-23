@@ -72,6 +72,11 @@ export const AuthenticatedUserView = () => {
   if (!user) return null;
 
   const handleLogout = async () => {
+    // Guests have no persistent projects — skip the unsaved-projects check
+    if (user.role === "guest") {
+      await logout();
+      return;
+    }
     try {
       const response = await projectApi.getProjects();
       const tempProjects = (response.projects ?? []).filter((p: { isSaved?: boolean }) => !p.isSaved);

@@ -25,6 +25,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
+import { useAuth } from "@/context/auth-context";
 
 export type SegmentationModelId = "medsam" | "unet";
 
@@ -52,6 +53,8 @@ function SegmentationResultsPageInner() {
   const fromViewer = searchParams.get("from") === "4d";
   const { processingUnit, isLoading: gpuStatusLoading } = useGpuStatus();
   const isGpuMode = processingUnit.gpuAvailable;
+  const { user } = useAuth();
+  const isGuest = user?.role === "guest";
 
   const {
     loading,
@@ -1401,8 +1404,8 @@ function SegmentationResultsPageInner() {
 
       </div>
 
-      {/* Guidance panel — content depends on whether user came from 4D viewer */}
-      {hasMasks && (
+      {/* Guidance panel — hidden for guests; content depends on whether user came from 4D viewer */}
+      {hasMasks && !isGuest && (
         fromViewer ? (
           <GuidancePanel
             storageKey={`seg-from4d-guidance-${projectId}`}

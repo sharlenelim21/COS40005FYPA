@@ -23,26 +23,27 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 // Icons
-import { 
-  Play, 
-  Eye, 
-  Edit, 
-  Save, 
-  X, 
-  RefreshCw, 
-  Database, 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
-  AlertCircle, 
-  Image as ImageIcon, 
-  Activity, 
-  Layers, 
+import {
+  Play,
+  Eye,
+  Edit,
+  Save,
+  X,
+  RefreshCw,
+  Database,
+  CheckCircle,
+  XCircle,
+  Clock,
+  AlertCircle,
+  Image as ImageIcon,
+  Activity,
+  Layers,
   Sparkles,
   Box,
   Crosshair,
   ChevronRight,
-  Trash2
+  Trash2,
+  Lock
 } from "lucide-react";
 
 // Custom components
@@ -50,6 +51,7 @@ import { NoProjectFound } from "@/components/project/NoProjectFound";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
+import { useAuth } from "@/context/auth-context";
 import { AffineMatrixDisplay } from "@/components/ui/AffineMatrixDisplay";
 import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
 
@@ -106,6 +108,8 @@ function ProjectPageInner() {
     if (highlight === "segmentation") setGlowEditMasks(true);
   }, [highlight]);
   const { processingUnit } = useGpuStatus();
+  const { user } = useAuth();
+  const isGuest = user?.role === "guest";
 
   // Update page title dynamically
   useEffect(() => {
@@ -1094,22 +1098,34 @@ function ProjectPageInner() {
                       {/* Landmark Detection */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
-                            <Link href={`/project/${projectId}/landmark-detection`}>
+                          {isGuest ? (
+                            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
                               <div className="flex items-center gap-3 w-full">
-                                <Crosshair className="h-5 w-5 text-primary" />
+                                <Lock className="h-5 w-5 text-muted-foreground" />
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Landmark Detection</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Detect landmarks, preview strain, and export reports
-                                  </p>
+                                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
                                 </div>
                               </div>
-                            </Link>
-                          </Button>
+                            </Button>
+                          ) : (
+                            <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
+                              <Link href={`/project/${projectId}/landmark-detection`}>
+                                <div className="flex items-center gap-3 w-full">
+                                  <Crosshair className="h-5 w-5 text-primary" />
+                                  <div className="text-left flex-1">
+                                    <p className="font-semibold">Landmark Detection</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Detect landmarks, preview strain, and export reports
+                                    </p>
+                                  </div>
+                                </div>
+                              </Link>
+                            </Button>
+                          )}
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Run landmark detection, view strain previews, and export a PDF report</p>
+                          <p>{isGuest ? "Sign in to unlock landmark detection" : "Run landmark detection, view strain previews, and export a PDF report"}</p>
                         </TooltipContent>
                       </Tooltip>
 
@@ -1127,34 +1143,46 @@ function ProjectPageInner() {
                       ) : (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button
-                              onClick={() => handleOpenReconstruction()}
-                              size="lg"
-                              variant={highlight === "reconstruction" ? "default" : "outline"}
-                              className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "animate-pulse shadow-lg" : ""}`}
-                              disabled={isStartingReconstruction}
-                            >
-                              <div className="flex items-center gap-3 w-full">
-                                {isStartingReconstruction ? (
-                                  <RefreshCw className="h-5 w-5 animate-spin" />
-                                ) : (
-                                  <Sparkles className="h-5 w-5" />
-                                )}
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">
-                                    {isStartingReconstruction 
-                                      ? 'Starting Reconstruction...' 
-                                      : 'Create 4D Reconstruction'}
-                                  </p>
-                                  <p className="text-xs opacity-90">
-                                    Generate model-scoped 4D meshes from segmentation
-                                  </p>
+                            {isGuest ? (
+                              <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+                                <div className="flex items-center gap-3 w-full">
+                                  <Lock className="h-5 w-5 text-muted-foreground" />
+                                  <div className="text-left flex-1">
+                                    <p className="font-semibold">Create 4D Reconstruction</p>
+                                    <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
+                                  </div>
                                 </div>
-                              </div>
-                            </Button>
+                              </Button>
+                            ) : (
+                              <Button
+                                onClick={() => handleOpenReconstruction()}
+                                size="lg"
+                                variant={highlight === "reconstruction" ? "default" : "outline"}
+                                className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "animate-pulse shadow-lg" : ""}`}
+                                disabled={isStartingReconstruction}
+                              >
+                                <div className="flex items-center gap-3 w-full">
+                                  {isStartingReconstruction ? (
+                                    <RefreshCw className="h-5 w-5 animate-spin" />
+                                  ) : (
+                                    <Sparkles className="h-5 w-5" />
+                                  )}
+                                  <div className="text-left flex-1">
+                                    <p className="font-semibold">
+                                      {isStartingReconstruction
+                                        ? 'Starting Reconstruction...'
+                                        : 'Create 4D Reconstruction'}
+                                    </p>
+                                    <p className="text-xs opacity-90">
+                                      Generate model-scoped 4D meshes from segmentation
+                                    </p>
+                                  </div>
+                                </div>
+                              </Button>
+                            )}
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Build animated 4D cardiac models for visualization and analysis</p>
+                            <p>{isGuest ? "Sign in to unlock 4D reconstruction" : "Build animated 4D cardiac models for visualization and analysis"}</p>
                           </TooltipContent>
                         </Tooltip>
                       )}
@@ -1233,52 +1261,76 @@ function ProjectPageInner() {
                       {/* Landmark Detection */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
-                            <Link href={`/project/${projectId}/landmark-detection`}>
+                          {isGuest ? (
+                            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
                               <div className="flex items-center gap-3 w-full">
-                                <Crosshair className="h-5 w-5 text-primary" />
+                                <Lock className="h-5 w-5 text-muted-foreground" />
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Landmark Detection</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Detect landmarks, preview strain, and export reports
-                                  </p>
+                                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
                                 </div>
                               </div>
-                            </Link>
-                          </Button>
+                            </Button>
+                          ) : (
+                            <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
+                              <Link href={`/project/${projectId}/landmark-detection`}>
+                                <div className="flex items-center gap-3 w-full">
+                                  <Crosshair className="h-5 w-5 text-primary" />
+                                  <div className="text-left flex-1">
+                                    <p className="font-semibold">Landmark Detection</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      Detect landmarks, preview strain, and export reports
+                                    </p>
+                                  </div>
+                                </div>
+                              </Link>
+                            </Button>
+                          )}
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Run landmark detection, view strain previews, and export a PDF report</p>
+                          <p>{isGuest ? "Sign in to unlock landmark detection" : "Run landmark detection, view strain previews, and export a PDF report"}</p>
                         </TooltipContent>
                       </Tooltip>
 
                       {/* Start Reconstruction */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button
-                            onClick={() => handleOpenReconstruction()}
-                            size="lg"
-                            variant="outline"
-                            className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30" : ""}`}
-                            disabled={isStartingReconstruction}
-                          >
-                            <div className="flex items-center gap-3 w-full">
-                              {isStartingReconstruction ? (
-                                <RefreshCw className="h-5 w-5 animate-spin" />
-                              ) : (
-                                <Sparkles className="h-5 w-5" />
-                              )}
-                              <div className="text-left flex-1">
-                                <p className="font-semibold">
-                                  {isStartingReconstruction ? "Starting Reconstruction..." : "Create 4D Reconstruction"}
-                                </p>
-                                <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
+                          {isGuest ? (
+                            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+                              <div className="flex items-center gap-3 w-full">
+                                <Lock className="h-5 w-5 text-muted-foreground" />
+                                <div className="text-left flex-1">
+                                  <p className="font-semibold">Create 4D Reconstruction</p>
+                                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
+                                </div>
                               </div>
-                            </div>
-                          </Button>
+                            </Button>
+                          ) : (
+                            <Button
+                              onClick={() => handleOpenReconstruction()}
+                              size="lg"
+                              variant="outline"
+                              className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30" : ""}`}
+                              disabled={isStartingReconstruction}
+                            >
+                              <div className="flex items-center gap-3 w-full">
+                                {isStartingReconstruction ? (
+                                  <RefreshCw className="h-5 w-5 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-5 w-5" />
+                                )}
+                                <div className="text-left flex-1">
+                                  <p className="font-semibold">
+                                    {isStartingReconstruction ? "Starting Reconstruction..." : "Create 4D Reconstruction"}
+                                  </p>
+                                  <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
+                                </div>
+                              </div>
+                            </Button>
+                          )}
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Build animated 4D cardiac models for visualization and analysis</p>
+                          <p>{isGuest ? "Sign in to unlock 4D reconstruction" : "Build animated 4D cardiac models for visualization and analysis"}</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>
