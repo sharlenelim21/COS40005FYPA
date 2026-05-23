@@ -163,8 +163,16 @@ export const projectApi = {
   getProjects: async () => {
     try {
       const response = await api.get("/project/get-projects-list");
-      return response.data;
+      const data = response.data;
+      if (Array.isArray(data)) {
+        return { projects: data };
+      }
+      return data;
     } catch (error) {
+      const status = (error as AxiosError)?.response?.status;
+      if (status === 404) {
+        return { projects: [] };
+      }
       throw error;
     }
   },

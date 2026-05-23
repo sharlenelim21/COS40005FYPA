@@ -431,6 +431,13 @@ export class TarImageCache {
       this.debugInfo.presignedUrl = presignedResponse.presignedUrl;
       this.debugInfo.presignedUrlExpiry = presignedResponse.expiresAt || null;
 
+      try {
+        const parsedUrl = new URL(presignedResponse.presignedUrl);
+        console.log(`[TarImageCache] Presigned URL origin: ${parsedUrl.protocol}//${parsedUrl.hostname}${parsedUrl.port ? `:${parsedUrl.port}` : ""}`);
+      } catch {
+        console.log(`[TarImageCache] Presigned URL origin: <invalid-url>`);
+      }
+
       // Step 2: Fetch tar file
       console.log(`[TarImageCache] Fetching tar file from presigned URL`);
       const tarResponse = await fetch(presignedResponse.presignedUrl);

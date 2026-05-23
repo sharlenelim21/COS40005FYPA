@@ -64,14 +64,14 @@ interface ReconstructionConfigDialogProps {
    * the requested default is unavailable.
    */
   defaultSelectedModel?: ReconstructionSegmentationModel;
-  existingReconstructionsByModel?: Partial<Record<ReconstructionSegmentationModel, string>>;
-  onViewReconstruction?: (model: ReconstructionSegmentationModel, reconstructionId?: string) => void;
   /**
    * Whether a GPU is available in the current environment.
    * When false, MedSAM cards show "GPU required" instead of
    * "Run MedSAM segmentation first", so CPU users are not misled.
    */
   gpuAvailable?: boolean;
+  existingReconstructionsByModel?: Partial<Record<ReconstructionSegmentationModel, string>>;
+  onViewReconstruction?: (model: ReconstructionSegmentationModel, reconstructionId?: string) => void;
 }
 
 const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
@@ -94,9 +94,9 @@ export function ReconstructionConfigDialog({
   availableModels,
   blockedModels,
   defaultSelectedModel,
+  gpuAvailable = true,
   existingReconstructionsByModel,
   onViewReconstruction,
-  gpuAvailable = true,
 }: ReconstructionConfigDialogProps) {
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);

@@ -1,30 +1,21 @@
+#!/usr/bin/env pwsh
+# VisHeart Local Deployment Startup Script
+# Implements GPU detection with automatic CPU fallback and health checks.
+
 param(
-    [int]$WaitRetries = 12,
-    [int]$WaitIntervalSec = 5,
-    [switch]$ForceCpu,
-    [switch]$ForceGpu
+    [int]$WaitRetries = 60,
+    [int]$WaitIntervalSec = 2
 )
 
-# VisHeart local-deployment startup script.
-# - Detects whether Docker has access to an NVIDIA GPU.
-# - Picks the matching docker-compose profile: 'gpu' (NVIDIA) or 'cpu'.
-# - Brings up visheart-app + dependencies + the chosen inference container.
-# - Health-checks frontend, backend, and the inference service.
-#
-# Both gpu-cpu and gpu-nvidia services in docker-compose.yml share the
-# network alias `gpu` and bind uvicorn on port 8011, so visheart-app
-# always reaches the inference service at http://gpu:8011 regardless of
-# which profile is active.
-
 function Write-Log {
-    param([string]$Msg)
-    $ts = (Get-Date).ToString('u')
-    Write-Host "[$ts] $Msg"
+    param([string]$Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ssZ"
+    Write-Host "[$timestamp] $Message"
 }
 
 function Test-DockerAvailable {
     try {
-        docker version > $null 2>&1
+        docker version | Out-Null
         return $true
     } catch {
         return $false
@@ -32,58 +23,34 @@ function Test-DockerAvailable {
 }
 
 function Test-DockerGpuAvailable {
-    # Method 1 is only a hint: a registered 'nvidia' runtime does NOT mean
-    # the GPU actually works (e.g. Docker Desktop on a WSL2 host with no
-    # NVIDIA adapter still lists the runtime). We must verify with Method 2
-    # before claiming the GPU is available.
-    $runtimeHinted = $false
+    # Check if nvidia runtime is present
     try {
-        $runtimes = docker info --format '{{json .Runtimes}}' 2>$null
-        if ($runtimes) {
-            try {
-                $obj = $runtimes | ConvertFrom-Json -ErrorAction Stop
-                if ($obj.PSObject.Properties.Name -contains 'nvidia') {
-                    Write-Log "Detected 'nvidia' runtime in 'docker info' (hint only; will verify)."
-                    $runtimeHinted = $true
-                }
-            } catch {
-                # ignore parse errors; treat as no hint
+        $dockerInfo = docker info 2>$null
+        if ($dockerInfo -like "*nvidia*") {
+            Write-Log "Detected 'nvidia' runtime in 'docker info'. Will perform container-level verification to confirm GPU usability."
+            Write-Log "Attempting container-level GPU check (this may pull a lightweight CUDA base image)."
+            
+            # Actually test GPU with a container
+            docker run --rm --gpus all "nvidia/cuda:12.3.0-base-ubuntu22.04" nvidia-smi 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Log "Container-level GPU check passed."
+                return $true
+            } else {
+                Write-Log "Container-level GPU check failed (non-zero exit)."
+                return $false
             }
         }
-    } catch {
-        # ignore; treat as no hint
-    }
-
-    if (-not $runtimeHinted) {
-        Write-Log "No 'nvidia' runtime registered with Docker. Treating as CPU-only."
         return $false
-    }
-
-    # Method 2: actually attempt to run nvidia-smi inside a CUDA container.
-    # Only run this if Method 1 was positive, so CPU-only machines don't
-    # pay the cost of pulling a CUDA base image just to confirm 'no GPU'.
-    Write-Log "Verifying GPU with container-level check (may pull a CUDA base image)."
-    $img = 'nvidia/cuda:12.4.1-base-ubuntu22.04'
-    try {
-        & docker run --rm --gpus all $img nvidia-smi > $null 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log 'Container-level GPU check succeeded.'
-            return $true
-        } else {
-            Write-Log 'Container-level GPU check failed (registered runtime but no usable adapter). Falling back to CPU.'
-            return $false
-        }
     } catch {
-        Write-Log 'Container-level GPU check failed (exception). Falling back to CPU.'
         return $false
     }
 }
 
 function Test-Url {
-    param([string]$url)
+    param([string]$Url)
     try {
-        $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 6 -Method GET -ErrorAction Stop
-        return $true
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3 -Method GET -ErrorAction Stop
+        return $response.StatusCode -eq 200
     } catch {
         return $false
     }
@@ -99,69 +66,93 @@ try {
         exit 2
     }
 
-    if ($ForceCpu -and $ForceGpu) {
-        Write-Log 'ERROR: -ForceCpu and -ForceGpu cannot both be set.'
-        exit 6
-    }
-
-    if ($ForceCpu) {
-        Write-Log '-ForceCpu set: skipping GPU detection.'
-        $gpuAvailable = $false
-    } elseif ($ForceGpu) {
-        Write-Log '-ForceGpu set: skipping GPU detection.'
-        $gpuAvailable = $true
-    } else {
-        $gpuAvailable = Test-DockerGpuAvailable
-    }
+    $gpuAvailable = Test-DockerGpuAvailable
 
     if ($gpuAvailable) {
         $profile = 'gpu'
-        $inferenceContainer = 'visheart-gpu-nvidia'
+        $inferenceService = 'gpu-nvidia'      # compose SERVICE name
+        $inferenceContainer = 'visheart-gpu-nvidia'  # container name
     } else {
         $profile = 'cpu'
-        $inferenceContainer = 'visheart-gpu-cpu'
+        $inferenceService = 'gpu-cpu'         # compose SERVICE name
+        $inferenceContainer = 'visheart-gpu-cpu'    # container name
     }
 
     Write-Log "Selected profile: $profile"
-    Write-Log "Selected inference container: $inferenceContainer"
+    Write-Log "Selected inference service: $inferenceService (container: $inferenceContainer)"
     if (-not $gpuAvailable) {
         Write-Log 'INFO: NVIDIA GPU not detected. Starting CPU profile. MedSAM is GPU-only and will be unavailable; UNet runs on CPU.'
     }
 
-    # Remove a stale container from the *opposite* profile so the 8011
+    # Remove a stale container from the *opposite* profile so the 8001
     # host port doesn't collide between consecutive runs.
     $oppositeContainer = if ($gpuAvailable) { 'visheart-gpu-cpu' } else { 'visheart-gpu-nvidia' }
     $stale = docker ps -aq --filter "name=$oppositeContainer" 2>$null
     if ($stale) {
-        Write-Log "Removing stale '$oppositeContainer' container to avoid port 8011 conflicts."
+        Write-Log "Removing stale '$oppositeContainer' container to avoid port 8001 conflicts."
         docker rm -f $stale 2>$null | Out-Null
     }
 
-    Write-Log "Running: docker compose --profile $profile up -d"
-    & docker compose --profile $profile up -d
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "ERROR: 'docker compose --profile $profile up -d' failed (exit $LASTEXITCODE)."
-        exit 5
+    Write-Log "Running: docker compose --profile $profile up -d visheart-app $inferenceService"
+    & docker compose --profile $profile up -d visheart-app $inferenceService
+    $composeExit = $LASTEXITCODE
+
+    if ($composeExit -ne 0) {
+        Write-Log "ERROR: 'docker compose --profile $profile up -d visheart-app $inferenceContainer' failed (exit $composeExit)."
+        if ($profile -eq 'gpu') {
+            Write-Log "GPU profile startup failed - attempting automatic CPU fallback."
+            # Switch to CPU profile and attempt to start again.
+            $profile = 'cpu'
+            $inferenceService = 'gpu-cpu'
+            $inferenceContainer = 'visheart-gpu-cpu'
+
+            # Remove any partially-created GPU container to avoid port conflicts.
+            $staleGpu = docker ps -aq --filter "name=visheart-gpu-nvidia" 2>$null
+            if ($staleGpu) {
+                Write-Log "Removing partially-created 'visheart-gpu-nvidia' container."
+                docker rm -f $staleGpu 2>$null | Out-Null
+            }
+
+            Write-Log "Running: docker compose --profile cpu up -d visheart-app $inferenceService"
+            & docker compose --profile cpu up -d visheart-app $inferenceService
+            $composeExit2 = $LASTEXITCODE
+            if ($composeExit2 -ne 0) {
+                Write-Log "ERROR: CPU fallback also failed (exit $composeExit2). Aborting startup."
+                exit 5
+            }
+
+            # After successful CPU fallback, we no longer expect GPU-specific endpoints.
+            $gpuAvailable = $false
+            Write-Log "CPU fallback succeeded. Selected profile: $profile (container: $inferenceContainer)"
+        } else {
+            exit 5
+        }
     }
 
     # Backend image runs Node.js but invokes a Python helper for landmark/UNet
-    # local paths via a `python` shim. Some base images only ship `python3`;
+    # local paths via a python shim. Some base images only ship python3;
     # link them so child_process.execFile('python', ...) resolves.
-    Write-Log 'Ensuring `python` symlink exists in backend container...'
-    docker exec visheart-local sh -c "command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python" > $null 2>&1
+    Write-Log 'Ensuring python symlink exists in backend container...'
+    $pythonFixCmd = 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python'
+    # Run the fix inside the container shell; ensure PowerShell passes the
+    # full shell string as a single argument by using a single-quoted string.
+    & docker exec visheart-local sh -c 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python' > $null 2>&1
 
     # Health checks. /status/server is always available; /status/gpu is only
-    # expected to report `backend: cuda` when the GPU profile is active.
-    $backendUrl       = 'http://localhost:5000/'
-    $frontendUrl      = 'http://localhost:3000/'
+    # expected to report backend: cuda when the GPU profile is active.
+    $backendUrl = 'http://localhost:5000/'
+    $frontendUrl = 'http://localhost:3000/'
     # Prebuilt GPU image listens on 8001. If you rebuild from local
     # source (which uses 8011), update this together with the compose
-    # `ports:` mapping and the visheart-app env block.
+    # ports mapping and the visheart-app env block.
     $inferenceServerUrl = 'http://localhost:8001/status/server'
-    $inferenceGpuUrl    = 'http://localhost:8001/status/gpu'
+    $inferenceGpuUrl = 'http://localhost:8001/status/gpu'
 
     Write-Log 'Waiting for services to respond (this may take a minute)...'
-    $backendOk = $false; $frontendOk = $false; $inferenceOk = $false; $inferenceGpuOk = $false
+    $backendOk = $false
+    $frontendOk = $false
+    $inferenceOk = $false
+    $inferenceGpuOk = $false
 
     for ($i = 0; $i -lt $WaitRetries; $i++) {
         if (-not $backendOk)   { $backendOk   = Test-Url $backendUrl }

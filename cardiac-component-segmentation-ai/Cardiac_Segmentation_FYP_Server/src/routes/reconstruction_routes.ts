@@ -97,6 +97,7 @@ router.post("/start-reconstruction/:projectId",
  */
 router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, res: Response) => {
     const projectId = toSingleString(req.params.projectId);
+    const requestStart = Date.now();
 
     if (!projectId) {
         logger.warn(`${serviceLocation}: Project ID is required to fetch reconstruction results.`);
@@ -104,7 +105,11 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
     }
     logger.info(`${serviceLocation}: Received request to fetch reconstruction results for project ID: ${projectId}`);
     try {
-        const result = await readProjectReconstruction(projectId);
+        const [result, masksResult] = await Promise.all([
+            readProjectReconstruction(projectId),
+            readProjectSegmentationMask(projectId),
+        ]);
+
         if (!result.success) {
             if (result.message?.includes("does not exist")) {
                 logger.warn(`${serviceLocation}: Project with ID ${projectId} not found when fetching reconstruction results.`);
@@ -123,13 +128,17 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
         }
 
         // Generate presigned URLs for each reconstruction's mesh.tar file
-        const masksResult = await readProjectSegmentationMask(projectId);
         const masksById = new Map<string, { segmentationModel?: string; model_used?: string; name?: string }>();
         if (masksResult.success && masksResult.projectsegmentationmasks) {
             for (const mask of masksResult.projectsegmentationmasks as any[]) {
                 masksById.set(String(mask._id), mask);
             }
         }
+
+        logger.info(
+            `${serviceLocation}: Loaded reconstruction metadata for project ${projectId} in ${Date.now() - requestStart}ms ` +
+            `(reconstructions=${result.projectreconstructions.length}, masks=${masksById.size})`
+        );
 
         const reconstructionsWithUrls = await Promise.all(
             result.projectreconstructions.map(async (recon) => {
@@ -153,6 +162,10 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                         if (s3Key) {
                             const awsBucketName = process.env.AWS_BUCKET_NAME;
                             if (awsBucketName) {
+                                logger.info(
+                                    `${serviceLocation}: Generating presigned download URL for reconstruction ${recon._id} ` +
+                                    `(bucket=${awsBucketName}, key=${s3Key}, originOnly)`
+                                );
                                 downloadUrl = await generatePresignedGetUrl(
                                     awsBucketName,
                                     s3Key,
@@ -198,7 +211,9 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
             })
         );
 
-        logger.info(`${serviceLocation}: Successfully fetched ${result.projectreconstructions.length} reconstruction(s) for project ID ${projectId}.`);
+        logger.info(
+            `${serviceLocation}: Successfully fetched ${result.projectreconstructions.length} reconstruction(s) for project ID ${projectId} in ${Date.now() - requestStart}ms.`
+        );
         return res.status(200).json({ success: true, reconstructions: reconstructionsWithUrls });
     } catch (error) {
         LogError(error as Error, serviceLocation, `Unexpected error fetching reconstruction results for project ${projectId}`);
