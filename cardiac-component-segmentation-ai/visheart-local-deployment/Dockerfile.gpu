@@ -1,0 +1,19 @@
+# Extends the pre-built GPU inference image with landmark model weights baked in.
+# Teammates just pull this image — no .pth files needed on their machine.
+#
+# Build (run from repo root COS40005FYPA/):
+#   docker build -f cardiac-component-segmentation-ai/visheart-local-deployment/Dockerfile.gpu \
+#     -t sharlene21/visheart-gpu:1.1.0 \
+#     -t sharlene21/visheart-gpu:latest \
+#     .
+#
+# Push:
+#   docker push sharlene21/visheart-gpu:1.1.0
+#   docker push sharlene21/visheart-gpu:latest
+
+FROM sveltes/visheart-inference-gpu:faithful-latest
+
+# Copy landmark detection model weights into the image.
+# Source path is relative to the build context (repo root COS40005FYPA/).
+COPY UNETRESNET34/checkpoints/best_model_1ch.pth /app/UNETRESNET34/checkpoints/best_model_1ch.pth
+COPY UNETRESNET34/checkpoints/best_model_2ch.pth /app/UNETRESNET34/checkpoints/best_model_2ch.pth

@@ -22,7 +22,7 @@ services:
   # Frontend (Next.js) + Backend (Node.js)
   # ============================================
   visheart-app:
-    image: jesmineting/visheart-local:1.0.0
+    image: sharlene21/visheart-local:1.1.0
     container_name: visheart-local
     restart: unless-stopped
     ports:
@@ -219,7 +219,7 @@ services:
   # GPU Inference Service (PROFILE: CPU)
   # ============================================
   gpu-cpu:
-    image: sveltes/visheart-inference-gpu:faithful-latest
+    image: sharlene21/visheart-gpu:latest
     container_name: visheart-gpu-cpu
     profiles: ["cpu"]
     restart: unless-stopped
@@ -259,7 +259,6 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
-      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:
@@ -269,7 +268,7 @@ services:
   # GPU Inference Service (PROFILE: NVIDIA)
   # ============================================
   gpu-nvidia:
-    image: sveltes/visheart-inference-gpu:faithful-latest
+    image: sharlene21/visheart-gpu:latest
     container_name: visheart-gpu-nvidia
     profiles: ["gpu"]
     restart: unless-stopped
@@ -316,7 +315,6 @@ services:
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
-      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:
