@@ -22,7 +22,7 @@ services:
   # Frontend (Next.js) + Backend (Node.js)
   # ============================================
   visheart-app:
-    image: sharlene21/visheart-local:1.1.0
+    image: sharlene21/visheart-local:1.3.0
     container_name: visheart-local
     restart: unless-stopped
     ports:

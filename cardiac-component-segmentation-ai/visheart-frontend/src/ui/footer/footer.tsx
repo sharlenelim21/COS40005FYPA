@@ -95,7 +95,7 @@ export default function Footer() {
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Team Leader</div>
                 <div className="text-xs ml-6">
-                  <a href="mailto:102775371@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
+                  <a href="mailto:102783112@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783112@students.swinburne.edu.my
                   </a>
                 </div>
@@ -108,8 +108,40 @@ export default function Footer() {
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Product Owner</div>
                 <div className="text-xs ml-6">
-                  <a href="mailto:102773605@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
+                  <a href="mailto:102783222@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783222@students.swinburne.edu.my
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Team Members Section */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-foreground invisible">Team</h3>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2 text-sm">
+                  <Mail className="h-4 w-4 text-primary" />
+                  <span className="font-medium text-foreground">Liew Mei Qi</span>
+                </div>
+                <div className="text-xs text-muted-foreground ml-6">Software Developer</div>
+                <div className="text-xs ml-6">
+                  <a href="mailto:102780236@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
+                    102780236@students.swinburne.edu.my
+                  </a>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2 text-sm">
+                  <Mail className="h-4 w-4 text-primary" />
+                  <span className="font-medium text-foreground">Stefani Lee Shi Huey</span>
+                </div>
+                <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
+                <div className="text-xs ml-6">
+                  <a href="mailto:102783196@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
+                    102783196@students.swinburne.edu.my
                   </a>
                 </div>
               </div>

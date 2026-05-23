@@ -415,14 +415,20 @@ export default function LandmarkDetectionPage() {
   }, [currentPrediction, currentLandmarkEditKey, landmarkEdits]);
 
   const handleLandmarkMove = useCallback((id: string, coord: [number, number]) => {
-    setLandmarkEdits((prev) => ({
-      ...prev,
-      [currentLandmarkEditKey]: {
-        ...(prev[currentLandmarkEditKey] ?? {}),
-        [id]: coord,
-      },
-    }));
-  }, [currentLandmarkEditKey]);
+    setLandmarkEdits((prev) => {
+      const existing = prev[currentLandmarkEditKey] ?? {};
+      const wasCollapsed = (currentPrediction?.flag === "collapsed_to_mean") && !("flag" in existing);
+      return {
+        ...prev,
+        [currentLandmarkEditKey]: {
+          ...existing,
+          [id]: coord,
+          // First edit on a collapsed slice promotes it to a normal editable prediction
+          ...(wasCollapsed ? { flag: "normal" } : {}),
+        },
+      };
+    });
+  }, [currentLandmarkEditKey, currentPrediction?.flag]);
   const bullseyeFrameCount =
     (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
       ? projectData.dimensions.frames

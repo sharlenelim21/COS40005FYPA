@@ -4,7 +4,7 @@
 import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
 import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask } from "./database";
-import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
+import { generatePresignedGetUrl, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import axios from 'axios';
 import FormData from 'form-data';
@@ -413,8 +413,8 @@ export const generateAISegmentationForReconstruction = async (
 
         logger.info(`${serviceLocation}: Saving output - successfully uploaded reconstruction NIfTI to S3`);
 
-        // Generate presigned URL for GPU server access
-        const presignedUrl = await generatePresignedGetUrl(s3BucketName, s3Key, 3600);
+        // Generate presigned URL for GPU server access (internal endpoint so GPU container can resolve it)
+        const presignedUrl = await generatePresignedGetUrlForInternalService(s3BucketName, s3Key, 3600);
 
         // Fire bullseye analysis non-blocking for ALL editable masks in the project,
         // using each mask's own RLE frame data so MedSAM and UNet produce independent results.

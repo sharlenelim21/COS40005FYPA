@@ -135,7 +135,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
   const hitTestLandmark = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!prediction || !editableLandmarks) return null;
-    if (prediction.flag === "collapsed_to_mean") return null;
+    // Allow dragging even on collapsed slices so users can manually correct mean-point predictions
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
