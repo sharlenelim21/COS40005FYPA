@@ -102,13 +102,9 @@ const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilt
 export const projectUploadFilter = multer({
   storage,
   limits: {
-<<<<<<< HEAD
-    fileSize: 200 * 1024 * 1024 * 1024, // 200 GB limit
-=======
     // 500MB limit - realistic for cardiac MRI NIfTI files (typical 10-100MB)
     // 200GB original limit was a DoS risk
     fileSize: 500 * 1024 * 1024,
->>>>>>> backup-finalsprint3
     files: 10 // Maximum 10 files per request
   },
   fileFilter,

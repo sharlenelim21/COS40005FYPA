@@ -868,5 +868,4 @@ async function cleanupTempFiles(processedFiles: ProcessedObjFile[], tarPath: str
   } catch (cleanupError) {
     logger.warn(`${serviceLocation}: Cleanup failed: ${(cleanupError as Error).message}`);
   }
-<<<<<<< HEAD
 }
