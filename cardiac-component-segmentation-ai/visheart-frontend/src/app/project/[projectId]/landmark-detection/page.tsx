@@ -224,6 +224,12 @@ export default function LandmarkDetectionPage() {
 
   useEffect(() => {
     fetchBullseye();
+    return () => {
+      if (bullseyePollRef.current) {
+        clearTimeout(bullseyePollRef.current);
+        bullseyePollRef.current = null;
+      }
+    };
   }, [fetchBullseye]);
 
   // Landmark dot visibility
