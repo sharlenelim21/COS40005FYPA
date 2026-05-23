@@ -3,12 +3,12 @@
 #
 # Build (run from repo root COS40005FYPA/):
 #   docker build -f cardiac-component-segmentation-ai/visheart-local-deployment/Dockerfile.gpu \
-#     -t sharlene21/visheart-gpu:1.1.0 \
+#     -t sharlene21/visheart-gpu:1.4.0 \
 #     -t sharlene21/visheart-gpu:latest \
 #     .
 #
 # Push:
-#   docker push sharlene21/visheart-gpu:1.1.0
+#   docker push sharlene21/visheart-gpu:1.4.0
 #   docker push sharlene21/visheart-gpu:latest
 
 FROM sveltes/visheart-inference-gpu:faithful-latest
@@ -26,5 +26,9 @@ COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/unet.pt
 COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/fourd_model_epoch_250.pth /app/app/models/fourd_model_epoch_250.pth
 
 # Override deep_sdf files that had hardcoded .cuda() calls in the base image.
-# Local versions have these replaced with device-aware calls that work on CPU too.
+# The base image (sveltes/visheart-inference-gpu:faithful-latest) has active .cuda()
+# calls in mesh.py (x4), utils.py (x3), and workspace.py (x2). Local versions use
+# .to(device) so 4D reconstruction works on CPU too.
 COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py /app/app/dependencies/deep_sdf/mesh.py
+COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/dependencies/deep_sdf/utils.py /app/app/dependencies/deep_sdf/utils.py
+COPY cardiac-component-segmentation-ai/visheart-inference-gpu/app/dependencies/deep_sdf/workspace.py /app/app/dependencies/deep_sdf/workspace.py
