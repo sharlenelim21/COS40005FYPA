@@ -172,7 +172,7 @@ export default function LandmarkDetectionPage() {
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
   const [editableLandmarks, setEditableLandmarks] = useState(true);
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
-  const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<Record<keyof FramePrediction, [number, number]>>>>({});
+  const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
 
   // Correct the bullseye model default once the GPU probe resolves.
   // Guard on gpuLoading: isGpuMode starts false before the fetch completes,
