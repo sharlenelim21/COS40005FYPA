@@ -1,6 +1,7 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import Link from "next/link";
 import { useProject } from "@/context/ProjectContext";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -78,10 +79,32 @@ const isActiveRecentJob = (job: ProjectTypes.UserJob): boolean => {
 const isActiveSegmentationJob = isActiveRecentJob;
 const isActiveReconstructionJob = isActiveRecentJob;
 
-export default function ProjectPage() {
+function ProjectPageInner() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const highlight = searchParams.get("highlight"); // "reconstruction" | "landmark" | "segmentation" | null
   const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions } = useProject();
+  // Glow "Start AI Segmentation" when there are no masks and no active jobs
+  const glowStartSegmentation = loading === "done" && !hasMasks && jobs.filter(j => j.status === ProjectTypes.JobStatus.PENDING || j.status === ProjectTypes.JobStatus.IN_PROGRESS).length === 0;
+
+  // Glow "Edit Segmentation Masks" when masks just finished processing on this page
+  // (hasMasks flipped true while user was here) OR via ?highlight=segmentation URL param
+  const [glowEditMasks, setGlowEditMasks] = useState(false);
+  const prevHadMasksRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (loading !== "done") return;
+    const prev = prevHadMasksRef.current;
+    // Only glow when masks transition from absent → present (segmentation just finished)
+    if (prev === false && hasMasks) {
+      setGlowEditMasks(true);
+    }
+    prevHadMasksRef.current = hasMasks;
+  }, [hasMasks, loading]);
+  // Also honor URL param on initial load
+  useEffect(() => {
+    if (highlight === "segmentation") setGlowEditMasks(true);
+  }, [highlight]);
   const { processingUnit } = useGpuStatus();
 
   // Update page title dynamically
@@ -965,11 +988,11 @@ export default function ProjectPage() {
                         ) : (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button 
-                                onClick={handleStartSegmentation} 
+                              <Button
+                                onClick={handleStartSegmentation}
                                 disabled={isStartingSegmentation}
                                 size="lg"
-                                className="justify-start h-auto py-4"
+                                className={`justify-start h-auto py-4 transition-all duration-300 ${glowStartSegmentation || highlight === "segmentation-start" ? "ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30" : ""}`}
                               >
                                 <div className="flex items-center gap-3 w-full">
                                   {isStartingSegmentation ? (
@@ -1047,7 +1070,7 @@ export default function ProjectPage() {
                       {/* Edit Segmentation */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                          <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/segmentation`}>
                               <div className="flex items-center gap-3 w-full">
                                 <Edit className="h-5 w-5 text-primary" />
@@ -1069,7 +1092,7 @@ export default function ProjectPage() {
                       {/* Landmark Detection */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                          <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/landmark-detection`}>
                               <div className="flex items-center gap-3 w-full">
                                 <Crosshair className="h-5 w-5 text-primary" />
@@ -1105,7 +1128,8 @@ export default function ProjectPage() {
                             <Button
                               onClick={() => handleOpenReconstruction()}
                               size="lg"
-                              className="justify-start h-auto py-4"
+                              variant={highlight === "reconstruction" ? "default" : "outline"}
+                              className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "animate-pulse shadow-lg" : ""}`}
                               disabled={isStartingReconstruction}
                             >
                               <div className="flex items-center gap-3 w-full">
@@ -1185,7 +1209,7 @@ export default function ProjectPage() {
                       {/* Edit Segmentation */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                          <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/segmentation`}>
                               <div className="flex items-center gap-3 w-full">
                                 <Edit className="h-5 w-5 text-primary" />
@@ -1207,7 +1231,7 @@ export default function ProjectPage() {
                       {/* Landmark Detection */}
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant="outline" className="justify-start h-auto py-4">
+                          <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/landmark-detection`}>
                               <div className="flex items-center gap-3 w-full">
                                 <Crosshair className="h-5 w-5 text-primary" />
@@ -1232,7 +1256,8 @@ export default function ProjectPage() {
                           <Button
                             onClick={() => handleOpenReconstruction()}
                             size="lg"
-                            className="justify-start h-auto py-4"
+                            variant="outline"
+                            className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30" : ""}`}
                             disabled={isStartingReconstruction}
                           >
                             <div className="flex items-center gap-3 w-full">
@@ -1747,5 +1772,13 @@ export default function ProjectPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+export default function ProjectPage() {
+  return (
+    <Suspense fallback={null}>
+      <ProjectPageInner />
+    </Suspense>
   );
 }

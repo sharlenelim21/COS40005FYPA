@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { useGpuStatus, useUserProjects, useUserJobs, useUserStats } from "@/lib/dashboard-hooks";
 import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStatus";
@@ -93,9 +94,13 @@ const getRoleIcon = (role: string | undefined) => {
   }
 };
 
-export default function DashboardPage() {
+function DashboardPage() {
   const { user, loading: authLoading, error: authError } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") ?? "overview";
+  const [activeTab, setActiveTab] = useState(initialTab);
+  useEffect(() => { setActiveTab(searchParams.get("tab") ?? "overview"); }, [searchParams]);
   const isAuthenticated = Boolean(user);
   const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(isAuthenticated);
   const { recentJobs, isLoading: jobsLoading, refresh: refreshJobs } = useUserJobs(isAuthenticated);
@@ -167,7 +172,6 @@ export default function DashboardPage() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
   const [walkthroughStep, setWalkthroughStep] = useState(0);
-  const previousCompletedJobIds = useRef<Set<string> | null>(null);
 
   // State for delete confirmation dialog
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -351,29 +355,6 @@ export default function DashboardPage() {
     }
   };
 
-  useEffect(() => {
-    if (!user || isLoadingData) return;
-    const completedIds = new Set(allJobs.filter((job) => job.status === "completed").map((job) => `${job.jobType}-${job.jobId}`));
-
-    if (previousCompletedJobIds.current) {
-      allJobs
-        .filter((job) => job.status === "completed")
-        .forEach((job) => {
-          const id = `${job.jobType}-${job.jobId}`;
-          if (!previousCompletedJobIds.current?.has(id)) {
-            toast.success(`${job.jobType === "segmentation" ? "Segmentation" : "4D reconstruction"} completed`, {
-              description: `${getProjectName(job.projectId)} is ready to review.`,
-              action: {
-                label: "Open",
-                onClick: () => router.push(`/project/${job.projectId}`),
-              },
-            });
-          }
-        });
-    }
-
-    previousCompletedJobIds.current = completedIds;
-  }, [allJobs, isLoadingData, router, user]);
 
   useEffect(() => {
     if (!user || typeof window === "undefined") return;
@@ -509,7 +490,7 @@ export default function DashboardPage() {
       </ShowForGuest>
 
       {/* Main Dashboard Tabs */}
-      <Tabs defaultValue="overview" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="projects">Projects</TabsTrigger>
@@ -598,7 +579,10 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <ShowForUser fallback={null}>
-                <Button className="w-full justify-start" onClick={() => setUploadDialogOpen(true)}>
+                <Button
+                  className="w-full justify-start transition-all duration-300 ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30"
+                  onClick={() => setUploadDialogOpen(true)}
+                >
                   <Upload className="mr-2 h-4 w-4" />
                   New Project
                 </Button>
@@ -1265,5 +1249,13 @@ export default function DashboardPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+export default function DashboardPageWrapper() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardPage />
+    </Suspense>
   );
 }

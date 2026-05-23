@@ -1,6 +1,98 @@
 "use client";
 
-import React from "react";
+import React, { useRef, useEffect, useCallback } from "react";
+
+function ZoomPanContainer({ children, className, onResetRef }: { children: React.ReactNode; className?: string; onResetRef?: (fn: () => void) => void }) {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const transformRef = useRef({ scale: 1, x: 0, y: 0 });
+  const dragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+  const activePtr = useRef<number | null>(null);
+
+  const applyTransform = useCallback((t: { scale: number; x: number; y: number }) => {
+    transformRef.current = t;
+    if (innerRef.current) {
+      innerRef.current.style.transform = `translate(${t.x}px, ${t.y}px) scale(${t.scale})`;
+    }
+    if (outerRef.current) {
+      outerRef.current.style.cursor = t.scale > 1 ? "grab" : "default";
+    }
+  }, []);
+
+  useEffect(() => {
+    if (onResetRef) onResetRef(() => applyTransform({ scale: 1, x: 0, y: 0 }));
+  }, [onResetRef, applyTransform]);
+
+  useEffect(() => {
+    const el = outerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const prev = transformRef.current;
+      const factor = e.deltaY < 0 ? 1.12 : 0.9;
+      const scale = Math.min(4, Math.max(1, prev.scale * factor));
+      const ratio = scale / prev.scale;
+      applyTransform({ scale, x: prev.x * ratio, y: prev.y * ratio });
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      e.preventDefault();
+      activePtr.current = e.pointerId;
+      el.setPointerCapture(e.pointerId);
+      dragging.current = true;
+      lastPos.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging.current || e.pointerId !== activePtr.current) return;
+      const prev = transformRef.current;
+      if (prev.scale <= 1) return;
+      const dx = e.clientX - lastPos.current.x;
+      const dy = e.clientY - lastPos.current.y;
+      lastPos.current = { x: e.clientX, y: e.clientY };
+      applyTransform({ ...prev, x: prev.x + dx, y: prev.y + dy });
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (e.pointerId === activePtr.current) {
+        dragging.current = false;
+        activePtr.current = null;
+      }
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [applyTransform]);
+
+  return (
+    <div ref={outerRef} className={`relative isolate ${className ?? ""}`} style={{ cursor: "default", overflow: "clip" }}>
+      <div
+        ref={innerRef}
+        style={{
+          transform: "translate(0px, 0px) scale(1)",
+          transformOrigin: "center center",
+          width: "100%",
+          height: "100%",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export type StrainType = "GLS" | "GCS" | "GRS";
 
@@ -126,18 +218,30 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
 }) => {
   const data = segmentData ?? getDummyStrainData(selectedStrainType, frame, totalFrames);
   const center = 150;
-  const basalOuter = 118;
-  const basalInner = 88;
-  const midInner = 58;
-  const apicalInner = 30;
+  const basalOuter = 108;
+  const basalInner = 81;
+  const midInner = 54;
+  const apicalInner = 28;
+  const strainZoomResetRef = useRef<(() => void) | null>(null);
 
   const segmentValue = (index: number) => data[index]?.strain ?? 0;
   const segmentLabel = (index: number) => data[index]?.label ?? `Segment ${index + 1}`;
 
   return (
-    <div className="flex flex-col gap-3">
-      <svg viewBox="0 0 300 300" className="mx-auto h-auto w-full max-w-sm" role="img" aria-label={`${selectedStrainType} strain bullseye`}>
-        <circle cx={center} cy={center} r="122" fill="#f8fafc" stroke="#e2e8f0" strokeWidth="1" />
+    <div className="flex min-h-0 flex-1 flex-col p-2 gap-1">
+      <div className="flex items-center justify-between flex-shrink-0">
+        <p className="text-[8px] text-muted-foreground/60">Scroll to zoom · drag to pan</p>
+        <button
+          type="button"
+          onClick={() => strainZoomResetRef.current?.()}
+          className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors"
+        >
+          Reset View
+        </button>
+      </div>
+      <ZoomPanContainer className="min-h-0 flex-1 w-full" onResetRef={(fn) => { strainZoomResetRef.current = fn; }}>
+      <svg viewBox="0 0 300 300" className="h-full w-full" role="img" aria-label={`${selectedStrainType} strain bullseye`}>
+        <circle cx={center} cy={center} r="112" fill="#f8fafc" stroke="#e2e8f0" strokeWidth="1" />
 
         {Array.from({ length: 6 }, (_, index) => (
           <StrainSegment
@@ -207,11 +311,12 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
           {segmentValue(16).toFixed(1)}
         </text>
 
-        <text x="150" y="18" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Anterior</text>
-        <text x="282" y="154" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Septal</text>
-        <text x="150" y="292" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Inferior</text>
-        <text x="18" y="154" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Lateral</text>
+        <text x="150" y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Anterior</text>
+        <text x="298" y="154" textAnchor="end" fontSize="11" fontWeight="700" fill="#475569">Septal</text>
+        <text x="150" y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="#475569">Inferior</text>
+        <text x="2" y="154" textAnchor="start" fontSize="11" fontWeight="700" fill="#475569">Lateral</text>
       </svg>
+      </ZoomPanContainer>
 
       <div className="flex flex-wrap items-center justify-center gap-2 text-[10px] text-muted-foreground">
         {[

@@ -23,6 +23,7 @@ import { ThemeProvider } from "@/lib/theme-provider";
 
 import { AuthProvider } from "@/context/auth-context";
 import { FloatingFAQButton } from "@/components/FloatingFAQButton";
+import { JobCompletionNotifier } from "@/components/JobCompletionNotifier";
 
 export const metadata: Metadata = {
   title: "VisHeart",
@@ -59,13 +60,14 @@ export default function RootLayout({
       <body className="bg-background text-foreground" suppressHydrationWarning>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AuthProvider>
+            <JobCompletionNotifier />
             <Header />
             {children}
             <FloatingFAQButton />
             <Footer />
           </AuthProvider>
         </ThemeProvider>
-        <Toaster richColors />
+        <Toaster richColors closeButton />
       </body>
     </html>
   );

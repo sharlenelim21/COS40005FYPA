@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { projectApi } from "@/lib/api";
 import {
@@ -23,6 +25,8 @@ import {
   User,
   UserCheck,
   AlertCircleIcon,
+  FolderOpen,
+  AlertTriangle,
 } from "lucide-react";
 
 const RoleBadge = () => {
@@ -60,31 +64,92 @@ const RoleBadge = () => {
 
 export const AuthenticatedUserView = () => {
   const { user, logout } = useAuth();
+  const router = useRouter();
+  const [showModal, setShowModal] = useState(false);
+  const [tempCount, setTempCount] = useState(0);
+  const [signingOut, setSigningOut] = useState(false);
 
   if (!user) return null;
 
   const handleLogout = async () => {
     try {
       const response = await projectApi.getProjects();
-      const tempProjects = (response.projects ?? []).filter((project: { isSaved?: boolean }) => !project.isSaved);
-
+      const tempProjects = (response.projects ?? []).filter((p: { isSaved?: boolean }) => !p.isSaved);
       if (tempProjects.length > 0) {
-        const proceed = window.confirm(
-          `You have ${tempProjects.length} temporary project${tempProjects.length === 1 ? "" : "s"} that will be deleted after logout.\n\nTo keep them, go to Dashboard > Projects and click each Temp badge to change it to Saved.\n\nContinue signing out?`,
-        );
-        if (!proceed) return;
+        setTempCount(tempProjects.length);
+        setShowModal(true);
+        return;
       }
     } catch {
-      const proceed = window.confirm(
-        "I could not check your temporary projects before logout. Go to Dashboard > Projects to save any Temp projects you want to keep.\n\nContinue signing out?",
-      );
-      if (!proceed) return;
+      setTempCount(-1); // unknown — show warning anyway
+      setShowModal(true);
+      return;
     }
-
     await logout();
   };
 
+  const confirmLogout = async () => {
+    setSigningOut(true);
+    await logout();
+    setSigningOut(false);
+    setShowModal(false);
+  };
+
+  const goToProjects = () => {
+    setShowModal(false);
+    router.push("/dashboard?tab=projects");
+  };
+
   return (
+    <>
+    {/* Unsaved projects warning modal */}
+    {showModal && (
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+        <div className="mx-4 w-full max-w-sm rounded-xl border border-border bg-background p-6 shadow-xl">
+          <div className="mb-4 flex items-start gap-3">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-950">
+              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Unsaved Projects</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {tempCount > 0
+                  ? `You have ${tempCount} temporary project${tempCount === 1 ? "" : "s"} that will be permanently deleted when you sign out.`
+                  : "You may have temporary projects that will be permanently deleted when you sign out."}
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Go to <span className="font-medium text-foreground">My Projects</span> to save them before signing out.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Button
+              className="w-full justify-center gap-2"
+              onClick={goToProjects}
+            >
+              <FolderOpen className="h-4 w-4" />
+              Go to My Projects
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full justify-center gap-2 border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30"
+              onClick={confirmLogout}
+              disabled={signingOut}
+            >
+              <LogOut className="h-4 w-4" />
+              {signingOut ? "Signing out…" : "Sign Out Anyway"}
+            </Button>
+            <button
+              type="button"
+              onClick={() => setShowModal(false)}
+              className="text-center text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     <div className="w-full max-w-[400px] pb-5 select-none sm:w-[400px]">
       <CardHeader className="pb-4 text-center">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-0">
@@ -167,5 +232,6 @@ export const AuthenticatedUserView = () => {
         </Button>
       </CardFooter>
     </div>
+    </>
   );
 };

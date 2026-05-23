@@ -2,8 +2,8 @@
 
 import dynamic from "next/dynamic";
 import { Loader2, RefreshCw, ArrowLeft } from "lucide-react";
-import { useState, useCallback, useRef, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useState, useCallback, useRef, useMemo, Suspense } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 
 // Backend integration
@@ -17,6 +17,8 @@ import { generateMaskKey } from "@/types/segmentation";
 import type * as ProjectTypes from "@/types/project";
 import { useProject } from "@/context/ProjectContext";
 import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
+import { GuidancePanel } from "@/components/GuidancePanel";
+import { Box, Crosshair } from "lucide-react";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -43,9 +45,11 @@ const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas
   ),
 });
 
-export default function SegmentationResultsPage() {
+function SegmentationResultsPageInner() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromViewer = searchParams.get("from") === "4d";
   const { processingUnit, isLoading: gpuStatusLoading } = useGpuStatus();
   const isGpuMode = processingUnit.gpuAvailable;
 
@@ -66,6 +70,15 @@ export default function SegmentationResultsPage() {
     getReconstructionGLB,
     getReconstructionForModel,
   } = useProject();
+
+  // Write the show-condition key whenever masks exist — covers both:
+  // (a) user just ran segmentation this session (reload lands here with masks)
+  // (b) user navigated directly to the page with existing masks
+  useEffect(() => {
+    if (hasMasks && projectId) {
+      try { sessionStorage.setItem(`seg-ran-${projectId}`, "1"); } catch {}
+    }
+  }, [hasMasks, projectId]);
 
   useEffect(() => {
     if (projectData?.name) {
@@ -620,7 +633,17 @@ export default function SegmentationResultsPage() {
           ? `${modelLabel} result ready. Reloading…`
           : `Reloading to fetch latest ${modelLabel} state…`
       );
-      window.location.reload();
+      try {
+        sessionStorage.setItem(`seg-ran-${projectId}`, "1");
+        sessionStorage.removeItem(`seg-suggest-4d-${projectId}`);
+      } catch {}
+      // First-time run (no prior masks): go to project page so Edit Masks button glows.
+      // Re-run (masks already existed): stay on segmentation page and reload results.
+      if (hasMasks) {
+        window.location.reload();
+      } else {
+        router.push(`/project/${projectId}?highlight=segmentation`);
+      }
     } catch (error: any) {
       const errorMsg =
         error?.response?.data?.error ||
@@ -970,13 +993,36 @@ export default function SegmentationResultsPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => router.push(`/project/${projectId}`)}
+          onClick={() => {
+            let highlight = "";
+            try {
+              if (hasMasks) {
+                if (fromViewer) {
+                  // Came from 4D viewer — next step is landmark detection
+                  const actedKey = `seg-from4d-guidance-${projectId}-acted`;
+                  const dismissedKey = `seg-from4d-guidance-${projectId}-dismissed`;
+                  const acted = sessionStorage.getItem(actedKey);
+                  const dismissed = sessionStorage.getItem(dismissedKey);
+                  if (!acted && !dismissed) highlight = "landmark";
+                } else {
+                  // Normal flow — next step is 4D reconstruction
+                  const actedKey = `seg-guidance-${projectId}-acted`;
+                  const dismissedKey = `seg-guidance-${projectId}-dismissed`;
+                  const acted = sessionStorage.getItem(actedKey);
+                  const dismissed = sessionStorage.getItem(dismissedKey);
+                  if (!acted && !dismissed) highlight = "reconstruction";
+                }
+              }
+            } catch {}
+            router.push(`/project/${projectId}${highlight ? `?highlight=${highlight}` : ""}`);
+          }}
           className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
         >
           <ArrowLeft className="h-4 w-4" />
           <span>Back to Project</span>
         </Button>
       </div>
+
 
       {/* AI Model Selector Bar */}
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-background shrink-0 flex-wrap">
@@ -1354,6 +1400,51 @@ export default function SegmentationResultsPage() {
       </AlertDialog>
 
       </div>
+
+      {/* Guidance panel — content depends on whether user came from 4D viewer */}
+      {hasMasks && (
+        fromViewer ? (
+          <GuidancePanel
+            storageKey={`seg-from4d-guidance-${projectId}`}
+            icon="🫀"
+            title="Want to run Landmark Detection next?"
+            subtitle="Detect landmarks, preview strain, export reports"
+            actions={[
+              {
+                label: "Run Landmark Detection",
+                icon: <Crosshair size={13} />,
+                primary: true,
+                onClick: () => router.push(`/project/${projectId}?highlight=landmark`),
+              },
+            ]}
+          />
+        ) : (
+          <GuidancePanel
+            storageKey={`seg-guidance-${projectId}`}
+            icon="✅"
+            title="Segmentation masks ready!"
+            subtitle="What would you like to do next?"
+            actions={[
+              {
+                label: "Create 4D Reconstruction",
+                icon: <Box size={13} />,
+                primary: true,
+                onClick: () => router.push(`/project/${projectId}?highlight=reconstruction`),
+              },
+            ]}
+            onDismissWithoutAction={() => {
+              try { sessionStorage.setItem(`seg-guidance-${projectId}-no-action`, "1"); } catch {}
+            }}
+          />
+        )
+      )}
     </div>
+  );
+}
+export default function SegmentationResultsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SegmentationResultsPageInner />
+    </Suspense>
   );
 }

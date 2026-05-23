@@ -43,6 +43,8 @@ interface ClientHeartModelProps {
   mid?: number;
   max?: number;
   className?: string;
+  onZoomChange?: (fn: (delta: number) => void) => void;
+  onResetZoom?: (fn: () => void) => void;
 }
 
 function valueToColor(value: number, min: number, mid: number, max: number) {
@@ -89,6 +91,8 @@ export function ClientHeartModel({
   mid = 5,
   max = 45,
   className,
+  onZoomChange,
+  onResetZoom,
 }: ClientHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const meshesRef = useRef<AnimatedMesh[]>([]);
@@ -107,11 +111,14 @@ export function ClientHeartModel({
     const container = containerRef.current;
     if (!container) return;
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x151515);
+    const isDark = () => document.documentElement.classList.contains("dark");
+    const getBg = () => new THREE.Color(isDark() ? "#18181b" : "#f8fafc"); // zinc-900 / slate-50 — matches bullseye panel
 
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
-    camera.position.set(0, 0.35, 6);
+    const scene = new THREE.Scene();
+    scene.background = getBg();
+
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000);
+    camera.position.set(0, 0.5, 11);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -141,6 +148,8 @@ export function ClientHeartModel({
     controls.dampingFactor = 0.05;
     controls.enablePan = false;
     controls.enableZoom = true;
+    controls.minDistance = 5;
+    controls.maxDistance = 20;
     controls.autoRotate = false;
     controls.target.set(0, 0, 0);
     controls.update();
@@ -194,6 +203,34 @@ export function ClientHeartModel({
       );
     });
 
+    // Expose zoom control to parent (for +/- buttons)
+    if (onZoomChange) {
+      onZoomChange((delta: number) => {
+        const zoomFactor = delta > 0 ? 1.2 : 0.85;
+        const newDist = Math.min(
+          controls.maxDistance,
+          Math.max(controls.minDistance, camera.position.distanceTo(controls.target) * zoomFactor),
+        );
+        const dir = camera.position.clone().sub(controls.target).normalize();
+        camera.position.copy(controls.target).addScaledVector(dir, newDist);
+        controls.update();
+      });
+    }
+    if (onResetZoom) {
+      onResetZoom(() => {
+        camera.position.set(0, 0.5, 11);
+        camera.lookAt(0, 0, 0);
+        controls.target.set(0, 0, 0);
+        controls.update();
+      });
+    }
+
+    // Keep background in sync with light/dark mode
+    const themeObserver = new MutationObserver(() => {
+      scene.background = getBg();
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+
     const resize = () => {
       const width = Math.max(container.clientWidth, 1);
       const height = Math.max(container.clientHeight, 1);
@@ -227,6 +264,7 @@ export function ClientHeartModel({
       cancelled = true;
       cancelAnimationFrame(animationId);
       resizeObserver.disconnect();
+      themeObserver.disconnect();
       controls.dispose();
       loadedObjects.forEach(disposeObject);
       renderer.dispose();

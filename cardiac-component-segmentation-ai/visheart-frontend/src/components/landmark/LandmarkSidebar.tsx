@@ -239,20 +239,6 @@ export function LandmarkSidebar({
         )}
       </div>
 
-      {/* Bottom action buttons */}
-      {hasPredictions && (
-        <div className="p-4 border-t border-[var(--sidebar-border)] flex flex-col gap-2 flex-shrink-0">
-          <Button
-            size="sm"
-            className="w-full text-xs gap-1.5"
-            onClick={onRerun}
-            variant="outline"
-          >
-            Re-run Detection
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

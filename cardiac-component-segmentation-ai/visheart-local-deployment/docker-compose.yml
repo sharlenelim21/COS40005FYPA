@@ -112,6 +112,7 @@ services:
       # GPU dependency removed so profiles can boot dynamically without crashing
     volumes:
       - ../Cardiac_Segmentation_FYP_Server/dist:/app/backend/dist:ro
+      - ../Cardiac_Segmentation_FYP_Server/src/python:/app/backend/src/python:ro
       - ../Cardiac_Segmentation_FYP_Server/dist/temp_jpeg:/app/backend/dist/temp_jpeg
       - ../Cardiac_Segmentation_FYP_Server/dist/temp_exports:/app/backend/dist/temp_exports
       - ../Cardiac_Segmentation_FYP_Server/dist/temp_mesh:/app/backend/dist/temp_mesh

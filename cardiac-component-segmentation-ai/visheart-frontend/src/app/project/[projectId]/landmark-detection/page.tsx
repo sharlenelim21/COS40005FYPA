@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -15,6 +15,8 @@ import {
   FileText,
   ArrowLeft,
   Activity,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 import { useProject } from "@/context/ProjectContext";
@@ -151,7 +153,13 @@ export default function LandmarkDetectionPage() {
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
   const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
-  const [leftPanelView, setLeftPanelView] = useState<"bullseye" | "strain">("bullseye");
+  const [leftPanelView, setLeftPanelView] = useState<"bullseye" | "strain">(() => {
+    if (typeof window !== "undefined") {
+      const hash = window.location.hash;
+      if (hash === "#strain") return "strain";
+    }
+    return "bullseye";
+  });
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GLS");
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
   const [editableLandmarks, setEditableLandmarks] = useState(true);
@@ -247,6 +255,10 @@ export default function LandmarkDetectionPage() {
 
   // AHA alignment
   const [ahaAlignmentAngle, setAhaAlignmentAngle] = useState<number | null>(null);
+
+  // Zoom reset refs — shared between bullseye panel and toolbar button
+  const bullseyeZoomResetRef = useRef<(() => void) | null>(null);
+  const heartZoomResetRef = useRef<(() => void) | null>(null);
 
   // Refetch bullseye after detection finishes; clear alignment on new run
   const prevStatus = useRef(state.status);
@@ -629,12 +641,12 @@ export default function LandmarkDetectionPage() {
       </div>
 
       {/* Desktop: 3-panel resizable layout */}
-      <div className="hidden lg:block flex-1 min-h-0 p-3">
+      <div className="hidden lg:flex flex-1 min-h-0 p-3">
         <ResizablePanelGroup
           direction="horizontal"
           className="h-full w-full rounded-xl border shadow-sm"
         >
-          <ResizablePanel defaultSize={28} minSize={0} maxSize={55}>
+          <ResizablePanel defaultSize={44} minSize={32} maxSize={62}>
             <div className="w-full h-full bg-background p-4 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -644,7 +656,7 @@ export default function LandmarkDetectionPage() {
                   <div className="grid grid-cols-2 rounded-lg border border-border bg-background p-0.5">
                     <button
                       type="button"
-                      onClick={() => setLeftPanelView("bullseye")}
+                      onClick={() => { setLeftPanelView("bullseye"); window.location.hash = "bullseye"; }}
                       className={cn(
                         "rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
                         leftPanelView === "bullseye" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
@@ -654,7 +666,7 @@ export default function LandmarkDetectionPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setLeftPanelView("strain")}
+                      onClick={() => { setLeftPanelView("strain"); window.location.hash = "strain"; }}
                       className={cn(
                         "rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
                         leftPanelView === "strain" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
@@ -705,6 +717,14 @@ export default function LandmarkDetectionPage() {
                 {/* AHA alignment controls — visible once landmarks are detected */}
                 {leftPanelView === "bullseye" && hasPredictions && (
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => { bullseyeZoomResetRef.current?.(); heartZoomResetRef.current?.(); }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+                      title="Reset zoom on bullseye and 3D heart"
+                    >
+                      Reset View
+                    </button>
                     {ahaAlignmentAngle === null ? (
                       <button
                         type="button"
@@ -738,6 +758,8 @@ export default function LandmarkDetectionPage() {
                   currentFrame={state.currentFrame}
                   frameCount={bullseyeFrameCount}
                   previewMode={!hasPredictions && !isRunning}
+                  onBullseyeResetRef={(fn) => { bullseyeZoomResetRef.current = fn; }}
+                  onHeartResetRef={(fn) => { heartZoomResetRef.current = fn; }}
                 />
               ) : (
                 <StrainPreviewPanel
@@ -760,7 +782,7 @@ export default function LandmarkDetectionPage() {
           <ResizableHandle withHandle />
 
           {/* CENTER: 2D MRI slice viewer + landmark overlay */}
-          <ResizablePanel defaultSize={47}>
+          <ResizablePanel defaultSize={38} minSize={25}>
             <div className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden">
               {state.status === "idle" && !isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10 pointer-events-none">
@@ -815,7 +837,7 @@ export default function LandmarkDetectionPage() {
           <ResizableHandle withHandle />
 
           {/* RIGHT: Sidebar */}
-          <ResizablePanel defaultSize={25} minSize={20} maxSize={36}>
+          <ResizablePanel defaultSize={22} minSize={15} maxSize={35}>
             <div className="h-full w-full">
               <LandmarkSidebar
                 state={state}
@@ -912,6 +934,8 @@ function AhaBullseyePanel({
   frameCount = 1,
   previewMode = false,
   onCompute,
+  onBullseyeResetRef,
+  onHeartResetRef,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
@@ -920,8 +944,11 @@ function AhaBullseyePanel({
   frameCount?: number;
   previewMode?: boolean;
   onCompute?: () => void;
+  onBullseyeResetRef?: (fn: () => void) => void;
+  onHeartResetRef?: (fn: () => void) => void;
 }) {
   const displayBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
+  const heartZoomRef = useRef<((delta: number) => void) | null>(null);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
@@ -950,60 +977,99 @@ function AhaBullseyePanel({
           )}
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Regional wall thickness (%)
+        <div className="flex min-h-0 flex-1 gap-2 p-3">
+          {/* LEFT: Bullseye chart */}
+          <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
+            <div className="mb-1 flex items-center justify-between flex-shrink-0">
+              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Frame {Math.min(currentFrame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
               </p>
-              <p className="text-[10px] text-muted-foreground">
-                Frame {Math.min(currentFrame + 1, Math.max(frameCount, 1))} of {Math.max(frameCount, 1)}
-              </p>
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                {previewMode ? "Preview" : "Result"}
+              </span>
             </div>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {previewMode ? "Dummy preview" : "Project result"}
-            </span>
-          </div>
-          <div className="rounded-lg bg-slate-50 p-4 dark:bg-zinc-900">
-            <div className="flex min-h-[330px] items-center justify-center">
+            <ZoomPanContainer
+              className="flex-1 min-h-0 w-full"
+              onResetRef={(fn) => { if (onBullseyeResetRef) onBullseyeResetRef(fn); }}
+            >
               <AhaBullseyeChart
                 bullseyeData={displayBullseyeData}
                 referenceAngleDeg={referenceAngleDeg}
-                size={390}
                 currentFrame={currentFrame}
                 frameCount={frameCount}
               />
+            </ZoomPanContainer>
+            {/* Compact stats below chart */}
+            <div className="flex-shrink-0 pt-1.5 space-y-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] text-muted-foreground tabular-nums">{displayBullseyeData.stats.min.toFixed(1)}</span>
+                <div
+                  className="h-1.5 flex-1 rounded-full"
+                  style={{
+                    background: "linear-gradient(to right, #d73027, #fc8d59, #fee08b, #d9ef8b, #91cf60, #1a9850)",
+                    border: "1px solid hsl(var(--border))",
+                  }}
+                />
+                <span className="text-[9px] text-muted-foreground tabular-nums">{displayBullseyeData.stats.max.toFixed(1)}</span>
+              </div>
+              <div className="flex justify-between text-center text-[9px]">
+                <div>
+                  <p className="text-muted-foreground">Min</p>
+                  <p className="font-semibold tabular-nums">{displayBullseyeData.stats.min.toFixed(1)}%</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Mean</p>
+                  <p className="font-semibold tabular-nums text-primary">{displayBullseyeData.stats.mean.toFixed(1)}%</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Max</p>
+                  <p className="font-semibold tabular-nums">{displayBullseyeData.stats.max.toFixed(1)}%</p>
+                </div>
+              </div>
+              {displayBullseyeData.stats.n_nan > 0 && (
+                <p className="text-[9px] text-amber-600 dark:text-amber-400">
+                  ⚠ {displayBullseyeData.stats.n_nan} segment{displayBullseyeData.stats.n_nan > 1 ? "s" : ""} missing
+                </p>
+              )}
             </div>
           </div>
-          <div className="mt-3 space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground tabular-nums">{displayBullseyeData.stats.min.toFixed(1)}%</span>
-              <div
-                className="h-2.5 flex-1 rounded-full shadow-inner"
-                style={{
-                  background: "linear-gradient(to right, #d73027, #fc8d59, #fee08b, #d9ef8b, #91cf60, #1a9850)",
-                  border: "1px solid hsl(var(--border))",
-                }}
-              />
-              <span className="text-[10px] text-muted-foreground tabular-nums">{displayBullseyeData.stats.max.toFixed(1)}%</span>
+
+          {/* RIGHT: 3D heart model */}
+          <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
+            <div className="mb-1 flex items-center justify-between flex-shrink-0">
+              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <MetricTile label="Min" value={displayBullseyeData.stats.min.toFixed(2)} unit="%" />
-              <MetricTile label="Mean" value={displayBullseyeData.stats.mean.toFixed(2)} unit="%" emphasized />
-              <MetricTile label="Max" value={displayBullseyeData.stats.max.toFixed(2)} unit="%" />
+            <AhaHeartProjection
+              bullseyeData={displayBullseyeData}
+              currentFrame={currentFrame}
+              frameCount={frameCount}
+              previewMode={previewMode}
+              onZoomChange={(fn) => { heartZoomRef.current = fn; }}
+              onResetZoom={(fn) => { if (onHeartResetRef) onHeartResetRef(fn); }}
+            />
+            {/* Zoom hint + buttons */}
+            <div className="flex items-center justify-center gap-2 px-2 py-1 flex-shrink-0">
+              <p className="text-[9px] text-muted-foreground">Scroll or</p>
+              <button
+                type="button"
+                aria-label="Zoom in"
+                className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                onClick={() => heartZoomRef.current?.(-1)}
+              >
+                <ZoomIn className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                aria-label="Zoom out"
+                className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                onClick={() => heartZoomRef.current?.(1)}
+              >
+                <ZoomOut className="h-3 w-3" />
+              </button>
+              <p className="text-[9px] text-muted-foreground">to zoom</p>
             </div>
           </div>
-          {displayBullseyeData.stats.n_nan > 0 && (
-            <p className="mt-2 text-[10px] text-amber-600 dark:text-amber-400">
-              {displayBullseyeData.stats.n_nan} segment{displayBullseyeData.stats.n_nan > 1 ? "s" : ""} missing data
-            </p>
-          )}
-          <AhaHeartProjection
-            bullseyeData={displayBullseyeData}
-            currentFrame={currentFrame}
-            frameCount={frameCount}
-            previewMode={previewMode}
-          />
         </div>
       )}
     </div>
@@ -1077,32 +1143,28 @@ function AhaHeartProjection({
   currentFrame,
   frameCount,
   previewMode = false,
+  onZoomChange,
+  onResetZoom,
 }: {
   bullseyeData: BullseyeData;
   currentFrame: number;
   frameCount: number;
   previewMode?: boolean;
+  onZoomChange?: (fn: (delta: number) => void) => void;
+  onResetZoom?: (fn: () => void) => void;
 }) {
   const frameValues = getFrameBullseyeValues(bullseyeData, currentFrame, frameCount);
-  const frameMin = Math.min(...frameValues);
-  const frameMax = Math.max(...frameValues);
 
   return (
-    <div className="mt-3 flex-shrink-0 border-t border-border pt-3">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">3D heart projection</p>
-          <p className="text-[10px] text-muted-foreground">{previewMode ? "Preview color map" : "Frame color map"}</p>
-        </div>
-      </div>
-      <ClientHeartModel
-        values={frameValues}
-        min={bullseyeData.stats.min}
-        mid={bullseyeData.stats.mean}
-        max={bullseyeData.stats.max}
-        className="h-[340px] w-full overflow-hidden rounded-lg bg-[#151515]"
-      />
-    </div>
+    <ClientHeartModel
+      values={frameValues}
+      min={bullseyeData.stats.min}
+      mid={bullseyeData.stats.mean}
+      max={bullseyeData.stats.max}
+      className="flex-1 min-h-0 w-full"
+      onZoomChange={onZoomChange}
+      onResetZoom={onResetZoom}
+    />
   );
 }
 
@@ -1137,56 +1199,149 @@ function BullseyeFrameGrid({
   );
 }
 
+function ZoomPanContainer({
+  children,
+  className,
+  onResetRef,
+}: {
+  children: ReactNode;
+  className?: string;
+  onResetRef?: (resetFn: () => void) => void;
+}) {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const transformRef = useRef({ scale: 1, x: 0, y: 0 });
+  const dragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+  const activePtr = useRef<number | null>(null);
+
+  const applyTransform = useCallback((t: { scale: number; x: number; y: number }) => {
+    transformRef.current = t;
+    if (innerRef.current) {
+      innerRef.current.style.transform = `translate(${t.x}px, ${t.y}px) scale(${t.scale})`;
+    }
+    if (outerRef.current) {
+      outerRef.current.style.cursor = t.scale > 1 ? "grab" : "default";
+    }
+  }, []);
+
+  useEffect(() => {
+    if (onResetRef) {
+      onResetRef(() => applyTransform({ scale: 1, x: 0, y: 0 }));
+    }
+  }, [onResetRef, applyTransform]);
+
+  useEffect(() => {
+    const el = outerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const prev = transformRef.current;
+      const factor = e.deltaY < 0 ? 1.12 : 0.9;
+      const scale = Math.min(4, Math.max(1, prev.scale * factor));
+      const ratio = scale / prev.scale;
+      applyTransform({ scale, x: prev.x * ratio, y: prev.y * ratio });
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      e.preventDefault();
+      activePtr.current = e.pointerId;
+      el.setPointerCapture(e.pointerId);
+      dragging.current = true;
+      lastPos.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging.current || e.pointerId !== activePtr.current) return;
+      const prev = transformRef.current;
+      if (prev.scale <= 1) return;
+      const dx = e.clientX - lastPos.current.x;
+      const dy = e.clientY - lastPos.current.y;
+      lastPos.current = { x: e.clientX, y: e.clientY };
+      applyTransform({ ...prev, x: prev.x + dx, y: prev.y + dy });
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (e.pointerId === activePtr.current) {
+        dragging.current = false;
+        activePtr.current = null;
+      }
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [applyTransform]);
+
+  return (
+    <div ref={outerRef} className={`relative isolate ${className ?? ""}`} style={{ cursor: "default", overflow: "clip" }}>
+      <div
+        ref={innerRef}
+        style={{
+          transform: "translate(0px, 0px) scale(1)",
+          transformOrigin: "center center",
+          width: "100%",
+          height: "100%",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function AhaBullseyeChart({
   bullseyeData,
   referenceAngleDeg = 0,
-  size = 300,
   currentFrame = 0,
   frameCount = 1,
 }: {
   bullseyeData: BullseyeData;
   referenceAngleDeg?: number;
-  size?: number;
   currentFrame?: number;
   frameCount?: number;
 }) {
   const center = 150;
-  const basalOuter = 118;
-  const basalInner = 88;
-  const midInner = 58;
-  const apicalInner = 30;
+  const basalOuter = 108;
+  const basalInner = 81;
+  const midInner = 54;
+  const apicalInner = 28;
   const { segment_metadata } = bullseyeData;
   const frameValues = getFrameBullseyeValues(bullseyeData, currentFrame, frameCount);
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
-
-  // Cardinal label positions are fixed (anatomically correct, do not rotate with segments).
-  const anteriorPt  = polarPoint(center, 135, -90);  // 12 o'clock
-  const lateralPt   = polarPoint(center, 135, 180);  // 9 o'clock
-  const inferiorPt  = polarPoint(center, 135,  90);  // 6 o'clock
-  const septalPt    = polarPoint(center, 135,   0);  // 3 o'clock
 
   return (
     <svg
       viewBox="0 0 300 300"
       role="img"
       aria-label="AHA 17-segment bullseye chart"
-      style={{ width: size, height: size }}
-      className="h-auto w-full text-[#475569] dark:text-slate-300"
+      className="h-full w-full text-[#475569] dark:text-slate-300"
     >
-      <circle cx={center} cy={center} r="122" className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
+      <circle cx={center} cy={center} r="112" className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
 
-      <text x={anteriorPt.x} y={anteriorPt.y} textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
+      <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
         Anterior
       </text>
-      <text x={septalPt.x} y={septalPt.y} textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
+      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">
         Septal
       </text>
-      <text x={lateralPt.x} y={lateralPt.y} textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
-        Lateral
-      </text>
-      <text x={inferiorPt.x} y={inferiorPt.y} textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
+      <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
         Inferior
+      </text>
+      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">
+        Lateral
       </text>
 
       {Array.from({ length: 6 }, (_, index) => (
@@ -1437,8 +1592,9 @@ function StrainPreviewPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background p-3">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+      {/* Header row: type selector + frame/status */}
+      <div className="mb-2 flex items-center justify-between gap-2 flex-shrink-0">
+        <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
           {(["GLS", "GCS", "GRS"] as const).map((type) => (
             <button
               key={type}
@@ -1453,31 +1609,42 @@ function StrainPreviewPanel({
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-            {previewMode ? "Dummy preview" : "Detected"}
-          </span>
-          <span className="text-[10px] font-mono text-muted-foreground">
-            {Math.min(currentFrame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
-          </span>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+          {previewMode ? "Preview" : "Detected"} {Math.min(currentFrame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
+        </span>
+      </div>
+
+      {/* Compact stats row */}
+      <div className="mb-2 flex gap-2 flex-shrink-0">
+        <div className="flex-1 rounded-md border border-border bg-muted/20 px-2 py-1 text-center">
+          <p className="text-[9px] text-muted-foreground">Mean {selectedStrainType}</p>
+          <p className="text-[11px] font-semibold" style={{ color: getStrainColor(average, selectedStrainType) }}>
+            {average > 0 ? "+" : ""}{average.toFixed(1)}%
+          </p>
         </div>
+        <div className="flex-1 rounded-md border border-border bg-muted/20 px-2 py-1 text-center">
+          <p className="text-[9px] text-muted-foreground">Peak</p>
+          <p className="text-[11px] font-semibold" style={{ color: getStrainColor(peak, selectedStrainType) }}>
+            {peak > 0 ? "+" : ""}{peak.toFixed(1)}%
+          </p>
+        </div>
+        {metricPreview.filter(({ type }) => type !== selectedStrainType).map(({ type, value }) => (
+          <button
+            key={type}
+            type="button"
+            onClick={() => onStrainTypeChange(type)}
+            className="flex-1 rounded-md border border-border bg-muted/20 px-2 py-1 text-center transition-colors hover:bg-muted/50"
+          >
+            <p className="text-[9px] text-muted-foreground">{type}</p>
+            <p className="text-[11px] font-semibold" style={{ color: getStrainColor(value, type) }}>
+              {value > 0 ? "+" : ""}{value.toFixed(1)}%
+            </p>
+          </button>
+        ))}
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-2">
-        <MetricTile
-          label={`Mean ${selectedStrainType}`}
-          value={`${average > 0 ? "+" : ""}${average.toFixed(1)}`}
-          unit="%"
-          emphasized
-        />
-        <MetricTile
-          label="Peak"
-          value={`${peak > 0 ? "+" : ""}${peak.toFixed(1)}`}
-          unit="%"
-        />
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-muted/20 p-2">
+      {/* Strain bullseye chart — fills remaining space */}
+      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-muted/20 flex flex-col">
         <StrainBullseye
           segmentData={strainData}
           selectedStrainType={selectedStrainType}
@@ -1487,28 +1654,6 @@ function StrainPreviewPanel({
           selectedSegment={selectedSegment}
           onSelectSegment={onSelectSegment}
         />
-      </div>
-
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[10px]">
-        {metricPreview.map(({ type, value }) => (
-          <button
-            key={type}
-            type="button"
-            onClick={() => onStrainTypeChange(type)}
-            className={cn(
-              "rounded-md border border-border bg-muted/20 p-2 transition-colors hover:bg-muted/50",
-              selectedStrainType === type && "border-primary/40 bg-primary/10",
-            )}
-          >
-            <p className="text-muted-foreground">{type}</p>
-            <p
-              className="font-semibold"
-              style={{ color: getStrainColor(value, type) }}
-            >
-              {value > 0 ? "+" : ""}{value.toFixed(1)}%
-            </p>
-          </button>
-        ))}
       </div>
     </div>
   );
