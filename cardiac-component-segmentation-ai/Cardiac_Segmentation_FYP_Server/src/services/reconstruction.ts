@@ -7,7 +7,7 @@ import { jobModel, readProject, readProjectReconstruction, readProjectSegmentati
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
-import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
+import { generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { URL } from 'url';  // ADDED URL import for S3 URL parsing
 import { getFreshGPUServerAddress, getCurrentToken } from "./gpu_auth_client";
 import { generateAISegmentationForReconstruction } from "./segmentation_export";
@@ -342,7 +342,7 @@ export const startReconstruction = async (
         }
 
         // Generate fresh presigned URL for the GPU (with longer expiration)
-        const dataUrlForGpu = await generatePresignedGetUrl(s3BucketName, segmentationResult.s3Key, 3600); // 1 hour
+        const dataUrlForGpu = await generatePresignedGetUrlForInternalService(s3BucketName, segmentationResult.s3Key, 3600); // 1 hour
         
         if (!dataUrlForGpu) {
             logger.error(`${serviceLocation}: Failed to generate presigned URL for segmentation file: ${segmentationResult.s3Key}`);

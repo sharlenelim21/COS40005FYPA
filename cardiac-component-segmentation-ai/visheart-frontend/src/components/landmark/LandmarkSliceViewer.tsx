@@ -54,9 +54,6 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const frameImgRef  = useRef<HTMLImageElement | null>(null);
   const draggingLandmarkRef = useRef<string | null>(null);
-  // Actual pixel dimensions of the loaded JPEG — may differ from imageDimensions
-  // if the backend stored thumbnails with transposed axes (H×W vs W×H).
-  const imgPixelDimsRef = useRef<{ w: number; h: number } | null>(null);
 
   // Keep frame label values in refs so changing frame doesn't recreate `draw`
   const currentFrameRef = useRef(currentFrame);
@@ -105,22 +102,14 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
         const [cx, cy] = toCanvas(coord, cw, ch);
-        // Collapsed: draw RV1/RV2 faded and without labels (mean point label replaces them)
-        drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, highlightedLandmarkId === def.id, isLowConfidence || isCollapsed);
-      }
-
-      // Collapsed: draw mean point on top with its own label
-      if (isCollapsed && prediction.display_mean) {
-        const meanCoord: [number, number] = [prediction.display_mean.x, prediction.display_mean.y];
-        const [cx, cy] = toCanvas(meanCoord, cw, ch);
-        drawMeanDot(ctx, cx, cy, showLabels);
+        drawDot(ctx, cx, cy, def, showLabels, highlightedLandmarkId === def.id);
       }
 
       if (totalFramesRef.current > 0) {
         drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
       }
     },
-    [prediction, visibleLandmarks, showLabels, highlightedLandmarkId, toCanvas, maskOverlays, effectiveMaskDimensions],
+    [prediction, visibleLandmarks, showLabels, highlightedLandmarkId, toCanvas, maskOverlays, imageDimensions],
   );
 
   const canvasToImageCoord = useCallback((event: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
@@ -220,7 +209,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       <canvas
         ref={canvasRef}
         className={cn("block max-w-full max-h-full", editableLandmarks && "cursor-crosshair")}
-        style={{ imageRendering: "auto" }}
+        style={{ imageRendering: "pixelated" }}
         aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
         onPointerDown={(event) => {
           const landmarkId = hitTestLandmark(event);
@@ -233,8 +222,11 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
           onLandmarkMove?.(draggingLandmarkRef.current, canvasToImageCoord(event));
         }}
         onPointerUp={(event) => {
+          const hasActiveDrag = !!draggingLandmarkRef.current;
           draggingLandmarkRef.current = null;
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          if (hasActiveDrag && event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
         }}
         onPointerCancel={() => {
           draggingLandmarkRef.current = null;
@@ -251,7 +243,6 @@ function drawDot(
   def: LandmarkDefinition,
   showLabel: boolean,
   highlighted = false,
-  lowConfidence = false,
 ) {
   // Low-confidence: keep original colour but reduce opacity so dots remain distinguishable
   const dotColor  = def.color;
@@ -265,7 +256,6 @@ function drawDot(
   ctx.beginPath();
   ctx.arc(cx, cy, GLOW_R, 0, Math.PI * 2);
   ctx.fillStyle = highlighted ? def.color + "55" : def.color + "2a";
-  ctx.fillStyle = dotColor + glowAlpha;
   ctx.fill();
 
   // Crosshair lines — clipped tightly around the dot
@@ -277,16 +267,6 @@ function drawDot(
   ctx.lineTo(cx, cy + DOT_R + CROSS_EXT);
   ctx.strokeStyle = def.color + "88";  // 53% opacity
   ctx.lineWidth = highlighted ? 1.8 : 0.8;
-  ctx.moveTo(Math.round(cx - arm) + 0.5, Math.round(cy) + 0.5);
-  ctx.lineTo(Math.round(cx - DOT_R) + 0.5, Math.round(cy) + 0.5);
-  ctx.moveTo(Math.round(cx + DOT_R) + 0.5, Math.round(cy) + 0.5);
-  ctx.lineTo(Math.round(cx + arm) + 0.5, Math.round(cy) + 0.5);
-  ctx.moveTo(Math.round(cx) + 0.5, Math.round(cy - arm) + 0.5);
-  ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy - DOT_R) + 0.5);
-  ctx.moveTo(Math.round(cx) + 0.5, Math.round(cy + DOT_R) + 0.5);
-  ctx.lineTo(Math.round(cx) + 0.5, Math.round(cy + arm) + 0.5);
-  ctx.strokeStyle = dotColor + "88";
-  ctx.lineWidth = 1;
   ctx.stroke();
 
   // Dot fill
@@ -312,9 +292,6 @@ function drawDot(
 
   // Label pill
   if (!showLabel) return;
-  // Label pill — always full opacity regardless of confidence
-  if (!showLabel) { ctx.restore(); return; }
-  ctx.globalAlpha = 1.0;
 
   ctx.font = LABEL_FONT;
   const text  = def.label;

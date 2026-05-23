@@ -136,10 +136,10 @@ export default function ProjectPage() {
       const name = ((m?.name || "") + "").toLowerCase();
       if (name.includes("unet")) return "unet";
       if (name.includes("medsam")) return "medsam";
-      const tag = ((m?.segmentationModel || m?.model_used || "") + "").toLowerCase();
-      if (tag === "medsam" || tag === "unet") return tag;
       // Do not guess "medsam" for generic names — they predate per-model tagging
       // and could belong to UNet on CPU environments.
+      const tag = ((m?.segmentationModel || m?.model_used || "") + "").toLowerCase();
+      if (tag === "medsam" || tag === "unet") return tag;
       return null;
     };
     const found = new Set<"medsam" | "unet">();
@@ -476,6 +476,8 @@ export default function ProjectPage() {
     setIsDeleting(true);
     try {
       await projectApi.deleteProject(projectId);
+      await clearProjectCache();
+      await clearReconstructionCache();
       // Success - redirect to dashboard
       router.push("/dashboard");
     } catch (error) {
@@ -1625,9 +1627,9 @@ export default function ProjectPage() {
         availableModels={availableReconstructionModels}
         blockedModels={Array.from(existing4DModels)}
         defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
+        gpuAvailable={processingUnit.gpuAvailable}
         existingReconstructionsByModel={existing4DByModel}
         onViewReconstruction={goToReconstructionViewer}
-        gpuAvailable={processingUnit.gpuAvailable}
       />
 
       {/* Delete Model Reconstruction Confirmation Dialog */}

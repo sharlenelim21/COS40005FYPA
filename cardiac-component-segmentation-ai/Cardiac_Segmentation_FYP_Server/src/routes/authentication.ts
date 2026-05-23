@@ -12,82 +12,9 @@ import { validationResult } from 'express-validator'; // Import express-validato
 import { v4 as uuidv4 } from 'uuid'; // Import UUID for generating unique guest IDs
 import { cleanupUserS3Storage } from '../services/s3_handler';
 import { handleUserSaveUnsave } from "../jobs/projectcleanupjob"; // Import project handler for user project management
-import { redisClient } from "../services/redis";
 
 const router = express.Router();
 const serviceLocation = "API(Authentication)"; // Service location for logging
-
-// IP rate limiting (login route only)
-const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
-const RATE_LIMIT_MAX = 5;
-const ipAttempts = new Map<string, { count: number; windowStart: number }>();
-
-const loginRateLimiter = (req: Request, res: Response, next: NextFunction): void => {
-  const ip = req.ip ?? "unknown";
-  const now = Date.now();
-  const entry = ipAttempts.get(ip);
-  if (entry && now - entry.windowStart < RATE_LIMIT_WINDOW_MS) {
-    if (entry.count >= RATE_LIMIT_MAX) {
-      logger.warn(`${serviceLocation}: Rate limit exceeded - ip=${ip} timestamp=${new Date().toISOString()}`);
-      res.status(429).json({ message: "Too many login attempts. Please try again in 10 minutes.", retryAfter: 600 });
-      return;
-    }
-  } else {
-    ipAttempts.set(ip, { count: 0, windowStart: now });
-  }
-  next();
-};
-
-// Account lockout via Redis
-const LOCKOUT_WINDOW_MS = 10 * 60 * 1000;
-const LOCKOUT_MAX_ATTEMPTS = 5;
-const LOCKOUT_TTL_SECONDS = 600;
-const getAttemptKey = (u: string) => `login_attempts:${u}`;
-const getLockKey    = (u: string) => `login_locked:${u}`;
-
-async function isAccountLocked(username: string): Promise<{ locked: boolean; lockedUntil?: number }> {
-  try {
-    const val = await redisClient.get(getLockKey(username));
-    if (val) {
-      const lockedUntil = parseInt(val, 10);
-      if (lockedUntil > Date.now()) return { locked: true, lockedUntil };
-      await redisClient.del(getLockKey(username));
-      await redisClient.del(getAttemptKey(username));
-    }
-  } catch (err) {
-    logger.error(`${serviceLocation}: Redis error checking lockout for ${username}: ${err}`);
-  }
-  return { locked: false };
-}
-
-async function recordFailedAttempt(username: string, ip: string): Promise<void> {
-  try {
-    const count = await redisClient.incr(getAttemptKey(username));
-    await redisClient.expire(getAttemptKey(username), LOCKOUT_TTL_SECONDS);
-    const ipEntry = ipAttempts.get(ip) ?? { count: 0, windowStart: Date.now() };
-    ipEntry.count += 1;
-    ipAttempts.set(ip, ipEntry);
-    if (count >= LOCKOUT_MAX_ATTEMPTS) {
-      const lockedUntil = Date.now() + LOCKOUT_WINDOW_MS;
-      await redisClient.set(getLockKey(username), String(lockedUntil), { EX: LOCKOUT_TTL_SECONDS });
-      logger.warn(`${serviceLocation}: Account locked - username=${username} ip=${ip} attempts=5/5 lockedUntil=${new Date(lockedUntil).toISOString()} timestamp=${new Date().toISOString()}`);
-    } else {
-      logger.warn(`${serviceLocation}: Failed login attempt - username=${username} ip=${ip} attempts=${count}/5 timestamp=${new Date().toISOString()}`);
-    }
-  } catch (err) {
-    logger.error(`${serviceLocation}: Redis error recording failed attempt for ${username}: ${err}`);
-  }
-}
-
-async function clearFailedAttempts(username: string, ip: string): Promise<void> {
-  try {
-    await redisClient.del(getAttemptKey(username));
-    await redisClient.del(getLockKey(username));
-    ipAttempts.delete(ip);
-  } catch (err) {
-    logger.error(`${serviceLocation}: Redis error clearing attempts for ${username}: ${err}`);
-  }
-}
 
 router.post("/register",
   // Use all validation fields for registration
@@ -188,52 +115,37 @@ router.post("/register-from-guest",
 )
 
 router.post("/login",
-  loginRateLimiter,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // Lockout check BEFORE validation so locked users can't keep incrementing
-    const username: string = req.body.username ?? "unknown";
-    const ip = req.ip ?? "unknown";
-    const { locked, lockedUntil } = await isAccountLocked(username);
-    if (locked) {
-      const remaining = Math.ceil(((lockedUntil ?? 0) - Date.now()) / 60000);
-      logger.warn(`${serviceLocation}: Locked account access attempt - username=${username} ip=${ip} lockedUntil=${new Date(lockedUntil ?? 0).toISOString()} timestamp=${new Date().toISOString()}`);
-      res.status(423).json({
-        message: `Account locked due to too many failed attempts. Try again in ${remaining} minute${remaining !== 1 ? "s" : ""}.`,
-        lockedUntil,
-        minutesRemaining: remaining,
-      });
-      return;
-    }
-    next();
-  },
-  [validateFields[0], validateFields[1]],
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  [validateFields[0], validateFields[1]],  // Username and password validation
+  (req: Request, res: Response, next: NextFunction): void => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      await recordFailedAttempt(req.body.username ?? "unknown", req.ip ?? "unknown");
       res.status(400).json({ login: false, errors: errors.array() });
     } else {
       next();
     }
   },
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const username: string = req.body.username;
-    const ip = req.ip ?? "unknown";
-    passport.authenticate("local", async (err: Error | null, user: IUserSafe, info?: { message: string }) => {
+  (req: Request, res: Response, next: NextFunction): void => {
+    passport.authenticate("local", (err: Error | null, user: IUserSafe, info?: { message: string }) => {
       if (err) {
         logger.error(`${serviceLocation}: Authentication error: ${err}`);
         return res.status(500).json({ message: "Internal error" });
       }
       if (!user) {
-        await recordFailedAttempt(username, ip);
+        logger.warn(
+          `${serviceLocation}: Failed login attempt - ` +
+          `username=${req.body.username} ` +
+          `ip=${req.ip} ` +
+          `timestamp=${new Date().toISOString()}`
+        );
         return res.status(401).json({ login: false, message: info?.message });
       }
-      return req.logIn(user, async (loginErr) => {
+
+      return req.logIn(user, (loginErr) => {
         if (loginErr) {
           logger.error(`${serviceLocation}: Login error: ${loginErr}`);
           return res.status(500).json({ message: "Internal error during login." });
         }
-        await clearFailedAttempts(username, ip);
+
         logger.info(`${serviceLocation}: User ${user.username} logged in successfully.`);
         return res.status(200).json({
           login: true,

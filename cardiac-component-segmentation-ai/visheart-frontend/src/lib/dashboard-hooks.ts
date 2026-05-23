@@ -149,7 +149,7 @@ export function useUserProjects(enabled = true) {
     setIsLoading(true);
     try {
       const response = await projectApi.getProjects();
-      setProjects(response.projects || []);
+      setProjects(Array.isArray(response?.projects) ? response.projects : []);
     } catch (error: any) {
       const isUnauthorized = error?.response?.status === 401;
       if (!isUnauthorized) {
