@@ -346,7 +346,7 @@ function DashboardPage() {
 
     try {
       await projectApi.deleteProject(projectToDelete.id);
-      await refreshProjects();
+      await Promise.all([refreshProjects(), refreshJobs()]);
       setDeleteDialogOpen(false);
       setProjectToDelete(null);
     } catch (error) {
