@@ -22,8 +22,11 @@ RUN pnpm install --no-frozen-lockfile
 COPY visheart-frontend/ ./
 
 # Set environment variables for LOCAL build
+# NEXT_PUBLIC_* vars must be set at BUILD time — runtime docker-compose env vars don't work for these
 ENV NEXT_PUBLIC_API_URL=http://localhost:5000
 ENV NEXT_PUBLIC_ENV=development
+ENV NEXT_PUBLIC_LANDMARK_USE_STUB=false
+ENV NEXT_PUBLIC_LANDMARK_ENDPOINT=/landmark-detection
 ENV NODE_ENV=production
 
 # Build frontend

@@ -17,3 +17,4 @@ FROM sveltes/visheart-inference-gpu:faithful-latest
 # Source path is relative to the build context (repo root COS40005FYPA/).
 COPY UNETRESNET34/checkpoints/best_model_1ch.pth /app/UNETRESNET34/checkpoints/best_model_1ch.pth
 COPY UNETRESNET34/checkpoints/best_model_2ch.pth /app/UNETRESNET34/checkpoints/best_model_2ch.pth
+COPY UNETRESNET34/models/unet_resnet34.py /app/UNETRESNET34/models/unet_resnet34.py
