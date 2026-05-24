@@ -1,0 +1,5 @@
+# Local deployment code (contains large dist/ files, not for version control)
+cardiac-component-segmentation-ai/visheart-local-code/
+
+# Docker cookie/session files
+cardiac-component-segmentation-ai/cookie.txt
