@@ -1840,6 +1840,8 @@ function LandmarkSummaryStats({
 }) {
   if (!nTotal) return null;
   const confident = nTotal - (nCollapsed ?? 0);
+  const segGuided = n2ch ?? 0;
+  const mriOnly = n1chFallback ?? 0;
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-0.5 px-4 py-1.5 border-b border-border bg-muted/30 text-[11px] text-muted-foreground flex-shrink-0">
       <span>
@@ -1852,15 +1854,15 @@ function LandmarkSummaryStats({
           {" mean point used"}
         </span>
       )}
-      {(n2ch ?? 0) > 0 && (
+      {segGuided > 0 && (
         <span>
-          <span className="font-medium text-blue-500">{n2ch}/{nTotal}</span>
+          <span className="font-medium text-blue-500">{segGuided}/{nTotal}</span>
           {" seg-guided (2ch)"}
         </span>
       )}
-      {(n1chFallback ?? 0) > 0 && (
+      {mriOnly > 0 && (
         <span>
-          <span className="font-medium text-amber-500">{n1chFallback}/{nTotal}</span>
+          <span className="font-medium text-amber-500">{mriOnly}/{nTotal}</span>
           {" MRI-only (1ch)"}
         </span>
       )}

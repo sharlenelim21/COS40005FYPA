@@ -313,9 +313,7 @@ function PlaybackBar({
 
       {/* Playback mode label */}
       <p className="text-[10px] text-muted-foreground text-center">
-        {confidentCount >= 2
-          ? `Playing ${confidentCount} confident slices`
-          : "Playing all slices"}
+        {"Playing all slices"}
       </p>
 
       {/* Slider */}
@@ -381,10 +379,10 @@ function SliceConfidenceDot({
     tip = "Landmarks too close — mean point used";
   } else if (confidence === "high") {
     color = "bg-green-500";
-    tip = model_used === "2ch" ? "High confidence (seg-guided)" : "High confidence";
+    tip = model_used === "2ch" ? "High confidence (seg-guided 2ch)" : "High confidence (MRI-only 1ch)";
   } else {
     color = "bg-orange-400";
-    tip = "Low confidence prediction";
+    tip = `Low confidence — ${model_used === "2ch" ? "seg-guided 2ch" : "MRI-only 1ch"}`;
   }
 
   return (

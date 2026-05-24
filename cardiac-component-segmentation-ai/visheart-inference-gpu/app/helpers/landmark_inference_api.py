@@ -376,6 +376,7 @@ def run_landmark_inference_from_nifti(
             )
 
         heatmap = _tta_predict(model_to_use, tensor, torch_device)
+
         hm_lm1 = heatmap[0]
         hm_lm2 = heatmap[1]
         lm1_x, lm1_y, hm1_max = _heatmap_to_coord(hm_lm1, H_orig, W_orig)

@@ -228,12 +228,8 @@ export function useLandmarkDetection(
 
   const handlePlay = useCallback(() => {
     if (state.status !== "done" || state.totalFrames < 2) return;
-    // Compute confident indices — flag=normal AND confidence=high
-    const confident = state.predictions
-      .map((p, i) => ({ p, i }))
-      .filter(({ p }) => p.flag === "normal" && p.confidence === "high")
-      .map(({ i }) => i);
-    playIndicesRef.current = confident.length >= 2 ? confident : [];
+    // Always play all slices — confident-only filtering caused confusing "Playing N confident slices" behaviour
+    playIndicesRef.current = [];
     isPlayingRef.current = true;
     lastTickRef.current = 0;
     setState((s) => ({ ...s, isPlaying: true }));
