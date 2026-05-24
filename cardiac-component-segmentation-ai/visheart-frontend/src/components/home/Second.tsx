@@ -65,8 +65,9 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
               transition={{ duration: 0.8, delay: 0.4 }}
               viewport={{ once: true }}
             >
-              Our platform integrates YOLOv11 object detection, MedSAM medical segmentation, and a cutting-edge 
-              4D reconstruction model to deliver a complete cardiac imaging analysis workflow.
+              Our platform integrates YOLOv11 object detection, MedSAM &amp; UNetMamba segmentation,
+              UNetResNet34 landmark detection, strain computation and analysis,
+              and a cutting-edge 4D reconstruction model to deliver a complete cardiac imaging analysis workflow.
             </motion.p>
           </motion.div>
 
@@ -177,8 +178,8 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                         <Brain className="w-6 h-6 text-primary" />
                       </motion.div>
                       <div>
-                        <CardTitle className="text-2xl">MedSAM</CardTitle>
-                        <CardDescription>Medical Segment Anything</CardDescription>
+                        <CardTitle className="text-2xl">MedSAM &amp; UNetMamba</CardTitle>
+                        <CardDescription>Medical Image Segmentation</CardDescription>
                       </div>
                     </div>
                     <motion.div
@@ -191,8 +192,9 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                 </CardHeader>
                 <CardContent className="flex flex-col h-full">
                   <p className="text-muted-foreground mb-6">
-                    A specialized adaptation of Meta&apos;s Segment Anything Model for medical imaging. 
-                    Provides precise pixel-level segmentation for detailed cardiac structure analysis.
+                    Two complementary segmentation models: MedSAM (Meta&apos;s Segment Anything adapted for medical imaging)
+                    and UNetMamba (state-space driven multi-class cardiac labelling) working together
+                    for precise pixel-level cardiac structure analysis.
                   </p>
                   <div className="space-y-3 mb-6">
                     <motion.div 
