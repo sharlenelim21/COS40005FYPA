@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import logger from "./logger";
 import * as bcrypt from "bcrypt";
 import { loadEnvFromKnownLocations } from "../utils/env";
+import { redisClient } from "./redis";
 
 // Import utility functions
 import LogError from "../utils/error_logger"; // Import the error logging utility
@@ -536,6 +537,15 @@ const deleteUser = async (user_id: string): Promise<UserCrudResult> => {
  * - On failure due to account configuration issue (e.g., missing password hash in DB): `{ success: false, operation: CRUDOperation.AUTHENTICATE, message: "Authentication failed due to an account configuration issue." }`.
  * - On internal server error (database issue, bcrypt error): `{ success: false, operation: CRUDOperation.AUTHENTICATE, message: "An internal server error occurred..." }`.
  */
+// Account lockout constants
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_SECONDS = 10 * 60; // 10 minutes
+
+const getLoginLockoutKeys = (username: string) => ({
+  attemptsKey: `login:attempts:${username.toLowerCase()}`,
+  lockKey:     `login:locked:${username.toLowerCase()}`,
+});
+
 const authenticateUser = async (
   username: string,
   passwordAttempt: string
@@ -555,7 +565,22 @@ const authenticateUser = async (
     return { success: false, operation, message: 'Invalid username or password.' };
   }
 
+  const { attemptsKey, lockKey } = getLoginLockoutKeys(username);
+
   try {
+    // --- Lockout check ---
+    const isLocked = await redisClient.get(lockKey);
+    if (isLocked) {
+      const ttl = await redisClient.ttl(lockKey);
+      const minutes = Math.ceil(ttl / 60);
+      logger.warn(`${serviceLocation}: Login blocked for locked account: ${username} (${ttl}s remaining)`);
+      return {
+        success: false,
+        operation,
+        message: `Account temporarily locked due to too many failed login attempts. Please try again in ${minutes} minute${minutes !== 1 ? "s" : ""}.`,
+      };
+    }
+
     // 1. Find the user specifically by username
     // Use .select('+password') to ensure the password hash is retrieved especially if have schema-level settings that might exclude it by default.
     const user: IUserDocument | null = await userModel.findOne({ username: username }).select('+password');
@@ -563,6 +588,7 @@ const authenticateUser = async (
     // 2. Handle case where username doesn't exist
     if (!user) {
       logger.warn(`${serviceLocation}: Authentication attempt failed for non-existent username: ${username}`);
+      // Don't increment attempts for non-existent usernames — prevents user enumeration via lockout timing
       return { success: false, operation, message: 'Invalid username or password.' };
     }
 
@@ -575,13 +601,36 @@ const authenticateUser = async (
     // 3. Compare the provided password attempt with the stored hash
     const isMatch = await bcrypt.compare(passwordAttempt, user.password);
 
-    // 4. Handle case where passwords don't match
+    // 4. Handle case where passwords don't match — increment failure counter
     if (!isMatch) {
-      logger.warn(`${serviceLocation}: Authentication attempt failed for username: ${username} (Incorrect password)`);
-      return { success: false, operation, message: 'Invalid username or password.' };
+      const attempts = await redisClient.incr(attemptsKey);
+      // Set expiry on first attempt so the counter auto-clears after the lockout window
+      if (attempts === 1) {
+        await redisClient.expire(attemptsKey, LOGIN_LOCKOUT_SECONDS);
+      }
+      const remaining = LOGIN_MAX_ATTEMPTS - attempts;
+      if (attempts >= LOGIN_MAX_ATTEMPTS) {
+        // Trigger lockout
+        await redisClient.set(lockKey, "1", { EX: LOGIN_LOCKOUT_SECONDS });
+        await redisClient.del(attemptsKey);
+        logger.warn(`${serviceLocation}: Account locked after ${attempts} failed attempts: ${username}`);
+        return {
+          success: false,
+          operation,
+          message: `Too many failed login attempts. Account locked for ${LOGIN_LOCKOUT_SECONDS / 60} minutes.`,
+        };
+      }
+      logger.warn(`${serviceLocation}: Authentication attempt failed for username: ${username} (Incorrect password) — ${attempts}/${LOGIN_MAX_ATTEMPTS} attempts`);
+      return {
+        success: false,
+        operation,
+        message: `Invalid username or password. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining before account is locked.`,
+      };
     }
 
-    // 5. Authentication successful!
+    // 5. Authentication successful — clear any failure counter
+    await redisClient.del(attemptsKey);
+    await redisClient.del(lockKey);
     logger.info(`${serviceLocation}: Authentication successful for username: ${username}`);
     return { success: true, operation, user: toIUserSafe(user) };
 
