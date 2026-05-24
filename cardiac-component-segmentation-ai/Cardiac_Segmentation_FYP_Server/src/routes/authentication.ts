@@ -8,13 +8,41 @@ import { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest } from "../se
 import logger from "../services/logger"; // Import logger
 // import { extractS3KeyFromUrl, deleteFromS3 } from "../services/s3_handler";
 import validateFields from "../utils/field_validation"; // Import reusable validation middleware
-import { validationResult } from 'express-validator'; // Import express-validator for input validation
+import { body, validationResult } from 'express-validator'; // Import express-validator for input validation
 import { v4 as uuidv4 } from 'uuid'; // Import UUID for generating unique guest IDs
 import { cleanupUserS3Storage } from '../services/s3_handler';
 import { handleUserSaveUnsave } from "../jobs/projectcleanupjob"; // Import project handler for user project management
+// express-rate-limit is installed as a production dependency — baked into the Docker image.
+// It will be active after the next docker build. For local volume-mount dev, the backend
+// falls back gracefully if the module is somehow missing (see loginRateLimiter below).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const rateLimit = (() => { try { return require("express-rate-limit"); } catch { return null; } })();
 
 const router = express.Router();
 const serviceLocation = "API(Authentication)"; // Service location for logging
+
+// Per-IP rate limiter for login — max 10 attempts per 15 minutes per IP address.
+// This is separate from the per-username account lockout in database.ts.
+// Together they protect against both single-IP brute force and distributed attacks.
+const loginRateLimiter = rateLimit
+  ? rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 10,                   // max 10 requests per IP per window
+      standardHeaders: true,     // return rate limit info in RateLimit-* headers
+      legacyHeaders: false,
+      handler: (req: Request, res: Response) => {
+        logger.warn(
+          `${serviceLocation}: Rate limit exceeded on login - ` +
+          `ip=${req.ip} ` +
+          `timestamp=${new Date().toISOString()}`
+        );
+        res.status(429).json({
+          login: false,
+          message: "Too many login attempts from this device. Please try again in 15 minutes.",
+        });
+      },
+    })
+  : (_req: Request, _res: Response, next: NextFunction) => next(); // no-op fallback until image rebuild
 
 router.post("/register",
   // Use all validation fields for registration
@@ -115,7 +143,10 @@ router.post("/register-from-guest",
 )
 
 router.post("/login",
-  [validateFields[0], validateFields[1]],  // Username and password validation
+  loginRateLimiter,
+  // Login only checks username length/format and that password is non-empty.
+  // Full password complexity rules only apply on register — not login.
+  [validateFields[0], body('password').notEmpty().withMessage('Password is required.')],
   (req: Request, res: Response, next: NextFunction): void => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -131,13 +162,17 @@ router.post("/login",
         return res.status(500).json({ message: "Internal error" });
       }
       if (!user) {
+        const message = info?.message ?? "Invalid username or password.";
+        const isLocked = message.toLowerCase().includes("locked") || message.toLowerCase().includes("too many");
+        const statusCode = isLocked ? 423 : 401;
         logger.warn(
           `${serviceLocation}: Failed login attempt - ` +
           `username=${req.body.username} ` +
           `ip=${req.ip} ` +
+          `status=${statusCode} ` +
           `timestamp=${new Date().toISOString()}`
         );
-        return res.status(401).json({ login: false, message: info?.message });
+        return res.status(statusCode).json({ login: false, message });
       }
 
       return req.logIn(user, (loginErr) => {

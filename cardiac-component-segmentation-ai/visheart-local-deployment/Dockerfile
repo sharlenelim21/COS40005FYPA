@@ -62,7 +62,9 @@ RUN if [ -f src/python/requirements.txt ]; then \
 FROM node:18-alpine AS production
 
 # Install runtime dependencies (including curl for healthcheck)
-RUN apk add --no-cache python3 py3-pip dumb-init curl && \
+# ca-certificates + openssl: fixes SSL/TLS errors teammates get when connecting to external services
+RUN apk add --no-cache python3 py3-pip dumb-init curl ca-certificates openssl && \
+    update-ca-certificates && \
     npm install -g pm2 pnpm
 
 # Set working directory
