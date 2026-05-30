@@ -4,6 +4,7 @@ import type {
   LandmarkInferenceResponse,
   FramePrediction,
 } from "@/types/landmark";
+import type { RealStrainResult } from "@/components/landmark/StrainVisualization";
 
 const baseURL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -153,7 +154,29 @@ export const landmarkApi = {
     }
     return false;
   },
+
+  computeStrain: async (projectId: string, formData: FormData): Promise<RealStrainResult> => {
+    const response = await api.post<RealStrainResult>(
+      `${ENDPOINT}/compute-strain/${projectId}`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return response.data;
+  },
 };
+
+export async function computeStrainFromFrames(
+  projectId: string,
+  edFrameIndex: number,
+  esFrameIndex: number,
+  modelType: "unet" | "medsam" = "unet",
+): Promise<RealStrainResult> {
+  const response = await api.post<RealStrainResult>(
+    `/segmentation/compute-strain-from-frames`,
+    { projectId, edFrameIndex, esFrameIndex, modelType },
+  );
+  return response.data;
+}
 
 export type LandmarkErrorCode =
   | "inference_failed"

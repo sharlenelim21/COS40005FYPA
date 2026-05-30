@@ -59,6 +59,8 @@ interface ClientHeartModelProps {
   onResetZoom?: (fn: () => void) => void;
   // Fix 3: 0-based selected segment index, -1 = none
   selectedSegment?: number;
+  // When true, low value = green (used for GCS where more negative = healthier)
+  reverseColors?: boolean;
 }
 
 // Identical colour ramp to the 2D bullseye's rdYlGn + segmentColor:
@@ -69,9 +71,10 @@ function rdYlGn(t: number): THREE.Color {
   return new THREE.Color(r, g, 0);
 }
 
-function valueToColor(value: number, min: number, max: number): THREE.Color {
+function valueToColor(value: number, min: number, max: number, reverse = false): THREE.Color {
   if (!Number.isFinite(value) || max === min) return new THREE.Color(0.267, 0.267, 0.267); // #444
-  const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  let t = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  if (reverse) t = 1 - t;
   return rdYlGn(t);
 }
 
@@ -97,11 +100,13 @@ export function ClientHeartModel({
   onZoomChange,
   onResetZoom,
   selectedSegment = -1,
+  reverseColors = false,
 }: ClientHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const meshesRef = useRef<AnimatedMesh[]>([]);
   const valuesRef = useRef(values);
   const rangeRef = useRef({ min, max });
+  const reverseColorsRef = useRef(reverseColors);
   // Fix 3: ref so the animation loop closure reads the latest value
   const selectedSegmentRef = useRef(selectedSegment);
 
@@ -117,16 +122,17 @@ export function ClientHeartModel({
   const isPausedRef = useRef(false);
   const [isPaused, setIsPaused] = useState(false);
 
-  // Sync latest values/range into refs and update target colours
+  // Sync latest values/range/reverseColors into refs and update target colours
   useEffect(() => {
     valuesRef.current = values;
     rangeRef.current = { min, max };
+    reverseColorsRef.current = reverseColors;
     meshesRef.current.forEach((entry) => {
-      const c = valueToColor(values[entry.segmentIndex] ?? min, min, max);
+      const c = valueToColor(values[entry.segmentIndex] ?? min, min, max, reverseColors);
       entry.targetColor = c.clone();
       entry.baseColor = c.clone();
     });
-  }, [max, min, values]);
+  }, [max, min, values, reverseColors]);
 
   // Sync selectedSegment ref for the animation loop
   useEffect(() => {
@@ -243,7 +249,7 @@ export function ClientHeartModel({
             if (!mesh.isMesh) return;
 
             const range = rangeRef.current;
-            const color = valueToColor(valuesRef.current[index] ?? range.min, range.min, range.max);
+            const color = valueToColor(valuesRef.current[index] ?? range.min, range.min, range.max, reverseColorsRef.current);
             mesh.material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
             meshesRef.current.push({
               mesh,

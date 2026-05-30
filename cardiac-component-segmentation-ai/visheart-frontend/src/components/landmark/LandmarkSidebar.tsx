@@ -722,7 +722,9 @@ function StrainTab({
   selectedStrainSegment?: number | null;
   selectedStrainType?: StrainType;
 }) {
-  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>(externalStrainType ?? "GCS");
+  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>(
+    externalStrainType && externalStrainType !== ("GLS" as string) ? externalStrainType : "GRS"
+  );
   const frameCount = Math.max(totalFrames || 10, 1);
   const curveData = selectedStrainSegment
     ? Array.from({ length: frameCount }, (_, frame) => {
@@ -786,8 +788,8 @@ function StrainTab({
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-1">
-        {(["GRS", "GCS", "GLS"] as const).map((type) => (
+      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+        {(["GRS", "GCS"] as const).map((type) => (
           <button
             key={type}
             type="button"

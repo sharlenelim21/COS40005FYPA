@@ -7,7 +7,6 @@ interface LandmarkExportData {
   strainMetrics?: {
     peakGCS: string;
     peakGRS: string;
-    peakGLS: string;
     alignment: string;
   };
 }
@@ -68,7 +67,6 @@ function buildReportLines(data: LandmarkExportData): PdfLine[] {
     { type: "heading", text: "Strain Preview Results" },
     { type: "metric", label: "Peak GCS (SAX)", value: data.strainMetrics?.peakGCS || "-17.6%" },
     { type: "metric", label: "Peak GRS (SAX)", value: data.strainMetrics?.peakGRS || "+27.8%" },
-    { type: "metric", label: "Peak GLS (LAX)", value: data.strainMetrics?.peakGLS || "-16.2%" },
     { type: "metric", label: "Frame Match", value: data.strainMetrics?.alignment || "94%" },
     { type: "body", text: "Note: strain values are dummy preview values until the strain calculation pipeline is connected." },
     { type: "heading", text: "Recommendations" },

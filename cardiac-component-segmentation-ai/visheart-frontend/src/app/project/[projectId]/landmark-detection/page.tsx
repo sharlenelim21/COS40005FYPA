@@ -17,6 +17,9 @@ import {
   Activity,
   ZoomIn,
   ZoomOut,
+  Upload,
+  Stethoscope,
+  X,
 } from "lucide-react";
 
 import { useProject } from "@/context/ProjectContext";
@@ -44,11 +47,15 @@ import { fmt } from "@/lib/format-utils";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
 import {
-  StrainBullseye,
+  StrainBullseyeChart,
   getDummyStrainData,
   getStrainColor,
+  ZoomPanContainer as StrainZoomPan,
   type StrainType,
+  type RealStrainResult,
+  type RealStrainSegment,
 } from "@/components/landmark/StrainVisualization";
+import { landmarkApi, computeStrainFromFrames } from "@/lib/landmarkApi";
 
 const LandmarkSliceViewer = dynamic(
   () => import("@/components/landmark/LandmarkSliceViewer").then((m) => m.LandmarkSliceViewer),
@@ -154,6 +161,7 @@ export default function LandmarkDetectionPage() {
   // Bullseye data + model selector state
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
+  const [segFrameCount, setSegFrameCount] = useState(0);
   const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("unet");
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
@@ -168,8 +176,9 @@ export default function LandmarkDetectionPage() {
     }
     return "bullseye";
   });
-  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GLS");
+  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GRS");
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
+  const [strainResult, setStrainResult] = useState<RealStrainResult | null>(null);
   const [editableLandmarks, setEditableLandmarks] = useState(true);
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<Record<keyof FramePrediction, [number, number]>>>>({});
@@ -229,6 +238,11 @@ export default function LandmarkDetectionPage() {
       setAvailableBullseyeModels({ medsam: medsamHasBullseye, unet: unetHasBullseye });
       // Whether the editable mask itself exists (regardless of bullseye state)
       setExistingSegModels({ medsam: medsamMasks.length > 0, unet: unetMasks.length > 0 });
+      // Extract frame count from the non-MedSAM mask (used for "Choose frames" strain mode)
+      const nonMedSAMWithFrames = editables.find((m) => (m as any).frames?.length > 0);
+      if (nonMedSAMWithFrames) {
+        setSegFrameCount((nonMedSAMWithFrames as any).frames.length);
+      }
       setCalculatingModels({
         medsam: medsamMasks.length > 0 && !medsamHasBullseye,
         unet: unetMasks.length > 0 && !unetHasBullseye,
@@ -563,7 +577,6 @@ export default function LandmarkDetectionPage() {
                   strainMetrics: {
                     peakGCS: "–17.6%",
                     peakGRS: "+27.8%",
-                    peakGLS: "–16.2%",
                     alignment: "94%",
                   },
                 });
@@ -814,11 +827,15 @@ export default function LandmarkDetectionPage() {
                   frameCount={
                     (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
                       ? projectData.dimensions.frames
-                      : state.totalFrames || 1
+                      : state.totalFrames || segFrameCount || 1
                   }
-                  previewMode={!hasPredictions}
                   selectedSegment={selectedStrainSegment}
                   onSelectSegment={setSelectedStrainSegment}
+                  projectId={projectId}
+                  avgLm1={state.avgLm1 ?? null}
+                  avgLm2={state.avgLm2 ?? null}
+                  strainResult={strainResult}
+                  onStrainResult={setStrainResult}
                 />
               )}
             </div>
@@ -1653,129 +1670,535 @@ function annularSectorPath(
   ].join(" ");
 }
 
+// Wraps ClientHeartModel with strain-appropriate colour scale and zoom controls.
+// selectedSegment3d is 0-based to match ClientHeartModel's convention.
+// min, max, reverseColors are passed from the parent so both panels share the same scale.
+function StrainHeartModel({
+  segments,
+  selectedStrainType,
+  selectedSegment3d,
+  min,
+  max,
+  reverseColors,
+  onZoomChange,
+  onResetZoom,
+}: {
+  segments: RealStrainSegment[];
+  selectedStrainType: StrainType;
+  selectedSegment3d: number;
+  min: number;
+  max: number;
+  reverseColors: boolean;
+  onZoomChange?: (fn: (delta: number) => void) => void;
+  onResetZoom?: (fn: () => void) => void;
+}) {
+  // Build 17-element values array (0-indexed matching HEART_SEGMENTS order)
+  const values = Array.from({ length: 17 }, (_, i) => {
+    const seg = segments[i];
+    if (!seg) return 0;
+    return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0;
+  });
+
+  return (
+    <div className="w-full h-full relative">
+      <ClientHeartModel
+        values={values}
+        min={min}
+        max={max}
+        reverseColors={reverseColors}
+        selectedSegment={selectedSegment3d}
+        className="w-full h-full"
+        onZoomChange={onZoomChange}
+        onResetZoom={onResetZoom}
+      />
+    </div>
+  );
+}
+
 function StrainPreviewPanel({
   selectedStrainType,
   onStrainTypeChange,
   currentFrame,
   frameCount,
-  previewMode,
   selectedSegment,
   onSelectSegment,
+  projectId,
+  avgLm1,
+  avgLm2,
+  strainResult,
+  onStrainResult,
 }: {
   selectedStrainType: StrainType;
   onStrainTypeChange: (type: StrainType) => void;
   currentFrame: number;
   frameCount: number;
-  previewMode: boolean;
   selectedSegment: number | null;
   onSelectSegment: (segment: number) => void;
+  projectId: string;
+  avgLm1: { x: number; y: number } | null;
+  avgLm2: { x: number; y: number } | null;
+  strainResult: RealStrainResult | null;
+  onStrainResult: (result: RealStrainResult | null) => void;
 }) {
-  const strainData = getDummyStrainData(selectedStrainType, currentFrame, frameCount);
-  const average = strainData.reduce((sum, item) => sum + item.strain, 0) / strainData.length;
-  const peak = selectedStrainType === "GRS"
-    ? Math.max(...strainData.map((item) => item.strain))
-    : Math.min(...strainData.map((item) => item.strain));
-  const metricPreview = (["GLS", "GCS", "GRS"] as const).map((type) => {
-    const data = getDummyStrainData(type, currentFrame, frameCount);
-    const value = data.reduce((sum, item) => sum + item.strain, 0) / data.length;
-    return { type, value };
-  });
+  const edRef  = useRef<HTMLInputElement>(null);
+  const esRef  = useRef<HTMLInputElement>(null);
+  const [edFile, setEdFile] = useState<File | null>(null);
+  const [esFile, setEsFile] = useState<File | null>(null);
+  const [isComputing, setIsComputing] = useState(false);
+  const [strainError, setStrainError] = useState<string | null>(null);
+  const [strainInputMode, setStrainInputMode] = useState<"upload" | "frames">("upload");
+  const [edFrameIdx, setEdFrameIdx] = useState<number>(0);
+  const [esFrameIdx, setEsFrameIdx] = useState<number>(13);
+  const [strainModel, setStrainModel] = useState<"unet" | "medsam">("unet");
+  const realStrainData = strainResult;
+  const [showUploadPanel, setShowUploadPanel] = useState(false);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number } | null>(null);
+  const bullseyeResetRef = useRef<(() => void) | null>(null);
+  const heartZoomRef    = useRef<((delta: number) => void) | null>(null);
+  const heartResetRef   = useRef<(() => void) | null>(null);
+  // 0-based segment index for ClientHeartModel (-1 = none). Kept in sync with the
+  // parent's 1-based selectedSegment via handleSegClick below.
+  const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
 
-  if (previewMode) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background p-3">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-1">
-            {(["GLS", "GCS", "GRS"] as const).map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => onStrainTypeChange(type)}
-                className={cn(
-                  "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
-                  selectedStrainType === type ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-                )}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-        </div>
-        <EmptyAnalysisPreview
-          icon="strain"
-          frame={currentFrame}
-          frameCount={frameCount}
-          message="Run landmark detection to preview frame-by-frame dummy strain values."
-        />
-      </div>
-    );
-  }
+  const handleComputeStrain = async () => {
+    if (!edFile || !esFile) return;
+    setIsComputing(true);
+    setStrainError(null);
+    try {
+      const formData = new FormData();
+      formData.append("ed_file", edFile);
+      formData.append("es_file", esFile);
+      if (avgLm1 && avgLm2) {
+        formData.append("rv_insertion_1_x", String(avgLm1.x));
+        formData.append("rv_insertion_1_y", String(avgLm1.y));
+        formData.append("rv_insertion_2_x", String(avgLm2.x));
+        formData.append("rv_insertion_2_y", String(avgLm2.y));
+      }
+      const result = await landmarkApi.computeStrain(projectId, formData);
+      onStrainResult(result);
+      setShowUploadPanel(false);
+    } catch (err: any) {
+      setStrainError(
+        err?.response?.data?.message ??
+        "Strain computation failed. Check that both files are valid segmentation NIfTI masks."
+      );
+    } finally {
+      setIsComputing(false);
+    }
+  };
+
+  const handleComputeFromFrames = async () => {
+    if (edFrameIdx === esFrameIdx) return;
+    setStrainError(null);
+    setIsComputing(true);
+    try {
+      const result = await computeStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel);
+      onStrainResult(result);
+      setShowUploadPanel(false);
+    } catch (err: any) {
+      setStrainError(err.message ?? "Failed to compute strain from frames.");
+    } finally {
+      setIsComputing(false);
+    }
+  };
+
+  const displayData = realStrainData
+    ? realStrainData.segments.map((s) => ({
+        segment: s.segment,
+        label:   s.label,
+        strain:  selectedStrainType === "GRS" ? (s.grs ?? 0) : (s.gcs ?? 0),
+      }))
+    : [];
+
+  const allValues = displayData.map((d) => d.strain);
+  const mean = allValues.length ? allValues.reduce((a, b) => a + b, 0) / allValues.length : 0;
+  const peak = allValues.length
+    ? (selectedStrainType === "GRS" ? Math.max(...allValues) : Math.min(...allValues))
+    : 0;
+
+  // Shared colour scale — computed once and passed to both 2D and 3D panels so
+  // the same strain value maps to the same colour in both views.
+  const strainVals = realStrainData
+    ? realStrainData.segments
+        .map((s) => (selectedStrainType === "GRS" ? s.grs : s.gcs) ?? NaN)
+        .filter((v) => Number.isFinite(v))
+    : [];
+  const sharedMin = strainVals.length ? Math.min(...strainVals) : -30;
+  const sharedMax = strainVals.length ? Math.max(...strainVals) : 80;
+  const reverseColors = selectedStrainType === "GCS";
+
+  // handle segment click — toggle selection.
+  // seg is 1-based (from the 2D bullseye). ClientHeartModel expects 0-based.
+  const handleSegClick = (seg: number) => {
+    const isDeselect = selectedSegment === seg;
+    onSelectSegment(isDeselect ? -1 as any : seg);
+    setSelectedSeg3d(isDeselect ? -1 : seg - 1);
+  };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background p-3">
-      {/* Header row: type selector + frame/status */}
-      <div className="mb-2 flex items-center justify-between gap-2 flex-shrink-0">
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
-          {(["GLS", "GCS", "GRS"] as const).map((type) => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => onStrainTypeChange(type)}
-              className={cn(
-                "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
-                selectedStrainType === type ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
+
+      {/* ── Toolbar ── */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border flex-shrink-0">
+        {/* Strain type toggle */}
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
+          {(["GCS", "GRS"] as const).map((type) => (
+            <button key={type} type="button" onClick={() => onStrainTypeChange(type)}
+              className={cn("rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors",
+                selectedStrainType === type ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>
               {type}
             </button>
           ))}
         </div>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-          {previewMode ? "Preview" : "Detected"} {Math.min(currentFrame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
-        </span>
-      </div>
 
-      {/* Compact stats row */}
-      <div className="mb-2 flex gap-2 flex-shrink-0">
-        <div className="flex-1 rounded-md border border-border bg-muted/20 px-2 py-1 text-center">
-          <p className="text-[9px] text-muted-foreground">Mean {selectedStrainType}</p>
-          <p className="text-[11px] font-semibold" style={{ color: getStrainColor(average, selectedStrainType) }}>
-            {average > 0 ? "+" : ""}{average.toFixed(1)}%
-          </p>
-        </div>
-        <div className="flex-1 rounded-md border border-border bg-muted/20 px-2 py-1 text-center">
-          <p className="text-[9px] text-muted-foreground">Peak</p>
-          <p className="text-[11px] font-semibold" style={{ color: getStrainColor(peak, selectedStrainType) }}>
-            {peak > 0 ? "+" : ""}{peak.toFixed(1)}%
-          </p>
-        </div>
-        {metricPreview.filter(({ type }) => type !== selectedStrainType).map(({ type, value }) => (
-          <button
-            key={type}
-            type="button"
-            onClick={() => onStrainTypeChange(type)}
-            className="flex-1 rounded-md border border-border bg-muted/20 px-2 py-1 text-center transition-colors hover:bg-muted/50"
+        {/* Model selector — only visible in Choose Frames mode */}
+        {strainInputMode === "frames" && (
+          <select
+            value={strainModel}
+            onChange={(e) => setStrainModel(e.target.value as "unet" | "medsam")}
+            className="rounded border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           >
-            <p className="text-[9px] text-muted-foreground">{type}</p>
-            <p className="text-[11px] font-semibold" style={{ color: getStrainColor(value, type) }}>
-              {value > 0 ? "+" : ""}{value.toFixed(1)}%
-            </p>
+            <option value="unet">UNet</option>
+            <option value="medsam">MedSAM</option>
+          </select>
+        )}
+
+        {/* Stats pills — only when real data exists */}
+        {realStrainData && (
+          <div className="flex items-center gap-1.5 flex-1">
+            <span className="rounded-md border border-border bg-muted/20 px-2 py-0.5 text-[9px] tabular-nums">
+              <span className="text-muted-foreground">Mean </span>
+              <span className="font-semibold" style={{ color: getStrainColor(mean, selectedStrainType) }}>
+                {mean > 0 ? "+" : ""}{mean.toFixed(1)}%
+              </span>
+            </span>
+            <span className="rounded-md border border-border bg-muted/20 px-2 py-0.5 text-[9px] tabular-nums">
+              <span className="text-muted-foreground">Peak </span>
+              <span className="font-semibold" style={{ color: getStrainColor(peak, selectedStrainType) }}>
+                {peak > 0 ? "+" : ""}{peak.toFixed(1)}%
+              </span>
+            </span>
+          </div>
+        )}
+
+        <div className="ml-auto flex items-center gap-1.5">
+          {/* Source badge — only when real data exists */}
+          {realStrainData && (
+            <span className="rounded-full px-2 py-0.5 text-[9px] font-medium shrink-0 bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400">
+              {avgLm1 ? "Real · Aligned" : "Real"}
+            </span>
+          )}
+
+          {/* Clear strain result */}
+          {realStrainData && (
+            <button type="button" onClick={() => { onStrainResult(null); setStrainInputMode("upload"); setShowUploadPanel(false); }}
+              className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[9px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
+              Clear
+            </button>
+          )}
+
+          {/* Upload trigger — always visible */}
+          <button type="button" onClick={() => setShowUploadPanel((p) => !p)}
+            title="Upload ED / ES masks to compute real strain"
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-medium transition-colors shrink-0",
+              showUploadPanel
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border bg-background text-muted-foreground hover:bg-muted"
+            )}>
+            <Upload className="h-3 w-3" />
+            {realStrainData ? "Recompute" : "Upload masks"}
           </button>
-        ))}
+        </div>
       </div>
 
-      {/* Strain bullseye chart — fills remaining space */}
-      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-muted/20 flex flex-col">
-        <StrainBullseye
-          segmentData={strainData}
-          selectedStrainType={selectedStrainType}
-          frame={currentFrame}
-          totalFrames={frameCount}
-          compact
-          selectedSegment={selectedSegment}
-          onSelectSegment={onSelectSegment}
-        />
-      </div>
+      {/* ── Upload drawer — slides in below toolbar ── */}
+      {showUploadPanel && (
+        <div className="flex-shrink-0 border-b border-border bg-muted/10 px-3 py-2.5 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-foreground">Compute Strain</p>
+            <button type="button" onClick={() => setShowUploadPanel(false)}
+              className="text-muted-foreground hover:text-foreground transition-colors">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {/* Mode toggle */}
+          <div className="flex rounded-lg border border-border overflow-hidden text-[11px] flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => setStrainInputMode("upload")}
+              className={`flex-1 px-3 py-1.5 transition-colors ${
+                strainInputMode === "upload"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Upload masks
+            </button>
+            <button
+              type="button"
+              onClick={() => setStrainInputMode("frames")}
+              className={`flex-1 px-3 py-1.5 transition-colors ${
+                strainInputMode === "frames"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              Choose frames
+            </button>
+          </div>
+
+          {strainInputMode === "upload" && (
+            <>
+              <p className="text-[9px] text-muted-foreground leading-relaxed">
+                Any NIfTI segmentation mask (.nii or .nii.gz) with classes 0=background, 1=RV, 2=myocardium, 3=LV cavity. You can use masks exported from VisHeart or from any other cardiac segmentation tool.
+                {avgLm1 && avgLm2 && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {/* ED */}
+                <div>
+                  <p className="text-[9px] text-muted-foreground mb-1">End-Diastole (ED)</p>
+                  <input ref={edRef} type="file" accept=".nii,.nii.gz" className="sr-only"
+                    onChange={(e) => { setEdFile(e.target.files?.[0] ?? null); setStrainError(null); }} />
+                  <button type="button" onClick={() => edRef.current?.click()}
+                    className={cn(
+                      "w-full flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-medium transition-colors",
+                      edFile ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400"
+                             : "border-dashed border-border bg-background text-muted-foreground hover:bg-muted/50"
+                    )}>
+                    <Upload className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{edFile ? edFile.name : "Choose ED .nii/.gz"}</span>
+                  </button>
+                </div>
+                {/* ES */}
+                <div>
+                  <p className="text-[9px] text-muted-foreground mb-1">End-Systole (ES)</p>
+                  <input ref={esRef} type="file" accept=".nii,.nii.gz" className="sr-only"
+                    onChange={(e) => { setEsFile(e.target.files?.[0] ?? null); setStrainError(null); }} />
+                  <button type="button" onClick={() => esRef.current?.click()}
+                    className={cn(
+                      "w-full flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-medium transition-colors",
+                      esFile ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400"
+                             : "border-dashed border-border bg-background text-muted-foreground hover:bg-muted/50"
+                    )}>
+                    <Upload className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{esFile ? esFile.name : "Choose ES .nii/.gz"}</span>
+                  </button>
+                </div>
+              </div>
+              {strainError && (
+                <p className="text-[9px] text-destructive rounded bg-destructive/10 px-2 py-1">{strainError}</p>
+              )}
+              <button type="button" disabled={!edFile || !esFile || isComputing} onClick={handleComputeStrain}
+                className={cn(
+                  "w-full rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
+                  (!edFile || !esFile || isComputing)
+                    ? "bg-muted text-muted-foreground cursor-not-allowed"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
+                )}>
+                {isComputing ? (
+                  <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Computing…</span>
+                ) : "Compute Strain"}
+              </button>
+            </>
+          )}
+
+          {strainInputMode === "frames" && (
+            <div className="flex flex-col gap-3 px-1">
+              <p className="text-[11px] text-muted-foreground">
+                Select any two frames from the stored segmentation to compute strain between them.
+                {avgLm1 && avgLm2 && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
+              </p>
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                ⓘ Values are indicative only — auto-segmentation masks have limited wall boundary accuracy. For clinical accuracy, use Upload Masks with manually verified masks.
+              </p>
+
+              {/* ED Frame */}
+              <div className="flex flex-col gap-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="font-medium">Frame 1</span>
+                  <span className="text-muted-foreground font-mono">
+                    Frame {edFrameIdx + 1} / {frameCount}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, frameCount - 1)}
+                  value={edFrameIdx}
+                  onChange={(e) => { setEdFrameIdx(Number(e.target.value)); setStrainError(null); }}
+                  className="w-full accent-primary"
+                />
+              </div>
+
+              {/* ES Frame */}
+              <div className="flex flex-col gap-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="font-medium">Frame 2</span>
+                  <span className="text-muted-foreground font-mono">
+                    Frame {esFrameIdx + 1} / {frameCount}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, frameCount - 1)}
+                  value={esFrameIdx}
+                  onChange={(e) => { setEsFrameIdx(Number(e.target.value)); setStrainError(null); }}
+                  className="w-full accent-primary"
+                />
+              </div>
+
+              {edFrameIdx === esFrameIdx && (
+                <p className="text-[10px] text-destructive">
+                  ED and ES frames must be different.
+                </p>
+              )}
+
+              {strainError && (
+                <p className="text-[9px] text-destructive rounded bg-destructive/10 px-2 py-1">{strainError}</p>
+              )}
+
+              <button
+                type="button"
+                disabled={edFrameIdx === esFrameIdx || frameCount <= 1 || isComputing}
+                onClick={handleComputeFromFrames}
+                className="w-full rounded-md bg-primary px-3 py-1.5 text-[11px] text-primary-foreground disabled:opacity-50 transition-colors hover:bg-primary/90"
+              >
+                {isComputing ? (
+                  <span className="inline-flex items-center justify-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Computing…</span>
+                ) : "Compute Strain"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Main area ── */}
+      {!realStrainData ? (
+        /* Upload prompt — shown when no strain data available */
+        <div className="flex flex-1 items-center justify-center min-h-[320px]">
+          <div className="flex flex-col items-center gap-3 text-center max-w-xs">
+            <div className="rounded-full border-2 border-dashed border-muted-foreground/30 p-5 mb-2">
+              <Heart className="w-8 h-8 text-muted-foreground/50" />
+            </div>
+            <p className="font-semibold text-sm text-foreground">
+              Upload ED &amp; ES masks to compute strain
+            </p>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Upload segmentation masks for End-Diastole (ED) and End-Systole (ES) frames in NIfTI format (.nii or .nii.gz). Required classes: 0=background, 1=RV, 2=myocardium, 3=LV cavity.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowUploadPanel(true)}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
+            >
+              <Upload className="w-3 h-3" />
+              Upload masks
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* 2-panel layout: LEFT bullseye / RIGHT 3D heart */
+        <div className="flex min-h-0 flex-1 gap-2 p-2.5">
+
+          {/* LEFT: 2D bullseye */}
+          <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
+            <div className="mb-1 flex items-center justify-between flex-shrink-0">
+              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                2D Bullseye
+              </p>
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                {selectedStrainType}
+              </span>
+            </div>
+            <StrainZoomPan className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
+              <StrainBullseyeChart
+                data={displayData}
+                strainType={selectedStrainType}
+                selectedSegment={selectedSegment}
+                onSegmentClick={handleSegClick}
+                onSegmentHover={setTooltip}
+                sharedMin={sharedMin}
+                sharedMax={sharedMax}
+                reverseColors={reverseColors}
+              />
+            </StrainZoomPan>
+            {/* Colour legend */}
+            <div className="flex flex-wrap items-center justify-center gap-2 text-[8.5px] text-muted-foreground pt-1 flex-shrink-0">
+              {[["#15803d","Excellent"],["#22c55e","Good"],["#eab308","Fair"],["#f97316","Reduced"],["#dc2626","Poor"]].map(([c, l]) => (
+                <span key={l} className="inline-flex items-center gap-0.5">
+                  <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: c }} />{l}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* RIGHT: real 3D heart coloured by strain */}
+          <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
+            <div className="mb-1 flex items-center justify-between flex-shrink-0">
+              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                3D Heart
+              </p>
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+            </div>
+            <div className="flex-1 min-h-0 w-full">
+              <StrainHeartModel
+                segments={realStrainData.segments}
+                selectedStrainType={selectedStrainType}
+                selectedSegment3d={selectedSeg3d}
+                min={sharedMin}
+                max={sharedMax}
+                reverseColors={reverseColors}
+                onZoomChange={(fn) => { heartZoomRef.current = fn; }}
+                onResetZoom={(fn) => { heartResetRef.current = fn; }}
+              />
+            </div>
+            {/* Real strain KPIs below 3D view */}
+            <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
+              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                <p className="text-[8px] text-muted-foreground">Peak GRS</p>
+                <p className={cn("font-bold text-[10px]",
+                  realStrainData.global_grs !== null && realStrainData.global_grs >= 40 ? "text-green-600" : "text-orange-500")}>
+                  {realStrainData.global_grs != null ? `${realStrainData.global_grs >= 0 ? "+" : ""}${realStrainData.global_grs.toFixed(1)}%` : "N/A"}
+                </p>
+                <p className="text-[7px] text-muted-foreground">Normal &gt;+40%</p>
+              </div>
+              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                <p className="text-[8px] text-muted-foreground">Peak GCS</p>
+                <p className={cn("font-bold text-[10px]",
+                  realStrainData.global_gcs !== null && realStrainData.global_gcs >= -25 && realStrainData.global_gcs <= -15 ? "text-green-600" : "text-orange-500")}>
+                  {realStrainData.global_gcs != null ? `${realStrainData.global_gcs.toFixed(1)}%` : "N/A"}
+                </p>
+                <p className="text-[7px] text-muted-foreground">Normal -15% to -25%</p>
+              </div>
+              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                <p className="text-[8px] text-muted-foreground">
+                  {realStrainData.source === "frames" ? `Frame ${(realStrainData.edFrameIndex ?? 0) + 1} WT` : "ED WT"}
+                </p>
+                <p className="font-bold text-[10px]">{realStrainData.ed_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
+              </div>
+              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                <p className="text-[8px] text-muted-foreground">
+                  {realStrainData.source === "frames" ? `Frame ${(realStrainData.esFrameIndex ?? 0) + 1} WT` : "ES WT"}
+                </p>
+                <p className="font-bold text-[10px]">{realStrainData.es_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hover tooltip */}
+      {tooltip && (
+        <div
+          className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+          style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}>
+          <div className="font-semibold">{tooltip.label}</div>
+          <div>{tooltip.value > 0 ? "+" : ""}{tooltip.value.toFixed(1)}%</div>
+        </div>
+      )}
     </div>
   );
 }

@@ -16,7 +16,8 @@ Public API
     compute_centroid(slice_mask)    -> (cx, cy) | (None, None)
     ray_cast_thickness(slice_mask, cx, cy, n_rays, start_angle_rad) -> np.ndarray (n_rays,)
     group_sectors(thicknesses, ring_type)           -> np.ndarray (6|4|1,)
-    mask_to_17_segments(mask_3d)    -> np.ndarray (17,)
+    compute_alignment_angle(cx, cy, rv_insertion_1, rv_insertion_2) -> float | None
+    mask_to_17_segments(mask_3d, rv_insertion_1, rv_insertion_2)    -> dict
 
 AHA segment / angle definitions are copied verbatim from
 UNETRESNET34/bullseye_17seg.ipynb — do not redefine here.
@@ -66,6 +67,7 @@ RING_NAMES: list[str] = ["Basal", "Mid-cavity", "Apical", "Apex"]
 # ── Internal constants ────────────────────────────────────────────────────────
 _MYO_CLASS = 2
 _MIN_MYO_PIXELS = 50
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,13 +136,12 @@ def classify_slices(
 
 def compute_centroid(slice_mask: np.ndarray) -> tuple[float, float] | tuple[None, None]:
     """
-    Compute the centroid of myocardium (class 2) using cv2.moments.
+    Compute the centroid of the LV cavity (class 3) using cv2.moments.
 
-    Matches find-centroid-and-sample-points.ipynb exactly:
-        myo = (slice == 2).astype(uint8)
-        M   = cv2.moments(myo * 255)
-        cx  = M["m10"] / M["m00"]
-        cy  = M["m01"] / M["m00"]
+    Uses the LV cavity as the geometric reference centre rather than the
+    myocardium ring — this produces a stable centroid that does not drift
+    when the wall thickens at ES, eliminating centroid-shift artefacts in
+    per-sector GRS computation.
 
     Parameters
     ----------
@@ -148,10 +149,10 @@ def compute_centroid(slice_mask: np.ndarray) -> tuple[float, float] | tuple[None
 
     Returns
     -------
-    (cx, cy) as floats, or (None, None) if class 2 is absent.
+    (cx, cy) as floats, or (None, None) if class 3 is absent.
     """
-    myo = (slice_mask == _MYO_CLASS).astype(np.uint8)
-    M = cv2.moments(myo * 255)
+    lv = (slice_mask == 3).astype(np.uint8)
+    M = cv2.moments(lv * 255)
     if M["m00"] == 0:
         return None, None
     return M["m10"] / M["m00"], M["m01"] / M["m00"]
@@ -236,6 +237,68 @@ def ray_cast_thickness(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ray_cast_inner_radius  (companion to ray_cast_thickness for GCS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ray_cast_inner_radius(
+    slice_mask: np.ndarray,
+    cx: float,
+    cy: float,
+    n_rays: int = 360,
+    start_angle_rad: float = 0.0,
+) -> np.ndarray:
+    """
+    Return the inner-wall radius per ray (centroid → inner myocardium boundary).
+
+    Same ray geometry as ray_cast_thickness; returns np.nan where the inner
+    boundary was not found.  Used to compute circumferential strain (GCS).
+    """
+    H, W = slice_mask.shape
+    max_r = max(H, W)
+
+    myo = (slice_mask == _MYO_CLASS).astype(np.uint8)
+
+    angles     = start_angle_rad - np.linspace(0.0, 2.0 * np.pi, n_rays, endpoint=False)
+    directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+
+    inner_radii = np.full(n_rays, np.nan, dtype=np.float64)
+
+    cx_i = int(np.clip(int(cx), 0, W - 1))
+    cy_i = int(np.clip(int(cy), 0, H - 1))
+
+    for ray_i, d in enumerate(directions):
+        transitions: list[tuple[int, int]] = []
+        prev = int(myo[cy_i, cx_i])
+
+        for r in range(1, max_r):
+            x = int(cx + r * d[0])
+            y = int(cy + r * d[1])
+            if x < 0 or x >= W or y < 0 or y >= H:
+                break
+            val = int(myo[y, x])
+            if val != prev:
+                transitions.append((x, y))
+                prev = val
+
+        if len(transitions) < 2:
+            continue
+
+        p1 = np.array(transitions[0], dtype=float)
+        p2 = np.array(transitions[1], dtype=float)
+        centre = np.array([cx, cy], dtype=float)
+
+        # inner is the closer transition
+        if np.linalg.norm(p1 - centre) < np.linalg.norm(p2 - centre):
+            inner = p1
+        else:
+            inner = p2
+
+        inner_radii[ray_i] = float(np.linalg.norm(inner - centre))
+
+    return inner_radii
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # group_sectors
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -289,11 +352,71 @@ def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
     return result
 
 
+def group_inner_radii(inner_radii: np.ndarray, ring_type: str) -> np.ndarray:
+    """
+    Average per-ray inner radii into AHA sectors, same sector ordering as group_sectors.
+
+    Returns mean inner radius per sector (same shape contract as group_sectors).
+    """
+    if ring_type == "apex":
+        return np.array([np.nanmean(inner_radii)])
+
+    n_sectors = 6 if ring_type in ("basal", "mid") else 4
+    n_rays = len(inner_radii)
+    rays_per_sector = n_rays // n_sectors
+
+    result = np.array([
+        np.nanmean(inner_radii[s * rays_per_sector : (s + 1) * rays_per_sector])
+        for s in range(n_sectors)
+    ])
+
+    if ring_type in ("basal", "mid"):
+        return np.roll(result, 1)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# compute_alignment_angle
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_alignment_angle(
+    cx: float,
+    cy: float,
+    rv_insertion_1: tuple[float, float] | None,
+    rv_insertion_2: tuple[float, float] | None,
+) -> float | None:
+    """
+    Compute the anterior start angle from RV insertion points.
+
+    The midpoint of the two RV insertion points points toward the Septal wall.
+    Anterior is 90° counterclockwise from Septal in standard AHA orientation.
+
+    Returns the anterior angle in radians, or None if landmarks not provided.
+    """
+    if rv_insertion_1 is None or rv_insertion_2 is None:
+        return None
+
+    x1, y1 = rv_insertion_1
+    x2, y2 = rv_insertion_2
+
+    mid_x = (x1 + x2) / 2.0
+    mid_y = (y1 + y2) / 2.0
+
+    septal_angle = np.arctan2(mid_y - cy, mid_x - cx)
+    anterior_angle = septal_angle + np.pi / 2.0
+
+    return float(anterior_angle)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # mask_to_17_segments  (main entry point)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
+def mask_to_17_segments(
+    mask_3d: np.ndarray,
+    rv_insertion_1: tuple[float, float] | None = None,
+    rv_insertion_2: tuple[float, float] | None = None,
+) -> dict:
     """
     Convert a 3-D segmentation mask to 17 AHA segment values.
 
@@ -312,13 +435,19 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
     ----------
     mask_3d : ndarray, shape (H, W, N_slices)
         Values: 0=background, 1=RV, 2=myocardium, 3=LV cavity.
+    rv_insertion_1 : (x, y) of RV Insertion Point 1 in pixel coords, or None.
+    rv_insertion_2 : (x, y) of RV Insertion Point 2 in pixel coords, or None.
+        When both are provided, the start angle is derived from the true Septal
+        direction instead of the fixed fallback angles.
 
     Returns
     -------
     dict with keys:
-        "values"      : ndarray, shape (17,) — mean wall thickness per AHA segment
-        "lv_centroid" : [cx, cy] float list, or None — average myocardium centroid
-                        across basal/mid slices, in pixel coords
+        "values"               : ndarray, shape (17,) — mean wall thickness per AHA segment (pixels)
+        "circ_values"          : ndarray, shape (17,) — mean LV inner circumference per segment (2π×r, pixels)
+        "lv_centroid"          : [cx, cy] float list, or None
+        "alignment_angle_deg"  : float | None — anterior start angle in degrees (landmark-derived)
+        "alignment_source"     : "landmark" | "fixed-angle"
     """
     labels = classify_slices(mask_3d)
 
@@ -329,28 +458,46 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
         "apex":   1,
     }
     ring_results: dict[str, np.ndarray] = {}
+    ring_inner_results: dict[str, np.ndarray] = {}
     lv_centroids: list[list[float]] = []
+    final_alignment_angle: float | None = None  # first landmark-derived angle computed (same for all rings)
 
     for ring_type, n_sectors in ring_configs.items():
         ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring_type]
 
         if not ring_slices:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
+            ring_inner_results[ring_type] = np.full(n_sectors, np.nan)
             continue
 
-        # Start angles chosen so that sector boundaries align exactly with AHA 60°/90°
-        # boundaries in image coordinates (y-axis points DOWN).
-        # Anterior = top of image = 270° in image coords.
-        # Rays are sampled CW (decreasing angle); group_sectors reverses basal/mid result.
-        start_angle_by_ring = {
-            "basal":  4 * np.pi / 3,   # 240° — sector boundaries at 240,180,120,60,0,300
-            "mid":    4 * np.pi / 3,   # 240°
-            "apical": 7 * np.pi / 4,   # 315° — sector boundaries at 315,225,135,45
-            "apex":   0.0,
-        }
-        start_angle = start_angle_by_ring[ring_type]
+        # Determine start angle: landmark-derived if RV insertion points provided,
+        # otherwise fall back to the fixed angles that match group_sectors expectations.
+        alignment_angle: float | None = None
+        if ring_type != "apex":
+            for sl_idx in ring_slices:
+                sl_ref = mask_3d[:, :, sl_idx]
+                cx_ref, cy_ref = compute_centroid(sl_ref)
+                if cx_ref is not None:
+                    alignment_angle = compute_alignment_angle(
+                        cx_ref, cy_ref, rv_insertion_1, rv_insertion_2
+                    )
+                    break
+
+        if alignment_angle is not None:
+            start_angle = alignment_angle
+            if final_alignment_angle is None:
+                final_alignment_angle = alignment_angle
+        else:
+            start_angle_by_ring = {
+                "basal":  4 * np.pi / 3,   # 240° — sector boundaries at 240,180,120,60,0,300
+                "mid":    4 * np.pi / 3,   # 240°
+                "apical": 7 * np.pi / 4,   # 315° — sector boundaries at 315,225,135,45
+                "apex":   0.0,
+            }
+            start_angle = start_angle_by_ring[ring_type]
 
         per_slice: list[np.ndarray] = []
+        per_slice_inner: list[np.ndarray] = []
         for sl_idx in ring_slices:
             sl   = mask_3d[:, :, sl_idx]
             cx, cy = compute_centroid(sl)
@@ -358,15 +505,20 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
                 continue
             if ring_type in ("basal", "mid"):
                 lv_centroids.append([cx, cy])
-            thick   = ray_cast_thickness(sl, cx, cy, start_angle_rad=start_angle)
-            sectors = group_sectors(thick, ring_type)
+            thick        = ray_cast_thickness(sl, cx, cy, start_angle_rad=start_angle)
+            inner_r      = ray_cast_inner_radius(sl, cx, cy, start_angle_rad=start_angle)
+            sectors      = group_sectors(thick, ring_type)
+            inner_secs   = group_inner_radii(inner_r, ring_type)
             if not np.all(np.isnan(sectors)):
                 per_slice.append(sectors)
+                per_slice_inner.append(inner_secs)
 
         if per_slice:
-            ring_results[ring_type] = np.nanmean(per_slice, axis=0)
+            ring_results[ring_type]       = np.nanmean(per_slice, axis=0)
+            ring_inner_results[ring_type] = np.nanmean(per_slice_inner, axis=0)
         else:
-            ring_results[ring_type] = np.full(n_sectors, np.nan)
+            ring_results[ring_type]       = np.full(n_sectors, np.nan)
+            ring_inner_results[ring_type] = np.full(n_sectors, np.nan)
 
     values = np.concatenate([
         ring_results["basal"],
@@ -374,9 +526,25 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
         ring_results["apical"],
         ring_results["apex"],
     ])
+    # circ_values: LV inner circumference per AHA segment = 2π × mean_inner_radius
+    # Used for GCS = (circ_ES - circ_ED) / circ_ED × 100
+    inner_radii_flat = np.concatenate([
+        ring_inner_results["basal"],
+        ring_inner_results["mid"],
+        ring_inner_results["apical"],
+        ring_inner_results["apex"],
+    ])
+    circ_values = 2.0 * np.pi * inner_radii_flat
+
     lv_centroid: list[float] | None = (
         [float(np.mean([c[0] for c in lv_centroids])),
          float(np.mean([c[1] for c in lv_centroids]))]
         if lv_centroids else None
     )
-    return {"values": values, "lv_centroid": lv_centroid}
+    return {
+        "values": values,
+        "circ_values": circ_values,
+        "lv_centroid": lv_centroid,
+        "alignment_angle_deg": float(np.degrees(final_alignment_angle)) if final_alignment_angle is not None else None,
+        "alignment_source": "landmark" if final_alignment_angle is not None else "fixed-angle",
+    }
