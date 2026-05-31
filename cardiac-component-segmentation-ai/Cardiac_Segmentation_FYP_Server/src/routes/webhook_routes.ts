@@ -34,6 +34,7 @@ import LogError from "../utils/error_logger";
 import { v4 as uuidv4 } from "uuid"; // For generating new _id for the manual mask
 import { gpuObjUploadFilter } from "../middleware/uploadmiddleware";
 import { processReconstructionCallback } from "../services/reconstruction_handler";
+import { recomputeBullseyeWithLandmarks } from "../services/segmentation_export";
 
 const serviceLocation = "InferenceCallback(Webhook)";
 const router = express.Router();
@@ -120,12 +121,36 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
       return;
     }
 
-    await updateJob(gpuJobId, {
+    const jobUpdateResult = await updateJob(gpuJobId, {
       status: JobStatus.COMPLETED,
       result,
       message: "Landmark detection completed.",
       model_used: result.model_used || "UNetResNet34 Landmark",
     });
+
+    // Fire-and-forget bullseye recompute using the freshly-saved landmark coords.
+    // avg_lm1 / avg_lm2 are present in the new GPU result format.
+    // Respond to the GPU immediately — never await this work.
+    const projectId = jobUpdateResult.job?.projectid;
+    // avg_lm1/avg_lm2 arrive as {x, y} objects in the new GPU format, or [x,y] arrays in old format.
+    const extractLm = (lm: any): [number, number] | null => {
+      if (lm && typeof lm.x === 'number' && typeof lm.y === 'number') return [lm.x, lm.y];
+      if (Array.isArray(lm) && lm.length >= 2) return [lm[0], lm[1]];
+      return null;
+    };
+    const avgLm1 = extractLm(result?.avg_lm1);
+    const avgLm2 = extractLm(result?.avg_lm2);
+
+    if (projectId && avgLm1 && avgLm2) {
+      recomputeBullseyeWithLandmarks(projectId, avgLm1, avgLm2).catch((err: any) => {
+        logger.warn(`${serviceLocation}: [BullseyeLM] Recompute error for project ${projectId}: ${err?.message}`);
+      });
+    } else {
+      logger.info(
+        `${serviceLocation}: Landmark callback — skipping bullseye recompute ` +
+        `(projectId=${projectId}, hasAvgLm1=${!!avgLm1}, hasAvgLm2=${!!avgLm2})`
+      );
+    }
 
     res.status(200).json({ message: "Landmark callback processed." });
   } catch (error) {

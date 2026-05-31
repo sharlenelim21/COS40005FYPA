@@ -203,6 +203,8 @@ class BullseyeS3Request(BaseModel):
     """Request model for bullseye analysis via S3 presigned URL."""
     s3_url: HttpUrl = Field(..., description="Presigned S3 URL for the NIfTI mask file (.nii or .nii.gz)")
     request_id: Optional[str] = Field(None, description="Optional client-provided request identifier")
+    rv_insertion_1: Optional[List[float]] = Field(None, description="RV Insertion Point 1 [x, y] in pixel coords")
+    rv_insertion_2: Optional[List[float]] = Field(None, description="RV Insertion Point 2 [x, y] in pixel coords")
 
 
 class BullseyeSegmentMeta(BaseModel):
@@ -230,6 +232,8 @@ class BullseyeAnalysisResult(BaseModel):
     input_shape: List[int] = Field(..., description="Shape of the input mask [H, W, N_slices]")
     slice_labels: List[str] = Field(..., description="Label per slice: basal | mid | apical | apex | none")
     lv_centroid: Optional[List[float]] = Field(None, description="Average myocardium centroid [cx, cy] in pixel coords across basal/mid slices")
+    alignment_angle_deg: Optional[float] = Field(None, description="Anterior start angle in degrees derived from RV insertion points; None when fixed-angle fallback was used")
+    alignment_source: Optional[str] = Field(None, description="'landmark' if RV insertion points were used, 'fixed-angle' if hardcoded fallback was used")
 
 
 class FourDReconstructionResult(BaseModel):

@@ -1,10 +1,16 @@
 import express, { Request, Response } from "express";
+import multer from "multer";
+import axios from "axios";
+import FormData from "form-data";
 import { isAuth } from "../services/passportjs";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import { startLandmarkInference } from "../services/landmark_inference";
 import { jobModel, readProject } from "../services/database";
 import { JobStatus } from "../types/database_types";
 import logger from "../services/logger";
+import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
+
+const memUpload = multer({ storage: multer.memoryStorage() });
 
 const router = express.Router();
 const serviceLocation = "LandmarkRoutes";
@@ -227,6 +233,79 @@ router.get(
         message: error?.message || "Failed to read landmark jobs.",
         jobs: [],
       });
+    }
+  },
+);
+
+// ── POST /compute-strain/:projectId ──────────────────────────────────────────
+// Accepts ED + ES NIfTI uploads, proxies to GPU /bullseye/compute-strain.
+// Landmark coordinates for this project are looked up automatically.
+router.post(
+  "/compute-strain/:projectId",
+  isAuth,
+  memUpload.fields([
+    { name: "ed_file", maxCount: 1 },
+    { name: "es_file", maxCount: 1 },
+  ]),
+  async (req: Request, res: Response): Promise<void> => {
+    const projectId = String(req.params.projectId);
+    const files = req.files as { [field: string]: Express.Multer.File[] } | undefined;
+    const edFile = files?.["ed_file"]?.[0];
+    const esFile = files?.["es_file"]?.[0];
+
+    if (!edFile || !esFile) {
+      res.status(400).json({ message: "Both ed_file and es_file are required." });
+      return;
+    }
+
+    try {
+      // Look up landmark coords for automatic alignment
+      const landmarkJob = await jobModel
+        .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
+        .sort({ updatedAt: -1 })
+        .lean();
+
+      const extractCoord = (lm: any): { x: number; y: number } | null => {
+        if (!lm) return null;
+        if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
+        if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
+        return null;
+      };
+      const lmResult = landmarkJob?.result
+        ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
+        : null;
+      const lm1 = extractCoord(lmResult?.avg_lm1);
+      const lm2 = extractCoord(lmResult?.avg_lm2);
+
+      const gpuBaseUrl = await getFreshGPUServerAddress();
+      const token = getCurrentToken();
+      if (!gpuBaseUrl || !token) {
+        res.status(503).json({ message: "GPU service unavailable." });
+        return;
+      }
+
+      const form = new FormData();
+      form.append("ed_file", edFile.buffer, { filename: edFile.originalname, contentType: "application/octet-stream" });
+      form.append("es_file", esFile.buffer, { filename: esFile.originalname, contentType: "application/octet-stream" });
+      if (lm1) {
+        form.append("rv_insertion_1_x", String(lm1.x));
+        form.append("rv_insertion_1_y", String(lm1.y));
+      }
+      if (lm2) {
+        form.append("rv_insertion_2_x", String(lm2.x));
+        form.append("rv_insertion_2_y", String(lm2.y));
+      }
+
+      const response = await axios.post(`${gpuBaseUrl}/bullseye/compute-strain`, form, {
+        headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
+        timeout: 120000,
+      });
+
+      logger.info(`${serviceLocation}: Strain computed for project ${projectId} | alignment=${response.data?.alignment_source}`);
+      res.status(200).json(response.data);
+    } catch (err: any) {
+      logger.error(`${serviceLocation}: compute-strain failed for project ${projectId}: ${err?.message}`);
+      res.status(500).json({ message: err?.response?.data?.detail ?? err?.message ?? "Strain computation failed." });
     }
   },
 );

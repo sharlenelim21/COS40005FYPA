@@ -3,7 +3,7 @@
 
 import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
-import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask } from "./database";
+import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask, jobModel, JobStatus } from "./database";
 import { generatePresignedGetUrl, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import axios from 'axios';
@@ -85,11 +85,58 @@ export const computeBullseyeAndStore = async (
 
         logger.info(`${serviceLocation}: [Bullseye] Sending NIfTI to GPU for mask ${maskId} (project ${projectId})`);
 
+        // Look up the most recent completed landmark job for this project to get RV insertion points.
+        const landmarkJob = await jobModel
+            .findOne({
+                projectid: projectId,
+                model_used: /landmark/i,
+                status: JobStatus.COMPLETED,
+                result: { $exists: true, $ne: null },
+            })
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .lean();
+
+        // The landmark result uses new format: { slices, avg_lm1: {x,y}, avg_lm2: {x,y} }
+        // or old format: { predictions: [{ rv_insertion_1: [x,y], rv_insertion_2: [x,y] }] }
+        let rv1: number[] | null = null;
+        let rv2: number[] | null = null;
+        if (landmarkJob?.result) {
+            const r = typeof landmarkJob.result === 'string'
+                ? JSON.parse(landmarkJob.result)
+                : landmarkJob.result;
+            if (r.avg_lm1 && typeof r.avg_lm1.x === 'number' && typeof r.avg_lm1.y === 'number') {
+                rv1 = [r.avg_lm1.x, r.avg_lm1.y];
+            } else if (Array.isArray(r.avg_lm1) && r.avg_lm1.length >= 2) {
+                rv1 = r.avg_lm1;
+            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
+                rv1 = r.predictions[0].rv_insertion_1 ?? null;
+            }
+            if (r.avg_lm2 && typeof r.avg_lm2.x === 'number' && typeof r.avg_lm2.y === 'number') {
+                rv2 = [r.avg_lm2.x, r.avg_lm2.y];
+            } else if (Array.isArray(r.avg_lm2) && r.avg_lm2.length >= 2) {
+                rv2 = r.avg_lm2;
+            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
+                rv2 = r.predictions[0].rv_insertion_2 ?? null;
+            }
+        }
+
+        if (rv1 && rv2) {
+            logger.info(`${serviceLocation}: [Bullseye] Using landmark alignment — rv1=[${rv1}] rv2=[${rv2}] for mask ${maskId}`);
+        } else {
+            logger.info(`${serviceLocation}: [Bullseye] No landmark data found — using fixed-angle fallback for mask ${maskId}`);
+        }
+
         const form = new FormData();
         form.append('file', fs.createReadStream(niftiPath), {
             filename: path.basename(niftiPath),
             contentType: 'application/gzip',
         });
+        if (rv1 && rv2) {
+            form.append('rv_insertion_1_x', String(rv1[0]));
+            form.append('rv_insertion_1_y', String(rv1[1]));
+            form.append('rv_insertion_2_x', String(rv2[0]));
+            form.append('rv_insertion_2_y', String(rv2[1]));
+        }
 
         const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
             headers: {
@@ -137,6 +184,172 @@ export const computeBullseyeAndStore = async (
         }
     }
 };
+
+/**
+ * Recompute the bullseye for a project using landmark alignment.
+ * Called after landmark detection completes to upgrade from fixed-angle
+ * to anatomically-aligned bullseye orientation.
+ *
+ * Pipeline:
+ *   1. Find all editable (isMedSAMOutput=false) masks for the project
+ *   2. For each, generate a temporary NIfTI from the mask's RLE frame data
+ *   3. POST to GPU /bullseye/analyze with landmark form fields
+ *   4. Overwrite the bullseye field on the mask document
+ *   5. Clean up temp files
+ *
+ * Never throws — failure must never affect the webhook response.
+ */
+export async function recomputeBullseyeWithLandmarks(
+    projectId: string,
+    avgLm1: [number, number],
+    avgLm2: [number, number],
+): Promise<void> {
+    const tempId = uuidv4();
+    const baseTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_lm_${tempId}`);
+
+    try {
+        logger.info(
+            `${serviceLocation}: [BullseyeLM] Recomputing with landmark alignment for project ${projectId} ` +
+            `avg_lm1=[${avgLm1}] avg_lm2=[${avgLm2}]`
+        );
+
+        // 1. GPU connection
+        const gpuBaseUrl = await getFreshGPUServerAddress();
+        const token = getCurrentToken();
+        if (!gpuBaseUrl || !token) {
+            logger.warn(`${serviceLocation}: [BullseyeLM] GPU unavailable — skipping landmark recompute for project ${projectId}`);
+            return;
+        }
+
+        // 2. Project metadata (dimensions + affine)
+        const projectResult = await readProject(projectId);
+        const project = projectResult.projects?.[0] as any;
+        if (!project) {
+            logger.warn(`${serviceLocation}: [BullseyeLM] Project ${projectId} not found — skipping`);
+            return;
+        }
+        const W: number | undefined = project?.dimensions?.width;
+        const H: number | undefined = project?.dimensions?.height;
+        if (!W || !H) {
+            logger.warn(`${serviceLocation}: [BullseyeLM] Project ${projectId} has no dimensions — skipping`);
+            return;
+        }
+
+        // 3. Find all editable masks
+        const masksResult = await readProjectSegmentationMask(projectId);
+        const editableMasks = (masksResult.projectsegmentationmasks ?? []).filter(
+            (m: any) => m.isMedSAMOutput === false
+        );
+        if (editableMasks.length === 0) {
+            logger.warn(`${serviceLocation}: [BullseyeLM] No editable masks for project ${projectId} — skipping`);
+            return;
+        }
+
+        await fs.ensureDir(baseTempDir);
+
+        // 4. Process each editable mask
+        for (const mask of editableMasks) {
+            const maskId: string = mask._id?.toString();
+            if (!maskId) continue;
+
+            const frames = mask.frames ?? [];
+            if (!frames.length) {
+                logger.warn(`${serviceLocation}: [BullseyeLM] Mask ${maskId} has no frames — skipping`);
+                continue;
+            }
+
+            const niftiPath = path.join(baseTempDir, `mask_${maskId}.nii.gz`);
+            const segJsonPath = path.join(baseTempDir, `seg_${maskId}.json`);
+
+            try {
+                // 4a. Generate NIfTI from RLE frames
+                await fs.writeJson(segJsonPath, [mask], { spaces: 2 });
+
+                let pythonCommand: string;
+                if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
+                    const affineFile = path.join(baseTempDir, `affine_${maskId}.json`);
+                    const dimsFile   = path.join(baseTempDir, `dims_${maskId}.json`);
+                    await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
+                    await fs.writeJson(dimsFile,   project.dimensions,   { spaces: 2 });
+                    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
+                    pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                } else {
+                    const s3Url = project.extractedfolderpath;
+                    if (!s3Url) {
+                        logger.warn(`${serviceLocation}: [BullseyeLM] Mask ${maskId} — no affine and no S3 URL — skipping`);
+                        continue;
+                    }
+                    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
+                    pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                }
+
+                const pythonOk = await new Promise<boolean>((resolve) => {
+                    exec(pythonCommand, (error, _stdout, stderr) => {
+                        if (error) {
+                            logger.warn(`${serviceLocation}: [BullseyeLM] NIfTI generation failed for mask ${maskId}: ${stderr || error.message}`);
+                            resolve(false);
+                        } else {
+                            resolve(true);
+                        }
+                    });
+                });
+
+                if (!pythonOk || !(await fs.pathExists(niftiPath))) {
+                    logger.warn(`${serviceLocation}: [BullseyeLM] NIfTI not produced for mask ${maskId} — skipping GPU call`);
+                    continue;
+                }
+
+                // 4b. Call GPU /bullseye/analyze with landmark coords
+                const form = new FormData();
+                form.append('file', fs.createReadStream(niftiPath), {
+                    filename: path.basename(niftiPath),
+                    contentType: 'application/gzip',
+                });
+                form.append('rv_insertion_1_x', String(avgLm1[0]));
+                form.append('rv_insertion_1_y', String(avgLm1[1]));
+                form.append('rv_insertion_2_x', String(avgLm2[0]));
+                form.append('rv_insertion_2_y', String(avgLm2[1]));
+
+                const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
+                    headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
+                    timeout: 120000,
+                });
+
+                if (response.status !== 200 || !response.data) {
+                    logger.warn(`${serviceLocation}: [BullseyeLM] GPU returned ${response.status} for mask ${maskId} — skipping store`);
+                    continue;
+                }
+
+                // 4c. Overwrite bullseye on the mask document
+                const bullseyeData = {
+                    ...response.data,
+                    computed_at: new Date().toISOString(),
+                };
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { bullseye: bullseyeData, updatedAt: new Date() } },
+                );
+                logger.info(
+                    `${serviceLocation}: [BullseyeLM] Stored landmark-aligned bullseye for mask ${maskId} ` +
+                    `alignment_source=${bullseyeData.alignment_source} alignment_angle_deg=${bullseyeData.alignment_angle_deg} ` +
+                    `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
+                );
+            } catch (maskErr: any) {
+                logger.warn(`${serviceLocation}: [BullseyeLM] Failed for mask ${maskId}: ${maskErr?.message}`);
+            }
+        }
+
+        logger.info(`${serviceLocation}: [BullseyeLM] Landmark-aligned recompute complete for project ${projectId}`);
+    } catch (err: any) {
+        logger.warn(`${serviceLocation}: [BullseyeLM] Outer error for project ${projectId}: ${err?.message}`);
+    } finally {
+        try {
+            if (await fs.pathExists(baseTempDir)) {
+                await fs.remove(baseTempDir);
+            }
+        } catch { /* cleanup failure is non-fatal */ }
+    }
+}
 
 /**
  * Generates a segmentation NIfTI file specifically for 4D reconstruction
