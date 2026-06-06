@@ -261,6 +261,7 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      - ../../UNETRESNET34/checkpoints:/app/UNETRESNET34/checkpoints:ro
     networks:
       visheart-network:
         aliases:
@@ -317,6 +318,7 @@ services:
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      - ../../UNETRESNET34/checkpoints:/app/UNETRESNET34/checkpoints:ro
     networks:
       visheart-network:
         aliases:

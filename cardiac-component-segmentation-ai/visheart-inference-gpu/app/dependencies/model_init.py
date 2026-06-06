@@ -58,6 +58,61 @@ def _load_model_safely(model_key: str, model_path: str, loader) -> None:
         logger.exception(f"❌ Bootstrap failed while loading {model_key}: {message}")
 
 
+def _load_landmark_models(logger: logging.Logger) -> None:
+    """Load both UNetResNet34 landmark models into module-level globals."""
+    global landmark_model_2ch, landmark_model_1ch
+
+    try:
+        from app.helpers.landmark_inference_api import load_landmark_model
+    except Exception as exc:
+        logger.error(f"[Landmark] Cannot import load_landmark_model: {exc} — landmark disabled")
+        return
+
+    device = os.getenv("VISHEART_DEVICE", "cpu")
+
+    unetresnet_dir = os.path.join(os.path.dirname(__file__), "..", "..", "UNETRESNET34")
+    ckpt_dir = os.path.join(unetresnet_dir, "checkpoints")
+    ckpt_2ch = os.path.join(ckpt_dir, "best_model_2ch.pth")
+    ckpt_1ch = os.path.join(ckpt_dir, "best_model_1ch.pth")
+
+    # Fall back to env-var paths if the relative path doesn't exist
+    if not os.path.exists(ckpt_2ch):
+        ckpt_2ch = os.getenv("LANDMARK_MODEL_2CH_PATH", ckpt_2ch)
+    if not os.path.exists(ckpt_1ch):
+        ckpt_1ch = os.getenv("LANDMARK_MODEL_1CH_PATH", ckpt_1ch)
+
+    if os.path.exists(ckpt_2ch):
+        logger.info(f"[Landmark] Loading 2ch model from {ckpt_2ch}")
+        try:
+            landmark_model_2ch = load_landmark_model(ckpt_2ch, in_channels=2, device=device)
+            logger.info("[Landmark] 2ch model loaded OK")
+        except Exception as exc:
+            logger.error(f"[Landmark] FAILED to load 2ch model: {exc}")
+    else:
+        logger.error(f"[Landmark] No 2ch checkpoint found at {ckpt_2ch}")
+
+    if os.path.exists(ckpt_1ch):
+        logger.info(f"[Landmark] Loading 1ch model from {ckpt_1ch}")
+        try:
+            landmark_model_1ch = load_landmark_model(ckpt_1ch, in_channels=1, device=device)
+            logger.info("[Landmark] 1ch model loaded OK")
+        except Exception as exc:
+            logger.warning(f"[Landmark] Could not load 1ch model: {exc} — using 2ch as fallback")
+            landmark_model_1ch = landmark_model_2ch
+    else:
+        logger.warning(f"[Landmark] No 1ch checkpoint found at {ckpt_1ch} — using 2ch as fallback")
+        landmark_model_1ch = landmark_model_2ch
+
+    # Publish into landmark_inference_api so run_landmark_inference_from_nifti can use them
+    try:
+        import app.helpers.landmark_inference_api as _lm_api
+        _lm_api._LOADED_MODEL_2CH = landmark_model_2ch
+        _lm_api._LOADED_MODEL_1CH = landmark_model_1ch
+        _lm_api._LOADED_DEVICE = device
+    except Exception:
+        pass
+
+
 def start_model_bootstrap() -> None:
     """Start model loading in the background so the server can bind immediately."""
     global _bootstrap_started, _bootstrap_finished
@@ -100,6 +155,9 @@ def start_model_bootstrap() -> None:
             model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "fourd_model_epoch_250.pth")
             model_path = os.path.join(MODEL_DIR, model_name)
             _load_model_safely("fourd_reconstruction", model_path, lambda path: globals().__setitem__("fourd_reconstruction_model", FourDReconstructionHandler(path)))
+
+        # Load landmark models (UNetResNet34 1ch + 2ch)
+        _load_landmark_models(logger)
 
         _bootstrap_finished = True
 
