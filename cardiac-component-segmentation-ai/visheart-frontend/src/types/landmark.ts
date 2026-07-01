@@ -88,6 +88,119 @@ export interface LandmarkPageState {
   n1chFallback?: number;
 }
 
+// ── Persisted landmark doc (backend IProjectLandmark shape) ─────────────────
+// Mirrors the DB schema in Cardiac_Segmentation_FYP_Server/src/types/database_types.ts.
+export interface PersistedLandmarkPoint {
+  key: string;
+  x: number;
+  y: number;
+  flag?: "normal" | "collapsed_to_mean";
+  confidence?: "high" | "low";
+}
+
+export interface PersistedLandmarkDoc {
+  _id?: string;
+  projectid: string;
+  name: string;
+  description?: string;
+  isSaved: boolean;
+  isModelOutput: boolean;
+  segmentationModel?: "medsam" | "unet";
+  landmarkModel?: string;
+  frames: {
+    frameindex: number;
+    frameinferred: boolean;
+    slices: {
+      sliceindex: number;
+      landmarks: PersistedLandmarkPoint[];
+    }[];
+  }[];
+}
+
+const LANDMARK_POINT_KEYS = [
+  "rv_insertion_1",
+  "rv_insertion_2",
+  "apex",
+  "basal_anterior",
+  "basal_inferior",
+  "basal_lateral",
+  "mid_anterior",
+] as const;
+
+/** Flattens FramePrediction[] merged with local landmarkEdits into the nested
+ *  frames[].slices[].landmarks[] shape the backend save-landmarks endpoint expects. */
+export function framePredictionsToLandmarkFrames(
+  predictions: FramePrediction[],
+  edits: Record<string, Partial<FramePrediction>>,
+): PersistedLandmarkDoc["frames"] {
+  const framesMap = new Map<number, PersistedLandmarkDoc["frames"][0]>();
+
+  for (const pred of predictions) {
+    const sliceId = pred.slice_id ?? 0;
+    const edit = edits[`${pred.frame_id}:${sliceId}`] ?? {};
+    const merged = { ...pred, ...edit } as FramePrediction;
+
+    const landmarks: PersistedLandmarkPoint[] = [];
+    for (const key of LANDMARK_POINT_KEYS) {
+      const coord = getLandmarkCoord(merged, key);
+      if (!coord) continue;
+      landmarks.push({
+        key,
+        x: coord[0],
+        y: coord[1],
+        flag: merged.flag,
+        confidence: merged.confidence,
+      });
+    }
+
+    let frame = framesMap.get(pred.frame_id);
+    if (!frame) {
+      frame = { frameindex: pred.frame_id, frameinferred: true, slices: [] };
+      framesMap.set(pred.frame_id, frame);
+    }
+    frame.slices.push({ sliceindex: sliceId, landmarks });
+  }
+
+  return Array.from(framesMap.values()).sort((a, b) => a.frameindex - b.frameindex);
+}
+
+/** Converts a loaded PersistedLandmarkDoc back into the Record<"frame:slice", Partial<FramePrediction>>
+ *  shape landmarkEdits already uses, so it can be dropped straight into setLandmarkEdits.
+ *
+ *  Saved docs always contain every slice (edited or not — see framePredictionsToLandmarkFrames),
+ *  so a slice that was never actually edited by the user is still present with its original
+ *  "collapsed_to_mean" flag. If that got copied into landmarkEdits verbatim, the very first drag
+ *  on that slice would see "flag" already present in the existing edit entry and skip the
+ *  collapsed->normal promotion in handleLandmarkMove — permanently stuck showing the mean-point
+ *  indicator even after a real edit moved the points away from it. Only reconstruct an edit entry
+ *  for slices that were genuinely promoted to "normal"; leave untouched collapsed slices with no
+ *  entry so they keep falling back to the raw AI prediction (and its collapsed_to_mean flag).
+ */
+export function landmarkFramesToEdits(
+  doc: PersistedLandmarkDoc | null | undefined,
+): Record<string, Partial<FramePrediction>> {
+  const edits: Record<string, Partial<FramePrediction>> = {};
+  if (!doc?.frames) return edits;
+
+  for (const frame of doc.frames) {
+    for (const slice of frame.slices ?? []) {
+      if (slice.landmarks?.some((p) => p.flag === "collapsed_to_mean")) continue;
+
+      const key = `${frame.frameindex}:${slice.sliceindex}`;
+      const entry: Partial<FramePrediction> = {};
+      for (const point of slice.landmarks ?? []) {
+        (entry as Record<string, unknown>)[point.key] = [point.x, point.y] as LandmarkCoord;
+        if (point.flag) entry.flag = point.flag;
+        if (point.confidence) entry.confidence = point.confidence;
+      }
+      if (Object.keys(entry).length > 0) {
+        edits[key] = entry;
+      }
+    }
+  }
+  return edits;
+}
+
 export const AHA_SEGMENT_COLORS: string[] = [
   "#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6",  // basal  1–6
   "#f43f5e", "#fb923c", "#facc15", "#4ade80", "#2dd4bf", "#60a5fa",  // mid    7–12

@@ -20,6 +20,7 @@ import {
   Upload,
   Stethoscope,
   X,
+  Save,
 } from "lucide-react";
 
 import { useProject } from "@/context/ProjectContext";
@@ -38,7 +39,12 @@ import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar } from "@/components/landmark/LandmarkSidebar";
 import { ClientHeartModel } from "@/components/landmark/ClientHeartModel";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
-import { AHA_SEGMENT_COLORS, LANDMARK_DEFINITIONS } from "@/types/landmark";
+import {
+  AHA_SEGMENT_COLORS,
+  LANDMARK_DEFINITIONS,
+  framePredictionsToLandmarkFrames,
+  landmarkFramesToEdits,
+} from "@/types/landmark";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
 import type { FramePrediction } from "@/types/landmark";
@@ -182,6 +188,8 @@ export default function LandmarkDetectionPage() {
   const [editableLandmarks, setEditableLandmarks] = useState(true);
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
+  const [isSavingLandmarks, setIsSavingLandmarks] = useState(false);
+  const [hasUnsavedLandmarkEdits, setHasUnsavedLandmarkEdits] = useState(false);
 
   // Correct the bullseye model default once the GPU probe resolves.
   // Guard on gpuLoading: isGpuMode starts false before the fetch completes,
@@ -438,11 +446,73 @@ export default function LandmarkDetectionPage() {
           ...existing,
           [id]: coord,
           // First edit on a collapsed slice promotes it to a normal editable prediction
-          ...(wasCollapsed ? { flag: "normal" } : {}),
+          ...(wasCollapsed ? { flag: "normal" as const } : {}),
         },
       };
     });
+    setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
+
+  const handleSaveLandmarks = useCallback(async () => {
+    if (isSavingLandmarks || state.predictions.length === 0) return;
+    setIsSavingLandmarks(true);
+    try {
+      const frames = framePredictionsToLandmarkFrames(state.predictions, landmarkEdits);
+      await landmarkApi.saveLandmarks(projectId, {
+        frames,
+        segmentationModel: selectedBullseyeModel,
+      });
+      setHasUnsavedLandmarkEdits(false);
+    } catch (err) {
+      console.error("[Landmark] Failed to save landmark edits:", err);
+    } finally {
+      setIsSavingLandmarks(false);
+    }
+  }, [isSavingLandmarks, state.predictions, landmarkEdits, projectId, selectedBullseyeModel]);
+
+  // Reload saved landmark edits on mount and after every successful (re-)run —
+  // local landmarkEdits state was just cleared by run/rerunDetectionAndResetEdits,
+  // but a previously SAVED editable doc must still reappear (mirrors segmentation
+  // masks reloading the editable mask after a rerun).
+  //
+  // Gated on an explicit "just transitioned to done" check rather than plain
+  // [state.status] membership: selectedBullseyeModel is also a dependency
+  // (the reload needs to use the right model), but it changes independently
+  // while the user is actively dragging points mid-session (e.g. the GPU
+  // probe correcting medsam/unet, or the user switching the dropdown) — and
+  // re-running this effect on that alone would wholesale overwrite
+  // landmarkEdits with the last-saved DB copy, silently discarding whatever
+  // unsaved drag the user just made.
+  const prevLandmarkStatus = useRef(state.status);
+  useEffect(() => {
+    const justFinished = prevLandmarkStatus.current !== "done" && state.status === "done";
+    prevLandmarkStatus.current = state.status;
+    if (!justFinished) return;
+
+    let cancelled = false;
+    landmarkApi.loadSavedLandmarks(projectId, selectedBullseyeModel).then((doc) => {
+      if (cancelled || !doc) return;
+      setLandmarkEdits(landmarkFramesToEdits(doc));
+    }).catch(() => {
+      // No saved doc yet, or load failed — leave landmarkEdits as-is (empty from the reset).
+    });
+    return () => { cancelled = true; };
+  }, [state.status, projectId, selectedBullseyeModel]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.key === 's') {
+        event.preventDefault();
+        if (hasUnsavedLandmarkEdits && !isSavingLandmarks) {
+          handleSaveLandmarks();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [hasUnsavedLandmarkEdits, isSavingLandmarks, handleSaveLandmarks]);
   const bullseyeFrameCount =
     (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
       ? projectData.dimensions.frames
@@ -567,9 +637,24 @@ export default function LandmarkDetectionPage() {
           </Select>
         </div>
 
-        {/* Re-run + Export buttons */}
+        {/* Save + Re-run + Export buttons */}
         {hasPredictions && (
           <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant={hasUnsavedLandmarkEdits ? "default" : "outline"}
+              size="sm"
+              className="text-xs gap-1.5"
+              disabled={!hasUnsavedLandmarkEdits || isSavingLandmarks}
+              onClick={handleSaveLandmarks}
+              title="Save landmark edits (Ctrl+S)"
+            >
+              {isSavingLandmarks ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              {isSavingLandmarks ? "Saving…" : "Save"}
+            </Button>
             <Button
               size="sm"
               className="text-xs gap-1.5"

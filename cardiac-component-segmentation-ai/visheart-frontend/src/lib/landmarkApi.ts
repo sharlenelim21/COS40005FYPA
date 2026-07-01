@@ -3,6 +3,7 @@ import type {
   LandmarkCoord,
   LandmarkInferenceResponse,
   FramePrediction,
+  PersistedLandmarkDoc,
 } from "@/types/landmark";
 import type { RealStrainResult } from "@/components/landmark/StrainVisualization";
 
@@ -162,6 +163,31 @@ export const landmarkApi = {
       { headers: { "Content-Type": "multipart/form-data" } },
     );
     return response.data;
+  },
+
+  saveLandmarks: async (
+    projectId: string,
+    data: {
+      name?: string;
+      description?: string;
+      frames: PersistedLandmarkDoc["frames"];
+      segmentationModel?: "medsam" | "unet";
+      landmarkModel?: string;
+    },
+  ): Promise<{ success: boolean; message?: string; landmark?: PersistedLandmarkDoc }> => {
+    const response = await api.put(`${ENDPOINT}/save-landmarks/${projectId}`, data);
+    return response.data;
+  },
+
+  loadSavedLandmarks: async (
+    projectId: string,
+    segmentationModel?: "medsam" | "unet",
+  ): Promise<PersistedLandmarkDoc | null> => {
+    const response = await api.get<{ success: boolean; result: PersistedLandmarkDoc | null }>(
+      `${ENDPOINT}/load-landmarks/${projectId}`,
+      { params: segmentationModel ? { segmentationModel } : undefined },
+    );
+    return response.data.result ?? null;
   },
 };
 

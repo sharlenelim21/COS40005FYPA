@@ -274,6 +274,47 @@ export interface IProjectSegmentationMaskDocument
   _id: any; // Ensure _id is part of the document type
 }
 
+/**
+ * Defines the structure for a project's landmark points (e.g. RV insertion points used for
+ * AHA bullseye alignment and strain computation). Mirrors IProjectSegmentationMask's shape and
+ * conventions: only user-editable docs are ever created (isModelOutput is always false today —
+ * there is no separate raw-AI-output snapshot doc, unlike segmentation masks), scoped per
+ * segmentationModel so a project can have independently-edited landmark sets for MedSAM-based
+ * and UNet-based runs.
+ * @interface IProjectLandmark
+ */
+export interface IProjectLandmark {
+  _id?: any; // Allow _id to be compatible with the transformed object for new landmark docs
+  projectid: string; // MongoDB Project ID of the project to which the landmark doc belongs
+  name: string; // Name of the landmark doc
+  description?: string; // Description of the landmark doc
+  isSaved: boolean; // Indicates if the landmark doc is saved in the database
+  isModelOutput: boolean; // false = user-editable/edited doc (the only kind currently created)
+  segmentationModel?: SegmentationModel; // Which segmentation model this landmark run depended on (medsam/unet) — primary scope key
+  landmarkModel?: string; // e.g. "unetresnet34-landmark" — informational only for now
+  model_used?: string; // Compatibility field: string copy of landmarkModel
+  frames: {
+    frameindex: number; // The index of the frame (0-based)
+    frameinferred: boolean; // Indicates if the frame has been inferred
+    slices: {
+      sliceindex: number; // The index of the slice (0-based)
+      landmarks: {
+        key: string; // e.g. "rv_insertion_1", "rv_insertion_2", "apex", ...
+        x: number;
+        y: number;
+        flag?: "normal" | "collapsed_to_mean";
+        confidence?: "high" | "low";
+      }[];
+    }[];
+  }[];
+}
+// Landmark Model Interface (single landmark document in the database)
+export interface IProjectLandmarkDocument
+  extends IProjectLandmark,
+    Omit<Document, "model"> {
+  _id: any; // Ensure _id is part of the document type
+}
+
 // Enumeration for 3D reconstruction source methods
 /**
  * Defines the possible sources for 3D reconstruction generation.
@@ -494,6 +535,19 @@ export interface ProjectSegmentationMaskCrudResult {
   operation: CRUDOperation; // The type of operation performed (CREATE, READ, UPDATE, DELETE)
   projectsegmentationmask?: IProjectSegmentationMaskDocument; // The created or updated segmentation mask document (applicable for CREATE and UPDATE operations)
   projectsegmentationmasks?: IProjectSegmentationMaskDocument[]; // Array of segmentation mask documents (applicable for READ operation)
+  message?: string; // Message if error/warning occurred (applicable for all operations)
+}
+
+/**
+ * Defines the standard structure for the result object returned by project landmark-related
+ * database operations (create, read, update, delete). Mirrors ProjectSegmentationMaskCrudResult.
+ * @interface ProjectLandmarkCrudResult
+ */
+export interface ProjectLandmarkCrudResult {
+  success: boolean; // Indicates whether the operation was successful
+  operation: CRUDOperation; // The type of operation performed (CREATE, READ, UPDATE, DELETE)
+  projectlandmark?: IProjectLandmarkDocument; // The created or updated landmark document (applicable for CREATE and UPDATE operations)
+  projectlandmarks?: IProjectLandmarkDocument[]; // Array of landmark documents (applicable for READ operation)
   message?: string; // Message if error/warning occurred (applicable for all operations)
 }
 

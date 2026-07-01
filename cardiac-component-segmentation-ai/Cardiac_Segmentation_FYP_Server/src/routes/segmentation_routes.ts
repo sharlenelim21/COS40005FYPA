@@ -11,7 +11,8 @@ import {
     jobModel,
     userModel,
     JobStatus,
-    projectSegmentationMaskModel
+    projectSegmentationMaskModel,
+    projectLandmarkModel
 } from "../services/database";
 import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
 import LogError from "../utils/error_logger";
@@ -1133,22 +1134,61 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             buildNIfTI(esFrame, "es"),
         ]);
 
-        // 5. Look up landmark coords for automatic alignment (same as compute-strain in landmark_routes)
-        const landmarkJob = await jobModel
-            .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-            .sort({ updatedAt: -1 })
-            .lean();
+        // 5. Look up landmark coords for automatic alignment. Prefer a saved,
+        // user-edited landmark doc (isModelOutput: false) scoped to the same
+        // segmentation model the strain request is using; fall back to the
+        // raw GPU job result if the user has never saved landmark edits for
+        // this model. This mirrors segmentation masks preferring the
+        // editable doc over the raw AI output.
         const extractCoord = (lm: any): { x: number; y: number } | null => {
             if (!lm) return null;
             if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
             if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
             return null;
         };
-        const lmResult = landmarkJob?.result
-            ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-            : null;
-        const lm1 = extractCoord(lmResult?.avg_lm1);
-        const lm2 = extractCoord(lmResult?.avg_lm2);
+
+        let lm1: { x: number; y: number } | null = null;
+        let lm2: { x: number; y: number } | null = null;
+
+        const savedLandmarkDoc = await projectLandmarkModel
+            .findOne({ projectid: projectId, segmentationModel: modelType ?? "unet", isModelOutput: false })
+            .sort({ updatedAt: -1 })
+            .lean();
+
+        if (savedLandmarkDoc) {
+            // Average rv_insertion_1 / rv_insertion_2 points across every frame/slice,
+            // matching the GPU's own unconditional-mean avg_lm1/avg_lm2 aggregation
+            // (visheart-inference-gpu/app/helpers/landmark_inference_api.py lines 410-432).
+            const lm1Points: { x: number; y: number }[] = [];
+            const lm2Points: { x: number; y: number }[] = [];
+            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
+                for (const slice of frame.slices ?? []) {
+                    for (const point of slice.landmarks ?? []) {
+                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
+                    }
+                }
+            }
+            const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
+                points.length
+                    ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
+                    : null;
+            lm1 = mean(lm1Points);
+            lm2 = mean(lm2Points);
+            logger.info(`${serviceLocation}: compute-strain-from-frames using saved landmark edits (doc ${savedLandmarkDoc._id}) for project ${projectId}.`);
+        }
+
+        if (!lm1 || !lm2) {
+            const landmarkJob = await jobModel
+                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
+                .sort({ updatedAt: -1 })
+                .lean();
+            const lmResult = landmarkJob?.result
+                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
+                : null;
+            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
+            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+        }
 
         // 6. POST both NIfTI files to GPU
         const FormDataNode = require("form-data");

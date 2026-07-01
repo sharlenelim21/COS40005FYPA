@@ -47,6 +47,28 @@ export function useLandmarkDetection(
     },
   }));
 
+  // projectDimensions arrives asynchronously (useProject() resolves after
+  // this hook's first mount), so the lazy useState initializer above often
+  // captures the {256,256} fallback instead of the project's real dimensions.
+  // The GPU response never carries real image_dimensions (always {0,0} on
+  // the new format), so applyResult has nothing to correct this with —
+  // leaving the canvas's toCanvas() scale permanently wrong for that page
+  // load and landmark dots drawn at the wrong position relative to the MRI
+  // image. Sync in an effect once real dimensions arrive, but only while
+  // still on the {256,256} fallback so a genuine GPU-provided value (if one
+  // ever appears) is never clobbered after the fact.
+  useEffect(() => {
+    if (!projectDimensions?.width || !projectDimensions?.height) return;
+    setState((s) => {
+      if (s.imageDimensions.width !== 256 || s.imageDimensions.height !== 256) return s;
+      if (s.imageDimensions.width === projectDimensions.width && s.imageDimensions.height === projectDimensions.height) return s;
+      return {
+        ...s,
+        imageDimensions: { width: projectDimensions.width!, height: projectDimensions.height! },
+      };
+    });
+  }, [projectDimensions?.width, projectDimensions?.height]);
+
   const [replacementFileError, setReplacementFileError] = useState<string | null>(null);
   const rafRef          = useRef<number | null>(null);
   const lastTickRef     = useRef<number>(0);

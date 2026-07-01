@@ -2,11 +2,17 @@ import express, { Request, Response } from "express";
 import multer from "multer";
 import axios from "axios";
 import FormData from "form-data";
-import { isAuth } from "../services/passportjs";
+import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import { startLandmarkInference } from "../services/landmark_inference";
-import { jobModel, readProject } from "../services/database";
-import { JobStatus } from "../types/database_types";
+import {
+  jobModel,
+  readProject,
+  readProjectLandmark,
+  createProjectLandmark,
+  updateProjectLandmark,
+} from "../services/database";
+import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
 
@@ -306,6 +312,207 @@ router.post(
     } catch (err: any) {
       logger.error(`${serviceLocation}: compute-strain failed for project ${projectId}: ${err?.message}`);
       res.status(500).json({ message: err?.response?.data?.detail ?? err?.message ?? "Strain computation failed." });
+    }
+  },
+);
+
+// ── Merge helper for editable landmark frames ────────────────────────────────
+// Mirrors mergeFramesData() in segmentation_routes.ts: merges incoming
+// frame/slice/landmark-point data into the existing editable doc's frames,
+// keyed by frameindex -> sliceindex -> landmark key, so unedited slices are
+// preserved untouched alongside newly-edited ones.
+function mergeLandmarkFramesData(
+  existingFrames: IProjectLandmarkDocument['frames'] | undefined,
+  requestedFramesPayload: IProjectLandmarkDocument['frames'],
+): IProjectLandmarkDocument['frames'] {
+  const baseFrames = existingFrames ? JSON.parse(JSON.stringify(existingFrames)) : [];
+  const framesMap = new Map<number, IProjectLandmarkDocument['frames'][0]>();
+
+  for (const frame of baseFrames) {
+    framesMap.set(frame.frameindex, frame);
+  }
+
+  for (const reqFrame of requestedFramesPayload) {
+    const dbFrame = framesMap.get(reqFrame.frameindex);
+
+    if (!dbFrame) {
+      framesMap.set(reqFrame.frameindex, JSON.parse(JSON.stringify(reqFrame)));
+      continue;
+    }
+
+    if (reqFrame.frameinferred !== undefined) {
+      dbFrame.frameinferred = reqFrame.frameinferred;
+    }
+
+    if (reqFrame.slices !== undefined) {
+      const slicesMap = new Map<number, IProjectLandmarkDocument['frames'][0]['slices'][0]>();
+      const currentSlicesOfDbFrame = Array.isArray(dbFrame.slices) ? dbFrame.slices : [];
+      for (const slice of currentSlicesOfDbFrame) {
+        slicesMap.set(slice.sliceindex, slice);
+      }
+
+      for (const reqSlice of reqFrame.slices) {
+        const dbSlice = slicesMap.get(reqSlice.sliceindex);
+        if (dbSlice) {
+          if (reqSlice.landmarks !== undefined) {
+            const pointsMap = new Map<string, IProjectLandmarkDocument['frames'][0]['slices'][0]['landmarks'][0]>();
+            const currentPoints = Array.isArray(dbSlice.landmarks) ? dbSlice.landmarks : [];
+            for (const point of currentPoints) {
+              pointsMap.set(point.key, point);
+            }
+            for (const reqPoint of reqSlice.landmarks) {
+              pointsMap.set(reqPoint.key, JSON.parse(JSON.stringify(reqPoint)));
+            }
+            dbSlice.landmarks = Array.from(pointsMap.values());
+          }
+        } else {
+          slicesMap.set(reqSlice.sliceindex, JSON.parse(JSON.stringify(reqSlice)));
+        }
+      }
+      dbFrame.slices = Array.from(slicesMap.values()).sort((a, b) => a.sliceindex - b.sliceindex);
+    }
+  }
+  return Array.from(framesMap.values()).sort((a, b) => a.frameindex - b.frameindex);
+}
+
+// ── PUT /save-landmarks/:projectId ───────────────────────────────────────────
+// Persists user-edited landmark points. Scoped per segmentationModel, same
+// convention as segmentation's save-manual-segmentation route. Unlike
+// segmentation (which always has a pre-seeded editable doc from the AI output
+// step), landmarks have no such seed step, so the first save for a given
+// model creates the editable doc rather than 404ing.
+router.put(
+  "/save-landmarks/:projectId",
+  isAuthAndNotGuest,
+  async (req: Request, res: Response): Promise<void> => {
+    const projectId = String(req.params.projectId);
+    const userId = (req.user as any)?._id;
+    const { name, description, frames: framesFromBody, segmentationModel, landmarkModel } = req.body as {
+      name?: string;
+      description?: string;
+      frames?: IProjectLandmark['frames'];
+      segmentationModel?: string;
+      landmarkModel?: string;
+    };
+
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized. User not identified." });
+      return;
+    }
+    if (!projectId) {
+      res.status(400).json({ success: false, message: "Project ID is required." });
+      return;
+    }
+    if (!Array.isArray(framesFromBody) || framesFromBody.length === 0) {
+      res.status(400).json({ success: false, message: "'frames' must be a non-empty array." });
+      return;
+    }
+
+    try {
+      const requestedModel = typeof segmentationModel === "string" ? segmentationModel.toLowerCase() : undefined;
+      const landmarksResult = await readProjectLandmark(projectId);
+
+      if (!landmarksResult.success && landmarksResult.message?.includes("does not exist")) {
+        res.status(404).json({ success: false, message: `Project ${projectId} not found.` });
+        return;
+      }
+
+      const candidateDocs = (landmarksResult.projectlandmarks ?? []).filter(doc => !doc.isModelOutput);
+      const modelMatchedDoc = requestedModel
+        ? candidateDocs.find(doc => (doc.segmentationModel ?? "").toString().toLowerCase() === requestedModel)
+        : undefined;
+      const editableDoc = modelMatchedDoc || candidateDocs[0];
+
+      if (!editableDoc || !editableDoc._id) {
+        // No pre-existing editable doc for this model — create one from scratch.
+        const created = await createProjectLandmark({
+          projectid: projectId,
+          name: name || `Manual Landmarks - ${new Date().toISOString()}`,
+          description,
+          isSaved: true,
+          isModelOutput: false,
+          segmentationModel: segmentationModel as any,
+          landmarkModel,
+          frames: framesFromBody,
+        });
+
+        if (!created.success || !created.projectlandmark) {
+          res.status(500).json({ success: false, message: created.message || "Failed to create landmark doc." });
+          return;
+        }
+
+        logger.info(`${serviceLocation}: Created new editable landmark doc ${created.projectlandmark._id} for project ${projectId}.`);
+        res.status(200).json({
+          success: true,
+          message: "Landmark edits saved successfully.",
+          landmark: created.projectlandmark,
+        });
+        return;
+      }
+
+      const mergedFrames = mergeLandmarkFramesData(editableDoc.frames, framesFromBody);
+      const updated = await updateProjectLandmark(editableDoc._id.toString(), {
+        isSaved: true,
+        name: name ?? editableDoc.name,
+        description: description ?? editableDoc.description,
+        segmentationModel: (segmentationModel as any) ?? editableDoc.segmentationModel,
+        landmarkModel: landmarkModel ?? editableDoc.landmarkModel,
+        frames: mergedFrames,
+      });
+
+      if (!updated.success || !updated.projectlandmark) {
+        res.status(500).json({ success: false, message: updated.message || "Failed to update landmark doc." });
+        return;
+      }
+
+      logger.info(`${serviceLocation}: Updated editable landmark doc ${editableDoc._id} for project ${projectId}.`);
+      res.status(200).json({
+        success: true,
+        message: "Landmark edits saved successfully.",
+        landmark: updated.projectlandmark,
+      });
+    } catch (error: any) {
+      logger.error(`${serviceLocation}: Error saving landmark edits`, {
+        projectId,
+        message: error?.message,
+        stack: error?.stack,
+      });
+      res.status(500).json({ success: false, message: error?.message || "Failed to save landmark edits." });
+    }
+  },
+);
+
+// ── GET /load-landmarks/:projectId ───────────────────────────────────────────
+// Returns the saved editable landmark doc (if any) matching segmentationModel,
+// so the frontend can reload saved edits after mount or after a re-run.
+router.get(
+  "/load-landmarks/:projectId",
+  isAuth,
+  async (req: Request, res: Response): Promise<void> => {
+    const projectId = String(req.params.projectId);
+    const requestedModel = typeof req.query.segmentationModel === "string"
+      ? req.query.segmentationModel.toLowerCase()
+      : undefined;
+
+    try {
+      const landmarksResult = await readProjectLandmark(projectId);
+      const candidateDocs = (landmarksResult.projectlandmarks ?? []).filter(doc => !doc.isModelOutput);
+      const modelMatchedDoc = requestedModel
+        ? candidateDocs.find(doc => (doc.segmentationModel ?? "").toString().toLowerCase() === requestedModel)
+        : undefined;
+      const editableDoc = modelMatchedDoc || candidateDocs[0];
+
+      res.status(200).json({
+        success: true,
+        result: editableDoc ?? null,
+      });
+    } catch (error: any) {
+      logger.error(`${serviceLocation}: Error loading landmark edits`, {
+        projectId,
+        message: error?.message,
+        stack: error?.stack,
+      });
+      res.status(500).json({ success: false, result: null, message: error?.message || "Failed to load landmark edits." });
     }
   },
 );

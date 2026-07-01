@@ -16,6 +16,7 @@ const serviceLocation = "Database"; // Service location for error logging
 import { IUser, IUserDocument, IUserSafe, UserRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
 import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
 import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat } from "../types/database_types"; // Import the project reconstruction types
+import { IProjectLandmark, IProjectLandmarkDocument, ProjectLandmarkCrudResult } from "../types/database_types"; // Import the project landmark types
 import { JobStatus, IJob, IJobDocument, JobCrudResult, SegmentationModel } from "../types/database_types"; // Import the job types
 import { IGPUHost, IGPUHostDocument, GPUHostCrudResult } from "../types/database_types"; // Import the GPU host types
 
@@ -789,8 +790,57 @@ projectSegmentationMaskSchema.pre('save', async function (next) {
 });
 const projectSegmentationMaskModel = model<IProjectSegmentationMask, Model<IProjectSegmentationMask>>("Segmentation Masks", projectSegmentationMaskSchema);
 
-// Add segmentation mask indexes after model creation  
+// Add segmentation mask indexes after model creation
 projectSegmentationMaskSchema.index({ projectid: 1 }); // Index on project ID for segmentation masks
+
+// Project Landmark Collection
+// Create landmark point schema (Nest Depth: 2)
+const projectLandmarkPointSchema = new Schema({
+  key: { type: String, required: true }, // e.g. "rv_insertion_1", "rv_insertion_2", "apex"
+  x: { type: Number, required: true },
+  y: { type: Number, required: true },
+  flag: { type: String, required: false }, // "normal" | "collapsed_to_mean"
+  confidence: { type: String, required: false }, // "high" | "low"
+}, { _id: false });
+
+// Create landmark slice schema (Nest Depth: 1)
+const projectLandmarkSliceSchema = new Schema({
+  sliceindex: { type: Number, required: true }, // Index of the slice (0-based)
+  landmarks: [{ type: projectLandmarkPointSchema, required: false }], // Array of landmark points for the slice
+}, { _id: false });
+
+// Create landmark frames schema (Nest Depth: 0.5)
+const projectLandmarkFramesSchema = new Schema({
+  frameindex: { type: Number, required: true }, // Index of the frame (0-based)
+  frameinferred: { type: Boolean, required: true, default: false }, // Indicates if the frame has been inferred
+  slices: { type: [projectLandmarkSliceSchema], required: true }, // Array of slices for the frame
+}, { _id: false });
+
+// Create Landmark schema (Nest Depth: 0)
+const projectLandmarkSchema = new Schema<IProjectLandmark>({
+  projectid: { type: String, required: true }, // MongoDB Project ID of the project to which the landmark doc belongs
+  name: { type: String, required: true }, // Name of the landmark doc
+  description: { type: String, required: false }, // Description of the landmark doc
+  isSaved: { type: Boolean, required: true, default: false }, // Indicates if the landmark doc is saved
+  isModelOutput: { type: Boolean, required: true, default: false }, // false = user-editable/edited doc
+  segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Which segmentation model this landmark run depended on
+  landmarkModel: { type: String, required: false }, // e.g. "unetresnet34-landmark"
+  model_used: { type: String, required: false }, // Compatibility field
+  frames: [{ type: projectLandmarkFramesSchema, required: true }], // Array of frames for the landmark doc
+}, { timestamps: true });
+
+// Add validation to ensure projectid exists before saving
+projectLandmarkSchema.pre('save', async function (next) {
+  const projectExists = await projectModel.exists({ _id: this.projectid });
+  if (!projectExists) {
+    throw new Error('Referenced project does not exist');
+  }
+  next();
+});
+const projectLandmarkModel = model<IProjectLandmark, Model<IProjectLandmark>>("Project Landmarks", projectLandmarkSchema);
+
+// Add landmark indexes after model creation
+projectLandmarkSchema.index({ projectid: 1 }); // Index on project ID for landmarks
 
 // Project Reconstruction Collection
 // Create simplified Project 4D Reconstruction schema for AI SDF-based reconstruction
@@ -1567,6 +1617,217 @@ const deleteProjectSegmentationMask = async (maskid: string): Promise<ProjectSeg
   }
 }
 
+/* Project Landmark section */
+
+/**
+ * Creates a new landmark document in the database. Mirrors createProjectSegmentationMask.
+ * @async
+ * @function createProjectLandmark
+ * @param {IProjectLandmark} projectlandmark - An object containing the details of the landmark doc to create.
+ * @returns {Promise<ProjectLandmarkCrudResult>} A promise resolving to a ProjectLandmarkCrudResult object.
+ */
+const createProjectLandmark = async (
+  projectlandmark: IProjectLandmark
+): Promise<ProjectLandmarkCrudResult> => {
+  const operation = CRUDOperation.CREATE;
+  const pl = projectlandmark;
+
+  if (!pl.model_used && pl.landmarkModel) {
+    pl.model_used = pl.landmarkModel;
+  }
+
+  try {
+    const projectid = pl.projectid;
+    const projectidexists = await projectModel.exists({ _id: projectid });
+    if (!projectidexists) {
+      logger.warn(`${serviceLocation}: Project ID ${projectid} does not exist.`);
+      return { success: false, operation, message: `Project ID ${projectid} does not exist.` };
+    }
+    const projectlandmarknameexists = await projectLandmarkModel.exists({ name: pl.name, projectid: pl.projectid });
+    if (projectlandmarknameexists) {
+      logger.warn(`${serviceLocation}: Invalid input parameters for project landmark creation: Landmark doc name ${pl.name} already exists for this project.`);
+      return { success: false, operation, message: `Invalid input parameters for project landmark creation: Landmark doc name ${pl.name} already exists for this project.` };
+    }
+    const stringInputs = [pl.name];
+    const emptyStringInputs = stringInputs.filter(input => !input || typeof input !== 'string' || input.trim() === '');
+    if (emptyStringInputs.length > 0) {
+      logger.warn(`${serviceLocation}: Invalid input parameters for project landmark creation: ${emptyStringInputs.join(", ")}`);
+      return { success: false, operation, message: `Invalid input parameters for project landmark creation: ${emptyStringInputs.join(", ")}` };
+    }
+    if (!pl.frames || !Array.isArray(pl.frames) || pl.frames.length === 0) {
+      logger.warn(`${serviceLocation}: Invalid input parameters for project landmark creation: frames array must be populated with at least one frame.`);
+      return { success: false, operation, message: `Invalid input parameters for project landmark creation: frames array must be populated with at least one frame.` };
+    }
+
+    for (const frame of pl.frames) {
+      if (!frame.slices || !Array.isArray(frame.slices) || frame.slices.length === 0) {
+        logger.warn(`${serviceLocation}: Invalid input parameters for project landmark creation: frame ${frame.frameindex} must have at least one slice.`);
+        return { success: false, operation, message: `Invalid input parameters for project landmark creation: frame ${frame.frameindex} must have at least one slice.` };
+      }
+      for (const slice of frame.slices) {
+        if (slice.landmarks && Array.isArray(slice.landmarks)) {
+          for (const point of slice.landmarks) {
+            if (!point.key || typeof point.key !== 'string' || typeof point.x !== 'number' || typeof point.y !== 'number') {
+              const offendingLocation = `frame ${frame.frameindex}, slice ${slice.sliceindex}`;
+              logger.warn(`${serviceLocation}: Invalid input for project landmark creation: landmark point must have a string key and numeric x/y in ${offendingLocation}.`);
+              return {
+                success: false,
+                operation,
+                message: `Invalid input for project landmark creation: landmark point must have a string key and numeric x/y in ${offendingLocation}.`
+              };
+            }
+          }
+        }
+      }
+    }
+
+    const newProjectLandmark = new projectLandmarkModel(pl);
+    const result = await newProjectLandmark.save();
+    if (!result) {
+      logger.warn(`${serviceLocation}: Error creating project landmark.`);
+      return { success: false, operation, message: "Error creating project landmark." };
+    }
+    logger.info(`${serviceLocation}: Project landmark ${result._id} created successfully.`);
+    return { success: true, operation, projectlandmark: result };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error creating project landmark, ${error}`);
+    return { success: false, operation, message: "Error creating project landmark." };
+  }
+}
+
+/**
+ * Reads all landmark docs associated with a specific project ID. Mirrors readProjectSegmentationMask.
+ * @async
+ * @function readProjectLandmark
+ * @param {string} projectid - The ID of the project whose landmark docs are to be retrieved.
+ * @returns {Promise<ProjectLandmarkCrudResult>} A promise resolving to a ProjectLandmarkCrudResult object.
+ */
+const readProjectLandmark = async (
+  projectid: string,
+): Promise<ProjectLandmarkCrudResult> => {
+  const operation = CRUDOperation.READ;
+  try {
+    const projectidexists = await projectModel.exists({ _id: projectid });
+    if (!projectidexists) {
+      logger.warn(`${serviceLocation}: Project ID ${projectid} does not exist.`);
+      return { success: false, operation, message: `Project ID ${projectid} does not exist.` };
+    }
+    const projectLandmarks = await projectLandmarkModel.find({ projectid: projectid });
+    if (!projectLandmarks || projectLandmarks.length === 0) {
+      logger.info(`${serviceLocation}: No landmark docs found for project ID ${projectid}.`);
+      return { success: true, operation, message: "No landmark docs found for this project." };
+    }
+    logger.info(`${serviceLocation}: Found ${projectLandmarks.length} landmark docs for project ID ${projectid}.`);
+    return { success: true, operation, projectlandmarks: projectLandmarks };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error reading project landmark, ${error}`);
+    return { success: false, operation, message: "Error reading project landmark." };
+  }
+}
+
+/**
+ * Updates an existing project landmark doc in the database. Mirrors updateProjectSegmentationMask.
+ * @async
+ * @function updateProjectLandmark
+ * @param {string} landmarkid - The ID of the landmark doc to update.
+ * @param {Partial<IProjectLandmarkDocument>} landmarkupdates - An object containing the updates to apply.
+ * @returns {Promise<ProjectLandmarkCrudResult>} A promise resolving to a ProjectLandmarkCrudResult object.
+ */
+const updateProjectLandmark = async (
+  landmarkid: string,
+  landmarkupdates: Partial<IProjectLandmarkDocument>
+): Promise<ProjectLandmarkCrudResult> => {
+  const operation = CRUDOperation.UPDATE;
+  try {
+    const doc = await projectLandmarkModel.findById(landmarkid);
+    if (!doc) {
+      logger.warn(`${serviceLocation}: Project landmark ${landmarkid} not found.`);
+      return { success: false, operation, message: `Project landmark ${landmarkid} not found.` };
+    }
+
+    if (landmarkupdates.name && landmarkupdates.name !== doc.name) {
+      const nameExists = await projectLandmarkModel.exists({
+        projectid: doc.projectid,
+        name: landmarkupdates.name,
+        _id: { $ne: landmarkid }
+      });
+      if (nameExists) {
+        return { success: false, operation, message: `Landmark doc name '${landmarkupdates.name}' already exists for this project.` };
+      }
+      doc.name = landmarkupdates.name;
+    }
+
+    if (landmarkupdates.description !== undefined) {
+      doc.description = landmarkupdates.description;
+    }
+
+    if (landmarkupdates.isSaved !== undefined) {
+      doc.isSaved = landmarkupdates.isSaved;
+    }
+
+    if (landmarkupdates.isModelOutput !== undefined) {
+      doc.isModelOutput = landmarkupdates.isModelOutput;
+    }
+
+    if (landmarkupdates.segmentationModel !== undefined) {
+      doc.segmentationModel = landmarkupdates.segmentationModel;
+    }
+
+    if (landmarkupdates.landmarkModel !== undefined) {
+      doc.landmarkModel = landmarkupdates.landmarkModel;
+    }
+
+    if (landmarkupdates.frames) {
+      if (!Array.isArray(landmarkupdates.frames) || landmarkupdates.frames.length === 0) {
+        return { success: false, operation, message: "Frames array must contain at least one frame." };
+      }
+
+      const invalidFrameIndices = landmarkupdates.frames.filter(frame =>
+        frame.frameindex === undefined || typeof frame.frameindex !== 'number' || frame.frameindex < 0
+      );
+      if (invalidFrameIndices.length > 0) {
+        const indices = invalidFrameIndices.map(f => f.frameindex).join(", ");
+        return { success: false, operation, message: `Invalid frame indices: [${indices}]. Frame index must be a non-negative number.` };
+      }
+
+      const framesWithEmptySlices = landmarkupdates.frames.filter(frame =>
+        !frame.slices || !Array.isArray(frame.slices) || frame.slices.length === 0
+      );
+      if (framesWithEmptySlices.length > 0) {
+        const indices = framesWithEmptySlices.map(f => f.frameindex).join(", ");
+        return { success: false, operation, message: `Frames with indices [${indices}] must have at least one slice.` };
+      }
+
+      for (const frame of landmarkupdates.frames) {
+        for (const slice of frame.slices) {
+          if (slice.landmarks && Array.isArray(slice.landmarks)) {
+            for (const point of slice.landmarks) {
+              if (!point.key || typeof point.key !== 'string' || typeof point.x !== 'number' || typeof point.y !== 'number') {
+                const offendingLocation = `frame ${frame.frameindex}, slice ${slice.sliceindex}`;
+                logger.warn(`${serviceLocation}: Invalid input for project landmark update: landmark point must have a string key and numeric x/y in ${offendingLocation}.`);
+                return {
+                  success: false,
+                  operation,
+                  message: `Invalid input for project landmark update: landmark point must have a string key and numeric x/y in ${offendingLocation}.`
+                };
+              }
+            }
+          }
+        }
+      }
+      doc.frames = landmarkupdates.frames as mongoose.Types.DocumentArray<IProjectLandmarkDocument['frames'][0]>;
+    }
+
+    await doc.save();
+
+    logger.info(`${serviceLocation}: Project landmark ${landmarkid} updated successfully.`);
+    return { success: true, operation, projectlandmark: doc };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error updating project landmark, ${error}`);
+    return { success: false, operation, message: "Error updating project landmark." };
+  }
+};
+
 /* Project Reconstruction section */
 
 /**
@@ -2230,5 +2491,7 @@ export {
   IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, projectReconstructionModel, createProjectReconstruction, readProjectReconstruction, updateProjectReconstruction, deleteProjectReconstruction,
   // Job and GPU Host exports
   jobModel, createJob, readJob, updateJob, deleteJob, JobStatus, IJob, IJobDocument, IProjectSegmentationMaskDocument, ProjectSegmentationMaskCrudResult, ProjectCrudResult,
-  readGPUHost, updateGPUHost, seedGPUHost, gpuHostModel, GPUHostCrudResult, IGPUHost, IGPUHostDocument
+  readGPUHost, updateGPUHost, seedGPUHost, gpuHostModel, GPUHostCrudResult, IGPUHost, IGPUHostDocument,
+  // Project Landmark exports
+  IProjectLandmark, IProjectLandmarkDocument, ProjectLandmarkCrudResult, projectLandmarkModel, createProjectLandmark, readProjectLandmark, updateProjectLandmark
 };

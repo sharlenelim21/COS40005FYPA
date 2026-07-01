@@ -199,8 +199,21 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
       let w = cw, h = cw / aspect;
       if (h > ch) { h = ch; w = h * aspect; }
 
-      canvas.width  = Math.round(w);
-      canvas.height = Math.round(h);
+      const roundedW = Math.round(w);
+      const roundedH = Math.round(h);
+
+      // Fix the canvas's CSS box to the same aspect-fit size as its internal
+      // pixel buffer. Without this, "max-w-full max-h-full" lets the browser
+      // stretch the element to whatever box the flex layout gives it — which
+      // can differ slightly between renders (layout not fully settled yet,
+      // scrollbar appearing, etc.) — so landmark dots computed in canvas-pixel
+      // space via toCanvas() would land at a different screen position even
+      // though the underlying image-space coordinates never changed.
+      canvas.style.width  = `${roundedW}px`;
+      canvas.style.height = `${roundedH}px`;
+
+      canvas.width  = roundedW;
+      canvas.height = roundedH;
       draw(canvas);
     });
 

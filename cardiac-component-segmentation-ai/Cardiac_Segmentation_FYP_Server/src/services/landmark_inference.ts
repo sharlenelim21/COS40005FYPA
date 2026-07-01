@@ -12,6 +12,7 @@ import {
 } from "./database";
 import {
   segmentationSource,
+  SegmentationModel,
 } from "../types/database_types";
 import { generateAISegmentationForReconstruction } from "./segmentation_export";
 import logger from "./logger";
@@ -169,6 +170,8 @@ export async function startLandmarkInference(
     status: JobStatus.PENDING,
     segmentationSource: segmentationSource.AI_INFERENCE,
     model_used: modelConfig?.model || "unetresnet34-landmark",
+    segmentationModel:
+      requestedSegModel === "unet" ? SegmentationModel.UNET : SegmentationModel.MEDSAM,
   };
 
   const jobCreationResult = await createJob(jobData);
