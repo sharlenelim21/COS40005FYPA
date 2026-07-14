@@ -1041,7 +1041,12 @@ function AhaBullseyePanel({
     : null;
   const frameMin = frameValues ? Math.min(...frameValues) : 0;
   const frameMax = frameValues ? Math.max(...frameValues) : 0;
-  const meanPct = frameMax > frameMin && displayBullseyeData
+  // Total invalidity: every segment came back null (e.g. a segmentation model
+  // found no myocardium above classify_slices()'s pixel threshold for any
+  // slice). Distinct from the partial case (stats.n_nan > 0 but mean still a
+  // real number), which already renders correctly further down.
+  const hasNoValidSegments = displayBullseyeData != null && displayBullseyeData.stats.mean == null;
+  const meanPct = frameMax > frameMin && displayBullseyeData?.stats.mean != null
     ? Math.round((displayBullseyeData.stats.mean - frameMin) / (frameMax - frameMin) * 100)
     : 50;
 
@@ -1068,6 +1073,23 @@ function AhaBullseyePanel({
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Compute Bullseye
+            </button>
+          )}
+        </div>
+      ) : hasNoValidSegments ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
+          <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
+          <p className="text-xs text-muted-foreground">
+            Insufficient segmentation — no myocardium detected in any slice for this model.
+          </p>
+          {onCompute && (
+            <button
+              type="button"
+              onClick={onCompute}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Recompute Bullseye
             </button>
           )}
         </div>
@@ -1127,7 +1149,7 @@ function AhaBullseyePanel({
                 </div>
                 <div>
                   <p className="text-muted-foreground">Mean</p>
-                  <p className="font-semibold tabular-nums text-primary">{displayBullseyeData.stats.mean.toFixed(1)} mm <span className="text-muted-foreground font-normal">({meanPct}%)</span></p>
+                  <p className="font-semibold tabular-nums text-primary">{(displayBullseyeData.stats.mean ?? 0).toFixed(1)} mm <span className="text-muted-foreground font-normal">({meanPct}%)</span></p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Max</p>
