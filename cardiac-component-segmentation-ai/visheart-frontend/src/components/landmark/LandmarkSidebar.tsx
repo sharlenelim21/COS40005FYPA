@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -37,6 +38,7 @@ import {
 } from "@/types/landmark";
 import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
 import { getDummyStrainData, getStrainColor, type StrainType } from "@/components/landmark/StrainVisualization";
+import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries } from "@/components/landmark/RegionalStrainCharts";
 
 const NAV_ITEMS = [
   { key: "landmarks", icon: MapPin,    label: "Landmarks" },
@@ -174,8 +176,11 @@ export function LandmarkSidebar({
         </span>
       </div>
 
-      {/* Playback controls */}
-      {hasPredictions && (
+      {/* Playback controls — fixed above the scroll area for Landmarks/Settings.
+          For Strain, it scrolls away with the tab content instead (see below):
+          fixed playback bar + our sticky graph card would otherwise stack two
+          pinned elements and cover the segment labels underneath. */}
+      {hasPredictions && activeTab !== "strain" && (
         <PlaybackBar
           currentFrame={state.currentFrame}
           totalFrames={state.totalFrames}
@@ -192,6 +197,22 @@ export function LandmarkSidebar({
 
       {/* Scrollable tab content */}
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
+        {activeTab === "strain" && hasPredictions && (
+          <div className="-mx-4 -mt-4 mb-4">
+            <PlaybackBar
+              currentFrame={state.currentFrame}
+              totalFrames={state.totalFrames}
+              isPlaying={state.isPlaying}
+              playbackFps={state.playbackFps}
+              confidentCount={confidentCount ?? 0}
+              onTogglePlay={onTogglePlay}
+              onNextFrame={onNextFrame}
+              onPrevFrame={onPrevFrame}
+              onSliderChange={onSliderChange}
+              onPlaybackSpeedChange={onPlaybackSpeedChange}
+            />
+          </div>
+        )}
         {activeTab === "landmarks" && (
           <LandmarksTab
             prediction={currentPrediction}
@@ -720,10 +741,19 @@ function StrainTab({
   selectedStrainSegment?: number | null;
   selectedStrainType?: StrainType;
 }) {
+  const router = useRouter();
+  const { projectId } = useParams<{ projectId: string }>();
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>(
     externalStrainType && externalStrainType !== ("GLS" as string) ? externalStrainType : "GRS"
   );
+  const [curveView, setCurveView] = useState<"global" | "region" | "cycle">("global");
+  const [labelsView, setLabelsView] = useState<"lvSegments" | "values">("lvSegments");
+  const [hoverSeg, setHoverSeg] = useState<number | null>(null);
   const frameCount = Math.max(totalFrames || 10, 1);
+  const cycleSeries = useMemo(
+    () => buildDummyCycleSeries(selectedStrainType, frameCount),
+    [selectedStrainType, frameCount],
+  );
   const curveData = selectedStrainSegment
     ? Array.from({ length: frameCount }, (_, frame) => {
         const segment = getDummyStrainData(selectedStrainType, frame, frameCount)
@@ -819,93 +849,148 @@ function StrainTab({
         />
       </div>
 
-      <div className="rounded-lg border border-border bg-background p-3">
-        <div className="mb-2 flex items-center justify-between">
+      <div className="sticky top-0 z-10 rounded-lg border border-border bg-background p-3 shadow-sm">
+        <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-            {selectedStrainSegment ? `Segment ${selectedStrainSegment}` : "Global"} {selectedStrainType} Curve
+            {curveView === "global"
+              ? `${selectedStrainSegment ? `Segment ${selectedStrainSegment}` : "Global"} ${selectedStrainType} Curve`
+              : curveView === "region"
+              ? "By Region"
+              : "Full Cycle — All Segments"}
           </h4>
-          <span className="text-[10px] text-muted-foreground">Time (ms)</span>
+          {curveView === "global" && <span className="text-[10px] text-muted-foreground">Time (ms)</span>}
         </div>
-        <div className="h-44">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={curveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
-              <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
-              <XAxis
-                dataKey="time"
-                tickLine={false}
-                axisLine={false}
-                tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                domain={selectedStrainType === "GRS" ? [0, 42] : [-26, 2]}
-                tickFormatter={(value) => `${value}%`}
-              />
-              <Tooltip
-                cursor={{ stroke: "hsl(var(--border))" }}
-                formatter={(value) => [`${Number(value).toFixed(1)}%`, selectedStrainType]}
-                labelFormatter={(label) => `${label} ms`}
-                contentStyle={{
-                  borderRadius: 8,
-                  border: "1px solid hsl(var(--border))",
-                  background: "hsl(var(--popover))",
-                  color: "hsl(var(--popover-foreground))",
-                  fontSize: 12,
-                }}
-              />
-              <ReferenceLine
-                x={currentTime}
-                stroke="hsl(var(--primary))"
-                strokeDasharray="4 4"
-                ifOverflow="extendDomain"
-              />
-              <Line
-                type="monotone"
-                dataKey="strain"
-                stroke={selectedStrainType === "GRS" ? "#22c55e" : "#f87171"}
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 3 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+        <div className="mb-2 grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
+          {([
+            ["global", "Global"],
+            ["region", "By Region"],
+            ["cycle", "Full Cycle"],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setCurveView(key)}
+              className={cn(
+                "rounded-md px-1.5 py-1 text-[10px] font-medium transition-colors",
+                curveView === key
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
         </div>
+
+        {curveView === "global" && (
+          <div className="h-44">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={curveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
+                <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="time"
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                  domain={selectedStrainType === "GRS" ? [0, 42] : [-26, 2]}
+                  tickFormatter={(value) => `${value}%`}
+                />
+                <Tooltip
+                  cursor={{ stroke: "hsl(var(--border))" }}
+                  formatter={(value) => [`${Number(value).toFixed(1)}%`, selectedStrainType]}
+                  labelFormatter={(label) => `${label} ms`}
+                  contentStyle={{
+                    borderRadius: 8,
+                    border: "1px solid hsl(var(--border))",
+                    background: "hsl(var(--popover))",
+                    color: "hsl(var(--popover-foreground))",
+                    fontSize: 12,
+                  }}
+                />
+                <ReferenceLine
+                  x={currentTime}
+                  stroke="hsl(var(--primary))"
+                  strokeDasharray="4 4"
+                  ifOverflow="extendDomain"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="strain"
+                  stroke={selectedStrainType === "GRS" ? "#22c55e" : "#f87171"}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 3 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {curveView === "region" && (
+          <RegionalStrainByRegion series={cycleSeries} />
+        )}
+
+        {curveView === "cycle" && (
+          <FullCycleChart series={cycleSeries} strainType={selectedStrainType} width={520} height={220} highlightSeg={hoverSeg} />
+        )}
+
+        {curveView !== "global" && (
+          <p className="mt-2 text-[9px] text-muted-foreground">
+            Dummy preview values — the backend only computes strain ED→ES today, not a full per-frame series yet.
+          </p>
+        )}
       </div>
 
-      <div className="rounded-lg border border-border bg-background">
-        <div className="border-b border-border px-3 py-2">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-            Segment Values
-          </h4>
+      {curveView === "global" ? (
+        <div className="rounded-lg border border-border bg-background">
+          <div className="border-b border-border px-3 py-2">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Segment Values</h4>
+          </div>
+          <SegmentValuesTable segmentValues={segmentValues} strainType={selectedStrainType} />
         </div>
-        <div className="max-h-56 overflow-y-auto">
-          <table className="w-full text-xs">
-            <tbody className="divide-y divide-border">
-              {segmentValues.map((segment) => (
-                <tr key={segment.segment} className="hover:bg-muted/40">
-                  <td className="px-3 py-2 text-muted-foreground">{segment.segment}</td>
-                  <td className="px-2 py-2">{segment.label}</td>
-                  <td
-                    className="px-3 py-2 text-right font-mono"
-                    style={{ color: getStrainColor(segment.strain, selectedStrainType) }}
-                  >
-                    {segment.strain > 0 ? "+" : ""}{segment.strain.toFixed(1)}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      ) : (
+        <div className="rounded-lg border border-border bg-background">
+          <div className="grid grid-cols-2 gap-1 border-b border-border p-1">
+            {([
+              ["lvSegments", "LV Segments"],
+              ["values", "Segment Values"],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setLabelsView(key)}
+                className={cn(
+                  "rounded-md px-1.5 py-1.5 text-[10px] font-medium transition-colors",
+                  labelsView === key
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {labelsView === "lvSegments" ? (
+            <div className="p-2">
+              <LVSegmentsLegend series={cycleSeries} highlightSeg={hoverSeg} onHoverSeg={setHoverSeg} size="sm" columns={1} />
+            </div>
+          ) : (
+            <SegmentValuesTable segmentValues={segmentValues} strainType={selectedStrainType} />
+          )}
         </div>
-      </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
         <Button
           variant="outline"
           size="sm"
           className="text-xs gap-1.5"
-          onClick={() => alert("Strain report export is a placeholder until real strain values are connected.")}
+          onClick={() => router.push(`/project/${projectId}/report`)}
         >
           <Download className="h-3.5 w-3.5" />
           Report
@@ -920,6 +1005,35 @@ function StrainTab({
           Data
         </Button>
       </div>
+    </div>
+  );
+}
+
+function SegmentValuesTable({
+  segmentValues,
+  strainType,
+}: {
+  segmentValues: { segment: number; label: string; strain: number }[];
+  strainType: StrainType;
+}) {
+  return (
+    <div className="max-h-56 overflow-y-auto">
+      <table className="w-full text-xs">
+        <tbody className="divide-y divide-border">
+          {segmentValues.map((segment) => (
+            <tr key={segment.segment} className="hover:bg-muted/40">
+              <td className="px-3 py-2 text-muted-foreground">{segment.segment}</td>
+              <td className="px-2 py-2">{segment.label}</td>
+              <td
+                className="px-3 py-2 text-right font-mono"
+                style={{ color: getStrainColor(segment.strain, strainType) }}
+              >
+                {segment.strain > 0 ? "+" : ""}{segment.strain.toFixed(1)}%
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
