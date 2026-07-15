@@ -99,13 +99,23 @@ def _run_analysis(
     lv_centroid: Optional[List[float]] = analysis["lv_centroid"]
     slice_labels: list[str] = classify_slices(mask_3d)
 
-    segment_values = [float(v) for v in values]
+    # NaN-safe per-segment values: same _safe_float/finite_vals pattern already
+    # used in compute_bullseye_from_rle.py (the subprocess fallback). A bare
+    # Python NaN is rejected by FastAPI's JSON encoder outright (ValueError:
+    # Out of range float values are not JSON compliant), crashing the request
+    # with a 500 instead of a graceful null — this affects both individual
+    # invalid segments and the aggregate stats when every segment is invalid
+    # (e.g. insufficient myocardium in every slice).
+    segment_values: List[Optional[float]] = [
+        None if np.isnan(v) else float(v) for v in values
+    ]
     n_nan = int(np.sum(np.isnan(values)))
+    valid_values = values[~np.isnan(values)]
 
     stats = {
-        "min":   float(np.nanmin(values)),
-        "max":   float(np.nanmax(values)),
-        "mean":  float(np.nanmean(values)),
+        "min":   float(np.min(valid_values)) if valid_values.size > 0 else None,
+        "max":   float(np.max(valid_values)) if valid_values.size > 0 else None,
+        "mean":  float(np.mean(valid_values)) if valid_values.size > 0 else None,
         "n_nan": n_nan,
     }
 

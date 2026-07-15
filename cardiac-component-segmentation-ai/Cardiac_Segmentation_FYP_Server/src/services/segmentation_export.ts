@@ -186,6 +186,91 @@ export const computeBullseyeAndStore = async (
 };
 
 /**
+ * Live-route entry point for the plain Bullseye tab: generates a temporary
+ * NIfTI from a single mask document's stored RLE frames (same pattern as
+ * recomputeBullseyeWithLandmarks' per-mask NIfTI build), then delegates to
+ * computeBullseyeAndStore() — GPU-primary, landmark-aware when a completed
+ * landmark job exists, with computeBullseyeAndStore's own internal fallback
+ * to the subprocess path (compute_bullseye_from_rle.py) preserved for when
+ * the GPU service is unreachable.
+ *
+ * Replaces the previous direct call to computeBullseyeFromMaskDoc(), which
+ * had no landmark awareness at all and would silently overwrite any
+ * landmark-aligned bullseye already stored by recomputeBullseyeWithLandmarks.
+ */
+export const generateNiftiAndComputeBullseye = async (
+    maskDoc: any,
+    project: IProjectDocument,
+    maskId: string,
+): Promise<void> => {
+    const tempId = uuidv4();
+    const baseTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_trigger_${tempId}`);
+    const niftiPath = path.join(baseTempDir, `mask_${maskId}.nii.gz`);
+    const segJsonPath = path.join(baseTempDir, `seg_${maskId}.json`);
+    const projectId = project._id?.toString() ?? (maskDoc as any).projectid?.toString();
+
+    try {
+        const W = project.dimensions?.width;
+        const H = project.dimensions?.height;
+        if (!W || !H) {
+            logger.warn(`${serviceLocation}: [BullseyeTrigger] Project ${projectId} missing dimensions — cannot generate NIfTI for mask ${maskId}`);
+            return;
+        }
+
+        await fs.ensureDir(baseTempDir);
+        await fs.writeJson(segJsonPath, [maskDoc], { spaces: 2 });
+
+        let pythonCommand: string;
+        if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
+            const affineFile = path.join(baseTempDir, `affine_${maskId}.json`);
+            const dimsFile   = path.join(baseTempDir, `dims_${maskId}.json`);
+            await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
+            await fs.writeJson(dimsFile,   project.dimensions,   { spaces: 2 });
+            const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
+            pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+        } else {
+            const s3Url = (project as any).extractedfolderpath;
+            if (!s3Url) {
+                logger.warn(`${serviceLocation}: [BullseyeTrigger] Mask ${maskId} — no affine and no S3 URL — cannot generate NIfTI`);
+                return;
+            }
+            const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
+            pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+        }
+
+        const pythonOk = await new Promise<boolean>((resolve) => {
+            exec(pythonCommand, (error, _stdout, stderr) => {
+                if (error) {
+                    logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI generation failed for mask ${maskId}: ${stderr || error.message}`);
+                    resolve(false);
+                } else {
+                    resolve(true);
+                }
+            });
+        });
+
+        if (!pythonOk || !(await fs.pathExists(niftiPath))) {
+            logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI not produced for mask ${maskId} — falling back to subprocess RLE path`);
+            const frames = (maskDoc as any).frames ?? [];
+            if (frames.length) {
+                await computeBullseyeFromMaskDoc(maskId, frames, W, H);
+            }
+            return;
+        }
+
+        await computeBullseyeAndStore(niftiPath, maskId, projectId);
+    } catch (err: any) {
+        logger.warn(`${serviceLocation}: [BullseyeTrigger] Error generating NIfTI for mask ${maskId}: ${err?.message}`);
+    } finally {
+        try {
+            if (await fs.pathExists(baseTempDir)) {
+                await fs.remove(baseTempDir);
+            }
+        } catch { /* cleanup failure is non-fatal */ }
+    }
+};
+
+/**
  * Recompute the bullseye for a project using landmark alignment.
  * Called after landmark detection completes to upgrade from fixed-angle
  * to anatomically-aligned bullseye orientation.
