@@ -49,7 +49,6 @@ import type { BullseyeData } from "@/types/project";
 import {
   StrainBullseyeChart,
   getDummyStrainData,
-  getStrainColor,
   ZoomPanContainer as StrainZoomPan,
   type StrainType,
   type RealStrainResult,
@@ -1751,6 +1750,179 @@ function StrainHeartModel({
   );
 }
 
+/**
+ * Dual-handle range picker for ED/ES frame selection — a single track with two
+ * draggable handles (hollow = ED, filled = ES), with the interval between them
+ * visually filled. Replaces two independent sliders so the ED-to-ES gap is
+ * immediately visible. Purely a rendering/interaction layer over the same
+ * edFrameIdx/esFrameIdx state StrainPreviewPanel already owns — no new source
+ * of truth for frame selection.
+ */
+function DualFrameRangePicker({
+  min,
+  max,
+  edValue,
+  esValue,
+  onEdChange,
+  onEsChange,
+}: {
+  min: number;
+  max: number;
+  edValue: number;
+  esValue: number;
+  onEdChange: (value: number) => void;
+  onEsChange: (value: number) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const draggingHandle = useRef<"ed" | "es" | null>(null);
+
+  const clamp = (v: number) => Math.min(max, Math.max(min, v));
+  const pctFor = (value: number) => (max > min ? ((value - min) / (max - min)) * 100 : 0);
+
+  const valueFromClientX = useCallback((clientX: number): number => {
+    const track = trackRef.current;
+    if (!track) return min;
+    const rect = track.getBoundingClientRect();
+    const ratio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+    const raw = min + ratio * (max - min);
+    return clamp(Math.round(raw));
+  }, [min, max]);
+
+  const applyDrag = useCallback((clientX: number) => {
+    const handle = draggingHandle.current;
+    if (!handle) return;
+    const value = valueFromClientX(clientX);
+    if (handle === "ed") {
+      // ED cannot cross or equal ES.
+      onEdChange(Math.min(value, esValue - 1));
+    } else {
+      // ES cannot cross or equal ED.
+      onEsChange(Math.max(value, edValue + 1));
+    }
+  }, [valueFromClientX, edValue, esValue, onEdChange, onEsChange]);
+
+  // Fast drags can momentarily move the pointer off the small handle circle
+  // (onto the track or page), so cursor-grabbing set only via Tailwind classes
+  // on the handle flickers back to the default arrow. Set it explicitly on
+  // document.body for the duration of the drag instead — same technique this
+  // codebase already uses on a container ref for canvas panning
+  // (image-canvas.tsx), scoped to body here since this drag isn't bounded to
+  // one container. user-select is also suppressed so a fast drag doesn't
+  // trigger accidental text selection on nearby labels.
+  const endDrag = useCallback(() => {
+    draggingHandle.current = null;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }, []);
+
+  useEffect(() => {
+    if (!draggingHandle.current) return undefined;
+    const onMove = (e: PointerEvent) => applyDrag(e.clientX);
+    const onUp = () => endDrag();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    // Safety net: if the pointer is released outside the window entirely
+    // (no pointerup fires), still restore cursor/selection on blur.
+    window.addEventListener("blur", onUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("blur", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edValue, esValue]);
+
+  const startDrag = (handle: "ed" | "es") => (e: React.PointerEvent) => {
+    e.preventDefault();
+    draggingHandle.current = handle;
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+    // Kick off listeners immediately (effect above re-attaches on next render,
+    // but we also want the very first move to register without waiting).
+    const onMove = (ev: PointerEvent) => applyDrag(ev.clientX);
+    const onUp = () => {
+      endDrag();
+      window.removeEventListener("pointermove", onMove);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    window.addEventListener("blur", onUp, { once: true });
+  };
+
+  const onKeyDown = (handle: "ed" | "es") => (e: React.KeyboardEvent) => {
+    let delta = 0;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -1;
+    else if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = 1;
+    else return;
+    e.preventDefault();
+    if (handle === "ed") {
+      onEdChange(clamp(Math.min(edValue + delta, esValue - 1)));
+    } else {
+      onEsChange(clamp(Math.max(esValue + delta, edValue + 1)));
+    }
+  };
+
+  const edPct = pctFor(edValue);
+  const esPct = pctFor(esValue);
+  const rangeStartPct = Math.min(edPct, esPct);
+  const rangeWidthPct = Math.abs(esPct - edPct);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div
+        ref={trackRef}
+        className="relative h-1.5 w-full rounded-full bg-muted"
+      >
+        {/* Filled segment between the two handles */}
+        <div
+          className="absolute h-full rounded-full bg-primary/70"
+          style={{ left: `${rangeStartPct}%`, width: `${rangeWidthPct}%` }}
+        />
+        {/* ED handle — hollow/outlined */}
+        <div
+          role="slider"
+          tabIndex={0}
+          aria-label={`End-diastole frame, ${edValue + 1} of ${max - min + 1}`}
+          aria-valuemin={min}
+          aria-valuemax={max}
+          aria-valuenow={edValue}
+          onPointerDown={startDrag("ed")}
+          onKeyDown={onKeyDown("ed")}
+          className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-background shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring active:cursor-grabbing"
+          style={{ left: `${edPct}%` }}
+        />
+        {/* ES handle — filled */}
+        <div
+          role="slider"
+          tabIndex={0}
+          aria-label={`End-systole frame, ${esValue + 1} of ${max - min + 1}`}
+          aria-valuemin={min}
+          aria-valuemax={max}
+          aria-valuenow={esValue}
+          onPointerDown={startDrag("es")}
+          onKeyDown={onKeyDown("es")}
+          className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-primary shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring active:cursor-grabbing"
+          style={{ left: `${esPct}%` }}
+        />
+      </div>
+      <div className="relative h-7 text-[10px] font-mono">
+        <span
+          className="absolute -translate-x-1/2 text-muted-foreground"
+          style={{ left: `${edPct}%` }}
+        >
+          ED · {edValue + 1}
+        </span>
+        <span
+          className="absolute -translate-x-1/2 font-semibold text-primary"
+          style={{ left: `${esPct}%` }}
+        >
+          ES · {esValue + 1}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function StrainPreviewPanel({
   selectedStrainType,
   onStrainTypeChange,
@@ -1782,7 +1954,7 @@ function StrainPreviewPanel({
   const [esFile, setEsFile] = useState<File | null>(null);
   const [isComputing, setIsComputing] = useState(false);
   const [strainError, setStrainError] = useState<string | null>(null);
-  const [strainInputMode, setStrainInputMode] = useState<"upload" | "frames">("upload");
+  const [strainInputMode, setStrainInputMode] = useState<"upload" | "frames">("frames");
   const [edFrameIdx, setEdFrameIdx] = useState<number>(0);
   const [esFrameIdx, setEsFrameIdx] = useState<number>(13);
   const [strainModel, setStrainModel] = useState<"unet" | "medsam">("unet");
@@ -1846,12 +2018,6 @@ function StrainPreviewPanel({
       }))
     : [];
 
-  const allValues = displayData.map((d) => d.strain);
-  const mean = allValues.length ? allValues.reduce((a, b) => a + b, 0) / allValues.length : 0;
-  const peak = allValues.length
-    ? (selectedStrainType === "GRS" ? Math.max(...allValues) : Math.min(...allValues))
-    : 0;
-
   // Shared colour scale — computed once and passed to both 2D and 3D panels so
   // the same strain value maps to the same colour in both views.
   const strainVals = realStrainData
@@ -1887,36 +2053,6 @@ function StrainPreviewPanel({
           ))}
         </div>
 
-        {/* Model selector — only visible in Choose Frames mode */}
-        {strainInputMode === "frames" && (
-          <select
-            value={strainModel}
-            onChange={(e) => setStrainModel(e.target.value as "unet" | "medsam")}
-            className="rounded border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          >
-            <option value="unet">UNet</option>
-            <option value="medsam">MedSAM</option>
-          </select>
-        )}
-
-        {/* Stats pills — only when real data exists */}
-        {realStrainData && (
-          <div className="flex items-center gap-1.5 flex-1">
-            <span className="rounded-md border border-border bg-muted/20 px-2 py-0.5 text-[9px] tabular-nums">
-              <span className="text-muted-foreground">Mean </span>
-              <span className="font-semibold" style={{ color: getStrainColor(mean, selectedStrainType) }}>
-                {mean > 0 ? "+" : ""}{mean.toFixed(1)}%
-              </span>
-            </span>
-            <span className="rounded-md border border-border bg-muted/20 px-2 py-0.5 text-[9px] tabular-nums">
-              <span className="text-muted-foreground">Peak </span>
-              <span className="font-semibold" style={{ color: getStrainColor(peak, selectedStrainType) }}>
-                {peak > 0 ? "+" : ""}{peak.toFixed(1)}%
-              </span>
-            </span>
-          </div>
-        )}
-
         <div className="ml-auto flex items-center gap-1.5">
           {/* Source badge — only when real data exists */}
           {realStrainData && (
@@ -1927,7 +2063,7 @@ function StrainPreviewPanel({
 
           {/* Clear strain result */}
           {realStrainData && (
-            <button type="button" onClick={() => { onStrainResult(null); setStrainInputMode("upload"); setShowUploadPanel(false); }}
+            <button type="button" onClick={() => { onStrainResult(null); setStrainInputMode("frames"); setShowUploadPanel(false); }}
               className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[9px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
               Clear
             </button>
@@ -1959,29 +2095,31 @@ function StrainPreviewPanel({
             </button>
           </div>
 
-          {/* Mode toggle */}
-          <div className="flex rounded-lg border border-border overflow-hidden text-[11px] flex-shrink-0">
-            <button
-              type="button"
-              onClick={() => setStrainInputMode("upload")}
-              className={`flex-1 px-3 py-1.5 transition-colors ${
-                strainInputMode === "upload"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-background text-muted-foreground hover:bg-muted"
-              }`}
-            >
-              Upload masks
-            </button>
+          {/* Mode toggle — compact segmented control, "Choose frames" first/default */}
+          <div className="inline-flex w-fit rounded-lg border border-border bg-muted/20 p-0.5 text-[10px] flex-shrink-0">
             <button
               type="button"
               onClick={() => setStrainInputMode("frames")}
-              className={`flex-1 px-3 py-1.5 transition-colors ${
+              className={cn(
+                "rounded-md px-2.5 py-1 font-medium transition-colors",
                 strainInputMode === "frames"
                   ? "bg-primary text-primary-foreground"
-                  : "bg-background text-muted-foreground hover:bg-muted"
-              }`}
+                  : "text-muted-foreground hover:bg-muted"
+              )}
             >
               Choose frames
+            </button>
+            <button
+              type="button"
+              onClick={() => setStrainInputMode("upload")}
+              className={cn(
+                "rounded-md px-2.5 py-1 font-medium transition-colors",
+                strainInputMode === "upload"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              Upload masks
             </button>
           </div>
 
@@ -2046,43 +2184,17 @@ function StrainPreviewPanel({
                 Select any two frames from the stored segmentation to compute strain between them.
                 {avgLm1 && avgLm2 && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
               </p>
-              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
-                ⓘ Values are indicative only — auto-segmentation masks have limited wall boundary accuracy. For clinical accuracy, use Upload Masks with manually verified masks.
-              </p>
 
-              {/* ED Frame */}
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between text-[11px]">
-                  <span className="font-medium">Frame 1</span>
-                  <span className="text-muted-foreground font-mono">
-                    Frame {edFrameIdx + 1} / {frameCount}
-                  </span>
-                </div>
-                <input
-                  type="range"
+              {/* ED/ES dual-handle frame range */}
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] text-muted-foreground">{frameCount} frames</span>
+                <DualFrameRangePicker
                   min={0}
                   max={Math.max(0, frameCount - 1)}
-                  value={edFrameIdx}
-                  onChange={(e) => { setEdFrameIdx(Number(e.target.value)); setStrainError(null); }}
-                  className="w-full accent-primary"
-                />
-              </div>
-
-              {/* ES Frame */}
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between text-[11px]">
-                  <span className="font-medium">Frame 2</span>
-                  <span className="text-muted-foreground font-mono">
-                    Frame {esFrameIdx + 1} / {frameCount}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(0, frameCount - 1)}
-                  value={esFrameIdx}
-                  onChange={(e) => { setEsFrameIdx(Number(e.target.value)); setStrainError(null); }}
-                  className="w-full accent-primary"
+                  edValue={edFrameIdx}
+                  esValue={esFrameIdx}
+                  onEdChange={(v) => { setEdFrameIdx(v); setStrainError(null); }}
+                  onEsChange={(v) => { setEsFrameIdx(v); setStrainError(null); }}
                 />
               </div>
 
@@ -2091,6 +2203,22 @@ function StrainPreviewPanel({
                   ED and ES frames must be different.
                 </p>
               )}
+
+              {/* Model selector + demoted accuracy note — paired since the note
+                  is specifically about auto-segmentation model quality. */}
+              <div className="flex items-start gap-2 rounded-md border border-border bg-muted/10 px-2 py-1.5">
+                <select
+                  value={strainModel}
+                  onChange={(e) => setStrainModel(e.target.value as "unet" | "medsam")}
+                  className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="unet">UNet</option>
+                  <option value="medsam">MedSAM</option>
+                </select>
+                <p className="text-[9px] leading-relaxed text-muted-foreground">
+                  Values are indicative only — auto-segmentation masks have limited wall boundary accuracy. For clinical accuracy, use Upload Masks with manually verified masks.
+                </p>
+              </div>
 
               {strainError && (
                 <p className="text-[9px] text-destructive rounded bg-destructive/10 px-2 py-1">{strainError}</p>
