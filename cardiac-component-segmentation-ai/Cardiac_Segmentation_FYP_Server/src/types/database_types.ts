@@ -266,6 +266,50 @@ export interface IProjectSegmentationMask {
     computed_at: string;
     lv_centroid?: [number, number];
   };
+  /**
+   * Cardiac clinical metrics derived from this mask's RLE frames plus the
+   * project's stored 4x4 affine. Produced by compute_heart_metrics_from_rle.py
+   * and stored parallel to `bullseye`. Fields may be null when the input is
+   * not sufficient to compute a given metric — see the `warnings` array for
+   * the reason. Volumes are millilitres, EF percent, mass grams.
+   */
+  heartMetrics?: {
+    /**
+     * Flat, generic-keyed measurements block — the integration contract for
+     * the report page. Aliased from the LV-prefixed longform fields below:
+     *   EF ← LVEF, EDV ← LVEDV, ESV ← LVESV, StrokeVolume ← LV_SV.
+     * PeakGRS / PeakGCS are placeholders here (always null); the report
+     * assembler fills them from the strain pipeline output.
+     */
+    measurements: {
+      EF: number | null;
+      EDV: number | null;
+      ESV: number | null;
+      StrokeVolume: number | null;
+      PeakGRS: number | null;
+      PeakGCS: number | null;
+    };
+    ed_frame: number;
+    es_frame: number;
+    ed_override_used: boolean;
+    es_override_used: boolean;
+    lv_volumes_ml: (number | null)[];
+    rv_volumes_ml: (number | null)[];
+    LVEDV: number | null;
+    LVESV: number | null;
+    LV_SV: number | null;
+    LVEF:  number | null;
+    RVEDV: number | null;
+    RVESV: number | null;
+    RV_SV: number | null;
+    RVEF:  number | null;
+    LV_mass_g: number | null;
+    voxel_mm3: number | null;
+    spacing_mm: [number | null, number | null, number | null];
+    units: { volumes: string; ef: string; mass: string; spacing: string };
+    warnings: string[];
+    computed_at: string;
+  };
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)
 export interface IProjectSegmentationMaskDocument
