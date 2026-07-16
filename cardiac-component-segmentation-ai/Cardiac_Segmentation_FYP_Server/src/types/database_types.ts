@@ -310,6 +310,31 @@ export interface IProjectSegmentationMask {
     warnings: string[];
     computed_at: string;
   };
+  /**
+   * Disease Pattern Similarity Assessment — NOT a diagnosis.
+   * Produced by compute_disease_similarity.py from this mask's measurements
+   * (heartMetrics.measurements + strain PeakGRS/PeakGCS). Reports which known
+   * cardiac reference pattern (NOR/HCM/DCM) the measurements most resemble,
+   * with per-metric reasoning. `most_similar` is the top-ranked pattern code;
+   * `similarities` is sorted descending by `percent` (percentages sum to 100).
+   */
+  diseaseSimilarity?: {
+    most_similar: "NOR" | "HCM" | "DCM";
+    similarities: {
+      code: "NOR" | "HCM" | "DCM";
+      label: string;
+      percent: number;      // 0–100, all entries sum to 100
+      distance: number;     // weighted z-distance (smaller = more similar)
+      reasons: string[];    // plain-language per-metric explanation
+    }[];
+    features_used: string[];
+    features_missing: string[];
+    temperature: number;
+    disclaimer: string;     // fixed non-diagnostic disclaimer
+    method: string;         // "zscore-weighted-distance+softmax"
+    warnings: string[];
+    computed_at: string;
+  };
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)
 export interface IProjectSegmentationMaskDocument

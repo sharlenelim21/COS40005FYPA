@@ -117,6 +117,67 @@ export const computeHeartMetricsFromMaskDoc = async (
 };
 
 /**
+ * Disease Pattern Similarity Assessment — NOT a diagnosis.
+ *
+ * Compares a patient's cardiac measurements against literature-derived NOR/HCM/DCM
+ * reference profiles and reports which pattern they most resemble, with per-metric
+ * reasoning. Mirrors computeHeartMetricsFromMaskDoc's shape: stdin JSON → local
+ * Python → stdout JSON → $set on the mask doc under `diseaseSimilarity`. Never
+ * rejects; always resolves so it can be fired in parallel with the other computes.
+ *
+ * `measurements` is the flat block produced by heartMetrics.measurements with
+ * PeakGRS/PeakGCS filled in from the strain pipeline. Any subset is accepted —
+ * the Python side ignores nulls and warns when too few features are present.
+ */
+export const computeDiseaseSimilarityFromMetrics = async (
+    maskId: string,
+    measurements: {
+        EF: number | null;
+        EDV: number | null;
+        ESV: number | null;
+        StrokeVolume: number | null;
+        PeakGRS: number | null;
+        PeakGCS: number | null;
+    },
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_disease_similarity.py');
+    const input = JSON.stringify({ measurements });
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [DiseaseSimilarity] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [DiseaseSimilarity] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [DiseaseSimilarity] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { diseaseSimilarity: result, updatedAt: new Date() } },
+                );
+                logger.info(
+                    `${serviceLocation}: [DiseaseSimilarity] Stored similarity for mask ${maskId} — ` +
+                    `most_similar=${result.most_similar} ` +
+                    `used=${result.features_used?.length ?? 0} warnings=${result.warnings?.length ?? 0} | ` +
+                    `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
+                );
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [DiseaseSimilarity] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
  * Non-blocking: POSTs the NIfTI file at niftiPath to the GPU /bullseye/analyze endpoint,
  * then stores the result in MongoDB on the segmentation mask document.
  */

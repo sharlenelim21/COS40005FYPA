@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, generateNiftiAndComputeBullseye } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -1322,6 +1322,68 @@ router.post("/trigger-heart-metrics/:maskId", isAuth, async (req: Request, res: 
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering heart metrics for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// Trigger Disease Pattern Similarity Assessment (NOT a diagnosis) for a single
+// mask. Compares the mask's measurements against literature-derived NOR/HCM/DCM
+// reference profiles. Volume metrics (EF/EDV/ESV/SV) are read from the stored
+// heartMetrics.measurements; PeakGRS/PeakGCS may be supplied in the request body
+// (from the strain pipeline) since strain peaks are not yet persisted on the mask.
+// POST /segmentation/trigger-disease-similarity/:maskId
+//   body (optional): { PeakGRS?: number, PeakGCS?: number }
+router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        // Volume-based measurements come from the previously-computed heart metrics.
+        const hm = (maskDoc as any).heartMetrics?.measurements;
+        if (!hm) {
+            return res.status(400).json({
+                success: false,
+                message: "Heart metrics not computed for this mask yet — run trigger-heart-metrics first.",
+            });
+        }
+
+        // Strain peaks are not persisted on the mask; accept them from the body
+        // when the caller has them, otherwise fall back to whatever heartMetrics
+        // holds (null placeholders today). The Python side tolerates nulls.
+        const bodyGRS = typeof req.body?.PeakGRS === "number" ? req.body.PeakGRS : null;
+        const bodyGCS = typeof req.body?.PeakGCS === "number" ? req.body.PeakGCS : null;
+
+        const measurements = {
+            EF:           hm.EF ?? null,
+            EDV:          hm.EDV ?? null,
+            ESV:          hm.ESV ?? null,
+            StrokeVolume: hm.StrokeVolume ?? null,
+            PeakGRS:      bodyGRS ?? hm.PeakGRS ?? null,
+            PeakGCS:      bodyGCS ?? hm.PeakGCS ?? null,
+        };
+
+        // Respond immediately and run computation async — same pattern as the
+        // other trigger routes.
+        res.json({ success: true, message: "Disease similarity computation started." });
+
+        computeDiseaseSimilarityFromMetrics(maskId, measurements).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-disease-similarity async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering disease similarity for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }
