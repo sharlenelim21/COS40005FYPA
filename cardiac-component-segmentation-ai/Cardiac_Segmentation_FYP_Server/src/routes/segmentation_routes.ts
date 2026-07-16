@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, generateNiftiAndComputeBullseye } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -1256,10 +1256,13 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
             return res.status(400).json({ success: false, message: "Mask has no frame data." });
         }
 
-        // Respond immediately and run computation async
+        // Respond immediately and run computation async.
+        // GPU-primary (landmark-aware when a completed landmark job exists),
+        // with computeBullseyeAndStore's own internal fallback to the
+        // subprocess RLE path if the GPU is unreachable.
         res.json({ success: true, message: "Bullseye computation started." });
 
-        computeBullseyeFromMaskDoc(maskId, frames, W, H).catch((err: any) => {
+        generateNiftiAndComputeBullseye(maskDoc, project, maskId).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-bullseye async error for mask ${maskId}: ${err?.message}`);
         });
 

@@ -389,7 +389,36 @@ def compute_alignment_angle(
     Compute the anterior start angle from RV insertion points.
 
     The midpoint of the two RV insertion points points toward the Septal wall.
-    Anterior is 90° counterclockwise from Septal in standard AHA orientation.
+
+    IMPORTANT — this offset is NOT a naive "Anterior is 90° counterclockwise
+    from Septal" geometric rotation. Two things make that naive assumption
+    wrong here:
+
+      1. The ray-caster's coordinate frame has y growing DOWNWARD (screen/array
+         convention), so a "+90° counterclockwise" rotation in that frame
+         actually points toward screen-Inferior, not screen-Anterior — the
+         sign is backwards versus the usual math-convention intuition.
+
+      2. Even after fixing the sign, the fixed-angle path's start angles
+         (240° basal/mid, 315° apical) are NOT "true" anterior (270°) — they
+         are baselines that group_sectors()'s np.roll(result, 1) was
+         specifically calibrated against. The landmark-derived angle must
+         reproduce that same 240° calibration point (when the septal
+         direction is at the canonical screen-right / 0°), not the
+         geometrically "correct" 270°, or the roll will misassign segments.
+
+    Combining both corrections gives septal_angle + 240° (4π/3), which
+    collapses to the fixed-angle path's 240° baseline exactly when septal
+    points screen-right, and rotates consistently with the heart otherwise.
+
+    This was diagnosed and empirically verified via a synthetic self-checking
+    test: a myocardium ring with a thickened wedge at each of the 4 cardinal
+    screen positions (Anterior/Septal/Inferior/Lateral) was run through the
+    real pipeline, confirming the old `septal_angle + π/2` formula misassigned
+    segments (e.g. an Anterior-positioned wedge landed in "Basal Inferior"),
+    while `septal_angle + 4π/3` correctly assigns all 4 positions to their
+    true AHA segments. See the read-only diagnostic pass on this branch for
+    the full test and derivation before changing this formula again.
 
     Returns the anterior angle in radians, or None if landmarks not provided.
     """
@@ -403,7 +432,7 @@ def compute_alignment_angle(
     mid_y = (y1 + y2) / 2.0
 
     septal_angle = np.arctan2(mid_y - cy, mid_x - cx)
-    anterior_angle = septal_angle + np.pi / 2.0
+    anterior_angle = septal_angle + (4.0 * np.pi / 3.0)
 
     return float(anterior_angle)
 

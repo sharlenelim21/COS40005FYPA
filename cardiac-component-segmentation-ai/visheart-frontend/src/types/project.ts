@@ -211,9 +211,9 @@ export interface BullseyeSegmentMeta {
 }
 
 export interface BullseyeStats {
-    min: number;
-    max: number;
-    mean: number;
+    min: number | null;
+    max: number | null;
+    mean: number | null;
     n_nan: number;
 }
 

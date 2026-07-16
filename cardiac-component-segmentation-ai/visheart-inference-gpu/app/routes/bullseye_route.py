@@ -99,13 +99,23 @@ def _run_analysis(
     lv_centroid: Optional[List[float]] = analysis["lv_centroid"]
     slice_labels: list[str] = classify_slices(mask_3d)
 
-    segment_values = [float(v) for v in values]
+    # NaN-safe per-segment values: same _safe_float/finite_vals pattern already
+    # used in compute_bullseye_from_rle.py (the subprocess fallback). A bare
+    # Python NaN is rejected by FastAPI's JSON encoder outright (ValueError:
+    # Out of range float values are not JSON compliant), crashing the request
+    # with a 500 instead of a graceful null — this affects both individual
+    # invalid segments and the aggregate stats when every segment is invalid
+    # (e.g. insufficient myocardium in every slice).
+    segment_values: List[Optional[float]] = [
+        None if np.isnan(v) else float(v) for v in values
+    ]
     n_nan = int(np.sum(np.isnan(values)))
+    valid_values = values[~np.isnan(values)]
 
     stats = {
-        "min":   float(np.nanmin(values)),
-        "max":   float(np.nanmax(values)),
-        "mean":  float(np.nanmean(values)),
+        "min":   float(np.min(valid_values)) if valid_values.size > 0 else None,
+        "max":   float(np.max(valid_values)) if valid_values.size > 0 else None,
+        "mean":  float(np.mean(valid_values)) if valid_values.size > 0 else None,
         "n_nan": n_nan,
     }
 
@@ -277,12 +287,28 @@ def _compute_strain_sync(
 
     wt_ed   = np.array(res_ed["values"],      dtype=float)
     wt_es   = np.array(res_es["values"],      dtype=float)
-    circ_ed = np.array(res_ed["circ_values"], dtype=float)
-    circ_es = np.array(res_es["circ_values"], dtype=float)
+    # circ_values from mask_to_17_segments is 2π × pure endocardial inner_radius.
+    # Back out inner_radius (r = circ / 2π), then use MID-WALL radius (r + wt/2)
+    # for GCS instead of pure endocardial radius — tracking only the inner
+    # cavity edge overstates circumferential shortening as the wall thickens
+    # inward. wt_ed/wt_es and the recovered inner radii are both raw pixel
+    # values at this point (vox_xy conversion happens later, per-segment),
+    # so combining them here is unit-consistent.
+    inner_r_ed = np.array(res_ed["circ_values"], dtype=float) / (2.0 * np.pi)
+    inner_r_es = np.array(res_es["circ_values"], dtype=float) / (2.0 * np.pi)
+    r_mid_ed = inner_r_ed + (wt_ed / 2.0)
+    r_mid_es = inner_r_es + (wt_es / 2.0)
+    circ_ed = 2.0 * np.pi * r_mid_ed
+    circ_es = 2.0 * np.pi * r_mid_es
 
     segments = []
     grs_vals: list[float] = []
     gcs_vals: list[float] = []
+    # Pooled for ratio-of-means global aggregation (see below).
+    valid_wt_ed_for_grs: list[float] = []
+    valid_wt_es_for_grs: list[float] = []
+    valid_circ_ed_for_gcs: list[float] = []
+    valid_circ_es_for_gcs: list[float] = []
 
     for i, name in enumerate(_AHA_NAMES):
         ed_v = float(wt_ed[i])   if not np.isnan(wt_ed[i])   else None
@@ -294,11 +320,15 @@ def _compute_strain_sync(
         if ed_v is not None and es_v is not None and ed_v > 0:
             grs = round((es_v - ed_v) / ed_v * 100.0, 2)
             grs_vals.append(grs)
+            valid_wt_ed_for_grs.append(ed_v)
+            valid_wt_es_for_grs.append(es_v)
 
         gcs: float | None = None
         if c_ed is not None and c_es is not None and c_ed > 0:
             gcs = round((c_es - c_ed) / c_ed * 100.0, 2)
             gcs_vals.append(gcs)
+            valid_circ_ed_for_gcs.append(c_ed)
+            valid_circ_es_for_gcs.append(c_es)
 
         segments.append({
             "segment":   i + 1,
@@ -309,8 +339,23 @@ def _compute_strain_sync(
             "wt_es_mm":  round(es_v * vox_xy, 3) if es_v is not None else None,
         })
 
-    global_grs = round(float(np.mean(grs_vals)), 2) if grs_vals else None
-    global_gcs = round(float(np.mean(gcs_vals)), 2) if gcs_vals else None
+    # Global metrics: ratio-of-means (pool valid segments' wt/circ first, then
+    # take one ratio) instead of mean-of-ratios (averaging 17 percent-changes).
+    # Mean-of-ratios gives small/noisy segments (e.g. apex) equal weight to
+    # large, stable ones — a known source of bias in per-segment strain pooling.
+    if valid_wt_ed_for_grs:
+        mean_wt_ed = float(np.mean(valid_wt_ed_for_grs))
+        mean_wt_es = float(np.mean(valid_wt_es_for_grs))
+        global_grs = round((mean_wt_es - mean_wt_ed) / mean_wt_ed * 100.0, 2) if mean_wt_ed > 0 else None
+    else:
+        global_grs = None
+
+    if valid_circ_ed_for_gcs:
+        mean_circ_ed = float(np.mean(valid_circ_ed_for_gcs))
+        mean_circ_es = float(np.mean(valid_circ_es_for_gcs))
+        global_gcs = round((mean_circ_es - mean_circ_ed) / mean_circ_ed * 100.0, 2) if mean_circ_ed > 0 else None
+    else:
+        global_gcs = None
 
     valid_ed_mm = [float(v) * vox_xy for v in wt_ed if not np.isnan(v)]
     valid_es_mm = [float(v) * vox_xy for v in wt_es if not np.isnan(v)]
