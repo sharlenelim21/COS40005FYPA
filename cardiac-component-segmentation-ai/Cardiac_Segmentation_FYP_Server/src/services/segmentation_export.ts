@@ -61,6 +61,62 @@ export const computeBullseyeFromMaskDoc = async (
 };
 
 /**
+ * Compute cardiac clinical metrics (chamber volumes, ejection fraction, LV
+ * mass) from a mask document's RLE frames plus the project's stored 4x4
+ * affine, and store the result on the mask doc under `heartMetrics`.
+ *
+ * Mirrors computeBullseyeFromMaskDoc exactly: stdin JSON → local Python →
+ * stdout JSON → $set on the mask doc. Never rejects; always resolves.
+ * Callers can safely fire-and-forget in parallel with the bullseye compute.
+ *
+ * `affine` MUST be a 4x4 nested list (project.affineMatrix). Without it the
+ * Python script refuses to compute — voxel volume is undefined without spacing.
+ */
+export const computeHeartMetricsFromMaskDoc = async (
+    maskId: string,
+    frames: any[],
+    width: number,
+    height: number,
+    affine: number[][],
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_heart_metrics_from_rle.py');
+    const input = JSON.stringify({ frames, width, height, affine });
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [HeartMetrics] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [HeartMetrics] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [HeartMetrics] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { heartMetrics: result, updatedAt: new Date() } },
+                );
+                logger.info(
+                    `${serviceLocation}: [HeartMetrics] Stored heart metrics for mask ${maskId} — ` +
+                    `LVEDV=${result.LVEDV} LVESV=${result.LVESV} LVEF=${result.LVEF} ` +
+                    `LV_mass_g=${result.LV_mass_g} warnings=${result.warnings?.length ?? 0} | ` +
+                    `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
+                );
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [HeartMetrics] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
  * Non-blocking: POSTs the NIfTI file at niftiPath to the GPU /bullseye/analyze endpoint,
  * then stores the result in MongoDB on the segmentation mask document.
  */
@@ -650,6 +706,18 @@ export const generateAISegmentationForReconstruction = async (
                     logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
                 });
             logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
+
+            // Heart metrics (volumes / EF / LV mass) — parallel to bullseye. Requires the project's
+            // stored affine matrix; without it voxel volume is undefined and the script would refuse.
+            if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
+                computeHeartMetricsFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE, project.affineMatrix)
+                    .catch((err: any) => {
+                        logger.warn(`${serviceLocation}: [HeartMetrics] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
+                    });
+                logger.info(`${serviceLocation}: [HeartMetrics] Fired non-blocking heart-metrics compute for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
+            } else {
+                logger.warn(`${serviceLocation}: [HeartMetrics] Skipped mask ${bullseyeMaskId} (${editableMaskForBullseye.name}) — project ${projectId} has no stored affineMatrix`);
+            }
         }
 
         return {
