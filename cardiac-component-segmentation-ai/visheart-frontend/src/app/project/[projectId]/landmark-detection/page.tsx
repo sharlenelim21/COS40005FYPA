@@ -124,6 +124,7 @@ export default function LandmarkDetectionPage() {
     projectData,
     decodedMasks,
     getMRIImage,
+    tarCacheReady,
   } = useProject();
 
   useEffect(() => {
@@ -138,6 +139,7 @@ export default function LandmarkDetectionPage() {
 
   const {
     state,
+    hydrating,
     replacementFileError,
     currentPrediction,
     confidentCount,
@@ -189,6 +191,9 @@ export default function LandmarkDetectionPage() {
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
   const [isSavingLandmarks, setIsSavingLandmarks] = useState(false);
   const [hasUnsavedLandmarkEdits, setHasUnsavedLandmarkEdits] = useState(false);
+  // True while the bullseye is being recomputed after a landmark-edit save, so
+  // the UI can show a "recomputing" hint instead of the stale chart.
+  const [bullseyeRecomputing, setBullseyeRecomputing] = useState(false);
 
   // Correct the bullseye model default once the GPU probe resolves.
   // Guard on gpuLoading: isGpuMode starts false before the fetch completes,
@@ -405,11 +410,15 @@ export default function LandmarkDetectionPage() {
 
   useEffect(() => {
     if (loading !== "done" || !projectData || autoRunStartedRef.current) return;
+    // Wait for the hook to finish checking for an already-computed result
+    // (in-memory cache or persisted DB job) before firing a fresh GPU run.
+    // If one is found, status flips to "done" and this effect stays a no-op.
+    if (hydrating) return;
     if (state.status !== "idle") return;
 
     autoRunStartedRef.current = true;
     runDetectionAndResetEdits(selectedModel);
-  }, [loading, projectData, state.status, runDetectionAndResetEdits, selectedModel]);
+  }, [loading, projectData, hydrating, state.status, runDetectionAndResetEdits, selectedModel]);
 
   const imageDimensions =
     state.imageDimensions.width > 0
@@ -462,26 +471,44 @@ export default function LandmarkDetectionPage() {
         segmentationModel: selectedBullseyeModel,
       });
       setHasUnsavedLandmarkEdits(false);
+
+      // Landmark points just changed, so the stored AHA-17 bullseye is now stale.
+      // Re-trigger bullseye for every editable mask — the backend prefers the
+      // saved edits we just wrote — then re-fetch so the chart reflects the new
+      // alignment. Best-effort: a failed recompute never blocks the save.
+      try {
+        const res = await segmentationApi.getSegmentationResults(projectId);
+        const editableMaskIds = ((res.segmentations ?? []) as { _id?: string; isMedSAMOutput: boolean }[])
+          .filter((m) => !m.isMedSAMOutput && m._id)
+          .map((m) => m._id as string);
+        await Promise.all(
+          editableMaskIds.map((id) => segmentationApi.triggerBullseye(id).catch(() => {})),
+        );
+        // Bullseye compute is async on the server; re-fetch after a short delay
+        // to pick up the freshly-recomputed, edit-aligned result.
+        setBullseyeRecomputing(true);
+        setTimeout(() => {
+          fetchBullseye(selectedBullseyeModel, false);
+          setBullseyeRecomputing(false);
+        }, 8000);
+      } catch (recomputeErr) {
+        console.error("[Landmark] Bullseye recompute after save failed:", recomputeErr);
+      }
     } catch (err) {
       console.error("[Landmark] Failed to save landmark edits:", err);
     } finally {
       setIsSavingLandmarks(false);
     }
-  }, [isSavingLandmarks, state.predictions, landmarkEdits, projectId, selectedBullseyeModel]);
+  }, [isSavingLandmarks, state.predictions, landmarkEdits, projectId, selectedBullseyeModel, fetchBullseye]);
 
   // Reload saved landmark edits on mount and after every successful (re-)run —
   // local landmarkEdits state was just cleared by run/rerunDetectionAndResetEdits,
   // but a previously SAVED editable doc must still reappear (mirrors segmentation
   // masks reloading the editable mask after a rerun).
   //
-  // Gated on an explicit "just transitioned to done" check rather than plain
-  // [state.status] membership: selectedBullseyeModel is also a dependency
-  // (the reload needs to use the right model), but it changes independently
-  // while the user is actively dragging points mid-session (e.g. the GPU
-  // probe correcting medsam/unet, or the user switching the dropdown) — and
-  // re-running this effect on that alone would wholesale overwrite
-  // landmarkEdits with the last-saved DB copy, silently discarding whatever
-  // unsaved drag the user just made.
+  // Landmark edits are shared across segmentation models (one editable doc per
+  // project), so the reload is model-agnostic and only needs to fire on the
+  // "just transitioned to done" edge — not on model changes.
   const prevLandmarkStatus = useRef(state.status);
   useEffect(() => {
     const justFinished = prevLandmarkStatus.current !== "done" && state.status === "done";
@@ -489,14 +516,14 @@ export default function LandmarkDetectionPage() {
     if (!justFinished) return;
 
     let cancelled = false;
-    landmarkApi.loadSavedLandmarks(projectId, selectedBullseyeModel).then((doc) => {
+    landmarkApi.loadSavedLandmarks(projectId).then((doc) => {
       if (cancelled || !doc) return;
       setLandmarkEdits(landmarkFramesToEdits(doc));
     }).catch(() => {
       // No saved doc yet, or load failed — leave landmarkEdits as-is (empty from the reset).
     });
     return () => { cancelled = true; };
-  }, [state.status, projectId, selectedBullseyeModel]);
+  }, [state.status, projectId]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -538,7 +565,11 @@ export default function LandmarkDetectionPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasPredictions, getMRIImage, currentImageFrame, currentImageSlice, projectId]);
+    // tarCacheReady is a dependency so that when a persisted landmark result
+    // makes predictions ready before the image cache finishes init(), this
+    // effect re-runs once the cache becomes ready and the MRI image appears
+    // without needing user interaction.
+  }, [hasPredictions, getMRIImage, currentImageFrame, currentImageSlice, projectId, tarCacheReady]);
 
   const currentMaskOverlays = useMemo<LandmarkMaskOverlay[]>(() => {
     if (!decodedMasks || !hasPredictions) return [];
@@ -821,7 +852,7 @@ export default function LandmarkDetectionPage() {
                     >
                       <SelectTrigger
                         size="sm"
-                        className="h-7 min-w-[92px] rounded-lg bg-background px-2 text-[10px] shadow-sm hover:bg-muted/40"
+                        className="h-7 w-[132px] shrink-0 rounded-lg bg-background px-2 text-[10px] shadow-sm hover:bg-muted/40"
                         aria-label="Select bullseye model"
                       >
                         <SelectValue placeholder="Model" />
@@ -853,6 +884,11 @@ export default function LandmarkDetectionPage() {
                         </SelectItem>
                       </SelectContent>
                     </Select>
+                  )}
+                  {leftPanelView === "bullseye" && bullseyeRecomputing && (
+                    <span className="text-[10px] font-medium text-muted-foreground animate-pulse">
+                      Recomputing with edits…
+                    </span>
                   )}
                   {leftPanelView === "strain" && (
                     <Activity className="h-3.5 w-3.5 text-muted-foreground" />

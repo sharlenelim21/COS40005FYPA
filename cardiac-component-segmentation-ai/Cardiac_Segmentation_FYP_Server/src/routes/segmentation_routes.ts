@@ -1150,8 +1150,15 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
         let lm1: { x: number; y: number } | null = null;
         let lm2: { x: number; y: number } | null = null;
 
+        // Landmark edits are shared across segmentation models (one editable doc
+        // per project) — a corrected RV insertion point is an anatomical image
+        // location, not a per-model value. So we do NOT filter by segmentationModel
+        // here; that would miss the user's edits whenever the active strain model
+        // differs from the model that was active when the doc was last saved.
+        // (The segmentation MASK input above IS still per-model — only the
+        // landmark alignment points are shared.)
         const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, segmentationModel: modelType ?? "unet", isModelOutput: false })
+            .findOne({ projectid: projectId, isModelOutput: false })
             .sort({ updatedAt: -1 })
             .lean();
 

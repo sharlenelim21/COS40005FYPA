@@ -3,7 +3,7 @@
 
 import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
-import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask, jobModel, JobStatus } from "./database";
+import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask, jobModel, JobStatus, projectLandmarkModel } from "./database";
 import { generatePresignedGetUrl, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import axios from 'axios';
@@ -202,8 +202,41 @@ export const computeBullseyeAndStore = async (
 
         logger.info(`${serviceLocation}: [Bullseye] Sending NIfTI to GPU for mask ${maskId} (project ${projectId})`);
 
-        // Look up the most recent completed landmark job for this project to get RV insertion points.
-        const landmarkJob = await jobModel
+        let rv1: number[] | null = null;
+        let rv2: number[] | null = null;
+
+        // Prefer the user's SAVED landmark edits over the raw AI detection so the
+        // bullseye alignment reflects the newest corrected RV insertion points.
+        // Edits are shared across segmentation models (one editable doc per
+        // project), so this is not filtered by model. Mirrors the strain routes.
+        const savedLandmarkDoc = await projectLandmarkModel
+            .findOne({ projectid: projectId, isModelOutput: false })
+            .sort({ updatedAt: -1 })
+            .lean();
+        if (savedLandmarkDoc) {
+            const lm1Points: number[][] = [];
+            const lm2Points: number[][] = [];
+            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
+                for (const slice of frame.slices ?? []) {
+                    for (const point of slice.landmarks ?? []) {
+                        if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
+                        if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
+                    }
+                }
+            }
+            const meanPt = (pts: number[][]): number[] | null =>
+                pts.length
+                    ? [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length]
+                    : null;
+            rv1 = meanPt(lm1Points);
+            rv2 = meanPt(lm2Points);
+            if (rv1 && rv2) {
+                logger.info(`${serviceLocation}: [Bullseye] Using saved landmark edits (doc ${savedLandmarkDoc._id}) for mask ${maskId}`);
+            }
+        }
+
+        // Fall back to the most recent completed landmark job only when no saved edits exist.
+        const landmarkJob = (rv1 && rv2) ? null : await jobModel
             .findOne({
                 projectid: projectId,
                 model_used: /landmark/i,
@@ -215,8 +248,6 @@ export const computeBullseyeAndStore = async (
 
         // The landmark result uses new format: { slices, avg_lm1: {x,y}, avg_lm2: {x,y} }
         // or old format: { predictions: [{ rv_insertion_1: [x,y], rv_insertion_2: [x,y] }] }
-        let rv1: number[] | null = null;
-        let rv2: number[] | null = null;
         if (landmarkJob?.result) {
             const r = typeof landmarkJob.result === 'string'
                 ? JSON.parse(landmarkJob.result)

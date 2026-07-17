@@ -11,6 +11,7 @@ import {
   readProjectLandmark,
   createProjectLandmark,
   updateProjectLandmark,
+  projectLandmarkModel,
 } from "../services/database";
 import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
@@ -265,23 +266,59 @@ router.post(
     }
 
     try {
-      // Look up landmark coords for automatic alignment
-      const landmarkJob = await jobModel
-        .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-        .sort({ updatedAt: -1 })
-        .lean();
-
       const extractCoord = (lm: any): { x: number; y: number } | null => {
         if (!lm) return null;
         if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
         if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
         return null;
       };
-      const lmResult = landmarkJob?.result
-        ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-        : null;
-      const lm1 = extractCoord(lmResult?.avg_lm1);
-      const lm2 = extractCoord(lmResult?.avg_lm2);
+
+      let lm1: { x: number; y: number } | null = null;
+      let lm2: { x: number; y: number } | null = null;
+
+      // Prefer the user's SAVED landmark edits over the raw AI detection, so
+      // computed strain reflects the newest corrected RV insertion points. Edits
+      // are shared across segmentation models (one editable doc per project), so
+      // this is not filtered by model. Mirrors compute-strain-from-frames.
+      const savedLandmarkDoc = await projectLandmarkModel
+        .findOne({ projectid: projectId, isModelOutput: false })
+        .sort({ updatedAt: -1 })
+        .lean();
+
+      if (savedLandmarkDoc) {
+        const lm1Points: { x: number; y: number }[] = [];
+        const lm2Points: { x: number; y: number }[] = [];
+        for (const frame of (savedLandmarkDoc as any).frames ?? []) {
+          for (const slice of frame.slices ?? []) {
+            for (const point of slice.landmarks ?? []) {
+              if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+              if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
+            }
+          }
+        }
+        const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
+          points.length
+            ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
+            : null;
+        lm1 = mean(lm1Points);
+        lm2 = mean(lm2Points);
+        if (lm1 && lm2) {
+          logger.info(`${serviceLocation}: compute-strain using saved landmark edits (doc ${savedLandmarkDoc._id}) for project ${projectId}.`);
+        }
+      }
+
+      // Fall back to the raw AI landmark job only when no saved edits exist.
+      if (!lm1 || !lm2) {
+        const landmarkJob = await jobModel
+          .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
+          .sort({ updatedAt: -1 })
+          .lean();
+        const lmResult = landmarkJob?.result
+          ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
+          : null;
+        lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
+        lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+      }
 
       const gpuBaseUrl = await getFreshGPUServerAddress();
       const token = getCurrentToken();
@@ -409,7 +446,6 @@ router.put(
     }
 
     try {
-      const requestedModel = typeof segmentationModel === "string" ? segmentationModel.toLowerCase() : undefined;
       const landmarksResult = await readProjectLandmark(projectId);
 
       if (!landmarksResult.success && landmarksResult.message?.includes("does not exist")) {
@@ -417,14 +453,17 @@ router.put(
         return;
       }
 
+      // Landmark edits are shared across segmentation models — one editable doc
+      // per project. A manually-corrected RV insertion point is an anatomical
+      // location on the image, not a per-model value, so we always target the
+      // single existing editable doc regardless of which model is active. The
+      // segmentationModel is still stored (informational: which model was active
+      // at save time) but is not used to pick or partition the doc.
       const candidateDocs = (landmarksResult.projectlandmarks ?? []).filter(doc => !doc.isModelOutput);
-      const modelMatchedDoc = requestedModel
-        ? candidateDocs.find(doc => (doc.segmentationModel ?? "").toString().toLowerCase() === requestedModel)
-        : undefined;
-      const editableDoc = modelMatchedDoc || candidateDocs[0];
+      const editableDoc = candidateDocs[0];
 
       if (!editableDoc || !editableDoc._id) {
-        // No pre-existing editable doc for this model — create one from scratch.
+        // No editable doc for this project yet — create the single shared one.
         const created = await createProjectLandmark({
           projectid: projectId,
           name: name || `Manual Landmarks - ${new Date().toISOString()}`,
@@ -483,24 +522,23 @@ router.put(
 );
 
 // ── GET /load-landmarks/:projectId ───────────────────────────────────────────
-// Returns the saved editable landmark doc (if any) matching segmentationModel,
-// so the frontend can reload saved edits after mount or after a re-run.
+// Returns the project's single saved editable landmark doc (if any).
+//
+// Landmark edits are shared across segmentation models: a manually-corrected RV
+// insertion point is an anatomical location on the MRI image, independent of
+// which segmentation model (unet/medsam) seeded the AI's initial 2ch detection.
+// So the segmentationModel query param is accepted for backward compatibility
+// but ignored — there is one editable doc per project.
 router.get(
   "/load-landmarks/:projectId",
   isAuth,
   async (req: Request, res: Response): Promise<void> => {
     const projectId = String(req.params.projectId);
-    const requestedModel = typeof req.query.segmentationModel === "string"
-      ? req.query.segmentationModel.toLowerCase()
-      : undefined;
 
     try {
       const landmarksResult = await readProjectLandmark(projectId);
       const candidateDocs = (landmarksResult.projectlandmarks ?? []).filter(doc => !doc.isModelOutput);
-      const modelMatchedDoc = requestedModel
-        ? candidateDocs.find(doc => (doc.segmentationModel ?? "").toString().toLowerCase() === requestedModel)
-        : undefined;
-      const editableDoc = modelMatchedDoc || candidateDocs[0];
+      const editableDoc = candidateDocs[0];
 
       res.status(200).json({
         success: true,

@@ -70,6 +70,10 @@ export function useLandmarkDetection(
   }, [projectDimensions?.width, projectDimensions?.height]);
 
   const [replacementFileError, setReplacementFileError] = useState<string | null>(null);
+  // True while the mount effect is checking for an already-computed result
+  // (in-memory cache or persisted DB job). The page's auto-run effect waits for
+  // this to be false so it does not race ahead and fire a redundant GPU run.
+  const [hydrating, setHydrating] = useState(true);
   const rafRef          = useRef<number | null>(null);
   const lastTickRef     = useRef<number>(0);
   const isPlayingRef    = useRef<boolean>(false);
@@ -153,13 +157,32 @@ export function useLandmarkDetection(
 
   useEffect(() => {
     if (!projectId) return;
+
+    // On mount, reuse an already-computed result instead of re-running the GPU.
+    // Order: in-memory cache (instant, same session) → persisted DB result
+    // (survives refresh/navigation) → otherwise stay idle and let the page's
+    // auto-run effect trigger a fresh detection. Applying a result flips status
+    // to "done", which suppresses the page's idle-guarded auto-run.
+    let cancelled = false;
+    setHydrating(true);
+
     if (landmarkApi.hasCached(projectId)) {
-      // Re-run (sync path via cache — effectively instant)
-      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL).then(applyResult).catch(() => {
-        // If somehow cache returns an error, silently ignore and stay idle
-      });
+      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL)
+        .then((r) => { if (!cancelled) applyResult(r); })
+        .catch(() => { /* cache miss/error — fall through to auto-run */ })
+        .finally(() => { if (!cancelled) setHydrating(false); });
+      return () => { cancelled = true; };
     }
-  }, [projectId]); 
+
+    // No in-memory cache (e.g. page refresh): ask the backend for the last
+    // persisted job result before paying for a fresh inference run.
+    landmarkApi.fetchPersistedResult(projectId)
+      .then((r) => { if (!cancelled && r) applyResult(r); })
+      .catch(() => { /* nothing saved / error — page auto-run handles it */ })
+      .finally(() => { if (!cancelled) setHydrating(false); });
+
+    return () => { cancelled = true; };
+  }, [projectId, applyResult]);
   
   const handleRunDetection = useCallback(
     async (model = DEFAULT_LANDMARK_MODEL, segmentationModel = "medsam") => {
@@ -318,6 +341,7 @@ export function useLandmarkDetection(
 
   return {
     state,
+    hydrating,
     replacementFileError,
     currentPrediction,
     confidentCount,

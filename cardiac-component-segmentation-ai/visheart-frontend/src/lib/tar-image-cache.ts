@@ -634,7 +634,15 @@ export class TarImageCache {
    * @returns Promise resolving to blob URL string or null if not found
    */
   async getImageURL(projectId: string, frame: number, slice: number): Promise<string | null> {
-    this.checkInitialization();
+    // "Not initialized yet" is a normal transient state on this read path: a
+    // caller (e.g. the landmark page loading a persisted result) can become
+    // ready to request an image before init() finishes. Return null instead of
+    // throwing so the caller treats it as "no image yet" and retries on the next
+    // render once the cache is populated. Write/setup methods still throw via
+    // checkInitialization() where uninitialized use is a genuine ordering bug.
+    if (!this.isInitialized) {
+      return null;
+    }
     const imageId = `${projectId}_f${frame}_s${slice}`;
 
     // Check URL cache first to avoid creating duplicate URLs for same blob

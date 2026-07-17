@@ -28,6 +28,38 @@ const MAX_POLL_ATTEMPTS = 100;
 const predictionCache = new Map<string, LandmarkInferenceResponse>();
 
 export const landmarkApi = {
+  /**
+   * Fetch a previously-persisted landmark detection result (if any) from the
+   * backend without triggering a new GPU run. Hits GET /results/:projectId with
+   * no jobUuid, which returns the most-recent completed job's parsed predictions
+   * or null. Used on page mount so revisiting the page reuses the saved result
+   * instead of re-running inference every time.
+   *
+   * Returns null when nothing is saved yet, on stub mode, or on any error — the
+   * caller then falls back to running detection.
+   */
+  fetchPersistedResult: async (
+    projectId: string,
+  ): Promise<LandmarkInferenceResponse | null> => {
+    if (USE_STUB) return null;
+    try {
+      const response = await api.get<{
+        success: boolean;
+        result: LandmarkInferenceResponse | null;
+        source?: string;
+      }>(`${ENDPOINT}/results/${projectId}`);
+      const result = response.data?.result;
+      if (result?.predictions?.length) {
+        // Warm the in-memory cache too, so subsequent same-session reads are instant.
+        predictionCache.set(`${projectId}::${DEFAULT_MODEL}::medsam`, result);
+        return result;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
   runDetectionByProject: async (
     projectId: string,
     model = DEFAULT_MODEL,
