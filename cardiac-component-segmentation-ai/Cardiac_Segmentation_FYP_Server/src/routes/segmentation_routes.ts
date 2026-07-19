@@ -1219,6 +1219,74 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
         // 7. Clean up and return
         await fs.remove(baseTempDir);
 
+        // Persist the strain result on the mask doc so the strain page can reload
+        // it instead of recomputing on every visit (mirrors bullseye/heartMetrics).
+        // Keyed by the ED/ES frames + model used so the frontend can tell whether
+        // a stored result matches the currently-selected frames. Best-effort:
+        // a failed write never fails the request.
+        //
+        // Also backfill heartMetrics.measurements.PeakGRS/PeakGCS from the strain
+        // peaks (they were null placeholders — the metrics module doesn't compute
+        // strain), so the flat measurements block downstream consumers read is
+        // complete. Then auto-fire the disease-similarity assessment now that both
+        // halves of its input (volumes + strain peaks) exist — no manual trigger.
+        try {
+            const gGRS = typeof gpuRes.data?.global_grs === "number" ? gpuRes.data.global_grs : null;
+            const gGCS = typeof gpuRes.data?.global_gcs === "number" ? gpuRes.data.global_gcs : null;
+
+            const setFields: Record<string, any> = {
+                strain: {
+                    ...gpuRes.data,
+                    edFrameIndex,
+                    esFrameIndex,
+                    segmentationModel: modelType ?? "unet",
+                    source: "frames",
+                    computed_at: new Date().toISOString(),
+                },
+                updatedAt: new Date(),
+            };
+            // Backfill measurements.PeakGRS/GCS ONLY when this strain was computed
+            // at the auto-detected ED/ES frames (heartMetrics.ed_frame/es_frame).
+            // Strain peaks are only meaningful between the true ED and ES; writing
+            // arbitrary-frame peaks here would (a) mislead any consumer reading
+            // heartMetrics.measurements and (b) defeat the similarity guard, which
+            // falls back to hm.PeakGRS. So: frames match → write the peaks; frames
+            // don't match → write null (keep the field honest). Only touch it when
+            // heart metrics already exist, so we don't create a partial object.
+            const hmForBackfill = (maskDoc as any).heartMetrics;
+            if (hmForBackfill?.measurements) {
+                const framesMatch =
+                    typeof hmForBackfill.ed_frame === "number" && typeof hmForBackfill.es_frame === "number" &&
+                    edFrameIndex === hmForBackfill.ed_frame && esFrameIndex === hmForBackfill.es_frame;
+                setFields["heartMetrics.measurements.PeakGRS"] = framesMatch ? gGRS : null;
+                setFields["heartMetrics.measurements.PeakGCS"] = framesMatch ? gGCS : null;
+                if (!framesMatch) {
+                    logger.info(`${serviceLocation}: Strain frames (ED=${edFrameIndex},ES=${esFrameIndex}) != auto ED/ES (${hmForBackfill.ed_frame}/${hmForBackfill.es_frame}) — NOT backfilling peaks into measurements (kept null).`);
+                }
+            }
+
+            const updatedMask = await projectSegmentationMaskModel.findByIdAndUpdate(
+                maskDoc._id.toString(),
+                { $set: setFields },
+                { new: true },
+            ).lean();
+            logger.info(`${serviceLocation}: Stored strain on mask ${maskDoc._id} — global_grs=${gGRS} global_gcs=${gGCS} edFrame=${edFrameIndex} esFrame=${esFrameIndex}`);
+
+            // Auto-chain disease similarity if heart metrics are present (otherwise
+            // it will run when the user triggers it, or after metrics are computed).
+            const simMeasurements = assembleSimilarityMeasurements(updatedMask);
+            if (simMeasurements) {
+                computeDiseaseSimilarityFromMetrics(maskDoc._id.toString(), simMeasurements).catch((simErr: any) => {
+                    logger.warn(`${serviceLocation}: Auto disease-similarity after strain failed for mask ${maskDoc._id}: ${simErr?.message}`);
+                });
+                logger.info(`${serviceLocation}: Auto-fired disease similarity for mask ${maskDoc._id} after strain compute.`);
+            } else {
+                logger.info(`${serviceLocation}: Skipped auto disease-similarity for mask ${maskDoc._id} — heart metrics not computed yet.`);
+            }
+        } catch (persistErr: any) {
+            logger.warn(`${serviceLocation}: Failed to persist strain / chain similarity on mask ${maskDoc._id}: ${persistErr?.message}`);
+        }
+
         logger.info(`${serviceLocation}: Strain from frames computed for project ${projectId} edFrame=${edFrameIndex} esFrame=${esFrameIndex}`);
         return res.status(200).json({
             ...gpuRes.data,
@@ -1335,11 +1403,61 @@ router.post("/trigger-heart-metrics/:maskId", isAuth, async (req: Request, res: 
     }
 });
 
+/**
+ * Assemble the flat measurements block a disease-similarity run needs, reading
+ * everything from the mask document:
+ *   EF/EDV/ESV/StrokeVolume ← heartMetrics.measurements (volumes)
+ *   PeakGRS/PeakGCS         ← strain.global_grs / strain.global_gcs (strain peaks)
+ * An optional bodyPeaks override wins over the persisted strain (used when the
+ * caller has fresher peaks in hand). Returns null when heart metrics are missing.
+ */
+function assembleSimilarityMeasurements(
+    maskDoc: any,
+    bodyPeaks?: { PeakGRS?: number | null; PeakGCS?: number | null },
+): {
+    EF: number | null; EDV: number | null; ESV: number | null;
+    StrokeVolume: number | null; PeakGRS: number | null; PeakGCS: number | null;
+} | null {
+    const hm = maskDoc?.heartMetrics?.measurements;
+    if (!hm) return null;
+
+    const strain = maskDoc?.strain;
+    const bodyGRS = typeof bodyPeaks?.PeakGRS === "number" ? bodyPeaks.PeakGRS : null;
+    const bodyGCS = typeof bodyPeaks?.PeakGCS === "number" ? bodyPeaks.PeakGCS : null;
+
+    // Strain peaks are only physiologically meaningful when measured between the
+    // TRUE end-diastole and end-systole frames. Heart metrics auto-detects those
+    // (ED = largest LV cavity, ES = smallest — heartMetrics.ed_frame/es_frame).
+    // Only trust the persisted strain peaks when they were computed at those exact
+    // frames; otherwise they came from an arbitrary user-picked pair and would
+    // give an unreliable similarity result, so we drop them and let similarity run
+    // on the volume features alone (honest, rather than fabricating peaks).
+    const hmDoc = maskDoc?.heartMetrics;
+    const strainAtCorrectFrames =
+        strain &&
+        typeof hmDoc?.ed_frame === "number" && typeof hmDoc?.es_frame === "number" &&
+        strain.edFrameIndex === hmDoc.ed_frame &&
+        strain.esFrameIndex === hmDoc.es_frame;
+    const strainGRS = strainAtCorrectFrames && typeof strain?.global_grs === "number" ? strain.global_grs : null;
+    const strainGCS = strainAtCorrectFrames && typeof strain?.global_gcs === "number" ? strain.global_gcs : null;
+
+    return {
+        EF:           hm.EF ?? null,
+        EDV:          hm.EDV ?? null,
+        ESV:          hm.ESV ?? null,
+        StrokeVolume: hm.StrokeVolume ?? null,
+        // Prefer explicit body override → strain peaks (only if computed at the
+        // auto ED/ES) → any value already on heartMetrics (usually null).
+        PeakGRS:      bodyGRS ?? strainGRS ?? hm.PeakGRS ?? null,
+        PeakGCS:      bodyGCS ?? strainGCS ?? hm.PeakGCS ?? null,
+    };
+}
+
 // Trigger Disease Pattern Similarity Assessment (NOT a diagnosis) for a single
 // mask. Compares the mask's measurements against literature-derived NOR/HCM/DCM
-// reference profiles. Volume metrics (EF/EDV/ESV/SV) are read from the stored
-// heartMetrics.measurements; PeakGRS/PeakGCS may be supplied in the request body
-// (from the strain pipeline) since strain peaks are not yet persisted on the mask.
+// reference profiles. Volume metrics (EF/EDV/ESV/SV) come from stored
+// heartMetrics.measurements; PeakGRS/PeakGCS come from the persisted strain
+// result (strain.global_grs/global_gcs) — or from the request body if supplied.
 // POST /segmentation/trigger-disease-similarity/:maskId
 //   body (optional): { PeakGRS?: number, PeakGCS?: number }
 router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, res: Response) => {
@@ -1357,29 +1475,13 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
 
-        // Volume-based measurements come from the previously-computed heart metrics.
-        const hm = (maskDoc as any).heartMetrics?.measurements;
-        if (!hm) {
+        const measurements = assembleSimilarityMeasurements(maskDoc, req.body);
+        if (!measurements) {
             return res.status(400).json({
                 success: false,
                 message: "Heart metrics not computed for this mask yet — run trigger-heart-metrics first.",
             });
         }
-
-        // Strain peaks are not persisted on the mask; accept them from the body
-        // when the caller has them, otherwise fall back to whatever heartMetrics
-        // holds (null placeholders today). The Python side tolerates nulls.
-        const bodyGRS = typeof req.body?.PeakGRS === "number" ? req.body.PeakGRS : null;
-        const bodyGCS = typeof req.body?.PeakGCS === "number" ? req.body.PeakGCS : null;
-
-        const measurements = {
-            EF:           hm.EF ?? null,
-            EDV:          hm.EDV ?? null,
-            ESV:          hm.ESV ?? null,
-            StrokeVolume: hm.StrokeVolume ?? null,
-            PeakGRS:      bodyGRS ?? hm.PeakGRS ?? null,
-            PeakGCS:      bodyGCS ?? hm.PeakGCS ?? null,
-        };
 
         // Respond immediately and run computation async — same pattern as the
         // other trigger routes.

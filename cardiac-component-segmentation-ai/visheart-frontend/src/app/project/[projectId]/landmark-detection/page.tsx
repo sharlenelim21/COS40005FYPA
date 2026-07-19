@@ -186,6 +186,14 @@ export default function LandmarkDetectionPage() {
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GRS");
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
   const [strainResult, setStrainResult] = useState<RealStrainResult | null>(null);
+  // Auto-detected ED/ES frames from heart-metrics (ED = largest LV cavity, ES =
+  // smallest), PER MODEL — each model's mask has its own independently-detected
+  // ED/ES. The strain picker must use the frames from the SAME model it computes
+  // with, so peaks match heartMetrics and the similarity guard passes.
+  const [autoFramesByModel, setAutoFramesByModel] = useState<{
+    unet: { ed: number; es: number } | null;
+    medsam: { ed: number; es: number } | null;
+  }>({ unet: null, medsam: null });
   const [editableLandmarks, setEditableLandmarks] = useState(true);
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
@@ -234,13 +242,27 @@ export default function LandmarkDetectionPage() {
     setBullseyeLoading(true);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
-      type SegItem = { _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData };
+      type SegItem = { _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData; strain?: RealStrainResult; heartMetrics?: { ed_frame?: number; es_frame?: number } };
       const segs = (res.segmentations ?? []) as SegItem[];
 
       // Editable masks only (isMedSAMOutput === false), split by inferred model
       const editables = segs.filter((m) => !m.isMedSAMOutput);
       const medsamMasks = editables.filter((m) => maskBelongsTo(m, "medsam"));
       const unetMasks = editables.filter((m) => maskBelongsTo(m, "unet"));
+
+      // Surface the auto-detected ED/ES frames PER MODEL (from each model's own
+      // heart-metrics) so the strain picker can default to the correct pair for
+      // whichever model it computes with. Each model's mask detects ED/ES over its
+      // own frames independently, so they can differ (e.g. UNet ES=13, MedSAM ES=11).
+      const framesFor = (masks: SegItem[]): { ed: number; es: number } | null => {
+        const withMetrics = masks.find(
+          (m) => typeof m.heartMetrics?.ed_frame === "number" && typeof m.heartMetrics?.es_frame === "number",
+        );
+        return withMetrics?.heartMetrics
+          ? { ed: withMetrics.heartMetrics.ed_frame as number, es: withMetrics.heartMetrics.es_frame as number }
+          : null;
+      };
+      setAutoFramesByModel({ unet: framesFor(unetMasks), medsam: framesFor(medsamMasks) });
 
       const medsamWithBullseye = medsamMasks.find((m) => m.bullseye != null);
       const unetWithBullseye = unetMasks.find((m) => m.bullseye != null);
@@ -959,9 +981,17 @@ export default function LandmarkDetectionPage() {
                   onStrainTypeChange={setSelectedStrainType}
                   currentFrame={state.currentFrame}
                   frameCount={
-                    (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
-                      ? projectData.dimensions.frames
-                      : state.totalFrames || segFrameCount || 1
+                    // Prefer the MASK's actual frame count (segFrameCount) — this is
+                    // the same frame set heart-metrics uses to detect ED/ES, so the
+                    // auto-detected ED/ES frames are always reachable in the picker
+                    // and strain runs at frames that match heartMetrics. Fall back to
+                    // project dimensions / total frames only when the mask count is
+                    // unknown.
+                    segFrameCount > 0
+                      ? segFrameCount
+                      : (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
+                        ? projectData.dimensions.frames
+                        : state.totalFrames || 1
                   }
                   selectedSegment={selectedStrainSegment}
                   onSelectSegment={setSelectedStrainSegment}
@@ -970,6 +1000,7 @@ export default function LandmarkDetectionPage() {
                   avgLm2={state.avgLm2 ?? null}
                   strainResult={strainResult}
                   onStrainResult={setStrainResult}
+                  autoFramesByModel={autoFramesByModel}
                 />
               )}
             </div>
@@ -2056,6 +2087,7 @@ function StrainPreviewPanel({
   avgLm2,
   strainResult,
   onStrainResult,
+  autoFramesByModel,
 }: {
   selectedStrainType: StrainType;
   onStrainTypeChange: (type: StrainType) => void;
@@ -2068,6 +2100,10 @@ function StrainPreviewPanel({
   avgLm2: { x: number; y: number } | null;
   strainResult: RealStrainResult | null;
   onStrainResult: (result: RealStrainResult | null) => void;
+  autoFramesByModel: {
+    unet: { ed: number; es: number } | null;
+    medsam: { ed: number; es: number } | null;
+  };
 }) {
   const edRef  = useRef<HTMLInputElement>(null);
   const esRef  = useRef<HTMLInputElement>(null);
@@ -2076,9 +2112,23 @@ function StrainPreviewPanel({
   const [isComputing, setIsComputing] = useState(false);
   const [strainError, setStrainError] = useState<string | null>(null);
   const [strainInputMode, setStrainInputMode] = useState<"upload" | "frames">("frames");
-  const [edFrameIdx, setEdFrameIdx] = useState<number>(0);
-  const [esFrameIdx, setEsFrameIdx] = useState<number>(13);
   const [strainModel, setStrainModel] = useState<"unet" | "medsam">("unet");
+  // The auto-detected ED/ES for the CURRENTLY-selected strain model — so the
+  // picker defaults to the frames that this model's heart-metrics found, keeping
+  // strain, heart-metrics, and the similarity guard consistent.
+  const autoFrames = autoFramesByModel[strainModel];
+  // Default the picker to the auto-detected ED/ES (physiologically correct pair)
+  // when available, so computed strain peaks are meaningful and match the volumes.
+  const [edFrameIdx, setEdFrameIdx] = useState<number>(autoFrames?.ed ?? 0);
+  const [esFrameIdx, setEsFrameIdx] = useState<number>(autoFrames?.es ?? 13);
+  // Sync the picker to the auto ED/ES when they load (metrics are async) or when
+  // the strain model changes — but only while the user hasn't manually dragged.
+  const userPickedFramesRef = useRef(false);
+  useEffect(() => {
+    if (userPickedFramesRef.current) return;
+    if (typeof autoFrames?.ed === "number") setEdFrameIdx(autoFrames.ed);
+    if (typeof autoFrames?.es === "number") setEsFrameIdx(autoFrames.es);
+  }, [autoFrames?.ed, autoFrames?.es]);
   const realStrainData = strainResult;
   const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number } | null>(null);
@@ -2314,8 +2364,8 @@ function StrainPreviewPanel({
                   max={Math.max(0, frameCount - 1)}
                   edValue={edFrameIdx}
                   esValue={esFrameIdx}
-                  onEdChange={(v) => { setEdFrameIdx(v); setStrainError(null); }}
-                  onEsChange={(v) => { setEsFrameIdx(v); setStrainError(null); }}
+                  onEdChange={(v) => { userPickedFramesRef.current = true; setEdFrameIdx(v); setStrainError(null); }}
+                  onEsChange={(v) => { userPickedFramesRef.current = true; setEsFrameIdx(v); setStrainError(null); }}
                 />
               </div>
 

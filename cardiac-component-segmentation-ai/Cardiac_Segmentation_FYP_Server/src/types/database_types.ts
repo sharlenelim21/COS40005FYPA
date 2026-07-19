@@ -335,6 +335,38 @@ export interface IProjectSegmentationMask {
     warnings: string[];
     computed_at: string;
   };
+  /**
+   * Regional strain (GRS/GCS per AHA segment) computed from an ED→ES frame pair.
+   * Produced by the GPU /bullseye/compute-strain endpoint and stored parallel to
+   * `bullseye`, so the strain page can reload the last result instead of
+   * recomputing on every visit. Keyed by the ED/ES frames + model used, so the
+   * frontend can tell whether a stored result matches the currently-selected
+   * frames. Global peaks (`global_grs`/`global_gcs`) are the values consumed by
+   * the disease-similarity module as PeakGRS/PeakGCS.
+   */
+  strain?: {
+    segments: {
+      segment: number;
+      label: string;
+      grs: number | null;
+      gcs: number | null;
+      wt_ed_mm?: number | null;
+      wt_es_mm?: number | null;
+    }[];
+    global_grs: number | null;
+    global_gcs: number | null;
+    ed_wt_mean_mm: number | null;
+    es_wt_mean_mm: number | null;
+    vox_xy_mm: number;
+    alignment_source: string;
+    alignment_angle_deg?: number | null;
+    // Persistence metadata: which frames/model this result was computed from.
+    edFrameIndex?: number;
+    esFrameIndex?: number;
+    segmentationModel?: SegmentationModel;
+    source?: "upload" | "frames";
+    computed_at: string;
+  };
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)
 export interface IProjectSegmentationMaskDocument

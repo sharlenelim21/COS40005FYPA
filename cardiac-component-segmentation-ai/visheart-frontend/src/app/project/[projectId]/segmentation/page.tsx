@@ -68,6 +68,7 @@ function SegmentationResultsPageInner() {
     tarCacheReady,
     tarCacheError,
     updateContextMasks,
+    refreshMasks,
     hasReconstructions,
     reconstructionCacheReady,
     getReconstructionGLB,
@@ -894,18 +895,33 @@ function SegmentationResultsPageInner() {
 
       console.log("[Segmentation] Successfully saved masks to backend");
 
+      // Optimistically push the edits into the context's decoded set so the
+      // view stays on the edited data immediately after save.
       updateContextMasks(decodedMasks);
-
       setHasUnsavedChanges(false);
-      setLocalDecodedMasks(null); 
 
-      console.log("[Segmentation] Successfully saved and updated context with optimistic approach");
+      // IMPORTANT: do NOT clear localDecodedMasks before the underlying source
+      // reflects the save. `decodedMasks` prioritises modelScopedDecodedMasks,
+      // which is derived from `undecodedMasks` — and that is NOT updated by
+      // updateContextMasks(). Clearing local first makes the view fall through to
+      // the stale pre-edit undecodedMasks (the "reverts to original until reload"
+      // bug). Instead, refetch masks from the backend (which now has the edit) so
+      // undecodedMasks/modelScopedDecodedMasks become authoritative, THEN drop the
+      // local overlay. If the refetch fails, keep local so edits stay visible.
+      try {
+        await refreshMasks();
+        setLocalDecodedMasks(null);
+      } catch (refreshErr) {
+        console.warn("[Segmentation] Post-save mask refresh failed; keeping local edits visible:", refreshErr);
+      }
+
+      console.log("[Segmentation] Successfully saved and reconciled masks with backend");
     } catch (err) {
       console.error("Failed to save editable masks:", err);
     } finally {
       setIsSaving(false);
     }
-  }, [decodedMasks, projectId, isSaving, updateContextMasks]);
+  }, [decodedMasks, projectId, isSaving, updateContextMasks, refreshMasks]);
 
   const handleRevertToAI = useCallback(async () => {
     if (!projectId || isSaving || !undecodedMasks) return;

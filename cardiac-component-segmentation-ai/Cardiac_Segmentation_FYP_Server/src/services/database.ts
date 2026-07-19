@@ -1585,6 +1585,23 @@ const updateProjectSegmentationMask = async (
         }
       }
       mask.frames = maskupdates.frames as mongoose.Types.DocumentArray<IProjectSegmentationMaskDocument['frames'][0]>;
+
+      // Frames just changed, so any previously-computed bullseye is now stale.
+      // Clear it so the Bullseye tab's existing "!mask.bullseye" recompute guard
+      // naturally fires a fresh computation from the edited frames next time it's
+      // viewed. Scoped to the frames-update path only: metadata-only updates
+      // (e.g. { isSaved: true }) never enter this block, so their bullseye is
+      // preserved. This gives every current and future frames-editing caller
+      // automatic cache invalidation.
+      if ((mask as any).bullseye !== undefined && (mask as any).bullseye !== null) {
+        logger.info(`${serviceLocation}: Frames edited on mask ${maskid} — clearing stale bullseye for recompute.`);
+      }
+      // Set to null (not undefined): for a defined Mixed schema path Mongoose
+      // does not reliably persist an undefined assignment as a cleared field,
+      // whereas null is stored explicitly. The frontend guard is `!mask.bullseye`,
+      // which null satisfies, so the recompute fires correctly.
+      mask.set('bullseye', null);
+      mask.markModified('bullseye');
     }
 
     await mask.save();
