@@ -3,3 +3,8 @@ cardiac-component-segmentation-ai/visheart-local-code/
 
 # Docker cookie/session files
 cardiac-component-segmentation-ai/cookie.txt
+
+# ACDC dataset (large NIfTI data — never commit; used only to derive reference
+# ranges. Only the computed REFERENCE_PROFILES output is committed.)
+cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server/data/
+/acdc/

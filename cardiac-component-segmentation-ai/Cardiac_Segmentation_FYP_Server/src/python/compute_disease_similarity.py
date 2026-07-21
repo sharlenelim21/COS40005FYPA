@@ -108,43 +108,53 @@ FEATURE_WEIGHTS: dict[str, float] = {
     "PeakGCS":      0.6,
 }
 
-# ── Literature-derived reference profiles (mean, sd) per feature ──────────────
+# ── Reference profiles (mean, sd) per feature ─────────────────────────────────
 # Values are population-level references, NOT fitted to this application's data.
-# Every number is cited in docs/DISEASE_SIMILARITY_REFERENCES.md. Where a robust
-# SD was not directly reported, a conservative (wider) SD is used so the model
-# does not over-claim confidence — a deliberately cautious choice for an FYP.
+# Every number is cited in docs/DISEASE_SIMILARITY_REFERENCES.md.
 #
-#   NOR — healthy adult LV
-#   HCM — hypertrophic cardiomyopathy: preserved/high EF, small cavity, thick
-#         wall → low-normal EDV, low ESV, supranormal radial strain early but
-#         impaired circumferential strain.
+# EF and EDV are the ACDC cohort group statistics (the same dataset this
+# project's segmentation is built on). ESV is NOT published by ACDC — its mean is
+# derived from the EF identity ESV = EDV * (1 - EF/100); its SD is an estimate.
+# StrokeVolume = EDV - ESV of the group means (SD combined in quadrature, hence
+# approximate). EF direction (NOR mid, HCM high, DCM low) was independently
+# confirmed from the project's own ACDC ground-truth masks
+# (scripts/derive_acdc_reference_ranges.py). See docs/DISEASE_SIMILARITY_REFERENCES.md
+# for the full provenance and the derived-value caveat (starred SDs are estimates).
+#
+# PeakGRS / PeakGCS are literature CMR feature-tracking values: strain cannot be
+# derived from the 2-frame ground-truth masks (it needs the full tracked cine),
+# so these remain literature-sourced placeholders pending a strain-derived range.
+#
+#   NOR — healthy adult LV.
+#   HCM — hypertrophic cardiomyopathy: preserved/high EF, small cavity, impaired
+#         circumferential strain.
 #   DCM — dilated cardiomyopathy: large cavity, low EF, low strain magnitudes.
 #
 # Units: EF %, volumes mL, PeakGRS %, PeakGCS % (negative by convention).
 REFERENCE_PROFILES: dict[str, dict[str, tuple[float, float]]] = {
     "NOR": {
-        "EF":           (62.0,  6.0),
-        "EDV":          (142.0, 30.0),
-        "ESV":          (54.0,  17.0),
-        "StrokeVolume": (88.0,  18.0),
-        "PeakGRS":      (40.0,  10.0),
-        "PeakGCS":      (-20.0, 4.0),
+        "EF":           (60.3,  5.1),   # ACDC published
+        "EDV":          (130.1, 26.4),  # ACDC published
+        "ESV":          (51.6,  17.0),  # derived EDV*(1-EF); SD estimated
+        "StrokeVolume": (78.5,  31.4),  # EDV - ESV; SD approx
+        "PeakGRS":      (43.7,  10.0),  # CMR-FT meta-analysis normal (pooled mean)
+        "PeakGCS":      (-21.4, 4.0),   # CMR-FT meta-analysis normal (pooled mean)
     },
     "HCM": {
-        "EF":           (68.0,  8.0),
-        "EDV":          (120.0, 28.0),
-        "ESV":          (38.0,  15.0),
-        "StrokeVolume": (82.0,  18.0),
-        "PeakGRS":      (32.0,  12.0),
-        "PeakGCS":      (-14.0, 4.0),
+        "EF":           (67.4,  8.9),   # ACDC published
+        "EDV":          (129.1, 35.2),  # ACDC published
+        "ESV":          (42.1,  18.0),  # derived EDV*(1-EF); SD estimated
+        "StrokeVolume": (87.0,  39.5),  # EDV - ESV; SD approx
+        "PeakGRS":      (32.0,  12.0),  # CMR-FT: reduced vs normal (directional)
+        "PeakGCS":      (-14.0, 4.0),   # CMR-FT: reduced vs normal (directional)
     },
     "DCM": {
-        "EF":           (30.0,  10.0),
-        "EDV":          (225.0, 55.0),
-        "ESV":          (160.0, 55.0),
-        "StrokeVolume": (65.0,  22.0),
-        "PeakGRS":      (16.0,  8.0),
-        "PeakGCS":      (-9.0,  4.0),
+        "EF":           (17.9,  7.7),   # ACDC published
+        "EDV":          (284.6, 47.8),  # ACDC published
+        "ESV":          (233.6, 51.0),  # derived EDV*(1-EF); SD estimated
+        "StrokeVolume": (51.0,  69.9),  # EDV - ESV; SD approx
+        "PeakGRS":      (16.0,  8.0),   # CMR-FT: markedly reduced (directional)
+        "PeakGCS":      (-9.0,  4.0),   # CMR-FT: markedly reduced (directional)
     },
 }
 
