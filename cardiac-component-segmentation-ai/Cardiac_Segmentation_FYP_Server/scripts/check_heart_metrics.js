@@ -351,6 +351,173 @@ function test_no_lvc_hard_error() {
     assert('error JSON contains "LV cavity"', /LV cavity/i.test(out.error ?? ''), JSON.stringify(out));
 }
 
+// ── Test 5b: duplicate (frameindex, sliceindex, class) → no double-count ───
+// A frame is allowed to appear more than once, or the same slice within a
+// frame to appear more than once — e.g. after a manual edit re-appended to
+// the mask doc instead of replacing. The output must match the union, not
+// the sum. Regression guard for the "very large in another run" side of the
+// 30x-volume-swing incident (PIPELINE_INTEGRATION.md §6).
+
+function test_duplicate_slice_no_double_count() {
+    console.log('\n[6] Duplicate (frameindex, sliceindex, class) → union, not sum');
+    const H = 128, W = 128;
+    const affine = [
+        [1.5, 0, 0, 0],
+        [0, 1.5, 0, 0],
+        [0, 0, 8.0, 0],
+        [0, 0, 0,   1],
+    ];
+    // Two ED entries with an identical LVC disc on slice 0. If the deduper
+    // works, LVEDV should equal the single-disc volume; if it doesn't, it
+    // will be exactly 2x.
+    const lvcRle = rleFromDisk(H, W, 64, 64, 20);
+    const framesSingle = [
+        makeFrame(0, [makeSlice(0, [{ cls: 'lvc', contents: lvcRle }])]),
+        makeFrame(1, [makeSlice(0, [{ cls: 'lvc', contents: rleFromDisk(H, W, 64, 64, 10) }])]),
+    ];
+    const framesDup = [
+        makeFrame(0, [makeSlice(0, [{ cls: 'lvc', contents: lvcRle }])]),
+        makeFrame(0, [makeSlice(0, [{ cls: 'lvc', contents: lvcRle }])]),  // exact duplicate
+        makeFrame(1, [makeSlice(0, [{ cls: 'lvc', contents: rleFromDisk(H, W, 64, 64, 10) }])]),
+    ];
+    const resSingle = runPython({ frames: framesSingle, width: W, height: H, affine });
+    const resDup    = runPython({ frames: framesDup,    width: W, height: H, affine });
+    if (resSingle.status !== 0 || resDup.status !== 0) {
+        assert('both runs exit 0', false, `single=${resSingle.status}, dup=${resDup.status}`);
+        return;
+    }
+    const outSingle = safeJson(resSingle.stdout, resSingle.stderr);
+    const outDup    = safeJson(resDup.stdout,    resDup.stderr);
+    console.log('  LVEDV single:', outSingle.LVEDV, '  LVEDV dup:', outDup.LVEDV);
+    assert('LVEDV unchanged by duplicate (frame,slice,class)',
+        Math.abs(outSingle.LVEDV - outDup.LVEDV) < 1e-6,
+        `single=${outSingle.LVEDV}, dup=${outDup.LVEDV}`);
+    assert('LVEDV(dup) is NOT ~2x LVEDV(single)',
+        Math.abs(outDup.LVEDV - 2 * outSingle.LVEDV) > 1e-3,
+        `dup=${outDup.LVEDV}, 2x=${2 * outSingle.LVEDV}`);
+    assert('LVEF unchanged by duplicate',
+        Math.abs(outSingle.LVEF - outDup.LVEF) < 1e-6,
+        `single=${outSingle.LVEF}, dup=${outDup.LVEF}`);
+}
+
+// ── Test 8: sheared / oblique affine → det-based voxel_mm3, exact ──────────
+// Regression guard for the Part-A1 hardening. On an oblique affine the true
+// voxel-parallelepiped volume is |det(affine[:3,:3])|, NOT the product of
+// the column norms — column norms over-estimate by the sine of the inter-
+// axis angles. Cardiac short-axis data is almost always orthogonal, but if
+// a project has a sheared or rotated affine the switch to det makes the
+// stored volume geometrically correct.
+
+function test_sheared_affine_uses_det() {
+    console.log('\n[8] Sheared/oblique affine → voxel_mm3 uses |det|, not column-norm product');
+    const H = 128, W = 128;
+    // Off-diagonal 0.5 in row 0 col 1 injects an in-plane shear. Column norms:
+    //   col0 = |(1.5, 0, 0)|         = 1.5
+    //   col1 = |(0.5, 1.5, 0)|       = sqrt(0.25 + 2.25) = sqrt(2.5) ≈ 1.5811
+    //   col2 = |(0, 0, 8)|           = 8
+    //   product = 1.5 * 1.5811 * 8   ≈ 18.973 mm^3   (over-estimate)
+    //   |det|   = 1.5 * 1.5 * 8      = 18.0 mm^3     (correct parallelepiped)
+    const affine = [
+        [1.5, 0.5, 0.0, 0.0],
+        [0.0, 1.5, 0.0, 0.0],
+        [0.0, 0.0, 8.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    const frames = [
+        makeFrame(0, [makeSlice(0, [
+            { cls: 'lvc', contents: rleFromDisk(H, W, 64, 64, 20) },
+            { cls: 'myo', contents: rleFromAnnulus(H, W, 64, 64, 20, 26) },
+        ])]),
+        makeFrame(1, [makeSlice(0, [
+            { cls: 'lvc', contents: rleFromDisk(H, W, 64, 64, 12) },
+        ])]),
+    ];
+    const res = runPython({ frames, width: W, height: H, affine });
+    if (res.status !== 0) {
+        console.log('  Python stderr:', res.stderr);
+        assert('Python exits 0', false, `exit ${res.status}`);
+        return;
+    }
+    const out = safeJson(res.stdout, res.stderr);
+    console.log('  voxel_mm3:', out.voxel_mm3, '  spacing_mm:', out.spacing_mm);
+
+    // voxel_mm3 must be exactly the det value (18.0), not the column-norm
+    // product (~18.973). A regression that reverts to the product would land
+    // at ~18.973 and this assertion would fail.
+    assert('voxel_mm3 == |det| = 18.0 (not column-norm product ≈ 18.973)',
+        Math.abs(out.voxel_mm3 - 18.0) < 1e-9,
+        `got ${out.voxel_mm3}`);
+
+    // spacing_mm still reports the per-column norms for display — so the
+    // sheared column 1 shows up as ~1.5811, not 1.5. This confirms the two
+    // fields serve different roles (display vs. exact geometric volume).
+    const expectedCol1 = Math.sqrt(0.25 + 2.25);
+    assert('spacing_mm[1] uses column norm (~1.5811)',
+        Math.abs(out.spacing_mm[1] - expectedCol1) < 1e-6,
+        `got ${out.spacing_mm[1]}, expected ~${expectedCol1}`);
+    assert('spacing_mm[0] and [2] unaffected by shear',
+        Math.abs(out.spacing_mm[0] - 1.5) < 1e-9 && Math.abs(out.spacing_mm[2] - 8.0) < 1e-9,
+        `spacing_mm=${JSON.stringify(out.spacing_mm)}`);
+
+    // LVEDV must have been computed with the det-based voxel_mm3. If the
+    // regression put the column-norm product back in place, LVEDV would be
+    // ~5.4% larger and this equality check would fail.
+    // On the disk r=20 the raster count is deterministic; compute it once
+    // by dividing back through the emitted voxel_mm3.
+    const lvVoxelsAtED = Math.round(out.LVEDV * 1000 / out.voxel_mm3);
+    const expectedLVEDV = lvVoxelsAtED * 18.0 / 1000;
+    assert('LVEDV consistent with voxel_mm3 = 18.0',
+        Math.abs(out.LVEDV - expectedLVEDV) < 1e-6,
+        `LVEDV=${out.LVEDV}, expected=${expectedLVEDV}`);
+}
+
+// ── Test 7: implausible affine → warning, NOT hard error ────────────────────
+// Identity affine (voxel_mm3 = 1.0) is a common silent-fallback mode and
+// produces volumes that look ~18x too small compared to real cardiac data.
+// The script should still return numbers (EF, per-frame curves) but MUST
+// push a warning so the downstream disease-similarity module can see the
+// anomaly rather than consuming poisoned volumes silently.
+
+function test_identity_affine_warns() {
+    console.log('\n[7] Identity affine (voxel_mm3 = 1.0) → plausibility warning');
+    const H = 128, W = 128;
+    const affine = [
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ];
+    const frames = [
+        makeFrame(0, [makeSlice(0, [
+            { cls: 'lvc', contents: rleFromDisk(H, W, 64, 64, 20) },
+            { cls: 'myo', contents: rleFromAnnulus(H, W, 64, 64, 20, 26) },
+        ])]),
+        makeFrame(1, [makeSlice(0, [
+            { cls: 'lvc', contents: rleFromDisk(H, W, 64, 64, 12) },
+        ])]),
+    ];
+    const res = runPython({ frames, width: W, height: H, affine });
+    if (res.status !== 0) {
+        assert('exits 0 (identity affine is not a hard error)', false, `exit ${res.status}`);
+        return;
+    }
+    const out = safeJson(res.stdout, res.stderr);
+    console.log('  voxel_mm3:', out.voxel_mm3, ' LVEDV:', out.LVEDV, ' warnings:', out.warnings);
+
+    assert('exits 0, not a hard error', res.status === 0);
+    assert('voxel_mm3 is 1.0 (identity)', Math.abs(out.voxel_mm3 - 1.0) < 1e-9, `got ${out.voxel_mm3}`);
+    assert('warnings include a spacing/affine flag',
+        (out.warnings ?? []).some(w => /voxel_mm3|affine/i.test(w)),
+        JSON.stringify(out.warnings));
+    assert('warnings include an LVEDV plausibility flag',
+        (out.warnings ?? []).some(w => /LVEDV/.test(w)),
+        JSON.stringify(out.warnings));
+    // EF is body-size-independent; even with a bad affine EF must still be sane.
+    assert('LVEF still valid (0-100) despite bad affine',
+        typeof out.LVEF === 'number' && out.LVEF >= 0 && out.LVEF <= 100,
+        `LVEF=${out.LVEF}`);
+}
+
 // ── Test 5: missing / wrong-shape affine → hard error ───────────────────────
 
 function test_bad_affine_hard_error() {
@@ -381,6 +548,9 @@ function test_bad_affine_hard_error() {
         test_missing_myo_mass_null();
         test_no_lvc_hard_error();
         test_bad_affine_hard_error();
+        test_duplicate_slice_no_double_count();
+        test_identity_affine_warns();
+        test_sheared_affine_uses_det();
     } catch (err) {
         console.error('Runner crashed:', err);
         process.exit(2);

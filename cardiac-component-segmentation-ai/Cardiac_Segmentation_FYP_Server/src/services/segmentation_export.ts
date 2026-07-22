@@ -100,14 +100,122 @@ export const computeHeartMetricsFromMaskDoc = async (
                     { _id: new mongoose.Types.ObjectId(maskId) },
                     { $set: { heartMetrics: result, updatedAt: new Date() } },
                 );
+                // Spacing / voxel_mm3 are the two numbers that explain why volumes
+                // may swing between projects. Log them alongside the metrics so a
+                // single `grep '\[HeartMetrics\]' server.log` reveals which projects
+                // have a suspicious affine — the sibling of the plausibility
+                // warnings the Python script emits. See PIPELINE_INTEGRATION.md §6.
+                const spacingStr = Array.isArray(result.spacing_mm)
+                    ? `[${result.spacing_mm.map((v: number | null) => v == null ? "null" : v.toFixed(3)).join(", ")}]`
+                    : String(result.spacing_mm);
                 logger.info(
                     `${serviceLocation}: [HeartMetrics] Stored heart metrics for mask ${maskId} — ` +
                     `LVEDV=${result.LVEDV} LVESV=${result.LVESV} LVEF=${result.LVEF} ` +
-                    `LV_mass_g=${result.LV_mass_g} warnings=${result.warnings?.length ?? 0} | ` +
+                    `LV_mass_g=${result.LV_mass_g} voxel_mm3=${result.voxel_mm3} spacing_mm=${spacingStr} ` +
+                    `warnings=${result.warnings?.length ?? 0} | ` +
                     `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
                 );
+                // If the script flagged plausibility issues, surface each one on its
+                // own line so ops can spot the specific reason without JSON-parsing
+                // the stored payload.
+                if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+                    for (const w of result.warnings) {
+                        logger.warn(`${serviceLocation}: [HeartMetrics] mask ${maskId} — ${w}`);
+                    }
+                }
+
+                // Auto-chain the rule-based Health Status compute now that
+                // measurements are stored. Fire-and-forget — this must never
+                // block or fail the heart-metrics write. The health-status
+                // function fetches measurements fresh from the mask doc, so
+                // there's no risk of reading a stale in-memory copy. Strain-
+                // driven backfill re-fires this later once PeakGRS/GCS land.
+                computeHealthStatusFromMetrics(maskId).catch((err: any) => {
+                    logger.warn(`${serviceLocation}: [HealthStatus] Auto-chain after heart metrics failed for mask ${maskId}: ${err?.message}`);
+                });
             } catch (parseErr: any) {
                 logger.warn(`${serviceLocation}: [HeartMetrics] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
+ * Rule-based cardiac health-status assessment (Task 2) — NOT a diagnosis.
+ *
+ * Reads `heartMetrics.measurements` and `heartMetrics.warnings` off the mask
+ * document, runs the local Python rule engine, and $set-stores the result on
+ * the same mask document under `healthStatus`. Mirrors
+ * computeDiseaseSimilarityFromMetrics's shape: stdin JSON → local Python →
+ * stdout JSON → $set. Never rejects; always resolves so callers can fire-and-
+ * forget it in parallel with disease similarity.
+ *
+ * Callers do NOT pass measurements — this function fetches them itself so
+ * the auto-fire paths (end of heart metrics, after the strain backfill) can
+ * be one-liners. Returns silently when `heartMetrics.measurements` is absent
+ * on the mask doc (nothing to grade yet).
+ */
+export const computeHealthStatusFromMetrics = async (
+    maskId: string,
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_health_status.py');
+
+    // Fetch the current measurements + heartMetrics.warnings from the mask
+    // document. This is deliberately a fresh read every call — the strain
+    // backfill mutates heartMetrics.measurements in place, and we want the
+    // re-fire after strain to consume the updated PeakGRS/PeakGCS values.
+    const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+    if (!maskDoc) {
+        logger.warn(`${serviceLocation}: [HealthStatus] Mask ${maskId} not found — skipping compute.`);
+        return;
+    }
+    const hm: any = (maskDoc as any).heartMetrics;
+    if (!hm || !hm.measurements) {
+        logger.info(`${serviceLocation}: [HealthStatus] Mask ${maskId} has no heartMetrics.measurements yet — skipping (will re-fire once heart metrics compute lands).`);
+        return;
+    }
+
+    const input = JSON.stringify({
+        measurements: hm.measurements,
+        heart_metrics_warnings: Array.isArray(hm.warnings) ? hm.warnings : [],
+    });
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [HealthStatus] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [HealthStatus] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [HealthStatus] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { healthStatus: result, updatedAt: new Date() } },
+                );
+                logger.info(
+                    `${serviceLocation}: [HealthStatus] Stored health status for mask ${maskId} — ` +
+                    `status=${result.status} confidence=${result.confidence} ` +
+                    `grade_from_ef=${result.grade_from_ef} ` +
+                    `used=${result.features_used?.length ?? 0} missing=${result.features_missing?.length ?? 0} ` +
+                    `warnings=${result.warnings?.length ?? 0} | ` +
+                    `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
+                );
+                if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+                    for (const w of result.warnings) {
+                        logger.warn(`${serviceLocation}: [HealthStatus] mask ${maskId} — ${w}`);
+                    }
+                }
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [HealthStatus] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
             resolve();
         });

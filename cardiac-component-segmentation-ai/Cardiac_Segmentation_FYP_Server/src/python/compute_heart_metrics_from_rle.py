@@ -122,69 +122,65 @@ def _safe_float(v) -> Optional[float]:
         return None
 
 
-# ── Per-frame voxel-count accumulator ─────────────────────────────────────────
+# ── Per-frame voxel-count accumulator (with per-slice union dedup) ────────────
 
 def count_voxels_per_frame(
     frames: list, H: int, W: int
 ) -> tuple[dict[int, int], dict[int, int], dict[int, int]]:
-    """Sum LVC / MYO / RV pixel counts per frame across all its slices.
+    """Sum LVC / MYO / RV voxel counts per frame across all its slices,
+    with per-(frameindex, sliceindex, class) union deduplication.
 
     Returns three dicts keyed by frameindex → integer voxel count. Frames that
     exist in the input but have no relevant pixels appear with a value of 0
     (so the caller can still emit their zero on the per-frame curve).
 
+    Why the dedup: `frames[]` may legitimately contain multiple entries for the
+    same (frameindex, sliceindex) — e.g. MedSAM output plus a later manual
+    edit, or a data-ingestion path that re-appended rather than replaced. If we
+    naively `+=` each occurrence we double-count and inflate volumes. Bullseye
+    (`compute_bullseye_from_rle.py :: build_mask_3d`) already handles this by
+    storing one 2D map per slice and taking a union; we mirror that pattern
+    here at the (frame, slice, class) grain so the two computations always
+    consume the same effective mask. See docs section 10 for details.
+
     We count voxels — not pixels — because the "volume" of a class in a frame
     is the sum over all its slices; each pixel is one voxel of thickness dz.
     """
-    lv_counts: dict[int, int] = {}
-    myo_counts: dict[int, int] = {}
-    rv_counts: dict[int, int] = {}
+    # Bucket boolean masks by (frameindex, sliceindex, class_val). Duplicate
+    # entries at the same key are OR'd together — the union of what any
+    # producer thought was inside that class, not the sum.
+    per_slice_mask: dict[tuple[int, int, int], np.ndarray] = {}
+    observed_frames: set[int] = set()
 
     for frame in frames:
         f_idx = int(frame.get("frameindex", 0))
-        # Initialise so every observed frame appears in the curve, even if empty.
-        lv_counts.setdefault(f_idx, 0)
-        myo_counts.setdefault(f_idx, 0)
-        rv_counts.setdefault(f_idx, 0)
-
+        observed_frames.add(f_idx)
         for slc in frame.get("slices", []):
+            s_idx = int(slc.get("sliceindex", 0))
             for seg in slc.get("segmentationmasks", []):
-                cls_name = seg.get("class", "")
-                cls_val = CLASS_MAP.get(cls_name, 0)
+                cls_val = CLASS_MAP.get(seg.get("class", ""), 0)
                 if cls_val == 0:
                     continue
                 rle_str = seg.get("segmentationmaskcontents", "")
                 if not rle_str:
                     continue
-                mask = decode_rle(rle_str, H, W)
-                n = int(mask.sum())
-                if cls_val == _LVC_CLASS:
-                    lv_counts[f_idx] += n
-                elif cls_val == _MYO_CLASS:
-                    myo_counts[f_idx] += n
-                elif cls_val == _RV_CLASS:
-                    rv_counts[f_idx] += n
+                mask = decode_rle(rle_str, H, W).astype(bool)
+                key = (f_idx, s_idx, cls_val)
+                existing = per_slice_mask.get(key)
+                per_slice_mask[key] = mask if existing is None else (existing | mask)
 
+    lv_counts:  dict[int, int] = {f: 0 for f in observed_frames}
+    myo_counts: dict[int, int] = {f: 0 for f in observed_frames}
+    rv_counts:  dict[int, int] = {f: 0 for f in observed_frames}
+    for (f_idx, _s_idx, cls_val), mask in per_slice_mask.items():
+        n = int(mask.sum())
+        if cls_val == _LVC_CLASS:
+            lv_counts[f_idx]  += n
+        elif cls_val == _MYO_CLASS:
+            myo_counts[f_idx] += n
+        elif cls_val == _RV_CLASS:
+            rv_counts[f_idx]  += n
     return lv_counts, myo_counts, rv_counts
-
-
-# ── MYO voxel count restricted to a specific frame ────────────────────────────
-
-def myo_voxels_at_frame(frames: list, target_idx: int, H: int, W: int) -> int:
-    """Sum myocardial pixels across all slices of a single frame."""
-    total = 0
-    for frame in frames:
-        if int(frame.get("frameindex", 0)) != target_idx:
-            continue
-        for slc in frame.get("slices", []):
-            for seg in slc.get("segmentationmasks", []):
-                if CLASS_MAP.get(seg.get("class", ""), 0) != _MYO_CLASS:
-                    continue
-                rle_str = seg.get("segmentationmaskcontents", "")
-                if not rle_str:
-                    continue
-                total += int(decode_rle(rle_str, H, W).sum())
-    return total
 
 
 # ── Spacing from affine ───────────────────────────────────────────────────────
@@ -233,12 +229,50 @@ def main() -> None:
               file=sys.stdout)
         sys.exit(1)
 
+    # Spacing (column-norms) is kept for the `spacing_mm` display field so the
+    # user still sees the per-axis in-plane / through-plane spacing separately.
     dx, dy, dz = spacing_from_affine(affine)
-    voxel_mm3 = dx * dy * dz
+    # Voxel volume uses the ABSOLUTE DETERMINANT of the top-left 3x3 block.
+    # For an orthogonal (diagonal) affine — which cardiac short-axis CINE
+    # almost always has — det equals the product of the column norms
+    # exactly, so all existing tests and stored volumes are unchanged
+    # bit-for-bit. For an oblique / sheared affine the column-norm product
+    # OVER-estimates the true parallelepiped volume by the sine of the
+    # inter-axis angles; det is the correct geometric volume in either case.
+    # This is why `voxel_mm3` and (spacing_mm[0]*spacing_mm[1]*spacing_mm[2])
+    # may differ slightly for oblique data — see HEART_METRICS_IMPLEMENTATION.md §9.
+    voxel_mm3 = float(abs(np.linalg.det(affine[:3, :3].astype(np.float64))))
     if not math.isfinite(voxel_mm3) or voxel_mm3 <= 0.0:
         print(json.dumps({"error": f"Non-positive voxel volume derived from affine: {voxel_mm3}"}),
               file=sys.stdout)
         sys.exit(1)
+
+    # Plausibility guard on voxel volume (does not fail — flags loudly). Adult
+    # cardiac MRI voxels are typically 1-30 mm^3 (in-plane 0.5-2 mm, slice
+    # 3-10 mm). Values far outside that range strongly suggest a bad affine
+    # (identity fallback, cm-in-mm misread, resample without spacing update,
+    # etc.). Reporting them silently would poison the downstream disease-
+    # similarity comparison (cohort references are in mL — bad spacing means
+    # a real patient could match "DCM" purely because their volumes were
+    # scaled 30x). See PIPELINE_INTEGRATION.md §6 for the incident this
+    # guard was added for.
+    if voxel_mm3 < 0.1:
+        warnings_out.append(
+            f"Suspicious voxel_mm3={voxel_mm3:.4f} mm^3 (< 0.1). Typical cardiac MRI "
+            "voxels are 1-30 mm^3. Check project.affineMatrix — absolute volumes "
+            "may be scaled down by orders of magnitude. EF (a ratio) is unaffected."
+        )
+    elif voxel_mm3 > 200.0:
+        warnings_out.append(
+            f"Suspicious voxel_mm3={voxel_mm3:.2f} mm^3 (> 200). Typical cardiac MRI "
+            "voxels are 1-30 mm^3. Check project.affineMatrix — absolute volumes "
+            "may be scaled up by orders of magnitude. EF (a ratio) is unaffected."
+        )
+    # TODO(ingestion): the underlying fix for a bad project.affineMatrix is to
+    # re-derive it from the source NIfTI on the ingestion side (whoever writes
+    # projectModel.affineMatrix on upload). This module deliberately does not
+    # repair the affine in place — a silent overwrite would mask the ingestion
+    # bug for future projects. Coordinate with the ingestion pipeline owner.
 
     # 3. Per-frame voxel counts.
     lv_counts, myo_counts, rv_counts = count_voxels_per_frame(frames, H, W)
@@ -286,6 +320,26 @@ def main() -> None:
     RVEDV = _safe_float(rv_counts.get(ed_frame, 0) * voxel_mm3 / 1000.0)
     RVESV = _safe_float(rv_counts.get(es_frame, 0) * voxel_mm3 / 1000.0)
 
+    # Plausibility guard on LVEDV. Adult LVEDV is typically ~60-250 mL; a
+    # value far outside that range is either bad segmentation coverage or
+    # (given the affine warning above) bad spacing. We do NOT null the
+    # number — a downstream cohort comparison may still choose to consume
+    # it — but we make the anomaly visible in warnings[] so the report can
+    # surface it and the pipeline log can be grepped for these projects.
+    if LVEDV is not None:
+        if LVEDV < 30.0:
+            warnings_out.append(
+                f"LVEDV={LVEDV:.1f} mL is below the typical adult range (60-250 mL). "
+                "Verify affine and segmentation coverage — this often indicates "
+                "an identity/bad affine (voxel_mm3 too small) or missing basal slices."
+            )
+        elif LVEDV > 400.0:
+            warnings_out.append(
+                f"LVEDV={LVEDV:.1f} mL is above the typical adult range (60-250 mL). "
+                "Verify affine and segmentation coverage — this often indicates "
+                "an inflated affine (voxel_mm3 too large) or duplicated slice data."
+            )
+
     # 7. Ejection fraction — guarded. If we don't have at least two distinct
     #    frames with LV cavity, or ED == ES, EF is not computable. Emit null
     #    with a clear warning rather than a bogus 0%.
@@ -320,8 +374,10 @@ def main() -> None:
                 "No RV voxels at ED — RVEF and RV_SV set to null."
             )
 
-    # 8. LV myocardial mass at ED. Graceful degradation: no MYO → null + warn.
-    myo_at_ed = myo_voxels_at_frame(frames, ed_frame, H, W)
+    # 8. LV myocardial mass at ED. Uses the same deduped myo_counts as the
+    #    per-frame curves — a single walk of the mask data feeds both. Graceful
+    #    degradation: no MYO at ED → null + warn (rest of payload survives).
+    myo_at_ed = myo_counts.get(ed_frame, 0)
     if myo_at_ed > 0:
         LV_mass_g = _safe_float(myo_at_ed * voxel_mm3 / 1000.0 * _MYO_DENSITY_G_PER_ML)
     else:
