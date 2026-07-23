@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Loader2,
@@ -26,7 +26,6 @@ import {
 import { useProject } from "@/context/ProjectContext";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
-import { exportLandmarkPDF } from "@/lib/landmarkPdfExport";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -117,6 +116,7 @@ function maskBelongsTo(
 
 export default function LandmarkDetectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const router = useRouter();
 
   const {
     loading,
@@ -719,19 +719,7 @@ export default function LandmarkDetectionPage() {
               variant="outline"
               size="sm"
               className="text-xs gap-1.5"
-              onClick={() => {
-                exportLandmarkPDF({
-                  projectName: projectData?.name || "Unnamed Project",
-                  detectionModel: state.modelUsed || "UNetResNet34",
-                  totalFrames: state.totalFrames || 0,
-                  currentFrame: state.currentFrame,
-                  strainMetrics: {
-                    peakGCS: "–17.6%",
-                    peakGRS: "+27.8%",
-                    alignment: "94%",
-                  },
-                });
-              }}
+              onClick={() => router.push(`/project/${projectId}/report`)}
             >
               <Download className="h-3.5 w-3.5" />
               Export Report

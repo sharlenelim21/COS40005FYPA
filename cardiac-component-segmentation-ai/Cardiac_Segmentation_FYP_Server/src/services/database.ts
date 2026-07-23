@@ -777,6 +777,7 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
   bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
   heartMetrics: { type: Schema.Types.Mixed, required: false }, // Chamber volumes / EF / LV mass — see IProjectSegmentationMask.heartMetrics
+  healthStatus: { type: Schema.Types.Mixed, required: false }, // Rule-based LV systolic-function health-status assessment (Task 2)
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Create the model with proper typing

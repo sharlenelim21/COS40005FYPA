@@ -311,6 +311,35 @@ export interface IProjectSegmentationMask {
     computed_at: string;
   };
   /**
+   * Rule-based cardiac health-status assessment — NOT a diagnosis.
+   *
+   * Produced by compute_health_status.py from this mask's stored
+   * heartMetrics.measurements (plus heartMetrics.warnings for the low-
+   * confidence branch). Uses the LVEF band as the primary axis, with
+   * supporting evidence lines for EDV / Peak GCS / Peak GRS. See
+   * HEALTH_STATUS_IMPLEMENTATION.md for the exact bands and the
+   * downgrade heuristic. `status` may be "Indeterminate" when EF is null
+   * (single phase or ED == ES). `confidence` drops to "low" when EF is
+   * null OR when volume evidence was suppressed because
+   * heartMetrics.warnings flagged the affine as suspicious.
+   */
+  healthStatus?: {
+    status: "Healthy" | "Mild" | "Moderate" | "Severe" | "Indeterminate";
+    confidence: "normal" | "low";
+    grade_from_ef: "Healthy" | "Mild" | "Moderate" | "Severe" | "Indeterminate";
+    evidence: {
+      label: string;
+      level: "ok" | "warn";
+      detail: string;
+    }[];
+    features_used: string[];
+    features_missing: string[];
+    disclaimer: string;
+    method: string;
+    warnings: string[];
+    computed_at: string;
+  };
+  /**
    * Disease Pattern Similarity Assessment — NOT a diagnosis.
    * Produced by compute_disease_similarity.py from this mask's measurements
    * (heartMetrics.measurements + strain PeakGRS/PeakGCS). Reports which known

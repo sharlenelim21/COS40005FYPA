@@ -61,6 +61,23 @@ type DiseaseSimilarity = {
   computed_at: string;
 };
 
+// Health Status — rule-based, from Task 2. Populated by the backend after
+// heartMetrics is computed (and again after the strain backfill), so this
+// field appears in lockstep with heartMetrics/diseaseSimilarity for editable
+// masks. See docs/HEALTH_STATUS_IMPLEMENTATION.md for the field semantics.
+type HealthStatus = {
+  status: "Healthy" | "Mild" | "Moderate" | "Severe" | "Indeterminate";
+  confidence: "normal" | "low";
+  grade_from_ef: "Healthy" | "Mild" | "Moderate" | "Severe" | "Indeterminate";
+  evidence: { label: string; level: "ok" | "warn"; detail: string }[];
+  features_used: string[];
+  features_missing: string[];
+  disclaimer: string;
+  method: string;
+  warnings: string[];
+  computed_at: string;
+};
+
 type MaskDoc = {
   _id?: string;
   name?: string;
@@ -69,6 +86,7 @@ type MaskDoc = {
   model_used?: string;
   heartMetrics?: HeartMetrics;
   diseaseSimilarity?: DiseaseSimilarity;
+  healthStatus?: HealthStatus;
 };
 
 type Model = "unet" | "medsam";
@@ -138,9 +156,9 @@ export default function ResultsPage() {
     const pick = (want: Model): MaskDoc | null => {
       const candidates = (masks ?? []).filter((m) => inferModel(m) === want);
       if (candidates.length === 0) return null;
-      // Prefer a doc that actually has metrics/similarity computed.
+      // Prefer a doc that actually has metrics/similarity/health-status computed.
       return (
-        candidates.find((m) => m.heartMetrics?.measurements || m.diseaseSimilarity) ??
+        candidates.find((m) => m.heartMetrics?.measurements || m.diseaseSimilarity || m.healthStatus) ??
         candidates[0]
       );
     };
@@ -163,6 +181,7 @@ export default function ResultsPage() {
   const doc = byModel[model];
   const measurements = doc?.heartMetrics?.measurements;
   const similarity = doc?.diseaseSimilarity;
+  const healthStatus = doc?.healthStatus;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8">
@@ -233,12 +252,84 @@ export default function ResultsPage() {
             )}
           </section>
 
-          {/* ── Health Status (placeholder) ── */}
+          {/* ── Health Status ── */}
+          {/*
+            Wired to mask.healthStatus (Task 2 — rule-based, ASE/EACVI 2015
+            LVEF grading; see docs/HEALTH_STATUS_IMPLEMENTATION.md for the
+            exact bands and downgrade heuristic). Field is populated by the
+            backend after heartMetrics is stored and again after the strain
+            backfill of PeakGRS/PeakGCS, so a stale card here means the
+            editable-mask compute chain hasn't reached this mask yet.
+          */}
           <section>
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Health Status</h2>
-            <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
-              Rule-based health-status assessment is pending — this module is not yet integrated.
-            </div>
+            {healthStatus ? (
+              <div className="rounded-xl border border-border bg-card p-4">
+                <div className="mb-3 flex items-baseline gap-3">
+                  <span className="text-xs text-muted-foreground">Status:</span>
+                  <span className={cn(
+                    "text-sm font-semibold",
+                    healthStatus.status === "Healthy"       && "text-emerald-600 dark:text-emerald-400",
+                    healthStatus.status === "Mild"          && "text-amber-600  dark:text-amber-400",
+                    healthStatus.status === "Moderate"      && "text-orange-600 dark:text-orange-400",
+                    healthStatus.status === "Severe"        && "text-red-600    dark:text-red-400",
+                    healthStatus.status === "Indeterminate" && "text-muted-foreground",
+                  )}>
+                    {healthStatus.status}
+                  </span>
+                  <span className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                    healthStatus.confidence === "normal"
+                      ? "border-border text-muted-foreground"
+                      : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+                  )}>
+                    {healthStatus.confidence === "normal" ? "normal confidence" : "low confidence"}
+                  </span>
+                  {healthStatus.status !== healthStatus.grade_from_ef && healthStatus.grade_from_ef !== "Indeterminate" && (
+                    <span className="text-[11px] text-muted-foreground">
+                      (EF grade {healthStatus.grade_from_ef} → downgraded)
+                    </span>
+                  )}
+                </div>
+
+                {healthStatus.evidence?.length > 0 && (
+                  <div className="mb-3">
+                    <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Evidence</div>
+                    <ul className="flex flex-col gap-1.5">
+                      {healthStatus.evidence.map((e, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs text-foreground">
+                          <span
+                            className={cn(
+                              "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
+                              e.level === "ok" ? "bg-emerald-500" : "bg-amber-500",
+                            )}
+                            aria-hidden
+                          />
+                          <span>
+                            <span className="font-medium">{e.label}:</span>{" "}
+                            <span className="text-muted-foreground">{e.detail}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {healthStatus.features_missing?.length > 0 && (
+                  <div className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">
+                    Missing features: {healthStatus.features_missing.join(", ")} — status is based on the available metrics.
+                  </div>
+                )}
+
+                <p className="mt-4 border-t border-border pt-3 text-[11px] italic text-muted-foreground">
+                  {healthStatus.disclaimer}
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
+                Health status not computed for this model yet — it will populate once heart metrics have run.
+              </div>
+            )}
           </section>
 
           {/* ── Disease Pattern Similarity ── */}

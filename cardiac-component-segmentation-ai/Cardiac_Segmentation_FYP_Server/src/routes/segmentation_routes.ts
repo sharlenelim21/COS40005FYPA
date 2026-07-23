@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -1280,6 +1280,17 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
                     logger.warn(`${serviceLocation}: Auto disease-similarity after strain failed for mask ${maskDoc._id}: ${simErr?.message}`);
                 });
                 logger.info(`${serviceLocation}: Auto-fired disease similarity for mask ${maskDoc._id} after strain compute.`);
+
+                // Re-fire Health Status too — strain has just backfilled
+                // measurements.PeakGRS/PeakGCS (when frames matched), so the
+                // rule engine can now emit Peak GCS / Peak GRS evidence
+                // instead of listing them under features_missing. The health-
+                // status service fetches measurements fresh, so this picks up
+                // the values we just $set-wrote.
+                computeHealthStatusFromMetrics(maskDoc._id.toString()).catch((hsErr: any) => {
+                    logger.warn(`${serviceLocation}: Auto health-status after strain failed for mask ${maskDoc._id}: ${hsErr?.message}`);
+                });
+                logger.info(`${serviceLocation}: Auto-fired health status for mask ${maskDoc._id} after strain compute.`);
             } else {
                 logger.info(`${serviceLocation}: Skipped auto disease-similarity for mask ${maskDoc._id} — heart metrics not computed yet.`);
             }
@@ -1493,6 +1504,52 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering disease similarity for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// Trigger the rule-based Health Status computation for a single mask.
+// Reads heartMetrics.measurements + heartMetrics.warnings off the mask doc
+// and stores healthStatus back on the same doc. Mirrors trigger-disease-
+// similarity 1:1 — no request body (this module has no external inputs
+// beyond the mask itself), 200 response, async compute.
+// POST /segmentation/trigger-health-status/:maskId
+router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        // Project access check — same as trigger-disease-similarity.
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        const hm: any = (maskDoc as any).heartMetrics;
+        if (!hm || !hm.measurements) {
+            return res.status(400).json({
+                success: false,
+                message: "Heart metrics not computed for this mask yet — run trigger-heart-metrics first.",
+            });
+        }
+
+        // Respond immediately and run the compute async — same pattern as the
+        // other trigger routes.
+        res.json({ success: true, message: "Health-status computation started." });
+
+        computeHealthStatusFromMetrics(maskId).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-health-status async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering health status for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }

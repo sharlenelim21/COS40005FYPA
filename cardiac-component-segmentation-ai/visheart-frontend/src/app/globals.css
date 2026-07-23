@@ -167,6 +167,55 @@ button[type="submit"]:hover {
   }
 }
 
+/*
+ * Print layout for the exported patient report (/project/[id]/report).
+ * Isolates #vh-report-root so only the report pages print — nav bars, dashboard
+ * chrome, and anything else on the page stays hidden without touching those
+ * shared components. Each .vh-report-page becomes exactly one printed sheet.
+ */
+@media print {
+  /*
+   * Without this, the browser's own default print margins (commonly
+   * ~12-19mm per side) eat into every physical A4 sheet — so a
+   * 297mm-tall .vh-report-page never actually fits on one page, and the
+   * few millimetres of overflow (usually just the footer) spills onto a
+   * second, near-blank page after every single page. Zeroing the @page
+   * margin and letting each .vh-report-page's own padding act as the
+   * visual margin is what makes "one section == one printed sheet" true.
+   */
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #vh-report-root,
+  #vh-report-root * {
+    visibility: visible;
+  }
+  #vh-report-root {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .vh-no-print {
+    display: none !important;
+  }
+  .vh-report-page {
+    width: 210mm !important;
+    min-height: 297mm !important;
+    margin: 0 !important;
+    page-break-after: always;
+    page-break-inside: avoid;
+  }
+  .vh-report-page:last-child {
+    page-break-after: auto;
+  }
+}
+
 /* Custom font definition */
 /* Load RetroFloral font from local file */
 @font-face {
