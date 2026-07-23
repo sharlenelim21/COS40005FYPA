@@ -29,6 +29,7 @@ export function StrainDetailPage({
   pageNumber,
   totalPages,
   generatedAt,
+  realSeries,
 }: {
   strainType: StrainType;
   patientLabel: string;
@@ -36,8 +37,11 @@ export function StrainDetailPage({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  /** Computed per-frame strain (frame → 17 segments); dummy preview when absent. */
+  realSeries?: { segment: number; label: string; strain: number }[][];
 }) {
-  const series = buildDummyCycleSeries(strainType, totalFrames);
+  const series = realSeries?.length ? realSeries : buildDummyCycleSeries(strainType, totalFrames);
+  const isReal = !!realSeries?.length;
   const stat = seriesGlobalPeak(series, strainType);
   const unit = "%";
 
@@ -83,6 +87,11 @@ export function StrainDetailPage({
           Across the cardiac cycle — summary curve
         </h3>
         <RegionalStrainFullCycle series={series} strainType={strainType} width={620} height={190} legendSize="xs" legendColumns={2} />
+        <p className="mt-2 text-[8.5px] text-muted-foreground">
+          {isReal
+            ? "Computed from this patient's segmentation: each frame's strain is measured against the end-diastolic reference frame."
+            : "PREVIEW VALUES — not this patient's data. No per-frame strain series has been computed for this model; run the strain series to populate this page."}
+        </p>
       </section>
     </ReportPageFrame>
   );

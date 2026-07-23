@@ -34,6 +34,7 @@ export function RegionalStrainBullseyePage({
   pageNumber,
   totalPages,
   generatedAt,
+  realSeries,
 }: {
   strainType: StrainType;
   patientLabel: string;
@@ -41,8 +42,15 @@ export function RegionalStrainBullseyePage({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  /**
+   * Computed per-frame strain, already mapped to the chart's shape
+   * (frame → 17 segments). When absent the dummy preview is used and the page
+   * says so, so a printed report never implies uncomputed values are measured.
+   */
+  realSeries?: { segment: number; label: string; strain: number }[][];
 }) {
-  const series = buildDummyCycleSeries(strainType, totalFrames);
+  const series = realSeries?.length ? realSeries : buildDummyCycleSeries(strainType, totalFrames);
+  const isReal = !!realSeries?.length;
   const domain = DOMAIN[strainType];
 
   return (
@@ -91,8 +99,9 @@ export function RegionalStrainBullseyePage({
         ))}
       </div>
       <p className="mt-2 text-[8.5px] text-muted-foreground">
-        Dummy preview values — the backend only computes strain ED→ES today (see the data-dependency note on
-        the strain detail pages), not the full per-frame series shown here.
+        {isReal
+          ? "Computed from this patient's segmentation: each frame's strain is measured against the end-diastolic reference frame."
+          : "PREVIEW VALUES — not this patient's data. No per-frame strain series has been computed for this model; run the strain series to populate this page."}
       </p>
     </ReportPageFrame>
   );
