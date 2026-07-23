@@ -21,7 +21,6 @@ import {
 import {
   MapPin,
   Activity,
-  Settings2,
   Brain,
   Play,
   Pause,
@@ -31,7 +30,6 @@ import {
   Upload,
   X,
   AlertCircle,
-  RefreshCw,
   Download,
   FileText,
 } from "lucide-react";
@@ -43,10 +41,13 @@ import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
 import { getDummyStrainData, getStrainColor, type StrainType } from "@/components/landmark/StrainVisualization";
 import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries } from "@/components/landmark/RegionalStrainCharts";
 
+// Two tabs, split by what they operate on: landmark points (per slice) and
+// strain (per cardiac frame). The former Settings tab was removed — its
+// inference summary and Re-run button both already exist in the page header,
+// leaving only Reset Page, which now lives with the landmark controls.
 const NAV_ITEMS = [
-  { key: "landmarks", icon: MapPin,    label: "Landmarks" },
-  { key: "strain",    icon: Activity,  label: "Strain"    },
-  { key: "settings",  icon: Settings2, label: "Settings"  },
+  { key: "landmarks", icon: MapPin,   label: "Landmarks" },
+  { key: "strain",    icon: Activity, label: "Strain"    },
 ] as const;
 
 type TabKey = typeof NAV_ITEMS[number]["key"];
@@ -77,6 +78,12 @@ export interface LandmarkSidebarProps {
    * heart can follow strain playback. Distinct from the slice index in `state`.
    */
   onStrainFrameChange?: (frame: number) => void;
+  /**
+   * Reports the active tab so the page can switch the whole workspace, not just
+   * this sidebar: Landmarks shows the MRI viewer alone, Strain shows the
+   * bullseye and 3D heart.
+   */
+  onTabChange?: (tab: "landmarks" | "strain") => void;
 
   onToggleLandmark: (id: string) => void;
   onTogglePlay: () => void;
@@ -105,6 +112,7 @@ export function LandmarkSidebar({
   replacementFileError,
   confidentCount,
   onStrainFrameChange,
+  onTabChange,
   onToggleLandmark,
   onTogglePlay,
   onNextFrame,
@@ -125,7 +133,13 @@ export function LandmarkSidebar({
   selectedStrainType = "GCS",
 }: LandmarkSidebarProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("landmarks");
-  const handleTabChange = useCallback((key: TabKey) => setActiveTab(key), []);
+  const handleTabChange = useCallback(
+    (key: TabKey) => {
+      setActiveTab(key);
+      onTabChange?.(key);
+    },
+    [onTabChange],
+  );
 
   // Strain playback runs on its own axis: the cardiac CYCLE (frames), whereas
   // state.currentFrame/totalFrames track SLICES (landmark detection is per
@@ -283,25 +297,38 @@ export function LandmarkSidebar({
             onToggleEditableLandmarks={onToggleEditableLandmarks}
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={onHighlightLandmark}
+            onReset={onReset}
           />
         )}
         {activeTab === "strain" && (
-          <StrainTab
-            hasPredictions={hasPredictions}
-            currentFrame={strainFrame}
-            totalFrames={strainFrameCount}
-            selectedStrainSegment={selectedStrainSegment}
-            selectedStrainType={selectedStrainType}
-          />
-        )}
-        {activeTab === "settings" && (
-          <SettingsTab
-            hasPredictions={hasPredictions}
-            onRerun={onRerun}
-            onReset={onReset}
-            modelUsed={state.modelUsed || "UNetResNet34 Landmark"}
-            totalFrames={state.totalFrames}
-          />
+          <div className="space-y-4">
+            <StrainTab
+              hasPredictions={hasPredictions}
+              currentFrame={strainFrame}
+              totalFrames={strainFrameCount}
+              selectedStrainSegment={selectedStrainSegment}
+              selectedStrainType={selectedStrainType}
+            />
+            {/* Strain-view toggles live here rather than with the landmark
+                controls — they affect this tab's rendering, not the points. */}
+            {hasPredictions && (
+              <DetectionSettingsPanel
+                scope="strain"
+                showLabels={showLabels}
+                onToggleShowLabels={onToggleShowLabels}
+                showCentroid={showCentroid}
+                onToggleShowCentroid={() => setShowCentroid((p) => !p)}
+                showRadialLines={showRadialLines}
+                onToggleShowRadialLines={() => setShowRadialLines((p) => !p)}
+                showStrainOverlay={showStrainOverlay}
+                onToggleShowStrainOverlay={() => setShowStrainOverlay((p) => !p)}
+                autoAlignAha={autoAlignAha}
+                onToggleAutoAlignAha={() => setAutoAlignAha((p) => !p)}
+                editableLandmarks={editableLandmarks}
+                onToggleEditableLandmarks={onToggleEditableLandmarks}
+              />
+            )}
+          </div>
         )}
       </div>
 
@@ -487,11 +514,14 @@ function LandmarksTab({
   onToggleEditableLandmarks,
   highlightedLandmarkId,
   onHighlightLandmark,
+  onReset,
 }: {
   prediction: FramePrediction | null;
   visibleLandmarks: Set<string>;
   onToggleLandmark: (id: string) => void;
   hasPredictions: boolean;
+  /** Reset Page — relocated here from the removed Settings tab. */
+  onReset?: () => void;
   currentFrame: number;
   replacementFile: File | null;
   replacementFileError: string | null;
@@ -657,6 +687,22 @@ function LandmarksTab({
           onClearReplacementFile={onClearReplacementFile}
         />
       </div>
+
+      {/* Moved here when the Settings tab was removed — its other contents
+          (inference summary, Re-run) already exist in the page header. */}
+      {onReset && (
+        <div className="pt-3 border-t border-border">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full gap-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={onReset}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset Page
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -674,6 +720,7 @@ function DetectionSettingsPanel({
   onToggleAutoAlignAha,
   editableLandmarks,
   onToggleEditableLandmarks,
+  scope = "landmarks",
 }: {
   showLabels: boolean;
   onToggleShowLabels: () => void;
@@ -687,16 +734,28 @@ function DetectionSettingsPanel({
   onToggleAutoAlignAha: () => void;
   editableLandmarks: boolean;
   onToggleEditableLandmarks?: () => void;
+  /** Which tab is rendering this — decides which toggles are relevant. */
+  scope?: "landmarks" | "strain";
 }) {
-  const settings = [
-    { label: "Show landmark labels", checked: showLabels, onCheckedChange: onToggleShowLabels },
-    { label: "Move/edit landmarks", checked: editableLandmarks, onCheckedChange: onToggleEditableLandmarks },
-  ];
+  // Split by what each toggle actually affects: landmark point display/editing
+  // vs. the strain overlay and AHA segment alignment.
+  const settings =
+    scope === "strain"
+      ? [
+          { label: "Show strain overlay", checked: showStrainOverlay, onCheckedChange: onToggleShowStrainOverlay },
+          { label: "Auto-align AHA segments", checked: autoAlignAha, onCheckedChange: onToggleAutoAlignAha },
+          { label: "Show radial lines", checked: showRadialLines, onCheckedChange: onToggleShowRadialLines },
+          { label: "Show centroid", checked: showCentroid, onCheckedChange: onToggleShowCentroid },
+        ]
+      : [
+          { label: "Show landmark labels", checked: showLabels, onCheckedChange: onToggleShowLabels },
+          { label: "Move/edit landmarks", checked: editableLandmarks, onCheckedChange: onToggleEditableLandmarks },
+        ];
 
   return (
     <section className="space-y-3 rounded-lg border border-border bg-muted/20 p-3">
       <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-        Detection Settings
+        {scope === "strain" ? "Display Settings" : "Detection Settings"}
       </h3>
       <div className="space-y-2">
         {settings.map((setting) => (
@@ -1348,64 +1407,3 @@ function StrainMetricCard({
 }
 
 // Settings
-function SettingsTab({
-  hasPredictions,
-  onRerun,
-  onReset,
-  modelUsed,
-  totalFrames,
-}: {
-  hasPredictions: boolean;
-  onRerun: () => void;
-  onReset: () => void;
-  modelUsed: string;
-  totalFrames: number;
-}) {
-  return (
-    <div className="space-y-4">
-      <h3 className="text-sm font-medium text-foreground">Settings</h3>
-
-      <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
-        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-          Inference Summary
-        </h4>
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <span className="text-muted-foreground">Model</span>
-          <span className="text-right font-medium text-foreground truncate">{modelUsed}</span>
-          <span className="text-muted-foreground">Frames</span>
-          <span className="text-right font-medium text-foreground">{totalFrames || "Not detected"}</span>
-          <span className="text-muted-foreground">Status</span>
-          <span className={cn("text-right font-medium", hasPredictions ? "text-green-600" : "text-amber-600")}>
-            {hasPredictions ? "Active" : "Pending"}
-          </span>
-        </div>
-      </div>
-
-      <div className="space-y-2 rounded-lg border border-border bg-background p-3">
-        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-          Workflow
-        </h4>
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full text-xs gap-2"
-          onClick={onRerun}
-          disabled={!hasPredictions}
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Re-run Detection (bypass cache)
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full text-xs gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-          onClick={onReset}
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          Reset Page
-        </Button>
-      </div>
-    </div>
-  );
-}

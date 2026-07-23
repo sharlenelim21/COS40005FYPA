@@ -575,6 +575,11 @@ export default function LandmarkDetectionPage() {
   // landmark viewer.
   const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
 
+  // Which workspace the sidebar's tab has selected. Landmarks is about editing
+  // points on the MRI, so the bullseye/3D panel is hidden and the viewer gets
+  // the full width; Strain brings that panel back.
+  const [workspace, setWorkspace] = useState<"landmarks" | "strain">("landmarks");
+
   // Per-frame wall thickness, when the full-cycle strain series has been run for
   // the model the bullseye is showing. This is what lets the AHA plot animate
   // real myocardial thickening; without it the stored `bullseye` is a single
@@ -853,6 +858,7 @@ export default function LandmarkDetectionPage() {
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
             onStrainFrameChange={setStrainPlaybackFrame}
+            onTabChange={setWorkspace}
             onToggleLandmark={handleToggleLandmark}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
@@ -877,11 +883,19 @@ export default function LandmarkDetectionPage() {
 
       {/* Desktop: 3-panel resizable layout */}
       <div className="hidden lg:flex flex-1 min-h-0 p-3">
+        {/* Keyed on the workspace: the group caches panel sizes by index, so
+            adding/removing the bullseye panel without a remount leaves the
+            remaining panels at stale widths. */}
         <ResizablePanelGroup
+          key={workspace}
           direction="horizontal"
           className="h-full w-full rounded-xl border shadow-sm"
         >
-          <ResizablePanel defaultSize={44} minSize={32} maxSize={62}>
+          {/* Bullseye / 3D heart — only in the Strain workspace. In Landmarks
+              the task is editing points on the MRI, so this panel is hidden and
+              the viewer takes its space. */}
+          {workspace === "strain" && (
+          <ResizablePanel defaultSize={78} minSize={40}>
             <div className="w-full h-full bg-background p-4 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1063,11 +1077,13 @@ export default function LandmarkDetectionPage() {
               )}
             </div>
           </ResizablePanel>
+          )}
 
-          <ResizableHandle withHandle />
-
-          {/* CENTER: 2D MRI slice viewer + landmark overlay */}
-          <ResizablePanel defaultSize={38} minSize={25}>
+          {/* CENTER: 2D MRI slice viewer + landmark overlay — the Landmarks
+              workspace only. Strain is about the cardiac cycle as a whole
+              (bullseye / 3D heart / curves), not editing points on a slice. */}
+          {workspace === "landmarks" && (
+          <ResizablePanel defaultSize={62} minSize={25}>
             <div className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden">
               {state.status === "idle" && !isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10 pointer-events-none">
@@ -1118,10 +1134,11 @@ export default function LandmarkDetectionPage() {
 
             </div>
           </ResizablePanel>
+          )}
 
           <ResizableHandle withHandle />
 
-          {/* RIGHT: Sidebar */}
+          {/* RIGHT: Sidebar — present in both workspaces. */}
           <ResizablePanel defaultSize={22} minSize={15} maxSize={35}>
             <div className="h-full w-full">
               <LandmarkSidebar
@@ -1131,6 +1148,7 @@ export default function LandmarkDetectionPage() {
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
                 onStrainFrameChange={setStrainPlaybackFrame}
+            onTabChange={setWorkspace}
                 onToggleLandmark={handleToggleLandmark}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}
