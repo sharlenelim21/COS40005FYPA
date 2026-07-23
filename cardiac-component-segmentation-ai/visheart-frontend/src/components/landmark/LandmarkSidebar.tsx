@@ -1,8 +1,11 @@
 "use client";
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { useProjectResults } from "@/hooks/useProjectResults";
+import { useProject } from "@/context/ProjectContext";
+import { computeStrainSeries } from "@/lib/landmarkApi";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -69,6 +72,11 @@ export interface LandmarkSidebarProps {
   visibleLandmarks: Set<string>;
   replacementFileError: string | null;
   confidentCount?: number;
+  /**
+   * Reports the Strain tab's cardiac-cycle frame so the page's bullseye and 3D
+   * heart can follow strain playback. Distinct from the slice index in `state`.
+   */
+  onStrainFrameChange?: (frame: number) => void;
 
   onToggleLandmark: (id: string) => void;
   onTogglePlay: () => void;
@@ -96,6 +104,7 @@ export function LandmarkSidebar({
   visibleLandmarks,
   replacementFileError,
   confidentCount,
+  onStrainFrameChange,
   onToggleLandmark,
   onTogglePlay,
   onNextFrame,
@@ -117,6 +126,33 @@ export function LandmarkSidebar({
 }: LandmarkSidebarProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("landmarks");
   const handleTabChange = useCallback((key: TabKey) => setActiveTab(key), []);
+
+  // Strain playback runs on its own axis: the cardiac CYCLE (frames), whereas
+  // state.currentFrame/totalFrames track SLICES (landmark detection is per
+  // slice). Keeping them separate is what fixes playback showing 1/10 on a
+  // 30-frame study.
+  //
+  // The frame index is reported upward (onStrainFrameChange) because the
+  // bullseye and 3D heart are rendered by the page, not here — without that
+  // they would keep animating on the slice index and disagree with this
+  // playback bar.
+  const { projectData: sidebarProject } = useProject();
+  const strainFrameCount = Math.max(sidebarProject?.dimensions?.frames ?? 0, 1);
+  const [strainFrame, setStrainFrame] = useState(0);
+  const [strainPlaying, setStrainPlaying] = useState(false);
+  useEffect(() => { onStrainFrameChange?.(strainFrame); }, [strainFrame, onStrainFrameChange]);
+  useEffect(() => {
+    if (!strainPlaying || strainFrameCount < 2) return;
+    const id = setInterval(
+      () => setStrainFrame((f) => (f + 1) % strainFrameCount),
+      1000 / Math.max(state.playbackFps || 2, 0.5),
+    );
+    return () => clearInterval(id);
+  }, [strainPlaying, strainFrameCount, state.playbackFps]);
+  // Keep the index valid if the project's frame count arrives late or changes.
+  useEffect(() => {
+    setStrainFrame((f) => Math.min(f, strainFrameCount - 1));
+  }, [strainFrameCount]);
   const [showCentroid, setShowCentroid] = useState(true);
   const [showRadialLines, setShowRadialLines] = useState(false);
   const [showStrainOverlay, setShowStrainOverlay] = useState(true);
@@ -179,9 +215,15 @@ export function LandmarkSidebar({
       {/* Playback controls — fixed above the scroll area for Landmarks/Settings.
           For Strain, it scrolls away with the tab content instead (see below):
           fixed playback bar + our sticky graph card would otherwise stack two
-          pinned elements and cover the segment labels underneath. */}
+          pinned elements and cover the segment labels underneath.
+
+          AXIS: the Landmarks tab steps through SLICES — landmark detection runs
+          per slice, so state.totalFrames (from the model's result) is a slice
+          count despite the name. The Strain tab steps through FRAMES (the
+          cardiac cycle) instead; see the strain PlaybackBar below. */}
       {hasPredictions && activeTab !== "strain" && (
         <PlaybackBar
+          axisLabel="Slice"
           currentFrame={state.currentFrame}
           totalFrames={state.totalFrames}
           isPlaying={state.isPlaying}
@@ -199,16 +241,19 @@ export function LandmarkSidebar({
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
         {activeTab === "strain" && hasPredictions && (
           <div className="-mx-4 -mt-4 mb-4">
+            {/* Strain is a property of the cardiac CYCLE, so this steps through
+                frames (e.g. 1/30) — not slices like the Landmarks tab. */}
             <PlaybackBar
-              currentFrame={state.currentFrame}
-              totalFrames={state.totalFrames}
-              isPlaying={state.isPlaying}
+              axisLabel="Frame"
+              currentFrame={strainFrame}
+              totalFrames={strainFrameCount}
+              isPlaying={strainPlaying}
               playbackFps={state.playbackFps}
               confidentCount={confidentCount ?? 0}
-              onTogglePlay={onTogglePlay}
-              onNextFrame={onNextFrame}
-              onPrevFrame={onPrevFrame}
-              onSliderChange={onSliderChange}
+              onTogglePlay={() => setStrainPlaying((p) => !p)}
+              onNextFrame={() => setStrainFrame((f) => Math.min(f + 1, strainFrameCount - 1))}
+              onPrevFrame={() => setStrainFrame((f) => Math.max(f - 1, 0))}
+              onSliderChange={(f) => setStrainFrame(Math.max(0, Math.min(f, strainFrameCount - 1)))}
               onPlaybackSpeedChange={onPlaybackSpeedChange}
             />
           </div>
@@ -243,8 +288,8 @@ export function LandmarkSidebar({
         {activeTab === "strain" && (
           <StrainTab
             hasPredictions={hasPredictions}
-            currentFrame={state.currentFrame}
-            totalFrames={state.totalFrames}
+            currentFrame={strainFrame}
+            totalFrames={strainFrameCount}
             selectedStrainSegment={selectedStrainSegment}
             selectedStrainType={selectedStrainType}
           />
@@ -276,9 +321,12 @@ function PlaybackBar({
   onPrevFrame,
   onSliderChange,
   onPlaybackSpeedChange,
+  axisLabel = "Frame",
 }: {
   currentFrame: number;
   totalFrames: number;
+  /** What the counter steps through — "Slice" for landmarks, "Frame" for strain. */
+  axisLabel?: string;
   isPlaying: boolean;
   playbackFps: number;
   confidentCount: number;
@@ -326,7 +374,7 @@ function PlaybackBar({
           <SkipForward className="h-4 w-4" />
         </button>
 
-        {/* Frame counter */}
+        {/* Position counter — axis depends on the tab (slices vs. frames) */}
         <span className="text-[10px] text-muted-foreground font-mono shrink-0 tabular-nums">
           {currentFrame + 1}/{totalFrames}
         </span>
@@ -334,7 +382,7 @@ function PlaybackBar({
 
       {/* Playback mode label */}
       <p className="text-[10px] text-muted-foreground text-center">
-        {"Playing all slices"}
+        {axisLabel === "Slice" ? "Stepping through slices" : "Playing the cardiac cycle"}
       </p>
 
       {/* Slider */}
@@ -750,12 +798,106 @@ function StrainTab({
   const [labelsView, setLabelsView] = useState<"lvSegments" | "values">("lvSegments");
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
   const frameCount = Math.max(totalFrames || 10, 1);
-  const cycleSeries = useMemo(
-    () => buildDummyCycleSeries(selectedStrainType, frameCount),
-    [selectedStrainType, frameCount],
-  );
-  const curveData = selectedStrainSegment
-    ? Array.from({ length: frameCount }, (_, frame) => {
+
+  // Stored per-model strain (ED→ES) and the optional full-cycle series. Each
+  // segmentation model is its own mask document, so `strainModel` is a display
+  // selector over already-computed results — switching never recomputes.
+  const [strainModel, setStrainModel] = useState<"unet" | "medsam">("unet");
+  const {
+    strain: realStrain,
+    strainSeries: realSeries,
+    available: modelAvailable,
+    setModel: setResultsModel,
+    autoEdFrame,
+  } = useProjectResults(projectId);
+  useEffect(() => { setResultsModel(strainModel); }, [strainModel, setResultsModel]);
+
+  const strainKey = selectedStrainType === "GRS" ? "grs" : "gcs";
+
+  /**
+   * Per-frame series in the chart's shape. Real data when the strain-series
+   * route has been run for this model; otherwise the dummy preview, which the
+   * UI labels explicitly so the two are never confused.
+   */
+  const cycleSeries = useMemo(() => {
+    if (realSeries?.frames?.length) {
+      return realSeries.frames.map((f) =>
+        (f.segments ?? []).map((s) => ({
+          segment: s.segment,
+          label: s.label,
+          strain: ((s as any)[strainKey] ?? 0) as number,
+        })),
+      );
+    }
+    return buildDummyCycleSeries(selectedStrainType, frameCount);
+  }, [realSeries, strainKey, selectedStrainType, frameCount]);
+
+  const usingRealSeries = !!realSeries?.frames?.length;
+  const usingRealStrain = !!realStrain?.segments?.length;
+  // Stamped by the backend when landmarks are saved after a strain compute.
+  const strainIsStale = !!(realSeries?.staleSince || realStrain?.staleSince);
+
+  // Full-cycle strain: one GPU call per frame, so it's opt-in rather than
+  // automatic. ED comes from the stored ED→ES result when available.
+  const [seriesBusy, setSeriesBusy] = useState(false);
+  const [seriesError, setSeriesError] = useState<string | null>(null);
+  const runStrainSeries = useCallback(async () => {
+    if (!projectId) return;
+    // ED must be the true end-diastole (largest LV cavity) — it is the reference
+    // every frame is measured against. Prefer the frames a previous strain run
+    // used, then heart-metrics' auto-detected ED. Falling back to frame 0 makes
+    // the whole series meaningless (frame 0 is rarely ED), so only do so as a
+    // last resort.
+    const edIndex =
+      realStrain?.edFrameIndex ??
+      realSeries?.edFrameIndex ??
+      autoEdFrame ??
+      0;
+    setSeriesBusy(true);
+    setSeriesError(null);
+    try {
+      await computeStrainSeries(projectId, edIndex, strainModel);
+      // Stored on the mask — reload so every consumer picks it up.
+      window.location.reload();
+    } catch (err: any) {
+      setSeriesError(err?.response?.data?.error ?? err?.message ?? "Strain series failed.");
+    } finally {
+      setSeriesBusy(false);
+    }
+  }, [projectId, realStrain, realSeries, strainModel, autoEdFrame]);
+  /**
+   * Global curve: one point per frame. When a segment is selected the curve
+   * tracks that segment; otherwise it is the mean across all 17. Uses the
+   * measured per-frame series when available, falling back to the dummy shape
+   * only when nothing has been computed (the UI labels which is showing).
+   *
+   * `time` is a nominal ms position across the cycle — the pipeline does not
+   * store acquisition timing, so it is derived from the frame index.
+   */
+  const curveData = useMemo(() => {
+    if (realSeries?.frames?.length) {
+      const n = realSeries.frames.length;
+      return realSeries.frames.map((f, i) => {
+        const segs = f.segments ?? [];
+        let value: number;
+        if (selectedStrainSegment) {
+          const seg = segs.find((s) => s.segment === selectedStrainSegment);
+          value = ((seg as any)?.[strainKey] ?? 0) as number;
+        } else {
+          const vals = segs
+            .map((s) => (s as any)[strainKey])
+            .filter((v: unknown): v is number => typeof v === "number");
+          value = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+        }
+        return {
+          frame: f.frameIndex + 1,
+          time: Math.round((i / Math.max(n - 1, 1)) * 1200),
+          strain: Number(value.toFixed(1)),
+        };
+      });
+    }
+    if (selectedStrainSegment) {
+      return Array.from({ length: frameCount }, (_, frame) => {
         const segment = getDummyStrainData(selectedStrainType, frame, frameCount)
           .find((item) => item.segment === selectedStrainSegment);
         return {
@@ -763,16 +905,62 @@ function StrainTab({
           time: Math.round((frame / Math.max(frameCount - 1, 1)) * 1200),
           strain: segment?.strain ?? 0,
         };
-      })
-    : strainCurveData(selectedStrainType, frameCount);
-  const segmentValues = getDummyStrainData(selectedStrainType, currentFrame, frameCount);
+      });
+    }
+    return strainCurveData(selectedStrainType, frameCount);
+  }, [realSeries, strainKey, selectedStrainSegment, selectedStrainType, frameCount]);
+  // Prefer the frame the user is scrubbing to (needs the series); fall back to
+  // the single ED→ES result, then to the dummy preview.
+  const segmentValues = useMemo(() => {
+    if (realSeries?.frames?.length) {
+      const frame =
+        realSeries.frames.find((f) => f.frameIndex === currentFrame) ??
+        realSeries.frames.find((f) => f.frameIndex === realSeries.peakFrameIndex);
+      if (frame?.segments?.length) {
+        return frame.segments.map((s) => ({
+          segment: s.segment,
+          label: s.label,
+          strain: ((s as any)[strainKey] ?? 0) as number,
+        }));
+      }
+    }
+    if (realStrain?.segments?.length) {
+      return realStrain.segments.map((s) => ({
+        segment: s.segment,
+        label: s.label,
+        strain: ((s as any)[strainKey] ?? 0) as number,
+      }));
+    }
+    return getDummyStrainData(selectedStrainType, currentFrame, frameCount);
+  }, [realSeries, realStrain, strainKey, currentFrame, selectedStrainType, frameCount]);
   const selectedSegmentValue = selectedStrainSegment
     ? segmentValues.find((item) => item.segment === selectedStrainSegment)
     : null;
+  // "Current" = mean across segments at the frame being viewed.
   const currentAverage = segmentValues.reduce((sum, item) => sum + item.strain, 0) / segmentValues.length;
-  const peakValue = selectedStrainType === "GRS"
-    ? Math.max(...curveData.map((item) => item.strain))
-    : Math.min(...curveData.map((item) => item.strain));
+
+  /**
+   * "Peak" = the extreme over the whole cycle. Prefer measured values:
+   *   1. strainSeries — the true peak across every computed frame
+   *   2. strain       — the single ED→ES global peak (what disease similarity
+   *                     and health status consume, so the panels agree)
+   *   3. the dummy curve, when nothing has been computed
+   * GRS peaks positive (thickening), GCS negative (shortening).
+   */
+  const peakValue = useMemo(() => {
+    const isGRS = selectedStrainType === "GRS";
+    if (realSeries?.frames?.length) {
+      const globals = realSeries.frames
+        .map((f) => (isGRS ? f.global_grs : f.global_gcs))
+        .filter((v): v is number => typeof v === "number");
+      if (globals.length) return isGRS ? Math.max(...globals) : Math.min(...globals);
+    }
+    const single = isGRS ? realStrain?.global_grs : realStrain?.global_gcs;
+    if (typeof single === "number") return single;
+    return isGRS
+      ? Math.max(...curveData.map((item) => item.strain))
+      : Math.min(...curveData.map((item) => item.strain));
+  }, [realSeries, realStrain, selectedStrainType, curveData]);
   const currentTime = curveData[Math.min(currentFrame, curveData.length - 1)]?.time ?? 0;
 
   if (!hasPredictions) {
@@ -794,12 +982,36 @@ function StrainTab({
           <p className="text-[10px] text-muted-foreground">
             {selectedSegmentValue
               ? `Segment ${selectedSegmentValue.segment}: ${selectedSegmentValue.label}`
+              : usingRealSeries ? "Computed strain (per-frame)"
+              : usingRealStrain ? "Computed strain (ED→ES)"
               : "Dummy preview values"}, frame {currentFrame + 1}/{frameCount}
           </p>
         </div>
-        <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-mono text-muted-foreground">
-          {currentTime} ms
-        </span>
+        <div className="flex items-center gap-2">
+          {/* UNet and MedSAM segment differently, so their strain differs —
+              each model's result is stored on its own mask document. */}
+          <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+            {(["unet", "medsam"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={!modelAvailable[m]}
+                onClick={() => setStrainModel(m)}
+                className={cn(
+                  "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+                  strainModel === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                  !modelAvailable[m] && "cursor-not-allowed opacity-40",
+                )}
+                title={modelAvailable[m] ? undefined : "No results stored for this model"}
+              >
+                {m === "unet" ? "UNet" : "MedSAM"}
+              </button>
+            ))}
+          </div>
+          <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-mono text-muted-foreground">
+            {currentTime} ms
+          </span>
+        </div>
       </div>
 
       {selectedSegmentValue && (
@@ -836,18 +1048,85 @@ function StrainTab({
 
       <div className="grid grid-cols-2 gap-2">
         <StrainMetricCard
-          label={`Current ${selectedStrainType}`}
+          label={
+            usingRealSeries ? `Current ${selectedStrainType}`
+            : usingRealStrain ? `Mean ${selectedStrainType} (ED→ES)`
+            : `Current ${selectedStrainType} (preview)`
+          }
           value={`${currentAverage > 0 ? "+" : ""}${currentAverage.toFixed(1)}%`}
           strainType={selectedStrainType}
           valueNumber={currentAverage}
         />
         <StrainMetricCard
-          label={`Peak ${selectedStrainType}`}
+          label={
+            usingRealSeries ? `Peak ${selectedStrainType}`
+            : usingRealStrain ? `Peak ${selectedStrainType} (ED→ES)`
+            : `Peak ${selectedStrainType} (preview)`
+          }
           value={`${peakValue > 0 ? "+" : ""}${peakValue.toFixed(1)}%`}
           strainType={selectedStrainType}
           valueNumber={peakValue}
         />
       </div>
+
+      {/* Landmarks define the AHA segment alignment, so editing them invalidates
+          previously-computed strain. The backend stamps `staleSince` on save
+          rather than auto-recomputing (the series is one GPU pass per frame). */}
+      {strainIsStale && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
+          <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Landmarks edited</span> since this strain was computed —
+            the segment alignment has changed, so these values are out of date.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2 h-7 w-full text-[10px]"
+            disabled={seriesBusy}
+            onClick={runStrainSeries}
+          >
+            {seriesBusy
+              ? "Recomputing… one pass per frame"
+              : `Recompute all frames with current landmarks (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          </Button>
+          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
+        </div>
+      )}
+
+      {/* Full-cycle strain is opt-in: it costs one GPU pass per frame, so it is
+          not chained automatically after the ED→ES compute. Shown until a series
+          exists for the selected model. */}
+      {/* Full-cycle strain: one GPU pass per frame, so it is opt-in rather than
+          chained after the ED→ES compute. Always available — a recompute is
+          needed after landmark edits, and after any pipeline change that adds
+          new per-frame fields. The stale banner above covers the landmark case. */}
+      {!strainIsStale && (
+        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            {usingRealSeries
+              ? `Full-cycle strain computed for ${realSeries!.frames.length} frames${
+                  realSeries!.computed_at
+                    ? ` on ${new Date(realSeries!.computed_at).toLocaleDateString()}`
+                    : ""
+                }.`
+              : usingRealStrain
+              ? "Only the ED→ES strain is stored for this model — the curves below are a preview shape."
+              : "No strain computed for this model yet — values below are a dummy preview."}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2 h-7 w-full text-[10px]"
+            disabled={seriesBusy}
+            onClick={runStrainSeries}
+          >
+            {seriesBusy
+              ? "Computing… one pass per frame"
+              : `${usingRealSeries ? "Recompute" : "Compute"} all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          </Button>
+          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
+        </div>
+      )}
 
       <div className="sticky top-0 z-10 rounded-lg border border-border bg-background p-3 shadow-sm">
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -858,7 +1137,11 @@ function StrainTab({
               ? "By Region"
               : "Full Cycle — All Segments"}
           </h4>
-          {curveView === "global" && <span className="text-[10px] text-muted-foreground">Time (ms)</span>}
+          {curveView === "global" && (
+            <span className="text-[10px] text-muted-foreground">
+              {usingRealSeries ? `${realSeries!.frames.length} frames` : "Preview"}
+            </span>
+          )}
         </div>
         <div className="mb-2 grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
           {([
@@ -939,9 +1222,11 @@ function StrainTab({
           <FullCycleChart series={cycleSeries} strainType={selectedStrainType} width={520} height={220} highlightSeg={hoverSeg} />
         )}
 
-        {curveView !== "global" && (
+        {curveView !== "global" && !usingRealSeries && (
           <p className="mt-2 text-[9px] text-muted-foreground">
-            Dummy preview values — the backend only computes strain ED→ES today, not a full per-frame series yet.
+            {usingRealStrain
+              ? "Preview curve shape — only the ED→ES strain is stored for this model."
+              : "Dummy preview values — no strain computed for this model yet."}
           </p>
         )}
       </div>
