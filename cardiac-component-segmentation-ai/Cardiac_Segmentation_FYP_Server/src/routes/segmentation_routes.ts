@@ -1313,6 +1313,273 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
     }
 });
 
+// Compute a PER-FRAME strain series: every stored frame measured against the
+// fixed ED reference frame, so the UI can plot a full cardiac-cycle curve and
+// scrub frame-by-frame. `compute-strain-from-frames` above returns the single
+// ED→ES measurement only; this is the time-resolved version.
+//
+// Implementation: the GPU's /bullseye/compute-strain compares two NIfTI volumes,
+// so we hold ED fixed and call it once per remaining frame. Frames are processed
+// with bounded concurrency to avoid swamping the GPU; an individual frame that
+// fails is skipped (recorded via framesComputed) rather than failing the batch.
+// The ED frame is emitted with zero strain — it is the reference by definition.
+//
+// POST /segmentation/compute-strain-series
+// body: { projectId, edFrameIndex, modelType?, frameStep? }
+router.post("/compute-strain-series", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const { projectId, edFrameIndex, modelType, frameStep } = req.body;
+
+    if (!projectId || edFrameIndex === undefined) {
+        return res.status(400).json({ error: "projectId and edFrameIndex are required" });
+    }
+
+    const model = modelType ?? "unet";
+    const tempId = uuidv4();
+    const baseTempDir = path.join(__dirname, '..', 'temp_exports', `strain_series_${tempId}`);
+
+    try {
+        const projectResult = await readProject(projectId, userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ error: "Project not found or access denied." });
+        }
+        const project = projectResult.projects[0] as IProjectDocument;
+        const W = project.dimensions?.width;
+        const H = project.dimensions?.height;
+        if (!W || !H) {
+            return res.status(400).json({ error: "Project is missing dimension data." });
+        }
+
+        // Same mask selection as compute-strain-from-frames: the editable mask for
+        // this model with the most frames. Model matters — UNet and MedSAM produce
+        // different segmentations and therefore different strain.
+        const allMasks = await projectSegmentationMaskModel.find({
+            projectid: projectId,
+            segmentationModel: model,
+            isMedSAMOutput: false,
+            "frames.0": { $exists: true },
+        }).lean();
+        if (!allMasks?.length) {
+            return res.status(404).json({ error: `No ${model} segmentation mask with stored frames found. Run ${model} segmentation first.` });
+        }
+        const maskDoc = allMasks.reduce((best: any, m: any) =>
+            (m.frames?.length ?? 0) > (best.frames?.length ?? 0) ? m : best
+        );
+
+        const frames = ((maskDoc as any).frames ?? []) as any[];
+        const edFrame = frames.find((f: any) => f.frameindex === edFrameIndex);
+        if (!edFrame) {
+            return res.status(404).json({ error: `ED frame ${edFrameIndex} not found in stored segmentation` });
+        }
+
+        // Optional subsampling — a long cine with many frames costs one GPU call
+        // per frame, so callers can trade resolution for speed.
+        const step = Math.max(1, Number(frameStep) || 1);
+        const targetFrames = frames
+            .filter((f: any) => f.frameindex !== edFrameIndex)
+            .sort((a: any, b: any) => a.frameindex - b.frameindex)
+            .filter((_: any, i: number) => i % step === 0);
+
+        const gpuBaseUrl = await getFreshGPUServerAddress();
+        const token = getCurrentToken();
+        if (!gpuBaseUrl || !token) {
+            return res.status(503).json({ error: "GPU service unavailable." });
+        }
+
+        await fs.ensureDir(baseTempDir);
+
+        // Reuses the same single-frame NIfTI construction as the ED→ES route.
+        const buildNIfTI = async (frame: any, label: string): Promise<string> => {
+            const niftiPath = path.join(baseTempDir, `${label}_${tempId}.nii.gz`);
+            const segJsonPath = path.join(baseTempDir, `${label}_${tempId}.json`);
+            const singleFrameDoc = { ...frame, frameindex: 0 };
+            const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
+            await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
+
+            let pythonCommand: string;
+            if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
+                const affineFile = path.join(baseTempDir, `affine_${label}.json`);
+                const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
+                await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
+                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+            } else {
+                const s3Url = (project as any).extractedfolderpath;
+                if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
+                const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
+                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+            }
+
+            await new Promise<void>((resolve, reject) => {
+                exec(pythonCommand, (error, _stdout, stderr) => {
+                    if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
+                    else resolve();
+                });
+            });
+            if (!(await fs.pathExists(niftiPath))) throw new Error(`NIfTI file not produced for ${label}`);
+            return niftiPath;
+        };
+
+        // Landmark alignment — identical resolution order to the ED→ES route:
+        // saved user edits first (shared across models, since a corrected RV
+        // insertion point is an anatomical location), then the raw GPU job.
+        const extractCoord = (lm: any): { x: number; y: number } | null => {
+            if (!lm) return null;
+            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
+            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
+            return null;
+        };
+        let lm1: { x: number; y: number } | null = null;
+        let lm2: { x: number; y: number } | null = null;
+        const savedLandmarkDoc = await projectLandmarkModel
+            .findOne({ projectid: projectId, isModelOutput: false })
+            .sort({ updatedAt: -1 })
+            .lean();
+        if (savedLandmarkDoc) {
+            const lm1Points: { x: number; y: number }[] = [];
+            const lm2Points: { x: number; y: number }[] = [];
+            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
+                for (const slice of frame.slices ?? []) {
+                    for (const point of slice.landmarks ?? []) {
+                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
+                    }
+                }
+            }
+            const mean = (pts: { x: number; y: number }[]) =>
+                pts.length ? { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length } : null;
+            lm1 = mean(lm1Points);
+            lm2 = mean(lm2Points);
+        }
+        if (!lm1 || !lm2) {
+            const landmarkJob = await jobModel
+                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
+                .sort({ updatedAt: -1 })
+                .lean();
+            const lmResult = landmarkJob?.result
+                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
+                : null;
+            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
+            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+        }
+
+        // ED is the fixed reference for every comparison — build it once.
+        const edPath = await buildNIfTI(edFrame, "ed");
+        const FormDataNode = require("form-data");
+
+        const strainForFrame = async (frame: any): Promise<any | null> => {
+            const label = `f${frame.frameindex}`;
+            try {
+                const framePath = await buildNIfTI(frame, label);
+                const form = new FormDataNode();
+                form.append("ed_file", fs.createReadStream(edPath), { filename: "ed.nii.gz", contentType: "application/gzip" });
+                form.append("es_file", fs.createReadStream(framePath), { filename: `${label}.nii.gz`, contentType: "application/gzip" });
+                if (lm1) { form.append("rv_insertion_1_x", String(lm1.x)); form.append("rv_insertion_1_y", String(lm1.y)); }
+                if (lm2) { form.append("rv_insertion_2_x", String(lm2.x)); form.append("rv_insertion_2_y", String(lm2.y)); }
+
+                const r = await axios.post(`${gpuBaseUrl}/bullseye/compute-strain`, form, {
+                    headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
+                    timeout: 120000,
+                });
+                await fs.remove(framePath).catch(() => {});
+                return {
+                    frameIndex: frame.frameindex,
+                    global_grs: typeof r.data?.global_grs === "number" ? r.data.global_grs : null,
+                    global_gcs: typeof r.data?.global_gcs === "number" ? r.data.global_gcs : null,
+                    segments: (r.data?.segments ?? []).map((s: any) => ({
+                        segment: s.segment,
+                        label: s.label,
+                        grs: s.grs ?? null,
+                        gcs: s.gcs ?? null,
+                        // Wall thickness at THIS frame (the GPU's "es" side of the
+                        // ED→frame comparison). This is what lets the AHA bullseye
+                        // animate real myocardial thickening across the cycle
+                        // instead of showing one static measurement.
+                        wt_mm: s.wt_es_mm ?? null,
+                        // ED-side thickness is identical in every comparison (ED is
+                        // the fixed reference), so carry it once for the ED frame.
+                        wt_ed_mm: s.wt_ed_mm ?? null,
+                    })),
+                };
+            } catch (frameErr: any) {
+                // One bad frame shouldn't lose the whole series.
+                logger.warn(`${serviceLocation}: strain-series frame ${frame.frameindex} failed: ${frameErr?.message}`);
+                return null;
+            }
+        };
+
+        // Bounded concurrency — enough to be worth parallelising, low enough not
+        // to overwhelm a single GPU worker.
+        const CONCURRENCY = 3;
+        const computed: any[] = [];
+        for (let i = 0; i < targetFrames.length; i += CONCURRENCY) {
+            const batch = targetFrames.slice(i, i + CONCURRENCY);
+            const results = await Promise.all(batch.map(strainForFrame));
+            for (const r of results) if (r) computed.push(r);
+        }
+
+        // ED itself: zero strain by definition (it is the reference). Its wall
+        // thickness is the ED-side measurement the GPU reported in every
+        // comparison, so the bullseye has a real value at this frame too.
+        const edSegments = (computed[0]?.segments ?? []).map((s: any) => ({
+            segment: s.segment,
+            label: s.label,
+            grs: 0,
+            gcs: 0,
+            wt_mm: s.wt_ed_mm ?? null,
+        }));
+        const series = [
+            { frameIndex: edFrameIndex, global_grs: 0, global_gcs: 0, segments: edSegments },
+            ...computed,
+        ].sort((a, b) => a.frameIndex - b.frameIndex);
+
+        // Peak = largest |GRS| across the cycle — the measured ES.
+        let peakFrameIndex: number | null = null;
+        let peakGRS: number | null = null;
+        let peakGCS: number | null = null;
+        for (const f of series) {
+            if (typeof f.global_grs === "number" && (peakGRS === null || Math.abs(f.global_grs) > Math.abs(peakGRS))) {
+                peakGRS = f.global_grs;
+                peakFrameIndex = f.frameIndex;
+                peakGCS = typeof f.global_gcs === "number" ? f.global_gcs : null;
+            }
+        }
+
+        await fs.remove(baseTempDir).catch(() => {});
+
+        const strainSeries = {
+            frames: series,
+            edFrameIndex,
+            peakFrameIndex,
+            peak_global_grs: peakGRS,
+            peak_global_gcs: peakGCS,
+            segmentationModel: model,
+            framesRequested: targetFrames.length + 1,
+            framesComputed: series.length,
+            computed_at: new Date().toISOString(),
+        };
+
+        // Best-effort persist — a failed write never fails the request.
+        try {
+            await projectSegmentationMaskModel.findByIdAndUpdate(
+                maskDoc._id.toString(),
+                { $set: { strainSeries, updatedAt: new Date() } },
+            );
+            logger.info(`${serviceLocation}: Stored strainSeries on mask ${maskDoc._id} — ${series.length}/${targetFrames.length + 1} frames, model=${model}, peak GRS=${peakGRS} @frame ${peakFrameIndex}`);
+        } catch (persistErr: any) {
+            logger.warn(`${serviceLocation}: Failed to persist strainSeries on mask ${maskDoc._id}: ${persistErr?.message}`);
+        }
+
+        return res.status(200).json(strainSeries);
+
+    } catch (err: any) {
+        await fs.remove(baseTempDir).catch(() => {});
+        logger.error(`${serviceLocation}: compute-strain-series failed for project ${projectId}: ${err?.message}`);
+        return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "Strain series computation failed." });
+    }
+});
+
 // Trigger bullseye computation for a single mask from its stored RLE data.
 // POST /segmentation/trigger-bullseye/:maskId
 router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Response) => {
