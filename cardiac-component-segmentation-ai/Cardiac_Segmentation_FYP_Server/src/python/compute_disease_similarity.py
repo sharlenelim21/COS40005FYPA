@@ -112,18 +112,23 @@ FEATURE_WEIGHTS: dict[str, float] = {
 # Values are population-level references, NOT fitted to this application's data.
 # Every number is cited in docs/DISEASE_SIMILARITY_REFERENCES.md.
 #
-# EF and EDV are the ACDC cohort group statistics (the same dataset this
-# project's segmentation is built on). ESV is NOT published by ACDC — its mean is
-# derived from the EF identity ESV = EDV * (1 - EF/100); its SD is an estimate.
-# StrokeVolume = EDV - ESV of the group means (SD combined in quadrature, hence
-# approximate). EF direction (NOR mid, HCM high, DCM low) was independently
-# confirmed from the project's own ACDC ground-truth masks
-# (scripts/derive_acdc_reference_ranges.py). See docs/DISEASE_SIMILARITY_REFERENCES.md
-# for the full provenance and the derived-value caveat (starred SDs are estimates).
+# EF, EDV and ESV are ACDC cohort group statistics (mean ± SD measured over the
+# 30 patients in each group) — the same dataset this project's segmentation is
+# built on. StrokeVolume mean = EDV - ESV of the group means; its SD is not
+# reported, so it is combined in quadrature from the EDV/ESV SDs (approximate).
+# See docs/DISEASE_SIMILARITY_REFERENCES.md for provenance and caveats.
 #
-# PeakGRS / PeakGCS are literature CMR feature-tracking values: strain cannot be
-# derived from the 2-frame ground-truth masks (it needs the full tracked cine),
-# so these remain literature-sourced placeholders pending a strain-derived range.
+# NOTE (validation caveat): recomputing EF from this project's own ACDC
+# ground-truth masks gave DCM EF ≈ 14.1 ± 5.4 % (n=6 usable patients), which is
+# lower than the 25.2 % below. Most patients could not be used because the masks
+# have differing slice counts at ED vs ES, so that check is weak evidence — but
+# it is the reason the DCM EF here should be treated as provisional.
+#
+# PeakGRS / PeakGCS are ACDC cohort strain statistics (mean ± SD per group).
+# Sign convention: GCS is negative (circumferential shortening), GRS is positive
+# (radial thickening). These were not derivable from this project's own 2-frame
+# ground-truth masks (strain needs the full tracked cine), so they are taken from
+# the reported cohort statistics rather than measured locally.
 #
 #   NOR — healthy adult LV.
 #   HCM — hypertrophic cardiomyopathy: preserved/high EF, small cavity, impaired
@@ -133,28 +138,28 @@ FEATURE_WEIGHTS: dict[str, float] = {
 # Units: EF %, volumes mL, PeakGRS %, PeakGCS % (negative by convention).
 REFERENCE_PROFILES: dict[str, dict[str, tuple[float, float]]] = {
     "NOR": {
-        "EF":           (60.3,  5.1),   # ACDC published
-        "EDV":          (130.1, 26.4),  # ACDC published
-        "ESV":          (51.6,  17.0),  # derived EDV*(1-EF); SD estimated
-        "StrokeVolume": (78.5,  31.4),  # EDV - ESV; SD approx
-        "PeakGRS":      (43.7,  10.0),  # CMR-FT meta-analysis normal (pooled mean)
-        "PeakGCS":      (-21.4, 4.0),   # CMR-FT meta-analysis normal (pooled mean)
+        "EF":           (62.7,  5.6),   # ACDC group mean (n=30)
+        "EDV":          (139.1, 33.2),  # ACDC group mean (n=30)
+        "ESV":          (53.8,  18.0),  # ACDC group mean (n=30)
+        "StrokeVolume": (85.3,  37.8),  # EDV - ESV; SD quadrature (approx)
+        "PeakGRS":      (40.3,  10.2),  # ACDC cohort strain stats
+        "PeakGCS":      (-16.8, 2.3),   # ACDC cohort strain stats
     },
     "HCM": {
-        "EF":           (67.4,  8.9),   # ACDC published
-        "EDV":          (129.1, 35.2),  # ACDC published
-        "ESV":          (42.1,  18.0),  # derived EDV*(1-EF); SD estimated
-        "StrokeVolume": (87.0,  39.5),  # EDV - ESV; SD approx
-        "PeakGRS":      (32.0,  12.0),  # CMR-FT: reduced vs normal (directional)
-        "PeakGCS":      (-14.0, 4.0),   # CMR-FT: reduced vs normal (directional)
+        "EF":           (61.9,  12.6),  # ACDC group mean (n=30)
+        "EDV":          (138.4, 56.8),  # ACDC group mean (n=30)
+        "ESV":          (53.6,  34.3),  # ACDC group mean (n=30)
+        "StrokeVolume": (84.8,  66.3),  # EDV - ESV; SD quadrature (approx)
+        "PeakGRS":      (37.8,  13.2),  # ACDC cohort strain stats
+        "PeakGCS":      (-14.5, 3.3),   # ACDC cohort strain stats
     },
     "DCM": {
-        "EF":           (17.9,  7.7),   # ACDC published
-        "EDV":          (284.6, 47.8),  # ACDC published
-        "ESV":          (233.6, 51.0),  # derived EDV*(1-EF); SD estimated
-        "StrokeVolume": (51.0,  69.9),  # EDV - ESV; SD approx
-        "PeakGRS":      (16.0,  8.0),   # CMR-FT: markedly reduced (directional)
-        "PeakGCS":      (-9.0,  4.0),   # CMR-FT: markedly reduced (directional)
+        "EF":           (25.2,  9.0),   # ACDC group mean (n=30) — see validation caveat
+        "EDV":          (248.3, 73.1),  # ACDC group mean (n=30)
+        "ESV":          (170.8, 58.7),  # ACDC group mean (n=30)
+        "StrokeVolume": (77.5,  93.7),  # EDV - ESV; SD quadrature (approx)
+        "PeakGRS":      (11.2,  6.5),   # ACDC cohort strain stats
+        "PeakGCS":      (-5.6,  2.2),   # ACDC cohort strain stats
     },
 }
 
