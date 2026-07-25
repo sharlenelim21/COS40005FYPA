@@ -749,6 +749,7 @@ const projectSegmentationMaskSliceComponentBoundingBoxesSchema = new Schema({
 // Create slice schema (Nest Depth: 2)
 const projectSegmentationMaskSliceSchema = new Schema({
   sliceindex: { type: Number, required: true }, // Index of the slice (0-based)
+  excluded: { type: Boolean, required: false }, // Soft-exclusion flag (Part D) — recompute skips excluded slices. Must be in the schema or Mongoose strict mode silently drops it on save/merge and via updateOne.
   componentboundingboxes: [{ type: projectSegmentationMaskSliceComponentBoundingBoxesSchema, required: false }], // Array of component bounding boxes for the slicesegmentation mask image (e.g., S3 bucket URL) - assume CSV? or RLE?
   segmentationmasks: [{ type: projectSegmentationMaskSliceContentSchema, required: false }], // Array of segmentation masks for the frame
 }, { _id: false }); // Disable automatic creation of an _id field for this subdocument
