@@ -146,7 +146,7 @@ export default function ReportPage() {
           <div className="text-center">
             <p className="text-xs font-semibold">Cardiac Functional Analysis Report</p>
             <p className="text-[10px] text-muted-foreground">
-              5 pages · A4 · {model === "unet" ? "UNet" : "MedSAM"} (most recent run)
+              {model === "unet" ? "UNet" : "MedSAM"} (most recent run)
             </p>
           </div>
           <Button size="sm" className="gap-1.5 text-xs" onClick={() => window.print()}>
