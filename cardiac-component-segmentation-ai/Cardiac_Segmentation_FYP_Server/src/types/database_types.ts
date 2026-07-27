@@ -425,6 +425,58 @@ export interface IProjectSegmentationMask {
     segmentationModel?: SegmentationModel;
     source?: "upload" | "frames";
     computed_at: string;
+    /**
+     * Set when landmarks were edited after this was computed — the AHA segment
+     * alignment has changed, so these values no longer match the current
+     * landmarks. Cleared on recompute. Presence means "offer a recompute", not
+     * "the numbers are wrong".
+     */
+    staleSince?: string;
+  };
+
+  /**
+   * Per-frame strain series — strain of EVERY stored frame measured against the
+   * fixed ED reference frame, so the UI can plot a full-cycle curve and scrub
+   * frame-by-frame (the `strain` field above is the single ED→ES measurement
+   * only). Produced by POST /segmentation/compute-strain-series.
+   *
+   * `frames[i].frameIndex` is the source frame's own index (not a 0..n counter),
+   * so a partial/sparse frame set still maps correctly onto the timeline.
+   * The ED frame itself is included with zero strain — it is the reference.
+   */
+  strainSeries?: {
+    frames: {
+      frameIndex: number;
+      global_grs: number | null;
+      global_gcs: number | null;
+      segments: {
+        segment: number;
+        label: string;
+        grs: number | null;
+        gcs: number | null;
+        /**
+         * Myocardial wall thickness at THIS frame, in mm. Lets the AHA bullseye
+         * animate real thickening across the cardiac cycle rather than showing a
+         * single static measurement. Null on results computed before this was
+         * stored — recompute the series to populate it.
+         */
+        wt_mm?: number | null;
+        /** ED-side thickness (same in every comparison; ED is the reference). */
+        wt_ed_mm?: number | null;
+      }[];
+    }[];
+    edFrameIndex: number;
+    /** Frame index where |global_grs| peaked — the measured ES, for reference. */
+    peakFrameIndex?: number | null;
+    peak_global_grs: number | null;
+    peak_global_gcs: number | null;
+    segmentationModel?: SegmentationModel;
+    /** Frames requested vs. actually computed (GPU failures are skipped, not fatal). */
+    framesRequested?: number;
+    framesComputed?: number;
+    computed_at: string;
+    /** See `strain.staleSince` — set when landmarks changed after this ran. */
+    staleSince?: string;
   };
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)

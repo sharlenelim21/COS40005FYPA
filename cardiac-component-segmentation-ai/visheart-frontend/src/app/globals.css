@@ -204,6 +204,18 @@ button[type="submit"]:hover {
   .vh-no-print {
     display: none !important;
   }
+  /*
+   * The report route renders two presentations of the same data: an
+   * interactive dashboard for screen (.vh-screen-only) and the paginated A4
+   * sheets for paper (.vh-print-only). Exactly one is shown per medium — the
+   * screen rules live outside this block, below.
+   */
+  .vh-screen-only {
+    display: none !important;
+  }
+  .vh-print-only {
+    display: block !important;
+  }
   .vh-report-page {
     width: 210mm !important;
     min-height: 297mm !important;
@@ -213,6 +225,15 @@ button[type="submit"]:hover {
   }
   .vh-report-page:last-child {
     page-break-after: auto;
+  }
+}
+
+/* Screen counterpart of the print-only/screen-only pair above: on screen the
+   interactive report is shown and the A4 sheets are hidden. Both live in the
+   DOM at once so printing needs no re-render or extra route. */
+@media screen {
+  .vh-print-only {
+    display: none !important;
   }
 }
 

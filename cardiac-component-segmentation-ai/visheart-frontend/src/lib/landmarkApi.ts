@@ -236,6 +236,36 @@ export async function computeStrainFromFrames(
   return response.data;
 }
 
+/**
+ * Compute strain for EVERY frame against the fixed ED reference, giving a
+ * full-cycle series (the ED→ES call above returns a single measurement).
+ * Costs one GPU call per frame, so it is slower — `frameStep` subsamples.
+ * The result is persisted on the mask as `strainSeries`.
+ */
+export async function computeStrainSeries(
+  projectId: string,
+  edFrameIndex: number,
+  modelType: "unet" | "medsam" = "unet",
+  frameStep = 1,
+): Promise<{
+  frames: { frameIndex: number; global_grs: number | null; global_gcs: number | null;
+            segments: { segment: number; label: string; grs: number | null; gcs: number | null }[] }[];
+  edFrameIndex: number;
+  peakFrameIndex?: number | null;
+  peak_global_grs: number | null;
+  peak_global_gcs: number | null;
+  framesRequested?: number;
+  framesComputed?: number;
+}> {
+  const response = await api.post(
+    `/segmentation/compute-strain-series`,
+    { projectId, edFrameIndex, modelType, frameStep },
+    // One GPU call per frame — well beyond the default client timeout.
+    { timeout: 600000 },
+  );
+  return response.data;
+}
+
 export type LandmarkErrorCode =
   | "inference_failed"
   | "timeout"

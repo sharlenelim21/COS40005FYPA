@@ -28,9 +28,13 @@ export function ReportPageFrame({
   generatedAt: string;
   children: React.ReactNode;
 }) {
+  // A4 geometry (210×297mm) is what makes print/PDF come out one page per sheet,
+  // so it stays. The card chrome (border/shadow/radius) was screen-only and is
+  // dropped so the on-screen view reads like the rest of the app rather than a
+  // boxed-in document.
   return (
     <section
-      className="vh-report-page mx-auto mb-6 flex w-[210mm] min-h-[297mm] flex-col rounded-lg border border-border bg-background p-6 text-[11px] leading-snug text-foreground shadow-sm print:mb-0 print:rounded-none print:border-0 print:shadow-none"
+      className="vh-report-page mx-auto mb-8 flex w-[210mm] min-h-[297mm] flex-col bg-background p-6 text-[11px] leading-snug text-foreground print:mb-0"
       data-page={pageNumber}
     >
       <header className="mb-3 flex items-center justify-between border-b border-border pb-2">

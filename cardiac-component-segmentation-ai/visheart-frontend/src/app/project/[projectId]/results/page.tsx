@@ -209,7 +209,7 @@ export default function ResultsPage() {
               !available[m] && "cursor-not-allowed opacity-40",
             )}
           >
-            {m === "unet" ? "UNet" : "MedSAM"}
+            {m === "unet" ? "UNet (recommended)" : "MedSAM"}
             {!available[m] && " (no data)"}
           </button>
         ))}

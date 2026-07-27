@@ -7,10 +7,19 @@ import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
-import { PatientSummaryPage } from "@/components/report/PatientSummaryPage";
+import { PatientSummaryPage, PLACEHOLDER_PATIENT_SUMMARY, type PatientSummaryData } from "@/components/report/PatientSummaryPage";
 import { RegionalStrainBullseyePage } from "@/components/report/RegionalStrainBullseyePage";
 import { StrainDetailPage } from "@/components/report/StrainDetailPage";
+import { useProjectResults } from "@/hooks/useProjectResults";
+import { InteractiveReport } from "@/components/report/InteractiveReport";
 import { ArrowLeft, ArrowUp, Printer } from "lucide-react";
+
+/** Bar colours for the disease-similarity rows, keyed by pattern code. */
+const PATTERN_COLORS: Record<string, string> = {
+  NOR: "#15803d",
+  DCM: "#fab219",
+  HCM: "#d03b3b",
+};
 
 const TOTAL_PAGES = 5;
 
@@ -23,6 +32,10 @@ export default function ReportPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
   const { loading, error, projectData } = useProject();
+  // One report, defaulting to the most-recently-computed model (no toggle) —
+  // the reader gets a single authoritative view rather than choosing a model.
+  const { model, available, measurements, healthStatus, similarity, strain, strainSeries } =
+    useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
   // with the real bottom edge of whatever's fixed above it (site header +
@@ -65,6 +78,58 @@ export default function ReportPage() {
   const patientLabel = projectData?.name || projectId || "Unknown";
   const totalFrames = projectData?.dimensions?.frames || 9;
 
+  // Map the stored pipeline output onto the report's summary shape. Falls back
+  // to the placeholder only when nothing has been computed for this project yet.
+  const hasRealData = !!(measurements || healthStatus || similarity);
+  const summaryData: PatientSummaryData = hasRealData
+    ? {
+        patientLabel,
+        scanSummary: [
+          "Cine MRI",
+          projectData?.dimensions?.slices ? `${projectData.dimensions.slices} slices` : null,
+          totalFrames ? `${totalFrames} frames` : null,
+          `Model: ${model === "unet" ? "UNetResNet34" : "MedSAM"}`,
+        ].filter(Boolean).join(" · "),
+        ef: measurements?.EF ?? null,
+        edv: measurements?.EDV ?? null,
+        esv: measurements?.ESV ?? null,
+        strokeVolume: measurements?.StrokeVolume ?? null,
+        peakGrs: measurements?.PeakGRS ?? null,
+        peakGcs: measurements?.PeakGCS ?? null,
+        voxelSize: PLACEHOLDER_PATIENT_SUMMARY.voxelSize,
+        healthStatus: healthStatus?.status ?? "Indeterminate",
+        healthEvidence:
+          healthStatus?.evidence?.map((e) => ({
+            text: `${e.label}: ${e.detail}`,
+            ok: e.level === "ok",
+          })) ?? [],
+        diseasePattern:
+          similarity?.similarities?.map((s) => ({
+            label: s.label,
+            pct: Math.round(s.percent),
+            color: PATTERN_COLORS[s.code] ?? "#64748b",
+          })) ?? [],
+        isRealData: true,
+      }
+    : { ...PLACEHOLDER_PATIENT_SUMMARY, patientLabel, isRealData: false };
+
+  // Map the stored per-frame series into the chart shape the strain pages use
+  // (one array of 17 segments per frame). Undefined when the series hasn't been
+  // computed, which makes those pages fall back to a clearly-labelled preview.
+  const seriesFor = (type: "GRS" | "GCS") => {
+    if (!strainSeries?.frames?.length) return undefined;
+    const k = type === "GRS" ? "grs" : "gcs";
+    return strainSeries.frames.map((f) =>
+      (f.segments ?? []).map((s) => ({
+        segment: s.segment,
+        label: s.label,
+        strain: ((s as any)[k] ?? 0) as number,
+      })),
+    );
+  };
+  const grsSeries = seriesFor("GRS");
+  const gcsSeries = seriesFor("GCS");
+
   return (
     <div className="min-h-screen bg-muted/20 pb-16">
       {/* top is measured live (see `clearance` above), not a fixed class —
@@ -80,7 +145,9 @@ export default function ReportPage() {
           </Button>
           <div className="text-center">
             <p className="text-xs font-semibold">Cardiac Functional Analysis Report</p>
-            <p className="text-[10px] text-muted-foreground">5 pages · sized to A4 (210×297mm)</p>
+            <p className="text-[10px] text-muted-foreground">
+              {model === "unet" ? "UNet" : "MedSAM"} (most recent run)
+            </p>
           </div>
           <Button size="sm" className="gap-1.5 text-xs" onClick={() => window.print()}>
             <Printer className="h-3.5 w-3.5" />
@@ -89,8 +156,36 @@ export default function ReportPage() {
         </div>
       </div>
 
-      <div id="vh-report-root" className={`${reportFont.className} px-4 pt-6`}>
-        <PatientSummaryPage patientLabel={patientLabel} pageNumber={1} totalPages={TOTAL_PAGES} generatedAt={generatedAt} />
+      {/* Screen presentation — interactive, hidden when printing. */}
+      <div className="vh-screen-only">
+        <InteractiveReport
+          patientLabel={patientLabel}
+          scanSummary={summaryData.scanSummary}
+          generatedAt={generatedAt}
+          measurements={measurements}
+          healthStatus={healthStatus}
+          similarity={similarity}
+          strain={strain}
+          strainSeries={strainSeries}
+        />
+      </div>
+
+      {/* Print presentation — the paginated A4 sheets. Kept in the DOM so
+          window.print() needs no re-render, but hidden on screen. */}
+      <div id="vh-report-root" className={`${reportFont.className} vh-print-only px-4 pt-6`}>
+        {!hasRealData ? (
+          // Match the screen's empty state instead of printing placeholder
+          // numbers, so a report can never be exported with fabricated values.
+          <div className="mx-auto flex min-h-[297mm] w-[210mm] flex-col items-center justify-center p-6 text-center">
+            <p className="text-base font-semibold text-foreground">No results to report</p>
+            <p className="mt-2 max-w-[420px] text-sm text-muted-foreground">
+              Nothing has been computed for this project yet. Run segmentation, heart metrics and
+              strain, then reopen this report to print it.
+            </p>
+          </div>
+        ) : (
+          <>
+        <PatientSummaryPage data={summaryData} patientLabel={patientLabel} pageNumber={1} totalPages={TOTAL_PAGES} generatedAt={generatedAt} />
         <RegionalStrainBullseyePage
           strainType="GRS"
           patientLabel={patientLabel}
@@ -98,6 +193,7 @@ export default function ReportPage() {
           pageNumber={2}
           totalPages={TOTAL_PAGES}
           generatedAt={generatedAt}
+          realSeries={grsSeries}
         />
         <RegionalStrainBullseyePage
           strainType="GCS"
@@ -106,6 +202,7 @@ export default function ReportPage() {
           pageNumber={3}
           totalPages={TOTAL_PAGES}
           generatedAt={generatedAt}
+          realSeries={gcsSeries}
         />
         <StrainDetailPage
           strainType="GRS"
@@ -114,6 +211,7 @@ export default function ReportPage() {
           pageNumber={4}
           totalPages={TOTAL_PAGES}
           generatedAt={generatedAt}
+          realSeries={grsSeries}
         />
         <StrainDetailPage
           strainType="GCS"
@@ -122,7 +220,10 @@ export default function ReportPage() {
           pageNumber={5}
           totalPages={TOTAL_PAGES}
           generatedAt={generatedAt}
+          realSeries={gcsSeries}
         />
+          </>
+        )}
       </div>
 
       {showScrollTop && (

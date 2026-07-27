@@ -12,6 +12,7 @@ import {
   createProjectLandmark,
   updateProjectLandmark,
   projectLandmarkModel,
+  projectSegmentationMaskModel,
 } from "../services/database";
 import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
@@ -418,6 +419,42 @@ function mergeLandmarkFramesData(
 // segmentation (which always has a pre-seeded editable doc from the AI output
 // step), landmarks have no such seed step, so the first save for a given
 // model creates the editable doc rather than 404ing.
+/**
+ * Mark stored strain results stale after a landmark edit.
+ *
+ * Landmarks define the AHA segment alignment, so editing them changes regional
+ * strain (and, to a lesser degree, the global peaks). Rather than auto-recompute
+ * — the full-cycle series costs one GPU pass per frame, and users often make
+ * several edits in a row — we stamp the results so the UI can offer a one-click
+ * recompute and never present stale numbers as current.
+ *
+ * Applies to every editable mask in the project: landmark edits are shared
+ * across segmentation models, so both the UNet and MedSAM results go stale.
+ * Best-effort — a failure here must never fail the landmark save itself.
+ */
+async function markStrainStaleAfterLandmarkEdit(projectId: string): Promise<void> {
+  try {
+    const stamp = new Date().toISOString();
+    const result = await projectSegmentationMaskModel.updateMany(
+      {
+        projectid: projectId,
+        isMedSAMOutput: false,
+        $or: [{ strain: { $exists: true } }, { strainSeries: { $exists: true } }],
+      },
+      { $set: { "strain.staleSince": stamp, "strainSeries.staleSince": stamp } },
+    );
+    if (result.modifiedCount > 0) {
+      logger.info(
+        `${serviceLocation}: Landmark edit for project ${projectId} marked strain stale on ${result.modifiedCount} mask(s).`,
+      );
+    }
+  } catch (err: any) {
+    logger.warn(
+      `${serviceLocation}: Failed to mark strain stale for project ${projectId}: ${err?.message}`,
+    );
+  }
+}
+
 router.put(
   "/save-landmarks/:projectId",
   isAuthAndNotGuest,
@@ -481,6 +518,7 @@ router.put(
         }
 
         logger.info(`${serviceLocation}: Created new editable landmark doc ${created.projectlandmark._id} for project ${projectId}.`);
+        await markStrainStaleAfterLandmarkEdit(projectId);
         res.status(200).json({
           success: true,
           message: "Landmark edits saved successfully.",
@@ -505,6 +543,7 @@ router.put(
       }
 
       logger.info(`${serviceLocation}: Updated editable landmark doc ${editableDoc._id} for project ${projectId}.`);
+      await markStrainStaleAfterLandmarkEdit(projectId);
       res.status(200).json({
         success: true,
         message: "Landmark edits saved successfully.",

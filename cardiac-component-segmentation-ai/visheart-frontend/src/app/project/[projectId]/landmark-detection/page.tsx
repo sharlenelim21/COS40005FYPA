@@ -24,6 +24,8 @@ import {
 } from "lucide-react";
 
 import { useProject } from "@/context/ProjectContext";
+import { useProjectResults } from "@/hooks/useProjectResults";
+import { downloadResultsCsv } from "@/lib/exportResultsCsv";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import {
@@ -568,6 +570,70 @@ export default function LandmarkDetectionPage() {
       ? projectData.dimensions.slices
       : 1;
 
+  // Cardiac-cycle frame owned by the Strain tab's playback bar (in the sidebar)
+  // and mirrored here so the bullseye and 3D heart animate with it. Kept
+  // separate from `state.currentFrame`, which is the SLICE index used by the
+  // landmark viewer.
+  const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
+
+  // Which workspace the sidebar's tab has selected. Landmarks is about editing
+  // points on the MRI, so the bullseye/3D panel is hidden and the viewer gets
+  // the full width; Strain brings that panel back.
+  const [workspace, setWorkspace] = useState<"landmarks" | "strain">("landmarks");
+
+  // Per-frame wall thickness, when the full-cycle strain series has been run for
+  // the model the bullseye is showing. This is what lets the AHA plot animate
+  // real myocardial thickening; without it the stored `bullseye` is a single
+  // static measurement.
+  const {
+    strainSeries: bullseyeSeries,
+    setModel: setBullseyeResultsModel,
+    seriesAvailable,
+    seriesComputedAt,
+    byModel: resultsByModel,
+  } = useProjectResults(projectId);
+  useEffect(() => {
+    setBullseyeResultsModel(selectedBullseyeModel);
+  }, [selectedBullseyeModel, setBullseyeResultsModel]);
+
+  // Land on a model that actually has per-frame data: the only one that has it,
+  // or the most recently computed when both do. Runs once per data arrival —
+  // `autoPickedSeriesModel` stops it fighting a later manual choice.
+  const autoPickedSeriesModel = useRef(false);
+  useEffect(() => {
+    if (autoPickedSeriesModel.current) return;
+    const { unet, medsam } = seriesAvailable;
+    if (!unet && !medsam) return;
+    let preferred: "unet" | "medsam";
+    if (unet && medsam) {
+      preferred =
+        (seriesComputedAt.medsam ?? 0) > (seriesComputedAt.unet ?? 0) ? "medsam" : "unet";
+    } else {
+      preferred = unet ? "unet" : "medsam";
+    }
+    autoPickedSeriesModel.current = true;
+    if (preferred !== selectedBullseyeModel) {
+      setSelectedBullseyeModel(preferred);
+      fetchBullseye(preferred);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seriesAvailable.unet, seriesAvailable.medsam, seriesComputedAt.unet, seriesComputedAt.medsam]);
+
+  /** Wall thickness (mm) per AHA segment at the frame currently being shown. */
+  const frameThicknessValues = useMemo(() => {
+    const frames = bullseyeSeries?.frames;
+    if (!frames?.length) return null;
+    const frame =
+      frames.find((f) => f.frameIndex === strainPlaybackFrame) ?? frames[0];
+    const vals = Array.from({ length: 17 }, (_, i) => {
+      const seg = frame.segments?.find((s) => s.segment === i + 1);
+      return typeof seg?.wt_mm === "number" ? seg.wt_mm : null;
+    });
+    // Older series predate wt_mm — fall back to the static bullseye rather than
+    // rendering a plot full of gaps.
+    return vals.every((v) => v === null) ? null : vals;
+  }, [bullseyeSeries, strainPlaybackFrame]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -653,9 +719,20 @@ export default function LandmarkDetectionPage() {
             label="Dataset"
             value={`${projectData.dimensions?.width ?? 256}×${projectData.dimensions?.height ?? 256}`}
           />
+          {/* Slices and frames are different axes: landmark detection runs per
+              slice, the cardiac cycle spans frames. state.totalFrames is a slice
+              count despite its name, so label it as slices and take frames from
+              the project dimensions. */}
+          <InfoPill
+            label="Slices"
+            value={String(
+              (hasPredictions ? state.totalFrames : projectData.dimensions?.slices) ??
+              projectData.dimensions?.slices ?? "—",
+            )}
+          />
           <InfoPill
             label="Frames"
-            value={hasPredictions ? String(state.totalFrames) : String(projectData.dimensions?.frames ?? "—")}
+            value={String(projectData.dimensions?.frames ?? "—")}
           />
           {hasPredictions && (
             <InfoPill label="Model" value={state.modelUsed} />
@@ -721,17 +798,20 @@ export default function LandmarkDetectionPage() {
               className="text-xs gap-1.5"
               onClick={() => router.push(`/project/${projectId}/report`)}
             >
-              <Download className="h-3.5 w-3.5" />
-              Export Report
+              <FileText className="h-3.5 w-3.5" />
+              Report Page
             </Button>
             <Button
               variant="outline"
               size="sm"
               className="text-xs gap-1.5"
+              disabled={!resultsByModel?.unet && !resultsByModel?.medsam}
               onClick={() => {
-                // Dummy CSV export
-                console.log("Exporting landmark data as CSV (dummy)...");
-                alert("Landmark data CSV export initiated.\n(Currently a placeholder - CSV export coming soon)");
+                if (!resultsByModel?.unet && !resultsByModel?.medsam) {
+                  alert("No computed results to export yet. Run metrics and strain first.");
+                  return;
+                }
+                downloadResultsCsv(projectData?.name || String(projectId), resultsByModel);
               }}
             >
               <FileText className="h-3.5 w-3.5" />
@@ -793,6 +873,9 @@ export default function LandmarkDetectionPage() {
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
+            onStrainFrameChange={setStrainPlaybackFrame}
+            onTabChange={setWorkspace}
+            activeTab={workspace}
             onToggleLandmark={handleToggleLandmark}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
@@ -817,11 +900,19 @@ export default function LandmarkDetectionPage() {
 
       {/* Desktop: 3-panel resizable layout */}
       <div className="hidden lg:flex flex-1 min-h-0 p-3">
+        {/* Keyed on the workspace: the group caches panel sizes by index, so
+            adding/removing the bullseye panel without a remount leaves the
+            remaining panels at stale widths. */}
         <ResizablePanelGroup
+          key={workspace}
           direction="horizontal"
           className="h-full w-full rounded-xl border shadow-sm"
         >
-          <ResizablePanel defaultSize={44} minSize={32} maxSize={62}>
+          {/* Bullseye / 3D heart — only in the Strain workspace. In Landmarks
+              the task is editing points on the MRI, so this panel is hidden and
+              the viewer takes its space. */}
+          {workspace === "strain" && (
+          <ResizablePanel defaultSize={78} minSize={40}>
             <div className="w-full h-full bg-background p-4 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -855,6 +946,9 @@ export default function LandmarkDetectionPage() {
                       value={selectedBullseyeModel}
                       onValueChange={(v: string) => {
                         const model = v as "medsam" | "unet";
+                        // An explicit choice wins over the auto-pick, including
+                        // choosing a model whose series hasn't been run yet.
+                        autoPickedSeriesModel.current = true;
                         setSelectedBullseyeModel(model);
                         fetchBullseye(model);
                       }}
@@ -868,6 +962,9 @@ export default function LandmarkDetectionPage() {
                         <SelectValue placeholder="Model" />
                       </SelectTrigger>
                       <SelectContent className="rounded-xl p-1 shadow-lg">
+                        {/* Selectable whenever the segmentation exists — a model
+                            without a per-frame strain series is still worth
+                            choosing, and the panel explains what to run. */}
                         <SelectItem
                           value="medsam"
                           disabled={!existingSegModels.medsam || (!isGpuMode && !availableBullseyeModels.medsam)}
@@ -889,7 +986,7 @@ export default function LandmarkDetectionPage() {
                             !existingSegModels.unet ? " (no data)" :
                             calculatingModels.unet ? ` (Calculating... ${calcCountdown}s)` :
                             !availableBullseyeModels.unet ? " (computing…)" :
-                            ""
+                            " (recommended)"
                           }
                         </SelectItem>
                       </SelectContent>
@@ -957,8 +1054,12 @@ export default function LandmarkDetectionPage() {
                   loading={hasPredictions ? bullseyeLoading : isRunning}
                   referenceAngleDeg={ahaAlignmentAngle ?? 0}
                   onCompute={() => fetchBullseye(selectedBullseyeModel, true)}
-                  currentFrame={state.currentFrame}
+                  // Follows the Strain tab's cardiac-cycle playback, not the
+                  // slice index — the bullseye is a per-frame view of the cycle.
+                  currentFrame={strainPlaybackFrame}
                   frameCount={bullseyeFrameCount}
+                  frameThickness={frameThicknessValues}
+                  modelLabel={selectedBullseyeModel === "unet" ? "UNet" : "MedSAM"}
                   previewMode={!hasPredictions && !isRunning}
                   onBullseyeResetRef={(fn) => { bullseyeZoomResetRef.current = fn; }}
                   onHeartResetRef={(fn) => { heartZoomResetRef.current = fn; }}
@@ -993,11 +1094,13 @@ export default function LandmarkDetectionPage() {
               )}
             </div>
           </ResizablePanel>
+          )}
 
-          <ResizableHandle withHandle />
-
-          {/* CENTER: 2D MRI slice viewer + landmark overlay */}
-          <ResizablePanel defaultSize={38} minSize={25}>
+          {/* CENTER: 2D MRI slice viewer + landmark overlay — the Landmarks
+              workspace only. Strain is about the cardiac cycle as a whole
+              (bullseye / 3D heart / curves), not editing points on a slice. */}
+          {workspace === "landmarks" && (
+          <ResizablePanel defaultSize={62} minSize={25}>
             <div className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden">
               {state.status === "idle" && !isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10 pointer-events-none">
@@ -1048,10 +1151,11 @@ export default function LandmarkDetectionPage() {
 
             </div>
           </ResizablePanel>
+          )}
 
           <ResizableHandle withHandle />
 
-          {/* RIGHT: Sidebar */}
+          {/* RIGHT: Sidebar — present in both workspaces. */}
           <ResizablePanel defaultSize={22} minSize={15} maxSize={35}>
             <div className="h-full w-full">
               <LandmarkSidebar
@@ -1060,6 +1164,9 @@ export default function LandmarkDetectionPage() {
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
+                onStrainFrameChange={setStrainPlaybackFrame}
+            onTabChange={setWorkspace}
+            activeTab={workspace}
                 onToggleLandmark={handleToggleLandmark}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}
@@ -1106,13 +1213,18 @@ function segmentColor(value: number | null | undefined, min: number | null | und
   return rdYlGn(t);
 }
 
-function getFrameBullseyeValues(bullseyeData: BullseyeData, currentFrame = 0, frameCount = 1): number[] {
-  const phase = frameCount > 1 ? currentFrame / (frameCount - 1) : 0;
-  const beat = Math.sin(phase * Math.PI);
-
-  return bullseyeData.segment_values.map((value, index) => (
-    value + Math.sin(index * 0.7 + currentFrame * 0.45) * 0.9 + beat * 1.2
-  ));
+/**
+ * Bullseye values to display.
+ *
+ * The stored `bullseye` is a SINGLE measurement (wall thickness at one point in
+ * the cycle) — it has no time dimension. This previously added a sine wave keyed
+ * to the frame index so the plot appeared to animate, which showed values that
+ * were never measured. Real per-frame values come from `strainSeries`
+ * (POST /segmentation/compute-strain-series); until that exists the static
+ * measurement is shown unchanged, and the UI says so.
+ */
+function getFrameBullseyeValues(bullseyeData: BullseyeData): number[] {
+  return bullseyeData.segment_values;
 }
 
 function getDummyBullseyeData(currentFrame = 0, frameCount = 1): BullseyeData {
@@ -1148,6 +1260,8 @@ function AhaBullseyePanel({
   referenceAngleDeg = 0,
   currentFrame = 0,
   frameCount = 1,
+  frameThickness = null,
+  modelLabel = "this model",
   previewMode = false,
   onCompute,
   onBullseyeResetRef,
@@ -1158,12 +1272,44 @@ function AhaBullseyePanel({
   referenceAngleDeg?: number;
   currentFrame?: number;
   frameCount?: number;
+  /**
+   * Wall thickness (mm) per AHA segment at `currentFrame`, from the full-cycle
+   * strain series. When present the plot animates real myocardial thickening;
+   * when null it falls back to the single stored `bullseye` measurement.
+   */
+  frameThickness?: (number | null)[] | null;
+  /** Display name of the model being shown — used in the empty state. */
+  modelLabel?: string;
   previewMode?: boolean;
   onCompute?: () => void;
   onBullseyeResetRef?: (fn: () => void) => void;
   onHeartResetRef?: (fn: () => void) => void;
 }) {
-  const displayBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
+  const baseBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
+
+  // Swap in the per-frame thickness while keeping the stored metadata/labels.
+  const displayBullseyeData = useMemo(() => {
+    if (!baseBullseyeData || !frameThickness) return baseBullseyeData;
+    const segment_values = baseBullseyeData.segment_values.map((v, i) =>
+      typeof frameThickness[i] === "number" ? (frameThickness[i] as number) : v,
+    );
+    const finite = segment_values.filter((v) => Number.isFinite(v));
+    return {
+      ...baseBullseyeData,
+      segment_values,
+      segment_metadata: baseBullseyeData.segment_metadata?.map((m, i) => ({
+        ...m,
+        value: segment_values[i],
+      })),
+      // Recompute so the colour scale tracks this frame, not the ED snapshot.
+      stats: {
+        ...baseBullseyeData.stats,
+        min: finite.length ? Math.min(...finite) : baseBullseyeData.stats?.min,
+        max: finite.length ? Math.max(...finite) : baseBullseyeData.stats?.max,
+        mean: finite.length ? finite.reduce((a, b) => a + b, 0) / finite.length : baseBullseyeData.stats?.mean,
+      },
+    } as BullseyeData;
+  }, [baseBullseyeData, frameThickness]);
   const heartZoomRef = useRef<((delta: number) => void) | null>(null);
 
   // Fix 1: bullseye segment hover tooltip
@@ -1176,7 +1322,7 @@ function AhaBullseyePanel({
 
   // Fix 2: per-frame min/max for colorbar percentages
   const frameValues = displayBullseyeData
-    ? getFrameBullseyeValues(displayBullseyeData, currentFrame, frameCount)
+    ? getFrameBullseyeValues(displayBullseyeData)
     : null;
   const frameMin = frameValues ? Math.min(...frameValues) : 0;
   const frameMax = frameValues ? Math.max(...frameValues) : 0;
@@ -1197,6 +1343,22 @@ function AhaBullseyePanel({
             <Loader2 className="h-6 w-6 animate-spin" />
             <span className="text-xs">Computing bullseye…</span>
           </div>
+        </div>
+      ) : !frameThickness && !previewMode ? (
+        /* No per-frame wall thickness for this model — the panel is a
+           cardiac-cycle view, so without a series there is nothing to show.
+           Rendered as unavailable rather than dimmed so a single static
+           measurement can't be mistaken for the animated result. */
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center">
+          <AlertCircle className="h-6 w-6 text-muted-foreground opacity-40" />
+          <p className="text-xs font-medium text-muted-foreground">
+            No strain data for {modelLabel}
+          </p>
+          <p className="max-w-[280px] text-[11px] leading-snug text-muted-foreground">
+            Open the <span className="font-medium text-foreground">Strain</span> tab and run{" "}
+            <span className="font-medium text-foreground">Compute all frames</span> to measure wall
+            thickness across the cardiac cycle for this model.
+          </p>
         </div>
       ) : !displayBullseyeData ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
@@ -1425,7 +1587,7 @@ function AhaHeartProjection({
   onZoomChange?: (fn: (delta: number) => void) => void;
   onResetZoom?: (fn: () => void) => void;
 }) {
-  const frameValues = getFrameBullseyeValues(bullseyeData, currentFrame, frameCount);
+  const frameValues = getFrameBullseyeValues(bullseyeData);
   // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
@@ -1603,7 +1765,7 @@ function AhaBullseyeChart({
   const midInner = 54;
   const apicalInner = 28;
   const { segment_metadata } = bullseyeData;
-  const frameValues = getFrameBullseyeValues(bullseyeData, currentFrame, frameCount);
+  const frameValues = getFrameBullseyeValues(bullseyeData);
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
 
@@ -2360,6 +2522,45 @@ function StrainPreviewPanel({
               {edFrameIdx === esFrameIdx && (
                 <p className="text-[10px] text-destructive">
                   ED and ES frames must be different.
+                </p>
+              )}
+
+              {/* Peak strain is only physiologically meaningful between the TRUE
+                  end-diastole and end-systole. When the picker is moved off the
+                  auto-detected pair the backend deliberately withholds the peaks
+                  from heartMetrics (and therefore from disease similarity and
+                  health status) — surface that here so the omission isn't silent. */}
+              {typeof autoFrames?.ed === "number" && typeof autoFrames?.es === "number" &&
+               (edFrameIdx !== autoFrames.ed || esFrameIdx !== autoFrames.es) && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
+                  <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
+                    <span className="font-semibold">Custom frames.</span>{" "}
+                    Computing {edFrameIdx + 1}→{esFrameIdx + 1} instead of the auto-detected{" "}
+                    {autoFrames.ed + 1}→{autoFrames.es + 1} ({strainModel === "unet" ? "UNet" : "MedSAM"}).
+                    Strain will still be computed for inspection, but the peaks will{" "}
+                    <span className="font-semibold">not</span> feed Disease Similarity or Health
+                    Status — those need the true ED/ES pair.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      userPickedFramesRef.current = false;
+                      setEdFrameIdx(autoFrames.ed);
+                      setEsFrameIdx(autoFrames.es);
+                      setStrainError(null);
+                    }}
+                    className="mt-1 text-[9px] font-medium text-amber-800 underline underline-offset-2 hover:no-underline dark:text-amber-300"
+                  >
+                    Reset to auto-detected frames
+                  </button>
+                </div>
+              )}
+
+              {typeof autoFrames?.ed === "number" && typeof autoFrames?.es === "number" &&
+               edFrameIdx === autoFrames.ed && esFrameIdx === autoFrames.es && (
+                <p className="text-[9px] leading-relaxed text-emerald-700 dark:text-emerald-400">
+                  Using the auto-detected ED/ES ({autoFrames.ed + 1}→{autoFrames.es + 1}) — peaks
+                  will feed Disease Similarity and Health Status.
                 </p>
               )}
 

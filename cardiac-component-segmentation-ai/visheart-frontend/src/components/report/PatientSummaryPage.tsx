@@ -3,19 +3,44 @@
 import React from "react";
 import { ReportPageFrame } from "./ReportPageFrame";
 
+/** Metric values are nullable — the pipeline leaves them null until computed. */
 export interface PatientSummaryData {
   patientLabel: string;
   scanSummary: string;
-  ef: number;
-  edv: number;
-  esv: number;
-  strokeVolume: number;
-  peakGrs: number;
-  peakGcs: number;
+  ef: number | null;
+  edv: number | null;
+  esv: number | null;
+  strokeVolume: number | null;
+  peakGrs: number | null;
+  peakGcs: number | null;
   voxelSize: string;
-  healthStatus: "Healthy" | "Mild Functional Impairment" | "Moderate Dysfunction" | "Severe Dysfunction";
+  /** Backend grades (compute_health_status.py); the longer labels are legacy. */
+  healthStatus:
+    | "Healthy" | "Mild" | "Moderate" | "Severe" | "Indeterminate"
+    | "Mild Functional Impairment" | "Moderate Dysfunction" | "Severe Dysfunction";
   healthEvidence: { text: string; ok: boolean }[];
   diseasePattern: { label: string; pct: number; color: string }[];
+  /** False when any figure on the page is placeholder rather than computed. */
+  isRealData?: boolean;
+}
+
+/** Tailwind classes for the health-status pill, by grade. */
+const STATUS_PILL: Record<string, string> = {
+  Healthy: "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
+  Mild: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  Moderate: "bg-orange-500/10 text-orange-700 dark:text-orange-400",
+  Severe: "bg-red-600/10 text-red-700 dark:text-red-400",
+  Indeterminate: "bg-muted text-muted-foreground",
+};
+
+function statusPillClass(status: string): string {
+  return STATUS_PILL[status] ?? STATUS_PILL[status.split(" ")[0]] ?? STATUS_PILL.Indeterminate;
+}
+
+/** Render a nullable metric, matching the results page's em-dash convention. */
+function metric(v: number | null | undefined, digits = 1, suffix = ""): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return `${v.toFixed(digits)}${suffix}`;
 }
 
 /**
@@ -63,12 +88,12 @@ export function PatientSummaryPage({
 }) {
   const resolvedLabel = patientLabel || data.patientLabel;
   const metrics: [string, string][] = [
-    ["Ejection Fraction", `${data.ef} %`],
-    ["EDV", `${data.edv} mL`],
-    ["ESV", `${data.esv} mL`],
-    ["Stroke Volume", `${data.strokeVolume} mL`],
-    ["Peak GRS", `${data.peakGrs} %`],
-    ["Peak GCS", `${data.peakGcs.toFixed(1)} %`],
+    ["Ejection Fraction", metric(data.ef, 1, " %")],
+    ["EDV", metric(data.edv, 1, " mL")],
+    ["ESV", metric(data.esv, 1, " mL")],
+    ["Stroke Volume", metric(data.strokeVolume, 1, " mL")],
+    ["Peak GRS", metric(data.peakGrs, 1, " %")],
+    ["Peak GCS", metric(data.peakGcs, 1, " %")],
     ["Voxel Size", data.voxelSize],
   ];
 
@@ -91,17 +116,13 @@ export function PatientSummaryPage({
               <p className="text-[12px] font-bold text-foreground">{value}</p>
             </div>
           ))}
-          <div>
-            <p className="text-[8.5px] uppercase tracking-wide text-muted-foreground">Peak GLS †</p>
-            <p className="text-[11px] font-semibold text-muted-foreground">Not available</p>
-          </div>
         </div>
       </section>
 
       <section className="mb-4">
         <h3 className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
           Health Status
-          <span className="rounded-full bg-emerald-600/10 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 dark:text-emerald-400">
+          <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${statusPillClass(data.healthStatus)}`}>
             {data.healthStatus}
           </span>
         </h3>
@@ -129,8 +150,11 @@ export function PatientSummaryPage({
           ))}
         </div>
         <p className="mt-2 text-[8.5px] leading-snug text-muted-foreground">
-          † GLS needs a long-axis (4-chamber) view — the current pipeline is short-axis (SAX) only.
-          Health Status and Disease Pattern Similarity are preview values pending those features.
+          Global longitudinal strain (GLS) is not reported — it needs a long-axis (4-chamber) view
+          and the current pipeline is short-axis (SAX) only.
+          {data.isRealData
+            ? " Health Status is a rule-based assessment (ASE/EACVI 2015 thresholds) and Disease Pattern Similarity is a similarity comparison — neither is a diagnosis; interpretation by a qualified clinician is required."
+            : " Health Status and Disease Pattern Similarity are preview values pending those features."}
         </p>
       </section>
     </ReportPageFrame>
