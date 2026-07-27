@@ -717,9 +717,20 @@ export default function LandmarkDetectionPage() {
             label="Dataset"
             value={`${projectData.dimensions?.width ?? 256}×${projectData.dimensions?.height ?? 256}`}
           />
+          {/* Slices and frames are different axes: landmark detection runs per
+              slice, the cardiac cycle spans frames. state.totalFrames is a slice
+              count despite its name, so label it as slices and take frames from
+              the project dimensions. */}
+          <InfoPill
+            label="Slices"
+            value={String(
+              (hasPredictions ? state.totalFrames : projectData.dimensions?.slices) ??
+              projectData.dimensions?.slices ?? "—",
+            )}
+          />
           <InfoPill
             label="Frames"
-            value={hasPredictions ? String(state.totalFrames) : String(projectData.dimensions?.frames ?? "—")}
+            value={String(projectData.dimensions?.frames ?? "—")}
           />
           {hasPredictions && (
             <InfoPill label="Model" value={state.modelUsed} />
@@ -785,8 +796,8 @@ export default function LandmarkDetectionPage() {
               className="text-xs gap-1.5"
               onClick={() => router.push(`/project/${projectId}/report`)}
             >
-              <Download className="h-3.5 w-3.5" />
-              Export Report
+              <FileText className="h-3.5 w-3.5" />
+              Report Page
             </Button>
             <Button
               variant="outline"
@@ -969,7 +980,7 @@ export default function LandmarkDetectionPage() {
                             !existingSegModels.unet ? " (no data)" :
                             calculatingModels.unet ? ` (Calculating... ${calcCountdown}s)` :
                             !availableBullseyeModels.unet ? " (computing…)" :
-                            ""
+                            " (recommended)"
                           }
                         </SelectItem>
                       </SelectContent>

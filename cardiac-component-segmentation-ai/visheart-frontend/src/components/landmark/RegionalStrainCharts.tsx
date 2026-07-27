@@ -85,54 +85,97 @@ export function RegionalStrainByRegion({
 }) {
   const frames = series.length;
   const segmentIds = series[0]?.map((d) => d.segment) ?? [];
+  const ringsPresent = RING_ORDER.filter((r) => segmentIds.some((s) => ringForSegment(s) === r));
+
+  // One ring at a time — the four toggles switch which ring's chart is shown,
+  // rather than tiling all four at once (clearer, and gives each chart room for
+  // a hover tooltip).
+  const [ring, setRing] = useState<Ring>(ringsPresent[0] ?? "basal");
+  const [hover, setHover] = useState<{ x: number; y: number; seg: number; frame: number; value: number } | null>(null);
+
+  const segs = segmentIds.filter((s) => ringForSegment(s) === ring);
+  const values = segs.flatMap((s) => Array.from({ length: frames }, (_, f) => valueAtFrame(series, s, f)));
+  const yMin = Math.min(...values, 0) - 1;
+  const yMax = Math.max(...values, 0) + 1;
+  const w = 460, h = 230, padL = 34, padR = 14, padT = 10, padB = 22;
+  const x = (f: number) => padL + (w - padL - padR) * (f / Math.max(frames - 1, 1));
+  const y = (v: number) => padT + (h - padT - padB) * (1 - (v - yMin) / (yMax - yMin || 1));
 
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {RING_ORDER.map((ring) => {
-        const segs = segmentIds.filter((s) => ringForSegment(s) === ring);
-        if (segs.length === 0) return null;
+    <div className="rounded-lg border border-border bg-background p-2.5">
+      {/* Ring selector */}
+      <div className="mb-2 inline-flex rounded-md border border-border bg-muted/30 p-0.5">
+        {ringsPresent.map((r) => {
+          const count = segmentIds.filter((s) => ringForSegment(s) === r).length;
+          return (
+            <button
+              key={r}
+              type="button"
+              onClick={() => { setRing(r); setHover(null); }}
+              className={cn(
+                "flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+                ring === r ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              <span className="h-1.5 w-1.5 rounded-sm" style={{ backgroundColor: RING_COLOR_VAR[r] }} />
+              {RING_LABEL[r]} ({count})
+            </button>
+          );
+        })}
+      </div>
 
-        const values = segs.flatMap((s) => Array.from({ length: frames }, (_, f) => valueAtFrame(series, s, f)));
-        const yMin = Math.min(...values) - 1;
-        const yMax = Math.max(...values) + 1;
-        const w = 220, h = 118, padL = 24, padR = 6, padT = 6, padB = 14;
-        const x = (f: number) => padL + (w - padL - padR) * (f / Math.max(frames - 1, 1));
-        const y = (v: number) => padT + (h - padT - padB) * (1 - (v - yMin) / (yMax - yMin || 1));
-
-        return (
-          <div key={ring} className="rounded-lg border border-border bg-background p-2">
-            <div className="mb-1 flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: RING_COLOR_VAR[ring] }} />
-              {RING_LABEL[ring]} ({segs.length})
-            </div>
-            <svg viewBox={`0 0 ${w} ${h}`} className="h-auto w-full">
-              {[0.25, 0.5, 0.75].map((frac) => (
-                <line
-                  key={frac}
-                  x1={padL} x2={w - padR}
-                  y1={padT + (h - padT - padB) * frac} y2={padT + (h - padT - padB) * frac}
-                  stroke="hsl(var(--border))" strokeWidth={1}
-                />
-              ))}
-              {segs.map((seg, idx) => {
-                const opacity = 0.55 + (idx / Math.max(segs.length - 1, 1)) * 0.45;
-                const points = Array.from({ length: frames }, (_, f) => `${x(f)},${y(valueAtFrame(series, seg, f))}`).join(" ");
-                const last = { x: x(frames - 1), y: y(valueAtFrame(series, seg, frames - 1)) };
-                const label = stripRingPrefix(series[0]?.find((d) => d.segment === seg)?.label ?? `Segment ${seg}`);
-                return (
-                  <g key={seg}>
-                    <polyline points={points} fill="none" stroke={RING_COLOR_VAR[ring]} strokeWidth={1.8} opacity={opacity} strokeLinecap="round" />
-                    <text x={last.x + 3} y={last.y + 3} fontSize={7} fill="hsl(var(--muted-foreground))">{label}</text>
-                  </g>
-                );
-              })}
-              <line x1={padL} x2={w - padR} y1={h - padB} y2={h - padB} stroke="hsl(var(--muted-foreground))" strokeWidth={1} />
-              <text x={padL} y={h - 3} fontSize={7} fill="hsl(var(--muted-foreground))">ED</text>
-              <text x={w - padR - 12} y={h - 3} fontSize={7} fill="hsl(var(--muted-foreground))">ED</text>
-            </svg>
+      <div className="relative">
+        <svg viewBox={`0 0 ${w} ${h}`} className="h-auto w-full">
+          {/* gridlines + y labels */}
+          {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
+            const gy = padT + (h - padT - padB) * frac;
+            const val = yMax - (yMax - yMin) * frac;
+            return (
+              <g key={frac}>
+                <line x1={padL} x2={w - padR} y1={gy} y2={gy} stroke="hsl(var(--border))" strokeWidth={1} opacity={0.5} />
+                <text x={padL - 4} y={gy + 3} textAnchor="end" fontSize={9} fill="hsl(var(--muted-foreground))">{val.toFixed(0)}</text>
+              </g>
+            );
+          })}
+          {segs.map((seg, idx) => {
+            const opacity = 0.55 + (idx / Math.max(segs.length - 1, 1)) * 0.45;
+            const points = Array.from({ length: frames }, (_, f) => `${x(f)},${y(valueAtFrame(series, seg, f))}`).join(" ");
+            return <polyline key={seg} points={points} fill="none" stroke={RING_COLOR_VAR[ring]} strokeWidth={1.8} opacity={opacity} strokeLinecap="round" />;
+          })}
+          {/* hover hit-targets: one dot per segment per frame */}
+          {segs.map((seg) =>
+            Array.from({ length: frames }, (_, f) => {
+              const v = valueAtFrame(series, seg, f);
+              const label = stripRingPrefix(series[0]?.find((d) => d.segment === seg)?.label ?? `Seg ${seg}`);
+              return (
+                <circle
+                  key={`${seg}-${f}`}
+                  cx={x(f)} cy={y(v)} r={4}
+                  fill="transparent"
+                  onMouseEnter={() => setHover({ x: x(f), y: y(v), seg, frame: f, value: v })}
+                  onMouseLeave={() => setHover(null)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <title>{`${label} · frame ${f + 1}: ${v.toFixed(1)}%`}</title>
+                </circle>
+              );
+            }),
+          )}
+          {hover && <circle cx={hover.x} cy={hover.y} r={2.6} fill={RING_COLOR_VAR[ring]} />}
+          <line x1={padL} x2={w - padR} y1={h - padB} y2={h - padB} stroke="hsl(var(--muted-foreground))" strokeWidth={1} />
+          <text x={padL} y={h - 6} fontSize={9} fill="hsl(var(--muted-foreground))">ED</text>
+          <text x={(padL + w - padR) / 2} y={h - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">cardiac frame →</text>
+          <text x={w - padR} y={h - 6} textAnchor="end" fontSize={9} fill="hsl(var(--muted-foreground))">ED</text>
+        </svg>
+        {hover && (
+          <div
+            className="pointer-events-none absolute z-10 rounded bg-foreground px-1.5 py-1 text-[9px] text-background shadow"
+            style={{ left: `${(hover.x / w) * 100}%`, top: `${(hover.y / h) * 100}%`, transform: "translate(-50%,-120%)" }}
+          >
+            {stripRingPrefix(series[0]?.find((d) => d.segment === hover.seg)?.label ?? `Seg ${hover.seg}`)} · f{hover.frame + 1}: {hover.value.toFixed(1)}%
           </div>
-        );
-      })}
+        )}
+      </div>
     </div>
   );
 }
@@ -230,6 +273,19 @@ export function FullCycleChart({
         {Array.from({ length: frames }, (_, f) => (
           <text key={f} x={x(f)} y={height - padB + 12} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">{f}</text>
         ))}
+        {/* Hover targets — a transparent dot per segment/frame gives a native
+            SVG <title> tooltip without pulling in a charting lib. */}
+        {orderedSegments.map((seg) =>
+          Array.from({ length: frames }, (_, f) => {
+            const v = valueAtFrame(series, seg, f);
+            const label = series[0]?.find((d) => d.segment === seg)?.label ?? `Segment ${seg}`;
+            return (
+              <circle key={`hit-${seg}-${f}`} cx={x(f)} cy={y(v)} r={4} fill="transparent" style={{ cursor: "pointer" }}>
+                <title>{`${label} · frame ${f}: ${v.toFixed(1)}%`}</title>
+              </circle>
+            );
+          }),
+        )}
       </svg>
       {hasPhaseBands ? (
         <div className="mt-1 flex text-center text-[9px] font-semibold">

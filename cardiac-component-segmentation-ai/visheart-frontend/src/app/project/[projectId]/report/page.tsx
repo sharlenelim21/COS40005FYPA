@@ -10,9 +10,8 @@ import { ErrorProject } from "@/components/project/ErrorProject";
 import { PatientSummaryPage, PLACEHOLDER_PATIENT_SUMMARY, type PatientSummaryData } from "@/components/report/PatientSummaryPage";
 import { RegionalStrainBullseyePage } from "@/components/report/RegionalStrainBullseyePage";
 import { StrainDetailPage } from "@/components/report/StrainDetailPage";
-import { useProjectResults, type Model } from "@/hooks/useProjectResults";
+import { useProjectResults } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
-import { cn } from "@/lib/utils";
 import { ArrowLeft, ArrowUp, Printer } from "lucide-react";
 
 /** Bar colours for the disease-similarity rows, keyed by pattern code. */
@@ -33,9 +32,10 @@ export default function ReportPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
   const { loading, error, projectData } = useProject();
-  // Real stored per-model results — same source as the /results page.
-  const { model, setModel, available, measurements, healthStatus, similarity, strain, strainSeries } =
-    useProjectResults(projectId);
+  // One report, defaulting to the most-recently-computed model (no toggle) —
+  // the reader gets a single authoritative view rather than choosing a model.
+  const { model, available, measurements, healthStatus, similarity, strain, strainSeries } =
+    useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
   // with the real bottom edge of whatever's fixed above it (site header +
@@ -143,31 +143,11 @@ export default function ReportPage() {
             <ArrowLeft className="h-3.5 w-3.5" />
             Back to Landmarks
           </Button>
-          <div className="flex items-center gap-3">
-            <div className="text-center">
-              <p className="text-xs font-semibold">Cardiac Functional Analysis Report</p>
-              <p className="text-[10px] text-muted-foreground">5 pages · sized to A4 (210×297mm)</p>
-            </div>
-            {/* Model selector — each model is its own stored mask document, so
-                this only swaps which results are displayed (no recompute). */}
-            <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-              {(["unet", "medsam"] as Model[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  disabled={!available[m]}
-                  onClick={() => setModel(m)}
-                  className={cn(
-                    "rounded px-2.5 py-1 text-[11px] font-medium transition-colors",
-                    model === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-                    !available[m] && "cursor-not-allowed opacity-40",
-                  )}
-                  title={available[m] ? undefined : "No results stored for this model"}
-                >
-                  {m === "unet" ? "UNet" : "MedSAM"}
-                </button>
-              ))}
-            </div>
+          <div className="text-center">
+            <p className="text-xs font-semibold">Cardiac Functional Analysis Report</p>
+            <p className="text-[10px] text-muted-foreground">
+              5 pages · A4 · {model === "unet" ? "UNet" : "MedSAM"} (most recent run)
+            </p>
           </div>
           <Button size="sm" className="gap-1.5 text-xs" onClick={() => window.print()}>
             <Printer className="h-3.5 w-3.5" />

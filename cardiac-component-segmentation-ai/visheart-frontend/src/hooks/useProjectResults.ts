@@ -11,7 +11,7 @@
  * recompute is triggered.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { segmentationApi } from "@/lib/api";
 
 // ── Types mirroring the stored mask-document fields ─────────────────────────────
@@ -141,10 +141,17 @@ export function fmt(v: number | null | undefined, digits = 1, suffix = ""): stri
 
 // ── Hook ────────────────────────────────────────────────────────────────────────
 
-export function useProjectResults(projectId: string | undefined) {
+/** When to auto-select a model. "recent" picks whichever was computed last. */
+type AutoSelect = "prefer-unet" | "recent";
+
+export function useProjectResults(
+  projectId: string | undefined,
+  autoSelect: AutoSelect = "prefer-unet",
+) {
   const [masks, setMasks] = useState<MaskDoc[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<Model>("unet");
+  const userChoseModel = useRef(false);
 
   useEffect(() => {
     if (!projectId) return;
@@ -183,12 +190,48 @@ export function useProjectResults(projectId: string | undefined) {
     medsam: !!byModel.medsam,
   };
 
-  // Fall back to whichever model actually has data.
+  // Most recent time anything was computed for a model — used to default to the
+  // freshest run. Takes the newest of the timestamps the doc carries.
+  const computedAtFor = (m: MaskDoc | null): number => {
+    if (!m) return 0;
+    const stamps = [
+      m.strainSeries?.computed_at,
+      m.strain?.computed_at,
+      m.diseaseSimilarity?.computed_at,
+      m.healthStatus?.computed_at,
+    ]
+      .filter(Boolean)
+      .map((s) => Date.parse(s as string))
+      .filter((n) => !Number.isNaN(n));
+    return stamps.length ? Math.max(...stamps) : 0;
+  };
+
+  // Auto-select a model once data arrives, unless the caller has switched
+  // manually. "recent" picks the freshest run (the report wants one report,
+  // most-recent); "prefer-unet" keeps UNet when it has data and only falls back.
   useEffect(() => {
-    if (masks === null) return;
+    if (masks === null || userChoseModel.current) return;
     const other: Model = model === "unet" ? "medsam" : "unet";
-    if (!available[model] && available[other]) setModel(other);
-  }, [masks, available, model]);
+    if (autoSelect === "recent") {
+      if (!available.unet && !available.medsam) return;
+      let pick: Model;
+      if (available.unet && available.medsam) {
+        pick = computedAtFor(byModel.medsam) > computedAtFor(byModel.unet) ? "medsam" : "unet";
+      } else {
+        pick = available.unet ? "unet" : "medsam";
+      }
+      if (pick !== model) setModel(pick);
+    } else if (!available[model] && available[other]) {
+      setModel(other);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [masks, available.unet, available.medsam, autoSelect]);
+
+  /** Switch model and stop auto-selection from overriding the choice. */
+  const chooseModel = (m: Model) => {
+    userChoseModel.current = true;
+    setModel(m);
+  };
 
   const doc = byModel[model];
 
@@ -227,6 +270,7 @@ export function useProjectResults(projectId: string | undefined) {
     loading: masks === null && !error,
     model,
     setModel,
+    chooseModel,
     available,
     doc,
     measurements: doc?.heartMetrics?.measurements,

@@ -133,13 +133,6 @@ export function LandmarkSidebar({
   selectedStrainType = "GCS",
 }: LandmarkSidebarProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("landmarks");
-  const handleTabChange = useCallback(
-    (key: TabKey) => {
-      setActiveTab(key);
-      onTabChange?.(key);
-    },
-    [onTabChange],
-  );
 
   // Strain playback runs on its own axis: the cardiac CYCLE (frames), whereas
   // state.currentFrame/totalFrames track SLICES (landmark detection is per
@@ -155,6 +148,19 @@ export function LandmarkSidebar({
   const [strainFrame, setStrainFrame] = useState(0);
   const [strainPlaying, setStrainPlaying] = useState(false);
   useEffect(() => { onStrainFrameChange?.(strainFrame); }, [strainFrame, onStrainFrameChange]);
+
+  // Landmark and strain playback are independent loops (slices vs. frames).
+  // Switching tabs pauses BOTH, so a loop started in one tab can't keep running
+  // while the user thinks the playback bar in the other tab is what's moving.
+  const handleTabChange = useCallback(
+    (key: TabKey) => {
+      setStrainPlaying(false);
+      if (state.isPlaying) onTogglePlay();
+      setActiveTab(key);
+      onTabChange?.(key);
+    },
+    [onTabChange, onTogglePlay, state.isPlaying],
+  );
   useEffect(() => {
     if (!strainPlaying || strainFrameCount < 2) return;
     const id = setInterval(
@@ -188,9 +194,11 @@ export function LandmarkSidebar({
             className={cn(
               "flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all flex-1 text-left",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              // Active tab gets a solid, clearly darker fill so it reads as
+              // selected at a glance (the subtle accent was too close to idle).
               activeTab === key
-                ? "bg-[var(--sidebar-accent)] text-[var(--sidebar-accent-foreground)] shadow-sm"
-                : "hover:bg-primary/20 text-[var(--sidebar-foreground)]",
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-primary/10 hover:text-foreground",
             )}
           >
             <Icon className="w-4 h-4 flex-shrink-0" />
@@ -1061,9 +1069,15 @@ function StrainTab({
                   strainModel === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
                   !modelAvailable[m] && "cursor-not-allowed opacity-40",
                 )}
-                title={modelAvailable[m] ? undefined : "No results stored for this model"}
+                title={
+                  !modelAvailable[m]
+                    ? "No results stored for this model"
+                    : m === "unet"
+                    ? "UNet — recommended (more accurate wall boundaries)"
+                    : undefined
+                }
               >
-                {m === "unet" ? "UNet" : "MedSAM"}
+                {m === "unet" ? "UNet ★" : "MedSAM"}
               </button>
             ))}
           </div>
@@ -1278,7 +1292,9 @@ function StrainTab({
         )}
 
         {curveView === "cycle" && (
-          <FullCycleChart series={cycleSeries} strainType={selectedStrainType} width={520} height={220} highlightSeg={hoverSeg} />
+          <div className="w-full overflow-x-auto">
+            <FullCycleChart series={cycleSeries} strainType={selectedStrainType} width={480} height={240} highlightSeg={hoverSeg} />
+          </div>
         )}
 
         {curveView !== "global" && !usingRealSeries && (
