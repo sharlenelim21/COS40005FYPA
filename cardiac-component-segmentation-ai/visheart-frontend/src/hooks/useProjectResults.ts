@@ -67,7 +67,10 @@ export type HealthStatus = {
 
 /** Single ED→ES strain result (global peaks + 17 AHA segments). */
 export type Strain = {
-  segments: { segment: number; label: string; grs: number | null; gcs: number | null }[];
+  segments: {
+    segment: number; label: string; grs: number | null; gcs: number | null;
+    wt_ed_mm?: number | null; wt_es_mm?: number | null;
+  }[];
   global_grs: number | null;
   global_gcs: number | null;
   edFrameIndex?: number;
@@ -273,6 +276,8 @@ export function useProjectResults(
     chooseModel,
     available,
     doc,
+    /** Both models' full mask docs — for exports that cover UNet and MedSAM. */
+    byModel,
     measurements: doc?.heartMetrics?.measurements,
     healthStatus: doc?.healthStatus,
     similarity: doc?.diseaseSimilarity,

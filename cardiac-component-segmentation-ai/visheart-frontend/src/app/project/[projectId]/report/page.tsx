@@ -173,6 +173,18 @@ export default function ReportPage() {
       {/* Print presentation — the paginated A4 sheets. Kept in the DOM so
           window.print() needs no re-render, but hidden on screen. */}
       <div id="vh-report-root" className={`${reportFont.className} vh-print-only px-4 pt-6`}>
+        {!hasRealData ? (
+          // Match the screen's empty state instead of printing placeholder
+          // numbers, so a report can never be exported with fabricated values.
+          <div className="mx-auto flex min-h-[297mm] w-[210mm] flex-col items-center justify-center p-6 text-center">
+            <p className="text-base font-semibold text-foreground">No results to report</p>
+            <p className="mt-2 max-w-[420px] text-sm text-muted-foreground">
+              Nothing has been computed for this project yet. Run segmentation, heart metrics and
+              strain, then reopen this report to print it.
+            </p>
+          </div>
+        ) : (
+          <>
         <PatientSummaryPage data={summaryData} patientLabel={patientLabel} pageNumber={1} totalPages={TOTAL_PAGES} generatedAt={generatedAt} />
         <RegionalStrainBullseyePage
           strainType="GRS"
@@ -210,6 +222,8 @@ export default function ReportPage() {
           generatedAt={generatedAt}
           realSeries={gcsSeries}
         />
+          </>
+        )}
       </div>
 
       {showScrollTop && (

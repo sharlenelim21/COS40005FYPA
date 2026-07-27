@@ -25,6 +25,7 @@ import {
 
 import { useProject } from "@/context/ProjectContext";
 import { useProjectResults } from "@/hooks/useProjectResults";
+import { downloadResultsCsv } from "@/lib/exportResultsCsv";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import {
@@ -589,6 +590,7 @@ export default function LandmarkDetectionPage() {
     setModel: setBullseyeResultsModel,
     seriesAvailable,
     seriesComputedAt,
+    byModel: resultsByModel,
   } = useProjectResults(projectId);
   useEffect(() => {
     setBullseyeResultsModel(selectedBullseyeModel);
@@ -803,10 +805,13 @@ export default function LandmarkDetectionPage() {
               variant="outline"
               size="sm"
               className="text-xs gap-1.5"
+              disabled={!resultsByModel?.unet && !resultsByModel?.medsam}
               onClick={() => {
-                // Dummy CSV export
-                console.log("Exporting landmark data as CSV (dummy)...");
-                alert("Landmark data CSV export initiated.\n(Currently a placeholder - CSV export coming soon)");
+                if (!resultsByModel?.unet && !resultsByModel?.medsam) {
+                  alert("No computed results to export yet. Run metrics and strain first.");
+                  return;
+                }
+                downloadResultsCsv(projectData?.name || String(projectId), resultsByModel);
               }}
             >
               <FileText className="h-3.5 w-3.5" />
@@ -870,6 +875,7 @@ export default function LandmarkDetectionPage() {
             confidentCount={confidentCount}
             onStrainFrameChange={setStrainPlaybackFrame}
             onTabChange={setWorkspace}
+            activeTab={workspace}
             onToggleLandmark={handleToggleLandmark}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
@@ -1160,6 +1166,7 @@ export default function LandmarkDetectionPage() {
                 confidentCount={confidentCount}
                 onStrainFrameChange={setStrainPlaybackFrame}
             onTabChange={setWorkspace}
+            activeTab={workspace}
                 onToggleLandmark={handleToggleLandmark}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}

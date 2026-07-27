@@ -38,22 +38,32 @@ const PATTERN_COLORS: Record<string, string> = { NOR: "#15803d", DCM: "#b45309",
 
 type StrainType = "GRS" | "GCS";
 
+// Same red→green gradient the landmark-detection bullseye uses, so the two
+// plots read with one colour language. Red = weak contraction, green = strong.
+const STRAIN_GRADIENT = ["#d73027", "#fc8d59", "#fee08b", "#d9ef8b", "#91cf60", "#1a9850"] as const;
+
+function lerpHex(a: string, b: string, t: number): string {
+  const p = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [ar, ag, ab] = p(a);
+  const [br, bg, bb] = p(b);
+  const to = (x: number) => Math.round(x).toString(16).padStart(2, "0");
+  return `#${to(ar + (br - ar) * t)}${to(ag + (bg - ag) * t)}${to(ab + (bb - ab) * t)}`;
+}
+
 /**
- * Colour bands. GCS is negative (shortening) and GRS positive (thickening), so
- * "better" runs in opposite directions — hence the per-type thresholds.
+ * Colour by contraction strength on a continuous scale (matching the landmark
+ * bullseye). GRS is positive (thickening) and GCS negative (shortening), so
+ * both are normalised to "fraction of expected peak contraction": 0 → red,
+ * 1 → green.
  */
 function strainColor(v: number | null, type: StrainType): string {
   if (v === null || Number.isNaN(v)) return "#e5e7eb";
-  if (type === "GCS") {
-    if (v <= -18) return "#15803d";
-    if (v <= -12) return "#2563eb";
-    if (v <= -6)  return "#b45309";
-    return "#e11d2e";
-  }
-  if (v >= 35) return "#15803d";
-  if (v >= 25) return "#2563eb";
-  if (v >= 15) return "#b45309";
-  return "#e11d2e";
+  // Normalise to 0..1 against a typical healthy peak (GRS ~40 %, GCS ~-20 %).
+  const frac = type === "GCS" ? Math.abs(v) / 20 : v / 40;
+  const t = Math.max(0, Math.min(1, frac));
+  const scaled = t * (STRAIN_GRADIENT.length - 1);
+  const i = Math.min(Math.floor(scaled), STRAIN_GRADIENT.length - 2);
+  return lerpHex(STRAIN_GRADIENT[i], STRAIN_GRADIENT[i + 1], scaled - i);
 }
 
 function polar(cx: number, cy: number, r: number, angleDeg: number) {
@@ -259,19 +269,42 @@ export function InteractiveReport({
           </p>
           <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">Comparison vs. reference profiles</p>
           {similarity ? (
-            <div className="flex flex-col gap-2.5">
-              {similarity.similarities.map((d) => (
-                <div key={d.code}>
-                  <div className="mb-1 flex justify-between text-[11.5px]">
-                    <span className="text-foreground">{d.label}</span>
-                    <span className="font-bold text-foreground">{d.percent.toFixed(0)}%</span>
+            <>
+              <div className="flex flex-col gap-2.5">
+                {similarity.similarities.map((d) => (
+                  <div key={d.code}>
+                    <div className="mb-1 flex justify-between text-[11.5px]">
+                      <span className="text-foreground">{d.label}</span>
+                      <span className="font-bold text-foreground">{d.percent.toFixed(0)}%</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                      <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, d.percent))}%`, background: PATTERN_COLORS[d.code] ?? "#64748b" }} />
+                    </div>
                   </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, d.percent))}%`, background: PATTERN_COLORS[d.code] ?? "#64748b" }} />
+                ))}
+              </div>
+              {/* Why the top pattern matched — the per-metric reasoning the
+                  module already computes, shown so the % isn't a black box. */}
+              {(() => {
+                const top = similarity.similarities.find((s) => s.code === similarity.most_similar);
+                if (!top?.reasons?.length) return null;
+                return (
+                  <div className="mt-3 border-t border-border pt-2">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Why {top.label}
+                    </p>
+                    <ul className="flex flex-col gap-0.5">
+                      {top.reasons.slice(0, 4).map((r, i) => (
+                        <li key={i} className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                          <span className="text-muted-foreground/50">•</span>
+                          <span>{r}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </div>
-              ))}
-            </div>
+                );
+              })()}
+            </>
           ) : (
             <p className="text-xs text-muted-foreground">Not computed for this model yet.</p>
           )}
@@ -314,12 +347,17 @@ export function InteractiveReport({
                   </span>
                 </div>
                 <Bullseye values={bullseyeValues} strainType={strainType} />
-                <div className="mt-1 flex flex-wrap justify-center gap-3 text-[11px] text-muted-foreground">
-                  {[["#15803d", "Excellent"], ["#2563eb", "Good"], ["#b45309", "Fair"], ["#e11d2e", "Reduced"]].map(([c, l]) => (
-                    <span key={l} className="flex items-center gap-1">
-                      <span className="inline-block h-2 w-2 rounded-sm" style={{ background: c }} />{l}
-                    </span>
-                  ))}
+                {/* Continuous scale, matching the landmark-detection bullseye. */}
+                <div className="mx-auto mt-2 max-w-[240px]">
+                  <div
+                    className="h-2 w-full rounded-full border border-border"
+                    style={{ background: `linear-gradient(to right, ${STRAIN_GRADIENT.join(", ")})` }}
+                  />
+                  <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground">
+                    <span>Weaker</span>
+                    <span>Contraction</span>
+                    <span>Stronger</span>
+                  </div>
                 </div>
               </div>
 

@@ -84,6 +84,13 @@ export interface LandmarkSidebarProps {
    * bullseye and 3D heart.
    */
   onTabChange?: (tab: "landmarks" | "strain") => void;
+  /**
+   * Controls the active tab from the page. The page remounts this sidebar when
+   * the workspace changes (the resizable group is keyed on it), which would
+   * otherwise reset internal tab state back to "landmarks" and desync the two
+   * panels. Passing it in keeps them in lockstep.
+   */
+  activeTab?: "landmarks" | "strain";
 
   onToggleLandmark: (id: string) => void;
   onTogglePlay: () => void;
@@ -113,6 +120,7 @@ export function LandmarkSidebar({
   confidentCount,
   onStrainFrameChange,
   onTabChange,
+  activeTab: activeTabProp,
   onToggleLandmark,
   onTogglePlay,
   onNextFrame,
@@ -132,7 +140,11 @@ export function LandmarkSidebar({
   selectedStrainSegment,
   selectedStrainType = "GCS",
 }: LandmarkSidebarProps) {
-  const [activeTab, setActiveTab] = useState<TabKey>("landmarks");
+  // Controlled by the page when provided (see activeTab prop) so a remount
+  // can't desync the sidebar tab from the page's workspace; otherwise falls
+  // back to local state.
+  const [localTab, setLocalTab] = useState<TabKey>("landmarks");
+  const activeTab: TabKey = activeTabProp ?? localTab;
 
   // Strain playback runs on its own axis: the cardiac CYCLE (frames), whereas
   // state.currentFrame/totalFrames track SLICES (landmark detection is per
@@ -156,7 +168,7 @@ export function LandmarkSidebar({
     (key: TabKey) => {
       setStrainPlaying(false);
       if (state.isPlaying) onTogglePlay();
-      setActiveTab(key);
+      setLocalTab(key);
       onTabChange?.(key);
     },
     [onTabChange, onTogglePlay, state.isPlaying],
