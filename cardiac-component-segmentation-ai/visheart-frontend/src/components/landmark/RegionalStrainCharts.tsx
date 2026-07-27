@@ -228,13 +228,23 @@ export function FullCycleChart({
   const segmentIds = series[0]?.map((d) => d.segment) ?? [];
   const [hoverFrame, setHoverFrame] = useState<number | null>(null);
 
-  const yMin = strainType === "GRS" ? 0 : -26;
-  const yMax = strainType === "GRS" ? 42 : 2;
-  const padL = 30, padR = 10, padT = 10, padB = 20;
+  // Fit the y-range to the actual data so peaks aren't clipped at a fixed cap
+  // (real GRS can exceed the old 42 ceiling). Start from sensible defaults, then
+  // widen to cover the data plus a small margin, snapped to the grid step.
+  const allValues = segmentIds.flatMap((s) =>
+    Array.from({ length: frames }, (_, f) => valueAtFrame(series, s, f)),
+  );
+  const dataMin = allValues.length ? Math.min(...allValues) : 0;
+  const dataMax = allValues.length ? Math.max(...allValues) : 0;
+  const step = 10;
+  const defMin = strainType === "GRS" ? 0 : -26;
+  const defMax = strainType === "GRS" ? 42 : 2;
+  const yMin = Math.floor(Math.min(defMin, dataMin - 2) / step) * step;
+  const yMax = Math.ceil(Math.max(defMax, dataMax + 2) / step) * step;
+  const padL = 30, padR = 12, padT = 14, padB = 20;
   const x = (f: number) => padL + (width - padL - padR) * (f / Math.max(frames - 1, 1));
   const y = (v: number) => padT + (height - padT - padB) * (1 - (v - yMin) / (yMax - yMin));
   const yZero = y(0);
-  const step = yMax - yMin > 30 ? 10 : 5;
   const gridLines: number[] = [];
   for (let gy = Math.ceil(yMin / step) * step; gy <= yMax; gy += step) gridLines.push(gy);
 
