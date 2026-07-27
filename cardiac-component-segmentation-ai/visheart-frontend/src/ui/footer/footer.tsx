@@ -93,7 +93,7 @@ export default function Footer() {
                   <Mail className="h-4 w-4 text-primary" />
                   <span className="font-medium text-foreground">Sharlene Lim</span>
                 </div>
-                <div className="text-xs text-muted-foreground ml-6">Team Leader</div>
+                <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
                 <div className="text-xs ml-6">
                   <a href="mailto:102783112@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783112@students.swinburne.edu.my
@@ -106,7 +106,7 @@ export default function Footer() {
                   <Mail className="h-4 w-4 text-primary" />
                   <span className="font-medium text-foreground">Ngui Jia Yi</span>
                 </div>
-                <div className="text-xs text-muted-foreground ml-6">Product Owner</div>
+                <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
                 <div className="text-xs ml-6">
                   <a href="mailto:102783222@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783222@students.swinburne.edu.my
