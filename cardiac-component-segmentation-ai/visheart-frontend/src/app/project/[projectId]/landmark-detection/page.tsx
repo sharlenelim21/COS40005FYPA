@@ -2608,10 +2608,16 @@ function StrainPreviewPanel({
               <Heart className="w-8 h-8 text-muted-foreground/50" />
             </div>
             <p className="font-semibold text-sm text-foreground">
-              Upload ED &amp; ES masks to compute strain
+              No strain computed yet
             </p>
+            {/* Two ways in, and the stored-mask route is the usual one — the old
+                copy named only the upload, which reads as "upload is required". */}
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Upload segmentation masks for End-Diastole (ED) and End-Systole (ES) frames in NIfTI format (.nii or .nii.gz). Required classes: 0=background, 1=RV, 2=myocardium, 3=LV cavity.
+              Open the panel to compute strain from this project&apos;s <strong>already-saved
+              segmentation</strong> — pick the ED and ES frames and press Compute Strain, no
+              upload needed. Optionally, upload your own ED/ES masks in NIfTI format (.nii or
+              .nii.gz; classes 0=background, 1=RV, 2=myocardium, 3=LV cavity) for
+              manually-verified accuracy.
             </p>
             <button
               type="button"
@@ -2619,7 +2625,7 @@ function StrainPreviewPanel({
               className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
             >
               <Upload className="w-3 h-3" />
-              Upload masks
+              Compute or upload masks
             </button>
           </div>
         </div>

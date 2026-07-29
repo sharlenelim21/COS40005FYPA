@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -1057,9 +1057,18 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             return res.status(404).json({ error: `No ${modelType ?? "unet"} segmentation mask with stored frames found for this project. Run ${modelType ?? "unet"} segmentation first.` });
         }
 
-        const maskDoc = allMasks.reduce((best: any, m: any) =>
-            (m.frames?.length ?? 0) > (best.frames?.length ?? 0) ? m : best
-        );
+        // Most frames wins; ties break to the NEWEST document. Without the
+        // tie-break this depended on Mongo's natural order — with two equal-frame
+        // masks (one per segmentation re-run) the oldest silently won every time,
+        // so results kept landing on a stale mask and a re-run appeared to do
+        // nothing. ObjectIds are monotonic by creation time, so comparing them
+        // orders the masks without needing a timestamp field.
+        const maskDoc = allMasks.reduce((best: any, m: any) => {
+            const n = m.frames?.length ?? 0;
+            const bn = best.frames?.length ?? 0;
+            if (n !== bn) return n > bn ? m : best;
+            return String(m._id) > String(best._id) ? m : best;
+        });
 
         logger.info(`${serviceLocation}: compute-strain-from-frames maskDoc found: id=${maskDoc._id} totalFrames=${maskDoc.frames?.length} frameIndices=${(maskDoc.frames as any[])?.map((f: any) => f.frameindex).join(',')}`);
 
@@ -1294,6 +1303,17 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             } else {
                 logger.info(`${serviceLocation}: Skipped auto disease-similarity for mask ${maskDoc._id} — heart metrics not computed yet.`);
             }
+
+            // Layer 2 — advisory regional (per-AHA-segment) status. Fired after
+            // strain lands because per-segment strain IS its input. Deliberately
+            // OUTSIDE the simMeasurements branch above: it needs no measurements,
+            // so it runs whether or not heart metrics exist — when they don't it
+            // stores status "unavailable" with the reason rather than guessing.
+            // Fire-and-forget: it must never affect this response.
+            computeRegionalHealthStatusFromStrain(maskDoc._id.toString()).catch((rhErr: any) => {
+                logger.warn(`${serviceLocation}: Auto regional-health-status after strain failed for mask ${maskDoc._id}: ${rhErr?.message}`);
+            });
+            logger.info(`${serviceLocation}: Auto-fired regional health status for mask ${maskDoc._id} after strain compute.`);
         } catch (persistErr: any) {
             logger.warn(`${serviceLocation}: Failed to persist strain / chain similarity on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
@@ -1362,9 +1382,18 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         if (!allMasks?.length) {
             return res.status(404).json({ error: `No ${model} segmentation mask with stored frames found. Run ${model} segmentation first.` });
         }
-        const maskDoc = allMasks.reduce((best: any, m: any) =>
-            (m.frames?.length ?? 0) > (best.frames?.length ?? 0) ? m : best
-        );
+        // Most frames wins; ties break to the NEWEST document. Without the
+        // tie-break this depended on Mongo's natural order — with two equal-frame
+        // masks (one per segmentation re-run) the oldest silently won every time,
+        // so results kept landing on a stale mask and a re-run appeared to do
+        // nothing. ObjectIds are monotonic by creation time, so comparing them
+        // orders the masks without needing a timestamp field.
+        const maskDoc = allMasks.reduce((best: any, m: any) => {
+            const n = m.frames?.length ?? 0;
+            const bn = best.frames?.length ?? 0;
+            if (n !== bn) return n > bn ? m : best;
+            return String(m._id) > String(best._id) ? m : best;
+        });
 
         const frames = ((maskDoc as any).frames ?? []) as any[];
         const edFrame = frames.find((f: any) => f.frameindex === edFrameIndex);
@@ -1817,6 +1846,46 @@ router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: 
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering health status for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// Trigger the Layer-2 advisory REGIONAL (per-AHA-segment) health assessment.
+// Reads this mask's stored per-segment strain and writes `regionalHealthStatus`
+// alongside `healthStatus` — it never touches the overall grade. Mirrors
+// trigger-health-status 1:1: no request body, immediate 200, async compute.
+//
+// Unlike trigger-health-status this does NOT 400 when heart metrics are absent:
+// the module's own defensive path stores status "unavailable" with the reason,
+// which is more useful to the caller than a refusal (and is never "healthy").
+// POST /segmentation/trigger-regional-health-status/:maskId
+router.post("/trigger-regional-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        // Project access check — same as the sibling trigger routes.
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        // Respond immediately and run the compute async.
+        res.json({ success: true, message: "Regional health-status computation started." });
+
+        computeRegionalHealthStatusFromStrain(maskId).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-regional-health-status async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering regional health status for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }

@@ -370,6 +370,51 @@ export interface IProjectSegmentationMask {
     computed_at: string;
   };
   /**
+   * Layer 2 — REGIONAL (per-AHA-segment) health assessment. **Advisory only.**
+   *
+   * Produced by compute_regional_health_status.py from this mask's stored
+   * per-segment strain (`strain.segments[]`, or the peak frame of
+   * `strainSeries`). Sits BESIDE `healthStatus` and never alters it:
+   * `overall_grade_unchanged` is always true, and the two fields are computed
+   * from different inputs by different modules.
+   *
+   * `status` is "unavailable" (never "healthy") when regional strain is absent
+   * or its ED/ES frames don't align with heartMetrics.ed_frame/es_frame — this
+   * layer is read-only w.r.t. strain and never recomputes it.
+   *
+   * A segment is only reported as reduced when BOTH the absolute GCS band and
+   * the relative gap versus the patient's own mean fire, so a uniformly weak
+   * heart is not reported as 17 separate focal defects. See
+   * REGIONAL_HEALTH_STATUS_IMPLEMENTATION.md.
+   */
+  regionalHealthStatus?: {
+    status: "ok" | "unavailable";
+    overall_grade_unchanged: true;
+    source: "strain" | "strainSeries" | null;
+    segments: {
+      idx: number;                                   // 1..17
+      region: "basal" | "mid" | "apical" | "apex";
+      label?: string;
+      gcs: number;                                   // %, more negative = better
+      grs: number | null;                            // %, more positive = better
+      level: "normal" | "mild" | "moderate" | "severe";   // hybrid result
+      abs_level: "normal" | "mild" | "moderate" | "severe"; // absolute band only
+      rel_gap: number;                               // gcs - patient mean
+      rel_flag: boolean;                             // relative rule fired
+    }[];
+    reduced_count: number;
+    affected_idx: number[];
+    skipped_idx: number[];        // segments with NaN/missing GCS
+    summary: string;
+    patient_mean_gcs: number | null;
+    relative_rule_applied?: boolean;
+    thresholds: Record<string, number>;
+    disclaimer: string;
+    method: string;
+    warnings: string[];
+    computed_at: string;
+  };
+  /**
    * Disease Pattern Similarity Assessment — NOT a diagnosis.
    * Produced by compute_disease_similarity.py from this mask's measurements
    * (heartMetrics.measurements + strain PeakGRS/PeakGCS). Reports which known

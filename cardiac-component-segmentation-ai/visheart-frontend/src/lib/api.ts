@@ -384,6 +384,76 @@ export const segmentationApi = {
     }
   },
 
+  // ── Analysis computes (volumes → health status → disease similarity) ────────
+  // All three mirror triggerBullseye: the backend responds immediately with
+  // {success:true} and does the actual work asynchronously, writing the result
+  // onto the mask document. Callers must re-fetch the mask to observe the
+  // result — see useProjectResults, which triggers then polls.
+
+  /**
+   * Chamber volumes / EF / LV mass from the mask's stored RLE + the project's
+   * affine. Requires project.affineMatrix (400 without it). On success the
+   * backend auto-chains the health-status compute, so a single call usually
+   * fills both heartMetrics and healthStatus.
+   */
+  triggerHeartMetrics: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-heart-metrics/${maskId}`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /**
+   * Rule-based health status. Reads heartMetrics.measurements off the mask, so
+   * it returns 400 until heart metrics exist. Normally fired automatically by
+   * triggerHeartMetrics; call this directly only to recompute in isolation.
+   */
+  triggerHealthStatus: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-health-status/${maskId}`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /**
+   * Layer 2 — advisory per-AHA-segment regional assessment. Reads the mask's
+   * stored per-segment strain; never changes the overall health-status grade.
+   * Unlike the others this does NOT 400 when inputs are missing — it stores
+   * status "unavailable" with the reason, which is never mistaken for "healthy".
+   */
+  triggerRegionalHealthStatus: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-regional-health-status/${maskId}`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /**
+   * Disease-pattern similarity (NOT a diagnosis). Also depends on
+   * heartMetrics.measurements (400 without it). Strain peaks are read from the
+   * stored strain result server-side; `peaks` optionally overrides them.
+   */
+  triggerDiseaseSimilarity: async (
+    maskId: string,
+    peaks?: { PeakGRS?: number | null; PeakGCS?: number | null },
+  ) => {
+    try {
+      const response = await api.post(
+        `/segmentation/trigger-disease-similarity/${maskId}`,
+        peaks ?? {},
+      );
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
   // Export project data
   exportProjectData: async (projectId: string, model?: "medsam" | "unet") => {
     try {

@@ -12,7 +12,7 @@ import { RegionalStrainBullseyePage } from "@/components/report/RegionalStrainBu
 import { StrainDetailPage } from "@/components/report/StrainDetailPage";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
-import { ArrowLeft, ArrowUp, Printer } from "lucide-react";
+import { ArrowLeft, ArrowUp, Printer, AlertTriangle } from "lucide-react";
 
 /** Bar colours for the disease-similarity rows, keyed by pattern code. */
 const PATTERN_COLORS: Record<string, string> = {
@@ -34,8 +34,13 @@ export default function ReportPage() {
   const { loading, error, projectData } = useProject();
   // One report, defaulting to the most-recently-computed model (no toggle) —
   // the reader gets a single authoritative view rather than choosing a model.
-  const { model, available, measurements, healthStatus, similarity, strain, strainSeries } =
-    useProjectResults(projectId, "recent");
+  // `computing` / `computeError` surface the self-healing analysis compute the
+  // hook runs when a mask has no stored metrics yet, so the summary cards can
+  // show progress instead of a permanent "not computed" dead end.
+  const {
+    model, available, measurements, healthStatus, similarity, strain, strainSeries,
+    computing, computeError, newerMaskAvailable, regionalHealthStatus,
+  } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
   // with the real bottom edge of whatever's fixed above it (site header +
@@ -156,6 +161,23 @@ export default function ReportPage() {
         </div>
       </div>
 
+      {/* A later segmentation run exists but hasn't been analysed, so the
+          figures below come from an earlier run. Surfaced rather than silently
+          switching docs — results live on the mask they were computed for, and
+          jumping to the newer (empty) mask would blank the strain panels. */}
+      {newerMaskAvailable && (
+        <div className="vh-no-print mx-auto mt-3 max-w-5xl px-6">
+          <p className="flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              A newer segmentation run exists for this model but has not been analysed yet —
+              the results below are from the previous run. Re-run strain on the newest
+              segmentation to bring this report up to date.
+            </span>
+          </p>
+        </div>
+      )}
+
       {/* Screen presentation — interactive, hidden when printing. */}
       <div className="vh-screen-only">
         <InteractiveReport
@@ -167,6 +189,9 @@ export default function ReportPage() {
           similarity={similarity}
           strain={strain}
           strainSeries={strainSeries}
+          regionalHealthStatus={regionalHealthStatus}
+          computing={computing}
+          computeError={computeError}
         />
       </div>
 

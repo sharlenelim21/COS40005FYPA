@@ -18,8 +18,8 @@ import React, { useMemo, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
-import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, BookOpen, FileText } from "lucide-react";
-import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries } from "@/hooks/useProjectResults";
+import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, BookOpen, FileText, Loader2 } from "lucide-react";
+import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus } from "@/hooks/useProjectResults";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -146,9 +146,83 @@ function fmt(v: number | null | undefined, digits = 1): string {
   return v.toFixed(digits);
 }
 
+/**
+ * One short line explaining WHY the health status is low-confidence.
+ *
+ * The backend sets confidence="low" for exactly two reasons
+ * (compute_health_status.py): EF was not computable, or heart-metrics warnings
+ * caused the volume evidence to be suppressed. Each leaves a distinctive
+ * `warn` evidence line, so we match those two specifically.
+ *
+ * Deliberately NOT "any warn line". Peak GCS, Peak GRS, End-Diastolic Volume
+ * and a *present-but-low* EF all emit level:"warn" while confidence stays
+ * "normal" — those feed the downgrade heuristic, not confidence. Matching them
+ * would attach a wrong reason to a perfectly normal-confidence result (e.g. a
+ * severely-reduced-but-known EF would read as "EF could not be computed").
+ *
+ * EF-null is detected via grade_from_ef === "Indeterminate", which the backend
+ * maps a null EF to (_grade_from_lvef); more robust than string-matching the
+ * detail text, which is kept only as a fallback. When both causes co-occur the
+ * EF reason leads — without EF there is no grade at all.
+ */
+function confidenceReason(hs: HealthStatus): string {
+  const efNotComputable =
+    hs.grade_from_ef === "Indeterminate" ||
+    !!hs.evidence?.some(
+      (e) =>
+        e.label === "Ejection Fraction" &&
+        e.level === "warn" &&
+        /not computable/i.test(e.detail),
+    );
+  if (efNotComputable) {
+    return (
+      "Ejection fraction could not be computed, so the status is not graded — " +
+      "usually only one cardiac phase was segmented, or ED and ES resolved to the same frame."
+    );
+  }
+
+  const volumesUnreliable = !!hs.evidence?.some(
+    (e) => e.label === "Absolute volumes" && e.level === "warn",
+  );
+  if (volumesUnreliable) {
+    return (
+      "Volume measurements may be unreliable — the heart-metrics compute flagged the " +
+      "affine / spacing, so the status is graded from EF alone."
+    );
+  }
+
+  return "The underlying measurements may be unreliable — interpret with caution.";
+}
+
+/**
+ * Placeholder shown in a summary card that has no data yet. Distinguishes
+ * "the compute is running" from "nothing ever asked for it" from "it failed",
+ * so an empty card is never a dead end for the reader.
+ */
+function EmptyState({ computing, error }: { computing?: boolean; error?: string | null }) {
+  if (computing) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Computing from segmentation…
+      </p>
+    );
+  }
+  if (error) {
+    return (
+      <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>{error}</span>
+      </p>
+    );
+  }
+  return <p className="text-xs text-muted-foreground">Not computed for this model yet.</p>;
+}
+
 export function InteractiveReport({
   patientLabel, scanSummary, generatedAt,
-  measurements, healthStatus, similarity, strain, strainSeries,
+  measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus,
+  computing, computeError,
 }: {
   patientLabel: string;
   scanSummary: string;
@@ -158,6 +232,11 @@ export function InteractiveReport({
   similarity?: DiseaseSimilarity;
   strain?: Strain;
   strainSeries?: StrainSeries;
+  /** Layer 2 — advisory, shown beneath the Layer-1 evidence. Never alters the grade. */
+  regionalHealthStatus?: RegionalHealthStatus;
+  /** True while the analysis triggers are running — see useProjectResults. */
+  computing?: boolean;
+  computeError?: string | null;
 }) {
   const [strainType, setStrainType] = useState<StrainType>("GCS");
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
@@ -237,14 +316,43 @@ export function InteractiveReport({
           <p className="mb-2.5 mt-0.5 text-[11px] text-muted-foreground">Rule-based — not a diagnosis</p>
           {healthStatus ? (
             <>
-              <span className={`mb-2.5 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                healthStatus.status === "Healthy" ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
-                : healthStatus.status === "Mild" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
-                : healthStatus.status === "Moderate" ? "bg-orange-500/10 text-orange-700 dark:text-orange-400"
-                : healthStatus.status === "Severe" ? "bg-red-600/10 text-red-700 dark:text-red-400"
-                : "bg-muted text-muted-foreground"}`}>
-                {healthStatus.status}
-              </span>
+              {/* Grade badge (Layer 1) + how much to trust it. The confidence
+                  badge sits BESIDE the grade, never inside it — confidence
+                  qualifies the grade, it doesn't change it. */}
+              <div className="mb-2.5 flex flex-wrap items-center gap-2">
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                  healthStatus.status === "Healthy" ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
+                  : healthStatus.status === "Mild" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                  : healthStatus.status === "Moderate" ? "bg-orange-500/10 text-orange-700 dark:text-orange-400"
+                  : healthStatus.status === "Severe" ? "bg-red-600/10 text-red-700 dark:text-red-400"
+                  : "bg-muted text-muted-foreground"}`}>
+                  {healthStatus.status}
+                </span>
+
+                {/* Rendered only for a value we recognise — an absent/unknown
+                    `confidence` shows nothing rather than defaulting to "Low",
+                    which would misreport the result. */}
+                {(healthStatus.confidence === "normal" || healthStatus.confidence === "low") && (
+                  <span className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                    healthStatus.confidence === "low"
+                      ? "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                      : "border border-border bg-muted text-muted-foreground"}`}>
+                    {healthStatus.confidence === "low" && (
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
+                    {healthStatus.confidence === "low" ? "Low confidence" : "Normal confidence"}
+                  </span>
+                )}
+              </div>
+
+              {/* Why it's low — so the badge isn't a mystery. Derived from the
+                  two evidence lines that actually drive confidence. */}
+              {healthStatus.confidence === "low" && (
+                <p className="mb-2.5 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
+                  {confidenceReason(healthStatus)}
+                </p>
+              )}
+
               <div className="flex flex-col gap-1.5">
                 {healthStatus.evidence?.map((e, i) => (
                   <div key={i} className="flex items-start gap-1.5 text-xs">
@@ -256,10 +364,35 @@ export function InteractiveReport({
                     </span>
                   </div>
                 ))}
+
+                {/* Layer 2 — advisory regional finding, rendered as one more
+                    evidence line BELOW the Layer-1 lines. It is deliberately
+                    presented as supporting detail, never as part of the grade:
+                    the badge above is driven solely by Layer 1. Only shown when
+                    the regional layer actually found something; "unavailable"
+                    and "no focal defect" stay silent so the card doesn't fill
+                    with non-findings. */}
+                {regionalHealthStatus?.status === "ok" &&
+                 regionalHealthStatus.reduced_count > 0 && (
+                  <div className="flex items-start gap-1.5 text-xs" title={regionalHealthStatus.disclaimer}>
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                    <span className="text-amber-700 dark:text-amber-400">
+                      {regionalHealthStatus.summary}
+                      {regionalHealthStatus.affected_idx?.length > 0 && (
+                        <span className="text-muted-foreground">
+                          {" "}({regionalHealthStatus.affected_idx.join(", ")})
+                        </span>
+                      )}
+                      <span className="ml-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        · advisory
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
             </>
           ) : (
-            <p className="text-xs text-muted-foreground">Not computed for this model yet.</p>
+            <EmptyState computing={computing} error={computeError} />
           )}
         </div>
 
@@ -306,7 +439,7 @@ export function InteractiveReport({
               })()}
             </>
           ) : (
-            <p className="text-xs text-muted-foreground">Not computed for this model yet.</p>
+            <EmptyState computing={computing} error={computeError} />
           )}
         </div>
       </section>
