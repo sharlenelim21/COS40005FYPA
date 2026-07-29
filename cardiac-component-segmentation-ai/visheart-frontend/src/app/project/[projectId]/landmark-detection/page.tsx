@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   Loader2,
@@ -120,6 +120,38 @@ export default function LandmarkDetectionPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
 
+  // Workspace (which tab) and the active segmentation model are the page's
+  // single source of truth, persisted to the URL so a reload restores exactly
+  // what the user was looking at (?tab=strain&model=unet). The bullseye panel,
+  // the sidebar tab, and the strain compute all read from these — no separate
+  // per-widget model state to drift out of sync.
+  const searchParams = useSearchParams();
+  const workspace: "landmarks" | "strain" =
+    searchParams.get("tab") === "strain" ? "strain" : "landmarks";
+  const activeModel: "unet" | "medsam" =
+    searchParams.get("model") === "medsam" ? "medsam" : "unet";
+
+  const updateUrlState = useCallback(
+    (next: { tab?: "landmarks" | "strain"; model?: "unet" | "medsam" }) => {
+      const params = new URLSearchParams(window.location.search);
+      if (next.tab) params.set("tab", next.tab);
+      if (next.model) params.set("model", next.model);
+      router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+    },
+    [router],
+  );
+  const setWorkspace = useCallback(
+    (tab: "landmarks" | "strain") => updateUrlState({ tab }),
+    [updateUrlState],
+  );
+  const setActiveModel = useCallback(
+    (model: "unet" | "medsam") => updateUrlState({ model }),
+    [updateUrlState],
+  );
+  // Back-compat aliases: existing bullseye code reads/writes these names.
+  const selectedBullseyeModel = activeModel;
+  const setSelectedBullseyeModel = setActiveModel;
+
   const {
     loading,
     error,
@@ -171,7 +203,6 @@ export default function LandmarkDetectionPage() {
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
   const [segFrameCount, setSegFrameCount] = useState(0);
-  const [selectedBullseyeModel, setSelectedBullseyeModel] = useState<"medsam" | "unet">("unet");
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
   const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
@@ -205,13 +236,9 @@ export default function LandmarkDetectionPage() {
   // the UI can show a "recomputing" hint instead of the stale chart.
   const [bullseyeRecomputing, setBullseyeRecomputing] = useState(false);
 
-  // Correct the bullseye model default once the GPU probe resolves.
-  // Guard on gpuLoading: isGpuMode starts false before the fetch completes,
-  // so without the guard this fires immediately and locks GPU users on UNet.
-  useEffect(() => {
-    if (gpuLoading) return;
-    setSelectedBullseyeModel(isGpuMode ? "medsam" : "unet");
-  }, [isGpuMode, gpuLoading]);
+  // (Model default now comes from the URL via activeModel — UNet unless the
+  // user picked MedSAM. The old GPU-mode auto-flip to MedSAM was removed: it
+  // fought the user's selection and desynced the bullseye from the strain tab.)
 
   // Countdown timer — ticks while any model is still calculating its bullseye.
   // Resets to 15 each time calculatingModels changes (i.e. on each fetchBullseye cycle).
@@ -314,8 +341,8 @@ export default function LandmarkDetectionPage() {
       }
 
       if (selectedMask) {
-        const resolvedModel = selectedMask === unetWithBullseye ? "unet" : "medsam";
-        setSelectedBullseyeModel(resolvedModel);
+        // Don't switch the active model here — activeModel (from the URL) is the
+        // single source of truth; this only loads that model's bullseye data.
         setBullseyeData(selectedMask.bullseye!);
         setBullseyeLoading(false);
         return;
@@ -576,10 +603,6 @@ export default function LandmarkDetectionPage() {
   // landmark viewer.
   const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
 
-  // Which workspace the sidebar's tab has selected. Landmarks is about editing
-  // points on the MRI, so the bullseye/3D panel is hidden and the viewer gets
-  // the full width; Strain brings that panel back.
-  const [workspace, setWorkspace] = useState<"landmarks" | "strain">("landmarks");
 
   // Per-frame wall thickness, when the full-cycle strain series has been run for
   // the model the bullseye is showing. This is what lets the AHA plot animate
@@ -596,12 +619,14 @@ export default function LandmarkDetectionPage() {
     setBullseyeResultsModel(selectedBullseyeModel);
   }, [selectedBullseyeModel, setBullseyeResultsModel]);
 
-  // Land on a model that actually has per-frame data: the only one that has it,
-  // or the most recently computed when both do. Runs once per data arrival —
-  // `autoPickedSeriesModel` stops it fighting a later manual choice.
+  // On first load with NO model in the URL, land on a model that actually has
+  // per-frame data (or the most recently computed when both do). When the URL
+  // already names a model — e.g. after a reload — that choice wins and this is
+  // skipped, so the user returns to exactly what they were viewing.
   const autoPickedSeriesModel = useRef(false);
   useEffect(() => {
     if (autoPickedSeriesModel.current) return;
+    if (searchParams.get("model")) { autoPickedSeriesModel.current = true; return; }
     const { unet, medsam } = seriesAvailable;
     if (!unet && !medsam) return;
     let preferred: "unet" | "medsam";
@@ -612,8 +637,8 @@ export default function LandmarkDetectionPage() {
       preferred = unet ? "unet" : "medsam";
     }
     autoPickedSeriesModel.current = true;
-    if (preferred !== selectedBullseyeModel) {
-      setSelectedBullseyeModel(preferred);
+    if (preferred !== activeModel) {
+      setActiveModel(preferred);
       fetchBullseye(preferred);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -876,6 +901,11 @@ export default function LandmarkDetectionPage() {
             onStrainFrameChange={setStrainPlaybackFrame}
             onTabChange={setWorkspace}
             activeTab={workspace}
+            activeModel={activeModel}
+            onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
+            hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
+            isSavingLandmarks={isSavingLandmarks}
+            onSaveLandmarks={handleSaveLandmarks}
             onToggleLandmark={handleToggleLandmark}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
@@ -1167,6 +1197,11 @@ export default function LandmarkDetectionPage() {
                 onStrainFrameChange={setStrainPlaybackFrame}
             onTabChange={setWorkspace}
             activeTab={workspace}
+            activeModel={activeModel}
+            onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
+            hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
+            isSavingLandmarks={isSavingLandmarks}
+            onSaveLandmarks={handleSaveLandmarks}
                 onToggleLandmark={handleToggleLandmark}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}

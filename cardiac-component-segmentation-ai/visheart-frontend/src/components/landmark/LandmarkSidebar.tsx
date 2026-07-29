@@ -27,6 +27,7 @@ import {
   SkipBack,
   SkipForward,
   RotateCcw,
+  Loader2,
   Upload,
   X,
   AlertCircle,
@@ -91,6 +92,14 @@ export interface LandmarkSidebarProps {
    * panels. Passing it in keeps them in lockstep.
    */
   activeTab?: "landmarks" | "strain";
+  /** The page's single active-model source (URL-backed). Keeps the strain tab's
+   *  model in sync with the bullseye panel. */
+  activeModel?: "unet" | "medsam";
+  onModelChange?: (m: "unet" | "medsam") => void;
+  /** Landmark save — surfaced in the Landmarks tab; blinks when there are edits. */
+  hasUnsavedLandmarkEdits?: boolean;
+  isSavingLandmarks?: boolean;
+  onSaveLandmarks?: () => void;
 
   onToggleLandmark: (id: string) => void;
   onTogglePlay: () => void;
@@ -121,6 +130,11 @@ export function LandmarkSidebar({
   onStrainFrameChange,
   onTabChange,
   activeTab: activeTabProp,
+  activeModel,
+  onModelChange,
+  hasUnsavedLandmarkEdits,
+  isSavingLandmarks,
+  onSaveLandmarks,
   onToggleLandmark,
   onTogglePlay,
   onNextFrame,
@@ -294,6 +308,9 @@ export function LandmarkSidebar({
         )}
         {activeTab === "landmarks" && (
           <LandmarksTab
+            hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
+            isSavingLandmarks={isSavingLandmarks}
+            onSaveLandmarks={onSaveLandmarks}
             prediction={currentPrediction}
             visibleLandmarks={visibleLandmarks}
             onToggleLandmark={onToggleLandmark}
@@ -328,6 +345,8 @@ export function LandmarkSidebar({
               totalFrames={strainFrameCount}
               selectedStrainSegment={selectedStrainSegment}
               selectedStrainType={selectedStrainType}
+              activeModel={activeModel ?? "unet"}
+              onModelChange={onModelChange}
             />
             {/* Strain-view toggles live here rather than with the landmark
                 controls — they affect this tab's rendering, not the points. */}
@@ -511,6 +530,9 @@ function SliceConfidenceDot({
 }
 
 function LandmarksTab({
+  hasUnsavedLandmarkEdits,
+  isSavingLandmarks,
+  onSaveLandmarks,
   prediction,
   visibleLandmarks,
   onToggleLandmark,
@@ -536,6 +558,9 @@ function LandmarksTab({
   onHighlightLandmark,
   onReset,
 }: {
+  hasUnsavedLandmarkEdits?: boolean;
+  isSavingLandmarks?: boolean;
+  onSaveLandmarks?: () => void;
   prediction: FramePrediction | null;
   visibleLandmarks: Set<string>;
   onToggleLandmark: (id: string) => void;
@@ -590,6 +615,30 @@ function LandmarksTab({
 
   return (
     <div className="space-y-4">
+      {/* Save landmark edits — lives in the Landmarks tab so it's next to the
+          editing controls. Pulses (ring + animation) while there are unsaved
+          edits so the user knows where to click; disabled/quiet otherwise. */}
+      {onSaveLandmarks && (
+        <Button
+          size="sm"
+          onClick={onSaveLandmarks}
+          disabled={!hasUnsavedLandmarkEdits || isSavingLandmarks}
+          className={cn(
+            "w-full gap-1.5 text-xs transition-all",
+            hasUnsavedLandmarkEdits && !isSavingLandmarks &&
+              "animate-pulse ring-2 ring-primary/60 ring-offset-1",
+          )}
+        >
+          {isSavingLandmarks ? (
+            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…</>
+          ) : hasUnsavedLandmarkEdits ? (
+            "● Save landmark edits"
+          ) : (
+            "Landmarks saved"
+          )}
+        </Button>
+      )}
+
       {/* Section header */}
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-foreground">Detected Landmarks</h3>
@@ -855,18 +904,60 @@ function ReplacementFileRow({
   );
 }
 
+/** UNet/MedSAM selector for the strain tab. UNet is marked recommended. */
+function ModelToggle({
+  strainModel,
+  setStrainModel,
+  modelAvailable,
+}: {
+  strainModel: "unet" | "medsam";
+  setStrainModel: (m: "unet" | "medsam") => void;
+  modelAvailable: Record<"unet" | "medsam", boolean>;
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+      {(["unet", "medsam"] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          disabled={!modelAvailable[m]}
+          onClick={() => setStrainModel(m)}
+          className={cn(
+            "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+            strainModel === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+            !modelAvailable[m] && "cursor-not-allowed opacity-40",
+          )}
+          title={
+            !modelAvailable[m]
+              ? "No results stored for this model"
+              : m === "unet"
+              ? "UNet — recommended (more accurate wall boundaries)"
+              : undefined
+          }
+        >
+          {m === "unet" ? "UNet ★" : "MedSAM"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function StrainTab({
   hasPredictions,
   currentFrame,
   totalFrames,
   selectedStrainSegment,
   selectedStrainType: externalStrainType,
+  activeModel,
+  onModelChange,
 }: {
   hasPredictions: boolean;
   currentFrame: number;
   totalFrames: number;
   selectedStrainSegment?: number | null;
   selectedStrainType?: StrainType;
+  activeModel: "unet" | "medsam";
+  onModelChange?: (m: "unet" | "medsam") => void;
 }) {
   const router = useRouter();
   const { projectId } = useParams<{ projectId: string }>();
@@ -878,10 +969,11 @@ function StrainTab({
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
   const frameCount = Math.max(totalFrames || 10, 1);
 
-  // Stored per-model strain (ED→ES) and the optional full-cycle series. Each
-  // segmentation model is its own mask document, so `strainModel` is a display
-  // selector over already-computed results — switching never recomputes.
-  const [strainModel, setStrainModel] = useState<"unet" | "medsam">("unet");
+  // Model is owned by the page (URL-backed activeModel), so the strain tab and
+  // the bullseye panel always agree and a reload restores the same model. The
+  // toggle here just asks the page to switch — no local model state.
+  const strainModel = activeModel;
+  const setStrainModel = (m: "unet" | "medsam") => onModelChange?.(m);
   const {
     strain: realStrain,
     strainSeries: realSeries,
@@ -1053,6 +1145,32 @@ function StrainTab({
     );
   }
 
+  // Nothing computed for THIS model yet → empty state (no dummy charts). Only the
+  // model toggle + compute button; results appear only for a model that was run.
+  if (!usingRealSeries && !usingRealStrain) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium text-foreground">Strain Results</h3>
+            <p className="text-[10px] text-muted-foreground">No strain computed for this model</p>
+          </div>
+          <ModelToggle strainModel={strainModel} setStrainModel={setStrainModel} modelAvailable={modelAvailable} />
+        </div>
+        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
+          <Activity className="mx-auto h-7 w-7 opacity-25" />
+          <p className="mt-2 text-xs text-muted-foreground">
+            No strain has been computed for {strainModel === "unet" ? "UNet" : "MedSAM"} yet.
+          </p>
+          <Button size="sm" variant="outline" className="mt-3 h-7 text-[10px]" disabled={seriesBusy} onClick={runStrainSeries}>
+            {seriesBusy ? "Computing… one pass per frame" : `Compute all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          </Button>
+          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -1069,30 +1187,7 @@ function StrainTab({
         <div className="flex items-center gap-2">
           {/* UNet and MedSAM segment differently, so their strain differs —
               each model's result is stored on its own mask document. */}
-          <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-            {(["unet", "medsam"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                disabled={!modelAvailable[m]}
-                onClick={() => setStrainModel(m)}
-                className={cn(
-                  "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
-                  strainModel === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-                  !modelAvailable[m] && "cursor-not-allowed opacity-40",
-                )}
-                title={
-                  !modelAvailable[m]
-                    ? "No results stored for this model"
-                    : m === "unet"
-                    ? "UNet — recommended (more accurate wall boundaries)"
-                    : undefined
-                }
-              >
-                {m === "unet" ? "UNet ★" : "MedSAM"}
-              </button>
-            ))}
-          </div>
+          <ModelToggle strainModel={strainModel} setStrainModel={setStrainModel} modelAvailable={modelAvailable} />
           <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-mono text-muted-foreground">
             {currentTime} ms
           </span>

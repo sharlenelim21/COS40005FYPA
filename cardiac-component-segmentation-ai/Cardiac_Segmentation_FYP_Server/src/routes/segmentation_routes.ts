@@ -1562,9 +1562,14 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
 
         // Best-effort persist — a failed write never fails the request.
         try {
+            // Recomputing clears the stale flag on BOTH strain fields: the series
+            // is now current, and the ED→ES `strain` result shares the same
+            // landmark alignment, so its stale stamp (set on landmark save) no
+            // longer applies. Leaving strain.staleSince set would keep the
+            // "landmarks edited" banner up even after a successful recompute.
             await projectSegmentationMaskModel.findByIdAndUpdate(
                 maskDoc._id.toString(),
-                { $set: { strainSeries, updatedAt: new Date() } },
+                { $set: { strainSeries, updatedAt: new Date() }, $unset: { "strain.staleSince": "" } },
             );
             logger.info(`${serviceLocation}: Stored strainSeries on mask ${maskDoc._id} — ${series.length}/${targetFrames.length + 1} frames, model=${model}, peak GRS=${peakGRS} @frame ${peakFrameIndex}`);
         } catch (persistErr: any) {
