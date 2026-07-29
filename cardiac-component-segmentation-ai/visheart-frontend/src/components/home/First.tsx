@@ -19,7 +19,7 @@ interface FirstSectionProps {
 export default function FirstSection({
   title = "Welcome to VisHeart",
   subtitle = "A 2D Cardiac MRI Segmentation, Landmark Detection, and 4D Reconstruction Platform",
-  description = "Experience GPU-powered cardiac imaging analysis with AI segmentation, cardiac landmark detection, AHA bullseye review, dummy strain reporting, and dynamic 4D reconstruction in one clinical workflow.",
+  description = "Experience GPU-powered cardiac imaging analysis with AI segmentation, cardiac landmark detection, AHA bullseye and regional strain analysis, and dynamic 4D reconstruction in one clinical workflow.",
   className = "",
 }: FirstSectionProps) {
   const { user } = useAuth();
@@ -98,7 +98,7 @@ export default function FirstSection({
                 <MapPin className="w-8 h-8 text-primary" />
               </motion.div>
               <h3 className="text-xl font-semibold text-foreground mb-2">Landmark Detection</h3>
-              <p className="text-muted-foreground">Automatic landmark identification with AHA bullseye and strain previews</p>
+              <p className="text-muted-foreground">Automatic landmark identification with AHA bullseye and regional strain analysis</p>
             </motion.div>
 
             <motion.div className="text-center" whileHover={{ y: -10 }} transition={{ duration: 0.3 }}>

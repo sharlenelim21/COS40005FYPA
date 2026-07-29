@@ -860,14 +860,16 @@ const DocPage = () => {
                         <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
                           7
                         </div>
-                        MRI Viewer (Before Segmentation)
+                        Preview Dataset (Raw MRI Viewer)
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        When segmentation masks are not yet available or
-                        processing is pending, the MRI viewer allows you to
-                        preview and examine your medical images.
+                        The Preview Dataset viewer lets you browse the raw medical
+                        images without any mask overlay. It&apos;s available from
+                        the project page at every stage — before segmentation,
+                        after masks exist, and after reconstruction — for quick
+                        previewing and navigation.
                       </p>
                       <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
                         <DocImage
@@ -896,8 +898,8 @@ const DocPage = () => {
                           </li>
                           <li>• Thumbnail overview of all frames</li>
                           <li>
-                            • Available when masks are not generated or processing
-                            is pending
+                            • Available anytime from the project page, regardless
+                            of segmentation or reconstruction status
                           </li>
                         </ul>
                       </div>
@@ -1006,7 +1008,7 @@ const DocPage = () => {
                             c: "bg-orange-500",
                             bg: "bg-orange-50 dark:bg-orange-950/30",
                             border: "border-orange-200 dark:border-orange-800",
-                            text: "Use MRI viewer to preview images (before segmentation)",
+                            text: "Use Preview Dataset to browse raw MRI images anytime",
                           },
                           {
                             n: "5",
@@ -1055,161 +1057,116 @@ const DocPage = () => {
                       How Landmark Detection Works
                     </h1>
                     <p className="text-muted-foreground mb-6">
-                      Landmark detection identifies repeatable cardiac reference points across MRI frames so users can review motion, compare phases, and prepare strain-style reporting from a consistent anatomical layout.
+                      Landmark detection finds the RV insertion points on each frame, then uses them to compute
+                      regional strain — shown as an AHA 17-segment bullseye synced with a 3D heart model.
                     </p>
                   </div>
 
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-                        <MapPin className="w-5 h-5 flex-shrink-0" />
-                        Overview
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <p className="text-sm text-muted-foreground">
-                        The landmark model reads the project MRI sequence and predicts key points such as RV insertion points, the left ventricular apex, basal references, and mid-ventricular references. These points are shown directly on the slice viewer and can be checked frame by frame.
-                      </p>
-                      <div className="grid gap-4">
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
-                            AI
-                          </div>
-                          <div>
-                            <h4 className="font-semibold">Per-Frame Detection</h4>
-                            <p className="text-sm text-muted-foreground">
-                              UNetResNet34 landmark inference produces predictions for the cardiac frames returned by the project data.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
-                            17
-                          </div>
-                          <div>
-                            <h4 className="font-semibold">AHA-17 Review</h4>
-                            <p className="text-sm text-muted-foreground">
-                              Bullseye and strain preview panels use a 17-segment layout to summarize regional behavior in a familiar cardiac reporting format.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-sm font-medium flex-shrink-0">
-                            4D
-                          </div>
-                          <div>
-                            <h4 className="font-semibold">Motion Review</h4>
-                            <p className="text-sm text-muted-foreground">
-                              Playback controls let users compare landmark movement, bullseye color changes, and 4D reconstruction frames over time.
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-
+                  {/* Step 1 */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
                           1
                         </div>
-                        Start Landmark Detection
+                        Starting a Landmark Detection Job
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        Open a project and choose <strong>Landmark Detection</strong> from the project workflow card. The page loads the MRI frame data, available masks, model selector, and visualization panels.
+                        Click into the highlighted <strong>Landmark Detection</strong> button on the project page. The
+                        detection runs automatically using the model shown in the page header.
                       </p>
-                      <ul className="text-sm text-muted-foreground space-y-1">
-                        <li>Open the landmark page to start detection automatically using the server-selected model.</li>
-                        <li>Use the default UNetResNet34 landmark model unless another model is added later.</li>
-                        <li>An optional replacement NIfTI file can be selected from the sidebar for testing.</li>
-                      </ul>
+                      <p className="text-sm text-muted-foreground">
+                        Switch to the <strong>Landmarks</strong> tab anytime to check the detected points frame by
+                        frame.
+                      </p>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                        <DocImage
+                          src="/images/doc/landmark-start.png"
+                          alt="Landmark Detection button on the project page"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                      </div>
                     </CardContent>
                   </Card>
 
+                  {/* Step 2 */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
                           2
                         </div>
-                        Review Detected Landmarks
+                        Bullseye / Regional Strain
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        Detection results appear as colored points on the MRI slice. The sidebar lists every landmark and its coordinate for the current frame.
+                        Switch to the <strong>Strain</strong> tab, then click <strong>Recompute all frames</strong> to
+                        measure wall thickness and strain (GRS/GCS) across the whole cardiac cycle for the selected
+                        model.
                       </p>
-                      <ul className="text-sm text-muted-foreground space-y-1">
-                        <li>Scrub through frames or press play to inspect temporal consistency.</li>
-                        <li>Toggle individual landmark points if the image becomes crowded.</li>
-                        <li>Hide labels when checking point placement against the image and mask overlays.</li>
-                      </ul>
+                      <p className="text-sm text-muted-foreground">
+                        The bullseye stays synced with the 3D heart model, and <strong>By Region</strong> /{" "}
+                        <strong>Full Cycle</strong> break the same data down further. GLS isn&apos;t shown — it needs a
+                        4-chamber view, and this pipeline only reads short-axis slices.
+                      </p>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                        <DocImage
+                          src="/images/doc/landmark-workspace-strain-bullseye.png"
+                          alt="Strain tab with bullseye and 3D heart model"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                        {[
+                          { src: "/images/doc/landmark-strain-region-basal.png", label: "Basal ring" },
+                          { src: "/images/doc/landmark-strain-region-mid.png", label: "Mid ring" },
+                          { src: "/images/doc/landmark-strain-region-apical.png", label: "Apical ring" },
+                          { src: "/images/doc/landmark-strain-region-apex.png", label: "Apex" },
+                          { src: "/images/doc/landmark-strain-full-cycle.png", label: "Full Cycle" },
+                        ].map((img) => (
+                          <div key={img.label} className="rounded-lg border bg-muted/30 p-1.5">
+                            <DocImage
+                              src={img.src}
+                              alt={`${img.label} strain chart`}
+                              className="w-full h-auto rounded-md border shadow-sm"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1 text-center">
+                              {img.label}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
                     </CardContent>
                   </Card>
 
+                  {/* Step 3 */}
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base md:text-lg">
                         <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
                           3
                         </div>
-                        Inspect Bullseye And Strain Preview
+                        Report &amp; Export
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        The analysis panels provide a bullseye/strain preview for demonstration and workflow review. Current strain values are dummy data until the strain calculation pipeline is connected.
+                        Click <strong>Report Page</strong> for a printable functional analysis report (measurements,
+                        health status, disease pattern similarity, regional strain), or{" "}
+                        <strong>Export Data</strong> to download the raw numbers.
                       </p>
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Metric</TableHead>
-                            <TableHead>Meaning</TableHead>
-                            <TableHead>Current Use</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          <TableRow>
-                            <TableCell className="font-medium">GLS</TableCell>
-                            <TableCell>Global Longitudinal Strain</TableCell>
-                            <TableCell>Dummy preview curve</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="font-medium">GCS</TableCell>
-                            <TableCell>Global Circumferential Strain</TableCell>
-                            <TableCell>Dummy preview curve</TableCell>
-                          </TableRow>
-                          <TableRow>
-                            <TableCell className="font-medium">GRS</TableCell>
-                            <TableCell>Global Radial Strain</TableCell>
-                            <TableCell>Dummy preview curve</TableCell>
-                          </TableRow>
-                        </TableBody>
-                      </Table>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-                        <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
-                          4
-                        </div>
-                        Export Results
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        After reviewing the landmarks and preview panels, export a PDF report from the landmark page. The report summarizes the project, detected landmark workflow, frame review sequence, and placeholder strain metrics.
+                        Health Status and Disease Pattern Similarity are rule-based comparisons, not diagnoses.
                       </p>
-                      <div className="p-2 md:p-4 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                        <p className="text-sm font-medium mb-1">Preview Data Note</p>
-                        <p className="text-sm text-muted-foreground">
-                          Strain values in the current interface are for presentation and workflow testing. They should be replaced by computed strain values before clinical interpretation.
-                        </p>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                        <DocImage
+                          src="/images/doc/landmark-export-report.png"
+                          alt="Cardiac Functional Analysis Report page"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
                       </div>
                     </CardContent>
                   </Card>
@@ -1327,81 +1284,37 @@ const DocPage = () => {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        Configure the parameters for generating your 4D cardiac
-                        reconstruction. Defaults are optimized to balance
-                        quality and speed.
+                        Click <strong>Start Reconstruction</strong> to start reconstruction.
                       </p>
-                      <div className="grid gap-3">
-                        <div>
-                          <h4 className="font-semibold text-sm">
-                            Export format
-                          </h4>
-                          <div className="text-sm text-muted-foreground space-y-2 pl-3">
-                            <p>
-                              •{" "}
-                              <strong>GLB (Recommended)</strong> — Binary glTF
-                              2.0 optimized for web viewing.
-                            </p>
-                            <p>
-                              •{" "}
-                              <strong>OBJ (Wavefront)</strong> — Plain text
-                              format, widely supported.
-                            </p>
-                          </div>
-                        </div>
-                        <div>
-                          <h4 className="font-semibold text-sm">
-                            End-diastole frame
-                          </h4>
-                          <p className="text-sm text-muted-foreground">
-                            Default: <strong>Frame 1</strong>. Select the
-                            cardiac end-diastole frame representing the relaxed
-                            state of the heart.
-                          </p>
-                        </div>
-                        <div>
-                          <h4 className="font-semibold text-sm">
-                            Advanced settings
-                          </h4>
-                          <div className="text-sm text-muted-foreground space-y-2 pl-3">
-                            <p>
-                              • <strong>SDF optimizer iterations:</strong>{" "}
-                              Default 30 (range 10–200).
-                            </p>
-                            <p>
-                              • <strong>Marching cubes resolution:</strong>{" "}
-                              Default 32 (range 32–256).
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
-                          <DocImage
-                            src="/images/doc/project-reconstruction-configuration.png"
-                            alt="Configure modal"
-                            className="w-full h-auto rounded-md border shadow-sm"
-                          />
-                          <p className="text-xs text-muted-foreground mt-2">
-                            Configuration panel with export format, ED frame
-                            selector, and basic parameters.
-                          </p>
-                        </div>
-                        <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
-                          <DocImage
-                            src="/images/doc/project-reconstruction-configuration-advanced.png"
-                            alt="Advanced settings panel"
-                            className="w-full h-auto rounded-md border shadow-sm"
-                          />
-                          <p className="text-xs text-muted-foreground mt-2">
-                            Advanced settings with SDF optimizer iterations and
-                            marching cubes resolution controls.
-                          </p>
-                        </div>
-                      </div>
-                      <p className="text-sm text-muted-foreground">
-                        Click <strong>Start Reconstruction</strong> to submit.
-                      </p>
+                      <ul className="text-sm text-muted-foreground space-y-2">
+                        <li>
+                          • <strong>Segmentation source</strong> — pick MedSAM or UNet. Only that model&apos;s mask is
+                          used. A card is greyed out if it has no segmentation yet, or marked &quot;In Use&quot; if it
+                          already has a 4D result (delete it first, or click View 4D).
+                        </li>
+                        <li>
+                          • <strong>Export format</strong> — GLB (recommended, smaller/web-friendly) or OBJ (plain
+                          text, widely supported).
+                        </li>
+                        <li>
+                          • <strong>ED frame</strong> — the relaxed end-diastole frame. Default 1.
+                        </li>
+                        <li>
+                          • <strong>Advanced settings</strong> (collapsed by default) — SDF iterations (10–200,
+                          default 30) and mesh resolution (32–256, default 32). Higher values look better but take
+                          longer.
+                        </li>
+                      </ul>
+                      <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
+                        <DocImage
+                          src="/images/doc/project-reconstruction-configuration.png"
+                          alt="Configure 4D Reconstruction dialog"
+                          className="w-full h-auto rounded-md border shadow-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Configure 4D Reconstruction dialog.
+                        </p>
+                      </div>            
                     </CardContent>
                   </Card>
 
@@ -1417,22 +1330,20 @@ const DocPage = () => {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        After reconstruction completes, you can visualize the 4D
-                        model with playback controls and compare it side-by-side
-                        with segmentation.
+                        After reconstruction completes, click{" "}
+                        <strong>View 4D</strong> to open the dedicated,
+                        full-screen 4D viewer with playback controls.
                       </p>
                       <ul className="text-sm text-muted-foreground space-y-1">
                         <li>
-                          • Inspect the 4D model with playback controls to
-                          review cardiac motion frame-by-frame
+                          • Inspect the 4D model with playback controls, a frame
+                          slider, and adjustable playback speed to review cardiac
+                          motion frame-by-frame
                         </li>
                         <li>
-                          • Toggle side-by-side view to compare segmentation
-                          masks and reconstructed mesh
-                        </li>
-                        <li>
-                          • Focus on full-screen 4D viewer with timeline
-                          controls for detailed analysis
+                          • Use <strong>View Segmentation Mask</strong> to jump
+                          straight to the matching frame in the segmentation
+                          viewer for comparison
                         </li>
                         <li>
                           • If you re-edit segmentation masks, re-run
@@ -1457,8 +1368,8 @@ const DocPage = () => {
                           className="w-full h-auto rounded-md border shadow-sm"
                         />
                         <p className="text-xs text-muted-foreground mt-2">
-                          Interactive 4D viewer with side-by-side segmentation
-                          comparison and playback timeline controls.
+                          Interactive 4D viewer with playback timeline controls
+                          and a link to jump to the matching segmentation frame.
                         </p>
                       </div>
                       <div className="p-2 md:p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 mt-4">

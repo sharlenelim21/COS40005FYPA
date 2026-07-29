@@ -580,9 +580,10 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                           <Crosshair className="w-4 h-4 text-primary" />
                         </div>
                         <div>
-                          <p className="font-medium text-foreground mb-1">Cardiac Reference Points</p>
+                          <p className="font-medium text-foreground mb-1">Landmarks Workspace</p>
                           <p className="text-sm text-muted-foreground">
-                            Detect RV insertion points and align the cardiac view for AHA-style regional review.
+                            Detect and verify RV insertion points per frame, with per-point confidence scores and a
+                            mean-point fallback when predictions overlap.
                           </p>
                         </div>
                       </div>
@@ -592,22 +593,27 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                           <Activity className="w-4 h-4 text-primary" />
                         </div>
                         <div>
-                          <p className="font-medium text-foreground mb-1">Bullseye &amp; Strain Preview</p>
+                          <p className="font-medium text-foreground mb-1">Strain Workspace</p>
                           <p className="text-sm text-muted-foreground">
-                            Review AHA 17-segment bullseye output, 3D heart projection, and strain-style visual summaries.
+                            Review a real AHA 17-segment bullseye synced with a rotating 3D heart model — click a
+                            segment to blink the matching wall — alongside per-frame GRS/GCS strain charts.
                           </p>
                         </div>
                       </div>
                       <div className="bg-primary/5 rounded-lg p-3 mt-4">
                         <p className="text-xs text-muted-foreground italic text-center">
-                          Landmark detection connects segmentation results with motion-aware analysis and reporting.
+                          Landmark detection connects segmentation results with motion-aware analysis, a results summary, and reporting.
                         </p>
                       </div>
                     </div>
-                    <div className="w-full md:w-48 h-48 bg-muted/30 rounded-lg border-2 border-dashed border-primary/30 flex items-center justify-center relative overflow-hidden">
-                      <span className="px-4 text-center text-xs text-muted-foreground">
-                        Landmark workflow video placeholder
-                      </span>
+                    <div className="w-full md:w-48 h-48 bg-muted rounded-lg border-2 border-primary/30 flex items-center justify-center relative overflow-hidden">
+                      <Image
+                        src="/images/home/Second/sample_landmark_strain_video.gif"
+                        alt="Bullseye and 3D heart preview"
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
                     </div>
                   </div>
                 </motion.div>
@@ -629,12 +635,21 @@ export default function SecondSection({ className = '' }: SecondSectionProps) {
                   >
                     <FileDown className="w-5 h-5 text-primary" />
                   </motion.div>
-                  <h5 className="text-lg font-semibold text-foreground">Export Landmark Report</h5>
+                  <h5 className="text-lg font-semibold text-foreground">Export Landmark &amp; Strain Results</h5>
                 </div>
                 <div className="w-full bg-muted/30 border border-primary/20 rounded-lg p-4">
                   <p className="text-sm text-muted-foreground mb-3">
-                    Download a PDF report containing detected landmarks, AHA bullseye output, 3D heart preview, strain-style visuals, and analysis notes.
+                    Download a PDF report with a patient summary, detected landmarks, AHA bullseye output, 3D heart
+                    preview, and regional strain visuals — or export the underlying data as CSV for further analysis.
                   </p>
+                  <div className="flex flex-wrap gap-3 mb-3">
+                    <div className="bg-primary/10 rounded-md px-3 py-1">
+                      <span className="text-xs font-medium text-primary">PDF Report</span>
+                    </div>
+                    <div className="bg-primary/10 rounded-md px-3 py-1">
+                      <span className="text-xs font-medium text-primary">CSV Export</span>
+                    </div>
+                  </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                     <span>Ready after landmark detection completes</span>
