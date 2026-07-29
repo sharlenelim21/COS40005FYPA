@@ -33,6 +33,8 @@ export type ResearchSource = {
   title: string;
   url: string | null;
   year: number | null;
+  /** Link to a legally-free full text, when the paper is open access. */
+  pdf_url?: string | null;
 };
 
 /** A grounded, cited answer. */
