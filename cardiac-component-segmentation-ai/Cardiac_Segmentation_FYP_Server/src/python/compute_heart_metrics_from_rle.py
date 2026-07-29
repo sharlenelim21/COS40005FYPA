@@ -301,6 +301,15 @@ def main() -> None:
 
     positive_frames = [f for f, n in lv_counts.items() if n > 0]
 
+    # NOTE ON ACCURACY vs. the ACDC ground-truth CSV:
+    # This detects ED/ES from the SEGMENTATION MODEL's own output — ED = frame
+    # with the most LV-cavity voxels, ES = the fewest. That is the standard
+    # method and is correct. It can differ from the ACDC info CSV by a frame or
+    # two because the CSV's ED/ES are EXPERT-annotated on the original full-res
+    # images, whereas this runs on the model's (imperfect) masks — MedSAM in
+    # particular. A small difference is expected and is a measure of segmentation
+    # quality on those phases, not a bug in this detection. A large difference
+    # points to poor segmentation on the ED/ES frames rather than a logic error.
     if _valid_override(ed_override):
         ed_frame = int(ed_override)
     else:

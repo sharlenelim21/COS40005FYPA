@@ -373,10 +373,10 @@ export function InteractiveReport({
                         onMouseMove={(e: any) => { if (e?.activeLabel !== undefined) setHoverFrame(Number(e.activeLabel)); }}
                         onMouseLeave={() => setHoverFrame(null)}
                       >
-                        <CartesianGrid stroke="hsl(var(--border))" strokeOpacity={0.4} />
+                        <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
                         <XAxis dataKey="frame" tick={{ fontSize: 11 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 11 }} />
                         <YAxis tick={{ fontSize: 11 }} label={{ value: "Strain (%)", angle: -90, position: "insideLeft", fontSize: 11 }} />
-                        <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                        <ReferenceLine y={0} stroke="var(--border)" />
                         <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                         {segmentLabels.map((s, i) => (
                           <Line

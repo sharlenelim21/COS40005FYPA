@@ -147,17 +147,33 @@ export function fmt(v: number | null | undefined, digits = 1, suffix = ""): stri
 /** When to auto-select a model. "recent" picks whichever was computed last. */
 type AutoSelect = "prefer-unet" | "recent";
 
+/**
+ * Module-level cache of the last-fetched masks per project. The page mounts this
+ * hook several times (bullseye panel, strain tab, etc.), and the sidebar remounts
+ * on every tab switch. Without a shared cache each instance starts at masks=null
+ * and shows an empty flash until its own fetch returns — the "switch to Strain,
+ * see nothing, then results appear" glitch. Seeding from the cache removes the
+ * flash; the fetch still runs to refresh.
+ */
+const masksCache = new Map<string, MaskDoc[]>();
+
 export function useProjectResults(
   projectId: string | undefined,
   autoSelect: AutoSelect = "prefer-unet",
 ) {
-  const [masks, setMasks] = useState<MaskDoc[] | null>(null);
+  const [masks, setMasks] = useState<MaskDoc[] | null>(
+    projectId ? masksCache.get(projectId) ?? null : null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<Model>("unet");
   const userChoseModel = useRef(false);
 
   useEffect(() => {
     if (!projectId) return;
+    // Seed synchronously from cache so a remount never flashes empty.
+    const cached = masksCache.get(projectId);
+    if (cached) setMasks(cached);
+
     let cancelled = false;
     (async () => {
       try {
@@ -165,9 +181,10 @@ export function useProjectResults(
         if (cancelled) return;
         // Editable masks carry the computed fields; raw MedSAM output does not.
         const editable = ((res.segmentations ?? []) as MaskDoc[]).filter((m) => !m.isMedSAMOutput);
+        masksCache.set(projectId, editable);
         setMasks(editable);
       } catch {
-        if (!cancelled) setError("Failed to load results. Ensure the project has been processed.");
+        if (!cancelled && !cached) setError("Failed to load results. Ensure the project has been processed.");
       }
     })();
     return () => { cancelled = true; };

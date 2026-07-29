@@ -791,24 +791,10 @@ export default function LandmarkDetectionPage() {
           </Select>
         </div>
 
-        {/* Save + Re-run + Export buttons */}
+        {/* Re-run + Export buttons. (Landmark save lives in the Landmarks tab
+            now, next to the editing controls — the header button was redundant.) */}
         {hasPredictions && (
           <div className="flex items-center gap-2 shrink-0">
-            <Button
-              variant={hasUnsavedLandmarkEdits ? "default" : "outline"}
-              size="sm"
-              className="text-xs gap-1.5"
-              disabled={!hasUnsavedLandmarkEdits || isSavingLandmarks}
-              onClick={handleSaveLandmarks}
-              title="Save landmark edits (Ctrl+S)"
-            >
-              {isSavingLandmarks ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
-              {isSavingLandmarks ? "Saving…" : "Save"}
-            </Button>
             <Button
               size="sm"
               className="text-xs gap-1.5"
@@ -1082,6 +1068,7 @@ export default function LandmarkDetectionPage() {
                 <AhaBullseyePanel
                   bullseyeData={hasPredictions ? bullseyeData : null}
                   loading={hasPredictions ? bullseyeLoading : isRunning}
+                  isComputing={bullseyeRecomputing || calculatingModels[activeModel]}
                   referenceAngleDeg={ahaAlignmentAngle ?? 0}
                   onCompute={() => fetchBullseye(selectedBullseyeModel, true)}
                   // Follows the Strain tab's cardiac-cycle playback, not the
@@ -1298,12 +1285,15 @@ function AhaBullseyePanel({
   frameThickness = null,
   modelLabel = "this model",
   previewMode = false,
+  isComputing = false,
   onCompute,
   onBullseyeResetRef,
   onHeartResetRef,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
+  /** True only while the GPU is generating the bullseye (vs. loading stored data). */
+  isComputing?: boolean;
   referenceAngleDeg?: number;
   currentFrame?: number;
   frameCount?: number;
@@ -1376,7 +1366,9 @@ function AhaBullseyePanel({
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
-            <span className="text-xs">Computing bullseye…</span>
+            {/* "Computing" only when the GPU is actually generating the bullseye;
+                otherwise we're just loading already-stored data. */}
+            <span className="text-xs">{isComputing ? "Computing bullseye…" : "Loading…"}</span>
           </div>
         </div>
       ) : !frameThickness && !previewMode ? (

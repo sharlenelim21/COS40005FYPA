@@ -904,6 +904,21 @@ function ReplacementFileRow({
   );
 }
 
+/**
+ * Busy label for the compute buttons. The backend runs the whole series in one
+ * request (one GPU pass per frame), so there's no per-frame progress to stream —
+ * we show a spinner + the frame count so the wait is understood, not a bare
+ * "Computing…". `verb` is "Computing" or "Recomputing".
+ */
+function ComputeBusyLabel({ verb, frames }: { verb: string; frames: number }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      {verb} {frames} frames… (one GPU pass each)
+    </span>
+  );
+}
+
 /** UNet/MedSAM selector for the strain tab. UNet is marked recommended. */
 function ModelToggle({
   strainModel,
@@ -1163,7 +1178,7 @@ function StrainTab({
             No strain has been computed for {strainModel === "unet" ? "UNet" : "MedSAM"} yet.
           </p>
           <Button size="sm" variant="outline" className="mt-3 h-7 text-[10px]" disabled={seriesBusy} onClick={runStrainSeries}>
-            {seriesBusy ? "Computing… one pass per frame" : `Compute all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
+            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={frameCount} /> : `Compute all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
         </div>
@@ -1266,7 +1281,7 @@ function StrainTab({
             onClick={runStrainSeries}
           >
             {seriesBusy
-              ? "Recomputing… one pass per frame"
+              ? <ComputeBusyLabel verb="Recomputing" frames={frameCount} />
               : `Recompute all frames with current landmarks (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
@@ -1301,7 +1316,7 @@ function StrainTab({
             onClick={runStrainSeries}
           >
             {seriesBusy
-              ? "Computing… one pass per frame"
+              ? <ComputeBusyLabel verb={usingRealSeries ? "Recomputing" : "Computing"} frames={frameCount} />
               : `${usingRealSeries ? "Recompute" : "Compute"} all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
@@ -1349,35 +1364,35 @@ function StrainTab({
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={curveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
-                <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
+                <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                 <XAxis
                   dataKey="time"
                   tickLine={false}
                   axisLine={false}
-                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                  tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
                 />
                 <YAxis
                   tickLine={false}
                   axisLine={false}
-                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
+                  tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
                   domain={selectedStrainType === "GRS" ? [0, 42] : [-26, 2]}
                   tickFormatter={(value) => `${value}%`}
                 />
                 <Tooltip
-                  cursor={{ stroke: "hsl(var(--border))" }}
+                  cursor={{ stroke: "var(--border)" }}
                   formatter={(value) => [`${Number(value).toFixed(1)}%`, selectedStrainType]}
                   labelFormatter={(label) => `${label} ms`}
                   contentStyle={{
                     borderRadius: 8,
-                    border: "1px solid hsl(var(--border))",
-                    background: "hsl(var(--popover))",
-                    color: "hsl(var(--popover-foreground))",
+                    border: "1px solid var(--border)",
+                    background: "var(--popover)",
+                    color: "var(--popover-foreground)",
                     fontSize: 12,
                   }}
                 />
                 <ReferenceLine
                   x={currentTime}
-                  stroke="hsl(var(--primary))"
+                  stroke="var(--primary)"
                   strokeDasharray="4 4"
                   ifOverflow="extendDomain"
                 />
