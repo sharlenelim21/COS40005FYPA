@@ -134,8 +134,8 @@ export function RegionalStrainByRegion({
             const val = yMax - (yMax - yMin) * frac;
             return (
               <g key={frac}>
-                <line x1={padL} x2={w - padR} y1={gy} y2={gy} stroke="hsl(var(--border))" strokeWidth={1} opacity={0.5} />
-                <text x={padL - 4} y={gy + 3} textAnchor="end" fontSize={9} fill="hsl(var(--muted-foreground))">{val.toFixed(0)}</text>
+                <line x1={padL} x2={w - padR} y1={gy} y2={gy} stroke="var(--border)" strokeWidth={1} opacity={0.5} />
+                <text x={padL - 4} y={gy + 3} textAnchor="end" fontSize={9} fill="var(--muted-foreground)">{val.toFixed(0)}</text>
               </g>
             );
           })}
@@ -147,7 +147,7 @@ export function RegionalStrainByRegion({
           {/* Vertical guide + dots at the hovered frame for every segment. */}
           {hoverFrame !== null && (
             <>
-              <line x1={x(hoverFrame)} x2={x(hoverFrame)} y1={padT} y2={h - padB} stroke="hsl(var(--muted-foreground))" strokeWidth={1} strokeDasharray="3 3" />
+              <line x1={x(hoverFrame)} x2={x(hoverFrame)} y1={padT} y2={h - padB} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="3 3" />
               {segs.map((seg) => (
                 <circle key={`dot-${seg}`} cx={x(hoverFrame)} cy={y(valueAtFrame(series, seg, hoverFrame))} r={2.4} fill={RING_COLOR_VAR[ring]} />
               ))}
@@ -167,10 +167,10 @@ export function RegionalStrainByRegion({
               onMouseLeave={() => setHoverFrame(null)}
             />
           ))}
-          <line x1={padL} x2={w - padR} y1={h - padB} y2={h - padB} stroke="hsl(var(--muted-foreground))" strokeWidth={1} />
-          <text x={padL} y={h - 6} fontSize={9} fill="hsl(var(--muted-foreground))">ED</text>
-          <text x={(padL + w - padR) / 2} y={h - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">cardiac frame →</text>
-          <text x={w - padR} y={h - 6} textAnchor="end" fontSize={9} fill="hsl(var(--muted-foreground))">ED</text>
+          <line x1={padL} x2={w - padR} y1={h - padB} y2={h - padB} stroke="var(--muted-foreground)" strokeWidth={1} />
+          <text x={padL} y={h - 6} fontSize={9} fill="var(--muted-foreground)">ED</text>
+          <text x={(padL + w - padR) / 2} y={h - 6} textAnchor="middle" fontSize={9} fill="var(--muted-foreground)">cardiac frame →</text>
+          <text x={w - padR} y={h - 6} textAnchor="end" fontSize={9} fill="var(--muted-foreground)">ED</text>
         </svg>
         {hoverFrame !== null && (
           <div
@@ -269,21 +269,21 @@ export function FullCycleChart({
           <rect
             x={x(diastoleEnd)} y={padT}
             width={Math.max(x(systoleEnd) - x(diastoleEnd), 0)} height={height - padT - padB}
-            fill="hsl(var(--primary))" opacity={0.06}
+            fill="var(--primary)" opacity={0.06}
           />
         )}
         {gridLines.map((gy) => (
           <g key={gy}>
-            <line x1={padL} x2={width - padR} y1={y(gy)} y2={y(gy)} stroke="hsl(var(--border))" strokeDasharray="3 3" />
-            <text x={2} y={y(gy) + 3} fontSize={10} fill="hsl(var(--muted-foreground))">{gy}</text>
+            <line x1={padL} x2={width - padR} y1={y(gy)} y2={y(gy)} stroke="var(--border)" strokeDasharray="3 3" />
+            <text x={2} y={y(gy) + 3} fontSize={10} fill="var(--muted-foreground)">{gy}</text>
           </g>
         ))}
-        <line x1={padL} x2={width - padR} y1={yZero} y2={yZero} stroke="hsl(var(--muted-foreground))" strokeDasharray="3 3" />
+        <line x1={padL} x2={width - padR} y1={yZero} y2={yZero} stroke="var(--muted-foreground)" strokeDasharray="3 3" />
         {hasPhaseBands && [
           { key: "diastole-end", f: diastoleEnd },
           { key: "systole-end", f: systoleEnd },
         ].map(({ key, f }) => (
-          <line key={key} x1={x(f)} x2={x(f)} y1={padT} y2={height - padB} stroke="hsl(var(--border))" strokeDasharray="2 2" />
+          <line key={key} x1={x(f)} x2={x(f)} y1={padT} y2={height - padB} stroke="var(--border)" strokeDasharray="2 2" />
         ))}
         {orderedSegments.map((seg) => {
           const ring = ringForSegment(seg);
@@ -301,14 +301,14 @@ export function FullCycleChart({
             />
           );
         })}
-        <line x1={padL} x2={width - padR} y1={height - padB} y2={height - padB} stroke="hsl(var(--muted-foreground))" />
+        <line x1={padL} x2={width - padR} y1={height - padB} y2={height - padB} stroke="var(--muted-foreground)" />
         {Array.from({ length: frames }, (_, f) => (
-          <text key={f} x={x(f)} y={height - padB + 12} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">{f}</text>
+          <text key={f} x={x(f)} y={height - padB + 12} textAnchor="middle" fontSize={9} fill="var(--muted-foreground)">{f}</text>
         ))}
         {/* Vertical guide + a dot on every segment at the hovered frame. */}
         {hoverFrame !== null && (
           <>
-            <line x1={x(hoverFrame)} x2={x(hoverFrame)} y1={padT} y2={height - padB} stroke="hsl(var(--muted-foreground))" strokeWidth={1} strokeDasharray="3 3" />
+            <line x1={x(hoverFrame)} x2={x(hoverFrame)} y1={padT} y2={height - padB} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="3 3" />
             {segmentIds.map((seg) => (
               <circle key={`dot-${seg}`} cx={x(hoverFrame)} cy={y(valueAtFrame(series, seg, hoverFrame))} r={2} fill={RING_COLOR_VAR[ringForSegment(seg)]} />
             ))}
@@ -493,7 +493,7 @@ export function PerFrameBarChart({
   return (
     <div>
       <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full">
-        <line x1={padL} x2={width - padR} y1={yZero} y2={yZero} stroke="hsl(var(--border))" strokeWidth={0.6} />
+        <line x1={padL} x2={width - padR} y1={yZero} y2={yZero} stroke="var(--border)" strokeWidth={0.6} />
         {values.map((d, i) => {
           const yv = y(d.strain);
           const top = Math.min(yv, yZero);

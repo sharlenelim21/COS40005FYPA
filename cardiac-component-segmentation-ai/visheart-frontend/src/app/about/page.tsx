@@ -62,7 +62,7 @@ const AboutPage = () => {
   const team = [
     {
       name: "Sharlene",
-      role: "Team Leader",
+      role: "Backend Developer",
       imageUrl: sharlene_image,
       description:
         "Leading the team’s direction, overseeing technical decisions, and supporting system development with a focus on overall project coordination.",
@@ -76,7 +76,7 @@ const AboutPage = () => {
     },
     {
       name: "Jia Yi",
-      role: "Product Owner",
+      role: "Backend Developer",
       imageUrl: jiayi_image,
       description:
         "Managing product requirements, prioritizing features, and ensuring alignment between client expectations and system development.",

@@ -20,6 +20,8 @@ import {
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, BookOpen, FileText, Loader2 } from "lucide-react";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus } from "@/hooks/useProjectResults";
+import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
+import { buildPatientContext } from "@/lib/researchApi";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -504,10 +506,10 @@ export function InteractiveReport({
                         onMouseMove={(e: any) => { if (e?.activeLabel !== undefined) setHoverFrame(Number(e.activeLabel)); }}
                         onMouseLeave={() => setHoverFrame(null)}
                       >
-                        <CartesianGrid stroke="hsl(var(--border))" strokeOpacity={0.4} />
+                        <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
                         <XAxis dataKey="frame" tick={{ fontSize: 11 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 11 }} />
                         <YAxis tick={{ fontSize: 11 }} label={{ value: "Strain (%)", angle: -90, position: "insideLeft", fontSize: 11 }} />
-                        <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                        <ReferenceLine y={0} stroke="var(--border)" />
                         <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                         {segmentLabels.map((s, i) => (
                           <Line
@@ -551,32 +553,23 @@ export function InteractiveReport({
         )}
       </Card>
 
-      {/* Research assistant — not yet integrated; shown as a labelled preview. */}
-      <Card
-        title="Clinical Research Assistant"
-        subtitle="Not yet integrated — the content below is a static preview, not generated from this patient."
-        icon={<BookOpen className="h-4 w-4 text-primary" />}
-      >
-        <div className="mb-3 rounded-lg border border-dashed border-border bg-muted/20 p-3.5 text-[13px] leading-relaxed text-muted-foreground">
-          Retrieval-augmented literature summaries will appear here once the research-assistant
-          service is connected. Until then this section shows example papers only — it does not
-          reference this patient&apos;s results.
-        </div>
-        <div className="flex flex-col gap-2.5 opacity-60">
-          {[
-            ["Deep Learning Techniques for Automatic MRI Cardiac Multi-structures Segmentation and Diagnosis", "Bernard O. et al., IEEE Trans. Medical Imaging, 2018"],
-            ["Normal ranges of left ventricular strain by feature-tracking CMR", "J. Cardiovasc. Magn. Reson., 2020"],
-          ].map(([title, authors]) => (
-            <div key={title} className="flex gap-2.5 rounded-lg border border-border p-3">
-              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <div>
-                <p className="text-[13px] font-semibold text-foreground">{title}</p>
-                <p className="mt-0.5 text-[11.5px] text-muted-foreground">{authors}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
+      {/* Clinical Research Assistant — grounded, cited literature answers for
+          this report. Patient measurements are passed as read-only context so
+          "Explain these results" is specific to this scan. The panel shows a
+          clear notice if the assistant service isn't running. */}
+      <section className="mt-6">
+        <CardiacResearchAssistant
+          patientContext={buildPatientContext({
+            EF: measurements?.EF,
+            EDV: measurements?.EDV,
+            ESV: measurements?.ESV,
+            StrokeVolume: measurements?.StrokeVolume,
+            PeakGRS: measurements?.PeakGRS,
+            PeakGCS: measurements?.PeakGCS,
+            mostSimilarPattern: similarity?.most_similar,
+          })}
+        />
+      </section>
 
       <p className="mt-6 text-center text-[11.5px] text-muted-foreground">
         Generated for clinical decision support only. Health Status is a rule-based assessment and
