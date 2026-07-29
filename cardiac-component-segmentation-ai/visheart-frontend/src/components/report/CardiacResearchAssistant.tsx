@@ -13,7 +13,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { BookOpen, Sparkles, Send, ExternalLink, Loader2, AlertTriangle } from "lucide-react";
+import { BookOpen, Sparkles, Send, ExternalLink, Loader2, AlertTriangle, FileText } from "lucide-react";
 import {
   researchApi,
   researchAssistantEnabled,
@@ -156,22 +156,36 @@ export default function CardiacResearchAssistant({ patientContext }: Props) {
                           Sources
                         </p>
                         {turn.answer.sources.map((s) => (
-                          <a
-                            key={s.n}
-                            href={s.url ?? undefined}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="group flex items-start gap-1.5 text-xs text-slate-600 transition-colors hover:text-teal-700 dark:text-slate-300 dark:hover:text-teal-400"
-                          >
+                          <div key={s.n} className="flex items-start gap-1.5 text-xs">
                             <span className="font-mono text-slate-400">[{s.n}]</span>
-                            <span className="flex-1">
-                              {s.title}
-                              {s.year ? ` (${s.year})` : ""}
-                            </span>
-                            {s.url && (
-                              <ExternalLink className="mt-0.5 h-3 w-3 shrink-0 opacity-0 group-hover:opacity-100" aria-hidden />
-                            )}
-                          </a>
+                            <div className="flex-1">
+                              <a
+                                href={s.url ?? undefined}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="group text-slate-600 transition-colors hover:text-teal-700 dark:text-slate-300 dark:hover:text-teal-400"
+                              >
+                                {s.title}
+                                {s.year ? ` (${s.year})` : ""}
+                                {s.url && (
+                                  <ExternalLink className="ml-1 inline h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+                                )}
+                              </a>
+                              {/* Only shown when Unpaywall found a legally-free
+                                  full text — abstracts alone often aren't enough. */}
+                              {s.pdf_url && (
+                                <a
+                                  href={s.pdf_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="ml-2 inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-medium text-teal-700 transition-colors hover:bg-teal-100 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/50"
+                                >
+                                  <FileText className="h-2.5 w-2.5" aria-hidden />
+                                  Free PDF
+                                </a>
+                              )}
+                            </div>
+                          </div>
                         ))}
                       </div>
                     )}
