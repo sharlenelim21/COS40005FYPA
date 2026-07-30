@@ -18,7 +18,7 @@ import React, { useMemo, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
-import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, BookOpen, FileText, Loader2 } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus } from "@/hooks/useProjectResults";
 import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
 import { buildPatientContext } from "@/lib/researchApi";
@@ -30,13 +30,38 @@ const RINGS = [
   { rInner: 30,  rOuter: 65,  count: 4, firstSegment: 13 },
 ];
 
-const SEGMENT_COLORS = [
-  "#E11D2E", "#F97316", "#EAB308", "#22C55E", "#14B8A6", "#0EA5E9", "#6366F1",
-  "#A855F7", "#EC4899", "#F43F5E", "#84CC16", "#06B6D4", "#8B5CF6", "#D946EF",
-  "#F59E0B", "#10B981", "#3B82F6",
-];
-
 const PATTERN_COLORS: Record<string, string> = { NOR: "#15803d", DCM: "#b45309", HCM: "#dc2626" };
+
+/**
+ * Curves are coloured by AHA RING, not per-segment. 17 distinct hues is
+ * unreadable and fights the bullseye's own ring language; 4 keeps the chart
+ * legible and matches what RegionalStrainCharts already does. Individual
+ * segments are identified by selection + the info box, not by colour.
+ * Uses the app's chart tokens so it stays on-theme in dark mode.
+ */
+const RING_OF = (seg: number): "basal" | "mid" | "apical" | "apex" =>
+  seg <= 6 ? "basal" : seg <= 12 ? "mid" : seg <= 16 ? "apical" : "apex";
+
+const RING_COLOR_VAR: Record<string, string> = {
+  basal: "var(--chart-1)",
+  mid: "var(--chart-2)",
+  apical: "var(--chart-3)",
+  apex: "var(--chart-4)",
+};
+
+/**
+ * Severity → the SAME token strings the overall health-status badge uses, so
+ * "Severe" reads identically wherever it appears. Not a new colour system.
+ */
+const LEVEL_BADGE: Record<string, string> = {
+  normal: "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
+  mild: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  moderate: "bg-orange-500/10 text-orange-700 dark:text-orange-400",
+  severe: "bg-red-600/10 text-red-700 dark:text-red-400",
+};
+const LEVEL_WORD: Record<string, string> = {
+  normal: "Normal", mild: "Mild", moderate: "Moderate", severe: "Severe",
+};
 
 type StrainType = "GRS" | "GCS";
 
@@ -96,10 +121,52 @@ function wedgePath(cx: number, cy: number, rInner: number, rOuter: number, a0: n
 
 type SegValue = { segment: number; label: string; value: number | null };
 
-function Bullseye({ values, strainType }: { values: SegValue[]; strainType: StrainType }) {
+/**
+ * Read the GRS or GCS field off a per-segment strain entry.
+ *
+ * `strain.segments[]` and `strainSeries.frames[].segments[]` are structurally
+ * different types that happen to share `grs`/`gcs`, so indexing the union
+ * directly doesn't narrow. Accepting the shared shape keeps this type-safe and
+ * removes the `as any` casts the call sites used to need.
+ */
+const strainField = (
+  s: { grs?: number | null; gcs?: number | null },
+  key: "grs" | "gcs",
+): number | null => s[key] ?? null;
+
+function Bullseye({
+  values, strainType, selectedSegment = null, onSegmentClick, onSegmentHover,
+}: {
+  values: SegValue[];
+  strainType: StrainType;
+  /** 1-based AHA segment id to highlight, or null. Optional — the print pages
+   *  render this component read-only and pass none of the interaction props. */
+  selectedSegment?: number | null;
+  onSegmentClick?: (seg: number) => void;
+  onSegmentHover?: (seg: number | null) => void;
+}) {
   const cx = 140, cy = 140;
   const byId = new Map(values.map((v) => [v.segment, v]));
   const wedges: React.ReactNode[] = [];
+  const interactive = !!onSegmentClick;
+
+  // Selected wedge: strong foreground outline + lift. Uses currentColor so it
+  // inverts correctly in dark mode instead of a baked-in white/black.
+  const selProps = (seg: number) =>
+    selectedSegment === seg
+      ? { stroke: "currentColor", strokeWidth: 3, style: { filter: "brightness(1.06)" } }
+      : { stroke: "var(--card)", strokeWidth: 1.5 };
+
+  /** Clicks must not bubble to the reset handler on the chart wrapper. */
+  const clickProps = (seg: number) =>
+    onSegmentClick
+      ? {
+          onClick: (e: React.MouseEvent) => { e.stopPropagation(); onSegmentClick(seg); },
+          onMouseEnter: () => onSegmentHover?.(seg),
+          onMouseLeave: () => onSegmentHover?.(null),
+          cursor: "pointer",
+        }
+      : {};
 
   RINGS.forEach((ring, ri) => {
     // AHA sector angles, counter-clockwise from 12 o'clock = Anterior. These are
@@ -114,28 +181,48 @@ function Bullseye({ values, strainType }: { values: SegValue[]; strainType: Stra
       const a1 = apical ? -45 - i * 90 : -60 - i * 60;
       const seg = byId.get(segId);
       const v = seg?.value ?? null;
+      const mid = polar(cx, cy, (ring.rInner + ring.rOuter) / 2, (a0 + a1) / 2);
       wedges.push(
-        <path
-          key={segId}
-          d={wedgePath(cx, cy, ring.rInner, ring.rOuter, a0, a1)}
-          fill={strainColor(v, strainType)}
-          stroke="#fff"
-          strokeWidth={1.5}
-          style={{ transition: "fill 120ms ease" }}
-        >
-          <title>{`${seg?.label ?? `Segment ${segId}`}: ${v === null ? "—" : `${v.toFixed(1)}%`}`}</title>
-        </path>,
+        <g key={segId} {...clickProps(segId)}>
+          <path
+            d={wedgePath(cx, cy, ring.rInner, ring.rOuter, a0, a1)}
+            fill={strainColor(v, strainType)}
+            {...selProps(segId)}
+            style={{ transition: "fill 120ms ease, stroke-width 120ms ease" }}
+          >
+            <title>{`${seg?.label ?? `Segment ${segId}`}: ${v === null ? "—" : `${v.toFixed(1)}%`}`}</title>
+          </path>
+          {/* Segment number: with curves coloured by ring (4 hues, not 17),
+              the number is how a reader identifies a specific segment. */}
+          <text
+            x={mid.x} y={mid.y + 3} textAnchor="middle" fontSize={10} fontWeight={700}
+            fill="#0b1220" style={{ pointerEvents: "none" }}
+          >
+            {segId}
+          </text>
+        </g>,
       );
     }
   });
 
   const apex = byId.get(17);
   return (
-    <svg viewBox="0 0 280 280" width="100%" height={240} role="img" aria-label="AHA 17-segment bullseye">
+    <svg
+      viewBox="0 0 280 280" width="100%" height={240} role="img"
+      aria-label="AHA 17-segment bullseye"
+      className={interactive ? "text-foreground" : undefined}
+    >
       {wedges}
-      <circle cx={cx} cy={cy} r={30} fill={strainColor(apex?.value ?? null, strainType)} stroke="#fff" strokeWidth={1.5} style={{ transition: "fill 120ms ease" }}>
-        <title>{`Apex: ${apex?.value === null || apex?.value === undefined ? "—" : `${apex.value.toFixed(1)}%`}`}</title>
-      </circle>
+      <g {...clickProps(17)}>
+        <circle
+          cx={cx} cy={cy} r={30} fill={strainColor(apex?.value ?? null, strainType)}
+          {...selProps(17)}
+          style={{ transition: "fill 120ms ease, stroke-width 120ms ease" }}
+        >
+          <title>{`Apex: ${apex?.value === null || apex?.value === undefined ? "—" : `${apex.value.toFixed(1)}%`}`}</title>
+        </circle>
+        <text x={cx} y={cy + 3} textAnchor="middle" fontSize={10} fontWeight={700} fill="#0b1220" style={{ pointerEvents: "none" }}>17</text>
+      </g>
       <text x={cx} y={16} textAnchor="middle" fontSize={11} className="fill-muted-foreground">Anterior</text>
       <text x={cx} y={272} textAnchor="middle" fontSize={11} className="fill-muted-foreground">Inferior</text>
       <text x={12} y={cy + 4} textAnchor="start" fontSize={11} className="fill-muted-foreground">Lateral</text>
@@ -144,17 +231,29 @@ function Bullseye({ values, strainType }: { values: SegValue[]; strainType: Stra
   );
 }
 
-function Card({ title, subtitle, icon, children }: {
+function Card({ title, subtitle, icon, children, sectionRef, highlight, action }: {
   title: string; subtitle?: string; icon?: React.ReactNode; children: React.ReactNode;
+  /** Optional so existing call sites are unaffected. */
+  sectionRef?: React.Ref<HTMLDivElement>;
+  /** Brief ring after a scroll-to, so the jump is traceable. */
+  highlight?: boolean;
+  /** Right-aligned control in the header (e.g. the GCS/GRS toggle). */
+  action?: React.ReactNode;
 }) {
   return (
-    <section className="mb-5 rounded-xl border border-border bg-card p-5">
+    <section
+      ref={sectionRef as React.Ref<HTMLElement>}
+      className={`mb-5 scroll-mt-24 rounded-xl border bg-card p-5 transition-shadow duration-300 ${
+        highlight ? "border-primary shadow-[0_0_0_3px_hsl(var(--primary)/0.25)]" : "border-border"
+      }`}
+    >
       <div className="mb-4 flex items-start gap-2.5">
         {icon && <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">{icon}</div>}
-        <div>
+        <div className="min-w-0 flex-1">
           <h2 className="text-[15px] font-bold text-foreground">{title}</h2>
           {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
         </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
       {children}
     </section>
@@ -164,6 +263,87 @@ function Card({ title, subtitle, icon, children }: {
 function fmt(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return v.toFixed(digits);
+}
+
+/**
+ * Health-status metric rows: the reference band drawn ON the bar, so no
+ * separate "Reference Range" text column is needed.
+ *
+ * Thresholds mirror compute_health_status.py (ASE/EACVI 2015 for LVEF; the
+ * strain figures are the same approximate references the backend cites, which
+ * vary by vendor/software). They are hardcoded ONLY because the stored payload
+ * exposes the verdicts, not the numeric cutoffs — the INTERPRETATION words are
+ * always taken from healthStatus.evidence (see interpretationFor) so this table
+ * can never contradict the backend's grade.
+ */
+type Zone = { from: number; to: number; tone: "green" | "amber" | "red" };
+
+type MetricBar = {
+  key: "EF" | "EDV" | "PeakGCS" | "PeakGRS";
+  name: string;
+  unit: string;
+  /** evidence.label the backend uses for this metric */
+  evidenceLabel: string;
+  min: number;
+  max: number;
+  /** inclusive normal band within [min,max] — drawn with a bold outline */
+  normal: [number, number];
+  /** green = normal, amber = borderline, red = far from normal */
+  zones: Zone[];
+};
+
+const METRIC_BARS: MetricBar[] = [
+  { key: "EF", name: "Ejection Fraction (LVEF)", unit: "%", evidenceLabel: "Ejection Fraction",
+    min: 0, max: 100, normal: [55, 100],
+    zones: [{ from: 0, to: 30, tone: "red" }, { from: 30, to: 55, tone: "amber" }, { from: 55, to: 100, tone: "green" }] },
+  { key: "EDV", name: "End-Diastolic Volume (EDV)", unit: "mL", evidenceLabel: "End-Diastolic Volume",
+    min: 0, max: 400, normal: [60, 250],
+    zones: [{ from: 0, to: 60, tone: "amber" }, { from: 60, to: 250, tone: "green" }, { from: 250, to: 320, tone: "amber" }, { from: 320, to: 400, tone: "red" }] },
+  { key: "PeakGCS", name: "Peak Global Circumferential Strain", unit: "%", evidenceLabel: "Peak GCS",
+    min: -30, max: 0, normal: [-30, -17],
+    zones: [{ from: -30, to: -17, tone: "green" }, { from: -17, to: -10, tone: "amber" }, { from: -10, to: 0, tone: "red" }] },
+  { key: "PeakGRS", name: "Peak Global Radial Strain", unit: "%", evidenceLabel: "Peak GRS",
+    min: 0, max: 50, normal: [25, 50],
+    zones: [{ from: 0, to: 15, tone: "red" }, { from: 15, to: 25, tone: "amber" }, { from: 25, to: 50, tone: "green" }] },
+];
+
+/** Zone fills — muted enough to sit under the value marker without shouting. */
+const ZONE_FILL: Record<Zone["tone"], string> = {
+  green: "bg-emerald-500/35 dark:bg-emerald-500/30",
+  amber: "bg-amber-500/35 dark:bg-amber-500/30",
+  red: "bg-red-500/35 dark:bg-red-500/30",
+};
+
+/** Position of `v` along the bar, clamped to 0–100 %. */
+const pct = (v: number, min: number, max: number) =>
+  Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
+
+/**
+ * The Interpretation cell. Sourced from the backend's own evidence line so the
+ * table displays the stored grade rather than re-deriving one in the browser.
+ * Returns null when the backend didn't evaluate that metric — the row then
+ * shows "—" instead of inventing a verdict.
+ */
+function interpretationFor(hs: HealthStatus | undefined, evidenceLabel: string) {
+  const e = hs?.evidence?.find((x) => x.label === evidenceLabel);
+  if (!e) return null;
+  // Details read like:
+  //   "LVEF 17.2 % — severely reduced (< 30 %)."
+  //   "EDV 357.1 mL — above the raw adult reference band (60-250 mL). Not
+  //    BSA-indexed; body size not accounted for."
+  // Take the clause after the em dash, then only its FIRST sentence/clause and
+  // drop any parenthetical — the cell needs a short verdict, and the full
+  // sentence is already available as the row's tooltip.
+  const after = e.detail.split("—")[1]?.trim() ?? e.detail;
+  const clause = after.split(/[.;]/)[0].replace(/\s*\([^)]*\)/g, "").trim();
+  const verdict = clause || after;
+  return {
+    // Sentence case only. Tailwind's `capitalize` title-cases EVERY word, which
+    // turned "above the raw adult reference band" into "Above The Raw Adult…".
+    text: verdict.charAt(0).toUpperCase() + verdict.slice(1),
+    full: e.detail,
+    level: e.level,
+  };
 }
 
 /**
@@ -269,7 +449,7 @@ export function InteractiveReport({
     if (!strainSeries?.frames?.length) return [];
     return strainSeries.frames.map((f) => {
       const row: Record<string, number | null> = { frame: f.frameIndex };
-      for (const s of f.segments ?? []) row[`s${s.segment}`] = (s as any)[key] ?? null;
+      for (const s of f.segments ?? []) row[`s${s.segment}`] = strainField(s, key);
       return row;
     });
   }, [strainSeries, key]);
@@ -287,19 +467,65 @@ export function InteractiveReport({
   const bullseyeValues: SegValue[] = useMemo(() => {
     const frame = strainSeries?.frames?.find((f) => f.frameIndex === activeFrame);
     const src = frame?.segments ?? strain?.segments ?? [];
-    return src.map((s) => ({ segment: s.segment, label: s.label, value: (s as any)[key] ?? null }));
+    return src.map((s) => ({ segment: s.segment, label: s.label, value: strainField(s, key) }));
   }, [strainSeries, strain, activeFrame, key]);
 
   const hasStrainData = bullseyeValues.length > 0;
   const hasCurves = curves.length > 1;
 
-  const metricRows: [string, string, string][] = [
-    ["Ejection Fraction", fmt(measurements?.EF), "%"],
-    ["EDV", fmt(measurements?.EDV), "mL"],
-    ["ESV", fmt(measurements?.ESV), "mL"],
-    ["Stroke Volume", fmt(measurements?.StrokeVolume), "mL"],
-    ["Peak GRS", fmt(measurements?.PeakGRS), "%"],
-    ["Peak GCS", fmt(measurements?.PeakGCS), "%"],
+  /**
+   * The ONE selection shared by the findings buttons, the bullseye wedges and
+   * the strain curves. Frame-agnostic on purpose: the regional findings are the
+   * ED→ES peak result, so the info box must NOT follow hoverFrame.
+   */
+  const [selectedSeg, setSelectedSeg] = useState<number | null>(null);
+  const [showAllSegments, setShowAllSegments] = useState(false);
+  const strainCardRef = React.useRef<HTMLDivElement | null>(null);
+  const [pulse, setPulse] = useState(false);
+
+  /** Regional entry for the selected segment; falls back to the ED→ES strain. */
+  const selectedInfo = useMemo(() => {
+    if (selectedSeg == null) return null;
+    const r = regionalHealthStatus?.segments?.find((s) => s.idx === selectedSeg);
+    if (r) return { idx: r.idx, label: r.label, region: r.region, gcs: r.gcs, grs: r.grs, level: r.level };
+    const s = strain?.segments?.find((x) => x.segment === selectedSeg);
+    if (s) return { idx: s.segment, label: s.label, region: RING_OF(s.segment), gcs: s.gcs, grs: s.grs, level: undefined };
+    const lbl = segmentLabels.find((x) => x.segment === selectedSeg);
+    return { idx: selectedSeg, label: lbl?.label ?? `Segment ${selectedSeg}`, region: RING_OF(selectedSeg), gcs: null, grs: null, level: undefined };
+  }, [selectedSeg, regionalHealthStatus, strain, segmentLabels]);
+
+  /** Select + bring the strain card into view (used by the findings buttons). */
+  const selectAndReveal = (seg: number) => {
+    setSelectedSeg(seg);
+    strainCardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setPulse(true);
+    window.setTimeout(() => setPulse(false), 650);
+  };
+
+  /** Level for a segment id, for the findings buttons. */
+  const levelOf = (idx: number) =>
+    regionalHealthStatus?.segments?.find((s) => s.idx === idx)?.level ?? "normal";
+
+  /** Click persists, hover only previews — selection therefore wins. */
+  const emphasisSeg = selectedSeg ?? hoverSeg;
+
+  const regionalOk = regionalHealthStatus?.status === "ok";
+  const hasFindings = regionalOk && (regionalHealthStatus?.reduced_count ?? 0) > 0;
+  const findingIds = hasFindings
+    ? (showAllSegments
+        ? (regionalHealthStatus?.segments ?? []).map((s) => s.idx).sort((a, b) => a - b)
+        : (regionalHealthStatus?.affected_idx ?? []).slice().sort((a, b) => a - b))
+    : [];
+
+  /** 2×3 grid of square cards. `accent` marks the two headline volumes with a
+   *  SINGLE accent token — the other four stay default foreground. */
+  const metricCards: { label: string; value: string; unit: string; accent?: boolean }[] = [
+    { label: "Ejection Fraction (LVEF)", value: fmt(measurements?.EF), unit: "%", accent: true },
+    { label: "End-Diastolic Volume (EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true },
+    { label: "End-Systolic Volume (ESV)", value: fmt(measurements?.ESV), unit: "mL" },
+    { label: "Stroke Volume (SV)", value: fmt(measurements?.StrokeVolume), unit: "mL" },
+    { label: "Peak Global Radial Strain", value: fmt(measurements?.PeakGRS), unit: "%" },
+    { label: "Peak Global Circumferential Strain", value: fmt(measurements?.PeakGCS), unit: "%" },
   ];
 
   return (
@@ -310,26 +536,51 @@ export function InteractiveReport({
         <p className="mt-0.5 text-[13px] text-muted-foreground">{scanSummary}</p>
       </header>
 
-      {/* Summary strip: measurements · health status · disease similarity */}
-      <section className="mb-5 grid grid-cols-1 rounded-xl border border-border bg-card md:grid-cols-[1.15fr_1fr_1fr]">
-        <div className="border-b border-border p-4 md:border-b-0 md:border-r">
+      {/* Summary strip: measurements · health status · disease similarity.
+          Health Status is the widest column — it now carries the metric table
+          and the Regional Findings entry point. */}
+      {/* Two columns, not three: Health Status carries the metric table AND
+          the Regional Findings entry point, so it needs the width. Cardiac
+          Measurements and Disease Similarity are both compact and stack in the
+          left column instead of squeezing the table into a third of the row. */}
+      <section className="mb-5 grid grid-cols-1 rounded-xl border border-border bg-card lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+        {/* Explicit placement rather than reordering the JSX: Measurements and
+            Disease stack in column 1, Health Status owns column 2 across both
+            rows. Keeps the DOM order (and the print/screen-reader order)
+            unchanged while giving the table the width it needs. */}
+        <div className="border-b border-border p-4 lg:col-start-1 lg:row-start-1">
           <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
             <Sparkles className="h-3.5 w-3.5 text-primary" /> Cardiac Measurements
           </p>
           <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">From segmentation volumes + voxel spacing</p>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-            {metricRows.map(([label, value, unit]) => (
-              <div key={label} className="flex items-baseline justify-between border-b border-dashed border-border pb-1">
-                <span className="text-[11.5px] text-muted-foreground">{label}</span>
-                <span className="text-[13px] font-bold text-foreground">
-                  {value}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">{unit}</span>
+          {/* 2×3 grid, sized to CONTENT. An earlier revision forced
+              aspect-[1/0.92]; in a wide column that made each card ~270px tall
+              with a dead gap in the middle. Icon and label now sit on one row
+              with the value beneath, so the card is only as tall as it needs to
+              be and the section balances against Health Status.
+              ONE muted icon token for all six — the icon is wayfinding, not a
+              category signal, so colour-coding it would imply meaning that
+              isn't there. */}
+          <div className="grid grid-cols-2 gap-2">
+            {metricCards.map((m) => (
+              <div key={m.label} className="rounded-lg border border-border px-2.5 py-2">
+                <div className="flex items-start gap-1.5">
+                  <Heart className="mt-[1px] h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                    {m.label}
+                  </span>
+                </div>
+                <span className={`mt-1 block text-[17px] font-bold leading-none tracking-tight ${
+                  m.accent ? "text-primary" : "text-foreground"}`}>
+                  {m.value}
+                  <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
                 </span>
               </div>
             ))}
           </div>
         </div>
 
-        <div className="border-b border-border p-4 md:border-b-0 md:border-r">
+        <div className="border-b border-border p-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:border-b-0 lg:border-l">
           <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
             <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> Health Status
           </p>
@@ -373,9 +624,102 @@ export function InteractiveReport({
                 </p>
               )}
 
-              <div className="flex flex-col gap-1.5">
-                {healthStatus.evidence?.map((e, i) => (
-                  <div key={i} className="flex items-start gap-1.5 text-xs">
+              {/* Metric table. There is deliberately NO "Reference Range"
+                  column — the normal band is drawn ON each bar as a bold
+                  outlined zone, putting the reference where the value is
+                  instead of in a separate column of prose. */}
+              {/* table-fixed + explicit widths: without them the Interpretation
+                  column collapsed to one word per line. */}
+              <table className="w-full table-fixed border-collapse">
+                <thead>
+                  <tr>
+                    {([["Metric", "w-[29%]"], ["Result (this study)", "w-[43%]"], ["Interpretation", "w-[28%]"]] as const).map(([h, w]) => (
+                      <th key={h} className={`${w} px-1 pb-1.5 text-left align-top text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground`}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {METRIC_BARS.map((m) => {
+                    const v = measurements?.[m.key] ?? null;
+                    const interp = interpretationFor(healthStatus, m.evidenceLabel);
+                    return (
+                      <tr key={m.key} className="border-t border-border/60">
+                        <td className="px-1 py-2 align-top">
+                          <span className="text-[11.5px] font-semibold leading-tight text-foreground">{m.name}</span>
+                        </td>
+                        <td className="px-1 py-2 align-top">
+                          <span className="text-[13px] font-bold tabular-nums text-foreground">
+                            {fmt(v)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">{m.unit}</span>
+                          </span>
+                          {/* Zones: green = normal, amber = borderline, red =
+                              far from normal. The normal band has no outline —
+                              the green fill plus the "normal x–y" caption below
+                              carry that reference, so an extra bold border only
+                              competed with the value marker.
+                              Outer wrapper is NOT clipped so the marker can
+                              stand proud of the track; the zones live in an
+                              inner clipped element to keep the rounded ends. */}
+                          <div className="relative mt-3 h-2.5 w-full min-w-[120px] max-w-[190px]">
+                            <div className="absolute inset-0 overflow-hidden rounded-full bg-muted">
+                              {m.zones.map((z) => (
+                                <div
+                                  key={`${z.from}-${z.to}`}
+                                  className={`absolute inset-y-0 ${ZONE_FILL[z.tone]}`}
+                                  style={{
+                                    left: `${pct(z.from, m.min, m.max)}%`,
+                                    width: `${pct(z.to, m.min, m.max) - pct(z.from, m.min, m.max)}%`,
+                                  }}
+                                />
+                              ))}
+                            </div>
+                            {v !== null && (
+                              /* Full-height marker: overhangs the track top and
+                                 bottom so the reading is findable at a glance,
+                                 with a card-coloured ring to separate it from
+                                 whichever zone sits underneath. */
+                              <div
+                                className="absolute top-1/2 h-[22px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-[2px] bg-foreground ring-[1.5px] ring-card"
+                                style={{ left: `${pct(v, m.min, m.max)}%` }}
+                                title={`This study: ${fmt(v)} ${m.unit}`}
+                              />
+                            )}
+                          </div>
+                          <div className="mt-2 flex w-full min-w-[120px] max-w-[190px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
+                            <span>{m.min}</span>
+                            <span className="text-foreground/70">normal {m.normal[0]}–{m.normal[1]}</span>
+                            <span>{m.max}</span>
+                          </div>
+                        </td>
+                        <td className="px-1 py-2 align-top">
+                          {interp ? (
+                            /* Short verdict only; the backend's full sentence is
+                               the tooltip so nothing is lost. */
+                            <span
+                              title={interp.full}
+                              className={`text-[11px] font-semibold leading-tight ${
+                                interp.level === "ok" ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`}
+                            >
+                              {interp.text}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              {/* Any evidence line the table doesn't cover (e.g. "Absolute
+                  volumes suppressed") still shows, so nothing the backend
+                  reported is silently dropped. */}
+              {healthStatus.evidence
+                ?.filter((e) => !METRIC_BARS.some((m) => m.evidenceLabel === e.label))
+                .map((e, i) => (
+                  <div key={i} className="mt-2 flex items-start gap-1.5 text-xs">
                     {e.level === "ok"
                       ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                       : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />}
@@ -385,38 +729,80 @@ export function InteractiveReport({
                   </div>
                 ))}
 
-                {/* Layer 2 — advisory regional finding, rendered as one more
-                    evidence line BELOW the Layer-1 lines. It is deliberately
-                    presented as supporting detail, never as part of the grade:
-                    the badge above is driven solely by Layer 1. Only shown when
-                    the regional layer actually found something; "unavailable"
-                    and "no focal defect" stay silent so the card doesn't fill
-                    with non-findings. */}
-                {regionalHealthStatus?.status === "ok" &&
-                 regionalHealthStatus.reduced_count > 0 && (
-                  <div className="flex items-start gap-1.5 text-xs" title={regionalHealthStatus.disclaimer}>
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-                    <span className="text-amber-700 dark:text-amber-400">
-                      {regionalHealthStatus.summary}
-                      {regionalHealthStatus.affected_idx?.length > 0 && (
-                        <span className="text-muted-foreground">
-                          {" "}({regionalHealthStatus.affected_idx.join(", ")})
-                        </span>
-                      )}
-                      <span className="ml-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                        · advisory
-                      </span>
+              {/* ── Regional Findings (Layer 2) ─────────────────────────────
+                  Interactive entry point into the strain card: each affected
+                  segment is a button that selects it and scrolls to the charts.
+                  Still advisory — the grade badge above is Layer 1 only. */}
+              {regionalHealthStatus && (
+                <div className="mt-3 border-t border-border pt-3" title={regionalHealthStatus.disclaimer}>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold text-foreground">Regional Findings</h3>
+                    <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Advisory
                     </span>
                   </div>
-                )}
-              </div>
+
+                  {hasFindings ? (
+                    <>
+                      <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {showAllSegments ? "All Segments" : "Affected Segments"}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {findingIds.map((idx) => {
+                          const lvl = levelOf(idx);
+                          const isSel = selectedSeg === idx;
+                          const quiet = lvl === "normal";
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); selectAndReveal(idx); }}
+                              title={`Segment ${idx} — ${LEVEL_WORD[lvl] ?? lvl}`}
+                              className={`min-w-[46px] rounded-lg border px-2 py-1.5 text-center transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                                isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
+                              } ${quiet ? "bg-muted/40" : "bg-card"}`}
+                            >
+                              <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
+                                {idx}
+                              </span>
+                              <span className={`mt-1 block text-[9px] font-semibold leading-none ${
+                                lvl === "severe" ? "text-red-700 dark:text-red-400"
+                                : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
+                                : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
+                                : "text-muted-foreground"}`}>
+                                {LEVEL_WORD[lvl] ?? lvl}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="mt-2 text-[11px] text-muted-foreground">{regionalHealthStatus.summary}</p>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setShowAllSegments((v) => !v); }}
+                        className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        {showAllSegments ? "← Show affected only" : "View all segments →"}
+                      </button>
+                    </>
+                  ) : (
+                    /* status !== "ok", or no focal defect — keep the plain
+                       advisory sentence rather than an empty button row. */
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      {regionalOk
+                        ? regionalHealthStatus.summary
+                        : "Regional assessment unavailable for this model."}
+                    </p>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <EmptyState computing={computing} error={computeError} />
           )}
         </div>
 
-        <div className="p-4">
+        <div className="p-4 lg:col-start-1 lg:row-start-2">
           <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
             <Info className="h-3.5 w-3.5 text-primary" /> Disease Pattern Similarity
           </p>
@@ -467,16 +853,28 @@ export function InteractiveReport({
       {/* Regional strain: bullseye linked to the full-cycle curves */}
       <Card
         title="Regional Strain Analysis"
-        subtitle="AHA 17-segment strain. Hover the chart to redraw the bullseye at that frame."
+        subtitle="AHA 17-segment strain. Click a segment — here, on a curve, or in Regional Findings — to focus it; click empty chart space to reset."
         icon={<Heart className="h-4 w-4 text-primary" />}
-      >
-        {!hasStrainData ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            No strain computed for this model yet — run strain from the Landmark Detection page.
-          </p>
-        ) : (
-          <>
-            <div className="mb-3 inline-flex rounded-lg border border-border bg-background p-0.5">
+        sectionRef={strainCardRef}
+        highlight={pulse}
+        action={hasStrainData ? (
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {/* Explicit reset. Clicking empty chart space also clears the
+                selection, but that's undiscoverable — this makes the exit
+                obvious. Only rendered while something IS selected, so it never
+                sits there as a dead control. */}
+            {selectedSeg !== null && (
+              <button
+                type="button"
+                onClick={() => setSelectedSeg(null)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Clear the selected segment"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reset
+              </button>
+            )}
+            <div className="inline-flex rounded-lg border border-border bg-background p-0.5">
               {(["GCS", "GRS"] as StrainType[]).map((t) => (
                 <button
                   key={t}
@@ -489,8 +887,74 @@ export function InteractiveReport({
                 </button>
               ))}
             </div>
+          </div>
+        ) : undefined}
+      >
+        {!hasStrainData ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            No strain computed for this model yet — run strain from the Landmark Detection page.
+          </p>
+        ) : (
+          <>
 
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-[260px_1fr]">
+            {/* Selected-segment info — ABOVE the charts so the finding you
+                clicked is the first thing you land on. Absent (not a
+                placeholder) when nothing is selected; the findings buttons
+                already advertise what's clickable. Animated height/opacity so
+                the charts reflowing downward reads as intentional. */}
+            <div
+              className={`overflow-hidden transition-all duration-200 ${
+                selectedInfo ? "mb-4 max-h-40 opacity-100" : "mb-0 max-h-0 opacity-0"
+              }`}
+              aria-live="polite"
+            >
+              {selectedInfo && (
+                <div
+                  className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-lg border border-border bg-muted/40 px-4 py-3"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[17px] font-bold text-[#0b1220]"
+                    style={{ background: strainColor(strainType === "GCS" ? selectedInfo.gcs : selectedInfo.grs, strainType) }}
+                  >
+                    {selectedInfo.idx}
+                  </span>
+                  <div className="min-w-[150px] flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-foreground">{selectedInfo.label}</span>
+                      <span className="rounded-full border border-border px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {selectedInfo.region} ring
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Peak values measured end-diastole → end-systole.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-5">
+                    <div className="text-right">
+                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">Peak GCS</span>
+                      <span className="text-[15px] font-bold tabular-nums text-foreground">{fmt(selectedInfo.gcs)}%</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">Peak GRS</span>
+                      <span className="text-[15px] font-bold tabular-nums text-foreground">{fmt(selectedInfo.grs)}%</span>
+                    </div>
+                    {selectedInfo.level && (
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${LEVEL_BADGE[selectedInfo.level] ?? "bg-muted text-muted-foreground"}`}>
+                        {LEVEL_WORD[selectedInfo.level] ?? selectedInfo.level}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Clicking anywhere in the chart area that isn't a wedge, a curve
+                or a control clears the selection. */}
+            <div
+              className="grid grid-cols-1 gap-6 md:grid-cols-[260px_1fr]"
+              onClick={() => setSelectedSeg(null)}
+            >
               <div>
                 <div className="mb-1 text-center">
                   <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
@@ -499,7 +963,13 @@ export function InteractiveReport({
                       : `Frame ${activeFrame}`}
                   </span>
                 </div>
-                <Bullseye values={bullseyeValues} strainType={strainType} />
+                <Bullseye
+                  values={bullseyeValues}
+                  strainType={strainType}
+                  selectedSegment={selectedSeg}
+                  onSegmentClick={setSelectedSeg}
+                  onSegmentHover={setHoverSeg}
+                />
                 {/* Continuous scale, matching the landmark-detection bullseye. */}
                 <div className="mx-auto mt-2 max-w-[240px]">
                   <div
@@ -521,7 +991,9 @@ export function InteractiveReport({
                       <LineChart
                         data={curves}
                         margin={{ top: 8, right: 12, left: -12, bottom: 4 }}
-                        onMouseMove={(e: any) => { if (e?.activeLabel !== undefined) setHoverFrame(Number(e.activeLabel)); }}
+                        onMouseMove={(e: { activeLabel?: string | number }) => {
+                          if (e?.activeLabel !== undefined) setHoverFrame(Number(e.activeLabel));
+                        }}
                         onMouseLeave={() => setHoverFrame(null)}
                       >
                         <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
@@ -529,32 +1001,63 @@ export function InteractiveReport({
                         <YAxis tick={{ fontSize: 11 }} label={{ value: "Strain (%)", angle: -90, position: "insideLeft", fontSize: 11 }} />
                         <ReferenceLine y={0} stroke="var(--border)" />
                         <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                        {segmentLabels.map((s, i) => (
+                        {/* Invisible wide hit-lines. A 1.4px stroke is almost
+                            impossible to click; these give each curve a ~14px
+                            target without changing what's drawn. Rendered
+                            first so the visible lines paint over them. */}
+                        {segmentLabels.map((s) => (
                           <Line
-                            key={s.segment}
+                            key={`hit-${s.segment}`}
                             dataKey={`s${s.segment}`}
-                            name={s.label}
-                            stroke={SEGMENT_COLORS[i % SEGMENT_COLORS.length]}
-                            strokeWidth={hoverSeg === s.segment ? 3 : 1.4}
+                            stroke="transparent"
+                            strokeWidth={14}
                             dot={false}
-                            opacity={hoverSeg && hoverSeg !== s.segment ? 0.15 : 1}
+                            activeDot={false}
                             isAnimationActive={false}
+                            legendType="none"
+                            style={{ cursor: "pointer" }}
+                            onClick={() => setSelectedSeg(s.segment)}
+                            onMouseEnter={() => setHoverSeg(s.segment)}
+                            onMouseLeave={() => setHoverSeg(null)}
                           />
                         ))}
+
+                        {/* Emphasis precedence: a click PERSISTS, hover only
+                            previews — so selection wins over hoverSeg. Selected
+                            segment is rendered last so it draws on top. */}
+                        {[...segmentLabels]
+                          .sort((a, b) => (a.segment === emphasisSeg ? 1 : b.segment === emphasisSeg ? -1 : 0))
+                          .map((s) => {
+                            const isOn = emphasisSeg === s.segment;
+                            const dimmed = emphasisSeg != null && !isOn;
+                            return (
+                              <Line
+                                key={s.segment}
+                                dataKey={`s${s.segment}`}
+                                name={s.label}
+                                stroke={RING_COLOR_VAR[RING_OF(s.segment)]}
+                                strokeWidth={isOn ? 3 : 1.4}
+                                dot={false}
+                                opacity={dimmed ? 0.12 : 1}
+                                isAnimationActive={false}
+                                style={{ cursor: "pointer" }}
+                                onClick={() => setSelectedSeg(s.segment)}
+                              />
+                            );
+                          })}
                       </LineChart>
                     </ResponsiveContainer>
-                    <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-1">
-                      {segmentLabels.map((s, i) => (
-                        <span
-                          key={s.segment}
-                          onMouseEnter={() => setHoverSeg(s.segment)}
-                          onMouseLeave={() => setHoverSeg(null)}
-                          className="flex items-center gap-1 text-[10.5px] text-muted-foreground"
-                        >
-                          <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: SEGMENT_COLORS[i % SEGMENT_COLORS.length] }} />
-                          {s.label}
+                    {/* Legend is now per RING (4 entries), matching the curve
+                        colours. Individual segments are identified by their
+                        number on the bullseye and by the info box. */}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      {(["basal", "mid", "apical", "apex"] as const).map((r) => (
+                        <span key={r} className="flex items-center gap-1.5 text-[10.5px] capitalize text-muted-foreground">
+                          <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: RING_COLOR_VAR[r] }} />
+                          {r}
                         </span>
                       ))}
+                      <span className="text-[10.5px] text-muted-foreground/70">· click a curve or wedge to focus</span>
                     </div>
                   </>
                 ) : (
