@@ -68,8 +68,20 @@ function strainColor(v: number | null, type: StrainType): string {
   return lerpHex(STRAIN_GRADIENT[i], STRAIN_GRADIENT[i + 1], scaled - i);
 }
 
+/**
+ * Polar point in SVG screen space: 0° = 3 o'clock, angles increase clockwise
+ * (because +y is down). NO -90° shift — callers pass true screen angles.
+ *
+ * The previous version applied `angleDeg - 90` and callers walked sectors
+ * clockwise from 0, which wound the ring the WRONG WAY: every *lateral*
+ * segment rendered on the septal (right) side and every *septal* segment on
+ * the lateral (left) side — a left-right mirror against this chart's own
+ * direction labels. Angles now match the AHA convention in
+ * visheart-inference-gpu/app/bullseye_analysis.py, which is also what
+ * StrainBullseyeChart uses.
+ */
 function polar(cx: number, cy: number, r: number, angleDeg: number) {
-  const a = ((angleDeg - 90) * Math.PI) / 180;
+  const a = (angleDeg * Math.PI) / 180;
   return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
 }
 
@@ -90,16 +102,22 @@ function Bullseye({ values, strainType }: { values: SegValue[]; strainType: Stra
   const wedges: React.ReactNode[] = [];
 
   RINGS.forEach((ring, ri) => {
-    const step = 360 / ring.count;
-    const offset = ri === 2 ? -45 : 0; // apical ring is rotated in the AHA model
+    // AHA sector angles, counter-clockwise from 12 o'clock = Anterior. These are
+    // the same formulas StrainBullseyeChart uses, so the report bullseye and the
+    // landmark bullseye now place a given segment id in the SAME position.
+    //   basal / mid : segment i spans [-120 - 60i, -60 - 60i]
+    //   apical      : segment i spans [-135 - 90i, -45 - 90i]
+    const apical = ri === 2;
     for (let i = 0; i < ring.count; i++) {
       const segId = ring.firstSegment + i;
+      const a0 = apical ? -135 - i * 90 : -120 - i * 60;
+      const a1 = apical ? -45 - i * 90 : -60 - i * 60;
       const seg = byId.get(segId);
       const v = seg?.value ?? null;
       wedges.push(
         <path
           key={segId}
-          d={wedgePath(cx, cy, ring.rInner, ring.rOuter, offset + i * step, offset + (i + 1) * step)}
+          d={wedgePath(cx, cy, ring.rInner, ring.rOuter, a0, a1)}
           fill={strainColor(v, strainType)}
           stroke="#fff"
           strokeWidth={1.5}
