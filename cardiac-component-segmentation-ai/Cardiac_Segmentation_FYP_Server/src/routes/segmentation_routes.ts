@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -1057,9 +1057,18 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             return res.status(404).json({ error: `No ${modelType ?? "unet"} segmentation mask with stored frames found for this project. Run ${modelType ?? "unet"} segmentation first.` });
         }
 
-        const maskDoc = allMasks.reduce((best: any, m: any) =>
-            (m.frames?.length ?? 0) > (best.frames?.length ?? 0) ? m : best
-        );
+        // Most frames wins; ties break to the NEWEST document. Without the
+        // tie-break this depended on Mongo's natural order — with two equal-frame
+        // masks (one per segmentation re-run) the oldest silently won every time,
+        // so results kept landing on a stale mask and a re-run appeared to do
+        // nothing. ObjectIds are monotonic by creation time, so comparing them
+        // orders the masks without needing a timestamp field.
+        const maskDoc = allMasks.reduce((best: any, m: any) => {
+            const n = m.frames?.length ?? 0;
+            const bn = best.frames?.length ?? 0;
+            if (n !== bn) return n > bn ? m : best;
+            return String(m._id) > String(best._id) ? m : best;
+        });
 
         logger.info(`${serviceLocation}: compute-strain-from-frames maskDoc found: id=${maskDoc._id} totalFrames=${maskDoc.frames?.length} frameIndices=${(maskDoc.frames as any[])?.map((f: any) => f.frameindex).join(',')}`);
 
@@ -1294,6 +1303,17 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             } else {
                 logger.info(`${serviceLocation}: Skipped auto disease-similarity for mask ${maskDoc._id} — heart metrics not computed yet.`);
             }
+
+            // Layer 2 — advisory regional (per-AHA-segment) status. Fired after
+            // strain lands because per-segment strain IS its input. Deliberately
+            // OUTSIDE the simMeasurements branch above: it needs no measurements,
+            // so it runs whether or not heart metrics exist — when they don't it
+            // stores status "unavailable" with the reason rather than guessing.
+            // Fire-and-forget: it must never affect this response.
+            computeRegionalHealthStatusFromStrain(maskDoc._id.toString()).catch((rhErr: any) => {
+                logger.warn(`${serviceLocation}: Auto regional-health-status after strain failed for mask ${maskDoc._id}: ${rhErr?.message}`);
+            });
+            logger.info(`${serviceLocation}: Auto-fired regional health status for mask ${maskDoc._id} after strain compute.`);
         } catch (persistErr: any) {
             logger.warn(`${serviceLocation}: Failed to persist strain / chain similarity on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
@@ -1362,9 +1382,18 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         if (!allMasks?.length) {
             return res.status(404).json({ error: `No ${model} segmentation mask with stored frames found. Run ${model} segmentation first.` });
         }
-        const maskDoc = allMasks.reduce((best: any, m: any) =>
-            (m.frames?.length ?? 0) > (best.frames?.length ?? 0) ? m : best
-        );
+        // Most frames wins; ties break to the NEWEST document. Without the
+        // tie-break this depended on Mongo's natural order — with two equal-frame
+        // masks (one per segmentation re-run) the oldest silently won every time,
+        // so results kept landing on a stale mask and a re-run appeared to do
+        // nothing. ObjectIds are monotonic by creation time, so comparing them
+        // orders the masks without needing a timestamp field.
+        const maskDoc = allMasks.reduce((best: any, m: any) => {
+            const n = m.frames?.length ?? 0;
+            const bn = best.frames?.length ?? 0;
+            if (n !== bn) return n > bn ? m : best;
+            return String(m._id) > String(best._id) ? m : best;
+        });
 
         const frames = ((maskDoc as any).frames ?? []) as any[];
         const edFrame = frames.find((f: any) => f.frameindex === edFrameIndex);
@@ -1822,6 +1851,198 @@ router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: 
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering health status for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// Trigger the Layer-2 advisory REGIONAL (per-AHA-segment) health assessment.
+// Reads this mask's stored per-segment strain and writes `regionalHealthStatus`
+// alongside `healthStatus` — it never touches the overall grade. Mirrors
+// trigger-health-status 1:1: no request body, immediate 200, async compute.
+//
+// Unlike trigger-health-status this does NOT 400 when heart metrics are absent:
+// the module's own defensive path stores status "unavailable" with the reason,
+// which is more useful to the caller than a refusal (and is never "healthy").
+// POST /segmentation/trigger-regional-health-status/:maskId
+router.post("/trigger-regional-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        // Project access check — same as the sibling trigger routes.
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        // Respond immediately and run the compute async.
+        res.json({ success: true, message: "Regional health-status computation started." });
+
+        computeRegionalHealthStatusFromStrain(maskId).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-regional-health-status async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering regional health status for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// Resolve a flagged duplicate slice (Part D — duplicate-slice resolution).
+// Lets the user act on a heartMetrics.duplicate_slices entry surfaced by
+// compute_heart_metrics_from_rle.py:
+//   - "exclude": soft-exclude the named slice ($set excluded=true) and recompute
+//                heart metrics + health status → volume drops by that slice's
+//                contribution, the duplicate stops being flagged, the warning
+//                clears, and health-status confidence can return to normal.
+//   - "restore": un-exclude the same slice ($set excluded=false) and recompute →
+//                volume + duplicate flag come back. This reversibility is exactly
+//                why we soft-exclude instead of hard-deleting the slice.
+//   - "keep":    acknowledge the duplicate ($addToSet into
+//                heartMetrics.acknowledgedDuplicates) — NO recompute. The volume
+//                stays; the report can show "duplicate present, accepted by user".
+// Mirrors the sibling trigger-* routes for mask lookup + project access. Two
+// deliberate differences: (1) exclude/restore AWAIT the recompute so the response
+// carries the corrected numbers (the whole point of resolving is to see the
+// effect); (2) auth is isAuthAndNotGuest because this MUTATES stored mask data,
+// like save-*-segmentation — the read-only trigger-* routes use isAuth.
+// NOTE: the results-page buttons that call this endpoint are a SEPARATE
+// coordinated frontend task — this route is backend-only.
+// POST /segmentation/resolve-duplicate-slice/:maskId
+//   body: { frameindex:number, sliceindex:number, action:"exclude"|"keep"|"restore" }
+router.post("/resolve-duplicate-slice/:maskId", isAuthAndNotGuest, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+    const { frameindex, sliceindex, action } = (req.body ?? {}) as {
+        frameindex?: unknown;
+        sliceindex?: unknown;
+        action?: unknown;
+    };
+
+    // Validate action + indices up-front (400 on bad input, before any DB work).
+    if (action !== "exclude" && action !== "restore" && action !== "keep") {
+        return res.status(400).json({ success: false, message: `Invalid action '${String(action)}'. Expected "exclude", "keep", or "restore".` });
+    }
+    if (!Number.isInteger(frameindex) || !Number.isInteger(sliceindex)) {
+        return res.status(400).json({ success: false, message: "frameindex and sliceindex must be integers." });
+    }
+    const fIdx = frameindex as number;
+    const sIdx = sliceindex as number;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        // Project access check — identical to the sibling trigger-* routes.
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+        const project = projectResult.projects[0] as IProjectDocument;
+
+        // Locate the frame + slice by VALUE, not array position — frameindex /
+        // sliceindex are stored values, and a mask may hold sparse frames like
+        // [0, 5, 12] where frames[5] is the wrong (or a missing) entry.
+        const frames = (maskDoc as any).frames ?? [];
+        const frame = frames.find((f: any) => f.frameindex === fIdx);
+        if (!frame) {
+            return res.status(404).json({ success: false, message: `Frame ${fIdx} not found on this mask.` });
+        }
+        const slice = (frame.slices ?? []).find((s: any) => s.sliceindex === sIdx);
+        if (!slice) {
+            return res.status(404).json({ success: false, message: `Slice ${sIdx} not found in frame ${fIdx}.` });
+        }
+
+        // ── "keep": acknowledge only, no recompute ───────────────────────────
+        if (action === "keep") {
+            const hm: any = (maskDoc as any).heartMetrics;
+            if (!hm || !hm.measurements) {
+                // Guard (mirrors trigger-health-status): don't create a partial
+                // heartMetrics object with only acknowledgedDuplicates on it.
+                return res.status(400).json({ success: false, message: "Heart metrics not computed for this mask yet — nothing to acknowledge." });
+            }
+            await projectSegmentationMaskModel.updateOne(
+                { _id: maskId },
+                {
+                    $addToSet: { "heartMetrics.acknowledgedDuplicates": { frameindex: fIdx, sliceindex: sIdx } },
+                    $set: { updatedAt: new Date() },
+                },
+            );
+            const updated = await projectSegmentationMaskModel.findById(maskId).lean();
+            logger.info(`${serviceLocation}: resolve-duplicate-slice keep — mask ${maskId} acknowledged (frame ${fIdx}, slice ${sIdx}).`);
+            return res.status(200).json({
+                success: true,
+                action,
+                acknowledgedDuplicates: (updated as any)?.heartMetrics?.acknowledgedDuplicates ?? [],
+            });
+        }
+
+        // ── "exclude" / "restore": mutate the slice, then recompute ──────────
+        // Recompute needs dimensions + affine; fail loudly (same as trigger-heart-metrics).
+        const W = project.dimensions?.width;
+        const H = project.dimensions?.height;
+        if (!W || !H) {
+            return res.status(400).json({ success: false, message: "Project is missing dimension data — cannot recompute." });
+        }
+        if (!project.affineMatrix || !Array.isArray(project.affineMatrix) || project.affineMatrix.length === 0) {
+            return res.status(400).json({ success: false, message: "Project has no stored affine matrix — cannot recompute physical volumes." });
+        }
+
+        const excluded = action === "exclude";
+        // Mark EVERY doc entry for this one logical (frameindex, sliceindex): the
+        // Python union dedup collapses repeated entries into a single key, so
+        // marking only the first occurrence would leave the duplicate's voxels in
+        // the count and the volume wouldn't move. arrayFilters touch exactly the
+        // named slice across all its occurrences and nothing else.
+        const writeResult = await projectSegmentationMaskModel.updateOne(
+            { _id: maskId },
+            { $set: { "frames.$[f].slices.$[s].excluded": excluded, updatedAt: new Date() } },
+            { arrayFilters: [{ "f.frameindex": fIdx }, { "s.sliceindex": sIdx }] },
+        );
+        if (writeResult.matchedCount === 0) {
+            return res.status(404).json({ success: false, message: `Slice ${sIdx} in frame ${fIdx} could not be updated.` });
+        }
+
+        // Re-read the mutated frames so the recompute honours the exclusion.
+        const freshMask = await projectSegmentationMaskModel.findById(maskId).lean();
+        const freshFrames = (freshMask as any)?.frames ?? [];
+
+        // Recompute heart metrics, then health status, AWAITING both so the
+        // response reflects the corrected state. (computeHeartMetricsFromMaskDoc
+        // also fire-and-forgets a health-status chain internally; the explicit
+        // await here is what guarantees the doc is fresh before we read it back —
+        // both passes read the same recomputed measurements, so they agree.)
+        await computeHeartMetricsFromMaskDoc(maskId, freshFrames, W, H, project.affineMatrix);
+        await computeHealthStatusFromMetrics(maskId);
+
+        const updated = await projectSegmentationMaskModel.findById(maskId).lean();
+        logger.info(
+            `${serviceLocation}: resolve-duplicate-slice ${action} — mask ${maskId} ` +
+            `slice (frame ${fIdx}, slice ${sIdx}) excluded=${excluded}, ` +
+            `slicesUpdated=${writeResult.modifiedCount}, recomputed heart metrics + health status.`
+        );
+        return res.status(200).json({
+            success: true,
+            action,
+            frameindex: fIdx,
+            sliceindex: sIdx,
+            slicesUpdated: writeResult.modifiedCount,
+            heartMetrics: (updated as any)?.heartMetrics ?? null,
+            healthStatus: (updated as any)?.healthStatus ?? null,
+        });
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error resolving duplicate slice for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }

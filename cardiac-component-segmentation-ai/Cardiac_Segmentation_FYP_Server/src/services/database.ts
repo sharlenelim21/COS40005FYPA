@@ -749,6 +749,7 @@ const projectSegmentationMaskSliceComponentBoundingBoxesSchema = new Schema({
 // Create slice schema (Nest Depth: 2)
 const projectSegmentationMaskSliceSchema = new Schema({
   sliceindex: { type: Number, required: true }, // Index of the slice (0-based)
+  excluded: { type: Boolean, required: false }, // Soft-exclusion flag (Part D) — recompute skips excluded slices. Must be in the schema or Mongoose strict mode silently drops it on save/merge and via updateOne.
   componentboundingboxes: [{ type: projectSegmentationMaskSliceComponentBoundingBoxesSchema, required: false }], // Array of component bounding boxes for the slicesegmentation mask image (e.g., S3 bucket URL) - assume CSV? or RLE?
   segmentationmasks: [{ type: projectSegmentationMaskSliceContentSchema, required: false }], // Array of segmentation masks for the frame
 }, { _id: false }); // Disable automatic creation of an _id field for this subdocument
@@ -778,6 +779,7 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
   heartMetrics: { type: Schema.Types.Mixed, required: false }, // Chamber volumes / EF / LV mass — see IProjectSegmentationMask.heartMetrics
   healthStatus: { type: Schema.Types.Mixed, required: false }, // Rule-based LV systolic-function health-status assessment (Task 2)
+  regionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // Layer 2 — advisory per-AHA-segment assessment from regional strain. Mixed for the same reason as healthStatus/bullseye: a typed sub-schema would strip unknown keys.
   strain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES strain result (global + 17-segment) — see IProjectSegmentationMask.strain
   strainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame strain vs. the fixed ED reference — see IProjectSegmentationMask.strainSeries
   diseaseSimilarity: { type: Schema.Types.Mixed, required: false }, // NOR/HCM/DCM pattern-similarity assessment (NOT a diagnosis)

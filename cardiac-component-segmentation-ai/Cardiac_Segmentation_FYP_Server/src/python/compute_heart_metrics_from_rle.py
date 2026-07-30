@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from collections import defaultdict
 from typing import Optional
 
 import warnings as _pywarnings
@@ -79,8 +80,20 @@ _LVC_CLASS = 3
 _MYO_CLASS = 2
 _RV_CLASS  = 1
 
+# Reverse of CLASS_MAP for human-readable warnings / duplicate_slices output.
+_CLASS_NAME = {_RV_CLASS: "rv", _MYO_CLASS: "myo", _LVC_CLASS: "lvc"}
+
 # Myocardial density in g/mL (Bernard et al. 2018; standard cardiology value).
 _MYO_DENSITY_G_PER_ML = 1.05
+
+# ── Duplicate-slice detection thresholds (Part A) ─────────────────────────────
+# A copied slice keeps its pixels but gets a NEW sliceindex, so the union dedup
+# in count_voxels_per_frame (keyed on (frame, slice, class)) cannot catch it —
+# the copy lands under a different key and its voxels are added again, inflating
+# the volume. Detection is two-stage: a cheap voxel-COUNT screen, then a voxel-
+# POSITION (IoU) confirm on the few equal-count candidates.
+DUP_IOU_EXACT = 1.0   # perfect voxel overlap → exact copy
+DUP_IOU_NEAR  = 0.98  # near-copy (e.g. a 1–2 px edit after a copy); below → keep
 
 
 # ── RLE decode (verbatim from compute_bullseye_from_rle.py) ───────────────────
@@ -126,13 +139,16 @@ def _safe_float(v) -> Optional[float]:
 
 def count_voxels_per_frame(
     frames: list, H: int, W: int
-) -> tuple[dict[int, int], dict[int, int], dict[int, int]]:
+) -> tuple[dict[int, int], dict[int, int], dict[int, int], dict[tuple[int, int, int], np.ndarray]]:
     """Sum LVC / MYO / RV voxel counts per frame across all its slices,
     with per-(frameindex, sliceindex, class) union deduplication.
 
-    Returns three dicts keyed by frameindex → integer voxel count. Frames that
-    exist in the input but have no relevant pixels appear with a value of 0
-    (so the caller can still emit their zero on the per-frame curve).
+    Returns three count dicts keyed by frameindex → integer voxel count, plus
+    the raw `per_slice_mask` dict (keyed by (frameindex, sliceindex, class_val)
+    → boolean ndarray) so the caller can run duplicate-slice detection on the
+    very same deduped masks the counts were derived from. Frames that exist in
+    the input but have no relevant pixels appear with a value of 0 (so the
+    caller can still emit their zero on the per-frame curve).
 
     Why the dedup: `frames[]` may legitimately contain multiple entries for the
     same (frameindex, sliceindex) — e.g. MedSAM output plus a later manual
@@ -156,6 +172,13 @@ def count_voxels_per_frame(
         f_idx = int(frame.get("frameindex", 0))
         observed_frames.add(f_idx)
         for slc in frame.get("slices", []):
+            # Part B — soft-exclude: a slice the user resolved away (via the
+            # resolve-duplicate-slice endpoint, $set excluded=true) is skipped
+            # entirely, so a normal recompute yields the corrected volume and no
+            # longer flags that pair. This is the ONLY place slices are iterated,
+            # so one skip covers counts, curves, ED/ES, EF, mass AND detection.
+            if slc.get("excluded") is True:
+                continue
             s_idx = int(slc.get("sliceindex", 0))
             for seg in slc.get("segmentationmasks", []):
                 cls_val = CLASS_MAP.get(seg.get("class", ""), 0)
@@ -180,7 +203,103 @@ def count_voxels_per_frame(
             myo_counts[f_idx] += n
         elif cls_val == _RV_CLASS:
             rv_counts[f_idx]  += n
-    return lv_counts, myo_counts, rv_counts
+    return lv_counts, myo_counts, rv_counts, per_slice_mask
+
+
+# ── Duplicate-slice detection (Part A) ────────────────────────────────────────
+
+def _iou(a: np.ndarray, b: np.ndarray) -> float:
+    """Intersection-over-union of two boolean masks. 1.0 = identical pixels,
+    0.0 = disjoint. Two empty masks return 0.0 (no positive voxels to compare —
+    they never reach here anyway, detection ignores count==0)."""
+    inter = int(np.logical_and(a, b).sum())
+    union = int(np.logical_or(a, b).sum())
+    if union == 0:
+        return 0.0
+    return inter / union
+
+
+def detect_duplicate_slices(
+    per_slice_mask: dict[tuple[int, int, int], np.ndarray],
+    voxel_mm3: float,
+) -> list[dict]:
+    """Find copied slices within each (frame, class) group. Purely additive:
+    it reads the deduped masks and NEVER changes any count or volume.
+
+    Stage 1 (cheap voxel-COUNT screen): within a (frame, class), bucket the
+        positive-count slices by voxel count. Only equal-count slices can be
+        copies of one another. ~O(n); usually zero candidates → no Stage-2 cost.
+        Slices with count==0 are ignored.
+    Stage 2 (voxel-POSITION confirm): for each equal-count bucket, confirm by
+        IoU. iou == DUP_IOU_EXACT → exact copy; DUP_IOU_NEAR <= iou < 1 → near
+        copy; iou < DUP_IOU_NEAR → genuinely different slice, left alone.
+
+    Minority rule: if EVERY positive slice in a (frame, class) group is mutually
+    identical, the group is a uniform / degenerate stack (e.g. a synthetic
+    fixture that repeats one slice, or a padded acquisition), NOT an accidental
+    copy — emit nothing for it. A real copy is a MINORITY artifact among
+    genuinely-varying slices. Documented trade-off: a copy inside a fully-uniform
+    group is not flagged (a false negative — see HEART_METRICS_IMPLEMENTATION.md).
+
+    Returns a deterministically-ordered list of duplicate descriptors. Of each
+    confirmed pair, `slice_remove` is the HIGHER sliceindex by convention (the
+    two slices are identical, so the choice is arbitrary but must be stable).
+    """
+    # Group positive-count slice masks by (frame, class).
+    groups: dict[tuple[int, int], list[tuple[int, np.ndarray, int]]] = defaultdict(list)
+    for (f_idx, s_idx, cls_val), mask in per_slice_mask.items():
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        groups[(f_idx, cls_val)].append((s_idx, mask, n))
+
+    duplicates: list[dict] = []
+    for (f_idx, cls_val), members in groups.items():
+        if len(members) < 2:
+            continue  # need two positive slices for a pair
+
+        # Minority rule: skip a group whose positive slices are ALL identical.
+        # (All equal count AND every one perfectly overlaps the first.)
+        counts = {n for (_s, _m, n) in members}
+        if len(counts) == 1:
+            ref = members[0][1]
+            if all(_iou(ref, m) >= DUP_IOU_EXACT for (_s, m, _n) in members[1:]):
+                continue
+
+        # Stage 1: bucket by voxel count (cheap screen).
+        by_count: dict[int, list[tuple[int, np.ndarray]]] = defaultdict(list)
+        for (s_idx, mask, n) in members:
+            by_count[n].append((s_idx, mask))
+
+        # Stage 2: confirm equal-count candidates by IoU.
+        for n, bucket in by_count.items():
+            if len(bucket) < 2:
+                continue
+            bucket.sort(key=lambda t: t[0])  # ascending sliceindex → determinism
+            removed: set[int] = set()
+            for a in range(len(bucket)):
+                s_a, mask_a = bucket[a]
+                if s_a in removed:
+                    continue
+                for b in range(a + 1, len(bucket)):
+                    s_b, mask_b = bucket[b]
+                    if s_b in removed:
+                        continue
+                    iou = _iou(mask_a, mask_b)
+                    if iou >= DUP_IOU_NEAR:
+                        duplicates.append({
+                            "frame":            f_idx,
+                            "class":            _CLASS_NAME.get(cls_val, str(cls_val)),
+                            "slice_keep":       s_a,  # lower sliceindex
+                            "slice_remove":     s_b,  # higher sliceindex
+                            "voxel_count":      n,
+                            "iou":              _safe_float(iou),
+                            "est_inflation_ml": _safe_float(n * voxel_mm3 / 1000.0),
+                        })
+                        removed.add(s_b)
+    # Stable global ordering independent of dict iteration order.
+    duplicates.sort(key=lambda d: (d["frame"], d["class"], d["slice_keep"], d["slice_remove"]))
+    return duplicates
 
 
 # ── Spacing from affine ───────────────────────────────────────────────────────
@@ -274,8 +393,8 @@ def main() -> None:
     # repair the affine in place — a silent overwrite would mask the ingestion
     # bug for future projects. Coordinate with the ingestion pipeline owner.
 
-    # 3. Per-frame voxel counts.
-    lv_counts, myo_counts, rv_counts = count_voxels_per_frame(frames, H, W)
+    # 3. Per-frame voxel counts (+ the deduped per-slice masks for detection).
+    lv_counts, myo_counts, rv_counts, per_slice_mask = count_voxels_per_frame(frames, H, W)
 
     # Hard-error only when there is no LV cavity in any frame — the rest of the
     # payload has no meaning without an LV curve to detect ED/ES from.
@@ -284,6 +403,20 @@ def main() -> None:
         print(json.dumps({"error": "No LV cavity (class 3) voxels found in mask data."}),
               file=sys.stdout)
         sys.exit(1)
+
+    # 3b. Duplicate-slice detection (Part A — additive; never alters the counts
+    #     or volumes above). Runs on the SAME deduped per-slice masks the counts
+    #     came from, so detection and volume always see identical data. Each
+    #     confirmed pair appends a human warning AND a machine-readable
+    #     duplicate_slices entry the UI can later offer to remove.
+    duplicate_slices = detect_duplicate_slices(per_slice_mask, voxel_mm3)
+    for d in duplicate_slices:
+        warnings_out.append(
+            f"Possible duplicate slice: frame {d['frame']}, slices "
+            f"{d['slice_keep']} & {d['slice_remove']} (class {d['class']}) — identical voxel "
+            f"count ({d['voxel_count']}) and {d['iou']:.0%} overlap. "
+            f"Est. inflation +{d['est_inflation_ml']:.1f} mL."
+        )
 
     # 4. Build per-frame volume curves (mL) indexed 0..max_frame with 0-fills
     #    for any missing indices, so the arrays are dense and the frontend can
@@ -440,6 +573,11 @@ def main() -> None:
             "spacing": "mm",
         },
         "warnings": warnings_out,
+        # Duplicate-slice detection (Part A). Additive/optional: on clean data
+        # duplicate_slices is [] and duplicate_slices_detected is False, so
+        # existing numbers and the (empty) warnings list are unchanged.
+        "duplicate_slices": duplicate_slices,
+        "duplicate_slices_detected": len(duplicate_slices) > 0,
     }
 
     print(json.dumps(result))

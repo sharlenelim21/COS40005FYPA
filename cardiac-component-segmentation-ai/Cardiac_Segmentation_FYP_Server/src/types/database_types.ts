@@ -245,6 +245,11 @@ export interface IProjectSegmentationMask {
     frameinferred: boolean; // Indicates if the frame has been inferred
     slices: {
       sliceindex: number; // The index of the slice (0-based)
+      // Soft-exclusion flag (Part D — duplicate-slice resolution). When true, a
+      // heart-metrics recompute skips this slice, so its voxels drop out of the
+      // volume and it stops being flagged as a duplicate. Reversible via the
+      // resolve-duplicate-slice endpoint (action "restore"). Default undefined/false.
+      excluded?: boolean;
       componentboundingboxes?: {
         class: ComponentBoundingBoxesClass; // Class of the component (e.g., rv, myo, lvc)
         confidence: number; // Confidence score of the bounding box
@@ -308,6 +313,31 @@ export interface IProjectSegmentationMask {
     spacing_mm: [number | null, number | null, number | null];
     units: { volumes: string; ef: string; mass: string; spacing: string };
     warnings: string[];
+    /**
+     * Duplicate-slice detection (Part A). A copied slice gets a new sliceindex,
+     * so the union dedup (keyed on frame/slice/class) can't catch it and its
+     * voxels are double-counted. This two-stage detector (voxel-count screen →
+     * IoU confirm) lists each confirmed copy so the UI can offer removal.
+     * Additive: absent / empty array on clean data. `slice_remove` is the
+     * higher sliceindex of the identical pair (arbitrary but deterministic).
+     */
+    duplicate_slices?: {
+      frame: number;
+      class: string;           // "lvc" | "myo" | "rv"
+      slice_keep: number;
+      slice_remove: number;
+      voxel_count: number;
+      iou: number;             // 1.0 = exact copy, >=0.98 = near copy
+      est_inflation_ml: number; // voxel_count * voxel_mm3 / 1000
+    }[];
+    duplicate_slices_detected?: boolean;
+    /**
+     * Duplicates the user chose to KEEP (acknowledge) rather than exclude, via
+     * resolve-duplicate-slice action:"keep". Advisory only — the acknowledged
+     * slice's voxels remain in the volume; the report can show "duplicate
+     * present, accepted by user". Populated by the endpoint, not the Python script.
+     */
+    acknowledgedDuplicates?: { frameindex: number; sliceindex: number }[];
     computed_at: string;
   };
   /**
@@ -334,6 +364,51 @@ export interface IProjectSegmentationMask {
     }[];
     features_used: string[];
     features_missing: string[];
+    disclaimer: string;
+    method: string;
+    warnings: string[];
+    computed_at: string;
+  };
+  /**
+   * Layer 2 — REGIONAL (per-AHA-segment) health assessment. **Advisory only.**
+   *
+   * Produced by compute_regional_health_status.py from this mask's stored
+   * per-segment strain (`strain.segments[]`, or the peak frame of
+   * `strainSeries`). Sits BESIDE `healthStatus` and never alters it:
+   * `overall_grade_unchanged` is always true, and the two fields are computed
+   * from different inputs by different modules.
+   *
+   * `status` is "unavailable" (never "healthy") when regional strain is absent
+   * or its ED/ES frames don't align with heartMetrics.ed_frame/es_frame — this
+   * layer is read-only w.r.t. strain and never recomputes it.
+   *
+   * A segment is only reported as reduced when BOTH the absolute GCS band and
+   * the relative gap versus the patient's own mean fire, so a uniformly weak
+   * heart is not reported as 17 separate focal defects. See
+   * REGIONAL_HEALTH_STATUS_IMPLEMENTATION.md.
+   */
+  regionalHealthStatus?: {
+    status: "ok" | "unavailable";
+    overall_grade_unchanged: true;
+    source: "strain" | "strainSeries" | null;
+    segments: {
+      idx: number;                                   // 1..17
+      region: "basal" | "mid" | "apical" | "apex";
+      label?: string;
+      gcs: number;                                   // %, more negative = better
+      grs: number | null;                            // %, more positive = better
+      level: "normal" | "mild" | "moderate" | "severe";   // hybrid result
+      abs_level: "normal" | "mild" | "moderate" | "severe"; // absolute band only
+      rel_gap: number;                               // gcs - patient mean
+      rel_flag: boolean;                             // relative rule fired
+    }[];
+    reduced_count: number;
+    affected_idx: number[];
+    skipped_idx: number[];        // segments with NaN/missing GCS
+    summary: string;
+    patient_mean_gcs: number | null;
+    relative_rule_applied?: boolean;
+    thresholds: Record<string, number>;
     disclaimer: string;
     method: string;
     warnings: string[];

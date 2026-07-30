@@ -18,6 +18,7 @@ import {
   createProjectSegmentationMask,
   createProjectReconstruction,
   readProject,
+  projectSegmentationMaskModel,
 } from "../services/database"; // Import database function to update job status
 import {
   JobStatus,
@@ -750,6 +751,69 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
             logger.info(
               `${serviceLocation}: Successfully created editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}). AI Mask ID: ${aiCreationResult.projectsegmentationmask._id}, Manual Mask ID: ${manualCreationResult.projectsegmentationmask._id}`
             );
+
+            // ── Re-run replaces: prune the superseded masks for this model ──
+            // Every completed job creates a fresh (AI output + Manual edit)
+            // pair, so without this each re-run leaves the previous pair behind.
+            // Those orphans caused two visible problems: analysis results
+            // (heartMetrics/strain/…) stayed attached to whichever older doc the
+            // pipeline happened to pick, so the report showed a stale run; and
+            // the strain routes tie-break on frame count with no sort, which
+            // made "which mask wins" depend on Mongo's natural order.
+            //
+            // DESTRUCTIVE — this deletes the previous run's documents, including
+            // any brush edits saved onto that run's Manual Edit doc. That is the
+            // intent of "re-running replaces the previous result": the old edits
+            // belong to a segmentation that no longer exists. Set
+            // SEGMENTATION_PRUNE_SUPERSEDED=false to keep the old behaviour.
+            //
+            // Scoped deliberately narrowly:
+            //   - same project AND same model (matched on either model field)
+            //   - never the two documents we just created
+            //   - legacy docs with NO model tag are left alone, since we cannot
+            //     confidently attribute them to this model
+            // Runs only after BOTH new docs exist, so a failed job can never
+            // delete a good result.
+            const pruneEnabled =
+              (process.env.SEGMENTATION_PRUNE_SUPERSEDED ?? "true").toLowerCase() !== "false";
+            if (pruneEnabled) {
+              try {
+                const keepIds = [
+                  aiCreationResult.projectsegmentationmask._id,
+                  manualCreationResult.projectsegmentationmask._id,
+                ];
+                const supersededFilter = {
+                  projectid: projectId,
+                  _id: { $nin: keepIds },
+                  $or: [
+                    { segmentationModel: resolvedSegmentationModel },
+                    { model_used: resolvedSegmentationModel },
+                  ],
+                };
+                // Read them first purely so the log names what was removed —
+                // deletions of user-visible data should never be silent.
+                const doomed = await projectSegmentationMaskModel
+                  .find(supersededFilter, { name: 1 })
+                  .lean();
+                if (doomed.length > 0) {
+                  const del = await projectSegmentationMaskModel.deleteMany(supersededFilter);
+                  logger.warn(
+                    `${serviceLocation}: [Prune] Removed ${del.deletedCount} superseded ${resolvedSegmentationModel.toUpperCase()} mask(s) for project ${projectId} after re-run — ` +
+                    doomed.map((d: any) => `${d._id}(${d.name})`).join(", ")
+                  );
+                } else {
+                  logger.info(
+                    `${serviceLocation}: [Prune] No superseded ${resolvedSegmentationModel.toUpperCase()} masks to remove for project ${projectId}.`
+                  );
+                }
+              } catch (pruneErr: any) {
+                // Never fail the webhook over cleanup — the new masks are
+                // already stored and usable.
+                logger.warn(
+                  `${serviceLocation}: [Prune] Failed to remove superseded masks for project ${projectId}: ${pruneErr?.message}`
+                );
+              }
+            }
           } else {
             logger.error(
               `${serviceLocation}: Failed to create editable manual segmentation mask for project ${projectId} (model=${resolvedSegmentationModel}) after AI mask creation. Reason: ${manualCreationResult.message}`

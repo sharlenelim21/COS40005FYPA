@@ -11,7 +11,7 @@
  * recompute is triggered.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { segmentationApi } from "@/lib/api";
 
 // ── Types mirroring the stored mask-document fields ─────────────────────────────
@@ -31,6 +31,9 @@ export type HeartMetrics = {
   es_frame?: number;
   LV_mass_g?: number | null;
   warnings?: string[];
+  /** Set by the backend on every write — lets a forced recompute detect that a
+   *  NEW result landed rather than just seeing the old one still present. */
+  computed_at?: string;
 };
 
 export type SimilarityEntry = {
@@ -59,6 +62,39 @@ export type HealthStatus = {
   evidence: { label: string; level: "ok" | "warn"; detail: string }[];
   features_used: string[];
   features_missing: string[];
+  disclaimer: string;
+  method: string;
+  warnings: string[];
+  computed_at: string;
+};
+
+/**
+ * Layer 2 — advisory per-AHA-segment assessment. Sits BESIDE `healthStatus` and
+ * never changes it (`overall_grade_unchanged` is always true). `status` is
+ * "unavailable" — never "healthy" — when regional strain is missing or its
+ * ED/ES frames don't align with the auto-detected ones.
+ */
+export type RegionalHealthStatus = {
+  status: "ok" | "unavailable";
+  overall_grade_unchanged: true;
+  source: "strain" | "strainSeries" | null;
+  segments: {
+    idx: number;
+    region: "basal" | "mid" | "apical" | "apex";
+    label?: string;
+    gcs: number;
+    grs: number | null;
+    level: "normal" | "mild" | "moderate" | "severe";
+    abs_level: "normal" | "mild" | "moderate" | "severe";
+    rel_gap: number;
+    rel_flag: boolean;
+  }[];
+  reduced_count: number;
+  affected_idx: number[];
+  skipped_idx: number[];
+  summary: string;
+  patient_mean_gcs: number | null;
+  relative_rule_applied?: boolean;
   disclaimer: string;
   method: string;
   warnings: string[];
@@ -119,6 +155,7 @@ export type MaskDoc = {
   heartMetrics?: HeartMetrics;
   diseaseSimilarity?: DiseaseSimilarity;
   healthStatus?: HealthStatus;
+  regionalHealthStatus?: RegionalHealthStatus;
   strain?: Strain;
   strainSeries?: StrainSeries;
 };
@@ -148,6 +185,20 @@ export function fmt(v: number | null | undefined, digits = 1, suffix = ""): stri
 type AutoSelect = "prefer-unet" | "recent";
 
 /**
+ * Status of the automatic analysis compute (see `autoCompute` below).
+ *   idle      — nothing to do, or not started
+ *   computing — a trigger has fired and we're polling for the result
+ *   error     — the trigger failed, or the result never appeared in time
+ */
+export type ComputeState = "idle" | "computing" | "error";
+
+/** How long to wait for an async backend compute before giving up. */
+const POLL_INTERVAL_MS = 1500;
+const POLL_MAX_ATTEMPTS = 20; // ~30 s
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
  * Module-level cache of the last-fetched masks per project. The page mounts this
  * hook several times (bullseye panel, strain tab, etc.), and the sidebar remounts
  * on every tab switch. Without a shared cache each instance starts at masks=null
@@ -160,13 +211,46 @@ const masksCache = new Map<string, MaskDoc[]>();
 export function useProjectResults(
   projectId: string | undefined,
   autoSelect: AutoSelect = "prefer-unet",
+  opts: {
+    /**
+     * When true (default), the hook makes the displayed model's results
+     * self-healing: if the selected mask has no heartMetrics / healthStatus /
+     * diseaseSimilarity, it fires the corresponding trigger endpoints and polls
+     * until the results land, then re-renders with the real numbers.
+     *
+     * Why this exists: those three fields are only ever written by the
+     * reconstruction pipeline or an explicit trigger call. A project that was
+     * segmented but never reconstructed therefore showed permanent em-dashes on
+     * the results/report pages, because nothing in the UI ever asked for the
+     * compute. Pass false to get the old read-only behaviour.
+     */
+    autoCompute?: boolean;
+  } = {},
 ) {
+  const { autoCompute = true } = opts;
   const [masks, setMasks] = useState<MaskDoc[] | null>(
     projectId ? masksCache.get(projectId) ?? null : null,
   );
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<Model>("unet");
+  const [computeState, setComputeState] = useState<ComputeState>("idle");
+  const [computeError, setComputeError] = useState<string | null>(null);
   const userChoseModel = useRef(false);
+  // Masks we've already tried to compute this session, so a failed or partial
+  // compute can't spin into an infinite trigger loop when the doc re-renders.
+  const attempted = useRef<Set<string>>(new Set());
+
+  /** Fetch the project's editable masks and push them into state. Returns the
+   *  fresh array so callers (the poller) can inspect it without waiting for
+   *  React state to settle. */
+  const loadMasks = useCallback(async (): Promise<MaskDoc[] | null> => {
+    if (!projectId) return null;
+    const res = await segmentationApi.getSegmentationResults(projectId);
+    // Editable masks carry the computed fields; raw MedSAM output does not.
+    const editable = ((res.segmentations ?? []) as MaskDoc[]).filter((m) => !m.isMedSAMOutput);
+    setMasks(editable);
+    return editable;
+  }, [projectId]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -188,18 +272,29 @@ export function useProjectResults(
       }
     })();
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, loadMasks]);
 
   // Group by model, preferring whichever doc actually has computed data.
   const byModel = useMemo(() => {
     const pick = (want: Model): MaskDoc | null => {
       const candidates = (masks ?? []).filter((m) => inferModel(m) === want);
       if (candidates.length === 0) return null;
+      // Newest first — ObjectIds are monotonic by creation time. The backend
+      // now prunes superseded masks on re-run so there is normally one per
+      // model, but ordering explicitly means that when duplicates DO exist
+      // (legacy data, or pruning disabled) the newest run wins deterministically
+      // instead of depending on the order the API happened to return.
+      const newestFirst = [...candidates].sort((a, b) =>
+        String(b._id ?? "").localeCompare(String(a._id ?? "")),
+      );
+      // Still prefer a doc that actually has results: results live on the mask
+      // they were computed for, so falling back to a populated older doc beats
+      // showing an empty newer one. `newerMaskAvailable` flags when that happens.
       return (
-        candidates.find(
+        newestFirst.find(
           (m) => m.heartMetrics?.measurements || m.diseaseSimilarity || m.healthStatus ||
                  m.strain || m.strainSeries,
-        ) ?? candidates[0]
+        ) ?? newestFirst[0]
       );
     };
     return { unet: pick("unet"), medsam: pick("medsam") };
@@ -209,6 +304,31 @@ export function useProjectResults(
     unet: !!byModel.unet,
     medsam: !!byModel.medsam,
   };
+
+  /**
+   * True when a NEWER editable mask exists for the displayed model but carries
+   * no computed results, so `pick()` fell back to an older doc that does.
+   *
+   * Why surface it rather than just switching: each segmentation job creates a
+   * fresh mask document, and results live on the document they were computed
+   * for. Silently jumping to the newest mask would blank the strain chart
+   * (strain is computed per-mask and isn't auto-recomputed), so we keep showing
+   * the populated doc and let the page say the run is stale instead.
+   *
+   * Mongo ObjectIds are monotonic by creation time, so a plain string compare
+   * orders masks without needing a timestamp field on the wire.
+   */
+  const newerMaskAvailable = useMemo(() => {
+    const shown = byModel[model];
+    if (!shown?._id) return false;
+    const candidates = (masks ?? []).filter((m) => inferModel(m) === model && m._id);
+    return candidates.some(
+      (m) =>
+        String(m._id) > String(shown._id) &&
+        !m.heartMetrics?.measurements && !m.healthStatus && !m.diseaseSimilarity &&
+        !m.strain && !m.strainSeries,
+    );
+  }, [masks, byModel, model]);
 
   // Most recent time anything was computed for a model — used to default to the
   // freshest run. Takes the newest of the timestamps the doc carries.
@@ -255,6 +375,135 @@ export function useProjectResults(
 
   const doc = byModel[model];
 
+  // ── Self-healing analysis compute ─────────────────────────────────────────
+  /**
+   * Make sure `maskId` has heart metrics, health status and disease similarity,
+   * firing whichever triggers are missing and polling until the results land.
+   *
+   * Order matters: health status and disease similarity both read
+   * `heartMetrics.measurements` server-side and return 400 without it, so
+   * volumes must complete first. Health status is normally auto-chained by the
+   * heart-metrics compute, so step 2 is usually a no-op.
+   *
+   * Only step 1 is treated as fatal — if volumes computed but similarity timed
+   * out, the page still shows real EF/EDV/ESV rather than reverting to dashes.
+   */
+  const ensureComputed = useCallback(
+    async (maskId: string, force = false) => {
+      setComputeState("computing");
+      setComputeError(null);
+
+      const pick = (list: MaskDoc[] | null) => list?.find((m) => m._id === maskId) ?? null;
+
+      /** Poll until `done(mask)` holds. Returns the mask, or null on timeout. */
+      const pollUntil = async (done: (m: MaskDoc) => boolean): Promise<MaskDoc | null> => {
+        for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
+          await sleep(POLL_INTERVAL_MS);
+          try {
+            const m = pick(await loadMasks());
+            if (m && done(m)) return m;
+          } catch {
+            /* transient network error — keep polling */
+          }
+        }
+        return null;
+      };
+
+      try {
+        let current = pick(await loadMasks());
+        if (!current) {
+          setComputeState("idle");
+          return;
+        }
+
+        // 1. Volumes / EF / LV mass — the dependency for everything below.
+        if (force || !current.heartMetrics?.measurements) {
+          const before = current.heartMetrics?.computed_at;
+          await segmentationApi.triggerHeartMetrics(maskId);
+          const m = await pollUntil((x) =>
+            !!x.heartMetrics?.measurements &&
+            (!force || x.heartMetrics?.computed_at !== before),
+          );
+          if (!m) {
+            setComputeError(
+              "Heart metrics did not finish in time. Check the backend log for [HeartMetrics].",
+            );
+            setComputeState("error");
+            return;
+          }
+          current = m;
+        }
+
+        // 2. Health status — usually already chained by step 1.
+        if (force || !current.healthStatus) {
+          const before = current.healthStatus?.computed_at;
+          await segmentationApi.triggerHealthStatus(maskId);
+          current =
+            (await pollUntil((x) =>
+              !!x.healthStatus && (!force || x.healthStatus?.computed_at !== before),
+            )) ?? current;
+        }
+
+        // 3. Disease similarity — depends on measurements, so it runs last.
+        if (force || !current.diseaseSimilarity) {
+          const before = current.diseaseSimilarity?.computed_at;
+          await segmentationApi.triggerDiseaseSimilarity(maskId);
+          current =
+            (await pollUntil((x) =>
+              !!x.diseaseSimilarity &&
+              (!force || x.diseaseSimilarity?.computed_at !== before),
+            )) ?? current;
+        }
+
+        // 4. Regional (Layer 2) — advisory. Depends on per-segment STRAIN, not
+        //    on measurements, so it is independent of steps 2-3 and is attempted
+        //    even if they failed. It resolves either way: when strain is missing
+        //    or misaligned it stores status "unavailable" rather than erroring,
+        //    so there is nothing to treat as a failure here.
+        if (force || !current.regionalHealthStatus) {
+          const before = current.regionalHealthStatus?.computed_at;
+          await segmentationApi.triggerRegionalHealthStatus(maskId);
+          current =
+            (await pollUntil((x) =>
+              !!x.regionalHealthStatus &&
+              (!force || x.regionalHealthStatus?.computed_at !== before),
+            )) ?? current;
+        }
+
+        setComputeState("idle");
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { message?: string } }; message?: string };
+        setComputeError(
+          err?.response?.data?.message ?? err?.message ?? "Analysis compute failed.",
+        );
+        setComputeState("error");
+      }
+    },
+    [loadMasks],
+  );
+
+  // Fire the compute once per mask when the displayed doc is missing results.
+  // Guarded by `attempted` so a timeout or a 400 can't retrigger on every
+  // re-render — the user can still retry explicitly via recompute().
+  useEffect(() => {
+    if (!autoCompute) return;
+    const id = doc?._id;
+    if (!id) return;
+    const complete =
+      !!doc?.heartMetrics?.measurements && !!doc?.healthStatus && !!doc?.diseaseSimilarity;
+    if (complete || attempted.current.has(id)) return;
+    attempted.current.add(id);
+    void ensureComputed(id);
+  }, [doc, autoCompute, ensureComputed]);
+
+  /** Force a fresh recompute of all three analyses for the displayed mask. */
+  const recompute = useCallback(async () => {
+    const id = doc?._id;
+    if (!id) return;
+    attempted.current.add(id);
+    await ensureComputed(id, true);
+  }, [doc, ensureComputed]);
+
   /**
    * Which models have a usable per-frame strain series (one carrying wall
    * thickness). Lets callers disable a model rather than switching to it and
@@ -288,6 +537,19 @@ export function useProjectResults(
     masks,
     error,
     loading: masks === null && !error,
+    /** "computing" while the analysis triggers are running/polling. */
+    computeState,
+    computeError,
+    /** True when results are absent *because* a compute is still in flight —
+     *  lets the UI say "Computing…" instead of "Not computed yet". */
+    computing: computeState === "computing",
+    /** Force a fresh recompute of metrics + status + similarity. */
+    recompute,
+    /** A newer segmentation run exists for this model but has no results yet —
+     *  what's displayed comes from an earlier run. */
+    newerMaskAvailable,
+    /** Re-read the masks without triggering any compute. */
+    refresh: loadMasks,
     model,
     setModel,
     chooseModel,
@@ -297,6 +559,8 @@ export function useProjectResults(
     byModel,
     measurements: doc?.heartMetrics?.measurements,
     healthStatus: doc?.healthStatus,
+    /** Layer 2 — advisory regional assessment; never changes healthStatus. */
+    regionalHealthStatus: doc?.regionalHealthStatus,
     similarity: doc?.diseaseSimilarity,
     strain: doc?.strain,
     strainSeries: doc?.strainSeries,

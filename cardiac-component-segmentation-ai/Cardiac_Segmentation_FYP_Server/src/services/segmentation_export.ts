@@ -225,6 +225,154 @@ export const computeHealthStatusFromMetrics = async (
 };
 
 /**
+ * Layer 2 — REGIONAL (per-AHA-segment) health assessment. **Advisory only.**
+ *
+ * Reads this mask's stored per-segment strain and classifies each AHA segment,
+ * storing the result under `regionalHealthStatus` parallel to `healthStatus`.
+ * It is strictly additive: it never reads, writes, or re-grades `healthStatus`,
+ * so the overall grade is byte-identical whether or not this ever runs.
+ *
+ * Source selection + the alignment gate live HERE (not in Python) because they
+ * need the whole mask document:
+ *
+ *   1. `strain.segments[]` — the two-point ED→ES result — is preferred, but
+ *      only when its edFrameIndex/esFrameIndex match heartMetrics.ed_frame /
+ *      es_frame. Strain measured between an arbitrary user-picked pair is not
+ *      an ED→ES contraction and must not be graded as one.
+ *   2. Otherwise the peak frame of `strainSeries`, and only when that series
+ *      was referenced to the same ED frame heart metrics detected.
+ *   3. Otherwise → status "unavailable" with the reason. Never "healthy": no
+ *      regional strain means no evidence, not good news.
+ *
+ * This function is READ-ONLY with respect to strain — if nothing aligns it
+ * reports and stops, it never triggers a strain recompute.
+ *
+ * Mirrors computeHealthStatusFromMetrics: fetches its own inputs, never
+ * rejects, always resolves, so callers can fire-and-forget it.
+ */
+export const computeRegionalHealthStatusFromStrain = async (
+    maskId: string,
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_regional_health_status.py');
+
+    const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+    if (!maskDoc) {
+        logger.warn(`${serviceLocation}: [RegionalHealth] Mask ${maskId} not found — skipping compute.`);
+        return;
+    }
+
+    const hm: any = (maskDoc as any).heartMetrics;
+    const strain: any = (maskDoc as any).strain;
+    const series: any = (maskDoc as any).strainSeries;
+
+    let segments: any[] | null = null;
+    let source: "strain" | "strainSeries" | null = null;
+    let unavailableReason: string | null = null;
+
+    const edFrame = typeof hm?.ed_frame === "number" ? hm.ed_frame : null;
+    const esFrame = typeof hm?.es_frame === "number" ? hm.es_frame : null;
+
+    // Reasons are collected as we reject each candidate, so the final message
+    // tells the user WHICH source was rejected and why, rather than a generic
+    // "no data". Ordered: two-point strain first (it is the true ED→ES pair),
+    // then the per-frame series' peak.
+    const rejected: string[] = [];
+
+    if (edFrame === null || esFrame === null) {
+        unavailableReason =
+            "heart metrics have not been computed for this mask, so the strain " +
+            "frames cannot be confirmed to be end-diastole and end-systole.";
+    } else {
+        // 1. Two-point ED→ES strain — preferred.
+        if (Array.isArray(strain?.segments) && strain.segments.length > 0) {
+            if (strain.edFrameIndex === edFrame && strain.esFrameIndex === esFrame) {
+                segments = strain.segments;
+                source = "strain";
+            } else {
+                rejected.push(
+                    `stored strain was computed on frames ${strain.edFrameIndex}→${strain.esFrameIndex}, ` +
+                    `but heart metrics detected ED/ES at ${edFrame}→${esFrame}`,
+                );
+            }
+        }
+
+        // 2. Peak frame of the per-frame series — same alignment rule on ED.
+        if (!segments && Array.isArray(series?.frames) && series.frames.length > 0) {
+            if (series.edFrameIndex === edFrame) {
+                const peakIdx = typeof series.peakFrameIndex === "number" ? series.peakFrameIndex : null;
+                const frame = peakIdx !== null
+                    ? series.frames.find((f: any) => f.frameIndex === peakIdx)
+                    : null;
+                if (frame && Array.isArray(frame.segments) && frame.segments.length > 0) {
+                    segments = frame.segments;
+                    source = "strainSeries";
+                } else {
+                    rejected.push("the strain series has no usable peak frame");
+                }
+            } else {
+                rejected.push(
+                    `the strain series is referenced to frame ${series.edFrameIndex}, but heart metrics ` +
+                    `detected end-diastole at frame ${edFrame}`,
+                );
+            }
+        }
+
+        if (!segments) {
+            unavailableReason = rejected.length
+                ? `${rejected.join("; ")}. Recompute strain at the auto-detected ED/ES frames to enable the regional assessment.`
+                : "no regional strain has been computed for this mask yet.";
+        }
+    }
+
+    const input = JSON.stringify(
+        unavailableReason
+            ? { segments: [], source, unavailable_reason: unavailableReason }
+            : { segments, source },
+    );
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [RegionalHealth] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [RegionalHealth] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [RegionalHealth] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                // NOTE: only `regionalHealthStatus` is written. `healthStatus` is
+                // deliberately untouched — Layer 2 is advisory and must never
+                // move the overall grade.
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { regionalHealthStatus: result, updatedAt: new Date() } },
+                );
+                logger.info(
+                    `${serviceLocation}: [RegionalHealth] Stored regional status for mask ${maskId} — ` +
+                    `status=${result.status} source=${result.source} reduced=${result.reduced_count} ` +
+                    `skipped=${result.skipped_idx?.length ?? 0} summary="${result.summary}" | ` +
+                    `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
+                );
+                if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+                    for (const w of result.warnings) {
+                        logger.warn(`${serviceLocation}: [RegionalHealth] mask ${maskId} — ${w}`);
+                    }
+                }
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [RegionalHealth] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
  * Disease Pattern Similarity Assessment — NOT a diagnosis.
  *
  * Compares a patient's cardiac measurements against literature-derived NOR/HCM/DCM

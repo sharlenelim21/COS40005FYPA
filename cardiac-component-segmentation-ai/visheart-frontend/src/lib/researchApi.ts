@@ -23,8 +23,11 @@ const api = axios.create({
   baseURL: baseURL ?? "",
   // The assistant is stateless and cross-origin; no cookies needed.
   withCredentials: false,
-  // LLM generation can take a while on CPU — allow generous time.
-  timeout: 120_000,
+  // LLM generation can take a while on CPU — allow generous time. Measured on a
+  // CPU-only machine (qwen2.5:3b via Ollama, no GPU offload): /ask ~90s and
+  // /explain ~190s, since /explain's patient context makes the prompt longer.
+  // 120s was not enough for /explain and surfaced as a spurious timeout error.
+  timeout: 300_000,
 });
 
 /** One cited source, as returned by the assistant. */
