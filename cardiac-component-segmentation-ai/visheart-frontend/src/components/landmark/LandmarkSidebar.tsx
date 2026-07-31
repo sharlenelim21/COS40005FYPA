@@ -311,6 +311,8 @@ export function LandmarkSidebar({
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={onSaveLandmarks}
+            allPredictions={state.predictions}
+            onSliceSelect={onSliderChange}
             prediction={currentPrediction}
             visibleLandmarks={visibleLandmarks}
             onToggleLandmark={onToggleLandmark}
@@ -413,7 +415,7 @@ function PlaybackBar({
           onClick={onPrevFrame}
           disabled={currentFrame === 0}
           className="p-1.5 rounded-md hover:bg-muted/50 disabled:opacity-30 transition-colors shrink-0"
-          aria-label="Previous frame"
+          aria-label={`Previous ${axisLabel.toLowerCase()}`}
         >
           <SkipBack className="h-4 w-4" />
         </button>
@@ -435,7 +437,7 @@ function PlaybackBar({
           onClick={onNextFrame}
           disabled={currentFrame >= totalFrames - 1}
           className="p-1.5 rounded-md hover:bg-muted/50 disabled:opacity-30 transition-colors shrink-0"
-          aria-label="Next frame"
+          aria-label={`Next ${axisLabel.toLowerCase()}`}
         >
           <SkipForward className="h-4 w-4" />
         </button>
@@ -459,7 +461,7 @@ function PlaybackBar({
         value={currentFrame}
         onChange={(e) => onSliderChange(Number(e.target.value))}
         className="w-full h-1.5 accent-primary cursor-pointer"
-        aria-label="Frame scrubber"
+        aria-label={`${axisLabel} scrubber`}
       />
 
       <div className="flex items-center justify-between gap-2 pt-1">
@@ -533,6 +535,8 @@ function LandmarksTab({
   hasUnsavedLandmarkEdits,
   isSavingLandmarks,
   onSaveLandmarks,
+  allPredictions,
+  onSliceSelect,
   prediction,
   visibleLandmarks,
   onToggleLandmark,
@@ -561,6 +565,10 @@ function LandmarksTab({
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
+  /** Every slice's prediction — powers the per-slice confidence overview. */
+  allPredictions?: FramePrediction[];
+  /** Jump the viewer to a slice when its confidence chip is clicked. */
+  onSliceSelect?: (slice: number) => void;
   prediction: FramePrediction | null;
   visibleLandmarks: Set<string>;
   onToggleLandmark: (id: string) => void;
@@ -649,10 +657,63 @@ function LandmarksTab({
             model_used={prediction?.model_used}
           />
           <span className="text-xs text-muted-foreground tabular-nums">
-            Frame {currentFrame + 1}
+            Slice {currentFrame + 1}
           </span>
         </div>
       </div>
+
+      {/* Per-slice confidence overview. The single dot above only describes the
+          slice currently in view, so there was no way to see which slices the
+          detector was unsure about without scrubbing through all of them. This
+          strip shows every slice at once and doubles as a jump target. */}
+      {allPredictions && allPredictions.length > 1 && (
+        <div className="rounded-lg border border-border bg-muted/20 p-2">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Slice confidence
+            </span>
+            <span className="text-[9px] text-muted-foreground">
+              {allPredictions.filter((p) => p.confidence === "high").length}/{allPredictions.length} confident
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {allPredictions.map((p, i) => {
+              const isCurrent = i === currentFrame;
+              const color =
+                p.flag === "collapsed_to_mean" ? "bg-zinc-400"
+                : p.confidence === "high" ? "bg-green-500"
+                : p.confidence === "low" ? "bg-orange-400"
+                : "bg-muted-foreground/30";
+              const tip =
+                p.flag === "collapsed_to_mean" ? "Landmarks too close — mean point used"
+                : p.confidence === "high" ? "High confidence"
+                : p.confidence === "low" ? "Low confidence"
+                : "No confidence reported";
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => onSliceSelect?.(i)}
+                  title={`Slice ${i + 1} — ${tip}`}
+                  className={cn(
+                    "flex h-5 w-5 items-center justify-center rounded text-[8px] font-medium transition-all",
+                    color,
+                    isCurrent ? "ring-2 ring-primary ring-offset-1" : "opacity-70 hover:opacity-100",
+                    p.confidence === "high" || p.flag === "collapsed_to_mean" ? "text-white" : "text-white",
+                  )}
+                >
+                  {i + 1}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-2 text-[9px] text-muted-foreground">
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500" />High</span>
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-orange-400" />Low</span>
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-zinc-400" />Mean-collapsed</span>
+          </div>
+        </div>
+      )}
 
       {/* Landmark rows */}
       <div className="space-y-1">
