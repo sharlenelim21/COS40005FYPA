@@ -25,8 +25,67 @@ export type Measurements = {
   PeakGCS: number | null;
 };
 
+/**
+ * Right-ventricular metrics.
+ *
+ * These are stored at the TOP LEVEL of `heartMetrics` by
+ * compute_heart_metrics_from_rle.py — deliberately NOT inside `measurements`,
+ * which is the LV-only contract the report/similarity modules consume. They
+ * were already being computed and persisted; they simply weren't surfaced to
+ * the frontend until now.
+ *
+ * All optional: a mask with no RV cavity yields nulls (the Python emits a
+ * warning and sets RVEF/RV_SV to null rather than dividing by zero), and older
+ * documents predate the fields entirely.
+ */
+export type RvMetrics = {
+  RVEDV: number | null;
+  RVESV: number | null;
+  RV_SV: number | null;
+  RVEF: number | null;
+  /** Per-frame RV volume curve, index = frameindex. */
+  rv_volumes_ml?: (number | null)[];
+};
+
+/**
+ * RV regional strain — the agreed CONTRACT for a backend module that does not
+ * exist yet (`compute_rv_strain_from_rle.py`, stored as `rvStrain` on the mask
+ * document). Declared here so the report can render it the moment it lands;
+ * the frontend computes none of it.
+ *
+ * ⚠️ EXPLORATORY by construction, whatever the backend produces:
+ *   - a GEOMETRIC contour-length proxy, not tracked material points
+ *   - CIRCUMFERENTIAL, not the validated longitudinal RV measure
+ *   - from SHORT-AXIS slices, so through-plane motion is unaccounted for
+ * It therefore has no severity cutoff and must never feed a grade.
+ *
+ * `rv_gcs` is a percentage; negative = circumferential shortening (contraction).
+ */
+export type RvStrain = {
+  global_rv_gcs: number | null;
+  segments: { band: "basal" | "mid" | "apical"; rv_gcs: number | null }[];
+  /** Only present when RV insertion landmarks were available to split the
+   *  contour into free-wall vs septal arcs. */
+  free_wall_gcs?: number | null;
+  source: string;   // e.g. "blood-pool"
+  method: string;   // e.g. "contour-length"
+  note: string;     // exploratory caveat, surfaced in the UI
+  computed_at?: string;
+};
+
 export type HeartMetrics = {
   measurements?: Measurements;
+  /** LV end-diastolic volume — the LV twin of RVEDV, kept top-level by the
+   *  backend for the same reason (measurements is the flat report contract). */
+  LVEDV?: number | null;
+  LVESV?: number | null;
+  LV_SV?: number | null;
+  LVEF?: number | null;
+  RVEDV?: number | null;
+  RVESV?: number | null;
+  RV_SV?: number | null;
+  RVEF?: number | null;
+  rv_volumes_ml?: (number | null)[];
   ed_frame?: number;
   es_frame?: number;
   LV_mass_g?: number | null;
@@ -185,6 +244,8 @@ export type MaskDoc = {
   diseaseSimilarity?: DiseaseSimilarity;
   healthStatus?: HealthStatus;
   regionalHealthStatus?: RegionalHealthStatus;
+  /** Written by a future backend module; absent on every mask today. */
+  rvStrain?: RvStrain;
   strain?: Strain;
   strainSeries?: StrainSeries;
   rvStrain?: RvStrain;
@@ -589,9 +650,32 @@ export function useProjectResults(
     /** Both models' full mask docs — for exports that cover UNet and MedSAM. */
     byModel,
     measurements: doc?.heartMetrics?.measurements,
+    /**
+     * RV metrics, surfaced separately from `measurements` so the LV-only
+     * contract that feeds health status and disease similarity is unchanged.
+     * `null` when the mask has no RV cavity — callers must handle that rather
+     * than rendering NaN.
+     */
+    rv: doc?.heartMetrics
+      ? {
+          RVEDV: doc.heartMetrics.RVEDV ?? null,
+          RVESV: doc.heartMetrics.RVESV ?? null,
+          RV_SV: doc.heartMetrics.RV_SV ?? null,
+          RVEF: doc.heartMetrics.RVEF ?? null,
+          rv_volumes_ml: doc.heartMetrics.rv_volumes_ml,
+        }
+      : undefined,
+    /** LV volumes as stored top-level — used for the RV:LV ratio, which needs
+     *  LVEDV alongside RVEDV. `measurements.EDV` is the same number. */
+    lvVolumes: doc?.heartMetrics
+      ? { LVEDV: doc.heartMetrics.LVEDV ?? null, LV_SV: doc.heartMetrics.LV_SV ?? null }
+      : undefined,
     healthStatus: doc?.healthStatus,
     /** Layer 2 — advisory regional assessment; never changes healthStatus. */
     regionalHealthStatus: doc?.regionalHealthStatus,
+    /** Exploratory RV regional strain — undefined until the backend module
+     *  exists. The report renders a pending state rather than blank. */
+    rvStrain: doc?.rvStrain,
     similarity: doc?.diseaseSimilarity,
     strain: doc?.strain,
     strainSeries: doc?.strainSeries,

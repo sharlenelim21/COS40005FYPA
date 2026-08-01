@@ -7,12 +7,23 @@ import { ReportPageFrame } from "./ReportPageFrame";
 export interface PatientSummaryData {
   patientLabel: string;
   scanSummary: string;
+  /** LV metrics. Named without an `lv` prefix for backward compatibility with
+   *  existing callers; the printed LABELS are explicitly LV-prefixed. */
   ef: number | null;
   edv: number | null;
   esv: number | null;
   strokeVolume: number | null;
   peakGrs: number | null;
   peakGcs: number | null;
+  /** RV metrics — all optional. Omitted entirely for masks with no RV cavity,
+   *  in which case the RV block is not printed at all. */
+  rvEf?: number | null;
+  rvEdv?: number | null;
+  rvEsv?: number | null;
+  rvSv?: number | null;
+  /** Derived in the report page from the LV/RV volumes above. */
+  rvLvRatio?: number | null;
+  svDifference?: number | null;
   voxelSize: string;
   /** Backend grades (compute_health_status.py); the longer labels are legacy. */
   healthStatus:
@@ -87,14 +98,27 @@ export function PatientSummaryPage({
   generatedAt: string;
 }) {
   const resolvedLabel = patientLabel || data.patientLabel;
+  // Every label is LV-prefixed: with RV metrics printed below, a bare "EDV"
+  // would be ambiguous on paper where there's no surrounding context.
   const metrics: [string, string][] = [
-    ["Ejection Fraction", metric(data.ef, 1, " %")],
-    ["EDV", metric(data.edv, 1, " mL")],
-    ["ESV", metric(data.esv, 1, " mL")],
-    ["Stroke Volume", metric(data.strokeVolume, 1, " mL")],
-    ["Peak GRS", metric(data.peakGrs, 1, " %")],
-    ["Peak GCS", metric(data.peakGcs, 1, " %")],
+    ["LV Ejection Fraction (LVEF)", metric(data.ef, 1, " %")],
+    ["LV End-Diastolic Volume (LV EDV)", metric(data.edv, 1, " mL")],
+    ["LV End-Systolic Volume (LV ESV)", metric(data.esv, 1, " mL")],
+    ["LV Stroke Volume (LV SV)", metric(data.strokeVolume, 1, " mL")],
+    ["LV Peak GRS", metric(data.peakGrs, 1, " %")],
+    ["LV Peak GCS", metric(data.peakGcs, 1, " %")],
     ["Voxel Size", data.voxelSize],
+  ];
+
+  // RV block. Optional so callers that don't supply RV data (and the
+  // placeholder) print exactly as before.
+  const hasRv =
+    data.rvEf != null || data.rvEdv != null || data.rvEsv != null || data.rvSv != null;
+  const rvMetrics: [string, string][] = [
+    ["RV Ejection Fraction (RVEF)", metric(data.rvEf, 1, " %")],
+    ["RV End-Diastolic Volume (RV EDV)", metric(data.rvEdv, 1, " mL")],
+    ["RV End-Systolic Volume (RV ESV)", metric(data.rvEsv, 1, " mL")],
+    ["RV Stroke Volume (RV SV)", metric(data.rvSv, 1, " mL")],
   ];
 
   return (
@@ -108,7 +132,9 @@ export function PatientSummaryPage({
       generatedAt={generatedAt}
     >
       <section className="mb-4">
-        <h3 className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Measurements</h3>
+        <h3 className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          Measurements · Left Ventricle
+        </h3>
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
           {metrics.map(([label, value]) => (
             <div key={label}>
@@ -118,6 +144,52 @@ export function PatientSummaryPage({
           ))}
         </div>
       </section>
+
+      {/* Right ventricle — printed only when RV was segmented, so a report
+          without RV data looks exactly as it did before rather than showing a
+          block of em-dashes. Volumes are raw and ungraded. */}
+      {hasRv && (
+        <section className="mb-4">
+          <h3 className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+            Measurements · Right Ventricle
+          </h3>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+            {rvMetrics.map(([label, value]) => (
+              <div key={label}>
+                <p className="text-[8.5px] uppercase tracking-wide text-muted-foreground">{label}</p>
+                <p className="text-[12px] font-bold text-foreground">{value}</p>
+              </div>
+            ))}
+          </div>
+          {(data.rvLvRatio != null || data.svDifference != null) && (
+            <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1.5">
+              {data.rvLvRatio != null && (
+                <div>
+                  <p className="text-[8.5px] uppercase tracking-wide text-muted-foreground">RV:LV Volume Ratio</p>
+                  <p className="text-[12px] font-bold text-foreground">
+                    {data.rvLvRatio.toFixed(2)}
+                    {data.rvLvRatio >= 1.0 && (
+                      <span className="ml-1 text-[8.5px] font-semibold text-muted-foreground">RV enlarged rel. to LV</span>
+                    )}
+                  </p>
+                </div>
+              )}
+              {data.svDifference != null && (
+                <div>
+                  <p className="text-[8.5px] uppercase tracking-wide text-muted-foreground">SV Difference (RV − LV)</p>
+                  <p className="text-[12px] font-bold text-foreground">
+                    {data.svDifference > 0 ? "+" : ""}{data.svDifference.toFixed(1)} mL
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          <p className="mt-1.5 text-[7.5px] leading-snug text-muted-foreground">
+            RV values are raw, not BSA-indexed and not graded. RV function thresholds are
+            approximate, not sex-specific, and must be clinically validated before use.
+          </p>
+        </section>
+      )}
 
       <section className="mb-4">
         <h3 className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
