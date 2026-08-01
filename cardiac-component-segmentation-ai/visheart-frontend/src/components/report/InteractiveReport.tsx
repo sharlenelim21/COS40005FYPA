@@ -19,7 +19,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
-import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain } from "@/hooks/useProjectResults";
+import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries } from "@/hooks/useProjectResults";
 import { RvStrainChart } from "@/components/landmark/RvStrainChart";
 import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
 import { buildPatientContext } from "@/lib/researchApi";
@@ -493,7 +493,7 @@ function EmptyState({ computing, error }: { computing?: boolean; error?: string 
 export function InteractiveReport({
   patientLabel, scanSummary, generatedAt,
   measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus,
-  computing, computeError, rv, lvVolumes, rvStrain,
+  computing, computeError, rv, lvVolumes, rvStrain, rvStrainSeries,
 }: {
   patientLabel: string;
   scanSummary: string;
@@ -503,8 +503,10 @@ export function InteractiveReport({
    *  unaffected. Absent/null means no RV cavity was segmented. */
   rv?: RvMetrics;
   lvVolumes?: { LVEDV: number | null; LV_SV: number | null };
-  /** Display-only. Undefined until the backend module exists. */
+  /** ED→ES RV regional strain, from POST /segmentation/compute-rv-strain-from-frames. */
   rvStrain?: RvStrain;
+  /** Per-frame RV strain series — the RV twin of `strainSeries`. */
+  rvStrainSeries?: RvStrainSeries;
   healthStatus?: HealthStatus;
   similarity?: DiseaseSimilarity;
   strain?: Strain;
@@ -588,6 +590,31 @@ export function InteractiveReport({
 
   /** Click persists, hover only previews — selection therefore wins. */
   const emphasisSeg = selectedSeg ?? hoverSeg;
+
+  /**
+   * RV per-frame curves — the RV twin of `curves` above, built the same way so
+   * the two charts read identically. One row per frame, one dataKey per RV
+   * region (r1..r6).
+   */
+  const rvCurves = useMemo(() => {
+    if (!rvStrainSeries?.frames?.length) return [];
+    return rvStrainSeries.frames.map((f) => {
+      const row: Record<string, number | null> = { frame: f.frameIndex };
+      for (const r of f.regions ?? []) row[`r${r.region}`] = r.strain ?? null;
+      return row;
+    });
+  }, [rvStrainSeries]);
+
+  /** Region ids/labels for the RV legend and lines. Prefers the series (it has
+   *  every frame) and falls back to the single ED→ES result. */
+  const rvRegionLabels = useMemo(() => {
+    const src = rvStrainSeries?.frames?.[0]?.regions ?? rvStrain?.regions ?? [];
+    return src.map((r) => ({ region: r.region, label: r.label }));
+  }, [rvStrainSeries, rvStrain]);
+
+  const hasRvCurves = rvCurves.length > 1;
+  /** Same precedence rule as the LV chart. */
+  const rvEmphasis = selectedRvRegion;
 
   const regionalOk = regionalHealthStatus?.status === "ok";
   const hasFindings = regionalOk && (regionalHealthStatus?.reduced_count ?? 0) > 0;
@@ -1390,7 +1417,7 @@ export function InteractiveReport({
           validated longitudinal one, taken from short-axis slices. Exploratory. */}
       <Card
         title="RV Regional Findings"
-        subtitle="Exploratory · RV circumferential strain (RV GCS), short-axis · advisory"
+        subtitle="Exploratory · RV cavity-radius strain, short-axis · advisory"
         icon={<Heart className="h-4 w-4 text-primary" />}
         action={
           <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -1439,6 +1466,48 @@ export function InteractiveReport({
                 )}
               </div>
 
+              {/* Per-frame RV curves — the RV twin of the LV line chart, so the
+                  two cards read the same way. One line per region, dimmed when
+                  another is selected. */}
+              {hasRvCurves ? (
+                <div className="mt-3">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={rvCurves} margin={{ top: 8, right: 12, left: -12, bottom: 4 }}>
+                      <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
+                      <XAxis dataKey="frame" tick={{ fontSize: 11 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} label={{ value: "RV strain (%)", angle: -90, position: "insideLeft", fontSize: 11 }} />
+                      <ReferenceLine y={0} stroke="var(--border)" />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                      {[...rvRegionLabels]
+                        .sort((a, b) => (a.region === rvEmphasis ? 1 : b.region === rvEmphasis ? -1 : 0))
+                        .map((r) => {
+                          const isOn = rvEmphasis === r.region;
+                          const dimmed = rvEmphasis != null && !isOn;
+                          return (
+                            <Line
+                              key={r.region}
+                              dataKey={`r${r.region}`}
+                              name={r.label}
+                              stroke={RING_COLOR_VAR[r.region <= 3 ? "basal" : "mid"]}
+                              strokeWidth={isOn ? 3 : 1.4}
+                              dot={false}
+                              opacity={dimmed ? 0.12 : 1}
+                              isAnimationActive={false}
+                              style={{ cursor: "pointer" }}
+                              onClick={() => setSelectedRvRegion((cur) => (cur === r.region ? null : r.region))}
+                            />
+                          );
+                        })}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-center text-[11px] text-muted-foreground">
+                  Full-cycle RV curves need the per-frame RV strain series. The single ED→ES
+                  result is shown in the bullseye.
+                </p>
+              )}
+
               {/* Per region. Deliberately NO severity colouring: this measure
                   has no validated cutoff, so tinting it would imply one. */}
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -1464,6 +1533,16 @@ export function InteractiveReport({
                     </span>
                   </button>
                 ))}
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+                {(["basal", "mid"] as const).map((band) => (
+                  <span key={band} className="flex items-center gap-1.5 text-[10.5px] capitalize text-muted-foreground">
+                    <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: RING_COLOR_VAR[band] }} />
+                    {band} free-wall
+                  </span>
+                ))}
+                <span className="text-[10.5px] text-muted-foreground/70">· click a region or curve to focus</span>
               </div>
 
               <p className="mt-3 text-[10px] leading-snug text-muted-foreground">

@@ -40,6 +40,7 @@ export default function ReportPage() {
   const {
     model, measurements, healthStatus, similarity, strain, strainSeries,
     computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain,
+    rvStrainSeries,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
@@ -209,6 +210,7 @@ export default function ReportPage() {
           rv={rv}
           lvVolumes={lvVolumes}
           rvStrain={rvStrain}
+          rvStrainSeries={rvStrainSeries}
           computing={computing}
           computeError={computeError}
         />
