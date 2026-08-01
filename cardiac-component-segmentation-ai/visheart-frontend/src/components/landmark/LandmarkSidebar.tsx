@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { useProject } from "@/context/ProjectContext";
-import { computeStrainSeries } from "@/lib/landmarkApi";
+import { computeStrainSeries, computeRvStrainSeries } from "@/lib/landmarkApi";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -1053,10 +1053,15 @@ function StrainTab({
   const {
     strain: realStrain,
     strainSeries: realSeries,
+    rvStrain: realRvStrain,
+    rvStrainSeries: realRvSeries,
     available: modelAvailable,
     setModel: setResultsModel,
     autoEdFrame,
   } = useProjectResults(projectId);
+  // LV/RV toggle for the results panel below — RV has no GRS/GCS split or
+  // region/cycle chart parity with LV yet, so it gets a simpler dedicated panel.
+  const [ventricleView, setVentricleView] = useState<"LV" | "RV">("LV");
   useEffect(() => { setResultsModel(strainModel); }, [strainModel, setResultsModel]);
 
   const strainKey = selectedStrainType === "GRS" ? "grs" : "gcs";
@@ -1103,15 +1108,70 @@ function StrainTab({
     setSeriesBusy(true);
     setSeriesError(null);
     try {
-      await computeStrainSeries(projectId, edIndex, strainModel);
+      // Fire LV and RV series together — one button, both computed. Independent
+      // GPU calls, so a failure in one shouldn't lose the other.
+      const [lvOutcome, rvOutcome] = await Promise.allSettled([
+        computeStrainSeries(projectId, edIndex, strainModel),
+        computeRvStrainSeries(projectId, edIndex, strainModel),
+      ]);
+      if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
+        const err: any = lvOutcome.reason;
+        setSeriesError(err?.response?.data?.error ?? err?.message ?? "Strain series failed.");
+        return;
+      }
       // Stored on the mask — reload so every consumer picks it up.
       window.location.reload();
-    } catch (err: any) {
-      setSeriesError(err?.response?.data?.error ?? err?.message ?? "Strain series failed.");
     } finally {
       setSeriesBusy(false);
     }
   }, [projectId, realStrain, realSeries, strainModel, autoEdFrame]);
+
+  const usingRealRvSeries = !!realRvSeries?.frames?.length;
+  const usingRealRvStrain = !!realRvStrain?.regions?.length;
+
+  /** Global RV strain curve, mirroring `curveData`'s "global" shape for LV. */
+  const rvCurveData = useMemo(() => {
+    if (!realRvSeries?.frames?.length) return [];
+    const n = realRvSeries.frames.length;
+    return realRvSeries.frames.map((f, i) => ({
+      frame: f.frameIndex + 1,
+      time: Math.round((i / Math.max(n - 1, 1)) * 1200),
+      strain: Number((f.global_rv_strain ?? 0).toFixed(1)),
+    }));
+  }, [realRvSeries]);
+
+  /** Per-region RV values at the frame being viewed (falls back to the peak
+   *  frame, then to the single ED→ES result — same preference order as LV's
+   *  `segmentValues`). */
+  const rvRegionValues = useMemo(() => {
+    if (realRvSeries?.frames?.length) {
+      const frame =
+        realRvSeries.frames.find((f) => f.frameIndex === currentFrame) ??
+        realRvSeries.frames.find((f) => f.frameIndex === realRvSeries.peakFrameIndex);
+      if (frame?.regions?.length) {
+        return frame.regions.map((r) => ({ segment: r.region, label: r.label, strain: r.strain ?? 0 }));
+      }
+    }
+    if (realRvStrain?.regions?.length) {
+      return realRvStrain.regions.map((r) => ({ segment: r.region, label: r.label, strain: r.strain ?? 0 }));
+    }
+    return [];
+  }, [realRvSeries, realRvStrain, currentFrame]);
+
+  const rvCurrentAverage = rvRegionValues.length
+    ? rvRegionValues.reduce((sum, r) => sum + r.strain, 0) / rvRegionValues.length
+    : 0;
+
+  /** Peak = most negative global RV strain across the cycle (most shrinkage). */
+  const rvPeakValue = useMemo(() => {
+    if (realRvSeries?.frames?.length) {
+      const globals = realRvSeries.frames
+        .map((f) => f.global_rv_strain)
+        .filter((v): v is number => typeof v === "number");
+      if (globals.length) return Math.min(...globals);
+    }
+    return typeof realRvStrain?.global_rv_strain === "number" ? realRvStrain.global_rv_strain : 0;
+  }, [realRvSeries, realRvStrain]);
   /**
    * Global curve: one point per frame. When a segment is selected the curve
    * tracks that segment; otherwise it is the mean across all 17. Uses the
@@ -1223,7 +1283,7 @@ function StrainTab({
 
   // Nothing computed for THIS model yet → empty state (no dummy charts). Only the
   // model toggle + compute button; results appear only for a model that was run.
-  if (!usingRealSeries && !usingRealStrain) {
+  if (!usingRealSeries && !usingRealStrain && !usingRealRvSeries && !usingRealRvStrain) {
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3">
@@ -1236,7 +1296,7 @@ function StrainTab({
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
           <Activity className="mx-auto h-7 w-7 opacity-25" />
           <p className="mt-2 text-xs text-muted-foreground">
-            No strain has been computed for {strainModel === "unet" ? "UNet" : "MedSAM"} yet.
+            No LV or RV strain has been computed for {strainModel === "unet" ? "UNet" : "MedSAM"} yet.
           </p>
           <Button size="sm" variant="outline" className="mt-3 h-7 text-[10px]" disabled={seriesBusy} onClick={runStrainSeries}>
             {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={frameCount} /> : `Compute all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
@@ -1270,6 +1330,41 @@ function StrainTab({
         </div>
       </div>
 
+      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+        {(["LV", "RV"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setVentricleView(v)}
+            className={cn(
+              "rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
+              ventricleView === v
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
+
+      {ventricleView === "RV" ? (
+        <RvStrainPanel
+          usingRealRvSeries={usingRealRvSeries}
+          usingRealRvStrain={usingRealRvStrain}
+          rvCurveData={rvCurveData}
+          rvRegionValues={rvRegionValues}
+          rvCurrentAverage={rvCurrentAverage}
+          rvPeakValue={rvPeakValue}
+          currentTime={currentTime}
+          frameCount={frameCount}
+          strainModel={strainModel}
+          seriesBusy={seriesBusy}
+          seriesError={seriesError}
+          runStrainSeries={runStrainSeries}
+        />
+      ) : (
+      <>
       {selectedSegmentValue && (
         <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs">
           <div className="flex items-center justify-between gap-3">
@@ -1527,6 +1622,8 @@ function StrainTab({
           )}
         </div>
       )}
+      </>
+      )}
 
       <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
         <Button
@@ -1547,6 +1644,124 @@ function StrainTab({
           <FileText className="h-3.5 w-3.5" />
           Data
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * RV side of the Strain Results panel — deliberately simpler than the LV
+ * panel above it (no GRS/GCS split, no region/cycle chart views, no 3D
+ * heart): RV strain is a single cavity-radius measure per region, not a
+ * 17-segment wall-thickness field, so there's less structure to visualize.
+ * Reuses getStrainColor(..., "GCS") for coloring since RV strain shares
+ * GCS's "more negative is healthier" convention.
+ */
+function RvStrainPanel({
+  usingRealRvSeries,
+  usingRealRvStrain,
+  rvCurveData,
+  rvRegionValues,
+  rvCurrentAverage,
+  rvPeakValue,
+  currentTime,
+  frameCount,
+  strainModel,
+  seriesBusy,
+  seriesError,
+  runStrainSeries,
+}: {
+  usingRealRvSeries: boolean;
+  usingRealRvStrain: boolean;
+  rvCurveData: { frame: number; time: number; strain: number }[];
+  rvRegionValues: { segment: number; label: string; strain: number }[];
+  rvCurrentAverage: number;
+  rvPeakValue: number;
+  currentTime: number;
+  frameCount: number;
+  strainModel: "unet" | "medsam";
+  seriesBusy: boolean;
+  seriesError: string | null;
+  runStrainSeries: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-2">
+        <StrainMetricCard
+          label={usingRealRvSeries ? "Current RV Strain" : usingRealRvStrain ? "RV Strain (ED→ES)" : "RV Strain"}
+          value={`${rvCurrentAverage.toFixed(1)}%`}
+          strainType="GCS"
+          valueNumber={rvCurrentAverage}
+        />
+        <StrainMetricCard
+          label="Peak RV Strain"
+          value={`${rvPeakValue.toFixed(1)}%`}
+          strainType="GCS"
+          valueNumber={rvPeakValue}
+        />
+      </div>
+
+      {!usingRealRvSeries && (
+        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            {usingRealRvStrain
+              ? "Only the ED→ES RV strain is stored — compute all frames for a full-cycle curve."
+              : "No RV strain computed for this model yet."}
+          </p>
+          <Button size="sm" variant="outline" className="mt-2 h-7 w-full text-[10px]" disabled={seriesBusy} onClick={runStrainSeries}>
+            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={frameCount} /> : `Compute all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          </Button>
+          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
+        </div>
+      )}
+
+      {usingRealRvSeries && (
+        <div className="rounded-lg border border-border bg-background p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Global RV Strain Curve</h4>
+            <span className="text-[10px] text-muted-foreground">{rvCurveData.length} frames</span>
+          </div>
+          <div className="h-44">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={rvCurveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
+                <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+                  domain={["dataMin - 5", "dataMax + 5"]}
+                  tickFormatter={(value) => `${value}%`}
+                />
+                <Tooltip
+                  cursor={{ stroke: "var(--border)" }}
+                  formatter={(value) => [`${Number(value).toFixed(1)}%`, "RV Strain"]}
+                  labelFormatter={(label) => `${label} ms`}
+                  contentStyle={{
+                    borderRadius: 8,
+                    border: "1px solid var(--border)",
+                    background: "var(--popover)",
+                    color: "var(--popover-foreground)",
+                    fontSize: 12,
+                  }}
+                />
+                <ReferenceLine x={currentTime} stroke="var(--primary)" strokeDasharray="4 4" ifOverflow="extendDomain" />
+                <Line type="monotone" dataKey="strain" stroke="#38bdf8" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-border bg-background">
+        <div className="border-b border-border px-3 py-2">
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Region Values</h4>
+        </div>
+        {rvRegionValues.length ? (
+          <SegmentValuesTable segmentValues={rvRegionValues} strainType="GCS" />
+        ) : (
+          <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
+        )}
       </div>
     </div>
   );

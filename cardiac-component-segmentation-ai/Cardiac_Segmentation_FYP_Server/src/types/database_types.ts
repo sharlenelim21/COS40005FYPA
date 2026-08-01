@@ -480,6 +480,33 @@ export interface IProjectSegmentationMask {
   };
 
   /**
+   * Regional RV strain computed from an ED→ES frame pair, sibling to `strain`.
+   * There is no separate RV free-wall myocardium label in the segmentation
+   * mask (only RV cavity), so unlike `strain.segments[].grs` this is NOT a
+   * wall-thickness measure — `regions[].strain` is % change in RV cavity
+   * boundary radius per region, the same radius-based methodology `gcs`
+   * already uses for the LV. Produced by the GPU /bullseye/compute-rv-strain
+   * endpoint. See bullseye_analysis.mask_to_rv_regions for the full rationale.
+   */
+  rvStrain?: {
+    regions: {
+      region: number;
+      label: string;
+      strain: number | null;
+      radius_ed_mm?: number | null;
+      radius_es_mm?: number | null;
+    }[];
+    global_rv_strain: number | null;
+    vox_xy_mm: number;
+    alignment_source: string;
+    alignment_angle_deg?: number | null;
+    edFrameIndex?: number;
+    esFrameIndex?: number;
+    segmentationModel?: SegmentationModel;
+    computed_at: string;
+  };
+
+  /**
    * Per-frame strain series — strain of EVERY stored frame measured against the
    * fixed ED reference frame, so the UI can plot a full-cycle curve and scrub
    * frame-by-frame (the `strain` field above is the single ED→ES measurement
@@ -522,6 +549,33 @@ export interface IProjectSegmentationMask {
     computed_at: string;
     /** See `strain.staleSince` — set when landmarks changed after this ran. */
     staleSince?: string;
+  };
+
+  /**
+   * Per-frame RV strain series — RV analog of `strainSeries` above, produced
+   * by POST /segmentation/compute-rv-strain-series. Kept as a separate field
+   * (not merged into `strainSeries`) since the RV value shape differs: one
+   * `strain` (cavity-radius %) per region rather than paired grs/gcs per
+   * 17-segment — see `rvStrain` for the underlying methodology.
+   */
+  rvStrainSeries?: {
+    frames: {
+      frameIndex: number;
+      global_rv_strain: number | null;
+      regions: {
+        region: number;
+        label: string;
+        strain: number | null;
+        radius_mm?: number | null;
+      }[];
+    }[];
+    edFrameIndex: number;
+    peakFrameIndex?: number | null;
+    peak_global_rv_strain: number | null;
+    segmentationModel?: SegmentationModel;
+    framesRequested?: number;
+    framesComputed?: number;
+    computed_at: string;
   };
 }
 // Segmentation Mask Model Interface (single segmentation mask document in the database)

@@ -5,7 +5,7 @@ import type {
   FramePrediction,
   PersistedLandmarkDoc,
 } from "@/types/landmark";
-import type { RealStrainResult } from "@/components/landmark/StrainVisualization";
+import type { RealStrainResult, RvStrainResult } from "@/components/landmark/StrainVisualization";
 
 const baseURL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -237,6 +237,23 @@ export async function computeStrainFromFrames(
 }
 
 /**
+ * Regional RV strain from an ED→ES frame pair — sibling to computeStrainFromFrames.
+ * See RvStrainResult for why this is a cavity-radius measure, not wall thickness.
+ */
+export async function computeRvStrainFromFrames(
+  projectId: string,
+  edFrameIndex: number,
+  esFrameIndex: number,
+  modelType: "unet" | "medsam" = "unet",
+): Promise<RvStrainResult> {
+  const response = await api.post<RvStrainResult>(
+    `/segmentation/compute-rv-strain-from-frames`,
+    { projectId, edFrameIndex, esFrameIndex, modelType },
+  );
+  return response.data;
+}
+
+/**
  * Compute strain for EVERY frame against the fixed ED reference, giving a
  * full-cycle series (the ED→ES call above returns a single measurement).
  * Costs one GPU call per frame, so it is slower — `frameStep` subsamples.
@@ -261,6 +278,32 @@ export async function computeStrainSeries(
     `/segmentation/compute-strain-series`,
     { projectId, edFrameIndex, modelType, frameStep },
     // One GPU call per frame — well beyond the default client timeout.
+    { timeout: 600000 },
+  );
+  return response.data;
+}
+
+/**
+ * RV analog of computeStrainSeries — full-cycle regional RV strain, every
+ * frame measured against the fixed ED reference. Persisted as `rvStrainSeries`.
+ */
+export async function computeRvStrainSeries(
+  projectId: string,
+  edFrameIndex: number,
+  modelType: "unet" | "medsam" = "unet",
+  frameStep = 1,
+): Promise<{
+  frames: { frameIndex: number; global_rv_strain: number | null;
+            regions: { region: number; label: string; strain: number | null; radius_mm?: number | null }[] }[];
+  edFrameIndex: number;
+  peakFrameIndex?: number | null;
+  peak_global_rv_strain: number | null;
+  framesRequested?: number;
+  framesComputed?: number;
+}> {
+  const response = await api.post(
+    `/segmentation/compute-rv-strain-series`,
+    { projectId, edFrameIndex, modelType, frameStep },
     { timeout: 600000 },
   );
   return response.data;
