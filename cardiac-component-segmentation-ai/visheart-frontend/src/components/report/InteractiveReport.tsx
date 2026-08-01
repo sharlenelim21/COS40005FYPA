@@ -19,7 +19,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
-import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus } from "@/hooks/useProjectResults";
+import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain } from "@/hooks/useProjectResults";
 import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
 import { buildPatientContext } from "@/lib/researchApi";
 
@@ -276,6 +276,76 @@ function fmt(v: number | null | undefined, digits = 1): string {
  * always taken from healthStatus.evidence (see interpretationFor) so this table
  * can never contradict the backend's grade.
  */
+// ── RV (right-ventricular) helpers ───────────────────────────────────────────
+// The report is BIVENTRICULAR (LV + RV), not whole-heart: the atria are not
+// segmented, so nothing here describes them.
+
+/**
+ * RV ejection-fraction bands. Mirrors the SHAPE of _grade_from_lvef in
+ * compute_health_status.py (descending thresholds, "Indeterminate" on null) but
+ * is a SEPARATE frontend helper — the LV grader is not touched and the overall
+ * badge is never computed from these.
+ *
+ * ⚠️ APPROXIMATE. Anchored on the 2024 CMR meta-analysis normal lower limit,
+ * NOT sex-specific, and not validated for this pipeline. RV normal ranges
+ * differ meaningfully between males and females; these MUST be replaced with
+ * sex-specific validated values before any clinical use. Advisory only.
+ */
+const RVEF_NORMAL_MIN = 48.0;
+const RVEF_MILD_MIN = 40.0;
+const RVEF_MODERATE_MIN = 30.0;
+
+type RvGrade = "Normal" | "Mildly reduced" | "Moderately reduced" | "Severely reduced" | "Indeterminate";
+
+function rvFunctionGrade(rvef: number | null | undefined): RvGrade {
+  if (rvef === null || rvef === undefined || Number.isNaN(rvef)) return "Indeterminate";
+  if (rvef >= RVEF_NORMAL_MIN) return "Normal";
+  if (rvef >= RVEF_MILD_MIN) return "Mildly reduced";
+  if (rvef >= RVEF_MODERATE_MIN) return "Moderately reduced";
+  return "Severely reduced";
+}
+
+/** Reuses the existing status token vocabulary — no new colour system. */
+const RV_GRADE_BADGE: Record<RvGrade, string> = {
+  "Normal": "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
+  "Mildly reduced": "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  "Moderately reduced": "bg-orange-500/10 text-orange-700 dark:text-orange-400",
+  "Severely reduced": "bg-red-600/10 text-red-700 dark:text-red-400",
+  "Indeterminate": "bg-muted text-muted-foreground",
+};
+
+/**
+ * Stroke-volume balance. In a closed circulation LV and RV stroke volumes
+ * should be near-equal; a persistent gap suggests a shunt or valvular
+ * regurgitation — OR, far more often here, segmentation error. Flagged as a
+ * data-quality / follow-up prompt, never as a finding.
+ *
+ * ⚠️ APPROXIMATE — a project heuristic, not a guideline. RELATIVE only:
+ * >= 25 % of the larger stroke volume.
+ *
+ * Deliberately no absolute-millilitre floor. An absolute cutoff scales badly:
+ * ~10 mL on a normal ~80 mL stroke volume is only ~12 %, well inside RV
+ * segmentation noise, while the same 10 mL on a small heart is a genuine
+ * mismatch. A pure ratio treats both correctly.
+ */
+const SV_DIFF_REL_PCT = 25.0;
+
+function svBalance(lvSv: number | null | undefined, rvSv: number | null | undefined) {
+  if (lvSv == null || rvSv == null || Number.isNaN(lvSv) || Number.isNaN(rvSv)) return null;
+  const diff = rvSv - lvSv;
+  const larger = Math.max(Math.abs(lvSv), Math.abs(rvSv));
+  const relPct = larger > 0 ? (Math.abs(diff) / larger) * 100 : 0;
+  const mismatch = relPct >= SV_DIFF_REL_PCT;
+  return { diff, relPct, mismatch };
+}
+
+/** RV:LV end-diastolic volume ratio. >= 1.0 means the RV is at least as large
+ *  as the LV — the conventional flag for RV enlargement. */
+function rvLvRatio(rvedv: number | null | undefined, lvedv: number | null | undefined) {
+  if (rvedv == null || lvedv == null || !(lvedv > 0)) return null;
+  return rvedv / lvedv;
+}
+
 type Zone = { from: number; to: number; tone: "green" | "amber" | "red" };
 
 type MetricBar = {
@@ -422,12 +492,18 @@ function EmptyState({ computing, error }: { computing?: boolean; error?: string 
 export function InteractiveReport({
   patientLabel, scanSummary, generatedAt,
   measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus,
-  computing, computeError,
+  computing, computeError, rv, lvVolumes, rvStrain,
 }: {
   patientLabel: string;
   scanSummary: string;
   generatedAt: string;
   measurements?: Measurements;
+  /** RV metrics — optional so existing callers and the print pages are
+   *  unaffected. Absent/null means no RV cavity was segmented. */
+  rv?: RvMetrics;
+  lvVolumes?: { LVEDV: number | null; LV_SV: number | null };
+  /** Display-only. Undefined until the backend module exists. */
+  rvStrain?: RvStrain;
   healthStatus?: HealthStatus;
   similarity?: DiseaseSimilarity;
   strain?: Strain;
@@ -517,16 +593,32 @@ export function InteractiveReport({
         : (regionalHealthStatus?.affected_idx ?? []).slice().sort((a, b) => a - b))
     : [];
 
-  /** 2×3 grid of square cards. `accent` marks the two headline volumes with a
-   *  SINGLE accent token — the other four stay default foreground. */
+  /** LEFT-ventricular cards. Every label is explicitly LV-prefixed: with RV
+   *  metrics on the same page, a bare "EDV" is ambiguous. */
   const metricCards: { label: string; value: string; unit: string; accent?: boolean }[] = [
-    { label: "Ejection Fraction (LVEF)", value: fmt(measurements?.EF), unit: "%", accent: true },
-    { label: "End-Diastolic Volume (EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true },
-    { label: "End-Systolic Volume (ESV)", value: fmt(measurements?.ESV), unit: "mL" },
-    { label: "Stroke Volume (SV)", value: fmt(measurements?.StrokeVolume), unit: "mL" },
-    { label: "Peak Global Radial Strain", value: fmt(measurements?.PeakGRS), unit: "%" },
-    { label: "Peak Global Circumferential Strain", value: fmt(measurements?.PeakGCS), unit: "%" },
+    { label: "LV Ejection Fraction (LVEF)", value: fmt(measurements?.EF), unit: "%", accent: true },
+    { label: "LV End-Diastolic Volume (LV EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true },
+    { label: "LV End-Systolic Volume (LV ESV)", value: fmt(measurements?.ESV), unit: "mL" },
+    { label: "LV Stroke Volume (LV SV)", value: fmt(measurements?.StrokeVolume), unit: "mL" },
+    { label: "LV Peak Global Radial Strain (LV GRS)", value: fmt(measurements?.PeakGRS), unit: "%" },
+    { label: "LV Peak Global Circumferential Strain (LV GCS)", value: fmt(measurements?.PeakGCS), unit: "%" },
   ];
+
+  // ── RV block ───────────────────────────────────────────────────────────────
+  // Hidden entirely when nothing RV was segmented, rather than rendering a row
+  // of em-dashes that implies a measurement was attempted and came back empty.
+  const hasRv = !!rv && (rv.RVEF !== null || rv.RVEDV !== null || rv.RVESV !== null || rv.RV_SV !== null);
+
+  const rvCards: { label: string; value: string; unit: string }[] = [
+    { label: "RV Ejection Fraction (RVEF)", value: fmt(rv?.RVEF), unit: "%" },
+    { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL" },
+    { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL" },
+    { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL" },
+  ];
+
+  const rvGrade = rvFunctionGrade(rv?.RVEF);
+  const ratio = rvLvRatio(rv?.RVEDV, lvVolumes?.LVEDV ?? measurements?.EDV);
+  const sv = svBalance(lvVolumes?.LV_SV ?? measurements?.StrokeVolume, rv?.RV_SV);
 
   return (
     <div className="mx-auto max-w-5xl px-6 pb-16 pt-6">
@@ -552,7 +644,9 @@ export function InteractiveReport({
           <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
             <Sparkles className="h-3.5 w-3.5 text-primary" /> Cardiac Measurements
           </p>
-          <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">From segmentation volumes + voxel spacing</p>
+          <p className="mb-2 mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Left Ventricle
+          </p>
           {/* 2×3 grid, sized to CONTENT. An earlier revision forced
               aspect-[1/0.92]; in a wide column that made each card ~270px tall
               with a dead gap in the middle. Icon and label now sit on one row
@@ -578,13 +672,86 @@ export function InteractiveReport({
               </div>
             ))}
           </div>
+
+          {/* ── Right ventricle ────────────────────────────────────────────
+              Same card style as the LV block. Volumes are shown RAW: there is
+              no RV grading here, and RV volumes are not BSA-indexed. */}
+          {hasRv && (
+            <>
+              <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Right Ventricle
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {rvCards.map((m) => (
+                  <div key={m.label} className="rounded-lg border border-border px-2.5 py-2">
+                    <div className="flex items-start gap-1.5">
+                      <Heart className="mt-[1px] h-3 w-3 shrink-0 text-muted-foreground" />
+                      <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                        {m.label}
+                      </span>
+                    </div>
+                    <span className="mt-1 block text-[17px] font-bold leading-none tracking-tight text-foreground">
+                      {m.value}
+                      <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Derived biventricular relationships ──────────────────────
+                  Computed in the browser from stored LV + RV volumes; nothing
+                  new is measured. Both are flags for review, not findings. */}
+              {(ratio !== null || sv !== null) && (
+                <>
+                  <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Biventricular Relationship
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {ratio !== null && (
+                      <div className={`rounded-lg border px-2.5 py-2 ${
+                        ratio >= 1.0 ? "border-amber-500/50 bg-amber-500/10" : "border-primary/40 bg-primary/5"}`}>
+                        <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                          RV:LV Volume Ratio (RV EDV ÷ LV EDV)
+                        </span>
+                        <span className="mt-1 block text-[17px] font-bold leading-none tracking-tight text-foreground">
+                          {ratio.toFixed(2)}
+                        </span>
+                        <span className={`mt-1 block text-[9.5px] font-semibold leading-snug ${
+                          ratio >= 1.0 ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+                          {ratio >= 1.0 ? "RV enlarged relative to LV" : "RV smaller than LV"}
+                        </span>
+                      </div>
+                    )}
+                    {sv !== null && (
+                      <div className={`rounded-lg border px-2.5 py-2 ${
+                        sv.mismatch ? "border-amber-500/50 bg-amber-500/10" : "border-border"}`}>
+                        <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                          SV Difference (RV SV − LV SV)
+                        </span>
+                        <span className="mt-1 block text-[17px] font-bold leading-none tracking-tight text-foreground">
+                          {sv.diff > 0 ? "+" : ""}{sv.diff.toFixed(1)}
+                          <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">mL</span>
+                        </span>
+                        <span className={`mt-1 block text-[9.5px] font-semibold leading-snug ${
+                          sv.mismatch ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+                          {sv.mismatch
+                            ? `Large mismatch (${sv.relPct.toFixed(0)} %) — possible shunt, valve leak, or segmentation error`
+                            : `Balanced (${sv.relPct.toFixed(0)} %)`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </div>
 
         <div className="border-b border-border p-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:border-b-0 lg:border-l">
           <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
             <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> Health Status
           </p>
-          <p className="mb-2.5 mt-0.5 text-[11px] text-muted-foreground">Rule-based — not a diagnosis</p>
+          <div className="mb-2.5" />
           {healthStatus ? (
             <>
               {/* Grade badge (Layer 1) + how much to trust it. The confidence
@@ -622,6 +789,64 @@ export function InteractiveReport({
                 <p className="mb-2.5 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
                   {confidenceReason(healthStatus)}
                 </p>
+              )}
+
+              {/* ── Biventricular function ─────────────────────────────────
+                  LV Function is the stored grade, shown verbatim. RV Function
+                  is a SEPARATE advisory grade from RVEF — it is deliberately
+                  rendered beside, never merged into, the badge above, which
+                  remains LV-driven and byte-identical whether or not RV data
+                  exists. "Biventricular", not "whole heart": the atria are not
+                  segmented. */}
+              {hasRv && (
+                <div className="mb-3 rounded-lg border border-border bg-muted/30 p-2.5">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Biventricular Function
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        LV Function
+                      </span>
+                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        healthStatus.status === "Healthy" ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
+                        : healthStatus.status === "Mild" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                        : healthStatus.status === "Moderate" ? "bg-orange-500/10 text-orange-700 dark:text-orange-400"
+                        : healthStatus.status === "Severe" ? "bg-red-600/10 text-red-700 dark:text-red-400"
+                        : "bg-muted text-muted-foreground"}`}>
+                        {healthStatus.status}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        RV Function <span className="normal-case tracking-normal">· advisory</span>
+                      </span>
+                      <span
+                        className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_GRADE_BADGE[rvGrade]}`}
+                        title="Approximate, non-sex-specific RVEF thresholds — must be clinically validated before use."
+                      >
+                        {rvGrade}
+                      </span>
+                    </div>
+                  </div>
+
+                  {sv !== null && (
+                    <span className={`mt-2 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10.5px] font-medium ${
+                      sv.mismatch
+                        ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                        : "border-border bg-muted text-muted-foreground"}`}>
+                      {sv.mismatch && <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />}
+                      {sv.mismatch
+                        ? `SV mismatch · Δ ${sv.diff > 0 ? "+" : ""}${sv.diff.toFixed(1)} mL`
+                        : `SV balance acceptable · Δ ${sv.diff > 0 ? "+" : ""}${sv.diff.toFixed(1)} mL`}
+                    </span>
+                  )}
+
+                  <p className="mt-2 text-[9.5px] leading-snug text-muted-foreground">
+                    RV thresholds are approximate and not sex-specific — they must be clinically
+                    validated before use. RV function does not affect the grade above.
+                  </p>
+                </div>
               )}
 
               {/* Metric table. There is deliberately NO "Reference Range"
@@ -712,6 +937,67 @@ export function InteractiveReport({
                   })}
                 </tbody>
               </table>
+
+              {/* ── RV Health ───────────────────────────────────────────────
+                  RVEF gets a reference bar in the same visual language as the
+                  LV rows. RV VOLUMES are listed raw and ungraded: there is no
+                  BSA indexing here, exactly as noted for LV EDV. No strain
+                  grade — RV strain is exploratory and lives elsewhere. */}
+              {hasRv && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    RV Health · advisory
+                  </p>
+                  <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                    <div>
+                      <span className="text-[11.5px] font-semibold text-foreground">RV Ejection Fraction (RVEF)</span>
+                      <span className="ml-2 text-[13px] font-bold tabular-nums text-foreground">
+                        {fmt(rv?.RVEF)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">%</span>
+                      </span>
+                      {/* Same zone language as the LV bars: green normal,
+                          amber borderline, red far. Thresholds approximate. */}
+                      <div className="relative mt-2 h-2.5 w-[150px]">
+                        <div className="absolute inset-0 overflow-hidden rounded-full bg-muted">
+                          {[
+                            { from: 0, to: 30, tone: "red" as const },
+                            { from: 30, to: 40, tone: "amber" as const },
+                            { from: 40, to: 48, tone: "amber" as const },
+                            { from: 48, to: 100, tone: "green" as const },
+                          ].map((z) => (
+                            <div
+                              key={z.from}
+                              className={`absolute inset-y-0 ${ZONE_FILL[z.tone]}`}
+                              style={{ left: `${pct(z.from, 0, 100)}%`, width: `${pct(z.to, 0, 100) - pct(z.from, 0, 100)}%` }}
+                            />
+                          ))}
+                        </div>
+                        {rv?.RVEF != null && (
+                          <div
+                            className="absolute top-1/2 h-[22px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground ring-[1.5px] ring-card"
+                            style={{ left: `${pct(rv.RVEF, 0, 100)}%` }}
+                            title={`RVEF ${fmt(rv.RVEF)} %`}
+                          />
+                        )}
+                      </div>
+                      <div className="mt-2 flex w-[150px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
+                        <span>0</span><span className="text-foreground/70">normal ≥ 48</span><span>100</span>
+                      </div>
+                    </div>
+                    <div>
+                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Interpretation
+                      </span>
+                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_GRADE_BADGE[rvGrade]}`}>
+                        {rvGrade}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
+                    RV EDV {fmt(rv?.RVEDV)} mL · RV ESV {fmt(rv?.RVESV)} mL · RV SV {fmt(rv?.RV_SV)} mL —
+                    raw values, not BSA-indexed and not graded; body size is not accounted for.
+                  </p>
+                </div>
+              )}
 
               {/* Any evidence line the table doesn't cover (e.g. "Absolute
                   volumes suppressed") still shows, so nothing the backend
@@ -806,7 +1092,9 @@ export function InteractiveReport({
           <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
             <Info className="h-3.5 w-3.5 text-primary" /> Disease Pattern Similarity
           </p>
-          <p className="mb-3 mt-0.5 text-[11px] text-muted-foreground">Comparison vs. reference profiles</p>
+          <p className="mb-3 mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            LV patterns
+          </p>
           {similarity ? (
             <>
               <div className="flex flex-col gap-2.5">
@@ -847,13 +1135,26 @@ export function InteractiveReport({
           ) : (
             <EmptyState computing={computing} error={computeError} />
           )}
+
+          {/* RV patterns deliberately NOT modelled. The reference profiles
+              (NOR/HCM/DCM) are LV-derived, so applying them to the RV would
+              fabricate a classifier that doesn't exist. */}
+          <div className="mt-4 border-t border-border pt-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              RV patterns
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Not available — future work. The reference profiles are LV-derived; no RV
+              classifier exists in this pipeline.
+            </p>
+          </div>
         </div>
       </section>
 
       {/* Regional strain: bullseye linked to the full-cycle curves */}
       <Card
-        title="Regional Strain Analysis"
-        subtitle="AHA 17-segment strain. Click a segment — here, on a curve, or in Regional Findings — to focus it; click empty chart space to reset."
+        title="LV Regional Strain Analysis"
+        subtitle="LV AHA 17-segment strain. Click a segment — here, on a curve, or in Regional Findings — to focus it; click empty chart space to reset."
         icon={<Heart className="h-4 w-4 text-primary" />}
         sectionRef={strainCardRef}
         highlight={pulse}
@@ -1070,6 +1371,88 @@ export function InteractiveReport({
                 )}
               </div>
             </div>
+          </>
+        )}
+      </Card>
+
+      {/* ── RV Regional Findings — DISPLAY ONLY ─────────────────────────────
+          Renders `rvStrain` if the backend ever writes it. Nothing here
+          computes strain: the producing module (compute_rv_strain_from_rle.py)
+          is backend-owned and does not exist yet, so today this always shows
+          the pending state.
+
+          It feeds NO grade, and by construction never will — the measure is a
+          geometric contour-length proxy, circumferential rather than the
+          validated longitudinal one, taken from short-axis slices. Exploratory. */}
+      <Card
+        title="RV Regional Findings"
+        subtitle="Exploratory · RV circumferential strain (RV GCS), short-axis · advisory"
+        icon={<Heart className="h-4 w-4 text-primary" />}
+        action={
+          <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+            Advisory
+          </span>
+        }
+      >
+        {!rvStrain ? (
+          <p className="py-5 text-center text-sm text-muted-foreground">
+            Not yet available — RV strain pending (backend).
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+              <div>
+                <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Global RV GCS
+                </span>
+                <span className="text-[19px] font-bold tabular-nums text-foreground">
+                  {fmt(rvStrain.global_rv_gcs)}
+                  <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
+                </span>
+              </div>
+              {rvStrain.free_wall_gcs != null && (
+                <div>
+                  <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Free-wall GCS
+                  </span>
+                  <span className="text-[19px] font-bold tabular-nums text-foreground">
+                    {fmt(rvStrain.free_wall_gcs)}
+                    <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Per band. No severity colouring anywhere — there is no validated
+                cutoff for this measure, so tinting it would imply one. */}
+            {rvStrain.segments?.length > 0 && (
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                {rvStrain.segments.map((s) => (
+                  <div key={s.band} className="rounded-lg border border-border px-2.5 py-2">
+                    <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {s.band}
+                    </span>
+                    <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
+                      {fmt(s.rv_gcs)}
+                      <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="mt-3 text-[10px] leading-snug text-muted-foreground">
+              {rvStrain.note}
+              {(rvStrain.source || rvStrain.method) && (
+                <span className="ml-1 opacity-80">
+                  ({[rvStrain.source, rvStrain.method].filter(Boolean).join(" · ")})
+                </span>
+              )}
+            </p>
+            <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+              Negative values indicate circumferential shortening. No severity threshold is
+              applied — this measure does not contribute to any health-status grade.
+            </p>
           </>
         )}
       </Card>
