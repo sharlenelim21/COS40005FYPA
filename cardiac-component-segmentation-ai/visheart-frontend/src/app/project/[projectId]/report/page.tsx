@@ -10,6 +10,7 @@ import { ErrorProject } from "@/components/project/ErrorProject";
 import { PatientSummaryPage, PLACEHOLDER_PATIENT_SUMMARY, type PatientSummaryData } from "@/components/report/PatientSummaryPage";
 import { RegionalStrainBullseyePage } from "@/components/report/RegionalStrainBullseyePage";
 import { StrainDetailPage } from "@/components/report/StrainDetailPage";
+import { RvStrainPage } from "@/components/report/RvStrainPage";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
 import { ArrowLeft, ArrowUp, Printer, AlertTriangle } from "lucide-react";
@@ -21,7 +22,11 @@ const PATTERN_COLORS: Record<string, string> = {
   HCM: "#d03b3b",
 };
 
-const TOTAL_PAGES = 5;
+// Page 6 (RV Regional Findings) is only added to the printed count when the
+// mask actually has RV strain data — see `totalPages` below. Kept as a
+// separate constant so LV-only projects don't print "page 1 of 6" with a
+// missing page 6.
+const BASE_TOTAL_PAGES = 5;
 
 // Source Sans 3 — designed for documents/UI at small sizes, noticeably more
 // legible than the app's unstyled system-font fallback once printed. Scoped
@@ -39,7 +44,7 @@ export default function ReportPage() {
   // show progress instead of a permanent "not computed" dead end.
   const {
     model, measurements, healthStatus, similarity, strain, strainSeries,
-    computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain,
+    computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain, rvStrainSeries,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
@@ -151,6 +156,13 @@ export default function ReportPage() {
   const grsSeries = seriesFor("GRS");
   const gcsSeries = seriesFor("GCS");
 
+  // RV Regional Findings only gets a 6th printed page when there's something
+  // to show — an LV-only project (or one where RV strain hasn't been run)
+  // prints exactly the original 5 pages rather than a page 6 that just says
+  // "not computed".
+  const hasRvStrain = !!(rvStrain || rvStrainSeries?.frames?.length);
+  const totalPages = hasRvStrain ? BASE_TOTAL_PAGES + 1 : BASE_TOTAL_PAGES;
+
   return (
     <div className="min-h-screen bg-muted/20 pb-16">
       {/* top is measured live (see `clearance` above), not a fixed class —
@@ -229,13 +241,13 @@ export default function ReportPage() {
           </div>
         ) : (
           <>
-        <PatientSummaryPage data={summaryData} patientLabel={patientLabel} pageNumber={1} totalPages={TOTAL_PAGES} generatedAt={generatedAt} />
+        <PatientSummaryPage data={summaryData} patientLabel={patientLabel} pageNumber={1} totalPages={totalPages} generatedAt={generatedAt} />
         <RegionalStrainBullseyePage
           strainType="GRS"
           patientLabel={patientLabel}
           totalFrames={totalFrames}
           pageNumber={2}
-          totalPages={TOTAL_PAGES}
+          totalPages={totalPages}
           generatedAt={generatedAt}
           realSeries={grsSeries}
         />
@@ -244,7 +256,7 @@ export default function ReportPage() {
           patientLabel={patientLabel}
           totalFrames={totalFrames}
           pageNumber={3}
-          totalPages={TOTAL_PAGES}
+          totalPages={totalPages}
           generatedAt={generatedAt}
           realSeries={gcsSeries}
         />
@@ -253,7 +265,7 @@ export default function ReportPage() {
           patientLabel={patientLabel}
           totalFrames={totalFrames}
           pageNumber={4}
-          totalPages={TOTAL_PAGES}
+          totalPages={totalPages}
           generatedAt={generatedAt}
           realSeries={grsSeries}
         />
@@ -262,10 +274,20 @@ export default function ReportPage() {
           patientLabel={patientLabel}
           totalFrames={totalFrames}
           pageNumber={5}
-          totalPages={TOTAL_PAGES}
+          totalPages={totalPages}
           generatedAt={generatedAt}
           realSeries={gcsSeries}
         />
+        {hasRvStrain && (
+          <RvStrainPage
+            patientLabel={patientLabel}
+            pageNumber={6}
+            totalPages={totalPages}
+            generatedAt={generatedAt}
+            rvStrain={rvStrain}
+            rvStrainSeries={rvStrainSeries}
+          />
+        )}
           </>
         )}
       </div>
