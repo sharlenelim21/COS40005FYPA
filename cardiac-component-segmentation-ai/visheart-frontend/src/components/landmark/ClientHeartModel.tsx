@@ -8,36 +8,43 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 type HeartSegmentAsset = {
   ahaIndex: number;
   // Label must match AHA_SEGMENTS order in page.tsx:
-  // 1=Basal Anterior, 2=Basal Anterolateral, 3=Basal Inferolateral,
-  // 4=Basal Inferior,  5=Basal Inferoseptal,  6=Basal Anteroseptal,
-  // 7=Mid Anterior,    8=Mid Anterolateral,    9=Mid Inferolateral,
-  // 10=Mid Inferior,   11=Mid Inferoseptal,    12=Mid Anteroseptal,
-  // 13=Apical Anterior, 14=Apical Lateral, 15=Apical Inferior,
-  // 16=Apical Septal,   17=Apex
+  // 1=Basal Anterior, 2=Basal Anteroseptal, 3=Basal Inferoseptal,
+  // 4=Basal Inferior,  5=Basal Inferolateral,  6=Basal Anterolateral,
+  // 7=Mid Anterior,    8=Mid Anteroseptal,    9=Mid Inferoseptal,
+  // 10=Mid Inferior,   11=Mid Inferolateral,    12=Mid Anterolateral,
+  // 13=Apical Anterior, 14=Apical Septal, 15=Apical Inferior,
+  // 16=Apical Lateral,   17=Apex
   label: string;
   className: string;
   file: string;
 };
 
 // Fix 1: labels corrected to match page.tsx AHA_SEGMENTS order exactly.
-// Previously indices 1,2,4,5 (and 7,8,10,11 and 13,15) had Lateral/Septal swapped.
+// Labels re-synced again to match AHA_SEGMENTS after the Lateral/Septal name
+// swap there (see the note on that array) — only `label` was changed below;
+// `className`/`file` (the actual 3D mesh asset wiring) were NOT touched and
+// were not re-verified as part of this fix. Several rows' className/file
+// still don't obviously match their (now-corrected) label — e.g. idx 6
+// "Anterolateral" still points at an "..._Inferior.obj" mesh — that's a
+// separate, pre-existing asset-wiring question that needs its own visual
+// verification, not a renaming fix.
 const HEART_SEGMENTS: HeartSegmentAsset[] = [
   { ahaIndex: 1,  label: "Basal Anterior",     className: "InferiorPosteriorLV", file: "MM631_BP52012_FMA9561_Inferior.obj" },
-  { ahaIndex: 2,  label: "Basal Anterolateral", className: "SeptalLV",            file: "MM629_BP52013_FMA9345_Septal.obj" },
-  { ahaIndex: 3,  label: "Basal Inferolateral", className: "SeptalLV",            file: "MM613_BP52013_FMA9345_Septal.obj" },
+  { ahaIndex: 2,  label: "Basal Anteroseptal", className: "SeptalLV",            file: "MM629_BP52013_FMA9345_Septal.obj" },
+  { ahaIndex: 3,  label: "Basal Inferoseptal", className: "SeptalLV",            file: "MM613_BP52013_FMA9345_Septal.obj" },
   { ahaIndex: 4,  label: "Basal Inferior",      className: "AnteriorLV",          file: "MM614_BP52011_FMA9560_Anterior.obj" },
-  { ahaIndex: 5,  label: "Basal Inferoseptal",  className: "LateralLV",           file: "MM615_BP52010_FMA9563_Lateral.obj" },
-  { ahaIndex: 6,  label: "Basal Anteroseptal",  className: "InferiorPosteriorLV", file: "MM616_BP52012_FMA9561_Inferior.obj" },
+  { ahaIndex: 5,  label: "Basal Inferolateral",  className: "LateralLV",           file: "MM615_BP52010_FMA9563_Lateral.obj" },
+  { ahaIndex: 6,  label: "Basal Anterolateral",  className: "InferiorPosteriorLV", file: "MM616_BP52012_FMA9561_Inferior.obj" },
   { ahaIndex: 7,  label: "Mid Anterior",        className: "InferiorPosteriorLV", file: "MM623_BP52012_FMA9561_Inferior.obj" },
-  { ahaIndex: 8,  label: "Mid Anterolateral",   className: "SeptalLV",            file: "MM618_BP52013_FMA9345_Septal.obj" },
-  { ahaIndex: 9,  label: "Mid Inferolateral",   className: "SeptalLV",            file: "MM619_BP52013_FMA9345_Septal.obj" },
+  { ahaIndex: 8,  label: "Mid Anteroseptal",   className: "SeptalLV",            file: "MM618_BP52013_FMA9345_Septal.obj" },
+  { ahaIndex: 9,  label: "Mid Inferoseptal",   className: "SeptalLV",            file: "MM619_BP52013_FMA9345_Septal.obj" },
   { ahaIndex: 10, label: "Mid Inferior",        className: "AnteriorLV",          file: "MM620_BP52011_FMA9560_Anterior.obj" },
-  { ahaIndex: 11, label: "Mid Inferoseptal",    className: "LateralLV",           file: "MM621_BP52010_FMA9563_Lateral.obj" },
-  { ahaIndex: 12, label: "Mid Anteroseptal",    className: "InferiorPosteriorLV", file: "MM622_BP52012_FMA9561_Inferior.obj" },
+  { ahaIndex: 11, label: "Mid Inferolateral",    className: "LateralLV",           file: "MM621_BP52010_FMA9563_Lateral.obj" },
+  { ahaIndex: 12, label: "Mid Anterolateral",    className: "InferiorPosteriorLV", file: "MM622_BP52012_FMA9561_Inferior.obj" },
   { ahaIndex: 13, label: "Apical Anterior",     className: "InferiorPosteriorLV", file: "MM626_BP52012_FMA9561_Inferior.obj" },
-  { ahaIndex: 14, label: "Apical Lateral",      className: "SeptalLV",            file: "MM625_BP52013_FMA9345_Septal.obj" },
+  { ahaIndex: 14, label: "Apical Septal",      className: "SeptalLV",            file: "MM625_BP52013_FMA9345_Septal.obj" },
   { ahaIndex: 15, label: "Apical Inferior",     className: "AnteriorLV",          file: "MM624_BP52011_FMA9560_Anterior.obj" },
-  { ahaIndex: 16, label: "Apical Septal",       className: "LateralLV",           file: "MM627_BP52010_FMA9563_Lateral.obj" },
+  { ahaIndex: 16, label: "Apical Lateral",       className: "LateralLV",           file: "MM627_BP52010_FMA9563_Lateral.obj" },
   { ahaIndex: 17, label: "Apex",                className: "AnteriorLV",          file: "MM628_BP52011_FMA9560_Anterior.obj" },
 ];
 

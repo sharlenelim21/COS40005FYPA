@@ -41,24 +41,32 @@ import warnings
 import numpy as np
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# ── AHA 17-Segment Definitions (verbatim from bullseye_analysis.py) ───────────
+# ── AHA 17-Segment Definitions ─────────────────────────────────────────────
+# `name` strings are Lateral/Septal-swapped relative to a literal "verbatim"
+# copy — see the matching note in bullseye_analysis.py's AHA_SEGMENTS. Kept
+# in sync here so this subprocess-fallback path (used when the GPU service
+# is unreachable) shows the same names as the primary path. NOTE: this
+# file's ray_cast_thickness/group_sectors use a different angle formula than
+# bullseye_analysis.py's (no start-angle offset, no roll) — that's a
+# pre-existing, separate implementation and wasn't re-verified as part of
+# this fix; only the display names were changed here.
 AHA_SEGMENTS = [
     {"idx":  1, "name": "Basal Anterior",      "ring": 0, "t1":  60, "t2": 120},
-    {"idx":  2, "name": "Basal Anterolateral", "ring": 0, "t1": 120, "t2": 180},
-    {"idx":  3, "name": "Basal Inferolateral", "ring": 0, "t1": 180, "t2": 240},
+    {"idx":  2, "name": "Basal Anteroseptal",  "ring": 0, "t1": 120, "t2": 180},
+    {"idx":  3, "name": "Basal Inferoseptal",  "ring": 0, "t1": 180, "t2": 240},
     {"idx":  4, "name": "Basal Inferior",      "ring": 0, "t1": 240, "t2": 300},
-    {"idx":  5, "name": "Basal Inferoseptal",  "ring": 0, "t1": 300, "t2": 360},
-    {"idx":  6, "name": "Basal Anteroseptal",  "ring": 0, "t1":   0, "t2":  60},
+    {"idx":  5, "name": "Basal Inferolateral", "ring": 0, "t1": 300, "t2": 360},
+    {"idx":  6, "name": "Basal Anterolateral", "ring": 0, "t1":   0, "t2":  60},
     {"idx":  7, "name": "Mid Anterior",        "ring": 1, "t1":  60, "t2": 120},
-    {"idx":  8, "name": "Mid Anterolateral",   "ring": 1, "t1": 120, "t2": 180},
-    {"idx":  9, "name": "Mid Inferolateral",   "ring": 1, "t1": 180, "t2": 240},
+    {"idx":  8, "name": "Mid Anteroseptal",    "ring": 1, "t1": 120, "t2": 180},
+    {"idx":  9, "name": "Mid Inferoseptal",    "ring": 1, "t1": 180, "t2": 240},
     {"idx": 10, "name": "Mid Inferior",        "ring": 1, "t1": 240, "t2": 300},
-    {"idx": 11, "name": "Mid Inferoseptal",    "ring": 1, "t1": 300, "t2": 360},
-    {"idx": 12, "name": "Mid Anteroseptal",    "ring": 1, "t1":   0, "t2":  60},
+    {"idx": 11, "name": "Mid Inferolateral",   "ring": 1, "t1": 300, "t2": 360},
+    {"idx": 12, "name": "Mid Anterolateral",   "ring": 1, "t1":   0, "t2":  60},
     {"idx": 13, "name": "Apical Anterior",     "ring": 2, "t1":  45, "t2": 135},
-    {"idx": 14, "name": "Apical Lateral",      "ring": 2, "t1": 135, "t2": 225},
+    {"idx": 14, "name": "Apical Septal",       "ring": 2, "t1": 135, "t2": 225},
     {"idx": 15, "name": "Apical Inferior",     "ring": 2, "t1": 225, "t2": 315},
-    {"idx": 16, "name": "Apical Septal",       "ring": 2, "t1": -45, "t2":  45},
+    {"idx": 16, "name": "Apical Lateral",      "ring": 2, "t1": -45, "t2":  45},
     {"idx": 17, "name": "Apex",                "ring": 3, "t1":   0, "t2": 360},
 ]
 RING_NAMES = ["Basal", "Mid-cavity", "Apical", "Apex"]

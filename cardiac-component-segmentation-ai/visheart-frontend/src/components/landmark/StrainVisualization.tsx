@@ -68,12 +68,15 @@ export interface RvStrainResult {
 const BASE_GCS = [-17.1, -18.3, -16.8, -17.7, -19.4, -18.5, -20.2, -19.1, -18.2, -19.7, -20.8, -20.1, -21.0, -19.5, -20.4, -19.8, -18.9];
 const BASE_GRS = [26.4, 28.2, 24.9, 25.8, 30.1, 29.4, 31.2, 30.5, 27.8, 28.6, 32.4, 31.6, 34.1, 32.7, 33.4, 31.9, 29.8];
 
+// Lateral/Septal-swapped relative to a literal AHA-notebook copy — matches
+// this app's own compass-label convention (Septal drawn screen-left, Lateral
+// screen-right). See the matching note in bullseye_analysis.py's AHA_SEGMENTS.
 const SEGMENT_LABELS = [
-  "Basal Anterior", "Basal Anterolateral", "Basal Inferolateral",
-  "Basal Inferior", "Basal Inferoseptal", "Basal Anteroseptal",
-  "Mid Anterior", "Mid Anterolateral", "Mid Inferolateral",
-  "Mid Inferior", "Mid Inferoseptal", "Mid Anteroseptal",
-  "Apical Anterior", "Apical Lateral", "Apical Inferior", "Apical Septal",
+  "Basal Anterior", "Basal Anteroseptal", "Basal Inferoseptal",
+  "Basal Inferior", "Basal Inferolateral", "Basal Anterolateral",
+  "Mid Anterior", "Mid Anteroseptal", "Mid Inferoseptal",
+  "Mid Inferior", "Mid Inferolateral", "Mid Anterolateral",
+  "Apical Anterior", "Apical Septal", "Apical Inferior", "Apical Lateral",
   "Apex",
 ];
 

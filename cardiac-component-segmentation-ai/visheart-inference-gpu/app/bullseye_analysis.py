@@ -44,24 +44,35 @@ RING_RADII: list[tuple[float, float]] = [
 
 AHA_SEGMENTS: list[dict] = [
     # Basal (ring 0, 6 × 60°)
+    # NOTE ON NAMES: the `name` strings below are deliberately Lateral/Septal-
+    # swapped relative to the source notebook this file was originally copied
+    # from (that notebook, and standard published AHA-17 diagrams, place
+    # Septal on the right / Lateral on the left — verified by recovering the
+    # deleted bullseye_17seg.ipynb from git history and hand-tracing the ray
+    # geometry). This app's own chart components hardcode the OPPOSITE
+    # compass convention (Septal drawn on screen-left, Lateral on screen-
+    # right), so these names are swapped here to match THAT convention rather
+    # than the notebook's. The `t1`/`t2` fields and the ray-casting/
+    # group_sectors pipeline are untouched — only these display strings
+    # changed, so the numeric segment_values are unaffected.
     {"idx":  1, "name": "Basal Anterior",      "ring": 0, "t1":  60, "t2": 120},
-    {"idx":  2, "name": "Basal Anterolateral", "ring": 0, "t1": 120, "t2": 180},
-    {"idx":  3, "name": "Basal Inferolateral", "ring": 0, "t1": 180, "t2": 240},
+    {"idx":  2, "name": "Basal Anteroseptal",  "ring": 0, "t1": 120, "t2": 180},
+    {"idx":  3, "name": "Basal Inferoseptal",  "ring": 0, "t1": 180, "t2": 240},
     {"idx":  4, "name": "Basal Inferior",      "ring": 0, "t1": 240, "t2": 300},
-    {"idx":  5, "name": "Basal Inferoseptal",  "ring": 0, "t1": 300, "t2": 360},
-    {"idx":  6, "name": "Basal Anteroseptal",  "ring": 0, "t1":   0, "t2":  60},
+    {"idx":  5, "name": "Basal Inferolateral", "ring": 0, "t1": 300, "t2": 360},
+    {"idx":  6, "name": "Basal Anterolateral", "ring": 0, "t1":   0, "t2":  60},
     # Mid-cavity (ring 1, 6 × 60°)
     {"idx":  7, "name": "Mid Anterior",        "ring": 1, "t1":  60, "t2": 120},
-    {"idx":  8, "name": "Mid Anterolateral",   "ring": 1, "t1": 120, "t2": 180},
-    {"idx":  9, "name": "Mid Inferolateral",   "ring": 1, "t1": 180, "t2": 240},
+    {"idx":  8, "name": "Mid Anteroseptal",    "ring": 1, "t1": 120, "t2": 180},
+    {"idx":  9, "name": "Mid Inferoseptal",    "ring": 1, "t1": 180, "t2": 240},
     {"idx": 10, "name": "Mid Inferior",        "ring": 1, "t1": 240, "t2": 300},
-    {"idx": 11, "name": "Mid Inferoseptal",    "ring": 1, "t1": 300, "t2": 360},
-    {"idx": 12, "name": "Mid Anteroseptal",    "ring": 1, "t1":   0, "t2":  60},
+    {"idx": 11, "name": "Mid Inferolateral",   "ring": 1, "t1": 300, "t2": 360},
+    {"idx": 12, "name": "Mid Anterolateral",   "ring": 1, "t1":   0, "t2":  60},
     # Apical (ring 2, 4 × 90°)
     {"idx": 13, "name": "Apical Anterior",     "ring": 2, "t1":  45, "t2": 135},
-    {"idx": 14, "name": "Apical Lateral",      "ring": 2, "t1": 135, "t2": 225},
+    {"idx": 14, "name": "Apical Septal",       "ring": 2, "t1": 135, "t2": 225},
     {"idx": 15, "name": "Apical Inferior",     "ring": 2, "t1": 225, "t2": 315},
-    {"idx": 16, "name": "Apical Septal",       "ring": 2, "t1": -45, "t2":  45},
+    {"idx": 16, "name": "Apical Lateral",      "ring": 2, "t1": -45, "t2":  45},
     # Apex (ring 3, full circle)
     {"idx": 17, "name": "Apex",                "ring": 3, "t1":   0, "t2": 360},
 ]

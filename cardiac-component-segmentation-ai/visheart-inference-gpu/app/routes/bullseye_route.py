@@ -236,13 +236,15 @@ async def analyze_bullseye_s3(
 
 # ── Route C: compute strain from ED + ES NIfTI uploads ───────────────────────
 
+# Names mirror AHA_SEGMENTS in bullseye_analysis.py — see the note there on
+# why these are Lateral/Septal-swapped relative to the source notebook.
 _AHA_NAMES = [
-    "Basal Anterior", "Basal Anterolateral", "Basal Inferolateral",
-    "Basal Inferior",  "Basal Inferoseptal",  "Basal Anteroseptal",
-    "Mid Anterior",    "Mid Anterolateral",   "Mid Inferolateral",
-    "Mid Inferior",    "Mid Inferoseptal",    "Mid Anteroseptal",
-    "Apical Anterior", "Apical Lateral",      "Apical Inferior",
-    "Apical Septal",   "Apex",
+    "Basal Anterior", "Basal Anteroseptal", "Basal Inferoseptal",
+    "Basal Inferior",  "Basal Inferolateral",  "Basal Anterolateral",
+    "Mid Anterior",    "Mid Anteroseptal",   "Mid Inferoseptal",
+    "Mid Inferior",    "Mid Inferolateral",    "Mid Anterolateral",
+    "Apical Anterior", "Apical Septal",      "Apical Inferior",
+    "Apical Lateral",   "Apex",
 ]
 
 

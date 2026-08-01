@@ -83,23 +83,26 @@ const MODEL_OPTIONS = [
 
 type ModelId = typeof MODEL_OPTIONS[number]["value"];
 
+// Lateral/Septal-swapped relative to a literal AHA-notebook copy — matches
+// this app's own compass-label convention (Septal drawn screen-left, Lateral
+// screen-right). See the matching note in bullseye_analysis.py's AHA_SEGMENTS.
 const AHA_SEGMENTS = [
   "Basal Anterior",
-  "Basal Anterolateral",
-  "Basal Inferolateral",
-  "Basal Inferior",
-  "Basal Inferoseptal",
   "Basal Anteroseptal",
+  "Basal Inferoseptal",
+  "Basal Inferior",
+  "Basal Inferolateral",
+  "Basal Anterolateral",
   "Mid Anterior",
-  "Mid Anterolateral",
-  "Mid Inferolateral",
-  "Mid Inferior",
-  "Mid Inferoseptal",
   "Mid Anteroseptal",
+  "Mid Inferoseptal",
+  "Mid Inferior",
+  "Mid Inferolateral",
+  "Mid Anterolateral",
   "Apical Anterior",
-  "Apical Lateral",
-  "Apical Inferior",
   "Apical Septal",
+  "Apical Inferior",
+  "Apical Lateral",
   "Apex",
 ] as const;
 
