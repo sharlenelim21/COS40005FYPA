@@ -1092,7 +1092,7 @@ function SegmentationResultsPageInner() {
 
         {!isGpuMode && (
           <span className="text-xs text-muted-foreground">
-            This model is only available with NVIDIA GPU.
+            MedSAM model is only available with NVIDIA GPU.
           </span>
         )}
 

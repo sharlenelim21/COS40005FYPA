@@ -60,10 +60,18 @@ export const researchApi = {
     }
   },
 
-  /** Free-text heart-literature question, e.g. "Explain peak GRS". */
-  ask: async (question: string): Promise<ResearchAnswer> => {
+  /**
+   * Free-text heart-literature question, e.g. "Explain peak GRS".
+   * `sessionId` (optional) lets a vague follow-up like "give me other related
+   * papers?" resolve against the previous question — the backend remembers
+   * the last topic per session_id. Omit it and each call is answered fresh.
+   */
+  ask: async (question: string, sessionId?: string): Promise<ResearchAnswer> => {
     try {
-      const res = await api.post<ResearchAnswer>("/ask", { question });
+      const res = await api.post<ResearchAnswer>("/ask", {
+        question,
+        session_id: sessionId,
+      });
       return res.data;
     } catch (err) {
       throw toError(err, "Could not reach the research assistant.");
@@ -74,9 +82,17 @@ export const researchApi = {
    * Explain a report in light of the literature. `context` is the patient's
    * measurements as a plain string; `question` is optional.
    */
-  explain: async (context: string, question?: string): Promise<ResearchAnswer> => {
+  explain: async (
+    context: string,
+    question?: string,
+    sessionId?: string,
+  ): Promise<ResearchAnswer> => {
     try {
-      const res = await api.post<ResearchAnswer>("/explain", { context, question });
+      const res = await api.post<ResearchAnswer>("/explain", {
+        context,
+        question,
+        session_id: sessionId,
+      });
       return res.data;
     } catch (err) {
       throw toError(err, "Could not reach the research assistant.");

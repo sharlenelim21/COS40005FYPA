@@ -38,8 +38,8 @@ export default function ReportPage() {
   // hook runs when a mask has no stored metrics yet, so the summary cards can
   // show progress instead of a permanent "not computed" dead end.
   const {
-    model, available, measurements, healthStatus, similarity, strain, strainSeries,
-    computing, computeError, newerMaskAvailable, regionalHealthStatus,
+    model, measurements, healthStatus, similarity, strain, strainSeries,
+    computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
@@ -101,6 +101,20 @@ export default function ReportPage() {
         strokeVolume: measurements?.StrokeVolume ?? null,
         peakGrs: measurements?.PeakGRS ?? null,
         peakGcs: measurements?.PeakGCS ?? null,
+        // RV — printed only when present. Ratio/difference are derived here so
+        // the print page stays a pure presentation component.
+        rvEf: rv?.RVEF ?? null,
+        rvEdv: rv?.RVEDV ?? null,
+        rvEsv: rv?.RVESV ?? null,
+        rvSv: rv?.RV_SV ?? null,
+        rvLvRatio:
+          rv?.RVEDV != null && (lvVolumes?.LVEDV ?? measurements?.EDV)
+            ? rv.RVEDV / (lvVolumes?.LVEDV ?? measurements!.EDV!)
+            : null,
+        svDifference:
+          rv?.RV_SV != null && (lvVolumes?.LV_SV ?? measurements?.StrokeVolume) != null
+            ? rv.RV_SV - (lvVolumes?.LV_SV ?? measurements!.StrokeVolume!)
+            : null,
         voxelSize: PLACEHOLDER_PATIENT_SUMMARY.voxelSize,
         healthStatus: healthStatus?.status ?? "Indeterminate",
         healthEvidence:
@@ -128,7 +142,9 @@ export default function ReportPage() {
       (f.segments ?? []).map((s) => ({
         segment: s.segment,
         label: s.label,
-        strain: ((s as any)[k] ?? 0) as number,
+        // Indexing by the narrowed "grs" | "gcs" key needs no cast — the
+        // segment type declares both fields.
+        strain: (s[k] ?? 0) as number,
       })),
     );
   };
@@ -190,6 +206,9 @@ export default function ReportPage() {
           strain={strain}
           strainSeries={strainSeries}
           regionalHealthStatus={regionalHealthStatus}
+          rv={rv}
+          lvVolumes={lvVolumes}
+          rvStrain={rvStrain}
           computing={computing}
           computeError={computeError}
         />

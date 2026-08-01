@@ -25,8 +25,41 @@ export type Measurements = {
   PeakGCS: number | null;
 };
 
+/**
+ * Right-ventricular metrics.
+ *
+ * These are stored at the TOP LEVEL of `heartMetrics` by
+ * compute_heart_metrics_from_rle.py — deliberately NOT inside `measurements`,
+ * which is the LV-only contract the report/similarity modules consume. They
+ * were already being computed and persisted; they simply weren't surfaced to
+ * the frontend until now.
+ *
+ * All optional: a mask with no RV cavity yields nulls (the Python emits a
+ * warning and sets RVEF/RV_SV to null rather than dividing by zero), and older
+ * documents predate the fields entirely.
+ */
+export type RvMetrics = {
+  RVEDV: number | null;
+  RVESV: number | null;
+  RV_SV: number | null;
+  RVEF: number | null;
+  /** Per-frame RV volume curve, index = frameindex. */
+  rv_volumes_ml?: (number | null)[];
+};
+
 export type HeartMetrics = {
   measurements?: Measurements;
+  /** LV end-diastolic volume — the LV twin of RVEDV, kept top-level by the
+   *  backend for the same reason (measurements is the flat report contract). */
+  LVEDV?: number | null;
+  LVESV?: number | null;
+  LV_SV?: number | null;
+  LVEF?: number | null;
+  RVEDV?: number | null;
+  RVESV?: number | null;
+  RV_SV?: number | null;
+  RVEF?: number | null;
+  rv_volumes_ml?: (number | null)[];
   ed_frame?: number;
   es_frame?: number;
   LV_mass_g?: number | null;
@@ -589,6 +622,26 @@ export function useProjectResults(
     /** Both models' full mask docs — for exports that cover UNet and MedSAM. */
     byModel,
     measurements: doc?.heartMetrics?.measurements,
+    /**
+     * RV metrics, surfaced separately from `measurements` so the LV-only
+     * contract that feeds health status and disease similarity is unchanged.
+     * `null` when the mask has no RV cavity — callers must handle that rather
+     * than rendering NaN.
+     */
+    rv: doc?.heartMetrics
+      ? {
+          RVEDV: doc.heartMetrics.RVEDV ?? null,
+          RVESV: doc.heartMetrics.RVESV ?? null,
+          RV_SV: doc.heartMetrics.RV_SV ?? null,
+          RVEF: doc.heartMetrics.RVEF ?? null,
+          rv_volumes_ml: doc.heartMetrics.rv_volumes_ml,
+        }
+      : undefined,
+    /** LV volumes as stored top-level — used for the RV:LV ratio, which needs
+     *  LVEDV alongside RVEDV. `measurements.EDV` is the same number. */
+    lvVolumes: doc?.heartMetrics
+      ? { LVEDV: doc.heartMetrics.LVEDV ?? null, LV_SV: doc.heartMetrics.LV_SV ?? null }
+      : undefined,
     healthStatus: doc?.healthStatus,
     /** Layer 2 — advisory regional assessment; never changes healthStatus. */
     regionalHealthStatus: doc?.regionalHealthStatus,
