@@ -1817,13 +1817,13 @@ function AhaBullseyeChart({
         Anterior
       </text>
       <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">
-        Lateral
+        Septal 
       </text>
       <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
         Inferior
       </text>
       <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">
-        Septal 
+        Lateral
       </text>
 
       {Array.from({ length: 6 }, (_, index) => (
