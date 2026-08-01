@@ -20,6 +20,7 @@ import {
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain } from "@/hooks/useProjectResults";
+import { RvStrainChart } from "@/components/landmark/RvStrainChart";
 import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
 import { buildPatientContext } from "@/lib/researchApi";
 
@@ -555,6 +556,9 @@ export function InteractiveReport({
    * ED→ES peak result, so the info box must NOT follow hoverFrame.
    */
   const [selectedSeg, setSelectedSeg] = useState<number | null>(null);
+  /** RV region selection — separate from the LV segment selection above; the
+   *  two charts are independent and their ids are different scales. */
+  const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
   const [showAllSegments, setShowAllSegments] = useState(false);
   const strainCardRef = React.useRef<HTMLDivElement | null>(null);
   const [pulse, setPulse] = useState(false);
@@ -1394,66 +1398,84 @@ export function InteractiveReport({
           </span>
         }
       >
-        {!rvStrain ? (
+        {!rvStrain?.regions?.length ? (
           <p className="py-5 text-center text-sm text-muted-foreground">
-            Not yet available — RV strain pending (backend).
+            No RV regional strain computed for this model yet — run RV strain from the
+            Landmark Detection page.
           </p>
         ) : (
-          <>
-            <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
-              <div>
-                <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Global RV GCS
-                </span>
-                <span className="text-[19px] font-bold tabular-nums text-foreground">
-                  {fmt(rvStrain.global_rv_gcs)}
-                  <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
-                </span>
-              </div>
-              {rvStrain.free_wall_gcs != null && (
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-[300px_1fr]">
+            {/* Same chart the landmark page draws RV strain with — 2 rings
+                (basal, mid) x 3 free-wall sectors. Reused rather than
+                reimplemented so the two views can never disagree. */}
+            <div onClick={(e) => e.stopPropagation()}>
+              <RvStrainChart
+                regions={rvStrain.regions}
+                selectedRegion={selectedRvRegion}
+                onRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
+              />
+            </div>
+
+            <div>
+              <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                 <div>
                   <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Free-wall GCS
+                    Global RV Strain
                   </span>
                   <span className="text-[19px] font-bold tabular-nums text-foreground">
-                    {fmt(rvStrain.free_wall_gcs)}
+                    {fmt(rvStrain.global_rv_strain)}
                     <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
                   </span>
                 </div>
-              )}
-            </div>
-
-            {/* Per band. No severity colouring anywhere — there is no validated
-                cutoff for this measure, so tinting it would imply one. */}
-            {rvStrain.segments?.length > 0 && (
-              <div className="mt-4 grid grid-cols-3 gap-2">
-                {rvStrain.segments.map((s) => (
-                  <div key={s.band} className="rounded-lg border border-border px-2.5 py-2">
+                {rvStrain.edFrameIndex != null && rvStrain.esFrameIndex != null && (
+                  <div>
                     <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {s.band}
+                      Frames
                     </span>
-                    <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
-                      {fmt(s.rv_gcs)}
-                      <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
+                    <span className="text-[13px] font-semibold tabular-nums text-foreground">
+                      ED {rvStrain.edFrameIndex} → ES {rvStrain.esFrameIndex}
                     </span>
                   </div>
+                )}
+              </div>
+
+              {/* Per region. Deliberately NO severity colouring: this measure
+                  has no validated cutoff, so tinting it would imply one. */}
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {rvStrain.regions.map((r) => (
+                  <button
+                    key={r.region}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedRvRegion((cur) => (cur === r.region ? null : r.region));
+                    }}
+                    className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                      selectedRvRegion === r.region
+                        ? "border-primary ring-2 ring-primary/30"
+                        : "border-border hover:bg-muted/50"}`}
+                  >
+                    <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {r.label}
+                    </span>
+                    <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
+                      {fmt(r.strain)}
+                      <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
+                    </span>
+                  </button>
                 ))}
               </div>
-            )}
 
-            <p className="mt-3 text-[10px] leading-snug text-muted-foreground">
-              {rvStrain.note}
-              {(rvStrain.source || rvStrain.method) && (
-                <span className="ml-1 opacity-80">
-                  ({[rvStrain.source, rvStrain.method].filter(Boolean).join(" · ")})
-                </span>
-              )}
-            </p>
-            <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
-              Negative values indicate circumferential shortening. No severity threshold is
-              applied — this measure does not contribute to any health-status grade.
-            </p>
-          </>
+              <p className="mt-3 text-[10px] leading-snug text-muted-foreground">
+                <span className="font-semibold text-foreground">Exploratory only.</span>{" "}
+                RV strain here is the percentage change in RV cavity boundary radius between
+                end-diastole and end-systole — not a wall-thickness measure like the LV&apos;s
+                GRS/GCS, and not the validated longitudinal RV measure. Negative values
+                indicate the cavity shrinking (the healthy direction). No severity threshold
+                is applied and this does not contribute to any health-status grade.
+              </p>
+            </div>
+          </div>
         )}
       </Card>
 

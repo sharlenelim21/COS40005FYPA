@@ -47,32 +47,6 @@ export type RvMetrics = {
   rv_volumes_ml?: (number | null)[];
 };
 
-/**
- * RV regional strain — the agreed CONTRACT for a backend module that does not
- * exist yet (`compute_rv_strain_from_rle.py`, stored as `rvStrain` on the mask
- * document). Declared here so the report can render it the moment it lands;
- * the frontend computes none of it.
- *
- * ⚠️ EXPLORATORY by construction, whatever the backend produces:
- *   - a GEOMETRIC contour-length proxy, not tracked material points
- *   - CIRCUMFERENTIAL, not the validated longitudinal RV measure
- *   - from SHORT-AXIS slices, so through-plane motion is unaccounted for
- * It therefore has no severity cutoff and must never feed a grade.
- *
- * `rv_gcs` is a percentage; negative = circumferential shortening (contraction).
- */
-export type RvStrain = {
-  global_rv_gcs: number | null;
-  segments: { band: "basal" | "mid" | "apical"; rv_gcs: number | null }[];
-  /** Only present when RV insertion landmarks were available to split the
-   *  contour into free-wall vs septal arcs. */
-  free_wall_gcs?: number | null;
-  source: string;   // e.g. "blood-pool"
-  method: string;   // e.g. "contour-length"
-  note: string;     // exploratory caveat, surfaced in the UI
-  computed_at?: string;
-};
-
 export type HeartMetrics = {
   measurements?: Measurements;
   /** LV end-diastolic volume — the LV twin of RVEDV, kept top-level by the
@@ -244,8 +218,6 @@ export type MaskDoc = {
   diseaseSimilarity?: DiseaseSimilarity;
   healthStatus?: HealthStatus;
   regionalHealthStatus?: RegionalHealthStatus;
-  /** Written by a future backend module; absent on every mask today. */
-  rvStrain?: RvStrain;
   strain?: Strain;
   strainSeries?: StrainSeries;
   rvStrain?: RvStrain;
@@ -673,9 +645,6 @@ export function useProjectResults(
     healthStatus: doc?.healthStatus,
     /** Layer 2 — advisory regional assessment; never changes healthStatus. */
     regionalHealthStatus: doc?.regionalHealthStatus,
-    /** Exploratory RV regional strain — undefined until the backend module
-     *  exists. The report renders a pending state rather than blank. */
-    rvStrain: doc?.rvStrain,
     similarity: doc?.diseaseSimilarity,
     strain: doc?.strain,
     strainSeries: doc?.strainSeries,
