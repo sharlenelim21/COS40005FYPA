@@ -782,6 +782,8 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   regionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // Layer 2 — advisory per-AHA-segment assessment from regional strain. Mixed for the same reason as healthStatus/bullseye: a typed sub-schema would strip unknown keys.
   strain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES strain result (global + 17-segment) — see IProjectSegmentationMask.strain
   strainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame strain vs. the fixed ED reference — see IProjectSegmentationMask.strainSeries
+  rvStrain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES regional RV (cavity-radius) strain — see IProjectSegmentationMask.rvStrain
+  rvStrainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame RV strain vs. the fixed ED reference — see IProjectSegmentationMask.rvStrainSeries
   diseaseSimilarity: { type: Schema.Types.Mixed, required: false }, // NOR/HCM/DCM pattern-similarity assessment (NOT a diagnosis)
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 

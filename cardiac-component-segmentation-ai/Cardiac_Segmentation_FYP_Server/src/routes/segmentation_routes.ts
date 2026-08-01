@@ -1333,6 +1333,232 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
     }
 });
 
+// ── POST /segmentation/compute-rv-strain-from-frames ─────────────────────────
+// Regional RV cavity-radius strain — mirrors compute-strain-from-frames above
+// almost exactly (same NIfTI generation, since the combined mask already
+// carries the RV label; same RV-insertion-landmark lookup), but proxies to
+// the GPU's /bullseye/compute-rv-strain instead and persists to `rvStrain`.
+// Deliberately skips the disease-similarity/health-status auto-chaining that
+// follows LV strain — those consumers are LV-metric-specific.
+router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const { projectId, edFrameIndex, esFrameIndex, modelType } = req.body;
+
+    if (!projectId || edFrameIndex === undefined || esFrameIndex === undefined) {
+        return res.status(400).json({ error: "projectId, edFrameIndex, esFrameIndex required" });
+    }
+    if (edFrameIndex === esFrameIndex) {
+        return res.status(400).json({ error: "ED and ES frame indices must be different" });
+    }
+
+    const tempId = uuidv4();
+    const baseTempDir = path.join(__dirname, '..', 'temp_exports', `rv_strain_frames_${tempId}`);
+
+    try {
+        // 1. Verify project access
+        const projectResult = await readProject(projectId, userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ error: "Project not found or access denied." });
+        }
+        const project = projectResult.projects[0] as IProjectDocument;
+        const W = project.dimensions?.width;
+        const H = project.dimensions?.height;
+        if (!W || !H) {
+            return res.status(400).json({ error: "Project is missing dimension data." });
+        }
+
+        // 2. Find the editable segmentation mask matching the requested model with the most frames
+        const allMasks = await projectSegmentationMaskModel.find({
+            projectid: projectId,
+            segmentationModel: modelType ?? "unet",
+            isMedSAMOutput: false,
+            "frames.0": { $exists: true },
+        }).lean();
+
+        if (!allMasks || allMasks.length === 0) {
+            return res.status(404).json({ error: `No ${modelType ?? "unet"} segmentation mask with stored frames found for this project. Run ${modelType ?? "unet"} segmentation first.` });
+        }
+
+        const maskDoc = allMasks.reduce((best: any, m: any) => {
+            const n = m.frames?.length ?? 0;
+            const bn = best.frames?.length ?? 0;
+            if (n !== bn) return n > bn ? m : best;
+            return String(m._id) > String(best._id) ? m : best;
+        });
+
+        const frames = (maskDoc as any).frames ?? [];
+        const edFrame = frames.find((f: any) => f.frameindex === edFrameIndex);
+        const esFrame = frames.find((f: any) => f.frameindex === esFrameIndex);
+        if (!edFrame) {
+            return res.status(404).json({ error: `Frame ${edFrameIndex} not found in stored segmentation` });
+        }
+        if (!esFrame) {
+            return res.status(404).json({ error: `Frame ${esFrameIndex} not found in stored segmentation` });
+        }
+
+        // 3. GPU connection
+        const gpuBaseUrl = await getFreshGPUServerAddress();
+        const token = getCurrentToken();
+        if (!gpuBaseUrl || !token) {
+            return res.status(503).json({ error: "GPU service unavailable." });
+        }
+
+        await fs.ensureDir(baseTempDir);
+
+        // 4. Generate NIfTI for each frame via Python (same as compute-strain-from-frames —
+        // the combined RLE→label assembly already includes the RV class, no new logic needed)
+        const buildNIfTI = async (frame: any, label: string): Promise<string> => {
+            const niftiPath = path.join(baseTempDir, `${label}_${tempId}.nii.gz`);
+            const segJsonPath = path.join(baseTempDir, `${label}_${tempId}.json`);
+
+            const singleFrameDoc = { ...frame, frameindex: 0 };
+            const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
+            await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
+
+            let pythonCommand: string;
+            if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
+                const affineFile = path.join(baseTempDir, `affine_${label}.json`);
+                const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
+                await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
+                await fs.writeJson(dimsFile,   { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
+                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+            } else {
+                const s3Url = (project as any).extractedfolderpath;
+                if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
+                const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
+                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+            }
+
+            await new Promise<void>((resolve, reject) => {
+                exec(pythonCommand, (error, stdout, stderr) => {
+                    if (stdout) logger.info(`${serviceLocation}: Python [${label}] stdout: ${stdout.trim()}`);
+                    if (stderr) logger.warn(`${serviceLocation}: Python [${label}] stderr: ${stderr.trim()}`);
+                    if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
+                    else resolve();
+                });
+            });
+
+            if (!(await fs.pathExists(niftiPath))) {
+                throw new Error(`NIfTI file not produced for ${label}`);
+            }
+            return niftiPath;
+        };
+
+        const [edPath, esPath] = await Promise.all([
+            buildNIfTI(edFrame, "ed"),
+            buildNIfTI(esFrame, "es"),
+        ]);
+
+        // 5. Look up RV insertion landmarks (same lookup as LV strain — shared,
+        // model-independent alignment points)
+        const extractCoord = (lm: any): { x: number; y: number } | null => {
+            if (!lm) return null;
+            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
+            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
+            return null;
+        };
+
+        let lm1: { x: number; y: number } | null = null;
+        let lm2: { x: number; y: number } | null = null;
+
+        const savedLandmarkDoc = await projectLandmarkModel
+            .findOne({ projectid: projectId, isModelOutput: false })
+            .sort({ updatedAt: -1 })
+            .lean();
+
+        if (savedLandmarkDoc) {
+            const lm1Points: { x: number; y: number }[] = [];
+            const lm2Points: { x: number; y: number }[] = [];
+            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
+                for (const slice of frame.slices ?? []) {
+                    for (const point of slice.landmarks ?? []) {
+                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
+                    }
+                }
+            }
+            const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
+                points.length
+                    ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
+                    : null;
+            lm1 = mean(lm1Points);
+            lm2 = mean(lm2Points);
+        }
+
+        if (!lm1 || !lm2) {
+            const landmarkJob = await jobModel
+                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
+                .sort({ updatedAt: -1 })
+                .lean();
+            const lmResult = landmarkJob?.result
+                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
+                : null;
+            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
+            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+        }
+
+        // 6. POST both NIfTI files to GPU
+        const FormDataNode = require("form-data");
+        const form = new FormDataNode();
+        form.append("ed_file", fs.createReadStream(edPath), { filename: "ed.nii.gz", contentType: "application/gzip" });
+        form.append("es_file", fs.createReadStream(esPath), { filename: "es.nii.gz", contentType: "application/gzip" });
+        if (lm1) {
+            form.append("rv_insertion_1_x", String(lm1.x));
+            form.append("rv_insertion_1_y", String(lm1.y));
+        }
+        if (lm2) {
+            form.append("rv_insertion_2_x", String(lm2.x));
+            form.append("rv_insertion_2_y", String(lm2.y));
+        }
+
+        const gpuRes = await axios.post(`${gpuBaseUrl}/bullseye/compute-rv-strain`, form, {
+            headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
+            timeout: 120000,
+        });
+
+        // 7. Clean up and return
+        await fs.remove(baseTempDir);
+
+        // Persist the RV strain result on the mask doc, sibling to `strain`, so
+        // the panel can reload it instead of recomputing on every visit.
+        try {
+            await projectSegmentationMaskModel.findByIdAndUpdate(
+                maskDoc._id.toString(),
+                {
+                    $set: {
+                        rvStrain: {
+                            ...gpuRes.data,
+                            edFrameIndex,
+                            esFrameIndex,
+                            segmentationModel: modelType ?? "unet",
+                            computed_at: new Date().toISOString(),
+                        },
+                        updatedAt: new Date(),
+                    },
+                },
+                { new: true },
+            ).lean();
+            logger.info(`${serviceLocation}: Stored rvStrain on mask ${maskDoc._id} — global_rv_strain=${gpuRes.data?.global_rv_strain} edFrame=${edFrameIndex} esFrame=${esFrameIndex}`);
+        } catch (persistErr: any) {
+            logger.warn(`${serviceLocation}: Failed to persist rvStrain on mask ${maskDoc._id}: ${persistErr?.message}`);
+        }
+
+        logger.info(`${serviceLocation}: RV strain from frames computed for project ${projectId} edFrame=${edFrameIndex} esFrame=${esFrameIndex}`);
+        return res.status(200).json({
+            ...gpuRes.data,
+            edFrameIndex,
+            esFrameIndex,
+            source: "frames",
+        });
+
+    } catch (err: any) {
+        await fs.remove(baseTempDir).catch(() => {});
+        logger.error(`${serviceLocation}: compute-rv-strain-from-frames failed for project ${projectId}: ${err?.message} | GPU response: ${JSON.stringify(err?.response?.data)}`);
+        return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "RV strain from frames failed." });
+    }
+});
+
 // Compute a PER-FRAME strain series: every stored frame measured against the
 // fixed ED reference frame, so the UI can plot a full cardiac-cycle curve and
 // scrub frame-by-frame. `compute-strain-from-frames` above returns the single
@@ -1611,6 +1837,242 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         await fs.remove(baseTempDir).catch(() => {});
         logger.error(`${serviceLocation}: compute-strain-series failed for project ${projectId}: ${err?.message}`);
         return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "Strain series computation failed." });
+    }
+});
+
+// Compute a PER-FRAME regional RV strain series — RV analog of
+// compute-strain-series above. Mirrors its structure closely (same NIfTI
+// build, same landmark lookup, same bounded-concurrency batching over
+// /bullseye/compute-rv-strain instead of /bullseye/compute-strain), storing
+// to `rvStrainSeries` (sibling to `strainSeries`) instead of overloading the
+// LV field with a different data shape.
+//
+// POST /segmentation/compute-rv-strain-series
+// body: { projectId, edFrameIndex, modelType?, frameStep? }
+router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const { projectId, edFrameIndex, modelType, frameStep } = req.body;
+
+    if (!projectId || edFrameIndex === undefined) {
+        return res.status(400).json({ error: "projectId and edFrameIndex are required" });
+    }
+
+    const model = modelType ?? "unet";
+    const tempId = uuidv4();
+    const baseTempDir = path.join(__dirname, '..', 'temp_exports', `rv_strain_series_${tempId}`);
+
+    try {
+        const projectResult = await readProject(projectId, userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ error: "Project not found or access denied." });
+        }
+        const project = projectResult.projects[0] as IProjectDocument;
+        const W = project.dimensions?.width;
+        const H = project.dimensions?.height;
+        if (!W || !H) {
+            return res.status(400).json({ error: "Project is missing dimension data." });
+        }
+
+        const allMasks = await projectSegmentationMaskModel.find({
+            projectid: projectId,
+            segmentationModel: model,
+            isMedSAMOutput: false,
+            "frames.0": { $exists: true },
+        }).lean();
+        if (!allMasks?.length) {
+            return res.status(404).json({ error: `No ${model} segmentation mask with stored frames found. Run ${model} segmentation first.` });
+        }
+        const maskDoc = allMasks.reduce((best: any, m: any) => {
+            const n = m.frames?.length ?? 0;
+            const bn = best.frames?.length ?? 0;
+            if (n !== bn) return n > bn ? m : best;
+            return String(m._id) > String(best._id) ? m : best;
+        });
+
+        const frames = ((maskDoc as any).frames ?? []) as any[];
+        const edFrame = frames.find((f: any) => f.frameindex === edFrameIndex);
+        if (!edFrame) {
+            return res.status(404).json({ error: `ED frame ${edFrameIndex} not found in stored segmentation` });
+        }
+
+        const step = Math.max(1, Number(frameStep) || 1);
+        const targetFrames = frames
+            .filter((f: any) => f.frameindex !== edFrameIndex)
+            .sort((a: any, b: any) => a.frameindex - b.frameindex)
+            .filter((_: any, i: number) => i % step === 0);
+
+        const gpuBaseUrl = await getFreshGPUServerAddress();
+        const token = getCurrentToken();
+        if (!gpuBaseUrl || !token) {
+            return res.status(503).json({ error: "GPU service unavailable." });
+        }
+
+        await fs.ensureDir(baseTempDir);
+
+        const buildNIfTI = async (frame: any, label: string): Promise<string> => {
+            const niftiPath = path.join(baseTempDir, `${label}_${tempId}.nii.gz`);
+            const segJsonPath = path.join(baseTempDir, `${label}_${tempId}.json`);
+            const singleFrameDoc = { ...frame, frameindex: 0 };
+            const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
+            await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
+
+            let pythonCommand: string;
+            if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
+                const affineFile = path.join(baseTempDir, `affine_${label}.json`);
+                const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
+                await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
+                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+            } else {
+                const s3Url = (project as any).extractedfolderpath;
+                if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
+                const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
+                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+            }
+
+            await new Promise<void>((resolve, reject) => {
+                exec(pythonCommand, (error, _stdout, stderr) => {
+                    if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
+                    else resolve();
+                });
+            });
+            if (!(await fs.pathExists(niftiPath))) throw new Error(`NIfTI file not produced for ${label}`);
+            return niftiPath;
+        };
+
+        const extractCoord = (lm: any): { x: number; y: number } | null => {
+            if (!lm) return null;
+            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
+            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
+            return null;
+        };
+        let lm1: { x: number; y: number } | null = null;
+        let lm2: { x: number; y: number } | null = null;
+        const savedLandmarkDoc = await projectLandmarkModel
+            .findOne({ projectid: projectId, isModelOutput: false })
+            .sort({ updatedAt: -1 })
+            .lean();
+        if (savedLandmarkDoc) {
+            const lm1Points: { x: number; y: number }[] = [];
+            const lm2Points: { x: number; y: number }[] = [];
+            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
+                for (const slice of frame.slices ?? []) {
+                    for (const point of slice.landmarks ?? []) {
+                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
+                    }
+                }
+            }
+            const mean = (pts: { x: number; y: number }[]) =>
+                pts.length ? { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length } : null;
+            lm1 = mean(lm1Points);
+            lm2 = mean(lm2Points);
+        }
+        if (!lm1 || !lm2) {
+            const landmarkJob = await jobModel
+                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
+                .sort({ updatedAt: -1 })
+                .lean();
+            const lmResult = landmarkJob?.result
+                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
+                : null;
+            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
+            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+        }
+
+        const edPath = await buildNIfTI(edFrame, "ed");
+        const FormDataNode = require("form-data");
+
+        const rvStrainForFrame = async (frame: any): Promise<any | null> => {
+            const label = `f${frame.frameindex}`;
+            try {
+                const framePath = await buildNIfTI(frame, label);
+                const form = new FormDataNode();
+                form.append("ed_file", fs.createReadStream(edPath), { filename: "ed.nii.gz", contentType: "application/gzip" });
+                form.append("es_file", fs.createReadStream(framePath), { filename: `${label}.nii.gz`, contentType: "application/gzip" });
+                if (lm1) { form.append("rv_insertion_1_x", String(lm1.x)); form.append("rv_insertion_1_y", String(lm1.y)); }
+                if (lm2) { form.append("rv_insertion_2_x", String(lm2.x)); form.append("rv_insertion_2_y", String(lm2.y)); }
+
+                const r = await axios.post(`${gpuBaseUrl}/bullseye/compute-rv-strain`, form, {
+                    headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
+                    timeout: 120000,
+                });
+                await fs.remove(framePath).catch(() => {});
+                return {
+                    frameIndex: frame.frameindex,
+                    global_rv_strain: typeof r.data?.global_rv_strain === "number" ? r.data.global_rv_strain : null,
+                    regions: (r.data?.regions ?? []).map((reg: any) => ({
+                        region: reg.region,
+                        label: reg.label,
+                        strain: reg.strain ?? null,
+                        radius_mm: reg.radius_es_mm ?? null,
+                        radius_ed_mm: reg.radius_ed_mm ?? null,
+                    })),
+                };
+            } catch (frameErr: any) {
+                logger.warn(`${serviceLocation}: rv-strain-series frame ${frame.frameindex} failed: ${frameErr?.message}`);
+                return null;
+            }
+        };
+
+        const CONCURRENCY = 3;
+        const computed: any[] = [];
+        for (let i = 0; i < targetFrames.length; i += CONCURRENCY) {
+            const batch = targetFrames.slice(i, i + CONCURRENCY);
+            const results = await Promise.all(batch.map(rvStrainForFrame));
+            for (const r of results) if (r) computed.push(r);
+        }
+
+        const edRegions = (computed[0]?.regions ?? []).map((r: any) => ({
+            region: r.region,
+            label: r.label,
+            strain: 0,
+            radius_mm: r.radius_ed_mm ?? null,
+        }));
+        const series = [
+            { frameIndex: edFrameIndex, global_rv_strain: 0, regions: edRegions },
+            ...computed,
+        ].sort((a, b) => a.frameIndex - b.frameIndex);
+
+        let peakFrameIndex: number | null = null;
+        let peakRvStrain: number | null = null;
+        for (const f of series) {
+            if (typeof f.global_rv_strain === "number" && (peakRvStrain === null || Math.abs(f.global_rv_strain) > Math.abs(peakRvStrain))) {
+                peakRvStrain = f.global_rv_strain;
+                peakFrameIndex = f.frameIndex;
+            }
+        }
+
+        await fs.remove(baseTempDir).catch(() => {});
+
+        const rvStrainSeries = {
+            frames: series,
+            edFrameIndex,
+            peakFrameIndex,
+            peak_global_rv_strain: peakRvStrain,
+            segmentationModel: model,
+            framesRequested: targetFrames.length + 1,
+            framesComputed: series.length,
+            computed_at: new Date().toISOString(),
+        };
+
+        try {
+            await projectSegmentationMaskModel.findByIdAndUpdate(
+                maskDoc._id.toString(),
+                { $set: { rvStrainSeries, updatedAt: new Date() } },
+            );
+            logger.info(`${serviceLocation}: Stored rvStrainSeries on mask ${maskDoc._id} — ${series.length}/${targetFrames.length + 1} frames, model=${model}, peak=${peakRvStrain} @frame ${peakFrameIndex}`);
+        } catch (persistErr: any) {
+            logger.warn(`${serviceLocation}: Failed to persist rvStrainSeries on mask ${maskDoc._id}: ${persistErr?.message}`);
+        }
+
+        return res.status(200).json(rvStrainSeries);
+
+    } catch (err: any) {
+        await fs.remove(baseTempDir).catch(() => {});
+        logger.error(`${serviceLocation}: compute-rv-strain-series failed for project ${projectId}: ${err?.message}`);
+        return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "RV strain series computation failed." });
     }
 });
 

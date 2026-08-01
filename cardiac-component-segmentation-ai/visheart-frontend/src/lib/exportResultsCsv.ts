@@ -52,6 +52,11 @@ export function buildResultsCsv(
     ["Peak GCS", "%", (d) => d.heartMetrics?.measurements?.PeakGCS],
     ["ED frame", "", (d) => d.heartMetrics?.ed_frame],
     ["ES frame", "", (d) => d.heartMetrics?.es_frame],
+    // RV strain isn't part of heartMetrics.measurements (it's a separate
+    // cavity-radius measure, not GRS/GCS — see rvStrain), so pull its global
+    // value straight from the series peak, falling back to the single ED→ES
+    // result. Not a "Peak" label to avoid implying it's GRS/GCS-comparable.
+    ["Global RV Strain", "%", (d) => d.rvStrainSeries?.peak_global_rv_strain ?? d.rvStrain?.global_rv_strain],
   ];
   for (const [label, unit, get] of measRows) {
     lines.push(row(label, unit, ...present.map((m) => {
@@ -121,6 +126,41 @@ export function buildResultsCsv(
     }
   }
   if (!anySeries) lines.push(row("(no per-frame series computed for any model)"));
+  lines.push("");
+
+  // ── Per-region RV strain (ED→ES) ────────────────────────────────────────
+  // RV strain is % change in cavity boundary radius (not wall thickness —
+  // there's no separate RV free-wall myocardium label to ray-cast against),
+  // over 6 basal/mid free-wall regions rather than 17 AHA segments. See
+  // bullseye_analysis.mask_to_rv_regions for the full rationale.
+  lines.push(row("REGIONAL RV STRAIN — ED→ES (6 free-wall regions)"));
+  lines.push(row("Model", "Region", "Label", "RV Strain %", "Radius ED (mm)", "Radius ES (mm)"));
+  for (const m of present) {
+    const regions = byModel[m]!.rvStrain?.regions;
+    if (!regions?.length) { lines.push(row(MODEL_LABEL[m], "not computed")); continue; }
+    for (const r of regions) {
+      lines.push(row(MODEL_LABEL[m], r.region, r.label, r.strain,
+        (r as any).radius_ed_mm ?? null, (r as any).radius_es_mm ?? null));
+    }
+  }
+  lines.push("");
+
+  // ── Per-frame RV strain series ──────────────────────────────────────────
+  lines.push(row("PER-FRAME RV STRAIN SERIES (global + per region)"));
+  lines.push(row("Model", "Frame", "Global RV Strain %", "Region", "Label", "RV Strain %", "Radius (mm)"));
+  let anyRvSeries = false;
+  for (const m of present) {
+    const rvs = byModel[m]!.rvStrainSeries;
+    if (!rvs?.frames?.length) continue;
+    anyRvSeries = true;
+    for (const f of rvs.frames) {
+      for (const r of f.regions ?? []) {
+        lines.push(row(MODEL_LABEL[m], f.frameIndex, f.global_rv_strain,
+          r.region, r.label, r.strain, (r as any).radius_mm ?? null));
+      }
+    }
+  }
+  if (!anyRvSeries) lines.push(row("(no per-frame RV series computed for any model)"));
 
   return lines.join("\n");
 }

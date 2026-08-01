@@ -23,6 +23,13 @@ import {
 type Props = {
   /** Prebuilt patient-context string (see buildPatientContext). Empty = none. */
   patientContext?: string;
+  /**
+   * Identifies which report this panel belongs to (e.g. the project ID), so
+   * the persisted conversation and session_id are scoped per-report — opening
+   * a different patient's report starts a fresh conversation rather than
+   * showing the previous patient's chat.
+   */
+  storageKey?: string;
 };
 
 type Turn = {
@@ -38,10 +45,56 @@ const QUICK_ACTIONS = [
   "Compare HCM and DCM",
 ];
 
-export default function CardiacResearchAssistant({ patientContext }: Props) {
+/**
+ * sessionStorage (not localStorage): survives switching tabs and coming back
+ * — the actual bug being fixed — but clears when the browser tab is closed,
+ * which is the right lifetime for "the conversation about this report visit"
+ * rather than a permanent chat history.
+ */
+function storage() {
+  return typeof window === "undefined" ? null : window.sessionStorage;
+}
+
+function loadTurns(key: string): Turn[] {
+  try {
+    const raw = storage()?.getItem(`cra:turns:${key}`);
+    return raw ? (JSON.parse(raw) as Turn[]) : [];
+  } catch {
+    return []; // corrupted/old-shape data -> start clean rather than crash
+  }
+}
+
+function saveTurns(key: string, turns: Turn[]) {
+  try {
+    // Never persist a turn stuck mid-request -- resuming a tab shouldn't show
+    // a permanently spinning loader for a request that will never complete.
+    const persistable = turns.filter((t) => !t.loading);
+    storage()?.setItem(`cra:turns:${key}`, JSON.stringify(persistable));
+  } catch {
+    // Storage full or unavailable (private browsing) -- conversation still
+    // works for this tab session, it just won't survive a switch. Non-fatal.
+  }
+}
+
+function loadOrCreateSessionId(key: string): string {
+  const storageKey = `cra:session:${key}`;
+  const existing = storage()?.getItem(storageKey);
+  if (existing) return existing;
+  const fresh =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  storage()?.setItem(storageKey, fresh);
+  return fresh;
+}
+
+export default function CardiacResearchAssistant({ patientContext, storageKey = "default" }: Props) {
   const [online, setOnline] = useState<boolean | null>(null);
   const [input, setInput] = useState("");
-  const [turns, setTurns] = useState<Turn[]>([]);
+  // Restored synchronously from sessionStorage so a tab switch never shows an
+  // empty panel before the effect below runs.
+  const [turns, setTurns] = useState<Turn[]>(() => loadTurns(storageKey));
+  const [sessionId] = useState<string>(() => loadOrCreateSessionId(storageKey));
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Check the service is up once on mount (only if a URL is configured).
@@ -52,6 +105,11 @@ export default function CardiacResearchAssistant({ patientContext }: Props) {
     }
     researchApi.health().then(setOnline);
   }, []);
+
+  // Persist every change so switching tabs and coming back restores the chat.
+  useEffect(() => {
+    saveTurns(storageKey, turns);
+  }, [turns, storageKey]);
 
   // Keep the newest turn in view.
   useEffect(() => {
@@ -72,10 +130,10 @@ export default function CardiacResearchAssistant({ patientContext }: Props) {
       // context; anything else is a free-text /ask.
       const useExplain = patientContext && /explain these results/i.test(q);
       const res = useExplain
-        ? await researchApi.explain(patientContext!, undefined)
+        ? await researchApi.explain(patientContext!, undefined, sessionId)
         : patientContext
-          ? await researchApi.explain(patientContext, q)
-          : await researchApi.ask(q);
+          ? await researchApi.explain(patientContext, q, sessionId)
+          : await researchApi.ask(q, sessionId);
       setTurns((prev) =>
         prev.map((t, i) => (i === index ? { ...t, answer: res, loading: false } : t)),
       );

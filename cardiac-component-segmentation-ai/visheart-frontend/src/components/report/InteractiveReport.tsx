@@ -225,8 +225,8 @@ function Bullseye({
       </g>
       <text x={cx} y={16} textAnchor="middle" fontSize={11} className="fill-muted-foreground">Anterior</text>
       <text x={cx} y={272} textAnchor="middle" fontSize={11} className="fill-muted-foreground">Inferior</text>
-      <text x={12} y={cy + 4} textAnchor="start" fontSize={11} className="fill-muted-foreground">Lateral</text>
-      <text x={268} y={cy + 4} textAnchor="end" fontSize={11} className="fill-muted-foreground">Septal</text>
+      <text x={12} y={cy + 4} textAnchor="start" fontSize={11} className="fill-muted-foreground">Septal</text>
+      <text x={268} y={cy + 4} textAnchor="end" fontSize={11} className="fill-muted-foreground">Lateral</text>
     </svg>
   );
 }
@@ -1463,6 +1463,7 @@ export function InteractiveReport({
           clear notice if the assistant service isn't running. */}
       <section className="mt-6">
         <CardiacResearchAssistant
+          storageKey={patientLabel}
           patientContext={buildPatientContext({
             EF: measurements?.EF,
             EDV: measurements?.EDV,
