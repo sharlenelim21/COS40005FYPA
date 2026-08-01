@@ -146,6 +146,35 @@ export type StrainSeries = {
   staleSince?: string;
 };
 
+/**
+ * Regional RV strain — sibling to `Strain`/`StrainSeries` above. `strain` per
+ * region is % change in RV cavity boundary radius, not wall thickness (there
+ * is no separate RV free-wall myocardium label) — see the backend's
+ * bullseye_analysis.mask_to_rv_regions for the full rationale. No GRS/GCS
+ * split: it's a single radius-based measure, closer in spirit to GCS.
+ */
+export type RvStrain = {
+  regions: { region: number; label: string; strain: number | null }[];
+  global_rv_strain: number | null;
+  edFrameIndex?: number;
+  esFrameIndex?: number;
+  computed_at?: string;
+};
+
+export type RvStrainSeries = {
+  frames: {
+    frameIndex: number;
+    global_rv_strain: number | null;
+    regions: { region: number; label: string; strain: number | null }[];
+  }[];
+  edFrameIndex: number;
+  peakFrameIndex?: number | null;
+  peak_global_rv_strain: number | null;
+  framesRequested?: number;
+  framesComputed?: number;
+  computed_at?: string;
+};
+
 export type MaskDoc = {
   _id?: string;
   name?: string;
@@ -158,6 +187,8 @@ export type MaskDoc = {
   regionalHealthStatus?: RegionalHealthStatus;
   strain?: Strain;
   strainSeries?: StrainSeries;
+  rvStrain?: RvStrain;
+  rvStrainSeries?: RvStrainSeries;
 };
 
 export type Model = "unet" | "medsam";
@@ -293,7 +324,7 @@ export function useProjectResults(
       return (
         newestFirst.find(
           (m) => m.heartMetrics?.measurements || m.diseaseSimilarity || m.healthStatus ||
-                 m.strain || m.strainSeries,
+                 m.strain || m.strainSeries || m.rvStrain || m.rvStrainSeries,
         ) ?? newestFirst[0]
       );
     };
@@ -326,7 +357,7 @@ export function useProjectResults(
       (m) =>
         String(m._id) > String(shown._id) &&
         !m.heartMetrics?.measurements && !m.healthStatus && !m.diseaseSimilarity &&
-        !m.strain && !m.strainSeries,
+        !m.strain && !m.strainSeries && !m.rvStrain && !m.rvStrainSeries,
     );
   }, [masks, byModel, model]);
 
@@ -564,6 +595,8 @@ export function useProjectResults(
     similarity: doc?.diseaseSimilarity,
     strain: doc?.strain,
     strainSeries: doc?.strainSeries,
+    rvStrain: doc?.rvStrain,
+    rvStrainSeries: doc?.rvStrainSeries,
     // Auto-detected cardiac phase frames (largest / smallest LV cavity).
     // Strain is only physiologically meaningful measured against these.
     autoEdFrame: doc?.heartMetrics?.ed_frame,

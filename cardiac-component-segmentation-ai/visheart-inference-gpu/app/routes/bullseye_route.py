@@ -17,6 +17,10 @@ POST /bullseye/compute-strain
     Accepts ED and ES NIfTI files + optional RV insertion points.
     Returns GRS and GCS per AHA segment.
 
+POST /bullseye/compute-rv-strain
+    Accepts ED and ES NIfTI files + optional RV insertion points.
+    Returns regional RV cavity-radius strain (basal/mid free-wall sectors).
+
 Both analyze endpoints return the same BullseyeAnalysisResult schema.
 """
 
@@ -43,6 +47,7 @@ from bullseye_analysis import (
     RING_NAMES,
     classify_slices,
     mask_to_17_segments,
+    mask_to_rv_regions,
 )
 
 router = APIRouter()
@@ -410,6 +415,149 @@ async def compute_strain(
     try:
         result = await run_in_threadpool(
             _compute_strain_sync,
+            ed_bytes, es_bytes,
+            ed_file.filename or "ed.nii.gz",
+            es_file.filename or "es.nii.gz",
+            rv1, rv2,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return result
+
+
+# ── Route D: compute regional RV strain from ED + ES NIfTI uploads ───────────
+# See bullseye_analysis.mask_to_rv_regions docstring: there is no separate RV
+# free-wall myocardium label in this mask, so this measures % change in RV
+# cavity boundary radius per region (a GCS-style radius measure) rather than
+# wall thickening (GRS-style, like the LV route above).
+
+def _compute_rv_strain_sync(
+    ed_bytes: bytes,
+    es_bytes: bytes,
+    ed_fname: str,
+    es_fname: str,
+    rv1: Optional[tuple[float, float]],
+    rv2: Optional[tuple[float, float]],
+) -> dict:
+    """CPU-bound: load both NIfTIs, run mask_to_rv_regions on each, compute per-region strain."""
+
+    def _load(data: bytes, fname: str):
+        suffix = ".nii.gz" if (fname or "").endswith(".gz") else ".nii"
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        try:
+            tmp.write(data)
+            tmp.flush()
+            tmp.close()
+            img = nib.load(tmp.name)
+            arr = np.asarray(img.dataobj)
+            if arr.ndim == 4:
+                arr = arr.max(axis=-1)
+            if arr.ndim != 3:
+                raise ValueError(f"Expected 3-D mask, got shape {arr.shape}")
+            zooms = img.header.get_zooms()
+            vox_xy = abs(float(zooms[0])) if len(zooms) > 0 and abs(float(zooms[0])) > 0 else 1.0
+            return arr.astype(np.uint8), vox_xy
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+    mask_ed, vox_xy = _load(ed_bytes, ed_fname)
+    mask_es, _      = _load(es_bytes, es_fname)
+
+    if not np.any(mask_ed == 1):
+        raise ValueError("ED mask contains no RV (class 1) pixels.")
+    if not np.any(mask_es == 1):
+        raise ValueError("ES mask contains no RV (class 1) pixels.")
+
+    res_ed = mask_to_rv_regions(mask_ed, rv_insertion_1=rv1, rv_insertion_2=rv2)
+    res_es = mask_to_rv_regions(mask_es, rv_insertion_1=rv1, rv_insertion_2=rv2)
+
+    r_ed = np.array(res_ed["values"], dtype=float)
+    r_es = np.array(res_es["values"], dtype=float)
+    region_meta = res_ed["region_metadata"]
+
+    regions = []
+    valid_r_ed: list[float] = []
+    valid_r_es: list[float] = []
+
+    for i, meta in enumerate(region_meta):
+        ed_v = float(r_ed[i]) if not np.isnan(r_ed[i]) else None
+        es_v = float(r_es[i]) if not np.isnan(r_es[i]) else None
+
+        strain: float | None = None
+        if ed_v is not None and es_v is not None and ed_v > 0:
+            strain = round((es_v - ed_v) / ed_v * 100.0, 2)
+            valid_r_ed.append(ed_v)
+            valid_r_es.append(es_v)
+
+        regions.append({
+            "region":       meta["idx"],
+            "label":        meta["label"],
+            "strain":       strain,
+            "radius_ed_mm": round(ed_v * vox_xy, 3) if ed_v is not None else None,
+            "radius_es_mm": round(es_v * vox_xy, 3) if es_v is not None else None,
+        })
+
+    # Ratio-of-means, same rationale as global_grs/global_gcs above.
+    if valid_r_ed:
+        mean_r_ed = float(np.mean(valid_r_ed))
+        mean_r_es = float(np.mean(valid_r_es))
+        global_rv_strain = round((mean_r_es - mean_r_ed) / mean_r_ed * 100.0, 2) if mean_r_ed > 0 else None
+    else:
+        global_rv_strain = None
+
+    return {
+        "regions":             regions,
+        "global_rv_strain":    global_rv_strain,
+        "vox_xy_mm":           vox_xy,
+        "alignment_source":    res_ed.get("alignment_source", "fixed-angle"),
+        "alignment_angle_deg": res_ed.get("alignment_angle_deg"),
+    }
+
+
+@router.post(
+    "/compute-rv-strain",
+    summary="Compute regional RV cavity-radius strain from ED + ES segmentation NIfTIs",
+    tags=["Bullseye"],
+)
+async def compute_rv_strain(
+    token_payload: Annotated[TokenPayLoad, Depends(conditional_verify_jwt)],
+    ed_file: UploadFile = File(..., description="ED frame segmentation NIfTI (.nii or .nii.gz)"),
+    es_file: UploadFile = File(..., description="ES frame segmentation NIfTI (.nii or .nii.gz)"),
+    rv_insertion_1_x: Optional[float] = Form(default=None),
+    rv_insertion_1_y: Optional[float] = Form(default=None),
+    rv_insertion_2_x: Optional[float] = Form(default=None),
+    rv_insertion_2_y: Optional[float] = Form(default=None),
+):
+    """
+    Upload segmentation masks for ED and ES frames. Returns % change in RV
+    cavity boundary radius per region (basal/mid free-wall sectors) — see
+    bullseye_analysis.mask_to_rv_regions for why this is a radius measure
+    rather than a wall-thickness measure like the LV's GRS.
+
+    Masks must be 3-D (H × W × N_slices) with class values:
+    0=background, 1=RV, 2=myocardium, 3=LV cavity.
+    """
+    for f, label in ((ed_file, "ed_file"), (es_file, "es_file")):
+        fname = f.filename or ""
+        if not (fname.endswith(".nii") or fname.endswith(".nii.gz")):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported file type for {label}: '{fname}'. Only .nii and .nii.gz are accepted."
+            )
+
+    rv1 = (rv_insertion_1_x, rv_insertion_1_y) if rv_insertion_1_x is not None and rv_insertion_1_y is not None else None
+    rv2 = (rv_insertion_2_x, rv_insertion_2_y) if rv_insertion_2_x is not None and rv_insertion_2_y is not None else None
+
+    ed_bytes = await ed_file.read()
+    es_bytes = await es_file.read()
+
+    try:
+        result = await run_in_threadpool(
+            _compute_rv_strain_sync,
             ed_bytes, es_bytes,
             ed_file.filename or "ed.nii.gz",
             es_file.filename or "es.nii.gz",

@@ -60,8 +60,10 @@ import {
   type StrainType,
   type RealStrainResult,
   type RealStrainSegment,
+  type RvStrainResult,
 } from "@/components/landmark/StrainVisualization";
-import { landmarkApi, computeStrainFromFrames } from "@/lib/landmarkApi";
+import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
+import { landmarkApi, computeStrainFromFrames, computeRvStrainFromFrames } from "@/lib/landmarkApi";
 
 const LandmarkSliceViewer = dynamic(
   () => import("@/components/landmark/LandmarkSliceViewer").then((m) => m.LandmarkSliceViewer),
@@ -219,6 +221,7 @@ export default function LandmarkDetectionPage() {
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GRS");
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
   const [strainResult, setStrainResult] = useState<RealStrainResult | null>(null);
+  const [rvStrainResult, setRvStrainResult] = useState<RvStrainResult | null>(null);
   // Auto-detected ED/ES frames from heart-metrics (ED = largest LV cavity, ES =
   // smallest), PER MODEL — each model's mask has its own independently-detected
   // ED/ES. The strain picker must use the frames from the SAME model it computes
@@ -944,7 +947,7 @@ export default function LandmarkDetectionPage() {
                         leftPanelView === "bullseye" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
                       )}
                     >
-                      Bullseye
+                      Wall Thickness
                     </button>
                     <button
                       type="button"
@@ -1106,6 +1109,8 @@ export default function LandmarkDetectionPage() {
                   avgLm2={state.avgLm2 ?? null}
                   strainResult={strainResult}
                   onStrainResult={setStrainResult}
+                  rvStrainResult={rvStrainResult}
+                  onRvStrainResult={setRvStrainResult}
                   autoFramesByModel={autoFramesByModel}
                 />
               )}
@@ -1809,13 +1814,13 @@ function AhaBullseyeChart({
         Anterior
       </text>
       <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">
-        Septal
+        Lateral
       </text>
       <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
         Inferior
       </text>
       <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">
-        Lateral
+        Septal 
       </text>
 
       {Array.from({ length: 6 }, (_, index) => (
@@ -2264,6 +2269,8 @@ function StrainPreviewPanel({
   avgLm2,
   strainResult,
   onStrainResult,
+  rvStrainResult,
+  onRvStrainResult,
   autoFramesByModel,
 }: {
   selectedStrainType: StrainType;
@@ -2277,6 +2284,8 @@ function StrainPreviewPanel({
   avgLm2: { x: number; y: number } | null;
   strainResult: RealStrainResult | null;
   onStrainResult: (result: RealStrainResult | null) => void;
+  rvStrainResult: RvStrainResult | null;
+  onRvStrainResult: (result: RvStrainResult | null) => void;
   autoFramesByModel: {
     unet: { ed: number; es: number } | null;
     medsam: { ed: number; es: number } | null;
@@ -2308,13 +2317,17 @@ function StrainPreviewPanel({
   }, [autoFrames?.ed, autoFrames?.es]);
   const realStrainData = strainResult;
   const [showUploadPanel, setShowUploadPanel] = useState(false);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number } | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number | null } | null>(null);
   const bullseyeResetRef = useRef<(() => void) | null>(null);
   const heartZoomRef    = useRef<((delta: number) => void) | null>(null);
   const heartResetRef   = useRef<(() => void) | null>(null);
   // 0-based segment index for ClientHeartModel (-1 = none). Kept in sync with the
   // parent's 1-based selectedSegment via handleSegClick below.
   const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
+  // Selection state for the RV crescent — kept separate from the LV's
+  // selectedSegment (1-17) since RV region numbers (1-6) would otherwise
+  // collide visually with LV segment numbers in the same 1-based range.
+  const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
 
   const handleComputeStrain = async () => {
     if (!edFile || !esFile) return;
@@ -2343,16 +2356,31 @@ function StrainPreviewPanel({
     }
   };
 
-  const handleComputeFromFrames = async () => {
+  // Compute LV and RV strain together from the same ED/ES frame pair — the
+  // combined chart shows both at once, so one button drives both requests.
+  // They're independent GPU calls; run in parallel and surface a partial
+  // failure rather than losing whichever one succeeded.
+  const handleComputeFromFramesBoth = async () => {
     if (edFrameIdx === esFrameIdx) return;
     setStrainError(null);
     setIsComputing(true);
     try {
-      const result = await computeStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel);
-      onStrainResult(result);
-      setShowUploadPanel(false);
-    } catch (err: any) {
-      setStrainError(err.message ?? "Failed to compute strain from frames.");
+      const [lvOutcome, rvOutcome] = await Promise.allSettled([
+        computeStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel),
+        computeRvStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel),
+      ]);
+      if (lvOutcome.status === "fulfilled") onStrainResult(lvOutcome.value);
+      if (rvOutcome.status === "fulfilled") onRvStrainResult(rvOutcome.value);
+
+      if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
+        setStrainError("Failed to compute LV and RV strain from frames.");
+      } else if (lvOutcome.status === "rejected") {
+        setStrainError("RV strain computed, but LV strain failed.");
+      } else if (rvOutcome.status === "rejected") {
+        setStrainError("LV strain computed, but RV strain failed.");
+      } else {
+        setShowUploadPanel(false);
+      }
     } finally {
       setIsComputing(false);
     }
@@ -2390,7 +2418,8 @@ function StrainPreviewPanel({
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border flex-shrink-0">
-        {/* Strain type toggle */}
+        {/* Strain type toggle — applies to the LV side of the combined chart.
+            RV strain is a single cavity-radius measure with no GRS/GCS sub-type. */}
         <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
           {(["GCS", "GRS"] as const).map((type) => (
             <button key={type} type="button" onClick={() => onStrainTypeChange(type)}
@@ -2403,15 +2432,15 @@ function StrainPreviewPanel({
 
         <div className="ml-auto flex items-center gap-1.5">
           {/* Source badge — only when real data exists */}
-          {realStrainData && (
+          {(realStrainData || rvStrainResult) && (
             <span className="rounded-full px-2 py-0.5 text-[9px] font-medium shrink-0 bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400">
               {avgLm1 ? "Real · Aligned" : "Real"}
             </span>
           )}
 
           {/* Clear strain result */}
-          {realStrainData && (
-            <button type="button" onClick={() => { onStrainResult(null); setStrainInputMode("frames"); setShowUploadPanel(false); }}
+          {(realStrainData || rvStrainResult) && (
+            <button type="button" onClick={() => { onStrainResult(null); onRvStrainResult(null); setStrainInputMode("frames"); setShowUploadPanel(false); }}
               className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[9px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
               Clear
             </button>
@@ -2419,7 +2448,7 @@ function StrainPreviewPanel({
 
           {/* Upload trigger — always visible */}
           <button type="button" onClick={() => setShowUploadPanel((p) => !p)}
-            title="Upload ED / ES masks to compute real strain"
+            title="Compute strain from this project's stored segmentation"
             className={cn(
               "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-medium transition-colors shrink-0",
               showUploadPanel
@@ -2427,7 +2456,7 @@ function StrainPreviewPanel({
                 : "border-border bg-background text-muted-foreground hover:bg-muted"
             )}>
             <Upload className="h-3 w-3" />
-            {realStrainData ? "Recompute" : "Upload masks"}
+            {(realStrainData || rvStrainResult) ? "Recompute" : "Compute"}
           </button>
         </div>
       </div>
@@ -2436,14 +2465,20 @@ function StrainPreviewPanel({
       {showUploadPanel && (
         <div className="flex-shrink-0 border-b border-border bg-muted/10 px-3 py-2.5 space-y-2">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] font-semibold text-foreground">Compute Strain</p>
+            <p className="text-[10px] font-semibold text-foreground">
+              Compute Strain
+            </p>
             <button type="button" onClick={() => setShowUploadPanel(false)}
               className="text-muted-foreground hover:text-foreground transition-colors">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
 
-          {/* Mode toggle — compact segmented control, "Choose frames" first/default */}
+          {/* Mode toggle — compact segmented control, "Choose frames" first/default.
+              Upload mode is LV-only: there's no RV-strain upload endpoint yet, only
+              the frames-from-stored-segmentation route, so uploading masks here
+              computes LV strain and leaves the RV crescent ungrayed-out until a
+              frames-based (re)compute also runs. */}
           <div className="inline-flex w-fit rounded-lg border border-border bg-muted/20 p-0.5 text-[10px] flex-shrink-0">
             <button
               type="button"
@@ -2467,14 +2502,14 @@ function StrainPreviewPanel({
                   : "text-muted-foreground hover:bg-muted"
               )}
             >
-              Upload masks
+              Upload masks (LV only)
             </button>
           </div>
 
           {strainInputMode === "upload" && (
             <>
               <p className="text-[9px] text-muted-foreground leading-relaxed">
-                Any NIfTI segmentation mask (.nii or .nii.gz) with classes 0=background, 1=RV, 2=myocardium, 3=LV cavity. You can use masks exported from VisHeart or from any other cardiac segmentation tool.
+                Any NIfTI segmentation mask (.nii or .nii.gz) with classes 0=background, 1=RV, 2=myocardium, 3=LV cavity. You can use masks exported from VisHeart or from any other cardiac segmentation tool. This computes LV strain only — use &quot;Choose frames&quot; for RV.
                 {avgLm1 && avgLm2 && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
               </p>
               <div className="grid grid-cols-2 gap-2">
@@ -2529,7 +2564,7 @@ function StrainPreviewPanel({
           {strainInputMode === "frames" && (
             <div className="flex flex-col gap-3 px-1">
               <p className="text-[11px] text-muted-foreground">
-                Select any two frames from the stored segmentation to compute strain between them.
+                Select any two frames from the stored segmentation to compute LV and RV strain between them.
                 {avgLm1 && avgLm2 && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
               </p>
 
@@ -2557,6 +2592,9 @@ function StrainPreviewPanel({
                   auto-detected pair the backend deliberately withholds the peaks
                   from heartMetrics (and therefore from disease similarity and
                   health status) — surface that here so the omission isn't silent. */}
+              {/* Peak backfill into Disease Similarity / Health Status is LV-specific
+                  (computeDiseaseSimilarityFromMetrics/computeHealthStatusFromMetrics
+                  consume LV strain peaks only) — RV strain isn't part of that chain. */}
               {typeof autoFrames?.ed === "number" && typeof autoFrames?.es === "number" &&
                (edFrameIdx !== autoFrames.ed || esFrameIdx !== autoFrames.es) && (
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
@@ -2614,7 +2652,7 @@ function StrainPreviewPanel({
               <button
                 type="button"
                 disabled={edFrameIdx === esFrameIdx || frameCount <= 1 || isComputing}
-                onClick={handleComputeFromFrames}
+                onClick={handleComputeFromFramesBoth}
                 className="w-full rounded-md bg-primary px-3 py-1.5 text-[11px] text-primary-foreground disabled:opacity-50 transition-colors hover:bg-primary/90"
               >
                 {isComputing ? (
@@ -2627,8 +2665,8 @@ function StrainPreviewPanel({
       )}
 
       {/* ── Main area ── */}
-      {!realStrainData ? (
-        /* Upload prompt — shown when no strain data available */
+      {!realStrainData && !rvStrainResult ? (
+        /* Prompt — shown when neither LV nor RV strain is available */
         <div className="flex flex-1 items-center justify-center min-h-[320px]">
           <div className="flex flex-col items-center gap-3 text-center max-w-xs">
             <div className="rounded-full border-2 border-dashed border-muted-foreground/30 p-5 mb-2">
@@ -2640,11 +2678,11 @@ function StrainPreviewPanel({
             {/* Two ways in, and the stored-mask route is the usual one — the old
                 copy named only the upload, which reads as "upload is required". */}
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Open the panel to compute strain from this project&apos;s <strong>already-saved
-              segmentation</strong> — pick the ED and ES frames and press Compute Strain, no
-              upload needed. Optionally, upload your own ED/ES masks in NIfTI format (.nii or
-              .nii.gz; classes 0=background, 1=RV, 2=myocardium, 3=LV cavity) for
-              manually-verified accuracy.
+              Open the panel to compute LV and RV strain together from this project&apos;s
+              <strong> already-saved segmentation</strong> — pick the ED and ES frames and press
+              Compute Strain, no upload needed. Optionally, upload your own ED/ES masks in NIfTI
+              format (.nii or .nii.gz; classes 0=background, 1=RV, 2=myocardium, 3=LV cavity) for
+              manually-verified LV accuracy.
             </p>
             <button
               type="button"
@@ -2657,22 +2695,24 @@ function StrainPreviewPanel({
           </div>
         </div>
       ) : (
-        /* 2-panel layout: LEFT bullseye / RIGHT 3D heart */
+        /* 2-panel layout: LEFT combined LV+RV bullseye / RIGHT 3D heart (LV only —
+           see CombinedVentricularChart for why the RV side has no 3D counterpart) */
         <div className="flex min-h-0 flex-1 gap-2 p-2.5">
 
-          {/* LEFT: 2D bullseye */}
+          {/* LEFT: combined 2D bullseye */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
               <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                2D Bullseye
+                LV + RV Bullseye
               </p>
               <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
                 {selectedStrainType}
               </span>
             </div>
             <StrainZoomPan className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
-              <StrainBullseyeChart
-                data={displayData}
+              <CombinedVentricularChart
+                lvData={displayData}
+                hasLv={!!realStrainData}
                 strainType={selectedStrainType}
                 selectedSegment={selectedSegment}
                 onSegmentClick={handleSegClick}
@@ -2680,6 +2720,10 @@ function StrainPreviewPanel({
                 sharedMin={sharedMin}
                 sharedMax={sharedMax}
                 reverseColors={reverseColors}
+                rvRegions={rvStrainResult?.regions ?? null}
+                selectedRvRegion={selectedRvRegion}
+                onRvRegionClick={(region) => setSelectedRvRegion((prev) => (prev === region ? null : region))}
+                onRvRegionHover={setTooltip}
               />
             </StrainZoomPan>
             {/* Colour legend */}
@@ -2690,59 +2734,85 @@ function StrainPreviewPanel({
                 </span>
               ))}
             </div>
+            {rvStrainResult && (
+              <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
+                <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                  <p className="text-[8px] text-muted-foreground">Global RV Strain</p>
+                  <p className="font-bold text-[10px]">
+                    {rvStrainResult.global_rv_strain != null ? `${rvStrainResult.global_rv_strain.toFixed(1)}%` : "N/A"}
+                  </p>
+                  <p className="text-[7px] text-muted-foreground">Negative = shrinking (healthy)</p>
+                </div>
+                <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                  <p className="text-[8px] text-muted-foreground">RV Frames</p>
+                  <p className="font-bold text-[10px]">{(rvStrainResult.edFrameIndex ?? 0) + 1}→{(rvStrainResult.esFrameIndex ?? 0) + 1}</p>
+                  <p className="text-[7px] text-muted-foreground capitalize">{rvStrainResult.alignment_source ?? "—"} alignment</p>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* RIGHT: real 3D heart coloured by strain */}
+          {/* RIGHT: real 3D heart coloured by LV strain */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
               <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                3D Heart
+                3D Heart (LV)
               </p>
               <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
             </div>
-            <div className="flex-1 min-h-0 w-full">
-              <StrainHeartModel
-                segments={realStrainData.segments}
-                selectedStrainType={selectedStrainType}
-                selectedSegment3d={selectedSeg3d}
-                min={sharedMin}
-                max={sharedMax}
-                reverseColors={reverseColors}
-                onZoomChange={(fn) => { heartZoomRef.current = fn; }}
-                onResetZoom={(fn) => { heartResetRef.current = fn; }}
-              />
-            </div>
-            {/* Real strain KPIs below 3D view */}
-            <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                <p className="text-[8px] text-muted-foreground">Peak GRS</p>
-                <p className={cn("font-bold text-[10px]",
-                  realStrainData.global_grs !== null && realStrainData.global_grs >= 40 ? "text-green-600" : "text-orange-500")}>
-                  {realStrainData.global_grs != null ? `${realStrainData.global_grs >= 0 ? "+" : ""}${realStrainData.global_grs.toFixed(1)}%` : "N/A"}
+            {realStrainData ? (
+              <>
+                <div className="flex-1 min-h-0 w-full">
+                  <StrainHeartModel
+                    segments={realStrainData.segments}
+                    selectedStrainType={selectedStrainType}
+                    selectedSegment3d={selectedSeg3d}
+                    min={sharedMin}
+                    max={sharedMax}
+                    reverseColors={reverseColors}
+                    onZoomChange={(fn) => { heartZoomRef.current = fn; }}
+                    onResetZoom={(fn) => { heartResetRef.current = fn; }}
+                  />
+                </div>
+                {/* Real strain KPIs below 3D view */}
+                <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
+                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                    <p className="text-[8px] text-muted-foreground">Peak GRS</p>
+                    <p className={cn("font-bold text-[10px]",
+                      realStrainData.global_grs !== null && realStrainData.global_grs >= 40 ? "text-green-600" : "text-orange-500")}>
+                      {realStrainData.global_grs != null ? `${realStrainData.global_grs >= 0 ? "+" : ""}${realStrainData.global_grs.toFixed(1)}%` : "N/A"}
+                    </p>
+                    <p className="text-[7px] text-muted-foreground">Normal &gt;+40%</p>
+                  </div>
+                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                    <p className="text-[8px] text-muted-foreground">Peak GCS</p>
+                    <p className={cn("font-bold text-[10px]",
+                      realStrainData.global_gcs !== null && realStrainData.global_gcs >= -25 && realStrainData.global_gcs <= -15 ? "text-green-600" : "text-orange-500")}>
+                      {realStrainData.global_gcs != null ? `${realStrainData.global_gcs.toFixed(1)}%` : "N/A"}
+                    </p>
+                    <p className="text-[7px] text-muted-foreground">Normal -15% to -25%</p>
+                  </div>
+                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                    <p className="text-[8px] text-muted-foreground">
+                      {realStrainData.source === "frames" ? `Frame ${(realStrainData.edFrameIndex ?? 0) + 1} WT` : "ED WT"}
+                    </p>
+                    <p className="font-bold text-[10px]">{realStrainData.ed_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
+                  </div>
+                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+                    <p className="text-[8px] text-muted-foreground">
+                      {realStrainData.source === "frames" ? `Frame ${(realStrainData.esFrameIndex ?? 0) + 1} WT` : "ES WT"}
+                    </p>
+                    <p className="font-bold text-[10px]">{realStrainData.es_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-center px-4">
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  No LV strain yet — the 3D heart needs LV data. RV-only results show on the left.
                 </p>
-                <p className="text-[7px] text-muted-foreground">Normal &gt;+40%</p>
               </div>
-              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                <p className="text-[8px] text-muted-foreground">Peak GCS</p>
-                <p className={cn("font-bold text-[10px]",
-                  realStrainData.global_gcs !== null && realStrainData.global_gcs >= -25 && realStrainData.global_gcs <= -15 ? "text-green-600" : "text-orange-500")}>
-                  {realStrainData.global_gcs != null ? `${realStrainData.global_gcs.toFixed(1)}%` : "N/A"}
-                </p>
-                <p className="text-[7px] text-muted-foreground">Normal -15% to -25%</p>
-              </div>
-              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                <p className="text-[8px] text-muted-foreground">
-                  {realStrainData.source === "frames" ? `Frame ${(realStrainData.edFrameIndex ?? 0) + 1} WT` : "ED WT"}
-                </p>
-                <p className="font-bold text-[10px]">{realStrainData.ed_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
-              </div>
-              <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                <p className="text-[8px] text-muted-foreground">
-                  {realStrainData.source === "frames" ? `Frame ${(realStrainData.esFrameIndex ?? 0) + 1} WT` : "ES WT"}
-                </p>
-                <p className="font-bold text-[10px]">{realStrainData.es_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       )}
@@ -2753,7 +2823,11 @@ function StrainPreviewPanel({
           className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
           style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}>
           <div className="font-semibold">{tooltip.label}</div>
-          <div>{tooltip.value > 0 ? "+" : ""}{tooltip.value.toFixed(1)}%</div>
+          <div>
+            {tooltip.value == null
+              ? "No data"
+              : `${tooltip.value > 0 ? "+" : ""}${tooltip.value.toFixed(1)}%`}
+          </div>
         </div>
       )}
     </div>

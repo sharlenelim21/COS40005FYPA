@@ -35,6 +35,33 @@ export interface StrainSegmentData {
   strain: number;
 }
 
+/**
+ * Regional RV strain. Unlike RealStrainSegment's grs/gcs (wall-thickness and
+ * circumference), `strain` here is % change in RV cavity boundary radius —
+ * there is no separate RV free-wall myocardium label to measure thickness
+ * against, so this mirrors the same radius-based methodology GCS uses,
+ * applied to the RV cavity instead of the LV endocardium. Basal/mid
+ * free-wall regions only (no apex/RVOT/LVOT breakdown yet).
+ */
+export interface RvStrainRegion {
+  region: number;
+  label: string;
+  strain: number | null;
+  radius_ed_mm?: number | null;
+  radius_es_mm?: number | null;
+}
+
+export interface RvStrainResult {
+  regions: RvStrainRegion[];
+  global_rv_strain: number | null;
+  vox_xy_mm: number;
+  alignment_source: string;
+  alignment_angle_deg?: number | null;
+  source?: "frames";
+  edFrameIndex?: number;
+  esFrameIndex?: number;
+}
+
 // ── dummy data ────────────────────────────────────────────────────────────────
 
 // AHA order: Ant, AntLat, InfLat, Inf, InfSep, AntSep (basal then mid), then 4 apical, apex
@@ -73,7 +100,7 @@ export function getDummyStrainData(
 // ── color helpers ─────────────────────────────────────────────────────────────
 
 // Same ramp as ClientHeartModel: red(0) → yellow(0.5) → green(1)
-function rdYlGn(t: number): string {
+export function rdYlGn(t: number): string {
   const r = t < 0.5 ? 1 : 1 - (t - 0.5) * 2;
   const g = t < 0.5 ? t * 2 : 1;
   const toHex = (x: number) =>
@@ -108,12 +135,12 @@ function strainNorm(strain: number, min: number, max: number, strainType: Strain
 
 // ── geometry helpers ──────────────────────────────────────────────────────────
 
-function polarPoint(center: number, radius: number, angleDeg: number) {
+export function polarPoint(center: number, radius: number, angleDeg: number) {
   const a = (angleDeg * Math.PI) / 180;
   return { x: center + radius * Math.cos(a), y: center + radius * Math.sin(a) };
 }
 
-function annularSectorPath(
+export function annularSectorPath(
   center: number, innerR: number, outerR: number,
   startDeg: number, endDeg: number,
 ) {
@@ -258,9 +285,9 @@ export function StrainBullseyeChart({
 
       {/* Direction labels */}
       <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Anterior</text>
-      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
+      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
       <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Inferior</text>
-      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
+      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
 
       {/* Basal ring — segments 1–6 */}
       {Array.from({ length: 6 }, (_, i) => {
