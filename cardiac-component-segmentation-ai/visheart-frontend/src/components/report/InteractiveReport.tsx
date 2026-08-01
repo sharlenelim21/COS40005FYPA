@@ -1080,6 +1080,7 @@ export function InteractiveReport({
           clear notice if the assistant service isn't running. */}
       <section className="mt-6">
         <CardiacResearchAssistant
+          storageKey={patientLabel}
           patientContext={buildPatientContext({
             EF: measurements?.EF,
             EDV: measurements?.EDV,
