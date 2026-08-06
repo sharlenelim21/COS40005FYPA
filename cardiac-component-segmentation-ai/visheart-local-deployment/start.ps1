@@ -56,77 +56,6 @@ function Test-Url {
     }
 }
 
-# Cardiac Research Assistant -- a separate service (cardiac-research-assistant
-# repo), NOT part of the Docker compose stack. It calls a local model through
-# Ollama, so both need to be running on the host. Failure here is intentionally
-# non-fatal: the assistant panel already shows its own "not reachable" notice
-# and degrades gracefully, so VisHeart's core system must not be blocked by it.
-function Start-ResearchAssistant {
-    # scriptDir is .../COS40005FYPA/cardiac-component-segmentation-ai/visheart-local-deployment
-    # -> go up 3 levels to the GitHub folder that holds both repos as siblings.
-    $githubRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scriptDir))
-    $assistantDir = Join-Path $githubRoot 'cardiac-research-assistant'
-    $backendDir = Join-Path $assistantDir 'backend'
-
-    if (-not (Test-Path $backendDir)) {
-        Write-Log "Research assistant repo not found at '$assistantDir' -- skipping (clone it as a sibling of COS40005FYPA to enable)."
-        return
-    }
-
-    # 1. Ollama -- start it if it isn't already running. The assistant's
-    #    default config points at Ollama's local endpoint, so nothing else to
-    #    configure for the common GPU/local case.
-    $ollamaRunning = Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue
-    if (-not $ollamaRunning) {
-        $ollamaExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
-        if (Test-Path $ollamaExe) {
-            Write-Log 'Starting Ollama...'
-            Start-Process $ollamaExe
-            Start-Sleep -Seconds 5
-        } else {
-            Write-Log 'Ollama not found -- research assistant needs it (or a hosted LLM_BASE_URL in .env). Skipping.'
-            return
-        }
-    }
-
-    # 2. Assistant backend -- skip if a health check already succeeds (a dev
-    #    may already be running it with --reload).
-    $assistantUrl = 'http://localhost:8000/health'
-    if (Test-Url $assistantUrl) {
-        Write-Log 'Research assistant already running on :8000.'
-        return
-    }
-
-    Write-Log 'Starting research assistant backend on :8000...'
-    # Matches the assistant's own README: activate whatever Python environment
-    # has its dependencies installed (conda, venv, etc.), then `python` on PATH
-    # resolves to it. Prefer a project .venv if one exists (a portable setup
-    # some contributors may use), otherwise trust PATH like the README does --
-    # do not hardcode a personal conda env path, since that would only work on
-    # the machine it was written on.
-    $venvPython = Join-Path $assistantDir '.venv\Scripts\python.exe'
-    $pythonExe = if (Test-Path $venvPython) { $venvPython } else { 'python' }
-    try {
-        Start-Process -FilePath $pythonExe `
-            -ArgumentList '-m', 'uvicorn', 'app:app', '--port', '8000' `
-            -WorkingDirectory $backendDir -WindowStyle Minimized -ErrorAction Stop
-    } catch {
-        Write-Log "Could not launch '$pythonExe' -- is a Python environment with the assistant's dependencies active/on PATH? See cardiac-research-assistant/README.md. Skipping."
-        return
-    }
-
-    $assistantOk = $false
-    for ($i = 0; $i -lt 15; $i++) {
-        if (Test-Url $assistantUrl) { $assistantOk = $true; break }
-        Start-Sleep -Seconds 2
-    }
-    if ($assistantOk) {
-        Write-Log 'Research assistant is up (http://localhost:8000).'
-    } else {
-        Write-Log 'Research assistant did not respond in time -- the report panel will show "not reachable" until it is. Not blocking VisHeart startup.'
-    }
-}
-
 try {
     $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
     Set-Location $scriptDir
@@ -245,10 +174,6 @@ try {
     if ($gpuAvailable) {
         Write-Log "  Inference GPU    (http://localhost:8001/status/gpu)    => $inferenceGpuOk"
     }
-
-    # Non-fatal by design -- see Start-ResearchAssistant. Runs after the core
-    # health checks so a slow/missing assistant never delays VisHeart itself.
-    Start-ResearchAssistant
 
     if ($backendOk -and $frontendOk -and $inferenceOk -and ((-not $gpuAvailable) -or $inferenceGpuOk)) {
         Write-Log 'Startup successful.'
