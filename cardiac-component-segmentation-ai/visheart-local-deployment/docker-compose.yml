@@ -251,6 +251,8 @@ services:
       - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro
       - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
+      - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
+      - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
@@ -309,6 +311,8 @@ services:
       - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro
       - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
+      - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
+      - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro

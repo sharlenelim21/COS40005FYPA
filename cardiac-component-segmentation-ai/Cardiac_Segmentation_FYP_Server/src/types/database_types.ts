@@ -716,7 +716,9 @@ export interface IProjectReconstruction {
     numIterations?: number; // Number of iterations used in SDF reconstruction (optional)
     resolution?: number; // Resolution of the reconstruction grid (optional)
   };
-  
+
+  ahaVertexLabels?: number[];
+
   // Based on mongoose timestamp
   createdAt?: Date; // Creation timestamp
   updatedAt?: Date; // Last update timestamp

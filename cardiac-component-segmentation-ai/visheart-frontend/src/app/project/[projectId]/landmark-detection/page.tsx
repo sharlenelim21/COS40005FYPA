@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar } from "@/components/landmark/LandmarkSidebar";
 import { ClientHeartModel } from "@/components/landmark/ClientHeartModel";
+import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import {
   AHA_SEGMENT_COLORS,
@@ -2051,6 +2052,10 @@ function StrainHeartModel({
   reverseColors,
   onZoomChange,
   onResetZoom,
+  reconstructionMeshUrl,
+  reconstructionMeshFormat,
+  reconstructionLabels,
+  onReconstructionSegmentClick,
 }: {
   segments: RealStrainSegment[];
   selectedStrainType: StrainType;
@@ -2060,6 +2065,10 @@ function StrainHeartModel({
   reverseColors: boolean;
   onZoomChange?: (fn: (delta: number) => void) => void;
   onResetZoom?: (fn: () => void) => void;
+  reconstructionMeshUrl?: string | null;
+  reconstructionMeshFormat?: "obj" | "glb";
+  reconstructionLabels?: number[] | null;
+  onReconstructionSegmentClick?: (segment: number) => void;
 }) {
   // Build 17-element values array (0-indexed matching HEART_SEGMENTS order)
   const values = Array.from({ length: 17 }, (_, i) => {
@@ -2067,6 +2076,26 @@ function StrainHeartModel({
     if (!seg) return 0;
     return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0;
   });
+
+  if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
+    return (
+      <div className="w-full h-full relative">
+        <ReconstructedHeartModel
+          meshUrl={reconstructionMeshUrl}
+          meshFormat={reconstructionMeshFormat}
+          segmentLabels={reconstructionLabels}
+          colorMode="strain"
+          values={values}
+          min={min}
+          max={max}
+          reverseColors={reverseColors}
+          className="w-full h-full"
+          selectedSegment={selectedSegment3d >= 0 ? selectedSegment3d + 1 : -1}
+          onSegmentClick={onReconstructionSegmentClick}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="w-full h-full relative">
@@ -2299,6 +2328,23 @@ function StrainPreviewPanel({
   const [strainError, setStrainError] = useState<string | null>(null);
   const [strainInputMode, setStrainInputMode] = useState<"upload" | "frames">("frames");
   const [strainModel, setStrainModel] = useState<"unet" | "medsam">("unet");
+
+  const { getReconstructionGLB, reconstructionsByModel } = useProject();
+  const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
+  const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setReconstructionMeshUrl(null);
+    if (!activeReconstruction?.reconstructionId || !Array.isArray(activeReconstruction?.ahaVertexLabels)) {
+      return;
+    }
+    (async () => {
+      const url = await getReconstructionGLB(0, strainModel, activeReconstruction.reconstructionId);
+      if (!cancelled) setReconstructionMeshUrl(url);
+    })();
+    return () => { cancelled = true; };
+  }, [activeReconstruction, strainModel, getReconstructionGLB]);
+
   // The auto-detected ED/ES for the CURRENTLY-selected strain model — so the
   // picker defaults to the frames that this model's heart-metrics found, keeping
   // strain, heart-metrics, and the similarity guard consistent.
@@ -2772,6 +2818,10 @@ function StrainPreviewPanel({
                     reverseColors={reverseColors}
                     onZoomChange={(fn) => { heartZoomRef.current = fn; }}
                     onResetZoom={(fn) => { heartResetRef.current = fn; }}
+                    reconstructionMeshUrl={reconstructionMeshUrl}
+                    reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
+                    reconstructionLabels={activeReconstruction?.ahaVertexLabels ?? null}
+                    onReconstructionSegmentClick={handleSegClick}
                   />
                 </div>
                 {/* Real strain KPIs below 3D view */}

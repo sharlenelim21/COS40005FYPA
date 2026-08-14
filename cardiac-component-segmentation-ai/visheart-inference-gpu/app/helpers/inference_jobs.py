@@ -1144,6 +1144,7 @@ async def _process_fourd_reconstruction_job(
                                 "total_mesh_files": len(all_mesh_files),
                                 "total_mesh_size": total_size,
                                 "mesh_format": "obj",
+                                "aha_vertex_labels": reconstruction_result.get("aha_vertex_labels"),
                                 "reconstruction_time": reconstruction_result["reconstruction_time"],
                                 "num_iterations": reconstruction_result["num_iterations"],
                                 "resolution": reconstruction_result["resolution"],

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
+import { valueToColor } from "./heartColor";
 
 type HeartSegmentAsset = {
   ahaIndex: number;
@@ -61,21 +62,6 @@ interface ClientHeartModelProps {
   selectedSegment?: number;
   // When true, low value = green (used for GCS where more negative = healthier)
   reverseColors?: boolean;
-}
-
-// Identical colour ramp to the 2D bullseye's rdYlGn + segmentColor:
-// Red (0) → Yellow (0.5) → Green (1)
-function rdYlGn(t: number): THREE.Color {
-  const r = t < 0.5 ? 1 : 1 - (t - 0.5) * 2;
-  const g = t < 0.5 ? t * 2 : 1;
-  return new THREE.Color(r, g, 0);
-}
-
-function valueToColor(value: number, min: number, max: number, reverse = false): THREE.Color {
-  if (!Number.isFinite(value) || max === min) return new THREE.Color(0.267, 0.267, 0.267); // #444
-  let t = Math.max(0, Math.min(1, (value - min) / (max - min)));
-  if (reverse) t = 1 - t;
-  return rdYlGn(t);
 }
 
 function disposeObject(object: THREE.Object3D) {

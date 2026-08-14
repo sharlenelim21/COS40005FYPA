@@ -614,12 +614,12 @@ class FourDReconstructionHandler:
             safe_empty_cache(self.device)
             raise e
     
-    def _generate_mesh_sync(self, c_s: torch.Tensor, c_m: torch.Tensor, 
-                           sdf_data: Dict, output_file: str, resolution: int = 128, 
-                           export_format: str = "obj") -> str:
+    def _generate_mesh_sync(self, c_s: torch.Tensor, c_m: torch.Tensor,
+                           sdf_data: Dict, output_file: str, resolution: int = 128,
+                           export_format: str = "obj") -> Tuple[str, Optional[List[int]]]:
         """
         Generate 3D mesh from optimized latent codes
-        
+
         Args:
             c_s: Shape latent code
             c_m: Motion latent code
@@ -627,9 +627,7 @@ class FourDReconstructionHandler:
             output_file: Path to save the mesh file (with correct extension)
             resolution: Marching cubes resolution
             export_format: Output format - "obj" or "glb"
-            
-        Returns:
-            Path to generated mesh file
+
         """
         try:
             # AUTOGRAD FIX: Force complete GPU synchronization before mesh generation
@@ -669,13 +667,14 @@ class FourDReconstructionHandler:
                 # So we need to provide the filename without extension
                 ply_base_name = base_name
                 
-                deep_sdf.mesh.create_mesh_4dsdf(
+                aha_labels = deep_sdf.mesh.create_mesh_4dsdf(
                     self.decoder, c_s_vec, c_m_vec, phase_t,
                     ply_base_name, motion_filename,
                     N=resolution, max_batch=self.max_batch,
-                    offset=offset, scale=scale, Ti=Ti
+                    offset=offset, scale=scale, Ti=Ti,
+                    classify_aha=True,
                 )
-                
+
                 # Force GPU sync after mesh generation
                 safe_synchronize(self.device)
             
@@ -702,8 +701,9 @@ class FourDReconstructionHandler:
                 # AUTOGRAD FIX: Clean up tensor variables and free GPU memory
                 del c_s_vec, c_m_vec, phase_t
                 safe_empty_cache(self.device)
-                
-                return output_file
+
+                labels_list = aha_labels.tolist() if aha_labels is not None else None
+                return output_file, labels_list
             else:
                 raise FileNotFoundError(f"PLY file not generated: {ply_file}")
             
@@ -753,9 +753,8 @@ class FourDReconstructionHandler:
             glb_file: Path to output GLB file
         """
         try:
-            # Load PLY file with trimesh
-            mesh = trimesh.load(ply_file)
-            
+            mesh = trimesh.load(ply_file, process=False)
+
             # Export as GLB (binary glTF 2.0)
             mesh.export(glb_file, file_type='glb')
             
@@ -846,8 +845,8 @@ class FourDReconstructionHandler:
             file_extension = export_format  # "obj" or "glb"
             output_file = os.path.join(output_dir, f"{input_filename}_reconstructed.{file_extension}")
             
-            mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
-            
+            mesh_file, aha_vertex_labels = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+
             # Debug mode: Copy to persistent location if enabled
             debug_save = kwargs.get('debug_save', False)
             if debug_save:
@@ -868,6 +867,7 @@ class FourDReconstructionHandler:
                 "success": True,
                 "input_file": nifti_file_path,
                 "mesh_file": mesh_file,
+                "aha_vertex_labels": aha_vertex_labels,
                 "reconstruction_time": reconstruction_time,
                 "num_iterations": num_iterations,
                 "resolution": resolution,
@@ -1003,6 +1003,7 @@ class FourDReconstructionHandler:
             assert T is not None and offset is not None and scale is not None
             
             # Phase 2: Multi-frame processing implementation
+            ed_aha_vertex_labels = None
             if process_all_frames:
                 print("Step 3: Processing multiple frames (Phase 2 implementation)...")
                 mesh_files = []
@@ -1059,9 +1060,11 @@ class FourDReconstructionHandler:
                             output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}.{file_extension}")
                         
                         print(f"Generating mesh for frame {original_frame_idx}...")
-                        frame_mesh_file = self._generate_mesh_sync(frame_c_s, frame_c_m, frame_sdf_data, output_file, resolution, export_format)
+                        frame_mesh_file, frame_aha_labels = self._generate_mesh_sync(frame_c_s, frame_c_m, frame_sdf_data, output_file, resolution, export_format)
                         mesh_files.append(frame_mesh_file)
                         processed_frame_indices.append(original_frame_idx)
+                        if original_frame_idx == ed_frame_index:
+                            ed_aha_vertex_labels = frame_aha_labels
                         
                         print(f"[OK] Successfully generated mesh for frame {original_frame_idx}: {os.path.basename(frame_mesh_file)}")
                         
@@ -1138,7 +1141,7 @@ class FourDReconstructionHandler:
                 file_extension = export_format  # "obj" or "glb"
                 output_file = os.path.join(output_dir, f"{input_filename}_4D_ED{ed_frame_index:02d}.{file_extension}")
                 
-                primary_mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+                primary_mesh_file, ed_aha_vertex_labels = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
                 print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
                 mesh_files = [primary_mesh_file]
                 processed_frame_indices = [ed_frame_index]
@@ -1158,6 +1161,7 @@ class FourDReconstructionHandler:
                 "input_file": nifti_file_path,
                 "mesh_file": primary_mesh_file,  # Primary mesh (ED frame or first available)
                 "mesh_files": mesh_files,  # All generated mesh files
+                "aha_vertex_labels": ed_aha_vertex_labels,
                 "reconstruction_time": reconstruction_time,
                 "num_iterations": num_iterations,
                 "resolution": resolution,

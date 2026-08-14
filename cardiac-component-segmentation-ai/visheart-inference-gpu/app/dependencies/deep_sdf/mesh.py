@@ -7,9 +7,12 @@ import torch
 import deep_sdf.utils
 import SimpleITK as sitk
 
+from aha_segmentation_3d import classify_vertices_to_aha17
+
 
 def create_mesh_4dsdf(
-    decoder, c_s, c_m, t, filename, motion_filename=None, N=256, max_batch=(32 ** 3 * 4), offset=None, scale=None, Ti=None, volume_size=2.0
+    decoder, c_s, c_m, t, filename, motion_filename=None, N=256, max_batch=(32 ** 3 * 4), offset=None, scale=None, Ti=None, volume_size=2.0,
+    classify_aha=False,
 ):
     start = time.time()
     ply_filename = filename
@@ -62,20 +65,23 @@ def create_mesh_4dsdf(
     end = time.time()
     logging.debug("sampling takes: %f" % (end - start))
 
-    convert_sdf_samples_to_ply(
+    aha_labels = convert_sdf_samples_to_ply(
         sdf_values.data.cpu(),
         voxel_origin,
         voxel_size,
         ply_filename + ".ply",
         offset,
         scale,
-        Ti
+        Ti,
+        classify_aha=classify_aha,
     )
     if motion_filename is not None:
         motion_data = sitk.GetImageFromArray(motion)
         motion_data.SetOrigin(voxel_origin)
         motion_data.SetSpacing([voxel_size, voxel_size, voxel_size])
         sitk.WriteImage(motion_data, motion_filename + ".nii.gz")
+
+    return aha_labels
 
 
 def create_mesh(
@@ -256,7 +262,8 @@ def convert_sdf_samples_to_ply(
     ply_filename_out,
     offset=None,
     scale=None,
-    Ti=None
+    Ti=None,
+    classify_aha=False,
 ):
     """
     Convert sdf samples to .ply
@@ -293,6 +300,9 @@ def convert_sdf_samples_to_ply(
         mesh_points = mesh_points / scale
     if offset is not None:
         mesh_points = mesh_points - offset
+
+    aha_labels = classify_vertices_to_aha17(mesh_points) if classify_aha else None
+
     if Ti is not None:
         homogeneous = np.column_stack((mesh_points, np.ones([mesh_points.shape[0], 1])))
         mesh_points = np.dot(Ti, homogeneous.transpose())[0:3, :].transpose()
@@ -324,3 +334,5 @@ def convert_sdf_samples_to_ply(
             time.time() - start_time
         )
     )
+
+    return aha_labels

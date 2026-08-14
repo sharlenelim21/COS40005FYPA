@@ -1,6 +1,4 @@
 #!/usr/bin/env pwsh
-# VisHeart Local Deployment Startup Script
-# Implements GPU detection with automatic CPU fallback and health checks.
 
 param(
     [int]$WaitRetries = 60,
@@ -23,14 +21,12 @@ function Test-DockerAvailable {
 }
 
 function Test-DockerGpuAvailable {
-    # Check if nvidia runtime is present
     try {
         $dockerInfo = docker info 2>$null
         if ($dockerInfo -like "*nvidia*") {
             Write-Log "Detected 'nvidia' runtime in 'docker info'. Will perform container-level verification to confirm GPU usability."
             Write-Log "Attempting container-level GPU check (this may pull a lightweight CUDA base image)."
-            
-            # Actually test GPU with a container
+
             docker run --rm --gpus all "nvidia/cuda:12.3.0-base-ubuntu22.04" nvidia-smi 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 Write-Log "Container-level GPU check passed."
@@ -70,12 +66,12 @@ try {
 
     if ($gpuAvailable) {
         $profile = 'gpu'
-        $inferenceService = 'gpu-nvidia'      # compose SERVICE name
-        $inferenceContainer = 'visheart-gpu-nvidia'  # container name
+        $inferenceService = 'gpu-nvidia'
+        $inferenceContainer = 'visheart-gpu-nvidia'
     } else {
         $profile = 'cpu'
-        $inferenceService = 'gpu-cpu'         # compose SERVICE name
-        $inferenceContainer = 'visheart-gpu-cpu'    # container name
+        $inferenceService = 'gpu-cpu'
+        $inferenceContainer = 'visheart-gpu-cpu'
     }
 
     Write-Log "Selected profile: $profile"
@@ -84,8 +80,6 @@ try {
         Write-Log 'INFO: NVIDIA GPU not detected. Starting CPU profile. MedSAM is GPU-only and will be unavailable; UNet runs on CPU.'
     }
 
-    # Remove a stale container from the *opposite* profile so the 8001
-    # host port doesn't collide between consecutive runs.
     $oppositeContainer = if ($gpuAvailable) { 'visheart-gpu-cpu' } else { 'visheart-gpu-nvidia' }
     $stale = docker ps -aq --filter "name=$oppositeContainer" 2>$null
     if ($stale) {
@@ -101,12 +95,10 @@ try {
         Write-Log "ERROR: 'docker compose --profile $profile up -d visheart-app $inferenceContainer' failed (exit $composeExit)."
         if ($profile -eq 'gpu') {
             Write-Log "GPU profile startup failed - attempting automatic CPU fallback."
-            # Switch to CPU profile and attempt to start again.
             $profile = 'cpu'
             $inferenceService = 'gpu-cpu'
             $inferenceContainer = 'visheart-gpu-cpu'
 
-            # Remove any partially-created GPU container to avoid port conflicts.
             $staleGpu = docker ps -aq --filter "name=visheart-gpu-nvidia" 2>$null
             if ($staleGpu) {
                 Write-Log "Removing partially-created 'visheart-gpu-nvidia' container."
@@ -121,7 +113,6 @@ try {
                 exit 5
             }
 
-            # After successful CPU fallback, we no longer expect GPU-specific endpoints.
             $gpuAvailable = $false
             Write-Log "CPU fallback succeeded. Selected profile: $profile (container: $inferenceContainer)"
         } else {
@@ -129,22 +120,12 @@ try {
         }
     }
 
-    # Backend image runs Node.js but invokes a Python helper for landmark/UNet
-    # local paths via a python shim. Some base images only ship python3;
-    # link them so child_process.execFile('python', ...) resolves.
     Write-Log 'Ensuring python symlink exists in backend container...'
     $pythonFixCmd = 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python'
-    # Run the fix inside the container shell; ensure PowerShell passes the
-    # full shell string as a single argument by using a single-quoted string.
     & docker exec visheart-local sh -c 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python' > $null 2>&1
 
-    # Health checks. /status/server is always available; /status/gpu is only
-    # expected to report backend: cuda when the GPU profile is active.
     $backendUrl = 'http://localhost:5000/'
     $frontendUrl = 'http://localhost:3000/'
-    # Prebuilt GPU image listens on 8001. If you rebuild from local
-    # source (which uses 8011), update this together with the compose
-    # ports mapping and the visheart-app env block.
     $inferenceServerUrl = 'http://localhost:8001/status/server'
     $inferenceGpuUrl = 'http://localhost:8001/status/gpu'
 

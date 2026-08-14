@@ -761,6 +761,15 @@ async function createReconstructionRecord(
     const reconstructionDir = path.posix.dirname(reconstructionObjectKey);
     const basepath = `s3://${process.env.AWS_BUCKET_NAME}/${reconstructionDir}`;
 
+    const rawAhaLabels = gpuResult?.aha_vertex_labels;
+    const ahaVertexLabels: number[] | undefined =
+      Array.isArray(rawAhaLabels) && rawAhaLabels.every((v: unknown) => typeof v === 'number')
+        ? rawAhaLabels
+        : undefined;
+    if (rawAhaLabels !== undefined && !ahaVertexLabels) {
+      logger.warn(`${serviceLocation}: Ignoring malformed aha_vertex_labels in GPU result for job ${gpuJobId}`);
+    }
+
     const reconstructionData: Partial<IProjectReconstruction> = {
       projectid: projectId,
       maskId: maskId,
@@ -776,6 +785,7 @@ async function createReconstructionRecord(
       basepath: basepath,
       reconstructionfolderpath: reconstructionFileS3Url,
       segmentationModel: normalizedSegmentationModel,
+      ahaVertexLabels,
       reconstructedMesh: {
         path: reconstructionFileS3Url,
         filename: finalFilename,

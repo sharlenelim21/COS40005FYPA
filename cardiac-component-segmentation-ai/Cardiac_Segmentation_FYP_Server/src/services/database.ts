@@ -888,6 +888,8 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
     numIterations: { type: Number, required: false }, // Number of iterations used in SDF reconstruction (optional)
     resolution: { type: Number, required: false }, // Resolution of the reconstruction grid (optional)
   },
+
+  ahaVertexLabels: { type: [Number], required: false },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Hooks for pre-save and pre-delete operations (must be before the model creation)
