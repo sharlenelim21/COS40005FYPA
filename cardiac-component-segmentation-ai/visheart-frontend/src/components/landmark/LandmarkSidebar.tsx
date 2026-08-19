@@ -117,7 +117,6 @@ export interface LandmarkSidebarProps {
   onToggleEditableLandmarks?: () => void;
   highlightedLandmarkId?: string | null;
   onHighlightLandmark?: (id: string | null) => void;
-  selectedStrainSegment?: number | null;
   selectedStrainType?: StrainType;
 }
 
@@ -151,7 +150,6 @@ export function LandmarkSidebar({
   onToggleEditableLandmarks,
   highlightedLandmarkId,
   onHighlightLandmark,
-  selectedStrainSegment,
   selectedStrainType = "GCS",
 }: LandmarkSidebarProps) {
   // Controlled by the page when provided (see activeTab prop) so a remount
@@ -345,7 +343,6 @@ export function LandmarkSidebar({
               hasPredictions={hasPredictions}
               currentFrame={strainFrame}
               totalFrames={strainFrameCount}
-              selectedStrainSegment={selectedStrainSegment}
               selectedStrainType={selectedStrainType}
               activeModel={activeModel ?? "unet"}
               onModelChange={onModelChange}
@@ -1022,7 +1019,6 @@ function StrainTab({
   hasPredictions,
   currentFrame,
   totalFrames,
-  selectedStrainSegment,
   selectedStrainType: externalStrainType,
   activeModel,
   onModelChange,
@@ -1030,7 +1026,6 @@ function StrainTab({
   hasPredictions: boolean;
   currentFrame: number;
   totalFrames: number;
-  selectedStrainSegment?: number | null;
   selectedStrainType?: StrainType;
   activeModel: "unet" | "medsam";
   onModelChange?: (m: "unet" | "medsam") => void;
@@ -1186,16 +1181,10 @@ function StrainTab({
       const n = realSeries.frames.length;
       return realSeries.frames.map((f, i) => {
         const segs = f.segments ?? [];
-        let value: number;
-        if (selectedStrainSegment) {
-          const seg = segs.find((s) => s.segment === selectedStrainSegment);
-          value = ((seg as any)?.[strainKey] ?? 0) as number;
-        } else {
-          const vals = segs
-            .map((s) => (s as any)[strainKey])
-            .filter((v: unknown): v is number => typeof v === "number");
-          value = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-        }
+        const vals = segs
+          .map((s) => (s as any)[strainKey])
+          .filter((v: unknown): v is number => typeof v === "number");
+        const value = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
         return {
           frame: f.frameIndex + 1,
           time: Math.round((i / Math.max(n - 1, 1)) * 1200),
@@ -1203,19 +1192,8 @@ function StrainTab({
         };
       });
     }
-    if (selectedStrainSegment) {
-      return Array.from({ length: frameCount }, (_, frame) => {
-        const segment = getDummyStrainData(selectedStrainType, frame, frameCount)
-          .find((item) => item.segment === selectedStrainSegment);
-        return {
-          frame: frame + 1,
-          time: Math.round((frame / Math.max(frameCount - 1, 1)) * 1200),
-          strain: segment?.strain ?? 0,
-        };
-      });
-    }
     return strainCurveData(selectedStrainType, frameCount);
-  }, [realSeries, strainKey, selectedStrainSegment, selectedStrainType, frameCount]);
+  }, [realSeries, strainKey, selectedStrainType, frameCount]);
   // Prefer the frame the user is scrubbing to (needs the series); fall back to
   // the single ED→ES result, then to the dummy preview.
   const segmentValues = useMemo(() => {
@@ -1240,9 +1218,6 @@ function StrainTab({
     }
     return getDummyStrainData(selectedStrainType, currentFrame, frameCount);
   }, [realSeries, realStrain, strainKey, currentFrame, selectedStrainType, frameCount]);
-  const selectedSegmentValue = selectedStrainSegment
-    ? segmentValues.find((item) => item.segment === selectedStrainSegment)
-    : null;
   // "Current" = mean across segments at the frame being viewed.
   const currentAverage = segmentValues.reduce((sum, item) => sum + item.strain, 0) / segmentValues.length;
 
@@ -1313,9 +1288,7 @@ function StrainTab({
         <div>
           <h3 className="text-sm font-medium text-foreground">Strain Results</h3>
           <p className="text-[10px] text-muted-foreground">
-            {selectedSegmentValue
-              ? `Segment ${selectedSegmentValue.segment}: ${selectedSegmentValue.label}`
-              : usingRealSeries ? "Computed strain (per-frame)"
+            {usingRealSeries ? "Computed strain (per-frame)"
               : usingRealStrain ? "Computed strain (ED→ES)"
               : "Dummy preview values"}, frame {currentFrame + 1}/{frameCount}
           </p>
@@ -1365,20 +1338,6 @@ function StrainTab({
         />
       ) : (
       <>
-      {selectedSegmentValue && (
-        <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs">
-          <div className="flex items-center justify-between gap-3">
-            <span className="font-semibold">Selected from 2D chart</span>
-            <span className="font-mono" style={{ color: getStrainColor(selectedSegmentValue.strain, selectedStrainType) }}>
-              {selectedSegmentValue.strain > 0 ? "+" : ""}{selectedSegmentValue.strain.toFixed(1)}%
-            </span>
-          </div>
-          <p className="mt-1 text-muted-foreground">
-            The vertical marker below shows this frame on the global {selectedStrainType} curve.
-          </p>
-        </div>
-      )}
-
       <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
         {(["GRS", "GCS"] as const).map((type) => (
           <button
@@ -1483,7 +1442,7 @@ function StrainTab({
         <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
             {curveView === "global"
-              ? `${selectedStrainSegment ? `Segment ${selectedStrainSegment}` : "Global"} ${selectedStrainType} Curve`
+              ? `Global ${selectedStrainType} Curve`
               : curveView === "region"
               ? "By Region"
               : "Full Cycle — All Segments"}

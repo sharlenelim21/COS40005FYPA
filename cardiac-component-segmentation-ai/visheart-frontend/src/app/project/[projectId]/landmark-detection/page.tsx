@@ -912,7 +912,6 @@ export default function LandmarkDetectionPage() {
             onToggleEditableLandmarks={() => setEditableLandmarks((p) => !p)}
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={setHighlightedLandmarkId}
-            selectedStrainSegment={selectedStrainSegment}
             selectedStrainType={selectedStrainType}
           />
         </div>
@@ -1080,6 +1079,7 @@ export default function LandmarkDetectionPage() {
                   currentFrame={strainPlaybackFrame}
                   frameCount={bullseyeFrameCount}
                   frameThickness={frameThicknessValues}
+                  reconstructionModel={selectedBullseyeModel}
                   modelLabel={selectedBullseyeModel === "unet" ? "UNet" : "MedSAM"}
                   previewMode={!hasPredictions && !isRunning}
                   onBullseyeResetRef={(fn) => { bullseyeZoomResetRef.current = fn; }}
@@ -1211,7 +1211,6 @@ export default function LandmarkDetectionPage() {
                 onToggleEditableLandmarks={() => setEditableLandmarks((p) => !p)}
                 highlightedLandmarkId={highlightedLandmarkId}
                 onHighlightLandmark={setHighlightedLandmarkId}
-                selectedStrainSegment={selectedStrainSegment}
                 selectedStrainType={selectedStrainType}
               />
             </div>
@@ -1289,6 +1288,7 @@ function AhaBullseyePanel({
   currentFrame = 0,
   frameCount = 1,
   frameThickness = null,
+  reconstructionModel,
   modelLabel = "this model",
   previewMode = false,
   isComputing = false,
@@ -1309,6 +1309,7 @@ function AhaBullseyePanel({
    * when null it falls back to the single stored `bullseye` measurement.
    */
   frameThickness?: (number | null)[] | null;
+  reconstructionModel?: "unet" | "medsam";
   /** Display name of the model being shown — used in the empty state. */
   modelLabel?: string;
   previewMode?: boolean;
@@ -1342,6 +1343,22 @@ function AhaBullseyePanel({
     } as BullseyeData;
   }, [baseBullseyeData, frameThickness]);
   const heartZoomRef = useRef<((delta: number) => void) | null>(null);
+
+  const { getReconstructionGLB, reconstructionsByModel } = useProject();
+  const activeReconstruction = reconstructionModel ? reconstructionsByModel?.[reconstructionModel] ?? null : null;
+  const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setReconstructionMeshUrl(null);
+    if (!activeReconstruction?.reconstructionId || !Array.isArray(activeReconstruction?.ahaVertexLabels)) {
+      return;
+    }
+    (async () => {
+      const url = await getReconstructionGLB(0, reconstructionModel, activeReconstruction.reconstructionId);
+      if (!cancelled) setReconstructionMeshUrl(url);
+    })();
+    return () => { cancelled = true; };
+  }, [activeReconstruction, reconstructionModel, getReconstructionGLB]);
 
   // Fix 1: bullseye segment hover tooltip
   const [bullseyeTooltip, setBullseyeTooltip] = useState<{
@@ -1510,6 +1527,10 @@ function AhaBullseyePanel({
               frameCount={frameCount}
               previewMode={previewMode}
               selectedSegment={selectedBullseyeSegment}
+              onSelectSegment={setSelectedBullseyeSegment}
+              reconstructionMeshUrl={reconstructionMeshUrl}
+              reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
+              reconstructionLabels={activeReconstruction?.ahaVertexLabels ?? null}
               onZoomChange={(fn) => { heartZoomRef.current = fn; }}
               onResetZoom={(fn) => { if (onHeartResetRef) onHeartResetRef(fn); }}
             />
@@ -1609,6 +1630,10 @@ function AhaHeartProjection({
   frameCount,
   previewMode = false,
   selectedSegment = -1,
+  onSelectSegment,
+  reconstructionMeshUrl,
+  reconstructionMeshFormat,
+  reconstructionLabels,
   onZoomChange,
   onResetZoom,
 }: {
@@ -1617,6 +1642,10 @@ function AhaHeartProjection({
   frameCount: number;
   previewMode?: boolean;
   selectedSegment?: number;
+  onSelectSegment?: (segment: number) => void;
+  reconstructionMeshUrl?: string | null;
+  reconstructionMeshFormat?: "obj" | "glb";
+  reconstructionLabels?: number[] | null;
   onZoomChange?: (fn: (delta: number) => void) => void;
   onResetZoom?: (fn: () => void) => void;
 }) {
@@ -1624,6 +1653,27 @@ function AhaHeartProjection({
   // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
+
+  if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
+    return (
+      <div className="flex-1 min-h-0 w-full relative">
+        <ReconstructedHeartModel
+          meshUrl={reconstructionMeshUrl}
+          meshFormat={reconstructionMeshFormat}
+          segmentLabels={reconstructionLabels}
+          colorMode="strain"
+          values={frameValues}
+          min={frameMin}
+          max={frameMax}
+          className="w-full h-full"
+          selectedSegment={selectedSegment >= 0 ? selectedSegment + 1 : -1}
+          onSegmentClick={(seg) =>
+            onSelectSegment?.(selectedSegment === seg - 1 ? -1 : seg - 1)
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <ClientHeartModel
