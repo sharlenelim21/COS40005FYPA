@@ -7,7 +7,7 @@ import torch
 import deep_sdf.utils
 import SimpleITK as sitk
 
-from aha_segmentation_3d import classify_vertices_to_aha17
+from cpd_aha_segmentation import classify_vertices_to_aha17_cpd
 
 
 def create_mesh_4dsdf(
@@ -301,7 +301,7 @@ def convert_sdf_samples_to_ply(
     if offset is not None:
         mesh_points = mesh_points - offset
 
-    aha_labels = classify_vertices_to_aha17(mesh_points) if classify_aha else None
+    aha_labels = classify_vertices_to_aha17_cpd(mesh_points) if classify_aha else None
 
     if Ti is not None:
         homogeneous = np.column_stack((mesh_points, np.ones([mesh_points.shape[0], 1])))

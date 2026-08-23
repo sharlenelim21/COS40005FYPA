@@ -234,8 +234,8 @@ services:
       SKIP_MEDSAM_MODEL_LOAD: "true"
       VISHEART_DEVICE: "cpu"
     command: >
-      bash -lc 'python -c "import nibabel, timm" ||
-      pip install --no-cache-dir "nibabel>=5.0.0" timm;
+      bash -lc 'python -c "import nibabel, timm, pycpd" ||
+      pip install --no-cache-dir "nibabel>=5.0.0" timm pycpd==2.0.0;
       exec bash ./docker/scripts/start.sh'
     volumes:
       - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
@@ -252,7 +252,9 @@ services:
       - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
+      - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
+      - ../visheart-inference-gpu/app/models/atlas:/app/app/models/atlas:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
@@ -294,8 +296,8 @@ services:
       USE_GPU: "true"
       UNET_INFERENCE_SCRIPT_PATH: /app/app/external_unet_inference.py
     command: >
-      bash -lc 'python -c "import nibabel, timm" ||
-      pip install --no-cache-dir "nibabel>=5.0.0" timm;
+      bash -lc 'python -c "import nibabel, timm, pycpd" ||
+      pip install --no-cache-dir "nibabel>=5.0.0" timm pycpd==2.0.0;
       exec bash ./docker/scripts/start.sh'
     volumes:
       - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
@@ -312,6 +314,7 @@ services:
       - ../visheart-inference-gpu/app/classes/yolo_handler.py:/app/app/classes/yolo_handler.py:ro
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
+      - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
