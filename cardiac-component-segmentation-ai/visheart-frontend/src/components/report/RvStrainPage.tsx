@@ -4,7 +4,7 @@ import React from "react";
 import type { RvStrain, RvStrainSeries } from "@/hooks/useProjectResults";
 import { ReportPageFrame } from "./ReportPageFrame";
 
-const BAND_ORDER: RvStrain["segments"][number]["band"][] = ["basal", "mid", "apical"];
+const BAND_ORDER = ["basal", "mid", "apical"] as const;
 const BAND_LABEL: Record<string, string> = { basal: "Basal", mid: "Mid", apical: "Apical" };
 
 function fmt(v: number | null | undefined, digits = 1): string {
@@ -42,7 +42,7 @@ export function RvStrainPage({
   rvStrain?: RvStrain;
   rvStrainSeries?: RvStrainSeries;
 }) {
-  const hasAny = !!(rvStrain || rvStrainSeries?.frames?.length);
+  const hasAny = !!(rvStrain?.regions?.length || rvStrainSeries?.frames?.length);
 
   // Prefer the full-cycle series for the per-band table (real per-frame data);
   // fall back to the single ED→ES rvStrain result when only that exists.
@@ -51,9 +51,9 @@ export function RvStrainPage({
         const peakFrame = rvStrainSeries.frames.find((f) => f.frameIndex === rvStrainSeries.peakFrameIndex);
         return (peakFrame?.regions ?? []).map((r) => ({ band: r.label, value: r.strain }));
       })()
-    : (rvStrain?.segments ?? []).map((s) => ({ band: BAND_LABEL[s.band] ?? s.band, value: s.rv_gcs }));
+    : (rvStrain?.regions ?? []).map((r) => ({ band: r.label, value: r.strain }));
 
-  const globalValue = rvStrainSeries?.peak_global_rv_strain ?? rvStrain?.global_rv_gcs ?? null;
+  const globalValue = rvStrainSeries?.peak_global_rv_strain ?? rvStrain?.global_rv_strain ?? null;
 
   return (
     <ReportPageFrame
@@ -79,15 +79,6 @@ export function RvStrainPage({
                 <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
               </p>
             </div>
-            {rvStrain?.free_wall_gcs != null && (
-              <div>
-                <p className="text-[8.5px] uppercase tracking-wide text-muted-foreground">Free-wall GCS</p>
-                <p className="text-[18px] font-bold tabular-nums text-foreground">
-                  {fmt(rvStrain.free_wall_gcs)}
-                  <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
-                </p>
-              </div>
-            )}
           </div>
 
           {/* No severity colouring — there is no validated cutoff for this
@@ -156,12 +147,7 @@ export function RvStrainPage({
           ) : null}
 
           <p className="mt-3 text-[8.5px] leading-snug text-muted-foreground">
-            {rvStrain?.note ?? "Geometric contour-length proxy (cavity-radius), not tracked material points."}
-            {(rvStrain?.source || rvStrain?.method) && (
-              <span className="ml-1 opacity-80">
-                ({[rvStrain.source, rvStrain.method].filter(Boolean).join(" · ")})
-              </span>
-            )}
+            Geometric contour-length proxy (cavity-radius), not tracked material points.
           </p>
           <p className="mt-1 text-[8.5px] leading-snug text-muted-foreground">
             Negative values indicate circumferential shortening. Circumferential, not the
