@@ -12,6 +12,7 @@ import {
     IProjectDocument,
     deleteProjectReconstruction
 } from "../services/database";
+import { SegmentationModel } from "../types/database_types";
 import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
 import { extractS3KeyFromUrl, deleteFromS3 } from "../services/s3_handler";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
@@ -78,7 +79,7 @@ router.post("/start-reconstruction/:projectId",
             if (result.success) {
                 res.status(200).json({ message: result.message, uuid: result.uuid });
             } else {
-                res.status(result.statusCode || 500).json({ message: result.message });
+                res.status(result.statusCode || 500).json({ message: result.message, reason: result.reason });
             }
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, "Error starting 4D reconstruction");
@@ -708,10 +709,30 @@ router.delete("/delete-model-reconstruction/:projectId",
 
             logger.info(`${serviceLocation}: Successfully deleted ${deletedCount} ${segmentationModel} reconstruction(s) for project ${projectId}.`);
 
+            const modelTag = segmentationModel === "medsam" ? SegmentationModel.MEDSAM : SegmentationModel.UNET;
+            const clearedJobsResult = await jobModel.updateMany(
+                {
+                    projectid: projectId,
+                    segmentationModel: modelTag,
+                    model_used: "4d_reconstruction",
+                    status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
+                },
+                {
+                    $set: {
+                        status: JobStatus.FAILED,
+                        message: "Reconstruction deleted by user before job completed.",
+                    },
+                }
+            );
+            if (clearedJobsResult.modifiedCount > 0) {
+                logger.info(`${serviceLocation}: Cleared ${clearedJobsResult.modifiedCount} pending/in-progress ${segmentationModel} job(s) for project ${projectId}.`);
+            }
+
             return res.status(200).json({
                 success: true,
                 message: `Successfully deleted ${deletedCount} ${segmentationModel} reconstruction(s).`,
-                deletedCount
+                deletedCount,
+                clearedJobCount: clearedJobsResult.modifiedCount
             });
 
         } catch (error: unknown) {

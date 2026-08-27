@@ -54,6 +54,7 @@ import { segmentationApi } from "@/lib/api";
 import { fmt } from "@/lib/format-utils";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
+import { JobStatus } from "@/types/project";
 import {
   StrainBullseyeChart,
   getDummyStrainData,
@@ -1344,7 +1345,7 @@ function AhaBullseyePanel({
   }, [baseBullseyeData, frameThickness]);
   const heartZoomRef = useRef<((delta: number) => void) | null>(null);
 
-  const { getReconstructionGLB, reconstructionsByModel } = useProject();
+  const { getReconstructionGLB, reconstructionsByModel, reconstructionJobs } = useProject();
   const activeReconstruction = reconstructionModel ? reconstructionsByModel?.[reconstructionModel] ?? null : null;
   const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -1359,6 +1360,15 @@ function AhaBullseyePanel({
     })();
     return () => { cancelled = true; };
   }, [activeReconstruction, reconstructionModel, getReconstructionGLB]);
+
+  const isReconstructionPending = useMemo(() => {
+    if (!reconstructionModel) return false;
+    return (reconstructionJobs || []).some(
+      (job) =>
+        job.segmentationModel === reconstructionModel &&
+        (job.status === JobStatus.PENDING || job.status === JobStatus.IN_PROGRESS),
+    );
+  }, [reconstructionJobs, reconstructionModel]);
 
   // Fix 1: bullseye segment hover tooltip
   const [bullseyeTooltip, setBullseyeTooltip] = useState<{
@@ -1531,6 +1541,7 @@ function AhaBullseyePanel({
               reconstructionMeshUrl={reconstructionMeshUrl}
               reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
               reconstructionLabels={activeReconstruction?.ahaVertexLabels ?? null}
+              reconstructionPending={isReconstructionPending}
               onZoomChange={(fn) => { heartZoomRef.current = fn; }}
               onResetZoom={(fn) => { if (onHeartResetRef) onHeartResetRef(fn); }}
             />
@@ -1634,6 +1645,7 @@ function AhaHeartProjection({
   reconstructionMeshUrl,
   reconstructionMeshFormat,
   reconstructionLabels,
+  reconstructionPending = false,
   onZoomChange,
   onResetZoom,
 }: {
@@ -1646,6 +1658,7 @@ function AhaHeartProjection({
   reconstructionMeshUrl?: string | null;
   reconstructionMeshFormat?: "obj" | "glb";
   reconstructionLabels?: number[] | null;
+  reconstructionPending?: boolean;
   onZoomChange?: (fn: (delta: number) => void) => void;
   onResetZoom?: (fn: () => void) => void;
 }) {
@@ -1653,15 +1666,38 @@ function AhaHeartProjection({
   // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
+  const [colorMode, setColorMode] = useState<"strain" | "debug-segment">("strain");
 
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
       <div className="flex-1 min-h-0 w-full relative">
+        <div className="absolute top-1 left-1 z-10 flex rounded-full border border-border bg-background/80 backdrop-blur-sm p-0.5 text-[9px] font-medium">
+          <button
+            type="button"
+            onClick={() => setColorMode("strain")}
+            className={cn(
+              "rounded-full px-2 py-0.5 transition-colors",
+              colorMode === "strain" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Strain
+          </button>
+          <button
+            type="button"
+            onClick={() => setColorMode("debug-segment")}
+            className={cn(
+              "rounded-full px-2 py-0.5 transition-colors",
+              colorMode === "debug-segment" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            AHA Segments
+          </button>
+        </div>
         <ReconstructedHeartModel
           meshUrl={reconstructionMeshUrl}
           meshFormat={reconstructionMeshFormat}
           segmentLabels={reconstructionLabels}
-          colorMode="strain"
+          colorMode={colorMode}
           values={frameValues}
           min={frameMin}
           max={frameMax}
@@ -1671,6 +1707,18 @@ function AhaHeartProjection({
             onSelectSegment?.(selectedSegment === seg - 1 ? -1 : seg - 1)
           }
         />
+      </div>
+    );
+  }
+
+  if (reconstructionPending) {
+    return (
+      <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
+        <Loader2 className="h-8 w-8 animate-spin opacity-50" />
+        <p className="max-w-[240px] text-xs leading-relaxed">
+          Your 4D reconstruction is processing, this usually takes 2-5 minutes. The real
+          AHA-colored 3D model will appear here once it's done.
+        </p>
       </div>
     );
   }
@@ -2126,15 +2174,38 @@ function StrainHeartModel({
     if (!seg) return 0;
     return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0;
   });
+  const [colorMode, setColorMode] = useState<"strain" | "debug-segment">("strain");
 
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
       <div className="w-full h-full relative">
+        <div className="absolute top-1 left-1 z-10 flex rounded-full border border-border bg-background/80 backdrop-blur-sm p-0.5 text-[9px] font-medium">
+          <button
+            type="button"
+            onClick={() => setColorMode("strain")}
+            className={cn(
+              "rounded-full px-2 py-0.5 transition-colors",
+              colorMode === "strain" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Strain
+          </button>
+          <button
+            type="button"
+            onClick={() => setColorMode("debug-segment")}
+            className={cn(
+              "rounded-full px-2 py-0.5 transition-colors",
+              colorMode === "debug-segment" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            AHA Segments
+          </button>
+        </div>
         <ReconstructedHeartModel
           meshUrl={reconstructionMeshUrl}
           meshFormat={reconstructionMeshFormat}
           segmentLabels={reconstructionLabels}
-          colorMode="strain"
+          colorMode={colorMode}
           values={values}
           min={min}
           max={max}

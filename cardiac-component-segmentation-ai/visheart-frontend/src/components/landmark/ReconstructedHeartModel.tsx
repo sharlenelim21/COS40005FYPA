@@ -249,9 +249,11 @@ export function ReconstructedHeartModel({
   const selectedSegmentRef = useRef(selectedSegment);
   const onSegmentClickRef = useRef(onSegmentClick);
   const segmentLabelsRef = useRef(segmentLabels);
+  const colorModeRef = useRef(colorMode);
   useEffect(() => { selectedSegmentRef.current = selectedSegment; }, [selectedSegment]);
   useEffect(() => { onSegmentClickRef.current = onSegmentClick; }, [onSegmentClick]);
   useEffect(() => { segmentLabelsRef.current = segmentLabels; }, [segmentLabels]);
+  useEffect(() => { colorModeRef.current = colorMode; }, [colorMode]);
 
   const applyVertexColorsRef = useRef<() => void>(() => {});
   applyVertexColorsRef.current = () => {
@@ -471,6 +473,8 @@ export function ReconstructedHeartModel({
     };
 
     const APEX_DIRECTION_SIGN = 1;
+    const AZIMUTH_ANCHOR_LABEL = 1;
+    const AZIMUTH_TARGET_DIRECTION = new THREE.Vector3(0, 0, 1);
 
     const alignCenterAndScale = (mesh: THREE.Mesh) => {
       let rotation = new THREE.Quaternion();
@@ -486,6 +490,21 @@ export function ReconstructedHeartModel({
           apexToBase.normalize();
           const targetBaseDirection = new THREE.Vector3(0, APEX_DIRECTION_SIGN, 0);
           rotation = new THREE.Quaternion().setFromUnitVectors(apexToBase, targetBaseDirection);
+
+          const anchorCentroid = labelCentroidLocal(mesh, new Set([AZIMUTH_ANCHOR_LABEL]));
+          if (anchorCentroid) {
+            const rotatedAnchor = anchorCentroid.clone().sub(baseCentroid).applyQuaternion(rotation);
+            rotatedAnchor.y = 0; 
+            if (rotatedAnchor.lengthSq() > 1e-8) {
+              rotatedAnchor.normalize();
+              const azimuthRotation = new THREE.Quaternion().setFromUnitVectors(rotatedAnchor, AZIMUTH_TARGET_DIRECTION);
+              rotation = azimuthRotation.multiply(rotation);
+            } else {
+              console.warn("[ReconstructedHeartModel] Azimuth anchor too close to the long axis to orient around it.");
+            }
+          } else {
+            console.warn("[ReconstructedHeartModel] Azimuth anchor label sparse; rotation around the long axis is unanchored.");
+          }
         }
       }
       mesh.geometry.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rotation));
@@ -537,6 +556,7 @@ export function ReconstructedHeartModel({
         lineMaterial.resolution.set(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1));
       }
       const boundaryLines = new LineSegments2(lineGeometry, lineMaterial);
+      boundaryLines.visible = colorModeRef.current !== "debug-segment";
       pivot.add(boundaryLines);
       boundaryLinesRef.current = boundaryLines;
       lineMaterialRef.current = lineMaterial;
@@ -568,7 +588,9 @@ export function ReconstructedHeartModel({
 
   useEffect(() => {
     applyVertexColorsRef.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (boundaryLinesRef.current) {
+      boundaryLinesRef.current.visible = colorMode !== "debug-segment";
+    }
   }, [colorMode, values, min, max, reverseColors, segmentLabels]);
 
   return (

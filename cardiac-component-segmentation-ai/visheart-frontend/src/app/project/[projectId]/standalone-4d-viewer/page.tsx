@@ -69,19 +69,19 @@ export default function Standalone4DViewerPage() {
     };
   }, [projectData?.name]);
 
-  // Poll for reconstruction when it doesn't exist yet (job was just started)
   const [isPolling, setIsPolling] = useState(false);
   const [pollTimedOut, setPollTimedOut] = useState(false);
+  const isMissing = !hasReconstructions || (!!selectedModel && !activeReconstruction);
 
   useEffect(() => {
     // Only poll after initial context load is done and reconstruction is missing
     if (loading !== "done") return;
-    if (hasReconstructions && (!selectedModel || activeReconstruction)) return;
+    if (!isMissing) return;
     if (pollTimedOut) return;
 
     setIsPolling(true);
     let attempts = 0;
-    const maxAttempts = 60; // 2 minutes at 2s intervals
+    const maxAttempts = 120; // 10 minutes at 5s intervals
 
     const interval = setInterval(async () => {
       attempts++;
@@ -92,13 +92,13 @@ export default function Standalone4DViewerPage() {
         setIsPolling(false);
         setPollTimedOut(true);
       }
-    }, 2000);
+    }, 5000);
 
     return () => {
       clearInterval(interval);
       setIsPolling(false);
     };
-  }, [loading, hasReconstructions, selectedModel, activeReconstruction, pollTimedOut, refreshReconstructions]);
+  }, [loading, isMissing, pollTimedOut, refreshReconstructions]);
 
   // Viewer state
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -208,7 +208,7 @@ export default function Standalone4DViewerPage() {
   }
 
   // No reconstruction data — show waiting UI while polling, error only on timeout
-  if (!hasReconstructions || (selectedModel && !activeReconstruction)) {
+  if (isMissing) {
     if (isPolling) {
       return (
         <div className="container mx-auto p-6 max-w-4xl">
@@ -226,11 +226,11 @@ export default function Standalone4DViewerPage() {
             <CardContent className="pt-6">
               <div className="text-center py-12">
                 <Loader2 className="h-12 w-12 mx-auto text-primary mb-4 animate-spin" />
-                <h3 className="text-lg font-semibold mb-2">Generating 4D Reconstruction...</h3>
+                <h3 className="text-lg font-semibold mb-2">Reconstruction in Progress</h3>
                 <p className="text-sm text-muted-foreground mb-4">
                   {selectedModel
-                    ? `Building the ${selectedModel.toUpperCase()} 4D model. This may take several minutes.`
-                    : "Building the 4D model. This may take several minutes."}
+                    ? `Your ${selectedModel.toUpperCase()} 4D reconstruction is processing, this usually takes 2-5 minutes.`
+                    : "Your 4D reconstruction is processing, this usually takes 2-5 minutes."}
                 </p>
               </div>
             </CardContent>
@@ -255,9 +255,13 @@ export default function Standalone4DViewerPage() {
           <CardContent className="pt-6">
             <div className="text-center py-12">
               <AlertCircle className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No 4D Reconstruction Available</h3>
+              <h3 className="text-lg font-semibold mb-2">
+                {pollTimedOut ? "Still Processing" : "No 4D Reconstruction Available"}
+              </h3>
               <p className="text-sm text-muted-foreground mb-4">
-                {selectedModel
+                {pollTimedOut
+                  ? "This is taking longer than the usual 2-5 minutes. It may still finish - check back shortly, or contact support if it doesn't complete."
+                  : selectedModel
                   ? `This project does not have a ${selectedModel.toUpperCase()} 4D reconstruction yet.`
                   : "This project does not have a 4D reconstruction yet."}
               </p>
@@ -510,10 +514,14 @@ export default function Standalone4DViewerPage() {
       </ResizablePanelGroup>
 
       <GuidancePanel
-        storageKey={`4d-guidance-${projectId}-${selectedModel ?? "unknown"}`}
+        storageKey={`4d-guidance-${projectId}-${activeReconstruction?.reconstructionId ?? selectedModel ?? "unknown"}`}
         icon="🫀"
-        title="What would you like to do next?"
-        subtitle="4D Reconstruction is ready"
+        title={
+          selectedModel
+            ? `${selectedModel.toUpperCase()} 4D reconstruction complete!`
+            : "4D reconstruction complete!"
+        }
+        subtitle="What would you like to do next?"
         actions={[
           {
             label: "View Segmentation Mask",

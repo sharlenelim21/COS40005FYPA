@@ -22,6 +22,7 @@ services:
   # Frontend (Next.js) + Backend (Node.js)
   # ============================================
   visheart-app:
+    # image: sharlene21/visheart-local:1.4.0
     image: sharlene21/visheart-local:1.4.0
     container_name: visheart-local
     restart: unless-stopped
@@ -265,9 +266,6 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
-      # Use checkpoint files baked into the GPU image. Mounting the local
-      # checkpoints folder can hide those files if local .pth paths are folders.
-      # - ../../UNETRESNET34/checkpoints:/app/UNETRESNET34/checkpoints:ro
     networks:
       visheart-network:
         aliases:
@@ -327,9 +325,6 @@ services:
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
-      # Use checkpoint files baked into the GPU image. Mounting the local
-      # checkpoints folder can hide those files if local .pth paths are folders.
-      # - ../../UNETRESNET34/checkpoints:/app/UNETRESNET34/checkpoints:ro
     networks:
       visheart-network:
         aliases:
