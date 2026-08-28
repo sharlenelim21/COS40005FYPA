@@ -48,6 +48,7 @@ import {
 
 // Custom components
 import { NoProjectFound } from "@/components/project/NoProjectFound";
+import { GuidancePanel } from "@/components/GuidancePanel";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
@@ -659,10 +660,19 @@ function ProjectPageInner() {
       // Keep showing loading state until the job appears
       // The loading state will be cleared by the effect when hasActiveReconstructionJobs becomes true
     } catch (error: unknown) {
+      const axiosError = error as { response?: { status?: number; data?: { message?: string; reason?: string } } };
+
+      if (axiosError?.response?.status === 409 && axiosError.response.data?.reason === "job_in_progress") {
+        console.log("[Project] Reconstruction already in progress for this model - syncing job state.");
+        setShowReconstructionDialog(false);
+        goToReconstructionViewer(config.segmentationModel);
+        await refreshReconstructionJobs();
+        return;
+      }
+
       console.error("[Project] ❌ Error starting reconstruction:", error);
       setReconstructionError(
-        (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 
-        "Failed to start reconstruction"
+        axiosError?.response?.data?.message || "Failed to start reconstruction"
       );
       setIsStartingReconstruction(false);
     }
@@ -1825,6 +1835,31 @@ function ProjectPageInner() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {hasReconstructions && !isGuest && reconstructionRows[0] && (
+        <GuidancePanel
+          storageKey={`recon-ready-guidance-${projectId}-${reconstructionRows[0].reconstructionId}`}
+          icon="🫀"
+          title={
+            reconstructionRows[0].segmentationModel && reconstructionRows[0].segmentationModel !== "unknown"
+              ? `${reconstructionRows[0].segmentationModel.toUpperCase()} 4D reconstruction complete!`
+              : "4D reconstruction complete!"
+          }
+          subtitle="View your 3D model"
+          actions={[
+            {
+              label: "View 3D Model",
+              icon: <Eye size={13} />,
+              primary: true,
+              onClick: () =>
+                goToReconstructionViewer(
+                  reconstructionRows[0].segmentationModel,
+                  reconstructionRows[0].reconstructionId
+                ),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }

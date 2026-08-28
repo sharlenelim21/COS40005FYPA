@@ -157,7 +157,7 @@ export const startReconstruction = async (
     ed_frame?: number,
     export_format?: string,
     segmentationModel?: string
-): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number }> => {
+): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number; reason?: "already_exists" | "job_in_progress" }> => {
     // Normalise the requested segmentation model. Allowed values:
     //   "medsam" — only MedSAM-tagged editable masks
     //   "unet"   — only UNet-tagged editable masks
@@ -225,6 +225,7 @@ export const startReconstruction = async (
                     return {
                         success: false,
                         statusCode: 409,
+                        reason: "already_exists",
                         message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
                     };
                 }
@@ -244,7 +245,8 @@ export const startReconstruction = async (
                 return {
                     success: false,
                     statusCode: 409,
-                    message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
+                    reason: "job_in_progress",
+                    message: `A 4D reconstruction is already in progress for ${modelLabel}.`,
                 };
             }
         }

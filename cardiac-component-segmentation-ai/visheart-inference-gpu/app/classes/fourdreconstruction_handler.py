@@ -616,7 +616,7 @@ class FourDReconstructionHandler:
     
     def _generate_mesh_sync(self, c_s: torch.Tensor, c_m: torch.Tensor,
                            sdf_data: Dict, output_file: str, resolution: int = 128,
-                           export_format: str = "obj") -> Tuple[str, Optional[List[int]]]:
+                           export_format: str = "obj", classify_aha: bool = True) -> Tuple[str, Optional[List[int]]]:
         """
         Generate 3D mesh from optimized latent codes
 
@@ -627,6 +627,10 @@ class FourDReconstructionHandler:
             output_file: Path to save the mesh file (with correct extension)
             resolution: Marching cubes resolution
             export_format: Output format - "obj" or "glb"
+            classify_aha: Whether to run CPD-based AHA-17 classification on this mesh.
+                AHA-17 boundaries are anatomical, not per-frame, so this should only be
+                True for the ED/reference frame - pass False for the other frames of a
+                4D reconstruction to avoid re-running CPD registration on every frame.
 
         """
         try:
@@ -672,7 +676,7 @@ class FourDReconstructionHandler:
                     ply_base_name, motion_filename,
                     N=resolution, max_batch=self.max_batch,
                     offset=offset, scale=scale, Ti=Ti,
-                    classify_aha=True,
+                    classify_aha=classify_aha,
                 )
 
                 # Force GPU sync after mesh generation
@@ -1060,7 +1064,10 @@ class FourDReconstructionHandler:
                             output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}.{file_extension}")
                         
                         print(f"Generating mesh for frame {original_frame_idx}...")
-                        frame_mesh_file, frame_aha_labels = self._generate_mesh_sync(frame_c_s, frame_c_m, frame_sdf_data, output_file, resolution, export_format)
+                        frame_mesh_file, frame_aha_labels = self._generate_mesh_sync(
+                            frame_c_s, frame_c_m, frame_sdf_data, output_file, resolution, export_format,
+                            classify_aha=(original_frame_idx == ed_frame_index),
+                        )
                         mesh_files.append(frame_mesh_file)
                         processed_frame_indices.append(original_frame_idx)
                         if original_frame_idx == ed_frame_index:
