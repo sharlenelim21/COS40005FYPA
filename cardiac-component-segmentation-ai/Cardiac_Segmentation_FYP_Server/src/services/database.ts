@@ -890,6 +890,10 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
   },
 
   ahaVertexLabels: { type: [Number], required: false },
+  // Per-frame labels, keyed by original frame index (string keys). Mongoose's Map
+  // type stores this as a real BSON map (not a nested-object schema), which is what
+  // an arbitrary/variable set of frame-index keys needs.
+  frameAhaVertexLabels: { type: Map, of: [Number], required: false },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Hooks for pre-save and pre-delete operations (must be before the model creation)

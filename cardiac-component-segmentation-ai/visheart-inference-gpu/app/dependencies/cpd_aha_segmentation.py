@@ -51,6 +51,13 @@ _MAX_REGISTRATION_POINTS = 2000
 # is bounded by a chunk x _MAX_REGISTRATION_POINTS matrix, not the full dense count x
 # _MAX_REGISTRATION_POINTS at once.
 _DENSE_FIELD_CHUNK = 4000
+# Candidate Z-axis rotations tried before the expensive CPD step - see
+# _find_best_rigid_rotation. 72 candidates = 5-degree steps. Bumped up from 12
+# (30-degree steps): measured on a real reconstruction, most remaining failures
+# were near-misses (16/17, missing just segment 4) rather than the original
+# systemic half-heart failure - a sign the right angle might sit between the
+# coarser candidates rather than being fundamentally unreachable by rotation.
+_Z_ROTATION_CANDIDATES = 72
 
 _atlas_cache: dict | None = None
 
@@ -184,25 +191,71 @@ def _get_atlas() -> dict:
     return _atlas_cache
 
 
-def classify_vertices_to_aha17_cpd(mesh_points_canonical: np.ndarray) -> np.ndarray:
+def _rotation_matrix_z(angle_deg: float) -> np.ndarray:
+    """3x3 rotation matrix for a rotation of angle_deg about the Z axis - the
+    apex-base axis both the atlas and every patient mesh are already aligned to."""
+    theta = np.radians(angle_deg)
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([
+        [c, -s, 0.0],
+        [s,  c, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+
+
+def _find_best_rigid_rotation(
+    dense_points: np.ndarray, dense_labels: np.ndarray, target_points: np.ndarray,
+    n_candidates: int = _Z_ROTATION_CANDIDATES,
+) -> tuple[np.ndarray, int]:
     """
-    Patient-adaptive replacement for classify_vertices_to_aha17(): registers the
-    cached, pre-labeled atlas onto this patient's own mesh with CPD, extends the
-    learned field to the atlas's full dense vertex set (v5_deform.ipynb's
-    apply_cpd_field approach), then assigns each patient vertex the label of its
-    nearest warped dense-atlas point (nearest-neighbor after warping).
+    Picks a starting Z-rotation for the atlas by the metric that actually matters -
+    how many of the 17 segments populate after label transfer - not by raw shape
+    overlap (tried and disproven: the LV is a smooth, near-symmetric blob, so a
+    shape-distance metric can't tell "correctly septal-aligned" from "30 degrees
+    off" - many wrong rotations score just as well as the right one on shape alone).
 
-    One CPD run for this single mesh (ED frame) - not per-frame.
+    Cheap by construction: RIGID nearest-neighbor label lookup only (rotate the
+    dense atlas, build a tree, query) - no deformable registration per candidate.
+    The winning angle then seeds the one real, expensive CPD registration, so total
+    added cost is K cheap rigid checks, not K expensive registrations.
 
-    Falls back to the fixed-rule classifier if CPD fails, or if label transfer leaves
-    any of the 17 segments empty, so a bad registration can't silently produce worse
-    boundaries than the rule it's replacing.
+    Returns (rotation_matrix, populated_count) for the best candidate found.
+    """
+    best_rotation = np.eye(3)
+    best_populated = -1
+    for angle_deg in np.linspace(0, 360, n_candidates, endpoint=False):
+        rotation = _rotation_matrix_z(angle_deg)
+        rotated_dense = dense_points @ rotation.T
+        tree = cKDTree(rotated_dense)
+        _, nearest_idx = tree.query(target_points)
+        labels = dense_labels[nearest_idx]
+        populated = len(np.unique(labels))
+        if populated > best_populated:
+            best_populated = populated
+            best_rotation = rotation
+
+    return best_rotation, best_populated
+
+
+def register_cpd_warp(mesh_points_canonical: np.ndarray) -> dict | None:
+    """
+    The EXPENSIVE half of CPD classification: registers the cached, pre-labeled
+    atlas onto this mesh with CPD and extends the learned field to the atlas's full
+    dense vertex set (v5_deform.ipynb's apply_cpd_field approach). Returns a warp
+    state dict for label_with_warp() to reuse CHEAPLY on other frames.
+
+    Reuse is valid across every frame of the SAME reconstruction, not just an
+    approximation specific to whichever frame registered first: all frames share one
+    shape latent code decoded through the same canonical coordinate space, so a warp
+    fitted against any one frame's point cloud applies equally to the others - only
+    the frame's own vertex positions differ, not the coordinate frame they live in.
+
+    Returns None on failure (missing atlas, degenerate input, etc) - callers should
+    fall back to the fixed-rule classifier.
     """
     pts = np.asarray(mesh_points_canonical, dtype=np.float64)
-    if pts.ndim != 2 or pts.shape[1] != 3:
-        raise ValueError(f"Expected mesh_points_canonical of shape (N, 3), got {pts.shape}")
-    if pts.shape[0] == 0:
-        return classify_vertices_to_aha17(pts)
+    if pts.ndim != 2 or pts.shape[1] != 3 or pts.shape[0] == 0:
+        return None
 
     try:
         atlas = _get_atlas()
@@ -220,6 +273,21 @@ def classify_vertices_to_aha17_cpd(mesh_points_canonical: np.ndarray) -> np.ndar
         else:
             target_sample = pts
 
+        # Rigid pre-alignment, scored by the metric that actually matters (segment
+        # population after label transfer), not raw shape distance - see
+        # _find_best_rigid_rotation for why the shape-distance version of this
+        # (tried previously) didn't work. Cheap: only rigid nearest-neighbor checks,
+        # no deformable registration yet.
+        best_rotation, best_populated = _find_best_rigid_rotation(
+            dense_points_scaled, atlas["dense_labels"], target_sample,
+        )
+        logger.info(
+            f"[CPD-AHA] Rigid pre-alignment: best candidate populated {best_populated}/17 "
+            f"segments before the deformable step."
+        )
+        reg_points_scaled = reg_points_scaled @ best_rotation.T
+        dense_points_scaled = dense_points_scaled @ best_rotation.T
+
         reg = DeformableRegistration(
             X=target_sample, Y=reg_points_scaled,
             beta=_CPD_BETA, lamb=_CPD_LAMBDA, max_iterations=_CPD_MAX_ITER,
@@ -231,20 +299,93 @@ def classify_vertices_to_aha17_cpd(mesh_points_canonical: np.ndarray) -> np.ndar
         # rather than being limited to the ~2000-point registration cap.
         warped_dense_atlas = _apply_cpd_field(dense_points_scaled, reg.Y, reg.W, reg.beta)
 
-        tree = cKDTree(warped_dense_atlas)
+        return {"warped_dense_atlas": warped_dense_atlas, "dense_labels": atlas["dense_labels"]}
+
+    except Exception as exc:
+        logger.warning(f"[CPD-AHA] CPD registration failed ({exc}).")
+        return None
+
+
+def label_with_warp(mesh_points_canonical: np.ndarray, warp_state: dict) -> np.ndarray | None:
+    """
+    The CHEAP half: nearest-neighbor label lookup against an already-warped atlas
+    from register_cpd_warp(). No new (expensive) deformable registration - this is
+    what makes per-frame labeling affordable across a multi-frame reconstruction.
+
+    Includes a cheap PER-FRAME rigid re-check (same idea as register_cpd_warp's
+    pre-alignment, applied to the already-warped atlas instead of the raw one):
+    measured on a real reconstruction, frames of the SAME 4D sequence do not all
+    share the exact orientation the shared warp was fitted against - some frames
+    hit the old full failure signature (9/17, same 8 segments) even on a warp that
+    gave 17/17 for the frame it was registered on. Re-running the cheap rotation
+    search per frame (rotate the already-warped atlas, no new deformable fit) fixed
+    most of those without paying for a fresh ~28s registration per frame.
+
+    Returns None if label transfer leaves any of the 17 segments empty even after
+    the per-frame re-check, so a degenerate frame can't silently ship worse
+    boundaries than the fixed-rule fallback would.
+    """
+    pts = np.asarray(mesh_points_canonical, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3 or pts.shape[0] == 0:
+        return None
+
+    try:
+        best_rotation, rigid_check_populated = _find_best_rigid_rotation(
+            warp_state["warped_dense_atlas"], warp_state["dense_labels"], pts,
+        )
+        # DIAGNOSTIC: show what the per-frame search actually found, so a repeat
+        # failure is distinguishable from "search didn't run" vs "search ran and
+        # genuinely found nothing better within the candidate angles tried."
+        logger.info(f"[CPD-AHA] Per-frame rigid re-check: best candidate populated {rigid_check_populated}/17.")
+        rotated_warped_atlas = warp_state["warped_dense_atlas"] @ best_rotation.T
+
+        tree = cKDTree(rotated_warped_atlas)
         _, nearest_idx = tree.query(pts)
-        labels = atlas["dense_labels"][nearest_idx].astype(np.int16)
+        labels = warp_state["dense_labels"][nearest_idx].astype(np.int16)
 
         n_populated = len(np.unique(labels))
         if n_populated < 17:
+            # DIAGNOSTIC: log per-segment counts before discarding this result, so a
+            # failure is actually debuggable instead of just "9/17, fell back".
+            unique, counts = np.unique(labels, return_counts=True)
+            populated_set = set(unique.tolist())
+            missing = sorted(set(range(1, 18)) - populated_set)
+            counts_str = ", ".join(f"{seg}:{cnt}" for seg, cnt in zip(unique.tolist(), counts.tolist()))
             logger.warning(
-                f"[CPD-AHA] CPD label transfer only populated {n_populated}/17 segments; "
-                "falling back to fixed-rule classification."
+                f"[CPD-AHA] Reused-warp label transfer only populated {n_populated}/17 segments. "
+                f"Populated counts=[{counts_str}]  Missing segments={missing}"
             )
-            return classify_vertices_to_aha17(pts)
+            return None
 
         return labels
 
     except Exception as exc:
-        logger.warning(f"[CPD-AHA] CPD classification failed ({exc}); falling back to fixed-rule classification.")
+        logger.warning(f"[CPD-AHA] Reused-warp labeling failed ({exc}).")
+        return None
+
+
+def classify_vertices_to_aha17_cpd(mesh_points_canonical: np.ndarray) -> np.ndarray:
+    """
+    Single-call convenience wrapper: register + label in one step, falling back to
+    the fixed-rule classifier on any failure. Kept for standalone/one-off use (e.g.
+    _validate_cpd_aha.py). A multi-frame reconstruction should call
+    register_cpd_warp() ONCE and label_with_warp() per frame instead - calling this
+    function per frame re-registers from scratch every time (~28s each).
+    """
+    pts = np.asarray(mesh_points_canonical, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"Expected mesh_points_canonical of shape (N, 3), got {pts.shape}")
+    if pts.shape[0] == 0:
         return classify_vertices_to_aha17(pts)
+
+    warp_state = register_cpd_warp(pts)
+    if warp_state is None:
+        logger.warning("[CPD-AHA] CPD registration failed; falling back to fixed-rule classification.")
+        return classify_vertices_to_aha17(pts)
+
+    labels = label_with_warp(pts, warp_state)
+    if labels is None:
+        logger.warning("[CPD-AHA] CPD label transfer failed; falling back to fixed-rule classification.")
+        return classify_vertices_to_aha17(pts)
+
+    return labels

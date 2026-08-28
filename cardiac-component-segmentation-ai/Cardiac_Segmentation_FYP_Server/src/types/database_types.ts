@@ -717,7 +717,14 @@ export interface IProjectReconstruction {
     resolution?: number; // Resolution of the reconstruction grid (optional)
   };
 
-  ahaVertexLabels?: number[];
+  ahaVertexLabels?: number[]; // ED frame's labels only, kept for back-compat with existing viewers
+
+  // Per-frame AHA-17 vertex labels, keyed by original frame index (as a string, since
+  // it's stored/transmitted as a JSON object). Each frame's marching-cubes mesh has
+  // its own vertex count/ordering, so labels are NOT interchangeable across frames -
+  // only pair a frame's labels with that SAME frame's mesh geometry. Lets the mesh
+  // viewer color/segment whichever frame is currently loaded, not just ED.
+  frameAhaVertexLabels?: Record<string, number[]>;
 
   // Based on mongoose timestamp
   createdAt?: Date; // Creation timestamp

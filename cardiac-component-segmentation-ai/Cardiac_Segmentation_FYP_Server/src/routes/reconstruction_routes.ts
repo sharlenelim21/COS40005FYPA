@@ -198,6 +198,7 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                     tarUrl: downloadUrl,
                     segmentationModel: inferredModel, // Model used for this reconstruction (medsam, unet, etc)
                     ahaVertexLabels: recon.ahaVertexLabels ?? null,
+                    frameAhaVertexLabels: recon.frameAhaVertexLabels ?? null,
                     metadata: {
                         edFrameIndex: recon.ed_frame,
                         reconstructionTime: recon.reconstructedMesh?.reconstructionTime,

@@ -770,6 +770,31 @@ async function createReconstructionRecord(
       logger.warn(`${serviceLocation}: Ignoring malformed aha_vertex_labels in GPU result for job ${gpuJobId}`);
     }
 
+    // Per-frame labels, keyed by original frame index (string keys, since it comes
+    // over as a JSON object). Each frame's own array must be a valid number[] -
+    // a malformed entry for one frame doesn't invalidate the others.
+    const rawFrameAhaLabels = gpuResult?.frame_aha_vertex_labels;
+    let frameAhaVertexLabels: Record<string, number[]> | undefined;
+    if (rawFrameAhaLabels && typeof rawFrameAhaLabels === 'object' && !Array.isArray(rawFrameAhaLabels)) {
+      const validEntries: Record<string, number[]> = {};
+      let droppedCount = 0;
+      for (const [frameIdx, labels] of Object.entries(rawFrameAhaLabels)) {
+        if (Array.isArray(labels) && labels.every((v: unknown) => typeof v === 'number')) {
+          validEntries[frameIdx] = labels as number[];
+        } else {
+          droppedCount++;
+        }
+      }
+      if (droppedCount > 0) {
+        logger.warn(`${serviceLocation}: Dropped ${droppedCount} malformed frame_aha_vertex_labels entries for job ${gpuJobId}`);
+      }
+      if (Object.keys(validEntries).length > 0) {
+        frameAhaVertexLabels = validEntries;
+      }
+    } else if (rawFrameAhaLabels !== undefined && rawFrameAhaLabels !== null) {
+      logger.warn(`${serviceLocation}: Ignoring malformed frame_aha_vertex_labels in GPU result for job ${gpuJobId}`);
+    }
+
     const reconstructionData: Partial<IProjectReconstruction> = {
       projectid: projectId,
       maskId: maskId,
@@ -786,6 +811,7 @@ async function createReconstructionRecord(
       reconstructionfolderpath: reconstructionFileS3Url,
       segmentationModel: normalizedSegmentationModel,
       ahaVertexLabels,
+      frameAhaVertexLabels,
       reconstructedMesh: {
         path: reconstructionFileS3Url,
         filename: finalFilename,

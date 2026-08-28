@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -250,6 +250,8 @@ export function ReconstructedHeartModel({
   const onSegmentClickRef = useRef(onSegmentClick);
   const segmentLabelsRef = useRef(segmentLabels);
   const colorModeRef = useRef(colorMode);
+  const isPausedRef = useRef(false);
+  const [isPaused, setIsPaused] = useState(false);
   useEffect(() => { selectedSegmentRef.current = selectedSegment; }, [selectedSegment]);
   useEffect(() => { onSegmentClickRef.current = onSegmentClick; }, [onSegmentClick]);
   useEffect(() => { segmentLabelsRef.current = segmentLabels; }, [segmentLabels]);
@@ -414,7 +416,7 @@ export function ReconstructedHeartModel({
     let animationId = 0;
     const animate = () => {
       animationId = requestAnimationFrame(animate);
-      if (!isDragging) {
+      if (!isDragging && !isPausedRef.current) {
         pivot.rotation.y += 0.006;
       }
       updateSelectionHighlight();
@@ -598,6 +600,27 @@ export function ReconstructedHeartModel({
       ref={containerRef}
       className={`relative ${className ?? ""}`}
       aria-label="Reconstructed patient-specific 3D heart model"
-    />
+    >
+      <button
+        type="button"
+        onClick={() => {
+          isPausedRef.current = !isPausedRef.current;
+          setIsPaused((p) => !p);
+        }}
+        className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/50 text-white transition-colors hover:bg-black/70"
+        title={isPaused ? "Resume rotation" : "Pause rotation"}
+      >
+        {isPaused ? (
+          <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor">
+            <path d="M0 0 L10 6 L0 12 Z" />
+          </svg>
+        ) : (
+          <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor">
+            <rect x="0" y="0" width="3" height="12" />
+            <rect x="7" y="0" width="3" height="12" />
+          </svg>
+        )}
+      </button>
+    </div>
   );
 }

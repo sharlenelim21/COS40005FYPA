@@ -1348,18 +1348,37 @@ function AhaBullseyePanel({
   const { getReconstructionGLB, reconstructionsByModel, reconstructionJobs } = useProject();
   const activeReconstruction = reconstructionModel ? reconstructionsByModel?.[reconstructionModel] ?? null : null;
   const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
+  // Reset ONLY when switching to a genuinely different reconstruction/model - not on
+  // every frame change, otherwise fast playback (many frame changes per second) spends
+  // most of its time with the mesh nulled out while each fetch is still in flight,
+  // which is exactly what caused the flicker/disappearing model during playback.
+  useEffect(() => {
+    setReconstructionMeshUrl(null);
+  }, [activeReconstruction?.reconstructionId, reconstructionModel]);
+
   useEffect(() => {
     let cancelled = false;
-    setReconstructionMeshUrl(null);
     if (!activeReconstruction?.reconstructionId || !Array.isArray(activeReconstruction?.ahaVertexLabels)) {
       return;
     }
     (async () => {
-      const url = await getReconstructionGLB(0, reconstructionModel, activeReconstruction.reconstructionId);
+      const url = await getReconstructionGLB(currentFrame, reconstructionModel, activeReconstruction.reconstructionId);
+      // Swap in directly, without nulling first - keeps the previous frame's mesh
+      // visible until the new one is ready, so rapid playback doesn't flash empty.
       if (!cancelled) setReconstructionMeshUrl(url);
     })();
     return () => { cancelled = true; };
-  }, [activeReconstruction, reconstructionModel, getReconstructionGLB]);
+  }, [activeReconstruction, reconstructionModel, getReconstructionGLB, currentFrame]);
+
+  // Per-frame AHA labels for whichever frame's geometry is currently loaded above.
+  // Each frame's own marching-cubes mesh has its own vertex count/ordering, so labels
+  // are NOT interchangeable across frames - falls back to the ED-only labels (older
+  // reconstructions, or frames the GPU skipped as apex/base slices with no contour).
+  const reconstructionLabels = useMemo(() => {
+    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(currentFrame)];
+    if (Array.isArray(perFrame)) return perFrame;
+    return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
+  }, [activeReconstruction, currentFrame]);
 
   const isReconstructionPending = useMemo(() => {
     if (!reconstructionModel) return false;
@@ -1540,7 +1559,7 @@ function AhaBullseyePanel({
               onSelectSegment={setSelectedBullseyeSegment}
               reconstructionMeshUrl={reconstructionMeshUrl}
               reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
-              reconstructionLabels={activeReconstruction?.ahaVertexLabels ?? null}
+              reconstructionLabels={reconstructionLabels}
               reconstructionPending={isReconstructionPending}
               onZoomChange={(fn) => { heartZoomRef.current = fn; }}
               onResetZoom={(fn) => { if (onHeartResetRef) onHeartResetRef(fn); }}
@@ -1666,38 +1685,15 @@ function AhaHeartProjection({
   // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
-  const [colorMode, setColorMode] = useState<"strain" | "debug-segment">("strain");
 
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
       <div className="flex-1 min-h-0 w-full relative">
-        <div className="absolute top-1 left-1 z-10 flex rounded-full border border-border bg-background/80 backdrop-blur-sm p-0.5 text-[9px] font-medium">
-          <button
-            type="button"
-            onClick={() => setColorMode("strain")}
-            className={cn(
-              "rounded-full px-2 py-0.5 transition-colors",
-              colorMode === "strain" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Strain
-          </button>
-          <button
-            type="button"
-            onClick={() => setColorMode("debug-segment")}
-            className={cn(
-              "rounded-full px-2 py-0.5 transition-colors",
-              colorMode === "debug-segment" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            AHA Segments
-          </button>
-        </div>
         <ReconstructedHeartModel
           meshUrl={reconstructionMeshUrl}
           meshFormat={reconstructionMeshFormat}
           segmentLabels={reconstructionLabels}
-          colorMode={colorMode}
+          colorMode="strain"
           values={frameValues}
           min={frameMin}
           max={frameMax}
@@ -2174,38 +2170,14 @@ function StrainHeartModel({
     if (!seg) return 0;
     return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0;
   });
-  const [colorMode, setColorMode] = useState<"strain" | "debug-segment">("strain");
-
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
       <div className="w-full h-full relative">
-        <div className="absolute top-1 left-1 z-10 flex rounded-full border border-border bg-background/80 backdrop-blur-sm p-0.5 text-[9px] font-medium">
-          <button
-            type="button"
-            onClick={() => setColorMode("strain")}
-            className={cn(
-              "rounded-full px-2 py-0.5 transition-colors",
-              colorMode === "strain" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Strain
-          </button>
-          <button
-            type="button"
-            onClick={() => setColorMode("debug-segment")}
-            className={cn(
-              "rounded-full px-2 py-0.5 transition-colors",
-              colorMode === "debug-segment" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            AHA Segments
-          </button>
-        </div>
         <ReconstructedHeartModel
           meshUrl={reconstructionMeshUrl}
           meshFormat={reconstructionMeshFormat}
           segmentLabels={reconstructionLabels}
-          colorMode={colorMode}
+          colorMode="strain"
           values={values}
           min={min}
           max={max}
@@ -2453,18 +2425,35 @@ function StrainPreviewPanel({
   const { getReconstructionGLB, reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
   const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
+  // Reset ONLY when switching to a genuinely different reconstruction/model - not on
+  // every frame change, otherwise fast playback spends most of its time with the mesh
+  // nulled out while each fetch is still in flight (the flicker/disappearing bug).
+  useEffect(() => {
+    setReconstructionMeshUrl(null);
+  }, [activeReconstruction?.reconstructionId, strainModel]);
+
   useEffect(() => {
     let cancelled = false;
-    setReconstructionMeshUrl(null);
     if (!activeReconstruction?.reconstructionId || !Array.isArray(activeReconstruction?.ahaVertexLabels)) {
       return;
     }
     (async () => {
-      const url = await getReconstructionGLB(0, strainModel, activeReconstruction.reconstructionId);
+      const url = await getReconstructionGLB(currentFrame, strainModel, activeReconstruction.reconstructionId);
+      // Swap in directly, without nulling first - keeps the previous frame's mesh
+      // visible until the new one is ready, so rapid playback doesn't flash empty.
       if (!cancelled) setReconstructionMeshUrl(url);
     })();
     return () => { cancelled = true; };
-  }, [activeReconstruction, strainModel, getReconstructionGLB]);
+  }, [activeReconstruction, strainModel, getReconstructionGLB, currentFrame]);
+
+  // Per-frame AHA labels for whichever frame's geometry is currently loaded above -
+  // each frame's own mesh has its own vertex layout, so labels can't be reused
+  // across frames. Falls back to ED-only labels for older reconstructions.
+  const reconstructionLabels = useMemo(() => {
+    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(currentFrame)];
+    if (Array.isArray(perFrame)) return perFrame;
+    return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
+  }, [activeReconstruction, currentFrame]);
 
   // The auto-detected ED/ES for the CURRENTLY-selected strain model — so the
   // picker defaults to the frames that this model's heart-metrics found, keeping
@@ -2941,7 +2930,7 @@ function StrainPreviewPanel({
                     onResetZoom={(fn) => { heartResetRef.current = fn; }}
                     reconstructionMeshUrl={reconstructionMeshUrl}
                     reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
-                    reconstructionLabels={activeReconstruction?.ahaVertexLabels ?? null}
+                    reconstructionLabels={reconstructionLabels}
                     onReconstructionSegmentClick={handleSegClick}
                   />
                 </div>

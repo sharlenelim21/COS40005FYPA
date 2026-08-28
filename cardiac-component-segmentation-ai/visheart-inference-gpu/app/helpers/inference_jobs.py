@@ -1145,6 +1145,10 @@ async def _process_fourd_reconstruction_job(
                                 "total_mesh_size": total_size,
                                 "mesh_format": "obj",
                                 "aha_vertex_labels": reconstruction_result.get("aha_vertex_labels"),
+                                # Per-frame labels keyed by original frame index (string keys - see
+                                # fourdreconstruction_handler.py). Mesh filenames embed the same frame
+                                # index (e.g. "..._4D_frame13.glb"), so the backend can match them up.
+                                "frame_aha_vertex_labels": reconstruction_result.get("frame_aha_vertex_labels"),
                                 "reconstruction_time": reconstruction_result["reconstruction_time"],
                                 "num_iterations": reconstruction_result["num_iterations"],
                                 "resolution": reconstruction_result["resolution"],

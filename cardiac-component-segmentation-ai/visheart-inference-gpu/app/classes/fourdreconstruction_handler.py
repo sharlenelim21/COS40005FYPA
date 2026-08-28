@@ -616,7 +616,8 @@ class FourDReconstructionHandler:
     
     def _generate_mesh_sync(self, c_s: torch.Tensor, c_m: torch.Tensor,
                            sdf_data: Dict, output_file: str, resolution: int = 128,
-                           export_format: str = "obj", classify_aha: bool = True) -> Tuple[str, Optional[List[int]]]:
+                           export_format: str = "obj", classify_aha: bool = True,
+                           cpd_warp_state: Optional[dict] = None) -> Tuple[str, Optional[List[int]], Optional[dict]]:
         """
         Generate 3D mesh from optimized latent codes
 
@@ -627,11 +628,20 @@ class FourDReconstructionHandler:
             output_file: Path to save the mesh file (with correct extension)
             resolution: Marching cubes resolution
             export_format: Output format - "obj" or "glb"
-            classify_aha: Whether to run CPD-based AHA-17 classification on this mesh.
-                AHA-17 boundaries are anatomical, not per-frame, so this should only be
-                True for the ED/reference frame - pass False for the other frames of a
-                4D reconstruction to avoid re-running CPD registration on every frame.
+            classify_aha: Whether to compute AHA-17 vertex labels for this frame.
+            cpd_warp_state: an optional warp state from a PRIOR frame's CPD
+                registration (see cpd_aha_segmentation.register_cpd_warp). Pass None
+                on the first frame of a multi-frame sequence; the caller should then
+                reuse the returned warp_state on every subsequent frame - that's what
+                makes per-frame CPD labeling affordable (cheap nearest-neighbor reuse
+                instead of a fresh ~28s registration each time).
 
+        Returns:
+            (mesh_file_path, aha_vertex_labels, warp_state) - warp_state is the CPD
+            warp actually used for this call (freshly registered if none was passed
+            in, or the same one passed in if reused); callers should feed it into the
+            next frame's call regardless of which case produced it. None/unused when
+            classify_aha is False.
         """
         try:
             # AUTOGRAD FIX: Force complete GPU synchronization before mesh generation
@@ -671,12 +681,12 @@ class FourDReconstructionHandler:
                 # So we need to provide the filename without extension
                 ply_base_name = base_name
                 
-                aha_labels = deep_sdf.mesh.create_mesh_4dsdf(
+                aha_labels, new_warp_state = deep_sdf.mesh.create_mesh_4dsdf(
                     self.decoder, c_s_vec, c_m_vec, phase_t,
                     ply_base_name, motion_filename,
                     N=resolution, max_batch=self.max_batch,
                     offset=offset, scale=scale, Ti=Ti,
-                    classify_aha=classify_aha,
+                    classify_aha=classify_aha, cpd_warp_state=cpd_warp_state,
                 )
 
                 # Force GPU sync after mesh generation
@@ -707,7 +717,7 @@ class FourDReconstructionHandler:
                 safe_empty_cache(self.device)
 
                 labels_list = aha_labels.tolist() if aha_labels is not None else None
-                return output_file, labels_list
+                return output_file, labels_list, new_warp_state
             else:
                 raise FileNotFoundError(f"PLY file not generated: {ply_file}")
             
@@ -849,7 +859,7 @@ class FourDReconstructionHandler:
             file_extension = export_format  # "obj" or "glb"
             output_file = os.path.join(output_dir, f"{input_filename}_reconstructed.{file_extension}")
             
-            mesh_file, aha_vertex_labels = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+            mesh_file, aha_vertex_labels, _ = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
 
             # Debug mode: Copy to persistent location if enabled
             debug_save = kwargs.get('debug_save', False)
@@ -1008,11 +1018,22 @@ class FourDReconstructionHandler:
             
             # Phase 2: Multi-frame processing implementation
             ed_aha_vertex_labels = None
+            # Per-frame AHA labels, keyed by original frame index - lets the mesh
+            # viewer color/segment whichever frame's geometry is currently loaded,
+            # not just the ED frame. See cpd_warp_state below for how this stays cheap.
+            frame_aha_labels_by_index: Dict[int, Optional[List[int]]] = {}
             if process_all_frames:
                 print("Step 3: Processing multiple frames (Phase 2 implementation)...")
                 mesh_files = []
                 processed_frame_indices = []
-                
+                # CPD warp state, reused across every frame after the first that
+                # successfully registers - see cpd_aha_segmentation.register_cpd_warp:
+                # all frames of this reconstruction share one canonical coordinate
+                # space, so registering once and reusing is valid, not an
+                # approximation. Turns per-frame CPD labeling from ~28s/frame into a
+                # cheap nearest-neighbor lookup for every frame after the first.
+                cpd_warp_state: Optional[dict] = None
+
                 os.makedirs(output_dir, exist_ok=True)
                 input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
                 file_extension = export_format  # "obj" or "glb"
@@ -1064,13 +1085,15 @@ class FourDReconstructionHandler:
                             output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}.{file_extension}")
                         
                         print(f"Generating mesh for frame {original_frame_idx}...")
-                        frame_mesh_file, frame_aha_labels = self._generate_mesh_sync(
+                        is_ed_frame = original_frame_idx == ed_frame_index
+                        frame_mesh_file, frame_aha_labels, cpd_warp_state = self._generate_mesh_sync(
                             frame_c_s, frame_c_m, frame_sdf_data, output_file, resolution, export_format,
-                            classify_aha=(original_frame_idx == ed_frame_index),
+                            classify_aha=True, cpd_warp_state=cpd_warp_state,
                         )
                         mesh_files.append(frame_mesh_file)
                         processed_frame_indices.append(original_frame_idx)
-                        if original_frame_idx == ed_frame_index:
+                        frame_aha_labels_by_index[original_frame_idx] = frame_aha_labels
+                        if is_ed_frame:
                             ed_aha_vertex_labels = frame_aha_labels
                         
                         print(f"[OK] Successfully generated mesh for frame {original_frame_idx}: {os.path.basename(frame_mesh_file)}")
@@ -1148,10 +1171,11 @@ class FourDReconstructionHandler:
                 file_extension = export_format  # "obj" or "glb"
                 output_file = os.path.join(output_dir, f"{input_filename}_4D_ED{ed_frame_index:02d}.{file_extension}")
                 
-                primary_mesh_file, ed_aha_vertex_labels = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+                primary_mesh_file, ed_aha_vertex_labels, _ = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
                 print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
                 mesh_files = [primary_mesh_file]
                 processed_frame_indices = [ed_frame_index]
+                frame_aha_labels_by_index[ed_frame_index] = ed_aha_vertex_labels
             
             # Clean up temporary files
             import shutil
@@ -1169,6 +1193,13 @@ class FourDReconstructionHandler:
                 "mesh_file": primary_mesh_file,  # Primary mesh (ED frame or first available)
                 "mesh_files": mesh_files,  # All generated mesh files
                 "aha_vertex_labels": ed_aha_vertex_labels,
+                # Per-frame labels keyed by original frame index (as strings - JSON
+                # object keys). Lets the viewer color whichever frame's mesh geometry
+                # is currently loaded, not just the ED frame's. Frames skipped as
+                # apex/base slices (no contour) simply have no entry.
+                "frame_aha_vertex_labels": {
+                    str(idx): labels for idx, labels in frame_aha_labels_by_index.items()
+                },
                 "reconstruction_time": reconstruction_time,
                 "num_iterations": num_iterations,
                 "resolution": resolution,
