@@ -10,8 +10,6 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
-import { GuidancePanel } from "@/components/GuidancePanel";
-import { Layers, Crosshair } from "lucide-react";
 import { 
   ResizablePanelGroup, 
   ResizablePanel, 
@@ -512,35 +510,6 @@ export default function Standalone4DViewerPage() {
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
-
-      <GuidancePanel
-        storageKey={`4d-guidance-${projectId}-${activeReconstruction?.reconstructionId ?? selectedModel ?? "unknown"}`}
-        icon="🫀"
-        title={
-          selectedModel
-            ? `${selectedModel.toUpperCase()} 4D reconstruction complete!`
-            : "4D reconstruction complete!"
-        }
-        subtitle="What would you like to do next?"
-        actions={[
-          {
-            label: "View Segmentation Mask",
-            icon: <Layers size={13} />,
-            onClick: () => {
-              const params = new URLSearchParams();
-              if (selectedModel) params.set("model", selectedModel);
-              params.set("from", "4d");
-              router.push(`/project/${projectId}/segmentation?${params.toString()}`);
-            },
-          },
-          {
-            label: "Run Landmark Detection",
-            icon: <Crosshair size={13} />,
-            primary: true,
-            onClick: () => router.push(`/project/${projectId}?highlight=landmark`),
-          },
-        ]}
-      />
     </div>
   );
 }

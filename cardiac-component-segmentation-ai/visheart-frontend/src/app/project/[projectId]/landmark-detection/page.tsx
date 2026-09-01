@@ -38,7 +38,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar } from "@/components/landmark/LandmarkSidebar";
-import { ClientHeartModel } from "@/components/landmark/ClientHeartModel";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import {
@@ -1720,15 +1719,13 @@ function AhaHeartProjection({
   }
 
   return (
-    <ClientHeartModel
-      values={frameValues}
-      min={frameMin}
-      max={frameMax}
-      className="flex-1 min-h-0 w-full"
-      selectedSegment={selectedSegment}
-      onZoomChange={onZoomChange}
-      onResetZoom={onResetZoom}
-    />
+    <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
+      <AlertCircle className="h-8 w-8 opacity-40" />
+      <p className="max-w-[240px] text-xs leading-relaxed">
+        Please run <span className="font-medium text-foreground">MedSAM</span> or{" "}
+        <span className="font-medium text-foreground">U-Net</span> 4D reconstruction to access this.
+      </p>
+    </div>
   );
 }
 
@@ -1909,13 +1906,13 @@ function AhaBullseyeChart({
         Anterior
       </text>
       <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">
-        Lateral
+        Septal
       </text>
       <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
         Inferior
       </text>
       <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">
-        Septal 
+        Lateral
       </text>
 
       {Array.from({ length: 6 }, (_, index) => (
@@ -2134,8 +2131,8 @@ function annularSectorPath(
   ].join(" ");
 }
 
-// Wraps ClientHeartModel with strain-appropriate colour scale and zoom controls.
-// selectedSegment3d is 0-based to match ClientHeartModel's convention.
+// Renders the real reconstructed heart, or a prompt to run 4D reconstruction.
+// selectedSegment3d is 0-based.
 // min, max, reverseColors are passed from the parent so both panels share the same scale.
 function StrainHeartModel({
   segments,
@@ -2191,17 +2188,12 @@ function StrainHeartModel({
   }
 
   return (
-    <div className="w-full h-full relative">
-      <ClientHeartModel
-        values={values}
-        min={min}
-        max={max}
-        reverseColors={reverseColors}
-        selectedSegment={selectedSegment3d}
-        className="w-full h-full"
-        onZoomChange={onZoomChange}
-        onResetZoom={onResetZoom}
-      />
+    <div className="w-full h-full relative flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
+      <AlertCircle className="h-8 w-8 opacity-40" />
+      <p className="max-w-[240px] text-xs leading-relaxed">
+        Please run <span className="font-medium text-foreground">MedSAM</span> or{" "}
+        <span className="font-medium text-foreground">U-Net</span> 4D reconstruction to access this.
+      </p>
     </div>
   );
 }
@@ -2477,7 +2469,7 @@ function StrainPreviewPanel({
   const bullseyeResetRef = useRef<(() => void) | null>(null);
   const heartZoomRef    = useRef<((delta: number) => void) | null>(null);
   const heartResetRef   = useRef<(() => void) | null>(null);
-  // 0-based segment index for ClientHeartModel (-1 = none). Kept in sync with the
+  // 0-based segment index for the 3D heart (-1 = none). Kept in sync with the
   // parent's 1-based selectedSegment via handleSegClick below.
   const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
   // Selection state for the RV crescent — kept separate from the LV's
@@ -2562,7 +2554,7 @@ function StrainPreviewPanel({
   const reverseColors = selectedStrainType === "GCS";
 
   // handle segment click — toggle selection.
-  // seg is 1-based (from the 2D bullseye). ClientHeartModel expects 0-based.
+  // seg is 1-based (from the 2D bullseye). The 3D heart expects 0-based.
   const handleSegClick = (seg: number) => {
     const isDeselect = selectedSegment === seg;
     onSelectSegment(isDeselect ? -1 as any : seg);

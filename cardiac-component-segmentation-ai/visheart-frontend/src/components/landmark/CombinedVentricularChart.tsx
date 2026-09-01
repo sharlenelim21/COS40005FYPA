@@ -152,10 +152,11 @@ export function CombinedVentricularChart({
       <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />
       <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
 
-      {/* Direction labels. Septal is where the RV crescent sits (left), so
-          it's omitted; Lateral is on the right, opposite the crescent. */}
+      {/* Direction labels. Lateral is on the left, where the RV crescent sits;
+          Septal is on the right, opposite the crescent. */}
       <text x={center.x} y="14" textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Anterior</text>
-      <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Lateral</text>
+      <text x={center.x - RV_BASAL_OUTER - 20} y={center.y + 4} textAnchor="end" fontSize="12" fontWeight="700" fill="currentColor">Lateral</text>
+      <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Septal</text>
       <text x={center.x} y={center.y + RV_BASAL_OUTER + 24} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Inferior</text>
       {(() => {
         const tag = polarPointAt(center, RV_BASAL_OUTER + 16, 180);

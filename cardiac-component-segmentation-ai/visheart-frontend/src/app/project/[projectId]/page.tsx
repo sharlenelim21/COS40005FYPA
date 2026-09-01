@@ -48,7 +48,6 @@ import {
 
 // Custom components
 import { NoProjectFound } from "@/components/project/NoProjectFound";
-import { GuidancePanel } from "@/components/GuidancePanel";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
@@ -1835,31 +1834,6 @@ function ProjectPageInner() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {hasReconstructions && !isGuest && reconstructionRows[0] && (
-        <GuidancePanel
-          storageKey={`recon-ready-guidance-${projectId}-${reconstructionRows[0].reconstructionId}`}
-          icon="🫀"
-          title={
-            reconstructionRows[0].segmentationModel && reconstructionRows[0].segmentationModel !== "unknown"
-              ? `${reconstructionRows[0].segmentationModel.toUpperCase()} 4D reconstruction complete!`
-              : "4D reconstruction complete!"
-          }
-          subtitle="View your 3D model"
-          actions={[
-            {
-              label: "View 3D Model",
-              icon: <Eye size={13} />,
-              primary: true,
-              onClick: () =>
-                goToReconstructionViewer(
-                  reconstructionRows[0].segmentationModel,
-                  reconstructionRows[0].reconstructionId
-                ),
-            },
-          ]}
-        />
-      )}
     </div>
   );
 }
