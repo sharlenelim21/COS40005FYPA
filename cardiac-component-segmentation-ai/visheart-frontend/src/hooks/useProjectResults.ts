@@ -394,8 +394,12 @@ export function useProjectResults(
     );
   }, [masks, byModel, model]);
 
-  // Most recent time anything was computed for a model — used to default to the
-  // freshest run. Takes the newest of the timestamps the doc carries.
+  // Most recent time strain/analysis was computed for a model - used to default
+  // to the model with the freshest computed results (not the freshest raw
+  // segmentation run: a model just segmented but not yet analysed should NOT
+  // bump aside an older model whose strain results are actually ready to show -
+  // the report would otherwise flip to a model with blank strain numbers).
+  // Takes the newest of the timestamps the doc carries.
   const computedAtFor = (m: MaskDoc | null): number => {
     if (!m) return 0;
     const stamps = [
@@ -411,8 +415,9 @@ export function useProjectResults(
   };
 
   // Auto-select a model once data arrives, unless the caller has switched
-  // manually. "recent" picks the freshest run (the report wants one report,
-  // most-recent); "prefer-unet" keeps UNet when it has data and only falls back.
+  // manually. "recent" picks whichever model's analysis was computed last (the
+  // report wants one report, most-recent); "prefer-unet" keeps UNet when it has
+  // data and only falls back.
   useEffect(() => {
     if (masks === null || userChoseModel.current) return;
     const other: Model = model === "unet" ? "medsam" : "unet";

@@ -2961,7 +2961,9 @@ function StrainPreviewPanel({
             ) : (
               <div className="flex-1 flex items-center justify-center text-center px-4">
                 <p className="text-[10px] text-muted-foreground leading-relaxed">
-                  No LV strain yet — the 3D heart needs LV data. RV-only results show on the left.
+                  {activeReconstruction?.reconstructionId
+                    ? `${strainModel === "unet" ? "UNet" : "MedSAM"} reconstruction found — click Compute Strain to view the 3D heart.`
+                    : `No LV strain yet — run ${strainModel === "unet" ? "UNet" : "MedSAM"} 4D reconstruction first. RV-only results show on the left.`}
                 </p>
               </div>
             )}
