@@ -24,6 +24,19 @@ export interface PatientSummaryData {
   /** Derived in the report page from the LV/RV volumes above. */
   rvLvRatio?: number | null;
   svDifference?: number | null;
+  /**
+   * Body surface area, user-entered on the report screen (Mosteller formula
+   * from height/weight — see report/page.tsx). Optional: omitted entirely
+   * when the user hasn't supplied height/weight, in which case RV volumes
+   * print raw exactly as before. When present, RVEDVI/RVESVI (BSA-indexed
+   * volumes) are shown alongside the raw values — these are the quantities
+   * the 2010 ARVC Task Force Criteria actually use, not raw RVEDV/RVESV.
+   */
+  bsaM2?: number | null;
+  heightCm?: number | null;
+  weightKg?: number | null;
+  rvEdvi?: number | null;
+  rvEsvi?: number | null;
   voxelSize: string;
   /** Backend grades (compute_health_status.py); the longer labels are legacy. */
   healthStatus:
@@ -109,17 +122,39 @@ export function PatientSummaryPage({
     ["LV Peak GCS", metric(data.peakGcs, 1, " %")],
     ["Voxel Size", data.voxelSize],
   ];
+  // BSA prints wherever it was supplied, even without RV data, since it's a
+  // patient-level figure — not RV-specific — and useful context on its own.
+  if (data.bsaM2 != null) {
+    metrics.push([
+      "Body Surface Area (BSA)",
+      `${data.bsaM2.toFixed(2)} m²${
+        data.heightCm != null && data.weightKg != null
+          ? ` (${data.heightCm.toFixed(0)} cm, ${data.weightKg.toFixed(0)} kg)`
+          : ""
+      }`,
+    ]);
+  }
 
   // RV block. Optional so callers that don't supply RV data (and the
   // placeholder) print exactly as before.
   const hasRv =
     data.rvEf != null || data.rvEdv != null || data.rvEsv != null || data.rvSv != null;
+  const hasBsa = data.bsaM2 != null;
   const rvMetrics: [string, string][] = [
     ["RV Ejection Fraction (RVEF)", metric(data.rvEf, 1, " %")],
     ["RV End-Diastolic Volume (RV EDV)", metric(data.rvEdv, 1, " mL")],
     ["RV End-Systolic Volume (RV ESV)", metric(data.rvEsv, 1, " mL")],
     ["RV Stroke Volume (RV SV)", metric(data.rvSv, 1, " mL")],
   ];
+  // BSA-indexed volumes — only meaningful once a BSA is on record. These are
+  // the quantities the 2010 ARVC Task Force Criteria actually reference
+  // (RVEDVI, not raw RVEDV), so they're the more clinically comparable pair.
+  const rvIndexedMetrics: [string, string][] = hasBsa
+    ? [
+        ["RV EDV Index (RVEDVI)", metric(data.rvEdvi, 1, " mL/m²")],
+        ["RV ESV Index (RVESVI)", metric(data.rvEsvi, 1, " mL/m²")],
+      ]
+    : [];
 
   return (
     <ReportPageFrame
@@ -161,6 +196,16 @@ export function PatientSummaryPage({
               </div>
             ))}
           </div>
+          {hasBsa && (
+            <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1.5">
+              {rvIndexedMetrics.map(([label, value]) => (
+                <div key={label}>
+                  <p className="text-[8.5px] uppercase tracking-wide text-muted-foreground">{label}</p>
+                  <p className="text-[12px] font-bold text-foreground">{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
           {(data.rvLvRatio != null || data.svDifference != null) && (
             <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1.5">
               {data.rvLvRatio != null && (
@@ -185,8 +230,9 @@ export function PatientSummaryPage({
             </div>
           )}
           <p className="mt-1.5 text-[7.5px] leading-snug text-muted-foreground">
-            RV values are raw, not BSA-indexed and not graded. RV function thresholds are
-            approximate, not sex-specific, and must be clinically validated before use.
+            {hasBsa
+              ? "RVEDVI/RVESVI use the BSA entered on the report screen (Mosteller formula) — not clinician-verified. Published ARVC/PAH thresholds are also sex-specific, which this report does not collect, so index values must still be interpreted by a qualified clinician before use."
+              : "RV values are raw, not BSA-indexed and not graded. Enter height/weight on the report screen to also print BSA-indexed volumes (RVEDVI/RVESVI). RV function thresholds are approximate, not sex-specific, and must be clinically validated before use."}
           </p>
         </section>
       )}

@@ -47,6 +47,8 @@ Input (stdin JSON):
         "EF": float|null,                  # LV ejection fraction, %
         "EDV": float|null,                 # LV end-diastolic volume, mL
         "ESV": float|null,                 # LV end-systolic volume, mL
+        "EDVI": float|null,                # LV EDV / BSA, mL/m^2 — only when caller has BSA
+        "ESVI": float|null,                # LV ESV / BSA, mL/m^2 — only when caller has BSA
         "StrokeVolume": float|null,        # mL
         "PeakGRS": float|null,             # peak global radial strain, %
         "PeakGCS": float|null              # peak global circumferential strain, %
@@ -83,13 +85,18 @@ import numpy as np
 
 # ── Feature set ───────────────────────────────────────────────────────────────
 # The measurement keys this module reasons over, in a stable display order.
-FEATURES: list[str] = ["EF", "EDV", "ESV", "StrokeVolume", "PeakGRS", "PeakGCS"]
+# EDVI/ESVI (BSA-indexed) are appended, not inserted next to EDV/ESV, so any
+# caller iterating FEATURES in order sees the raw volumes before their indexed
+# counterparts.
+FEATURES: list[str] = ["EF", "EDV", "ESV", "EDVI", "ESVI", "StrokeVolume", "PeakGRS", "PeakGCS"]
 
 # Human-readable feature names for the explanation strings.
 FEATURE_LABELS: dict[str, str] = {
     "EF":           "Ejection Fraction",
     "EDV":          "End-Diastolic Volume",
     "ESV":          "End-Systolic Volume",
+    "EDVI":         "End-Diastolic Volume Index (BSA)",
+    "ESVI":         "End-Systolic Volume Index (BSA)",
     "StrokeVolume": "Stroke Volume",
     "PeakGRS":      "Peak Global Radial Strain",
     "PeakGCS":      "Peak Global Circumferential Strain",
@@ -99,10 +106,19 @@ FEATURE_LABELS: dict[str, str] = {
 # for NOR/HCM/DCM; strain is supporting evidence (and is more sensitive to the
 # app's own measurement noise), so it is down-weighted. Weights are renormalised
 # at run time over whichever features the patient actually has.
+#
+# EDVI/ESVI are deliberately weighted BELOW their raw counterparts (0.5 vs
+# 1.0/0.8), not equal to them. They are the *same underlying volume* divided by
+# BSA — supplying both EDV and EDVI at once is largely restating one piece of
+# evidence twice, so if a caller does provide both, the lower weight keeps that
+# double-counting from dominating the distance. Callers that only have BSA
+# (no interest in raw volumes) can pass EDVI/ESVI alone.
 FEATURE_WEIGHTS: dict[str, float] = {
     "EF":           1.0,
     "EDV":          1.0,
     "ESV":          0.8,
+    "EDVI":         0.5,
+    "ESVI":         0.4,
     "StrokeVolume": 0.5,
     "PeakGRS":      0.6,
     "PeakGCS":      0.6,
@@ -130,17 +146,32 @@ FEATURE_WEIGHTS: dict[str, float] = {
 # ground-truth masks (strain needs the full tracked cine), so they are taken from
 # the reported cohort statistics rather than measured locally.
 #
+# EDVI / ESVI (PROVISIONAL — see caveat below): the ACDC patient_info.csv this
+# project ships from does carry per-patient Height/Weight, which would let
+# EDVI/ESVI be derived the same rigorous way EF is in
+# scripts/derive_acdc_reference_ranges.py (real per-patient BSA, not a
+# population-level approximation). That derivation has NOT been run yet — the
+# numbers below are a stand-in: each group's EDV/ESV mean and SD, divided by
+# the fixed reference BSA of 1.73 m^2 (the Du Bois "standard" adult BSA used to
+# normalize GFR and similar indices). This is only exact if every patient in
+# the cohort had that exact BSA; in reality BSA varies patient-to-patient, so
+# these SDs in particular understate the true spread. Treat as provisional
+# until re-derived from the real per-patient BSA — same status as the DCM EF
+# note below.
+#
 #   NOR — healthy adult LV.
 #   HCM — hypertrophic cardiomyopathy: preserved/high EF, small cavity, impaired
 #         circumferential strain.
 #   DCM — dilated cardiomyopathy: large cavity, low EF, low strain magnitudes.
 #
-# Units: EF %, volumes mL, PeakGRS %, PeakGCS % (negative by convention).
+# Units: EF %, volumes mL, EDVI/ESVI mL/m^2, PeakGRS %, PeakGCS % (negative by convention).
 REFERENCE_PROFILES: dict[str, dict[str, tuple[float, float]]] = {
     "NOR": {
         "EF":           (62.7,  5.6),   # ACDC group mean (n=30)
         "EDV":          (139.1, 33.2),  # ACDC group mean (n=30)
         "ESV":          (53.8,  18.0),  # ACDC group mean (n=30)
+        "EDVI":         (80.4,  19.2),  # PROVISIONAL: EDV / 1.73 m^2 — see caveat above
+        "ESVI":         (31.1,  10.4),  # PROVISIONAL: ESV / 1.73 m^2 — see caveat above
         "StrokeVolume": (85.3,  37.8),  # EDV - ESV; SD quadrature (approx)
         "PeakGRS":      (40.3,  10.2),  # ACDC cohort strain stats
         "PeakGCS":      (-16.8, 2.3),   # ACDC cohort strain stats
@@ -149,6 +180,8 @@ REFERENCE_PROFILES: dict[str, dict[str, tuple[float, float]]] = {
         "EF":           (61.9,  12.6),  # ACDC group mean (n=30)
         "EDV":          (138.4, 56.8),  # ACDC group mean (n=30)
         "ESV":          (53.6,  34.3),  # ACDC group mean (n=30)
+        "EDVI":         (80.0,  32.8),  # PROVISIONAL: EDV / 1.73 m^2 — see caveat above
+        "ESVI":         (31.0,  19.8),  # PROVISIONAL: ESV / 1.73 m^2 — see caveat above
         "StrokeVolume": (84.8,  66.3),  # EDV - ESV; SD quadrature (approx)
         "PeakGRS":      (37.8,  13.2),  # ACDC cohort strain stats
         "PeakGCS":      (-14.5, 3.3),   # ACDC cohort strain stats
@@ -157,6 +190,8 @@ REFERENCE_PROFILES: dict[str, dict[str, tuple[float, float]]] = {
         "EF":           (25.2,  9.0),   # ACDC group mean (n=30) — see validation caveat
         "EDV":          (248.3, 73.1),  # ACDC group mean (n=30)
         "ESV":          (170.8, 58.7),  # ACDC group mean (n=30)
+        "EDVI":         (143.5, 42.3),  # PROVISIONAL: EDV / 1.73 m^2 — see caveat above
+        "ESVI":         (98.7,  33.9),  # PROVISIONAL: ESV / 1.73 m^2 — see caveat above
         "StrokeVolume": (77.5,  93.7),  # EDV - ESV; SD quadrature (approx)
         "PeakGRS":      (11.2,  6.5),   # ACDC cohort strain stats
         "PeakGCS":      (-5.6,  2.2),   # ACDC cohort strain stats
@@ -193,7 +228,7 @@ def _safe_float(v) -> Optional[float]:
 def _direction_word(feature: str, patient: float, mu: float) -> str:
     """Plain-language 'higher/lower/enlarged/reduced' for a feature vs a profile mean."""
     higher = patient > mu
-    if feature in ("EDV", "ESV"):
+    if feature in ("EDV", "ESV", "EDVI", "ESVI"):
         return "enlarged relative to" if higher else "smaller than"
     if feature in ("EF", "StrokeVolume", "PeakGRS"):
         return "higher than" if higher else "reduced compared with"

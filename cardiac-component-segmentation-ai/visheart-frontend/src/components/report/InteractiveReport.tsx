@@ -19,6 +19,8 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries } from "@/hooks/useProjectResults";
 import { RvStrainChart } from "@/components/landmark/RvStrainChart";
 import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
@@ -32,6 +34,7 @@ const RINGS = [
 ];
 
 const PATTERN_COLORS: Record<string, string> = { NOR: "#15803d", DCM: "#b45309", HCM: "#dc2626" };
+const RV_PATTERN_COLORS: Record<string, string> = { ARVC: "#dc2626", PAH: "#7c3aed", GENERAL: "#64748b" };
 
 /**
  * Curves are coloured by AHA RING, not per-segment. 17 distinct hues is
@@ -494,11 +497,26 @@ export function InteractiveReport({
   patientLabel, scanSummary, generatedAt,
   measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus,
   computing, computeError, rv, lvVolumes, rvStrain, rvStrainSeries,
+  bsaM2, heightCm, weightKg, onHeightCmChange, onWeightKgChange,
 }: {
   patientLabel: string;
   scanSummary: string;
   generatedAt: string;
   measurements?: Measurements;
+  /**
+   * Body surface area (m²) plus the raw height/weight strings that produced
+   * it — all owned by report/page.tsx (so PatientSummaryPage's print output
+   * can use the same numbers) and rendered here as inline inputs in the
+   * Cardiac Measurements header. Purely a display-time divisor: computed
+   * client-side from EDV/ESV, never sent to or stored by the backend.
+   * bsaM2 null means height/weight are blank, so every indexed sub-value
+   * below simply doesn't render.
+   */
+  bsaM2?: number | null;
+  heightCm?: string;
+  weightKg?: string;
+  onHeightCmChange?: (v: string) => void;
+  onWeightKgChange?: (v: string) => void;
   /** RV metrics — optional so existing callers and the print pages are
    *  unaffected. Absent/null means no RV cavity was segmented. */
   rv?: RvMetrics;
@@ -624,13 +642,23 @@ export function InteractiveReport({
         : (regionalHealthStatus?.affected_idx ?? []).slice().sort((a, b) => a - b))
     : [];
 
+  // BSA-indexed sub-values (mL/m²) — pure client-side division, shown as a
+  // secondary line ON the same EDV/ESV tile rather than as separate tiles.
+  // Rationale: an indexed number is only meaningful alongside its raw
+  // counterpart, so putting it in its own card would force the reader to
+  // cross-reference two tiles instead of reading one. Undefined whenever
+  // bsaM2 or the underlying raw volume is missing — every indexed line
+  // below degrades to simply not rendering.
+  const indexedMlM2 = (raw: number | null | undefined): string | undefined =>
+    bsaM2 && raw != null ? `${(raw / bsaM2).toFixed(1)} mL/m² indexed` : undefined;
+
   /** LEFT-ventricular cards. Every label is explicitly LV-prefixed: with RV
    *  metrics on the same page, a bare "EDV" is ambiguous. */
-  const metricCards: { label: string; value: string; unit: string; accent?: boolean }[] = [
+  const metricCards: { label: string; value: string; unit: string; accent?: boolean; indexed?: string }[] = [
     { label: "LV Ejection Fraction (LVEF)", value: fmt(measurements?.EF), unit: "%", accent: true },
-    { label: "LV End-Diastolic Volume (LV EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true },
-    { label: "LV End-Systolic Volume (LV ESV)", value: fmt(measurements?.ESV), unit: "mL" },
-    { label: "LV Stroke Volume (LV SV)", value: fmt(measurements?.StrokeVolume), unit: "mL" },
+    { label: "LV End-Diastolic Volume (LV EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true, indexed: indexedMlM2(measurements?.EDV) },
+    { label: "LV End-Systolic Volume (LV ESV)", value: fmt(measurements?.ESV), unit: "mL", indexed: indexedMlM2(measurements?.ESV) },
+    { label: "LV Stroke Volume (LV SV)", value: fmt(measurements?.StrokeVolume), unit: "mL", indexed: indexedMlM2(measurements?.StrokeVolume) },
     { label: "LV Peak Global Radial Strain (LV GRS)", value: fmt(measurements?.PeakGRS), unit: "%" },
     { label: "LV Peak Global Circumferential Strain (LV GCS)", value: fmt(measurements?.PeakGCS), unit: "%" },
   ];
@@ -640,16 +668,52 @@ export function InteractiveReport({
   // of em-dashes that implies a measurement was attempted and came back empty.
   const hasRv = !!rv && (rv.RVEF !== null || rv.RVEDV !== null || rv.RVESV !== null || rv.RV_SV !== null);
 
-  const rvCards: { label: string; value: string; unit: string }[] = [
+  // REAL — this is the existing radius-based RV strain measure, which the
+  // backend's own type comment already calls "closer in spirit to GCS" (see
+  // RvStrain/RvStrainSeries in useProjectResults.ts). Same "peak = most
+  // negative" convention the sidebar's rvPeakValue already uses. null when
+  // RV strain hasn't been computed for this model — the tiles/table below
+  // fall back to "—", not a fake number.
+  const rvPeakGcs: number | null = rvStrainSeries?.peak_global_rv_strain ?? rvStrain?.global_rv_strain ?? null;
+  const hasRealRvGcs = rvPeakGcs != null;
+  // DUMMY — Global Area Strain has no computation anywhere in this pipeline
+  // yet (needs a per-frame single-slice RV cavity-area script, not built).
+  // Fixed preview number stands in until that exists, clearly labelled
+  // "preview" everywhere it's shown (Cardiac Measurements tiles + RV Health
+  // table) — unlike GCS above, this one is NOT real data.
+  const rvPeakGasPreview = 28.7;
+
+  const rvCards: { label: string; value: string; unit: string; indexed?: string; preview?: boolean }[] = [
     { label: "RV Ejection Fraction (RVEF)", value: fmt(rv?.RVEF), unit: "%" },
-    { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL" },
-    { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL" },
-    { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL" },
+    { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL", indexed: indexedMlM2(rv?.RVEDV) },
+    { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL", indexed: indexedMlM2(rv?.RVESV) },
+    { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL", indexed: indexedMlM2(rv?.RV_SV) },
+    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", preview: !hasRealRvGcs },
+    { label: "RV Peak Global Area Strain (RV GAS)", value: rvPeakGasPreview.toFixed(1), unit: "%", preview: true },
   ];
 
   const rvGrade = rvFunctionGrade(rv?.RVEF);
   const ratio = rvLvRatio(rv?.RVEDV, lvVolumes?.LVEDV ?? measurements?.EDV);
   const sv = svBalance(lvVolumes?.LV_SV ?? measurements?.StrokeVolume, rv?.RV_SV);
+
+  // ── RV disease-pattern prototype ──────────────────────────────────────────
+  // Sex is required to interpret RVEDVI (the ARVC TFC cutoffs are sex-
+  // specific) — not collected elsewhere in the pipeline, so it lives here as
+  // a small local toggle rather than a persisted field.
+  const [rvSex, setRvSex] = useState<Sex>("unspecified");
+  const rvedvi = bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null;
+  const rvesvi = bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null;
+  const rvSvi = bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null;
+  // Placeholders: neither the RV regional-contraction classifier nor the GAS
+  // geometric module exist in this pipeline yet (see rvDiseasePattern.ts).
+  // `null` = "not yet assessed", deliberately not defaulted to true/false.
+  const rvRegionalAbnormalPlaceholder: boolean | null = null;
+  const rvGasAbnormalPlaceholder: boolean | null = null;
+  const rvDiseasePatterns = computeRvDiseasePatterns({
+    rvedvi, rvesvi, rvef: rv?.RVEF ?? null, svi: rvSvi, sex: rvSex,
+    regionalContractionAbnormal: rvRegionalAbnormalPlaceholder,
+    gasAbnormal: rvGasAbnormalPlaceholder,
+  });
 
   return (
     <div className="mx-auto max-w-5xl px-6 pb-16 pt-6">
@@ -672,9 +736,41 @@ export function InteractiveReport({
             rows. Keeps the DOM order (and the print/screen-reader order)
             unchanged while giving the table the width it needs. */}
         <div className="border-b border-border p-4 lg:col-start-1 lg:row-start-1">
-          <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
-            <Sparkles className="h-3.5 w-3.5 text-primary" /> Cardiac Measurements
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+            <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+              <Sparkles className="h-3.5 w-3.5 text-primary" /> Cardiac Measurements
+            </p>
+            {/* BSA — optional, screen-only. Lives here (not a separate banner)
+                since this card is the only place its effect is visible: it
+                only ever changes the indexed sub-values on the EDV/ESV tiles
+                below, in this section. */}
+            {(onHeightCmChange || onWeightKgChange) && (
+              <div className="flex items-center gap-2" title="Adds BSA-indexed volumes (EDVI/ESVI, RVEDVI/RVESVI) to the tiles below. Leave blank to show raw values only.">
+                <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">BSA</span>
+                <span className="flex items-center gap-1">
+                  <Input
+                    type="number" inputMode="decimal" min={0}
+                    value={heightCm ?? ""} onChange={(e) => onHeightCmChange?.(e.target.value)}
+                    placeholder="Height"
+                    className="h-6 w-16 text-[11px]"
+                  />
+                  <span className="text-[9px] text-muted-foreground">cm</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <Input
+                    type="number" inputMode="decimal" min={0}
+                    value={weightKg ?? ""} onChange={(e) => onWeightKgChange?.(e.target.value)}
+                    placeholder="Weight"
+                    className="h-6 w-16 text-[11px]"
+                  />
+                  <span className="text-[9px] text-muted-foreground">kg</span>
+                </span>
+                <span className="text-[11px] font-semibold tabular-nums text-foreground">
+                  {bsaM2 != null ? `${bsaM2.toFixed(2)} m²` : "—"}
+                </span>
+              </div>
+            )}
+          </div>
           <p className="mb-2 mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             Left Ventricle
           </p>
@@ -700,6 +796,12 @@ export function InteractiveReport({
                   {m.value}
                   <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
                 </span>
+                {/* BSA-indexed sub-value — only present when the report-screen
+                    BSA card has been filled in; otherwise this line is absent
+                    and the tile looks exactly as it did before BSA existed. */}
+                {m.indexed && (
+                  <span className="mt-0.5 block text-[9.5px] font-medium text-muted-foreground">{m.indexed}</span>
+                )}
               </div>
             ))}
           </div>
@@ -714,17 +816,20 @@ export function InteractiveReport({
               </p>
               <div className="grid grid-cols-2 gap-2">
                 {rvCards.map((m) => (
-                  <div key={m.label} className="rounded-lg border border-border px-2.5 py-2">
+                  <div key={m.label} className={`rounded-lg border px-2.5 py-2 ${m.preview ? "border-dashed border-border bg-muted/20" : "border-border"}`}>
                     <div className="flex items-start gap-1.5">
                       <Heart className="mt-[1px] h-3 w-3 shrink-0 text-muted-foreground" />
                       <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
-                        {m.label}
+                        {m.label}{m.preview && <span className="ml-1 text-amber-600 dark:text-amber-400">preview</span>}
                       </span>
                     </div>
-                    <span className="mt-1 block text-[17px] font-bold leading-none tracking-tight text-foreground">
+                    <span className={`mt-1 block text-[17px] font-bold leading-none tracking-tight ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
                       {m.value}
                       <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
                     </span>
+                    {m.indexed && (
+                      <span className="mt-0.5 block text-[9.5px] font-medium text-muted-foreground">{m.indexed}</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -970,65 +1075,108 @@ export function InteractiveReport({
               </table>
 
               {/* ── RV Health ───────────────────────────────────────────────
-                  RVEF gets a reference bar in the same visual language as the
-                  LV rows. RV VOLUMES are listed raw and ungraded: there is no
-                  BSA indexing here, exactly as noted for LV EDV. No strain
-                  grade — RV strain is exploratory and lives elsewhere. */}
-              {hasRv && (
-                <div className="mt-4 border-t border-border pt-3">
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    RV Health · advisory
-                  </p>
-                  <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-                    <div>
-                      <span className="text-[11.5px] font-semibold text-foreground">RV Ejection Fraction (RVEF)</span>
-                      <span className="ml-2 text-[13px] font-bold tabular-nums text-foreground">
-                        {fmt(rv?.RVEF)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">%</span>
-                      </span>
-                      {/* Same zone language as the LV bars: green normal,
-                          amber borderline, red far. Thresholds approximate. */}
-                      <div className="relative mt-2 h-2.5 w-[150px]">
-                        <div className="absolute inset-0 overflow-hidden rounded-full bg-muted">
-                          {[
-                            { from: 0, to: 30, tone: "red" as const },
-                            { from: 30, to: 40, tone: "amber" as const },
-                            { from: 40, to: 48, tone: "amber" as const },
-                            { from: 48, to: 100, tone: "green" as const },
-                          ].map((z) => (
-                            <div
-                              key={z.from}
-                              className={`absolute inset-y-0 ${ZONE_FILL[z.tone]}`}
-                              style={{ left: `${pct(z.from, 0, 100)}%`, width: `${pct(z.to, 0, 100) - pct(z.from, 0, 100)}%` }}
-                            />
+                  Same 3-column table as the LV metric table above (Metric /
+                  Result (this study) / Interpretation), same bar+zone
+                  language. RVEF and RVEDVI are real; RVEDVI's zones depend on
+                  the sex toggle since the ARVC cutoffs are sex-specific (te
+                  Riele/Tandri/Bluemke 2014, Table 1). Peak GCS/GAS are
+                  PREVIEW placeholders with NO colour zones — no paper
+                  validates a normal range for either in this pipeline yet,
+                  so drawing coloured zones would imply a reference that
+                  doesn't exist. Advisory only — never affects the LV grade. */}
+              {hasRv && (() => {
+                const edviMinor = rvSex === "female" ? 90 : 100;
+                const edviMajor = rvSex === "female" ? 100 : 110;
+                const edviMax = rvSex === "female" ? 140 : 160;
+                const edviZones: Zone[] = rvSex === "unspecified"
+                  ? []
+                  : [{ from: 0, to: edviMinor, tone: "green" }, { from: edviMinor, to: edviMajor, tone: "amber" }, { from: edviMajor, to: edviMax, tone: "red" }];
+                const edviInterp = rvedvi == null
+                  ? { text: "Enter BSA above to index", level: "warn" as const }
+                  : rvSex === "unspecified"
+                  ? { text: "Select sex above (cutoffs are sex-specific)", level: "warn" as const }
+                  : rvedvi >= edviMajor
+                  ? { text: "Above ARVC major threshold", level: "warn" as const }
+                  : rvedvi >= edviMinor
+                  ? { text: "Above ARVC minor threshold", level: "warn" as const }
+                  : { text: "Within reference", level: "ok" as const };
+
+                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; level: "ok" | "warn" } | null }[] = [
+                  { key: "RVEF", name: "RV Ejection Fraction (RVEF)", value: rv?.RVEF ?? null, unit: "%", min: 0, max: 100, normalLabel: "≥ 48",
+                    zones: [{ from: 0, to: 30, tone: "red" }, { from: 30, to: 48, tone: "amber" }, { from: 48, to: 100, tone: "green" }],
+                    interp: { text: rvGrade, level: rvGrade === "Normal" ? "ok" : "warn" } },
+                  { key: "RVEDVI", name: "RV EDV Index (RVEDVI)", value: rvedvi, unit: "mL/m²", min: 0, max: edviMax, normalLabel: `< ${edviMinor}`,
+                    zones: edviZones, interp: edviInterp },
+                  { key: "PeakGCS_RV", name: "Peak Global Circumferential Strain", value: rvPeakGcs, unit: "%", min: -30, max: 0, normalLabel: "not validated",
+                    zones: [], interp: hasRealRvGcs
+                      ? { text: "Measured — no validated RV-specific reference range", level: "warn" }
+                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" } },
+                  { key: "PeakGAS_RV", name: "Peak Global Area Strain", value: rvPeakGasPreview, unit: "%", min: 0, max: 50, normalLabel: "not validated",
+                    zones: [], interp: { text: "Preview — no validated reference range", level: "warn" } },
+                ];
+
+                return (
+                  <div className="mt-4 border-t border-border pt-3">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      RV Health · advisory
+                    </p>
+                    <table className="w-full table-fixed border-collapse">
+                      <thead>
+                        <tr>
+                          {([["Metric", "w-[29%]"], ["Result (this study)", "w-[43%]"], ["Interpretation", "w-[28%]"]] as const).map(([h, w]) => (
+                            <th key={h} className={`${w} px-1 pb-1.5 text-left align-top text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground`}>
+                              {h}
+                            </th>
                           ))}
-                        </div>
-                        {rv?.RVEF != null && (
-                          <div
-                            className="absolute top-1/2 h-[22px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground ring-[1.5px] ring-card"
-                            style={{ left: `${pct(rv.RVEF, 0, 100)}%` }}
-                            title={`RVEF ${fmt(rv.RVEF)} %`}
-                          />
-                        )}
-                      </div>
-                      <div className="mt-2 flex w-[150px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
-                        <span>0</span><span className="text-foreground/70">normal ≥ 48</span><span>100</span>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Interpretation
-                      </span>
-                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_GRADE_BADGE[rvGrade]}`}>
-                        {rvGrade}
-                      </span>
-                    </div>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((m) => (
+                          <tr key={m.key} className="border-t border-border/60">
+                            <td className="px-1 py-2 align-top">
+                              <span className="text-[11.5px] font-semibold leading-tight text-foreground">{m.name}</span>
+                            </td>
+                            <td className="px-1 py-2 align-top">
+                              <span className="text-[13px] font-bold tabular-nums text-foreground">
+                                {fmt(m.value)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">{m.unit}</span>
+                              </span>
+                              <div className="relative mt-3 h-2.5 w-full min-w-[120px] max-w-[190px]">
+                                <div className="absolute inset-0 overflow-hidden rounded-full bg-muted">
+                                  {m.zones.map((z) => (
+                                    <div key={`${z.from}-${z.to}`} className={`absolute inset-y-0 ${ZONE_FILL[z.tone]}`}
+                                      style={{ left: `${pct(z.from, m.min, m.max)}%`, width: `${pct(z.to, m.min, m.max) - pct(z.from, m.min, m.max)}%` }} />
+                                  ))}
+                                </div>
+                                {m.value !== null && (
+                                  <div className="absolute top-1/2 h-[22px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-[2px] bg-foreground ring-[1.5px] ring-card"
+                                    style={{ left: `${pct(m.value, m.min, m.max)}%` }} title={`This study: ${fmt(m.value)} ${m.unit}`} />
+                                )}
+                              </div>
+                              <div className="mt-2 flex w-full min-w-[120px] max-w-[190px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
+                                <span>{m.min}</span><span className="text-foreground/70">{m.zones.length ? `normal ${m.normalLabel}` : m.normalLabel}</span><span>{m.max}</span>
+                              </div>
+                            </td>
+                            <td className="px-1 py-2 align-top">
+                              {m.interp ? (
+                                <span className={`text-[11px] font-semibold leading-tight ${m.interp.level === "ok" ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`}>
+                                  {m.interp.text}
+                                </span>
+                              ) : <span className="text-[11px] text-muted-foreground">—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <p className="mt-2 text-[9px] leading-snug text-muted-foreground">
+                      RVEF/RVEDVI are computed from this patient's data (RVEDVI needs sex + BSA, set above).
+                      Peak GCS is real (the existing RV cavity-radius strain measure) once RV strain has been
+                      run for this model. Peak GAS is still a placeholder preview — this pipeline has no
+                      area-based RV strain computation yet. RV SV {fmt(rv?.RV_SV)} mL. Advisory only — RV
+                      findings never affect the LV grade above.
+                    </p>
                   </div>
-                  <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-                    RV EDV {fmt(rv?.RVEDV)} mL · RV ESV {fmt(rv?.RVESV)} mL · RV SV {fmt(rv?.RV_SV)} mL —
-                    raw values, not BSA-indexed and not graded; body size is not accounted for.
-                  </p>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Any evidence line the table doesn't cover (e.g. "Absolute
                   volumes suppressed") still shows, so nothing the backend
@@ -1167,16 +1315,71 @@ export function InteractiveReport({
             <EmptyState computing={computing} error={computeError} />
           )}
 
-          {/* RV patterns deliberately NOT modelled. The reference profiles
-              (NOR/HCM/DCM) are LV-derived, so applying them to the RV would
-              fabricate a classifier that doesn't exist. */}
+          {/* RV patterns — prototype. Rule-based against published ARVC TFC /
+              PAH risk-stratification cutoffs (see rvDiseasePattern.ts for the
+              exact citations), NOT the NOR/HCM/DCM z-score engine above —
+              those reference profiles are LV-derived and don't apply here.
+              Every score is explicitly non-diagnostic; the disclaimer is
+              rendered with every result, never omitted. */}
           <div className="mt-4 border-t border-border pt-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              RV patterns
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Not available — future work. The reference profiles are LV-derived; no RV
-              classifier exists in this pipeline.
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                RV patterns <span className="normal-case tracking-normal">· prototype</span>
+              </p>
+              <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+                {(["male", "female", "unspecified"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setRvSex(s)}
+                    title="RVEDVI's ARVC cutoffs are sex-specific — not collected elsewhere in this pipeline."
+                    className={`rounded px-1.5 py-0.5 text-[9px] font-medium capitalize transition-colors ${
+                      rvSex === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                  >
+                    {s === "unspecified" ? "Sex: —" : s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5">
+              {rvDiseasePatterns.map((p) => (
+                <div key={p.code}>
+                  <div className="mb-1 flex justify-between text-[11.5px]">
+                    <span className="text-foreground">{p.label}</span>
+                    <span className="font-bold text-foreground">{p.score}%</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full rounded-full" style={{ width: `${p.score}%`, background: RV_PATTERN_COLORS[p.code] }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Why the top pattern scored the way it did — same "Why {label}"
+                treatment as the LV patterns above, only for the highest-
+                scoring RV pattern instead of every row. */}
+            {(() => {
+              const top = rvDiseasePatterns.reduce((a, b) => (b.score > a.score ? b : a), rvDiseasePatterns[0]);
+              if (!top) return null;
+              return (
+                <div className="mt-3 border-t border-border pt-2">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Why {top.label}
+                  </p>
+                  <ul className="flex flex-col gap-0.5">
+                    {top.factors.filter((f) => f.status !== "pending").slice(0, 4).map((f, i) => (
+                      <li key={i} className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                        <span className="text-muted-foreground/50">•</span>
+                        <span>{f.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1.5 text-[8.5px] leading-snug text-muted-foreground/80">{top.reference}</p>
+                </div>
+              );
+            })()}
+            <p className="mt-3 border-t border-border pt-2 text-[9px] leading-snug text-muted-foreground">
+              {rvDiseasePatterns[0]?.disclaimer}
             </p>
           </div>
         </div>

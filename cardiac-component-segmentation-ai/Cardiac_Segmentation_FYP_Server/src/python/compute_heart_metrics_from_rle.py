@@ -17,6 +17,7 @@ Input (stdin JSON):
     affine     — number[4][4]          # 4x4 affine from the NIfTI header
     ed_frame?  — int (optional)        # explicit end-diastole override
     es_frame?  — int (optional)        # explicit end-systole override
+    bsa_m2?    — float (optional)      # body surface area; enables *_I fields below
 
 Output (stdout JSON):
     ed_frame, es_frame                 # frames actually used (auto or override)
@@ -24,8 +25,10 @@ Output (stdout JSON):
     LVEDV, LVESV, LV_SV, LVEF          # LV metrics (SV/EF may be null — see below)
     RVEDV, RVESV, RV_SV, RVEF          # RV metrics
     LV_mass_g                          # LV myocardial mass at ED (may be null)
+    bsa_m2, LVEDVI, LVESVI,            # BSA passthrough + indexed volumes (mL/m^2).
+    RVEDVI, RVESVI                       null unless bsa_m2 was supplied and positive.
     voxel_mm3, spacing_mm              # derived from affine, kept for audit
-    units                              # {volumes, ef, mass, spacing}
+    units                              # {volumes, ef, mass, spacing, bsa, indexed_volumes}
     warnings                           # list[str], empty on the happy path
 
 Class mapping (same as the bullseye script + create_nifti_with_stored_affine):
@@ -336,6 +339,15 @@ def main() -> None:
     ed_override = data.get("ed_frame")
     es_override = data.get("es_frame")
 
+    # Optional body surface area (m^2), entered by the user on the report page
+    # (Mosteller formula from height/weight — see report/page.tsx). Purely a
+    # per-patient divisor: absent or invalid, every *_I field below is null and
+    # everything else in this script behaves exactly as it did before BSA existed.
+    bsa_m2 = _safe_float(data.get("bsa_m2"))
+    if bsa_m2 is not None and bsa_m2 <= 0:
+        warnings_out.append(f"Ignoring non-positive bsa_m2={bsa_m2} — indexed volumes (EDVI/ESVI) set to null.")
+        bsa_m2 = None
+
     # 2. Validate the affine — heart metrics *require* spacing. Bail hard.
     try:
         affine = np.array(affine_raw, dtype=np.float64)
@@ -529,6 +541,27 @@ def main() -> None:
             "LV_mass_g set to null."
         )
 
+    # 8b. BSA-indexed volumes (mL/m^2) — null whenever bsa_m2 wasn't supplied
+    #     or a given raw volume is itself null. Pure division; no new
+    #     plausibility guards needed since LVEDV/RVEDV etc. already have theirs.
+    def _indexed(vol: Optional[float]) -> Optional[float]:
+        if bsa_m2 is None or vol is None:
+            return None
+        return _safe_float(vol / bsa_m2)
+
+    LVEDVI = _indexed(LVEDV)
+    LVESVI = _indexed(LVESV)
+    RVEDVI = _indexed(RVEDV)
+    RVESVI = _indexed(RVESV)
+    # Stroke volume index — genuinely new information (not derivable from
+    # EDVI/ESVI alone without also knowing SV), and the literal input the
+    # 2022 ESC/ERS PAH risk table (Humbert et al., Eur Respir J 2023, Table
+    # 16) uses: SVI > 40 / 26-40 / < 26 mL/m^2 (cMRI-specific band — the
+    # table separately lists a different SVI band for right-heart-cath
+    # haemodynamics; do not conflate the two).
+    LV_SVI = _indexed(LV_SV)
+    RV_SVI = _indexed(RV_SV)
+
     # 9. Emit result JSON. All numeric fields go through _safe_float so no
     #    NaN/Inf ever hits the wire.
     #
@@ -538,11 +571,17 @@ def main() -> None:
     # LV-derived. PeakGRS / PeakGCS come from the strain pipeline and are
     # filled in at assembly time; they exist here as `null` placeholders so
     # the object shape is stable regardless of whether strain has run yet.
+    # EDVI/ESVI follow the same generic (LV, unprefixed) convention as EDV/ESV
+    # — null until a caller supplies bsa_m2, same graceful-degradation pattern
+    # as PeakGRS/PeakGCS being null until strain runs.
     measurements = {
         "EF":           LVEF,
         "EDV":          LVEDV,
         "ESV":          LVESV,
+        "EDVI":         LVEDVI,
+        "ESVI":         LVESVI,
         "StrokeVolume": LV_SV,
+        "StrokeVolumeIndex": LV_SVI,
         "PeakGRS":      None,  # filled by strain, not computed here
         "PeakGCS":      None,  # filled by strain, not computed here
     }
@@ -564,6 +603,14 @@ def main() -> None:
         "RV_SV": RV_SV,
         "RVEF":  RVEF,
         "LV_mass_g": LV_mass_g,
+        # BSA passthrough + indexed volumes — all null when bsa_m2 wasn't given.
+        "bsa_m2": bsa_m2,
+        "LVEDVI": LVEDVI,
+        "LVESVI": LVESVI,
+        "RVEDVI": RVEDVI,
+        "RVESVI": RVESVI,
+        "LV_SVI": LV_SVI,
+        "RV_SVI": RV_SVI,
         "voxel_mm3": _safe_float(voxel_mm3),
         "spacing_mm": [_safe_float(dx), _safe_float(dy), _safe_float(dz)],
         "units": {
@@ -571,6 +618,8 @@ def main() -> None:
             "ef":      "%",
             "mass":    "g",
             "spacing": "mm",
+            "bsa":     "m^2",
+            "indexed_volumes": "mL/m^2",
         },
         "warnings": warnings_out,
         # Duplicate-slice detection (Part A). Additive/optional: on clean data

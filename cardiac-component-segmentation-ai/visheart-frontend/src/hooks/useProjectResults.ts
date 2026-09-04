@@ -20,7 +20,13 @@ export type Measurements = {
   EF: number | null;
   EDV: number | null;
   ESV: number | null;
+  /** LV EDV / BSA, mL/m^2 — null unless compute_heart_metrics_from_rle.py was
+   *  given a bsa_m2 (not currently wired end-to-end; see report/page.tsx). */
+  EDVI?: number | null;
+  ESVI?: number | null;
   StrokeVolume: number | null;
+  /** LV stroke volume / BSA, mL/m^2 — same bsa_m2 caveat as EDVI/ESVI. */
+  StrokeVolumeIndex?: number | null;
   PeakGRS: number | null;
   PeakGCS: number | null;
 };
@@ -43,6 +49,14 @@ export type RvMetrics = {
   RVESV: number | null;
   RV_SV: number | null;
   RVEF: number | null;
+  /** BSA-indexed (mL/m^2) — null unless bsa_m2 was supplied to the backend
+   *  compute. Not currently wired end-to-end; the report page computes its
+   *  own client-side copy from RVEDV/RVESV/RV_SV and a locally-entered BSA
+   *  rather than reading these. Present here so the type matches what
+   *  compute_heart_metrics_from_rle.py actually emits. */
+  RVEDVI?: number | null;
+  RVESVI?: number | null;
+  RV_SVI?: number | null;
   /** Per-frame RV volume curve, index = frameindex. */
   rv_volumes_ml?: (number | null)[];
 };
@@ -59,6 +73,14 @@ export type HeartMetrics = {
   RVESV?: number | null;
   RV_SV?: number | null;
   RVEF?: number | null;
+  /** BSA passthrough + indexed volumes — see RvMetrics for the same caveat. */
+  bsa_m2?: number | null;
+  LVEDVI?: number | null;
+  LVESVI?: number | null;
+  LV_SVI?: number | null;
+  RVEDVI?: number | null;
+  RVESVI?: number | null;
+  RV_SVI?: number | null;
   rv_volumes_ml?: (number | null)[];
   ed_frame?: number;
   es_frame?: number;
@@ -639,14 +661,28 @@ export function useProjectResults(
           RVESV: doc.heartMetrics.RVESV ?? null,
           RV_SV: doc.heartMetrics.RV_SV ?? null,
           RVEF: doc.heartMetrics.RVEF ?? null,
+          RVEDVI: doc.heartMetrics.RVEDVI ?? null,
+          RVESVI: doc.heartMetrics.RVESVI ?? null,
+          RV_SVI: doc.heartMetrics.RV_SVI ?? null,
           rv_volumes_ml: doc.heartMetrics.rv_volumes_ml,
         }
       : undefined,
     /** LV volumes as stored top-level — used for the RV:LV ratio, which needs
      *  LVEDV alongside RVEDV. `measurements.EDV` is the same number. */
     lvVolumes: doc?.heartMetrics
-      ? { LVEDV: doc.heartMetrics.LVEDV ?? null, LV_SV: doc.heartMetrics.LV_SV ?? null }
+      ? {
+          LVEDV: doc.heartMetrics.LVEDV ?? null,
+          LV_SV: doc.heartMetrics.LV_SV ?? null,
+          LVEDVI: doc.heartMetrics.LVEDVI ?? null,
+          LVESVI: doc.heartMetrics.LVESVI ?? null,
+          LV_SVI: doc.heartMetrics.LV_SVI ?? null,
+        }
       : undefined,
+    /** Body surface area, if the backend compute was ever given one. Today
+     *  this is always null in the live app — the report page's BSA card is
+     *  client-side only (see report/page.tsx) and never sends bsa_m2 to the
+     *  backend. Present for when that wiring gets built. */
+    bsaM2FromBackend: doc?.heartMetrics?.bsa_m2 ?? null,
     healthStatus: doc?.healthStatus,
     /** Layer 2 — advisory regional assessment; never changes healthStatus. */
     regionalHealthStatus: doc?.regionalHealthStatus,

@@ -48,6 +48,20 @@ export default function ReportPage() {
     rvStrainSeries,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
+  // BSA input — optional. Entered here (not persisted server-side) since it's
+  // a report-time convenience, not a clinical record; height/weight are kept
+  // as separate fields (rather than a single BSA field) because that's what a
+  // user actually has on hand, with BSA itself derived via the Mosteller
+  // formula. Blank either field and every BSA-indexed row above simply
+  // doesn't print — see PatientSummaryPage's hasBsa gating.
+  const [heightCm, setHeightCm] = useState("");
+  const [weightKg, setWeightKg] = useState("");
+  const heightNum = parseFloat(heightCm);
+  const weightNum = parseFloat(weightKg);
+  const bsaM2 =
+    Number.isFinite(heightNum) && Number.isFinite(weightNum) && heightNum > 0 && weightNum > 0
+      ? Math.sqrt((heightNum * weightNum) / 3600)
+      : null;
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
   // with the real bottom edge of whatever's fixed above it (site header +
   // ProjectDashboardBar's floating pill, whichever is currently taller).
@@ -121,6 +135,14 @@ export default function ReportPage() {
           rv?.RV_SV != null && (lvVolumes?.LV_SV ?? measurements?.StrokeVolume) != null
             ? rv.RV_SV - (lvVolumes?.LV_SV ?? measurements!.StrokeVolume!)
             : null,
+        // BSA is user-entered on this page (see heightCm/weightKg state above),
+        // not part of the computed pipeline — null whenever either field is
+        // blank, which is what gates the indexed rows off in PatientSummaryPage.
+        bsaM2,
+        heightCm: bsaM2 != null ? heightNum : null,
+        weightKg: bsaM2 != null ? weightNum : null,
+        rvEdvi: bsaM2 != null && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null,
+        rvEsvi: bsaM2 != null && rv?.RVESV != null ? rv.RVESV / bsaM2 : null,
         voxelSize: PLACEHOLDER_PATIENT_SUMMARY.voxelSize,
         healthStatus: healthStatus?.status ?? "Indeterminate",
         healthEvidence:
@@ -225,6 +247,11 @@ export default function ReportPage() {
           rvStrainSeries={rvStrainSeries}
           computing={computing}
           computeError={computeError}
+          bsaM2={bsaM2}
+          heightCm={heightCm}
+          weightKg={weightKg}
+          onHeightCmChange={setHeightCm}
+          onWeightKgChange={setWeightKg}
         />
       </div>
 
