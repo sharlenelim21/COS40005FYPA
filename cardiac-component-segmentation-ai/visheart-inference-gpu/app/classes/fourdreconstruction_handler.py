@@ -1124,7 +1124,7 @@ class FourDReconstructionHandler:
             # Create output filename with correct extension
             input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
             file_extension = export_format  # "obj" or "glb"
-            output_file = os.path.join(output_dir, f"{input_filename}_reconstructed.{file_extension}")
+            output_file = os.path.join(output_dir, f"{input_filename}_reconstructed_{chamber}.{file_extension}")
 
             print("Step 5: Generating mesh...")
             mesh_file, c_s, c_m, selection = self._fit_and_mesh_sync(
@@ -1138,7 +1138,7 @@ class FourDReconstructionHandler:
             if debug_save:
                 debug_dir = kwargs.get('debug_dir', '/tmp/4d_reconstruction_debug')
                 os.makedirs(debug_dir, exist_ok=True)
-                debug_file = os.path.join(debug_dir, f"debug_{input_filename}_reconstructed.{file_extension}")
+                debug_file = os.path.join(debug_dir, f"debug_{input_filename}_reconstructed_{chamber}.{file_extension}")
                 
                 import shutil
                 shutil.copy2(mesh_file, debug_file)
@@ -1345,11 +1345,15 @@ class FourDReconstructionHandler:
                         )
                         
                         # Generate mesh for this frame with correct extension
+                        # Chamber goes BEFORE the frame number: it groups a sequence by chamber,
+                        # and it keeps `_ED` terminal, which is where the ED detection below reads
+                        # it from. LV is tagged too -- "no suffix means LV" is an implicit rule
+                        # that breaks the moment anything else is written beside it.
                         if original_frame_idx == ed_frame_index:
                             # Mark ED frame clearly
-                            output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}_ED.{file_extension}")
+                            output_file = os.path.join(output_dir, f"{input_filename}_4D_{chamber}_frame{original_frame_idx:02d}_ED.{file_extension}")
                         else:
-                            output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}.{file_extension}")
+                            output_file = os.path.join(output_dir, f"{input_filename}_4D_{chamber}_frame{original_frame_idx:02d}.{file_extension}")
 
                         # AUTOGRAD FIX: Optimize latent codes for this frame with clean state.
                         # Each frame offsets the seed by its own index, so frames stay independent
@@ -1435,7 +1439,7 @@ class FourDReconstructionHandler:
                 os.makedirs(output_dir, exist_ok=True)
                 input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
                 file_extension = export_format  # "obj" or "glb"
-                output_file = os.path.join(output_dir, f"{input_filename}_4D_ED{ed_frame_index:02d}.{file_extension}")
+                output_file = os.path.join(output_dir, f"{input_filename}_4D_{chamber}_ED{ed_frame_index:02d}.{file_extension}")
 
                 # Optimize latent codes (single frame) and decode
                 ed_seed = None if seed is None else int(seed) + ed_frame_index * 1000

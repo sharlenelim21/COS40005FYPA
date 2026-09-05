@@ -18,6 +18,7 @@ import {
   ResizableHandle 
 } from "@/components/ui/resizable";
 import { Switch } from "@/components/ui/switch";
+import { useGpuStatus } from "@/lib/dashboard-hooks";
 import {
   ArrowLeft,
   Play,
@@ -27,6 +28,11 @@ import {
   Loader2,
   AlertCircle,
 } from "lucide-react";
+
+// How often the viewer asks the server whether a pending reconstruction has landed. The number of
+// attempts is derived from this and the per-job budget, so changing it does not change how long
+// the viewer waits.
+const POLL_INTERVAL_MS = 2000;
 
 export default function Standalone4DViewerPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -54,6 +60,7 @@ export default function Standalone4DViewerPage() {
     refreshReconstructions,
     reconstructionResults,
   } = useProject();
+  const { processingUnit } = useGpuStatus();
 
   const activeReconstruction = reconstructionIdParam
     ? getReconstructionById(reconstructionIdParam) ||
@@ -126,6 +133,33 @@ export default function Standalone4DViewerPage() {
     : pendingChamber === "lv" ? !lvReconstruction
     : false;
 
+  // How long to keep watching for a reconstruction that is still being built.
+  //
+  // A fixed budget cannot work here: the same job is ~3s/frame on GPU and ~21s/frame on CPU, and
+  // frame counts vary per study. The old flat 10 minutes was already marginal for a 30-frame CPU
+  // job (~7 min) and would silently expire on a 40-frame one -- the job keeps running, but nothing
+  // is watching, which reads to the user as "it never appeared".
+  //
+  // Per-frame figures are measured on this pipeline at the N=64 decode default with the highest
+  // iteration count each device defaults to:
+  //     GPU   0.30s decode + 200 x 0.014s fit  ~= 3.1s
+  //     CPU   4.70s decode + 120 x 0.081s fit  ~= 14.4s   (20.9s if raised to 200)
+  // The CPU figure takes the 200-iteration case, since the user can raise it.
+  //
+  // An unknown processing unit is treated as CPU: over-waiting only costs a few background
+  // refreshes, while under-waiting loses the result.
+  const pollBudgetMs = useMemo(() => {
+    const frames = projectData?.dimensions?.frames || 30;
+    const secondsPerFrame = processingUnit.gpuAvailable ? 3.1 : 20.9;
+    // Fixed overhead does not scale with frame count -- queueing behind another job, mask upload,
+    // tar packing, S3 upload. A purely linear budget under-waits badly on short sequences: 30
+    // frames on GPU would come out at 2.3 min, shorter than the flat budget this replaces.
+    const FIXED_OVERHEAD_SECONDS = 180;
+    const estimated = FIXED_OVERHEAD_SECONDS + frames * secondsPerFrame * 1.5;
+    const clamped = Math.min(Math.max(estimated, 120), 45 * 60);
+    return clamped * 1000;
+  }, [projectData?.dimensions?.frames, processingUnit.gpuAvailable]);
+
   // Poll for reconstruction when it doesn't exist yet (job was just started)
   const [isPolling, setIsPolling] = useState(false);
   const [pollTimedOut, setPollTimedOut] = useState(false);
@@ -143,9 +177,8 @@ export default function Standalone4DViewerPage() {
 
     setIsPolling(true);
     let attempts = 0;
-    // A 30-frame reconstruction runs for minutes, so the original 2-minute budget expired long
-    // before a job could finish. 10 minutes at 2s intervals.
-    const maxAttempts = 300;
+    // Scaled to the job, not a constant -- see pollBudgetMs.
+    const maxAttempts = Math.ceil(pollBudgetMs / POLL_INTERVAL_MS);
 
     const interval = setInterval(async () => {
       attempts++;
@@ -156,14 +189,14 @@ export default function Standalone4DViewerPage() {
         setIsPolling(false);
         setPollTimedOut(true);
       }
-    }, 2000);
+    }, POLL_INTERVAL_MS);
 
     return () => {
       clearInterval(interval);
       setIsPolling(false);
     };
   }, [loading, hasReconstructions, selectedModel, activeReconstruction, pollTimedOut,
-      refreshReconstructions, pendingChamberMissing]);
+      refreshReconstructions, pendingChamberMissing, pollBudgetMs]);
 
   // Viewer state
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -652,14 +685,17 @@ export default function Standalone4DViewerPage() {
                         Building {pendingChamber?.toUpperCase()} reconstruction…
                       </p>
                       <p className="text-[11px] leading-relaxed text-muted-foreground">
-                        This runs on the GPU and takes a few minutes for a full sequence. You can
-                        stay here — the chamber appears automatically when it finishes.
+                        This runs on the {processingUnit.gpuAvailable ? "GPU" : "CPU"} and takes
+                        about {Math.round(pollBudgetMs / 60000)} minutes for a full sequence
+                        {processingUnit.gpuAvailable ? "" : " on this machine"}. You can stay
+                        here — the chamber appears automatically when it finishes.
                       </p>
                     </div>
                   )}
                   {pendingChamberMissing === false && pollTimedOut && pendingChamber && (
                     <p className="text-[11px] text-muted-foreground">
-                      Stopped checking for updates. Reload to check again.
+                      Stopped checking after {Math.round(pollBudgetMs / 60000)} minutes. The job
+                      may still be running on the server — reload to check again.
                     </p>
                   )}
 

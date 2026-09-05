@@ -27,6 +27,21 @@ import {
 import { ChevronDown, Settings, Sparkles, AlertTriangle, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+// Latent-fit iterations, per processing unit. The fit is measurably under-converged at the old
+// default of 30: LV myocardial volume swings 23.7% between ED and ES against a 6.8% floor set by
+// the masks themselves, and myocardium is near-incompressible. Measured on ACDC (6 cases, paired):
+//
+//        iterations   30      120     200
+//        LV myo swing 23.7%   15.6%   9.3%     (floor 6.8%)
+//        mean abs err 30.1%   20.7%   18.3%
+//
+// GPU takes the best value. CPU cannot: at 200 iterations plus an N=64 decode a 30-frame job is
+// ~20.8s/frame on CPU (~10.4 min), which runs past the viewer's 10-minute poll budget -- the job
+// still finishes, but nothing is watching for it any more. 120 keeps a 30-frame CPU job at
+// ~7.2 min, inside the budget, and still recovers most of the accuracy.
+const ITERATIONS_GPU = 200;
+const ITERATIONS_CPU = 120;
+
 export type ReconstructionSegmentationModel = "medsam" | "unet";
 
 export type ReconstructionChamber = "lv" | "rv";
@@ -118,7 +133,7 @@ export function ReconstructionConfigDialog({
   const [chamber, setChamber] = useState<ReconstructionChamber>(defaultChamber ?? "lv");
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
-  const [numIterations, setNumIterations] = useState(30);
+  const [numIterations, setNumIterations] = useState(gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU);
   // 32 was the old default and is too coarse: at N=32 the marching-cubes facets are ~17x larger
   // by area than at N=128, which flat-shades into what looks like holes in a closed surface.
   // 64 costs ~0.3s more per frame to decode and gives ~4x the vertices. Raise it further (96-128)
@@ -170,6 +185,16 @@ export function ReconstructionConfigDialog({
     if (!open) return;
     setChamber(defaultChamber ?? "lv");
   }, [open, defaultChamber]);
+
+  // Re-applies the iteration default for whichever processing unit is currently reported, on open
+  // and whenever that report changes. The status poll starts at gpuAvailable=false and flips to
+  // true once it answers, so this has to react to the change or a GPU system would keep the CPU
+  // default. The cost is that a status change while the dialog is open resets a hand-typed value;
+  // that window is small, and being wrong about the device is the worse failure.
+  useEffect(() => {
+    if (!open) return;
+    setNumIterations(gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU);
+  }, [open, gpuAvailable]);
 
   const noModelsAvailable = availableSet.size === 0;
   const noCreatableModels = (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
@@ -491,12 +516,25 @@ export function ReconstructionConfigDialog({
                   max={200}
                   step={10}
                   value={numIterations}
-                  onChange={(e) => setNumIterations(parseInt(e.target.value) || 30)}
+                  onChange={(e) =>
+                    setNumIterations(parseInt(e.target.value) || (gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU))
+                  }
                   className="font-mono"
                 />
                 <p className="text-xs text-muted-foreground">
                   Number of optimization iterations for latent code fitting (10-200).
-                  Higher values improve accuracy but increase processing time. Default: 30
+                  Below ~120 the fit is measurably under-converged and chamber volumes are off by
+                  around 30%. Measured cost per iteration per frame: ~0.014s on GPU, ~0.081s on
+                  CPU. Default on this system: {gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU}
+                  ({gpuAvailable ? "GPU" : "CPU"}).
+                  {!gpuAvailable && (
+                    <>
+                      {" "}
+                      Raising this on CPU can push a 30-frame job past 10 minutes, after which the
+                      viewer stops watching for it -- the job still finishes, but you will need to
+                      reload to see it.
+                    </>
+                  )}
                 </p>
               </div>
 
@@ -525,7 +563,7 @@ export function ReconstructionConfigDialog({
               </div>
 
               {/* Warning for high values */}
-              {(numIterations > 100 || resolution > 128) && (
+              {resolution > 128 && (
                 <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
                   <Settings className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
                   <div className="text-xs text-amber-900 dark:text-amber-100">
