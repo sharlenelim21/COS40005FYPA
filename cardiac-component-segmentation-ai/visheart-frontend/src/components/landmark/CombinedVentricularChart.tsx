@@ -4,19 +4,6 @@ import React from "react";
 import { rdYlGn } from "./StrainVisualization";
 import type { StrainSegmentData, StrainType, RvStrainRegion } from "./StrainVisualization";
 
-/**
- * Combined LV + RV bullseye — the 17-segment LV rings fused with an RV
- * free-wall crescent wrapping the LV circle's septal side (screen-left, per
- * the chart's existing Anterior/Lateral/Inferior/Septal label convention —
- * matching the standard biventricular bullseye reference layout), echoing
- * the standard biventricular bullseye layout. Unlike that clinical
- * reference (18-30 incl. RVOT/LVOT), the RV side here shows the 6 regions we
- * actually compute (basal/mid x 3 free-wall sectors) — there is no separate
- * RV free-wall myocardium label to derive a finer wall-thickness breakdown
- * from (see bullseye_analysis.mask_to_rv_regions). RV strain is a
- * cavity-radius % change, not wall thickness, and uses its own color scale
- * since its value range differs from GRS/GCS.
- */
 interface CombinedVentricularChartProps {
   lvData: StrainSegmentData[];
   hasLv: boolean;
@@ -39,18 +26,7 @@ const VIEW_W = 480, VIEW_H = 430;
 const LV_BASAL_OUTER = 100, LV_BASAL_INNER = 76, LV_MID_INNER = 50, LV_APICAL_INNER = 26;
 const RV_MID_INNER = LV_BASAL_OUTER, RV_MID_OUTER = RV_MID_INNER + 20;
 const RV_BASAL_INNER = RV_MID_OUTER, RV_BASAL_OUTER = RV_BASAL_INNER + 24;
-// Combined shape spans RV_BASAL_OUTER (left, from center) + LV_BASAL_OUTER+4
-// (right, from center) — centering THAT span in the viewBox (rather than an
-// arbitrary fixed x) keeps left/right margins equal regardless of radius
-// tweaks. Previously center.x was fixed at 322, leaving ~178px empty on the
-// left and ~10px on the right — the whole chart read as shifted off-center.
 const CENTER = { x: (VIEW_W - (LV_BASAL_OUTER + 4) + RV_BASAL_OUTER) / 2, y: 168 };
-// RV sits on the septal side (screen-left, matching the chart's Septal=left
-// label convention and the standard biventricular bullseye reference
-// layout). 120°→240° lands the crescent's flat edges exactly on the LV
-// ring's segment boundaries there (all segment boundaries fall on multiples
-// of 60° — see lvSegPath below), so it visually fuses with the LV circle
-// at a real segment seam instead of floating at an arbitrary angle.
 const RV_SPAN_START = 120, RV_SPAN_END = 240;
 
 export function CombinedVentricularChart({
@@ -151,15 +127,12 @@ export function CombinedVentricularChart({
       {/* Background discs */}
       <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />
       <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
-
-      {/* Direction labels. Lateral is on the left, where the RV crescent sits;
-          Septal is on the right, opposite the crescent. */}
       <text x={center.x} y="14" textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Anterior</text>
       <text x={center.x - RV_BASAL_OUTER - 20} y={center.y + 4} textAnchor="end" fontSize="12" fontWeight="700" fill="currentColor">Lateral</text>
       <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Septal</text>
       <text x={center.x} y={center.y + RV_BASAL_OUTER + 24} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Inferior</text>
       {(() => {
-        const tag = polarPointAt(center, RV_BASAL_OUTER + 16, 180);
+        const tag = polarPointAt(center, RV_BASAL_OUTER + 16, 205);
         return <text x={tag.x} y={tag.y + 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="currentColor" opacity="0.7">RV</text>;
       })()}
       <text x={center.x + LV_BASAL_OUTER - 26} y={center.y - LV_BASAL_OUTER + 16} textAnchor="start" fontSize="10" fontWeight="700" fill="currentColor" opacity="0.7">LV</text>
@@ -260,10 +233,6 @@ export function CombinedVentricularChart({
   );
 }
 
-// annularSectorPath/polarPoint imported from StrainVisualization are centred
-// on a single scalar `center` (square canvas). This chart uses a non-square
-// (x,y) centre, so these small local wrappers apply the offset explicitly
-// rather than duplicating the arc-path math.
 function polarPointAt(center: { x: number; y: number }, radius: number, angleDeg: number) {
   const a = (angleDeg * Math.PI) / 180;
   return { x: center.x + radius * Math.cos(a), y: center.y + radius * Math.sin(a) };

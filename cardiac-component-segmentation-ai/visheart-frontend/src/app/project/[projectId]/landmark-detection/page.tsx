@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 
 import { useProject } from "@/context/ProjectContext";
-import { useProjectResults } from "@/hooks/useProjectResults";
+import { useProjectResults, type MaskDoc } from "@/hooks/useProjectResults";
 import { downloadResultsCsv } from "@/lib/exportResultsCsv";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
+import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import {
   AHA_SEGMENT_COLORS,
@@ -129,13 +130,15 @@ export default function LandmarkDetectionPage() {
   // the sidebar tab, and the strain compute all read from these — no separate
   // per-widget model state to drift out of sync.
   const searchParams = useSearchParams();
-  const workspace: "landmarks" | "strain" =
-    searchParams.get("tab") === "strain" ? "strain" : "landmarks";
+  const workspace: "landmarks" | "structure" | "strain" =
+    searchParams.get("tab") === "strain" ? "strain"
+    : searchParams.get("tab") === "structure" ? "structure"
+    : "landmarks";
   const activeModel: "unet" | "medsam" =
     searchParams.get("model") === "medsam" ? "medsam" : "unet";
 
   const updateUrlState = useCallback(
-    (next: { tab?: "landmarks" | "strain"; model?: "unet" | "medsam" }) => {
+    (next: { tab?: "landmarks" | "structure" | "strain"; model?: "unet" | "medsam" }) => {
       const params = new URLSearchParams(window.location.search);
       if (next.tab) params.set("tab", next.tab);
       if (next.model) params.set("model", next.model);
@@ -144,7 +147,7 @@ export default function LandmarkDetectionPage() {
     [router],
   );
   const setWorkspace = useCallback(
-    (tab: "landmarks" | "strain") => updateUrlState({ tab }),
+    (tab: "landmarks" | "structure" | "strain") => updateUrlState({ tab }),
     [updateUrlState],
   );
   const setActiveModel = useCallback(
@@ -212,21 +215,11 @@ export default function LandmarkDetectionPage() {
   const [calculatingModels, setCalculatingModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   const [calcCountdown, setCalcCountdown] = useState(15);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [leftPanelView, setLeftPanelView] = useState<"bullseye" | "strain">(() => {
-    if (typeof window !== "undefined") {
-      const hash = window.location.hash;
-      if (hash === "#strain") return "strain";
-    }
-    return "bullseye";
-  });
+  const [structureVentricle, setStructureVentricle] = useState<"LV" | "RV">("LV");
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GRS");
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
   const [strainResult, setStrainResult] = useState<RealStrainResult | null>(null);
   const [rvStrainResult, setRvStrainResult] = useState<RvStrainResult | null>(null);
-  // Auto-detected ED/ES frames from heart-metrics (ED = largest LV cavity, ES =
-  // smallest), PER MODEL — each model's mask has its own independently-detected
-  // ED/ES. The strain picker must use the frames from the SAME model it computes
-  // with, so peaks match heartMetrics and the similarity guard passes.
   const [autoFramesByModel, setAutoFramesByModel] = useState<{
     unet: { ed: number; es: number } | null;
     medsam: { ed: number; es: number } | null;
@@ -236,8 +229,8 @@ export default function LandmarkDetectionPage() {
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
   const [isSavingLandmarks, setIsSavingLandmarks] = useState(false);
   const [hasUnsavedLandmarkEdits, setHasUnsavedLandmarkEdits] = useState(false);
-  // True while the bullseye is being recomputed after a landmark-edit save, so
-  // the UI can show a "recomputing" hint instead of the stale chart.
+  const [pendingDeletions, setPendingDeletions] = useState<Record<string, number>>({});
+  const pendingDeletionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [bullseyeRecomputing, setBullseyeRecomputing] = useState(false);
 
   // (Model default now comes from the URL via activeModel — UNet unless the
@@ -516,6 +509,42 @@ export default function LandmarkDetectionPage() {
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
+  const handleLandmarkDeleteRequest = useCallback((id: string) => {
+    const sliceKey = currentLandmarkEditKey;
+    const fullKey = `${sliceKey}:${id}`;
+    setPendingDeletions((prev) => ({ ...prev, [fullKey]: Date.now() }));
+    pendingDeletionTimers.current[fullKey] = setTimeout(() => {
+      setLandmarkEdits((prev) => ({
+        ...prev,
+        [sliceKey]: { ...(prev[sliceKey] ?? {}), [id]: undefined },
+      }));
+      setHasUnsavedLandmarkEdits(true);
+      setPendingDeletions((prev) => {
+        const next = { ...prev };
+        delete next[fullKey];
+        return next;
+      });
+      delete pendingDeletionTimers.current[fullKey];
+    }, 5000);
+  }, [currentLandmarkEditKey]);
+
+  /** Undo a pending delete before its 5s window expires. Safe to key off the
+   *  CURRENT slice: the row that renders this action only exists while
+   *  viewing the same slice the deletion was started on. */
+  const handleUndoLandmarkDelete = useCallback((id: string) => {
+    const fullKey = `${currentLandmarkEditKey}:${id}`;
+    const timer = pendingDeletionTimers.current[fullKey];
+    if (timer) {
+      clearTimeout(timer);
+      delete pendingDeletionTimers.current[fullKey];
+    }
+    setPendingDeletions((prev) => {
+      const next = { ...prev };
+      delete next[fullKey];
+      return next;
+    });
+  }, [currentLandmarkEditKey]);
+
   const handleSaveLandmarks = useCallback(async () => {
     if (isSavingLandmarks || state.predictions.length === 0) return;
     setIsSavingLandmarks(true);
@@ -713,6 +742,31 @@ export default function LandmarkDetectionPage() {
     return overlays;
   }, [decodedMasks, hasPredictions, currentImageFrame, currentImageSlice]);
 
+  // Landmark ids to hide from the CURRENTLY VIEWED slice's canvas while their
+  // deletion is pending undo — scoped to this slice only, so navigating away
+  // and back doesn't leak the fade into an unrelated slice.
+  const currentSliceFadingIds = useMemo(() => {
+    const prefix = `${currentLandmarkEditKey}:`;
+    return new Set(
+      Object.keys(pendingDeletions)
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length)),
+    );
+  }, [pendingDeletions, currentLandmarkEditKey]);
+
+  // Slices with a manual deletion — pending OR already committed to
+  // landmarkEdits — for the Slice Confidence strip's pencil badge.
+  const manuallyDeletedSliceKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const key of Object.keys(pendingDeletions)) {
+      set.add(key.slice(0, key.lastIndexOf(":")));
+    }
+    for (const [key, edit] of Object.entries(landmarkEdits)) {
+      if (Object.values(edit).some((value) => value === undefined)) set.add(key);
+    }
+    return set;
+  }, [pendingDeletions, landmarkEdits]);
+
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
 
@@ -873,6 +927,7 @@ export default function LandmarkDetectionPage() {
             maskOverlays={currentMaskOverlays}
             maskDimensions={maskDimensions}
             visibleLandmarks={visibleLandmarks}
+            fadingLandmarkIds={currentSliceFadingIds}
             showLabels={showLabels}
             editableLandmarks={editableLandmarks}
             highlightedLandmarkId={highlightedLandmarkId}
@@ -893,10 +948,18 @@ export default function LandmarkDetectionPage() {
             activeTab={workspace}
             activeModel={activeModel}
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
+            structureVentricle={structureVentricle}
+            onStructureVentricleChange={setStructureVentricle}
+            structureStats={bullseyeData?.stats ?? null}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={handleSaveLandmarks}
             onToggleLandmark={handleToggleLandmark}
+            currentSliceKey={currentLandmarkEditKey}
+            pendingDeletions={pendingDeletions}
+            onDeleteLandmark={handleLandmarkDeleteRequest}
+            onUndoDeleteLandmark={handleUndoLandmarkDelete}
+            manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
             onPrevFrame={handlePrevFrame}
@@ -927,40 +990,15 @@ export default function LandmarkDetectionPage() {
           direction="horizontal"
           className="h-full w-full rounded-xl border shadow-sm"
         >
-          {/* Bullseye / 3D heart — only in the Strain workspace. In Landmarks
-              the task is editing points on the MRI, so this panel is hidden and
-              the viewer takes its space. */}
-          {workspace === "strain" && (
-          <ResizablePanel defaultSize={78} minSize={40}>
+          {workspace === "structure" && (
+          <ResizablePanel defaultSize={66} minSize={40}>
             <div className="w-full h-full bg-background p-4 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-semibold text-foreground">
-                    {leftPanelView === "bullseye" ? "AHA 17-Segment Bullseye" : "Strain Preview"}
+                    {structureVentricle === "LV" ? "AHA 17-Segment Bullseye" : "RV 9-Segment Bullseye"}
                   </h3>
-                  <div className="grid grid-cols-2 rounded-lg border border-border bg-background p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => { setLeftPanelView("bullseye"); window.location.hash = "bullseye"; }}
-                      className={cn(
-                        "rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
-                        leftPanelView === "bullseye" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-                      )}
-                    >
-                      Wall Thickness
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setLeftPanelView("strain"); window.location.hash = "strain"; }}
-                      className={cn(
-                        "rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
-                        leftPanelView === "strain" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-                      )}
-                    >
-                      Strain
-                    </button>
-                  </div>
-                  {leftPanelView === "bullseye" && (
+                  {structureVentricle === "LV" && (
                     <Select
                       value={selectedBullseyeModel}
                       onValueChange={(v: string) => {
@@ -1011,17 +1049,14 @@ export default function LandmarkDetectionPage() {
                       </SelectContent>
                     </Select>
                   )}
-                  {leftPanelView === "bullseye" && bullseyeRecomputing && (
+                  {structureVentricle === "LV" && bullseyeRecomputing && (
                     <span className="text-[10px] font-medium text-muted-foreground animate-pulse">
                       Recomputing with edits…
                     </span>
                   )}
-                  {leftPanelView === "strain" && (
-                    <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                  )}
                 </div>
                 {/* AHA alignment controls — visible once landmarks are detected */}
-                {leftPanelView === "bullseye" && hasPredictions && (
+                {structureVentricle === "LV" && hasPredictions && (
                   <div className="flex items-center gap-1 flex-shrink-0">
                     <button
                       type="button"
@@ -1067,15 +1102,23 @@ export default function LandmarkDetectionPage() {
                     </p>
                   </div>
                 </div>
-              ) : leftPanelView === "bullseye" ? (
+              ) : structureVentricle === "RV" ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
+                  <AlertCircle className="h-8 w-8 opacity-40" />
+                  <p className="max-w-[280px] text-xs leading-relaxed">
+                    RV structural view coming soon — cavity-area data isn&apos;t computed by the backend yet.
+                  </p>
+                </div>
+              ) : (
                 <AhaBullseyePanel
                   bullseyeData={hasPredictions ? bullseyeData : null}
                   loading={hasPredictions ? bullseyeLoading : isRunning}
                   isComputing={bullseyeRecomputing || calculatingModels[activeModel]}
                   referenceAngleDeg={ahaAlignmentAngle ?? 0}
                   onCompute={() => fetchBullseye(selectedBullseyeModel, true)}
-                  // Follows the Strain tab's cardiac-cycle playback, not the
-                  // slice index — the bullseye is a per-frame view of the cycle.
+                  // Follows the shared cardiac-cycle playback (now driven from
+                  // either the Structure or Strain tab), not the slice index —
+                  // the bullseye is a per-frame view of the cycle.
                   currentFrame={strainPlaybackFrame}
                   frameCount={bullseyeFrameCount}
                   frameThickness={frameThicknessValues}
@@ -1085,10 +1128,42 @@ export default function LandmarkDetectionPage() {
                   onBullseyeResetRef={(fn) => { bullseyeZoomResetRef.current = fn; }}
                   onHeartResetRef={(fn) => { heartZoomResetRef.current = fn; }}
                 />
+              )}
+            </div>
+          </ResizablePanel>
+          )}
+
+          {workspace === "strain" && (
+          <ResizablePanel defaultSize={66} minSize={40}>
+            <div className="w-full h-full bg-background p-4 flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between mb-2 flex-shrink-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-semibold text-foreground">Strain Preview</h3>
+                  <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {activeModel === "unet" ? "UNet" : "MedSAM"}
+                  </span>
+                </div>
+              </div>
+              {!hasPredictions ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
+                  <div className="h-16 w-16 rounded-full border-2 border-dashed border-muted-foreground/30 flex items-center justify-center">
+                    <span className="text-2xl opacity-30">♥</span>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">No landmark data yet</p>
+                    <p className="text-xs mt-1 opacity-70">
+                      Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate strain results.
+                    </p>
+                  </div>
+                </div>
               ) : (
                 <StrainPreviewPanel
                   selectedStrainType={selectedStrainType}
                   onStrainTypeChange={setSelectedStrainType}
+                  resultsByModel={resultsByModel}
+                  activeModel={activeModel}
+                  onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
                   currentFrame={state.currentFrame}
                   frameCount={
                     // Prefer the MASK's actual frame count (segFrameCount) — this is
@@ -1123,7 +1198,7 @@ export default function LandmarkDetectionPage() {
               workspace only. Strain is about the cardiac cycle as a whole
               (bullseye / 3D heart / curves), not editing points on a slice. */}
           {workspace === "landmarks" && (
-          <ResizablePanel defaultSize={62} minSize={25}>
+          <ResizablePanel defaultSize={55} minSize={25}>
             <div className="w-full h-full relative bg-muted/40 p-4 flex flex-col gap-3 overflow-hidden">
               {state.status === "idle" && !isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 z-10 pointer-events-none">
@@ -1165,6 +1240,7 @@ export default function LandmarkDetectionPage() {
                   maskOverlays={currentMaskOverlays}
                   maskDimensions={maskDimensions}
                   visibleLandmarks={visibleLandmarks}
+                  fadingLandmarkIds={currentSliceFadingIds}
                   showLabels={showLabels}
                   editableLandmarks={editableLandmarks}
                   highlightedLandmarkId={highlightedLandmarkId}
@@ -1179,7 +1255,7 @@ export default function LandmarkDetectionPage() {
           <ResizableHandle withHandle />
 
           {/* RIGHT: Sidebar — present in both workspaces. */}
-          <ResizablePanel defaultSize={22} minSize={15} maxSize={35}>
+          <ResizablePanel defaultSize={33} minSize={20} maxSize={45}>
             <div className="h-full w-full">
               <LandmarkSidebar
                 state={state}
@@ -1192,10 +1268,18 @@ export default function LandmarkDetectionPage() {
             activeTab={workspace}
             activeModel={activeModel}
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
+            structureVentricle={structureVentricle}
+            onStructureVentricleChange={setStructureVentricle}
+            structureStats={bullseyeData?.stats ?? null}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={handleSaveLandmarks}
                 onToggleLandmark={handleToggleLandmark}
+            currentSliceKey={currentLandmarkEditKey}
+            pendingDeletions={pendingDeletions}
+            onDeleteLandmark={handleLandmarkDeleteRequest}
+            onUndoDeleteLandmark={handleUndoLandmarkDelete}
+            manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}
                 onPrevFrame={handlePrevFrame}
@@ -2141,8 +2225,6 @@ function StrainHeartModel({
   min,
   max,
   reverseColors,
-  onZoomChange,
-  onResetZoom,
   reconstructionMeshUrl,
   reconstructionMeshFormat,
   reconstructionLabels,
@@ -2154,8 +2236,6 @@ function StrainHeartModel({
   min: number;
   max: number;
   reverseColors: boolean;
-  onZoomChange?: (fn: (delta: number) => void) => void;
-  onResetZoom?: (fn: () => void) => void;
   reconstructionMeshUrl?: string | null;
   reconstructionMeshFormat?: "obj" | "glb";
   reconstructionLabels?: number[] | null;
@@ -2386,6 +2466,9 @@ function StrainPreviewPanel({
   rvStrainResult,
   onRvStrainResult,
   autoFramesByModel,
+  resultsByModel,
+  activeModel,
+  onModelChange,
 }: {
   selectedStrainType: StrainType;
   onStrainTypeChange: (type: StrainType) => void;
@@ -2404,6 +2487,9 @@ function StrainPreviewPanel({
     unet: { ed: number; es: number } | null;
     medsam: { ed: number; es: number } | null;
   };
+  resultsByModel: { unet: MaskDoc | null; medsam: MaskDoc | null };
+  activeModel: "unet" | "medsam";
+  onModelChange?: (m: "unet" | "medsam") => void;
 }) {
   const edRef  = useRef<HTMLInputElement>(null);
   const esRef  = useRef<HTMLInputElement>(null);
@@ -2412,7 +2498,85 @@ function StrainPreviewPanel({
   const [isComputing, setIsComputing] = useState(false);
   const [strainError, setStrainError] = useState<string | null>(null);
   const [strainInputMode, setStrainInputMode] = useState<"upload" | "frames">("frames");
-  const [strainModel, setStrainModel] = useState<"unet" | "medsam">("unet");
+  const strainModel = activeModel;
+  const setStrainModel = (m: "unet" | "medsam") => onModelChange?.(m);
+  const strainResultRef = useRef(strainResult);
+  strainResultRef.current = strainResult;
+  const rvStrainResultRef = useRef(rvStrainResult);
+  rvStrainResultRef.current = rvStrainResult;
+  const hydratedModelsRef = useRef<Set<"unet" | "medsam">>(new Set());
+  useEffect(() => {
+    if (hydratedModelsRef.current.has(strainModel)) return;
+    const doc = resultsByModel?.[strainModel];
+    if (!doc) return; 
+
+    const hasLvData = !!doc.strain || !!doc.strainSeries?.frames?.length;
+    if (!hasLvData) return;
+    hydratedModelsRef.current.add(strainModel);
+
+    const meanOfNullable = (vals: (number | null | undefined)[]): number | null => {
+      const nums = vals.filter((v): v is number => typeof v === "number");
+      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+    };
+
+    if (!strainResultRef.current) {
+      if (doc.strain) {
+        onStrainResult({
+          segments: doc.strain.segments,
+          global_grs: doc.strain.global_grs,
+          global_gcs: doc.strain.global_gcs,
+          ed_wt_mean_mm: meanOfNullable(doc.strain.segments.map((s) => s.wt_ed_mm)),
+          es_wt_mean_mm: meanOfNullable(doc.strain.segments.map((s) => s.wt_es_mm)),
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: doc.strain.edFrameIndex,
+          esFrameIndex: doc.strain.esFrameIndex,
+          source: "frames",
+        });
+      } else if (doc.strainSeries?.frames?.length) {
+        const series = doc.strainSeries;
+        const frame =
+          series.frames.find((f) => f.frameIndex === series.edFrameIndex) ?? series.frames[0];
+        onStrainResult({
+          segments: frame.segments.map((s) => ({ segment: s.segment, label: s.label, grs: s.grs, gcs: s.gcs })),
+          global_grs: frame.global_grs,
+          global_gcs: frame.global_gcs,
+          ed_wt_mean_mm: null,
+          es_wt_mean_mm: null,
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: series.edFrameIndex,
+          source: "frames",
+        });
+      }
+    }
+
+    if (!rvStrainResultRef.current) {
+      if (doc.rvStrain) {
+        onRvStrainResult({
+          regions: doc.rvStrain.regions,
+          global_rv_strain: doc.rvStrain.global_rv_strain,
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: doc.rvStrain.edFrameIndex,
+          esFrameIndex: doc.rvStrain.esFrameIndex,
+          source: "frames",
+        });
+      } else if (doc.rvStrainSeries?.frames?.length) {
+        const series = doc.rvStrainSeries;
+        const frame =
+          series.frames.find((f) => f.frameIndex === series.edFrameIndex) ?? series.frames[0];
+        onRvStrainResult({
+          regions: frame.regions,
+          global_rv_strain: frame.global_rv_strain,
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: series.edFrameIndex,
+          source: "frames",
+        });
+      }
+    }
+  }, [strainModel, resultsByModel]);
 
   const { getReconstructionGLB, reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
@@ -2467,8 +2631,9 @@ function StrainPreviewPanel({
   const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number | null } | null>(null);
   const bullseyeResetRef = useRef<(() => void) | null>(null);
-  const heartZoomRef    = useRef<((delta: number) => void) | null>(null);
-  const heartResetRef   = useRef<(() => void) | null>(null);
+  // Combined/RV aren't backed by real data yet (no RV mesh from the backend) —
+  // see ChamberFocusToggle's docstring. Only "LV" renders the real model.
+  const [chamberFocus, setChamberFocus] = useState<ChamberFocus>("LV");
   // 0-based segment index for the 3D heart (-1 = none). Kept in sync with the
   // parent's 1-based selectedSegment via handleSegClick below.
   const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
@@ -2904,11 +3069,20 @@ function StrainPreviewPanel({
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
               <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                3D Heart (LV)
+                3D Heart {chamberFocus === "combined" ? "(LV + RV)" : `(${chamberFocus})`}
               </p>
               <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
             </div>
-            {realStrainData ? (
+            <ChamberFocusToggle value={chamberFocus} onChange={setChamberFocus} className="mb-2 flex-shrink-0" />
+            {chamberFocus !== "LV" ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
+                <AlertCircle className="h-8 w-8 opacity-40" />
+                <p className="max-w-[240px] text-xs leading-relaxed">
+                  {chamberFocus === "RV" ? "RV view coming soon" : "Combined LV + RV view coming soon"} — the RV mesh
+                  isn&apos;t generated by the backend yet.
+                </p>
+              </div>
+            ) : realStrainData ? (
               <>
                 <div className="flex-1 min-h-0 w-full">
                   <StrainHeartModel
@@ -2918,14 +3092,15 @@ function StrainPreviewPanel({
                     min={sharedMin}
                     max={sharedMax}
                     reverseColors={reverseColors}
-                    onZoomChange={(fn) => { heartZoomRef.current = fn; }}
-                    onResetZoom={(fn) => { heartResetRef.current = fn; }}
                     reconstructionMeshUrl={reconstructionMeshUrl}
                     reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
                     reconstructionLabels={reconstructionLabels}
                     onReconstructionSegmentClick={handleSegClick}
                   />
                 </div>
+                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                  Drag to rotate · scroll to zoom
+                </p>
                 {/* Real strain KPIs below 3D view */}
                 <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
                   <div className="rounded border border-border bg-background px-1.5 py-1 text-center">

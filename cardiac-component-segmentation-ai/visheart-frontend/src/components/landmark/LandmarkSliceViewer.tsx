@@ -20,6 +20,7 @@ interface LandmarkSliceViewerProps {
   frameImageUrl?: string | null;
   maskOverlays?: LandmarkMaskOverlay[];
   visibleLandmarks: Set<string>;
+  fadingLandmarkIds?: Set<string>;
   showLabels?: boolean;
   editableLandmarks?: boolean;
   highlightedLandmarkId?: string | null;
@@ -43,6 +44,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   frameImageUrl,
   maskOverlays = [],
   visibleLandmarks,
+  fadingLandmarkIds,
   showLabels = true,
   editableLandmarks = false,
   highlightedLandmarkId,
@@ -98,7 +100,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
 
       const sorted = [...LANDMARK_DEFINITIONS].sort((a, b) => a.priority - b.priority);
       for (const def of sorted) {
-        if (!visibleLandmarks.has(def.id)) continue;
+        if (!visibleLandmarks.has(def.id) || fadingLandmarkIds?.has(def.id)) continue;
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
         const [cx, cy] = toCanvas(coord, cw, ch);
@@ -118,7 +120,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         drawFrameLabel(ctx, currentFrameRef.current, totalFramesRef.current);
       }
     },
-    [prediction, visibleLandmarks, showLabels, highlightedLandmarkId, toCanvas, maskOverlays, imageDimensions],
+    [prediction, visibleLandmarks, fadingLandmarkIds, showLabels, highlightedLandmarkId, toCanvas, maskOverlays, imageDimensions],
   );
 
   const canvasToImageCoord = useCallback((event: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
@@ -143,14 +145,14 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
     const pointerY = ((event.clientY - rect.top) / rect.height) * canvas.height;
 
     for (const def of [...LANDMARK_DEFINITIONS].sort((a, b) => b.priority - a.priority)) {
-      if (!visibleLandmarks.has(def.id)) continue;
+      if (!visibleLandmarks.has(def.id) || fadingLandmarkIds?.has(def.id)) continue;
       const coord = getLandmarkCoord(prediction, def.id);
       if (!coord) continue;
       const [cx, cy] = toCanvas(coord, canvas.width, canvas.height);
       if (Math.hypot(pointerX - cx, pointerY - cy) <= GLOW_R + 6) return def.id;
     }
     return null;
-  }, [editableLandmarks, prediction, toCanvas, visibleLandmarks]);
+  }, [editableLandmarks, prediction, toCanvas, visibleLandmarks, fadingLandmarkIds]);
 
   // Redraw whenever draw function changes (prediction/masks/settings) or frame advances
   useEffect(() => {

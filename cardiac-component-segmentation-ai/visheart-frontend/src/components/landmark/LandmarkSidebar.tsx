@@ -20,6 +20,7 @@ import {
 } from "recharts";
 import {
   MapPin,
+  LayoutGrid,
   Activity,
   Brain,
   Play,
@@ -33,6 +34,8 @@ import {
   AlertCircle,
   Download,
   FileText,
+  Trash2,
+  Pencil,
 } from "lucide-react";
 import {
   LANDMARK_DEFINITIONS,
@@ -42,17 +45,15 @@ import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
 import { getDummyStrainData, getStrainColor, type StrainType } from "@/components/landmark/StrainVisualization";
 import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries } from "@/components/landmark/RegionalStrainCharts";
 
-// Two tabs, split by what they operate on: landmark points (per slice) and
-// strain (per cardiac frame). The former Settings tab was removed — its
-// inference summary and Re-run button both already exist in the page header,
-// leaving only Reset Page, which now lives with the landmark controls.
 const NAV_ITEMS = [
-  { key: "landmarks", icon: MapPin,   label: "Landmarks" },
-  { key: "strain",    icon: Activity, label: "Strain"    },
+  { key: "landmarks", icon: MapPin,     label: "Landmarks" },
+  { key: "structure", icon: LayoutGrid, label: "Structure" },
+  { key: "strain",    icon: Activity,   label: "Strain"    },
 ] as const;
 
 type TabKey = typeof NAV_ITEMS[number]["key"];
 const SIDEBAR_LANDMARK_IDS = new Set(["rv_insertion_1", "rv_insertion_2"]);
+const EMPTY_STRING_SET = new Set<string>();
 
 function strainCurveData(type: StrainType, totalFrames: number) {
   const frames = Math.max(totalFrames || 10, 1);
@@ -74,34 +75,23 @@ export interface LandmarkSidebarProps {
   visibleLandmarks: Set<string>;
   replacementFileError: string | null;
   confidentCount?: number;
-  /**
-   * Reports the Strain tab's cardiac-cycle frame so the page's bullseye and 3D
-   * heart can follow strain playback. Distinct from the slice index in `state`.
-   */
   onStrainFrameChange?: (frame: number) => void;
-  /**
-   * Reports the active tab so the page can switch the whole workspace, not just
-   * this sidebar: Landmarks shows the MRI viewer alone, Strain shows the
-   * bullseye and 3D heart.
-   */
-  onTabChange?: (tab: "landmarks" | "strain") => void;
-  /**
-   * Controls the active tab from the page. The page remounts this sidebar when
-   * the workspace changes (the resizable group is keyed on it), which would
-   * otherwise reset internal tab state back to "landmarks" and desync the two
-   * panels. Passing it in keeps them in lockstep.
-   */
-  activeTab?: "landmarks" | "strain";
-  /** The page's single active-model source (URL-backed). Keeps the strain tab's
-   *  model in sync with the bullseye panel. */
+  onTabChange?: (tab: "landmarks" | "structure" | "strain") => void;
+  activeTab?: "landmarks" | "structure" | "strain";
   activeModel?: "unet" | "medsam";
   onModelChange?: (m: "unet" | "medsam") => void;
-  /** Landmark save — surfaced in the Landmarks tab; blinks when there are edits. */
+  structureVentricle?: "LV" | "RV";
+  onStructureVentricleChange?: (v: "LV" | "RV") => void;
+  structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
-
   onToggleLandmark: (id: string) => void;
+  currentSliceKey?: string;
+  pendingDeletions?: Record<string, number>;
+  onDeleteLandmark?: (id: string) => void;
+  onUndoDeleteLandmark?: (id: string) => void;
+  manuallyDeletedSliceKeys?: Set<string>;
   onTogglePlay: () => void;
   onNextFrame: () => void;
   onPrevFrame: () => void;
@@ -131,10 +121,18 @@ export function LandmarkSidebar({
   activeTab: activeTabProp,
   activeModel,
   onModelChange,
+  structureVentricle = "LV",
+  onStructureVentricleChange,
+  structureStats,
   hasUnsavedLandmarkEdits,
   isSavingLandmarks,
   onSaveLandmarks,
   onToggleLandmark,
+  currentSliceKey,
+  pendingDeletions,
+  onDeleteLandmark,
+  onUndoDeleteLandmark,
+  manuallyDeletedSliceKeys,
   onTogglePlay,
   onNextFrame,
   onPrevFrame,
@@ -258,16 +256,7 @@ export function LandmarkSidebar({
         </span>
       </div>
 
-      {/* Playback controls — fixed above the scroll area for Landmarks/Settings.
-          For Strain, it scrolls away with the tab content instead (see below):
-          fixed playback bar + our sticky graph card would otherwise stack two
-          pinned elements and cover the segment labels underneath.
-
-          AXIS: the Landmarks tab steps through SLICES — landmark detection runs
-          per slice, so state.totalFrames (from the model's result) is a slice
-          count despite the name. The Strain tab steps through FRAMES (the
-          cardiac cycle) instead; see the strain PlaybackBar below. */}
-      {hasPredictions && activeTab !== "strain" && (
+      {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
           axisLabel="Slice"
           currentFrame={state.currentFrame}
@@ -285,10 +274,8 @@ export function LandmarkSidebar({
 
       {/* Scrollable tab content */}
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
-        {activeTab === "strain" && hasPredictions && (
+        {(activeTab === "strain" || activeTab === "structure") && hasPredictions && (
           <div className="-mx-4 -mt-4 mb-4">
-            {/* Strain is a property of the cardiac CYCLE, so this steps through
-                frames (e.g. 1/30) — not slices like the Landmarks tab. */}
             <PlaybackBar
               axisLabel="Frame"
               currentFrame={strainFrame}
@@ -314,6 +301,11 @@ export function LandmarkSidebar({
             prediction={currentPrediction}
             visibleLandmarks={visibleLandmarks}
             onToggleLandmark={onToggleLandmark}
+            currentSliceKey={currentSliceKey ?? ""}
+            pendingDeletions={pendingDeletions ?? {}}
+            onDeleteLandmark={onDeleteLandmark ?? (() => {})}
+            onUndoDeleteLandmark={onUndoDeleteLandmark ?? (() => {})}
+            manuallyDeletedSliceKeys={manuallyDeletedSliceKeys ?? EMPTY_STRING_SET}
             hasPredictions={hasPredictions}
             currentFrame={state.currentFrame}
             replacementFile={state.replacementFile}
@@ -335,6 +327,16 @@ export function LandmarkSidebar({
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={onHighlightLandmark}
             onReset={onReset}
+          />
+        )}
+        {activeTab === "structure" && (
+          <StructureTab
+            hasPredictions={hasPredictions}
+            activeModel={activeModel ?? "unet"}
+            onModelChange={onModelChange}
+            structureVentricle={structureVentricle}
+            onStructureVentricleChange={onStructureVentricleChange}
+            structureStats={structureStats}
           />
         )}
         {activeTab === "strain" && (
@@ -493,7 +495,24 @@ function stateSpeedClass(fps: number, currentFps?: number) {
 }
 
 // Landmarks tab
-/** Small coloured dot + tooltip for per-slice prediction quality. */
+function RemovedRowCountdown({ deletedAt }: { deletedAt: number }) {
+  const [remaining, setRemaining] = useState(() => Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
+
+  useEffect(() => {
+    setRemaining(Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
+    const id = setInterval(() => {
+      setRemaining(Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
+    }, 250);
+    return () => clearInterval(id);
+  }, [deletedAt]);
+
+  return (
+    <span className="text-[9px] font-mono tabular-nums text-muted-foreground shrink-0" aria-live="polite">
+      {remaining}s
+    </span>
+  );
+}
+
 function SliceConfidenceDot({
   flag,
   confidence,
@@ -537,6 +556,11 @@ function LandmarksTab({
   prediction,
   visibleLandmarks,
   onToggleLandmark,
+  currentSliceKey,
+  pendingDeletions,
+  onDeleteLandmark,
+  onUndoDeleteLandmark,
+  manuallyDeletedSliceKeys,
   hasPredictions,
   currentFrame,
   replacementFile,
@@ -562,15 +586,17 @@ function LandmarksTab({
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
-  /** Every slice's prediction — powers the per-slice confidence overview. */
   allPredictions?: FramePrediction[];
-  /** Jump the viewer to a slice when its confidence chip is clicked. */
   onSliceSelect?: (slice: number) => void;
   prediction: FramePrediction | null;
   visibleLandmarks: Set<string>;
   onToggleLandmark: (id: string) => void;
+  currentSliceKey: string;
+  pendingDeletions: Record<string, number>;
+  onDeleteLandmark: (id: string) => void;
+  onUndoDeleteLandmark: (id: string) => void;
+  manuallyDeletedSliceKeys: Set<string>;
   hasPredictions: boolean;
-  /** Reset Page — relocated here from the removed Settings tab. */
   onReset?: () => void;
   currentFrame: number;
   replacementFile: File | null;
@@ -686,20 +712,27 @@ function LandmarksTab({
                 : p.confidence === "high" ? "High confidence"
                 : p.confidence === "low" ? "Low confidence"
                 : "No confidence reported";
+              const wasManuallyEdited = manuallyDeletedSliceKeys.has(`${p.frame_id}:${p.slice_id ?? 0}`);
               return (
                 <button
                   key={i}
                   type="button"
                   onClick={() => onSliceSelect?.(i)}
-                  title={`Slice ${i + 1} — ${tip}`}
+                  title={wasManuallyEdited ? `Slice ${i + 1} — ${tip} — landmark manually removed` : `Slice ${i + 1} — ${tip}`}
                   className={cn(
-                    "flex h-5 w-5 items-center justify-center rounded text-[8px] font-medium transition-all",
+                    "relative flex h-5 w-5 items-center justify-center rounded text-[8px] font-medium transition-all",
                     color,
                     isCurrent ? "ring-2 ring-primary ring-offset-1" : "opacity-70 hover:opacity-100",
                     p.confidence === "high" || p.flag === "collapsed_to_mean" ? "text-white" : "text-white",
                   )}
                 >
                   {i + 1}
+                  {wasManuallyEdited && (
+                    <Pencil
+                      className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-background p-[1px] text-foreground shadow"
+                      aria-hidden
+                    />
+                  )}
                 </button>
               );
             })}
@@ -718,6 +751,29 @@ function LandmarksTab({
           const coord = getLandmarkCoord(prediction, def.id);
           const isVisible = visibleLandmarks.has(def.id);
           const hasCoord  = !!coord;
+          const deletedAt = pendingDeletions[`${currentSliceKey}:${def.id}`];
+
+          if (deletedAt !== undefined) {
+            return (
+              <div
+                key={def.id}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-dashed border-border/60 bg-transparent text-left"
+              >
+                <Trash2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="flex-1 text-xs text-muted-foreground">
+                  {def.label} removed from Slice {currentFrame + 1}
+                </span>
+                <RemovedRowCountdown deletedAt={deletedAt} />
+                <button
+                  type="button"
+                  onClick={() => onUndoDeleteLandmark(def.id)}
+                  className="text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                >
+                  Undo
+                </button>
+              </div>
+            );
+          }
 
           return (
             <button
@@ -755,17 +811,6 @@ function LandmarksTab({
               ) : (
                 <span className="text-[10px] text-muted-foreground/40 shrink-0">—</span>
               )}
-              {/* Visibility pill */}
-              <span
-                className={cn(
-                  "text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
-                  isVisible
-                    ? "bg-primary/10 text-primary"
-                    : "bg-muted text-muted-foreground",
-                )}
-              >
-                {isVisible ? "on" : "off"}
-              </span>
               {onHighlightLandmark && (
                 <span
                   className={cn(
@@ -781,6 +826,28 @@ function LandmarksTab({
                   title={highlightedLandmarkId === def.id ? "Remove highlight" : "Highlight this landmark"}
                 >
                   {highlightedLandmarkId === def.id ? "clear" : "focus"}
+                </span>
+              )}
+              {hasCoord && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteLandmark(def.id);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onDeleteLandmark(def.id);
+                    }
+                  }}
+                  className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                  title={`Delete ${def.label} from this slice`}
+                  aria-label={`Delete ${def.label} from this slice`}
+                >
+                  <Trash2 className="h-3 w-3" />
                 </span>
               )}
             </button>
@@ -1011,6 +1078,110 @@ function ModelToggle({
           {m === "unet" ? "UNet ★" : "MedSAM"}
         </button>
       ))}
+    </div>
+  );
+}
+
+function StructureStatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 px-2 py-2 text-center">
+      <p className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="font-mono text-xs font-semibold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function StructureTab({
+  hasPredictions,
+  activeModel,
+  onModelChange,
+  structureVentricle,
+  onStructureVentricleChange,
+  structureStats,
+}: {
+  hasPredictions: boolean;
+  activeModel: "unet" | "medsam";
+  onModelChange?: (m: "unet" | "medsam") => void;
+  structureVentricle: "LV" | "RV";
+  onStructureVentricleChange?: (v: "LV" | "RV") => void;
+  structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
+}) {
+  if (!hasPredictions) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
+        <LayoutGrid className="h-8 w-8 opacity-25" />
+        <p className="text-sm leading-snug">
+          Landmark detection starts automatically; the wall-thickness bullseye appears when results are ready.
+        </p>
+      </div>
+    );
+  }
+
+  const isLv = structureVentricle === "LV";
+  const unit = isLv ? "mm" : "mm²";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium text-foreground">Structure</h3>
+        <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+          {(["unet", "medsam"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onModelChange?.(m)}
+              className={cn(
+                "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+                activeModel === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {m === "unet" ? "UNet ★" : "MedSAM"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+        {(["LV", "RV"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onStructureVentricleChange?.(v)}
+            className={cn(
+              "rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
+              structureVentricle === v
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
+
+      {!isLv ? (
+        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
+          <LayoutGrid className="mx-auto h-7 w-7 opacity-25" />
+          <p className="mt-2 text-xs text-muted-foreground">
+            RV structural view coming soon — cavity-area data isn&apos;t computed by the backend yet.
+          </p>
+        </div>
+      ) : structureStats && structureStats.mean != null ? (
+        <>
+          <div className="grid grid-cols-3 gap-2">
+            <StructureStatTile label="Min" value={structureStats.min != null ? `${structureStats.min.toFixed(1)} ${unit}` : "—"} />
+            <StructureStatTile label="Mean" value={`${structureStats.mean.toFixed(1)} ${unit}`} />
+            <StructureStatTile label="Max" value={structureStats.max != null ? `${structureStats.max.toFixed(1)} ${unit}` : "—"} />
+          </div>
+          <p className="text-[9px] text-muted-foreground leading-relaxed">
+            AHA 17-segment wall thickness — a single computed snapshot, not a per-frame cycle metric.
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No wall-thickness bullseye computed yet for {activeModel === "unet" ? "UNet" : "MedSAM"}.
+        </p>
+      )}
     </div>
   );
 }
@@ -1338,17 +1509,17 @@ function StrainTab({
         />
       ) : (
       <>
-      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+      <div className="flex items-center gap-4 border-b border-border">
         {(["GRS", "GCS"] as const).map((type) => (
           <button
             key={type}
             type="button"
             onClick={() => setSelectedStrainType(type)}
             className={cn(
-              "rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
+              "-mb-px border-b-2 px-0.5 pb-1.5 text-[11px] font-medium transition-colors",
               selectedStrainType === type
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
             {type}
