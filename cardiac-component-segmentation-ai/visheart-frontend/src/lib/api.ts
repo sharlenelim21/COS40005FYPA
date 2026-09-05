@@ -520,6 +520,11 @@ export const reconstructionApi = {
       // Backend strictly scopes the editable-mask lookup to this model;
       // omit to preserve legacy (model-agnostic) behaviour.
       segmentationModel?: 'medsam' | 'unet';
+      // Which chamber to reconstruct. 'lv' (default) is the myocardial wall and is the clinical
+      // product. 'rv' is the RV cavity and is RESEARCH/REFERENCE ONLY — it needs an RV checkpoint
+      // configured on the GPU service, and returns 503 when there is none rather than quietly
+      // meshing the request with the LV model.
+      chamber?: 'lv' | 'rv';
       parameters?: {
         num_iterations?: number;
         resolution?: number;

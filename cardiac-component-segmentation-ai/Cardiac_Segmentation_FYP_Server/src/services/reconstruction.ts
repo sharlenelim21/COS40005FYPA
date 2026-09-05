@@ -1,7 +1,7 @@
 // File: src/services/reconstruction.ts
 // Description: Service layer for initiating 4D reconstruction process, including GPU service communication.
 
-import { IUserSafe, ProjectCrudResult, IProjectSegmentationMask, SegmentationModel } from "../types/database_types";
+import { IUserSafe, ProjectCrudResult, IProjectSegmentationMask, SegmentationModel, ReconstructionChamber } from "../types/database_types";
 import logger from "./logger";
 import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask } from "./database";
 import { v4 as uuidv4 } from 'uuid';
@@ -43,6 +43,13 @@ const inferMaskModel = (
     return null;
 };
 
+/**
+ * A stored chamber value. Anything that is not an explicit "rv" is LV -- including absent, which
+ * is what every reconstruction and job written before the chamber field has.
+ */
+const normalizeStoredChamber = (value: unknown): "lv" | "rv" =>
+    (value ?? "").toString().toLowerCase() === "rv" ? "rv" : "lv";
+
 const normalizeStoredModel = (value: unknown): "medsam" | "unet" | null => {
     const normalized = (value ?? "").toString().toLowerCase();
     if (normalized === "medsam" || normalized === "unet") {
@@ -70,6 +77,7 @@ const sendReconstructionRequestToCloudGpu = async (
         process_all_frames?: boolean;
         debug_save?: boolean;    
         debug_dir?: string;
+        chamber?: string;
     },
     gpuAuthToken: string
 ): Promise<{ success: boolean; jobId?: string; error?: string }> => {
@@ -156,7 +164,8 @@ export const startReconstruction = async (
     parameters?: any,
     ed_frame?: number,
     export_format?: string,
-    segmentationModel?: string
+    segmentationModel?: string,
+    chamber?: string
 ): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number }> => {
     // Normalise the requested segmentation model. Allowed values:
     //   "medsam" — only MedSAM-tagged editable masks
@@ -172,8 +181,13 @@ export const startReconstruction = async (
                 : null)
             : null;
 
+    // Which chamber to reconstruct. Anything other than an explicit "rv" is LV, so an unknown or
+    // absent value reproduces the pre-chamber behaviour exactly rather than failing the request.
+    const requestedChamber: "lv" | "rv" =
+        typeof chamber === "string" && chamber.toLowerCase() === "rv" ? "rv" : "lv";
+
     logger.info(
-        `${serviceLocation}: Starting 4D reconstruction for project ${projectId} by user ${user?.username} with export_format: ${export_format || 'default'}, requestedModel: ${requestedModel ?? "<none — legacy>"}`
+        `${serviceLocation}: Starting 4D reconstruction for project ${projectId} by user ${user?.username} with export_format: ${export_format || 'default'}, requestedModel: ${requestedModel ?? "<none — legacy>"}, chamber: ${requestedChamber}`
     );
     
     // Get current GPU authentication token
@@ -215,20 +229,32 @@ export const startReconstruction = async (
         if (requestedModel) {
             const existingReconstructions = await readProjectReconstruction(projectId);
             if (existingReconstructions.success && existingReconstructions.projectreconstructions) {
+                // Occupancy is per (model, chamber). LV and RV are separate reconstructions of the
+                // same scan, so an existing RV must not block building the clinical LV result --
+                // and vice versa. Records with no chamber predate the field and are LV.
                 const matchingReconstruction = existingReconstructions.projectreconstructions.find(
                     (reconstruction) =>
-                        normalizeStoredModel(reconstruction.segmentationModel) === requestedModel,
+                        normalizeStoredModel(reconstruction.segmentationModel) === requestedModel &&
+                        normalizeStoredChamber((reconstruction as { chamber?: string }).chamber) === requestedChamber,
                 );
 
                 if (matchingReconstruction) {
                     const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
+                    const chamberLabel = requestedChamber === "rv" ? "An RV" : "A 4D";
                     return {
                         success: false,
                         statusCode: 409,
-                        message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
+                        message: `${chamberLabel} reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
                     };
                 }
             }
+
+            // Same per-(model, chamber) rule for jobs still in flight. Jobs created before the
+            // chamber field have none, so "chamber missing" is matched as LV rather than as
+            // "matches anything" -- otherwise an old stuck LV job would block RV forever.
+            const chamberJobFilter = requestedChamber === "rv"
+                ? { chamber: ReconstructionChamber.RV }
+                : { chamber: { $in: [ReconstructionChamber.LV, null] } };
 
             const blockingJob = await jobModel.findOne({
                 projectid: projectId,
@@ -237,14 +263,16 @@ export const startReconstruction = async (
                     : SegmentationModel.UNET,
                 status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
                 model_used: "4d_reconstruction",
+                ...chamberJobFilter,
             }).lean();
 
             if (blockingJob) {
                 const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
+                const chamberLabel = requestedChamber === "rv" ? "An RV" : "A 4D";
                 return {
                     success: false,
                     statusCode: 409,
-                    message: `A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
+                    message: `${chamberLabel} reconstruction for ${modelLabel} is already running. Wait for it to finish, or delete it.`,
                 };
             }
         }
@@ -379,7 +407,10 @@ export const startReconstruction = async (
             process_all_frames: parameters?.process_all_frames ?? true,  // Enable 4D processing by default
             export_format: meshFormat,  // NEW: Send mesh format to GPU (obj or glb)
             debug_save: parameters?.debug_save || parameters?.debug || false,  // Support both debug and debug_save
-            debug_dir: parameters?.debug_dir || "/tmp/4d_reconstruction_debug"
+            debug_dir: parameters?.debug_dir || "/tmp/4d_reconstruction_debug",
+            // GPU picks the RV checkpoint and contour label from this. It returns 503 when RV is
+            // requested but no RV checkpoint is configured, rather than silently meshing with LV.
+            chamber: requestedChamber
         };
 
         // Log reconstruction parameters for monitoring with FULL payload details
@@ -390,6 +421,7 @@ export const startReconstruction = async (
             process_all_frames: reconstructionPayload.process_all_frames,
             num_iterations: reconstructionPayload.num_iterations,
             resolution: reconstructionPayload.resolution,
+            chamber: reconstructionPayload.chamber,
             s3Key: segmentationResult.s3Key,
             fileSizeBytes: segmentationResult.fileSizeBytes,
             callbackUrl: callback_url,
@@ -418,7 +450,9 @@ export const startReconstruction = async (
                     ? SegmentationModel.MEDSAM
                     : persistedSegmentationModel === "unet"
                     ? SegmentationModel.UNET
-                    : undefined
+                    : undefined,
+                // So the in-flight guard above can tell an RV job from an LV one.
+                chamber: requestedChamber === "rv" ? ReconstructionChamber.RV : ReconstructionChamber.LV
             };
 
             const jobCreationResult = await createJob(jobData as IJob);

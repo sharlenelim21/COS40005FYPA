@@ -18,6 +18,7 @@ import {
   JobStatus,
   IProjectReconstruction,
   MeshFormat,
+  ReconstructionChamber,
 } from "../types/database_types";
 import LogError from "../utils/error_logger";
 
@@ -747,9 +748,24 @@ async function createReconstructionRecord(
       edFrameIndex = Math.max(0, totalFrames - 1);
     }
 
-    // Generate reconstruction metadata
-    const reconstructionName = `4D Reconstruction - Job ${gpuJobId.substring(0, 8)}`;
-    const reconstructionDescription = `4D cardiac reconstruction: ${processedFiles.length} frames, ED frame ${edFrameIndex + 1}`;
+    // Which chamber the GPU actually reconstructed. It echoes the request back, so this is the
+    // authoritative answer rather than something inferred here. Any value that is not an explicit
+    // "rv" is LV: that is what every GPU build before the chamber field returned.
+    const reconstructionChamber: ReconstructionChamber =
+      String(gpuResult?.chamber ?? "").toLowerCase() === "rv"
+        ? ReconstructionChamber.RV
+        : ReconstructionChamber.LV;
+    const isRvChamber = reconstructionChamber === ReconstructionChamber.RV;
+    logger.info(`${serviceLocation}: Reconstruction chamber for job ${gpuJobId}: ${reconstructionChamber}`);
+
+    // Generate reconstruction metadata. RV is named and described as research-only so the label
+    // survives anywhere the record is listed, not just in the viewer that knows about `chamber`.
+    const reconstructionName = isRvChamber
+      ? `RV (Research Only) - Job ${gpuJobId.substring(0, 8)}`
+      : `4D Reconstruction - Job ${gpuJobId.substring(0, 8)}`;
+    const reconstructionDescription = isRvChamber
+      ? `RV cavity reconstruction (RESEARCH/REFERENCE ONLY - not for clinical diagnosis): ${processedFiles.length} frames, ED frame ${edFrameIndex + 1}`
+      : `4D cardiac reconstruction: ${processedFiles.length} frames, ED frame ${edFrameIndex + 1}`;
     const finalFilename = path.posix.basename(reconstructionObjectKey);
 
     // Detect mesh format from uploaded files
@@ -776,6 +792,7 @@ async function createReconstructionRecord(
       basepath: basepath,
       reconstructionfolderpath: reconstructionFileS3Url,
       segmentationModel: normalizedSegmentationModel,
+      chamber: reconstructionChamber,
       reconstructedMesh: {
         path: reconstructionFileS3Url,
         filename: finalFilename,

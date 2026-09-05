@@ -3,7 +3,7 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import Link from "next/link";
-import { useProject } from "@/context/ProjectContext";
+import { useProject, normalizeReconstructionChamber } from "@/context/ProjectContext";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // API
@@ -43,7 +43,8 @@ import {
   Crosshair,
   ChevronRight,
   Trash2,
-  Lock
+  Lock,
+  AlertTriangle
 } from "lucide-react";
 
 // Custom components
@@ -86,6 +87,15 @@ function ProjectPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const highlight = searchParams.get("highlight"); // "reconstruction" | "landmark" | "segmentation" | null
+  // ?build=lv|rv — the viewer's "Build LV/RV" buttons land here. The viewer deliberately does not
+  // start the job itself: this page owns mask availability, GPU availability and the duplicate
+  // check, and starting a job without those would fail confusingly.
+  const buildChamberParam = searchParams.get("build");
+  const requestedBuildChamber =
+    buildChamberParam === "lv" || buildChamberParam === "rv" ? buildChamberParam : null;
+  const buildModelParam = searchParams.get("model");
+  const requestedBuildModel =
+    buildModelParam === "medsam" || buildModelParam === "unet" ? buildModelParam : null;
   const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache } = useProject();
   // Glow "Start AI Segmentation" when there are no masks and no active jobs
   const glowStartSegmentation = loading === "done" && !hasMasks && (jobs ?? []).filter(j => j.status === ProjectTypes.JobStatus.PENDING || j.status === ProjectTypes.JobStatus.IN_PROGRESS).length === 0;
@@ -107,6 +117,19 @@ function ProjectPageInner() {
   useEffect(() => {
     if (highlight === "segmentation") setGlowEditMasks(true);
   }, [highlight]);
+
+  // Open the reconstruction dialog preset to the chamber the viewer asked for. Guarded by a ref so
+  // closing the dialog does not immediately reopen it while the param is still in the URL.
+  const handledBuildParamRef = useRef(false);
+  useEffect(() => {
+    if (loading !== "done") return;
+    if (!requestedBuildChamber) return;
+    if (handledBuildParamRef.current) return;
+    handledBuildParamRef.current = true;
+    if (requestedBuildModel) setSelectedModelForCreation(requestedBuildModel);
+    setPresetChamber(requestedBuildChamber);
+    setShowReconstructionDialog(true);
+  }, [loading, requestedBuildChamber, requestedBuildModel]);
   const { processingUnit } = useGpuStatus();
   const { user } = useAuth();
   const isGuest = user?.role === "guest";
@@ -148,6 +171,8 @@ function ProjectPageInner() {
 
   // Per-model reconstruction state
   const [selectedModelForCreation, setSelectedModelForCreation] = useState<"medsam" | "unet" | null>(null);
+  // Which chamber the dialog should open on. Null = its own default (LV).
+  const [presetChamber, setPresetChamber] = useState<"lv" | "rv" | null>(null);
   const [selectedReconstructionForDeletion, setSelectedReconstructionForDeletion] = useState<any | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
   const [deleteModelDialogOpen, setDeleteModelDialogOpen] = useState(false);
 
@@ -364,13 +389,23 @@ function ProjectPageInner() {
     prevHadActiveReconstructionJobsRef.current = hasActiveReconstructionJobs;
   }, [hasActiveReconstructionJobs, refreshReconstructions]);
 
-  const goToReconstructionViewer = useCallback((model?: "medsam" | "unet" | "unknown", reconstructionId?: string) => {
+  const goToReconstructionViewer = useCallback((
+    model?: "medsam" | "unet" | "unknown",
+    reconstructionId?: string,
+    // The chamber a job was just started for. Without it the viewer cannot tell "nothing is
+    // coming" from "RV is still building", and stops polling as soon as any reconstruction
+    // exists -- which for a second chamber is always true.
+    pendingChamber?: "lv" | "rv",
+  ) => {
     const params = new URLSearchParams();
     if (model) {
       params.set("model", model);
     }
     if (reconstructionId) {
       params.set("reconstructionId", reconstructionId);
+    }
+    if (pendingChamber) {
+      params.set("pending", pendingChamber);
     }
     const query = params.toString();
     router.push(`/project/${projectId}/standalone-4d-viewer${query ? `?${query}` : ""}`);
@@ -405,9 +440,14 @@ function ProjectPageInner() {
     });
   }, [reconstructionMetadata, reconstructionResults, reconstructionsByModel]);
 
+  // These two guards are LV-only on purpose. LV and RV are separate reconstructions of the same
+  // scan, so an RV record must not make it look like the model's LV slot is taken (which would
+  // block creating the actual clinical reconstruction), and `existing4DByModel` must not hand the
+  // "view existing" button an RV id. RV occupancy is tracked separately below.
   const existing4DModels = useMemo(() => {
     const models = new Set<"medsam" | "unet">();
     for (const reconstruction of reconstructionRows) {
+      if (normalizeReconstructionChamber(reconstruction?.chamber) === "rv") continue;
       const normalized = ((reconstruction?.segmentationModel || "") + "").toLowerCase();
       if (normalized === "medsam" || normalized === "unet") {
         models.add(normalized);
@@ -419,12 +459,57 @@ function ProjectPageInner() {
   const existing4DByModel = useMemo(() => {
     const map: Partial<Record<"medsam" | "unet", string>> = {};
     for (const reconstruction of reconstructionRows) {
+      if (normalizeReconstructionChamber(reconstruction?.chamber) === "rv") continue;
       const normalized = ((reconstruction?.segmentationModel || "") + "").toLowerCase();
       if ((normalized === "medsam" || normalized === "unet") && reconstruction?.reconstructionId) {
         map[normalized] = reconstruction.reconstructionId;
       }
     }
     return map;
+  }, [reconstructionRows]);
+
+  // One card per built reconstruction, except that an RV record is folded into its LV sibling's
+  // card rather than shown as a second card: they are two chambers of the same scan, and "View 4D"
+  // opens both in one viewer. An RV record with no LV sibling still gets its own card, clearly
+  // labelled, otherwise it would exist but be invisible.
+  const reconstructionCards = useMemo(() => {
+    const lvRows = reconstructionRows.filter(
+      (recon) => normalizeReconstructionChamber(recon?.chamber) !== "rv",
+    );
+    const rvRows = reconstructionRows.filter(
+      (recon) => normalizeReconstructionChamber(recon?.chamber) === "rv",
+    );
+    const modelOf = (recon: any) => (recon?.segmentationModel || "unknown").toString().toLowerCase(); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    const claimed = new Set<string>();
+    const cards = lvRows.map((recon) => {
+      const companion = rvRows.find(
+        (rv) => modelOf(rv) === modelOf(recon) && !claimed.has(rv.reconstructionId),
+      );
+      if (companion) claimed.add(companion.reconstructionId);
+      return { recon, rvCompanion: companion ?? null, isRvOnly: false };
+    });
+
+    for (const rv of rvRows) {
+      if (!claimed.has(rv.reconstructionId)) {
+        cards.push({ recon: rv, rvCompanion: null, isRvOnly: true });
+      }
+    }
+    return cards;
+  }, [reconstructionRows]);
+
+  // Which models already have an RV reconstruction. Same one-per-model rule as LV, tracked in its
+  // own set so the two chambers never block each other.
+  const existingRvModels = useMemo(() => {
+    const models = new Set<"medsam" | "unet">();
+    for (const reconstruction of reconstructionRows) {
+      if (normalizeReconstructionChamber(reconstruction?.chamber) !== "rv") continue;
+      const normalized = ((reconstruction?.segmentationModel || "") + "").toLowerCase();
+      if (normalized === "medsam" || normalized === "unet") {
+        models.add(normalized);
+      }
+    }
+    return models;
   }, [reconstructionRows]);
 
   // Missing projectId handling
@@ -608,9 +693,12 @@ function ProjectPageInner() {
   const handleStartReconstruction = async (config: ReconstructionConfig) => {
     console.log("[Project] Starting 4D reconstruction with config:", config);
 
-    if (existing4DModels.has(config.segmentationModel)) {
+    const requestedChamber = config.chamber ?? "lv";
+    const occupied = requestedChamber === "rv" ? existingRvModels : existing4DModels;
+    if (occupied.has(config.segmentationModel)) {
       const modelLabel = config.segmentationModel === "medsam" ? "MedSAM" : "UNet";
-      setReconstructionError(`A 4D reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`);
+      const chamberLabel = requestedChamber === "rv" ? "RV" : "4D";
+      setReconstructionError(`A ${chamberLabel} reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`);
       return;
     }
 
@@ -621,12 +709,17 @@ function ProjectPageInner() {
 
     try {
       await reconstructionApi.startReconstruction(projectId, {
-        reconstructionName: `4D Cardiac Reconstruction (${config.segmentationModel.toUpperCase()}) - ${projectData.name}`,
-        reconstructionDescription: `Generated via configuration wizard from ${config.segmentationModel.toUpperCase()} segmentation`,
+        reconstructionName: requestedChamber === "rv"
+          ? `RV Reconstruction — RESEARCH ONLY (${config.segmentationModel.toUpperCase()}) - ${projectData.name}`
+          : `4D Cardiac Reconstruction (${config.segmentationModel.toUpperCase()}) - ${projectData.name}`,
+        reconstructionDescription: requestedChamber === "rv"
+          ? `RV cavity, research/reference only — not for clinical diagnosis. Generated from ${config.segmentationModel.toUpperCase()} segmentation`
+          : `Generated via configuration wizard from ${config.segmentationModel.toUpperCase()} segmentation`,
         ed_frame: config.edFrame, // Pass 1-based ED frame from user selection
         export_format: config.exportFormat, // Pass user's format choice to backend
         // Tell the backend exactly which model's editable mask to consume.
         segmentationModel: config.segmentationModel,
+        chamber: requestedChamber,
         parameters: {
           num_iterations: config.numIterations,
           resolution: config.resolution,
@@ -638,7 +731,7 @@ function ProjectPageInner() {
       
       // Close dialog
       setShowReconstructionDialog(false);
-      goToReconstructionViewer(config.segmentationModel);
+      goToReconstructionViewer(config.segmentationModel, undefined, requestedChamber);
       
       // Poll for the job to appear - retry up to 5 times with 1 second delay
       console.log("[Project] 🔄 Polling for reconstruction job to appear...");
@@ -1480,11 +1573,11 @@ function ProjectPageInner() {
                       <Box className="h-4 w-4" />
                       4D Reconstruction
                     </CardTitle>
-                    <Badge variant="default">{reconstructionRows.length} Available</Badge>
+                    <Badge variant="default">{reconstructionCards.length} Available</Badge>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {reconstructionRows.map((recon) => {
+                  {reconstructionCards.map(({ recon, rvCompanion, isRvOnly }) => {
                     const model = (recon.segmentationModel || "unknown").toString().toLowerCase();
                     const viewModel = model === "medsam" || model === "unet" ? model : "unknown";
                     const edFrame = recon.metadata?.edFrameIndex ?? recon.ed_frame ?? 1;
@@ -1493,13 +1586,18 @@ function ProjectPageInner() {
                     const processingTime = recon.metadata?.reconstructionTime;
 
                     return (
-                      <div key={recon.reconstructionId} className="rounded-lg border p-4 space-y-3">
+                      <div key={recon.reconstructionId} className={`rounded-lg border p-4 space-y-3 ${isRvOnly ? "border-amber-500/40" : ""}`}>
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                           <div className="min-w-0 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="font-semibold truncate">{recon.name || "4D Reconstruction"}</p>
                               <Badge variant="outline">{formatReconstructionModel(model)}</Badge>
                               <Badge variant="secondary">{recon.status || "Ready"}</Badge>
+                              {isRvOnly && (
+                                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
+                                  RV · research only
+                                </Badge>
+                              )}
                             </div>
                             <div className="grid gap-3 text-sm sm:grid-cols-2">
                               <div>
@@ -1537,6 +1635,22 @@ function ProjectPageInner() {
                                 </div>
                               )}
                             </div>
+
+                            {/* An RV reconstruction exists for this model, so "View 4D" opens both
+                                chambers. Said here rather than as a second card, because it is the
+                                same scan — but it must be said, since the RV mesh is research-only
+                                and the user has not opened the viewer yet. */}
+                            {rvCompanion && (
+                              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
+                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                                <p className="text-xs leading-relaxed text-muted-foreground">
+                                  <span className="font-medium text-foreground">Includes RV.</span>{" "}
+                                  Opening 4D shows the RV cavity alongside the LV, and either can be
+                                  hidden there. RV is for reference/research only — not reliable for
+                                  clinical diagnosis.
+                                </p>
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -1703,7 +1817,9 @@ function ProjectPageInner() {
         totalFrames={projectData?.dimensions?.frames || 1}
         availableModels={availableReconstructionModels}
         blockedModels={Array.from(existing4DModels)}
+        blockedRvModels={Array.from(existingRvModels)}
         defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
+        defaultChamber={presetChamber ?? undefined}
         gpuAvailable={processingUnit.gpuAvailable}
         existingReconstructionsByModel={existing4DByModel}
         onViewReconstruction={goToReconstructionViewer}

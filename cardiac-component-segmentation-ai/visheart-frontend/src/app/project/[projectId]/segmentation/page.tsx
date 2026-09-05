@@ -15,7 +15,7 @@ import { SegmentationSidebar } from "@/components/segmentation/segmentation-side
 import type { AnatomicalLabel, HistoryEntry, DrawingTool } from "@/types/segmentation";
 import { generateMaskKey } from "@/types/segmentation";
 import type * as ProjectTypes from "@/types/project";
-import { useProject } from "@/context/ProjectContext";
+import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
 import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
 import { GuidancePanel } from "@/components/GuidancePanel";
 import { Box, Crosshair } from "lucide-react";
@@ -73,6 +73,7 @@ function SegmentationResultsPageInner() {
     reconstructionCacheReady,
     getReconstructionGLB,
     getReconstructionForModel,
+    reconstructionResults,
     setSelectedSegmentationModel,
   } = useProject();
 
@@ -508,6 +509,58 @@ function SegmentationResultsPageInner() {
 
     loadModel();
   }, [currentFrame, reconstructionMetadataForModel, selectedModel, getReconstructionGLB]);
+
+  // RV counterpart of the reconstruction above.
+  //
+  // Resolved from `reconstructionResults` rather than from `getReconstructionForModel`, because
+  // `reconstructionsByModel` deliberately excludes RV records so a research-only mesh can never
+  // become the project default. RV therefore has to be asked for explicitly, here and in the
+  // standalone viewer.
+  const rvReconstructionForModel = useMemo(() => {
+    if (!Array.isArray(reconstructionResults)) return null;
+    const wanted = normalizeReconstructionModel(selectedModel);
+    if (wanted === "unknown") return null;
+    return (
+      reconstructionResults.find(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (recon: any) =>
+          normalizeReconstructionChamber(recon?.chamber) === "rv" &&
+          normalizeReconstructionModel(recon?.segmentationModel) === wanted,
+      ) || null
+    );
+  }, [reconstructionResults, selectedModel]);
+
+  const [showRvInPanel, setShowRvInPanel] = useState(true);
+  const [rvPanelModelUrl, setRvPanelModelUrl] = useState<string | null>(null);
+
+  // Separate effect from the LV load on purpose: with the RV toggle off, the LV path does no extra
+  // work at all — no fetch, no cache extraction for the RV tar.
+  useEffect(() => {
+    if (!showRvInPanel || !rvReconstructionForModel?.reconstructionId) {
+      setRvPanelModelUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadRv = async () => {
+      try {
+        const url = await getReconstructionGLB(
+          currentFrame,
+          undefined,
+          rvReconstructionForModel.reconstructionId,
+        );
+        if (!cancelled) setRvPanelModelUrl(url);
+      } catch (error) {
+        console.error("[Segmentation 3D] Error loading RV model:", error);
+        if (!cancelled) setRvPanelModelUrl(null);
+      }
+    };
+
+    loadRv();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFrame, rvReconstructionForModel, showRvInPanel, getReconstructionGLB]);
 
   const handleReset = useCallback(() => {
     setZoomLevel(1);
@@ -1238,18 +1291,45 @@ function SegmentationResultsPageInner() {
           <ResizablePanel defaultSize={70} minSize={20}>
             <ResizablePanelGroup direction="horizontal">
               {/* 3D Viewer (Left) — only shown when a 4D reconstruction exists for the selected model */}
-              {reconstructionMetadataForModel && (
+              {(reconstructionMetadataForModel || rvReconstructionForModel) && (
                 <>
                   <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
                     <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
-                      <div className="flex items-center justify-between mb-2 flex-shrink-0">
-                        <h3 className="text-sm font-semibold">3D Reconstruction of Left Ventricle Myocardium</h3>
+                      <div className="flex items-center justify-between mb-2 flex-shrink-0 gap-2">
+                        <h3 className="text-sm font-semibold">
+                          {reconstructionMetadataForModel
+                            ? rvReconstructionForModel
+                              ? "3D Reconstruction — LV Myocardium + RV Cavity"
+                              : "3D Reconstruction of Left Ventricle Myocardium"
+                            : "3D Reconstruction of Right Ventricle Cavity"}
+                        </h3>
+                        {rvReconstructionForModel && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs flex-shrink-0"
+                            onClick={() => setShowRvInPanel((prev) => !prev)}
+                          >
+                            {showRvInPanel ? "Hide RV" : "Show RV"}
+                          </Button>
+                        )}
                       </div>
+
+                      {rvReconstructionForModel && showRvInPanel && (
+                        <p className="mb-2 flex-shrink-0 text-[11px] leading-snug text-amber-600 dark:text-amber-500">
+                          RV reconstruction is for reference/research use only; not reliable for
+                          actual clinical diagnosis.
+                        </p>
+                      )}
 
                       <div className="flex-1 min-h-0 max-h-full">
                         <ReconstructionGLBViewer
                           modelUrl={reconstructionModelUrl}
+                          secondaryModelUrl={rvPanelModelUrl}
                           frame={currentFrame + 1}
+                          primaryLabel="LV myocardium"
+                          secondaryLabel="RV cavity"
+                          secondaryIsResearchOnly
                           className="w-full h-full"
                         />
                       </div>

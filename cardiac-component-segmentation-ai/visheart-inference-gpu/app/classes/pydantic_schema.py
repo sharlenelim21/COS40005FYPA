@@ -180,6 +180,36 @@ class FourDReconstructionJobRequest(BaseModel):
         default=False,
         description="Enable detailed optimization logging (latent code norms, regularization losses per epoch)"
     )
+    chamber: Optional[Literal["lv", "rv"]] = Field(
+        default="lv",
+        description=(
+            "Which chamber to reconstruct. 'lv' meshes the myocardial wall (label 2) and is the "
+            "default, so existing callers are unaffected. 'rv' meshes the RV cavity (label 1) and "
+            "uses the RV checkpoint. The segmentation has no RV wall label, so RV is reconstructed "
+            "as a solid cavity rather than a shell."
+        )
+    )
+    seed: Optional[int] = Field(
+        default=None,
+        description=(
+            "Random seed for latent code initialisation. Latent fitting is non-convex and starts "
+            "from a random draw, so without a seed the same scan reconstructs differently on every "
+            "request. Set a seed to make a job reproducible; the seed actually used is returned in "
+            "the result under 'fitting'. Leave unset for the previous non-deterministic behaviour."
+        ),
+        ge=0, le=2**31 - 1
+    )
+    num_candidates: Optional[int] = Field(
+        default=1,
+        description=(
+            "How many seeds to fit before choosing one (best-of-N). Each candidate is decoded and "
+            "scored by how closely its surface agrees with the input contour, and the best is "
+            "returned. 3 is the measured sweet spot: it beats a single fit by ~5% and a single "
+            "1000-iteration fit outright, at roughly 3x the fitting cost. 1 (default) fits once, "
+            "exactly as before."
+        ),
+        ge=1, le=10
+    )
     process_all_frames: Optional[bool] = Field(
         default=True,
         description="If True, process all cardiac phases (4D). If False, ED frame only (3D-like)"
@@ -254,6 +284,14 @@ class FourDReconstructionResult(BaseModel):
     resolution: int = Field(..., description="Marching cubes resolution used")
     status: Literal["reconstruction_completed"] = "reconstruction_completed"
     message: str = Field(..., description="Status message")
+    chamber: Literal["lv", "rv"] = Field(
+        default="lv",
+        description=(
+            "Which chamber this result reconstructs. Echoed back from the request so the "
+            "caller can store and label the mesh per chamber without having to remember what "
+            "it asked for. Defaults to 'lv', which is what every pre-chamber caller got."
+        )
+    )
     
     # 4D-specific metadata
     is_4d_input: bool = Field(..., description="Whether input was 4D NiFTI")

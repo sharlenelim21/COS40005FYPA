@@ -6,6 +6,17 @@ import os
 import SimpleITK as sitk
 import cv2
 
+# Segmentation label convention used throughout this module and by the upstream models.
+# There is no RV myocardium label anywhere in the pipeline -- the segmentation produces three
+# classes only -- so RV reconstruction meshes the RV cavity as a solid, while LV meshes the
+# myocardial wall as a shell. Plan task 4.1.
+RV_LABEL = 1
+LVM_LABEL = 2
+LV_CAVITY_LABEL = 3
+# Chamber name -> the label its reconstruction is built from.
+CHAMBER_LABELS = {"lv": LVM_LABEL, "rv": RV_LABEL}
+
+
 # Fixes the problem with extreme cases of segmentation masks (especially those simply drawn)
 def safe_contour_to_mask(contour_points, mask_shape):
     """
@@ -105,22 +116,32 @@ def extract_spatial_metadata(sitk_image):
     
     return origin, spacing, direction
 
-def get_contour(input_mask_path):
+def get_contour(input_mask_path, target_label=LVM_LABEL):
     """
     segmentation label: 1: RV, 2: LVM, 3: LV
+
+    Args:
+        input_mask_path: path to the segmentation mask
+        target_label: which structure to extract a contour for. Defaults to LVM (2), which is
+            what every existing caller expects, so passing nothing preserves the LV pipeline
+            exactly. Pass RV_LABEL (1) for the right ventricle.
+
+            The two chambers are independently extractable on purpose -- biventricular
+            reconstruction needs both, so this must never become "RV replaces LV".
+
     return: 3D point cloud contour obtained by segmentation
     """
     pred_name = os.path.join(input_mask_path)
     pred_in = sitk.ReadImage(pred_name)
     pred_npy = sitk.GetArrayFromImage(pred_in)
-    
+
     # Normalize dimensions to handle both 3D and 4D inputs
     pred_npy = normalize_nifti_dimensions(pred_npy)
 
     p_w_list = []
     for j in range(pred_npy.shape[0]):
         mask = np.zeros([pred_npy.shape[1], pred_npy.shape[2]])
-        list = np.where(pred_npy[j, :, :].astype(np.int32) == 2)  # LVM        
+        list = np.where(pred_npy[j, :, :].astype(np.int32) == target_label)
         mask[list] = 255
 
         mask = mask.astype(np.uint8)
@@ -180,24 +201,27 @@ def get_contour(input_mask_path):
     p_w_list = np.array(p_w_list)
     return(p_w_list)
 
-def get_contour_safe(input_mask_path):
+def get_contour_safe(input_mask_path, target_label=LVM_LABEL):
     """
     segmentation label: 1: RV, 2: LVM, 3: LV
     return: 3D point cloud contour obtained by segmentation
     Safer version of get_contour that does the following: Avoids 'list' variable; handles empty/single-point/ragged contours robustly; enforces (N,2) coord array; preserves cols-rows ordering for result[rows, cols]; optional debug print for no contours.
+
+    `target_label` defaults to LVM (2) so existing callers are unaffected; pass RV_LABEL (1)
+    for the right ventricle. Plan task 4.1.
     """
     pred_in = sitk.ReadImage(input_mask_path)
     pred_npy = sitk.GetArrayFromImage(pred_in)
-    
+
     # Normalize dimensions to handle both 3D and 4D inputs
     pred_npy = normalize_nifti_dimensions(pred_npy)
 
     p_w_list = []
     for j in range(pred_npy.shape[0]):
         mask = np.zeros([pred_npy.shape[1], pred_npy.shape[2]], dtype=np.uint8)
-        coords = np.where(pred_npy[j, :, :].astype(np.int32) == 2)  # LVM
+        coords = np.where(pred_npy[j, :, :].astype(np.int32) == target_label)
         if coords[0].size == 0:
-            # no LVM in this slice
+            # this structure is not present in this slice
             continue
         mask[coords] = 255
 

@@ -6,6 +6,21 @@ export enum SegmentationModel {
   UNET = "unet"
 }
 
+/**
+ * Which cardiac chamber a 4D reconstruction represents.
+ *
+ * LV is the myocardial wall and is the clinical product; every reconstruction created before
+ * this field existed is LV, so LV is the default everywhere and untagged records read as LV.
+ *
+ * RV is the right-ventricular cavity. It is RESEARCH/REFERENCE ONLY -- the RV shape model is
+ * under a documented accuracy no-go and its output must not be used for clinical diagnosis.
+ * Anything that surfaces an RV reconstruction to a user is required to label it as such.
+ */
+export enum ReconstructionChamber {
+  LV = "lv",
+  RV = "rv"
+}
+
 /* Interfaces */
 // Enumeration for user roles
 /**
@@ -694,6 +709,9 @@ export interface IProjectReconstruction {
   isAIGenerated: boolean; // Indicates if the reconstruction is AI-generated (should not delete if it's AI output)
   meshFormat: MeshFormat; // Format of the 4D mesh file
   segmentationModel?: string; // Which segmentation model was used to generate this reconstruction (medsam or unet)
+  chamber?: ReconstructionChamber; // Which chamber this mesh is (lv = myocardium, rv = RV cavity).
+                                   // Absent means LV: every record predating this field is LV.
+                                   // RV is research-only and must be labelled wherever it is shown.
   
   // File properties 
   filename: string; // Server-generated reconstruction filename (e.g., projectid_reconstructionid_4d)
@@ -756,6 +774,9 @@ export interface IJob {
   segmentationDescription?: string; // Optional user-defined description for the resulting segmentation
   segmentationSource?: segmentationSource; // Source of the image for segmentation
   segmentationModel?: SegmentationModel; // Track which model was used
+  chamber?: ReconstructionChamber; // 4D reconstruction jobs only: which chamber this job builds.
+                                   // Absent means LV. Needed so an in-flight RV job does not block
+                                   // an LV job for the same segmentation model, and vice versa.
   model_used?: string; // Compatibility field mirrored to DB for external tools (string)
 }
 export interface IJobDocument extends IJob, Document {}

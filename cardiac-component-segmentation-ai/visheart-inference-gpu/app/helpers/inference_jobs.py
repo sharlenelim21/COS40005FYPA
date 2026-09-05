@@ -1116,7 +1116,12 @@ async def _process_fourd_reconstruction_job(
                         debug_dir=request.debug_dir,
                         # PHASE 1 EXPERIMENT: Pass new parameters
                         code_reg_lambda=request.code_reg_lambda,
-                        verbose_logging=request.verbose_logging
+                        verbose_logging=request.verbose_logging,
+                        # Chamber selection (lv = myocardium, rv = RV cavity)
+                        chamber=request.chamber,
+                        # Reproducibility and best-of-N candidate selection
+                        seed=request.seed,
+                        num_candidates=request.num_candidates
                     )
                     
                     if reconstruction_result["success"]:
@@ -1148,6 +1153,10 @@ async def _process_fourd_reconstruction_job(
                                 "num_iterations": reconstruction_result["num_iterations"],
                                 "resolution": reconstruction_result["resolution"],
                                 "status": "reconstruction_completed",
+                                # Which chamber produced this mesh. The Node callback stores it
+                                # on the reconstruction record so the viewer can label an RV mesh
+                                # rather than presenting it as an ordinary LV reconstruction.
+                                "chamber": reconstruction_result.get("chamber", "lv"),
                                 "message": f"4D reconstruction completed successfully. {len(all_mesh_files)} mesh files sent as multipart attachments.",
                                 
                                 # Add 4D-specific metadata

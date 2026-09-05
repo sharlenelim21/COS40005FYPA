@@ -58,10 +58,13 @@ router.post("/start-reconstruction/:projectId",
             // Backward-compat: when omitted, the service falls back to the
             // legacy (model-agnostic) selection so older frontends keep working.
             segmentationModel,
+            // chamber: which cardiac chamber to reconstruct. "lv" | "rv" | undefined.
+            // Omitted means LV, so existing frontends are unaffected.
+            chamber,
         } = req.body;
 
         logger.info(
-            `${serviceLocation}: Received start 4D reconstruction request for project ${projectId} with ed_frame ${ed_frame}, export_format ${export_format || 'default'}, segmentationModel ${segmentationModel || '<none — legacy>'} by user ${req.user?.username} with id ${req.user?._id}`
+            `${serviceLocation}: Received start 4D reconstruction request for project ${projectId} with ed_frame ${ed_frame}, export_format ${export_format || 'default'}, segmentationModel ${segmentationModel || '<none — legacy>'}, chamber ${chamber || 'lv (default)'} by user ${req.user?.username} with id ${req.user?._id}`
         );
 
         try {
@@ -73,7 +76,8 @@ router.post("/start-reconstruction/:projectId",
                 parameters,
                 ed_frame,
                 export_format,
-                segmentationModel
+                segmentationModel,
+                chamber
             );
             if (result.success) {
                 res.status(200).json({ message: result.message, uuid: result.uuid });
@@ -196,6 +200,10 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                     downloadUrl, // Presigned URL for download
                     tarUrl: downloadUrl,
                     segmentationModel: inferredModel, // Model used for this reconstruction (medsam, unet, etc)
+                    // Which chamber this mesh is. Records written before the field existed have no
+                    // value and are LV -- that is what the whole pipeline produced until now.
+                    // The viewer keys its research-only RV warning off this, so it must be sent.
+                    chamber: recon.chamber === "rv" ? "rv" : "lv",
                     metadata: {
                         edFrameIndex: recon.ed_frame,
                         reconstructionTime: recon.reconstructedMesh?.reconstructionTime,

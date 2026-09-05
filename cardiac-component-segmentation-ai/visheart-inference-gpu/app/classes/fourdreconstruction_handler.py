@@ -28,7 +28,7 @@ from mesh_to_sdf.mesh_to_sdf import ComputeNormalizationParameters, transformati
 from deep_sdf.obj_process import obj_read
 
 # Import from get_P.py for contour extraction and affine matrix computation
-from get_P import get_contour, get_T
+from get_P import get_contour, get_T, CHAMBER_LABELS
 
 #New: Import device runtime utilities for better GPU management
 from app.classes.device_runtime import (
@@ -39,6 +39,31 @@ from app.classes.device_runtime import (
     safe_synchronize,
     safe_memory_stats,
 )
+
+
+# Edge length of the cube marching cubes samples, in canonical units, so `volume_size=V` covers
+# [-V/2, +V/2]. Task 4.18.
+#
+# This is chosen per case rather than fixed, because the two chambers need different bounds and
+# the bound is not free. create_mesh_4dsdf defaults to 2.0, covering [-1, +1]:
+#
+#   LV canonical coordinates reach |coord| ~0.78  -> 2.0 is ample
+#   RV canonical coordinates reach |coord| ~2.05  -> 2.0 CLIPS it into a non-watertight shell
+#                                                    (Chamfer 9.14 mm, 0/3 watertight)
+#
+# Widening to 4.5 fixes RV. But at a fixed N the sampled voxel grows with the bound, so applying
+# 4.5 to LV as well costs 80% of its vertices (57885 -> 11413) and visibly facets the delivered
+# mesh. Surface error does not notice -- Chamfer improved 0.009 mm over 20 cases -- which is why
+# the first version of this applied 4.5 globally. Faceting is a rendering property, not a
+# distance property, and the metrics could not see it.
+#
+# So: keep the tight bound whenever the shape fits inside it, and widen only when it does not.
+# LV therefore decodes exactly as it did before this task, and RV stops being clipped.
+DECODE_VOLUME_SIZE_TIGHT = 2.0
+DECODE_VOLUME_SIZE_WIDE = 4.5
+# Fraction of the tight bound's half-width a shape may occupy before the wide bound is used.
+# LV's observed maximum is 0.7773 across 20 cases, so 0.95 leaves ~22% of headroom.
+DECODE_TIGHT_HEADROOM = 0.95
 
 
 class FourDReconstructionHandler:
@@ -356,23 +381,33 @@ class FourDReconstructionHandler:
         is_4d, _ = self._detect_nifti_dimensions(nifti_path)
         return is_4d
     
-    def _extract_contour_from_nifti_sync(self, nifti_file_path: str) -> np.ndarray:
+    def _extract_contour_from_nifti_sync(self, nifti_file_path: str,
+                                         chamber: str = "lv") -> np.ndarray:
         """
         Extract 3D point cloud contour from NiFTI segmentation file
-        
+
         Args:
             nifti_file_path: Path to NiFTI segmentation file
-            
+            chamber: "lv" extracts the myocardial wall (label 2), "rv" extracts the RV cavity
+                (label 1). Defaults to "lv" so existing callers are unchanged. Plan task 4.1/4.14.
+
         Returns:
             numpy array of 3D points
         """
         try:
             # Suppress SimpleITK warnings
             sitk.ProcessObject_SetGlobalWarningDisplay(False)
-            
+
+            key = (chamber or "lv").lower()
+            if key not in CHAMBER_LABELS:
+                raise ValueError(f"Unknown chamber {chamber!r}; expected one of "
+                                 f"{sorted(CHAMBER_LABELS)}")
+            target_label = CHAMBER_LABELS[key]
+
             # Use get_contour from get_P.py
-            points = get_contour(nifti_file_path)
-            print(f"Extracted {len(points)} contour points from {nifti_file_path}")
+            points = get_contour(nifti_file_path, target_label=target_label)
+            print(f"Extracted {len(points)} contour points ({key}, label {target_label}) "
+                  f"from {nifti_file_path}")
             return points
             
         except Exception as e:
@@ -462,18 +497,25 @@ class FourDReconstructionHandler:
             print(f"Error in transform_to_canonical_in_memory: {e}")
             raise e
     
-    def _optimize_latent_codes_sync(self, sdf_data: Dict, num_iterations: int = 50, lr: float = 5e-4, 
-                                   code_reg_lambda: float = 1e-4, verbose_logging: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _optimize_latent_codes_sync(self, sdf_data: Dict, num_iterations: int = 50, lr: float = 5e-4,
+                                   code_reg_lambda: float = 1e-4, verbose_logging: bool = False,
+                                   seed: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Optimize latent codes for reconstruction (single frame)
-        
+
         Args:
             sdf_data: SDF data dictionary
             num_iterations: Number of optimization iterations
             lr: Learning rate
             code_reg_lambda: L2 regularization weight for latent codes (default 1e-4, set to 0 to disable)
             verbose_logging: If True, log detailed optimization progress
-            
+            seed: Seed for latent code initialisation. Latent fitting is non-convex and the codes
+                start from a random draw, so an unseeded fit lands in a different local optimum on
+                every call -- measured spread on the same case is a median of 0.82 mm and up to
+                2.84 mm Chamfer, which is larger than the difference between 200 and 1000
+                iterations. Pass a seed to make a reconstruction reproducible; leave None for the
+                previous (non-deterministic) behaviour.
+
         Returns:
             Optimized shape (c_s) and motion (c_m) codes
         """
@@ -495,6 +537,12 @@ class FourDReconstructionHandler:
             c_m = self._create_isolated_tensor(torch.zeros(frame_num, self.Cm_size), requires_grad=True)
             
             # Initialize with proper distributions - completely isolated
+            # Seed immediately before the draw, so the seed governs exactly these two tensors and
+            # nothing else in the process is affected for longer than it takes to fill them.
+            if seed is not None:
+                torch.manual_seed(seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(seed)
             with torch.no_grad():
                 c_s.normal_(mean=0, std=0.1)
                 c_m.normal_(mean=0, std=1.0 / np.sqrt(self.Cm_size))
@@ -669,11 +717,14 @@ class FourDReconstructionHandler:
                 # So we need to provide the filename without extension
                 ply_base_name = base_name
                 
+                # Pick the smallest bound that contains this shape -- see the constants above.
+                volume_size = self._decode_volume_size(sdf_data)
                 deep_sdf.mesh.create_mesh_4dsdf(
                     self.decoder, c_s_vec, c_m_vec, phase_t,
                     ply_base_name, motion_filename,
                     N=resolution, max_batch=self.max_batch,
-                    offset=offset, scale=scale, Ti=Ti
+                    offset=offset, scale=scale, Ti=Ti,
+                    volume_size=volume_size
                 )
                 
                 # Force GPU sync after mesh generation
@@ -744,6 +795,30 @@ class FourDReconstructionHandler:
             print(f"Error converting PLY to OBJ: {e}")
             raise e
     
+    @staticmethod
+    def _log_mesh_topology(mesh, mesh_file: str) -> None:
+        """Report the properties that decide whether a viewer shows a closed surface.
+
+        `is_watertight` alone is not enough and has misled this project twice. It asks only whether
+        every edge is shared by two faces. A surface can pass it while carrying tunnels straight
+        through itself -- a torus is watertight -- and a tunnel renders as a hole you can see the
+        background through. `euler_number` is what catches that: 2 for a sphere, 2-2g for genus g.
+        """
+        try:
+            euler = int(mesh.euler_number)
+            bodies = int(mesh.body_count)
+            watertight = bool(mesh.is_watertight)
+            # Only meaningful for a closed single body; genus is undefined otherwise.
+            genus = (2 - euler) // 2 if (watertight and bodies == 1) else None
+            verdict = "OK" if (watertight and bodies == 1 and euler == 2) else "SUSPECT"
+            print(f"[mesh-topology] {os.path.basename(mesh_file)} {verdict}: "
+                  f"verts={len(mesh.vertices)} faces={len(mesh.faces)} "
+                  f"watertight={watertight} winding_ok={bool(mesh.is_winding_consistent)} "
+                  f"euler={euler} bodies={bodies} "
+                  f"genus={'n/a' if genus is None else genus}")
+        except Exception as e:
+            print(f"[mesh-topology] could not measure {os.path.basename(mesh_file)}: {e}")
+
     def _convert_ply_to_glb(self, ply_file: str, glb_file: str):
         """
         Convert PLY file to GLB format using trimesh
@@ -753,18 +828,220 @@ class FourDReconstructionHandler:
             glb_file: Path to output GLB file
         """
         try:
-            # Load PLY file with trimesh
-            mesh = trimesh.load(ply_file)
-            
+            # process=False is load-bearing. The default (process=True) merges vertices within a
+            # tolerance and drops degenerate faces, which can collapse a triangle and leave a real
+            # hole in a surface that marching cubes produced closed -- measured on
+            # patient101_frame14 at N=64: 14378 verts watertight, 14377 verts NOT watertight
+            # (euler 2 -> 3) through this function alone. The OBJ path never did this, which is
+            # why every topology check reported on this pipeline missed it.
+            mesh = trimesh.load(ply_file, process=False)
+
             # Export as GLB (binary glTF 2.0)
             mesh.export(glb_file, file_type='glb')
-            
+
+            self._log_mesh_topology(mesh, glb_file)
             print(f"Converted PLY to GLB: {glb_file}")
                     
         except Exception as e:
             print(f"Error converting PLY to GLB: {e}")
             raise e
-    
+
+    def _surface_agreement_sync(self, mesh_file: str, contour_points: np.ndarray,
+                                samples: int = 20000) -> float:
+        """RMS distance between a decoded surface and the contour points it was fitted to.
+
+        This is the selection signal for best-of-N. It is available at inference because the
+        contour points are the model's own input -- no expert surface is needed.
+
+        Measured against ground truth on 6 ACDC cases x 6 seeds, it ranks seeds with a Spearman
+        correlation of +0.57 to true Chamfer error. The optimiser's own fitting loss was also
+        tried and reaches only +0.09: it scores the SDF *field* sampled at the input points, and a
+        shape can have sdf~0 at every one of them while still being the wrong surface. This
+        measures the surface actually delivered.
+
+        Both directions are included because they fail differently -- the mesh wandering off the
+        data, and the mesh failing to cover it.
+
+        Returns +inf when the mesh cannot be scored, so a broken candidate never wins.
+        """
+        try:
+            mesh = trimesh.load(mesh_file, process=False)
+            if mesh is None or len(getattr(mesh, "faces", [])) == 0:
+                return float("inf")
+
+            from scipy.spatial import cKDTree
+
+            target = np.asarray(contour_points, dtype=float)[:, :3]
+            if len(target) == 0:
+                return float("inf")
+
+            # Fixed seed so the same candidate always scores the same. trimesh takes the seed
+            # directly, which keeps the process-wide RNG untouched.
+            sampled = trimesh.sample.sample_surface(mesh, samples, seed=20260902)[0]
+            to_input = cKDTree(target).query(sampled)[0]
+            from_input = cKDTree(sampled).query(target)[0]
+            return float(np.sqrt(0.5 * (np.mean(to_input ** 2) + np.mean(from_input ** 2))))
+        except Exception as e:
+            print(f"Surface agreement scoring failed for {mesh_file}: {e}")
+            return float("inf")
+
+    def _decode_volume_size(self, sdf_data: Dict) -> float:
+        """Smallest sampling bound that contains this case's canonical shape.
+
+        Returns the tight bound when the shape fits inside it, which keeps LV decoding exactly as
+        it did before task 4.18, and the wide bound otherwise, which stops RV being clipped.
+        See the constants at the top of this module for why this is per-case and not fixed.
+
+        Falls back to the wide bound if the extent cannot be read -- being clipped is a worse
+        failure than being coarse.
+        """
+        try:
+            canonical = np.asarray(sdf_data["pcd"], dtype=float)[:, :3]
+            if canonical.size == 0:
+                return DECODE_VOLUME_SIZE_WIDE
+            extent = float(np.abs(canonical).max())
+        except Exception as e:
+            print(f"Could not measure canonical extent, using wide decode bound: {e}")
+            return DECODE_VOLUME_SIZE_WIDE
+
+        fits_tight = extent <= (DECODE_VOLUME_SIZE_TIGHT / 2.0) * DECODE_TIGHT_HEADROOM
+        volume_size = DECODE_VOLUME_SIZE_TIGHT if fits_tight else DECODE_VOLUME_SIZE_WIDE
+        print(f"Decode bound: canonical extent {extent:.4f} -> volume_size {volume_size}")
+        return volume_size
+
+    @staticmethod
+    def _motion_sidecars(mesh_file: str) -> List[str]:
+        """Paths of the '<base>_motion.*' files `create_mesh_4dsdf` writes beside a mesh.
+
+        Nothing downstream reads them, but a single fit leaves one behind, so best-of-N has to
+        leave exactly one too -- otherwise the output directory differs depending on how many
+        candidates were requested.
+        """
+        root = os.path.splitext(mesh_file)[0]
+        directory = os.path.dirname(root) or "."
+        prefix = os.path.basename(root) + "_motion"
+        if not os.path.isdir(directory):
+            return []
+        return [os.path.join(directory, name) for name in os.listdir(directory)
+                if name.startswith(prefix)]
+
+    def _discard_candidate(self, mesh_file: str) -> None:
+        """Delete a losing candidate's mesh and its motion sidecars."""
+        for path in [mesh_file] + self._motion_sidecars(mesh_file):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as e:
+                print(f"Could not remove candidate file {path}: {e}")
+
+    def _promote_candidate(self, mesh_file: str, output_file: str) -> None:
+        """Move a winning candidate's mesh and sidecars onto the final output name."""
+        if os.path.exists(output_file):
+            os.remove(output_file)
+        os.replace(mesh_file, output_file)
+
+        winner_root = os.path.splitext(mesh_file)[0]
+        target_root = os.path.splitext(output_file)[0]
+        prefix = os.path.basename(winner_root) + "_motion"
+        for path in self._motion_sidecars(mesh_file):
+            suffix = os.path.basename(path)[len(prefix):]
+            target = target_root + "_motion" + suffix
+            try:
+                if os.path.exists(target):
+                    os.remove(target)
+                os.replace(path, target)
+            except OSError as e:
+                print(f"Could not promote sidecar {path}: {e}")
+
+    def _fit_and_mesh_sync(self, sdf_data: Dict, contour_points: np.ndarray, output_file: str,
+                           resolution: int = 128, export_format: str = "obj",
+                           num_iterations: int = 50, code_reg_lambda: float = 1e-4,
+                           verbose_logging: bool = False, num_candidates: int = 1,
+                           seed: Optional[int] = None) -> Tuple[str, torch.Tensor, torch.Tensor, Dict]:
+        """Fit the latent codes and decode the mesh, optionally best-of-N across random seeds.
+
+        Latent fitting is non-convex and starts from a random draw, so different seeds land in
+        different local optima -- a spread of up to 2.84 mm Chamfer on the same case, larger than
+        the difference between 200 and 1000 fit iterations. Fitting several times and keeping the
+        candidate that best agrees with its own input recovers most of that.
+
+        Measured on 6 ACDC cases: best-of-3 by surface agreement reaches 3.764 mm against 3.981 mm
+        for a single fit, and beats a single 1000-iteration fit (3.934 mm) at slightly lower cost.
+
+        `num_candidates=1` is the default and takes exactly the original path -- one fit, one
+        decode, and with `seed=None` the same non-deterministic behaviour as before.
+
+        Returns:
+            (mesh_file, c_s, c_m, selection) where selection records what was tried and chosen.
+        """
+        if num_candidates <= 1:
+            c_s, c_m = self._optimize_latent_codes_sync(
+                sdf_data, num_iterations, code_reg_lambda=code_reg_lambda,
+                verbose_logging=verbose_logging, seed=seed
+            )
+            mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file,
+                                                 resolution, export_format)
+            return mesh_file, c_s, c_m, {"num_candidates": 1, "seed": seed,
+                                         "selected_seed": seed, "selection": "single-fit"}
+
+        # Best-of-N always seeds, even when the caller passed none -- otherwise the candidates
+        # could not be reproduced or reported, which is the point of doing this at all.
+        base_seed = 0 if seed is None else int(seed)
+        root, extension = os.path.splitext(output_file)
+        candidates: List[Dict[str, Any]] = []
+
+        for index in range(num_candidates):
+            candidate_seed = base_seed + index
+            candidate_file = f"{root}_cand{index}{extension}"
+            try:
+                c_s, c_m = self._optimize_latent_codes_sync(
+                    sdf_data, num_iterations, code_reg_lambda=code_reg_lambda,
+                    verbose_logging=verbose_logging, seed=candidate_seed
+                )
+                self._generate_mesh_sync(c_s, c_m, sdf_data, candidate_file,
+                                         resolution, export_format)
+                score = self._surface_agreement_sync(candidate_file, contour_points)
+                candidates.append({"seed": candidate_seed, "file": candidate_file,
+                                   "surface_agreement_mm": score, "c_s": c_s, "c_m": c_m})
+                print(f"  candidate seed={candidate_seed}: surface agreement {score:.3f} mm")
+            except Exception as e:
+                print(f"  candidate seed={candidate_seed} failed: {e}")
+                self._discard_candidate(candidate_file)
+
+        scored = [c for c in candidates if np.isfinite(c["surface_agreement_mm"])]
+        if not scored:
+            # Every candidate failed or was unscorable. Fall back to a plain single fit rather
+            # than returning nothing, so best-of-N can never be worse than not asking for it.
+            print("  all candidates failed to score - falling back to a single fit")
+            for candidate in candidates:
+                self._discard_candidate(candidate["file"])
+            return self._fit_and_mesh_sync(
+                sdf_data, contour_points, output_file, resolution, export_format,
+                num_iterations, code_reg_lambda, verbose_logging,
+                num_candidates=1, seed=base_seed
+            )
+
+        best = min(scored, key=lambda c: c["surface_agreement_mm"])
+        for candidate in candidates:
+            if candidate is not best:
+                self._discard_candidate(candidate["file"])
+        self._promote_candidate(best["file"], output_file)
+
+        selection = {
+            "num_candidates": num_candidates,
+            "seed": seed,
+            "base_seed": base_seed,
+            "selected_seed": best["seed"],
+            "selection": "best-of-n-by-surface-agreement",
+            "surface_agreement_mm": best["surface_agreement_mm"],
+            "candidates": [{"seed": c["seed"],
+                            "surface_agreement_mm": c["surface_agreement_mm"]}
+                           for c in candidates],
+        }
+        print(f"  selected seed={best['seed']} "
+              f"(surface agreement {best['surface_agreement_mm']:.3f} mm)")
+        return output_file, best["c_s"], best["c_m"], selection
+
     async def predict(self, nifti_file_path: str, output_dir: str, **kwargs) -> Dict[str, Any]:
         """
         Main async prediction interface for 4D reconstruction from NiFTI file
@@ -810,16 +1087,24 @@ class FourDReconstructionHandler:
             # PHASE 1 EXPERIMENT: Configurable regularization and verbose logging
             code_reg_lambda = kwargs.get('code_reg_lambda', 1e-4)  # Default 1e-4, can be reduced or set to 0
             verbose_logging = kwargs.get('verbose_logging', False)  # Enable detailed optimization logs
-            
+
+            # Reproducibility and best-of-N. Defaults keep the original behaviour exactly.
+            seed = kwargs.get('seed', None)
+            num_candidates = kwargs.get('num_candidates', 1)
+            # Which chamber to reconstruct. "lv" (default) is the myocardial wall, as before.
+            chamber = (kwargs.get('chamber') or 'lv').lower()
+
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
+            print(f"Chamber: {chamber}")
             print(f"Export format: {export_format.upper()}")
             print(f"Optimization config: iterations={num_iterations}, lr=5e-4, reg_lambda={code_reg_lambda}")
+            print(f"Fitting config: seed={seed}, candidates={num_candidates}")
             if verbose_logging:
                 print(f"Verbose logging: ENABLED")
             
             # Step 1: Extract point cloud from NiFTI
             print("Step 1: Extracting contour points...")
-            point_cloud = self._extract_contour_from_nifti_sync(nifti_file_path)
+            point_cloud = self._extract_contour_from_nifti_sync(nifti_file_path, chamber)
             
             # Step 2: Extract affine transformation matrix
             print("Step 2: Extracting affine matrix...")
@@ -831,22 +1116,22 @@ class FourDReconstructionHandler:
                 point_cloud, T, offset, scale, test_sampling=True
             )
             
-            # Step 4: Optimize latent codes
+            # Steps 4 and 5: Optimize latent codes and generate mesh
+            # Combined so best-of-N can score each candidate's decoded surface before choosing.
             print("Step 4: Optimizing latent codes...")
-            c_s, c_m = self._optimize_latent_codes_sync(sdf_data, num_iterations, 
-                                                       code_reg_lambda=code_reg_lambda,
-                                                       verbose_logging=verbose_logging)
-            
-            # Step 5: Generate mesh
-            print("Step 5: Generating mesh...")
             os.makedirs(output_dir, exist_ok=True)
-            
+
             # Create output filename with correct extension
             input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
             file_extension = export_format  # "obj" or "glb"
             output_file = os.path.join(output_dir, f"{input_filename}_reconstructed.{file_extension}")
-            
-            mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+
+            print("Step 5: Generating mesh...")
+            mesh_file, c_s, c_m, selection = self._fit_and_mesh_sync(
+                sdf_data, point_cloud, output_file, resolution, export_format,
+                num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
+                verbose_logging=verbose_logging, num_candidates=num_candidates, seed=seed
+            )
             
             # Debug mode: Copy to persistent location if enabled
             debug_save = kwargs.get('debug_save', False)
@@ -873,6 +1158,11 @@ class FourDReconstructionHandler:
                 "resolution": resolution,
                 "export_format": export_format,
                 "output_directory": output_dir,
+                # Which chamber this mesh is. The caller stores meshes per chamber and must
+                # label an RV mesh in the UI, so it cannot be left to infer this.
+                "chamber": chamber,
+                # Records which seed produced the delivered mesh, so it can be recreated exactly.
+                "fitting": selection,
                 # New metadata for consistency with 4D processing
                 "is_4d_input": False,
                 "ed_frame_index": 0,  # N/A for 3D, but use 0 for consistency
@@ -893,6 +1183,7 @@ class FourDReconstructionHandler:
                 "input_file": nifti_file_path,
                 "reconstruction_time": time.time() - start_time,
                 "export_format": kwargs.get('export_format', 'obj'),
+                "chamber": (kwargs.get('chamber') or 'lv').lower(),
                 # Error case metadata
                 "is_4d_input": False,
                 "ed_frame_index": 0,
@@ -928,12 +1219,21 @@ class FourDReconstructionHandler:
             # PHASE 1 EXPERIMENT: Configurable regularization
             code_reg_lambda = kwargs.get('code_reg_lambda', 1e-4)
             verbose_logging = kwargs.get('verbose_logging', False)
-            
+
+            # Reproducibility and best-of-N. Defaults keep the original behaviour exactly.
+            seed = kwargs.get('seed', None)
+            num_candidates = kwargs.get('num_candidates', 1)
+            # Which chamber to reconstruct. "lv" (default) is the myocardial wall, as before.
+            chamber = (kwargs.get('chamber') or 'lv').lower()
+            # Which seed produced each delivered frame, keyed by frame index.
+            frame_selections: Dict[int, Dict[str, Any]] = {}
+
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
             print("[4D Reconstruction] Reconstruction started")
             print(f"ED frame index: {ed_frame_index}, Process all frames: {process_all_frames}")
             print(f"Export format: {export_format.upper()}")
             print(f"Optimization config: iterations={num_iterations}, reg_lambda={code_reg_lambda}")
+            print(f"Fitting config: seed={seed}, candidates={num_candidates}")
             
             # Step 1: Detect and validate 4D input
             is_4d, num_temporal_frames = self._detect_nifti_dimensions(nifti_file_path)
@@ -1023,7 +1323,7 @@ class FourDReconstructionHandler:
                         
                         # Extract contour for this frame
                         try:
-                            frame_point_cloud = self._extract_contour_from_nifti_sync(frame_path)
+                            frame_point_cloud = self._extract_contour_from_nifti_sync(frame_path, chamber)
                             
                             # Check if we got any points
                             if len(frame_point_cloud) == 0:
@@ -1044,22 +1344,26 @@ class FourDReconstructionHandler:
                             frame_point_cloud, T, offset, scale, test_sampling=True
                         )
                         
-                        # AUTOGRAD FIX: Optimize latent codes for this frame with clean state
-                        print(f"Starting optimization for frame {original_frame_idx}...")
-                        frame_c_s, frame_c_m = self._optimize_latent_codes_sync(frame_sdf_data, num_iterations,
-                                                                                code_reg_lambda=code_reg_lambda,
-                                                                                verbose_logging=verbose_logging)
-                        print(f"Completed optimization for frame {original_frame_idx}")
-                        
                         # Generate mesh for this frame with correct extension
                         if original_frame_idx == ed_frame_index:
                             # Mark ED frame clearly
                             output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}_ED.{file_extension}")
                         else:
                             output_file = os.path.join(output_dir, f"{input_filename}_4D_frame{original_frame_idx:02d}.{file_extension}")
-                        
-                        print(f"Generating mesh for frame {original_frame_idx}...")
-                        frame_mesh_file = self._generate_mesh_sync(frame_c_s, frame_c_m, frame_sdf_data, output_file, resolution, export_format)
+
+                        # AUTOGRAD FIX: Optimize latent codes for this frame with clean state.
+                        # Each frame offsets the seed by its own index, so frames stay independent
+                        # while the whole sequence remains reproducible from one request seed.
+                        print(f"Starting optimization for frame {original_frame_idx}...")
+                        frame_seed = None if seed is None else int(seed) + original_frame_idx * 1000
+                        frame_mesh_file, frame_c_s, frame_c_m, frame_selection = self._fit_and_mesh_sync(
+                            frame_sdf_data, frame_point_cloud, output_file, resolution, export_format,
+                            num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
+                            verbose_logging=verbose_logging, num_candidates=num_candidates,
+                            seed=frame_seed
+                        )
+                        print(f"Completed optimization for frame {original_frame_idx}")
+                        frame_selections[original_frame_idx] = frame_selection
                         mesh_files.append(frame_mesh_file)
                         processed_frame_indices.append(original_frame_idx)
                         
@@ -1101,7 +1405,7 @@ class FourDReconstructionHandler:
                 
                 # Extract and process ED frame only
                 try:
-                    ed_point_cloud = self._extract_contour_from_nifti_sync(ed_frame_path)
+                    ed_point_cloud = self._extract_contour_from_nifti_sync(ed_frame_path, chamber)
                     
                     # Check if we got any points
                     if len(ed_point_cloud) == 0:
@@ -1127,18 +1431,20 @@ class FourDReconstructionHandler:
                     ed_point_cloud, T, offset, scale, test_sampling=True
                 )
                 
-                # Optimize latent codes (single frame)
-                c_s, c_m = self._optimize_latent_codes_sync(sdf_data, num_iterations,
-                                                           code_reg_lambda=code_reg_lambda,
-                                                           verbose_logging=verbose_logging)
-                
                 # Generate mesh with correct extension
                 os.makedirs(output_dir, exist_ok=True)
                 input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
                 file_extension = export_format  # "obj" or "glb"
                 output_file = os.path.join(output_dir, f"{input_filename}_4D_ED{ed_frame_index:02d}.{file_extension}")
-                
-                primary_mesh_file = self._generate_mesh_sync(c_s, c_m, sdf_data, output_file, resolution, export_format)
+
+                # Optimize latent codes (single frame) and decode
+                ed_seed = None if seed is None else int(seed) + ed_frame_index * 1000
+                primary_mesh_file, c_s, c_m, ed_selection = self._fit_and_mesh_sync(
+                    sdf_data, ed_point_cloud, output_file, resolution, export_format,
+                    num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
+                    verbose_logging=verbose_logging, num_candidates=num_candidates, seed=ed_seed
+                )
+                frame_selections[ed_frame_index] = ed_selection
                 print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
                 mesh_files = [primary_mesh_file]
                 processed_frame_indices = [ed_frame_index]
@@ -1163,6 +1469,15 @@ class FourDReconstructionHandler:
                 "resolution": resolution,
                 "export_format": export_format,
                 "output_directory": output_dir,
+                # Which chamber this mesh is. The caller stores meshes per chamber and must
+                # label an RV mesh in the UI, so it cannot be left to infer this.
+                "chamber": chamber,
+                # Which seed produced each delivered frame, so any frame can be recreated exactly.
+                "fitting": {
+                    "seed": seed,
+                    "num_candidates": num_candidates,
+                    "per_frame": frame_selections,
+                },
                 # 4D-specific metadata
                 "is_4d_input": True,
                 "ed_frame_index": ed_frame_index,
@@ -1200,6 +1515,7 @@ class FourDReconstructionHandler:
                 "input_file": nifti_file_path,
                 "reconstruction_time": time.time() - start_time,
                 "export_format": kwargs.get('export_format', 'obj'),
+                "chamber": (kwargs.get('chamber') or 'lv').lower(),
                 # Error case metadata
                 "is_4d_input": True,
                 "ed_frame_index": kwargs.get('ed_frame_index', 0),

@@ -29,6 +29,8 @@ import { cn } from "@/lib/utils";
 
 export type ReconstructionSegmentationModel = "medsam" | "unet";
 
+export type ReconstructionChamber = "lv" | "rv";
+
 export interface ReconstructionConfig {
   exportFormat: "obj" | "glb";
   edFrame: number; // 1-based frame index for user selection
@@ -36,6 +38,8 @@ export interface ReconstructionConfig {
   resolution: number;
   // Which segmentation result this reconstruction should consume.
   segmentationModel: ReconstructionSegmentationModel;
+  // Which chamber to reconstruct. "lv" is the clinical product; "rv" is research/reference only.
+  chamber: ReconstructionChamber;
 }
 
 interface ReconstructionConfigDialogProps {
@@ -72,6 +76,16 @@ interface ReconstructionConfigDialogProps {
   gpuAvailable?: boolean;
   existingReconstructionsByModel?: Partial<Record<ReconstructionSegmentationModel, string>>;
   onViewReconstruction?: (model: ReconstructionSegmentationModel, reconstructionId?: string) => void;
+  /**
+   * Models that already have an RV reconstruction. Tracked separately from `blockedModels`
+   * (which is LV) because the two chambers occupy independent slots.
+   */
+  blockedRvModels?: ReconstructionSegmentationModel[];
+  /**
+   * Chamber to open on. Omitted means LV — RV should stay a deliberate choice. Set only when the
+   * caller already knows the user asked for that chamber (e.g. the viewer's "Build RV" button).
+   */
+  defaultChamber?: ReconstructionChamber;
 }
 
 const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
@@ -97,11 +111,19 @@ export function ReconstructionConfigDialog({
   gpuAvailable = true,
   existingReconstructionsByModel,
   onViewReconstruction,
+  blockedRvModels,
+  defaultChamber,
 }: ReconstructionConfigDialogProps) {
+  // LV unless the caller explicitly asked otherwise. RV stays a deliberate choice.
+  const [chamber, setChamber] = useState<ReconstructionChamber>(defaultChamber ?? "lv");
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
   const [numIterations, setNumIterations] = useState(30);
-  const [resolution, setResolution] = useState(32);
+  // 32 was the old default and is too coarse: at N=32 the marching-cubes facets are ~17x larger
+  // by area than at N=128, which flat-shades into what looks like holes in a closed surface.
+  // 64 costs ~0.3s more per frame to decode and gives ~4x the vertices. Raise it further (96-128)
+  // for figures or anything measured off the surface.
+  const [resolution, setResolution] = useState(64);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Derive a stable Set for membership checks.
@@ -109,9 +131,13 @@ export function ReconstructionConfigDialog({
     () => new Set<ReconstructionSegmentationModel>(availableModels ?? []),
     [availableModels]
   );
+  // Occupancy is per chamber: an existing LV reconstruction must not block creating the RV one,
+  // and vice versa.
   const blockedSet = useMemo(
-    () => new Set<ReconstructionSegmentationModel>(blockedModels ?? []),
-    [blockedModels]
+    () => new Set<ReconstructionSegmentationModel>(
+      (chamber === "rv" ? blockedRvModels : blockedModels) ?? []
+    ),
+    [blockedModels, blockedRvModels, chamber]
   );
 
   // Choose an initial model: prefer the caller's default if available,
@@ -138,6 +164,13 @@ export function ReconstructionConfigDialog({
     setSelectedModel(initialModel);
   }, [open, initialModel]);
 
+  // Reopening resets to the caller's chamber, defaulting to LV, so an RV run is never repeated
+  // by accident just because the dialog was left on RV last time.
+  useEffect(() => {
+    if (!open) return;
+    setChamber(defaultChamber ?? "lv");
+  }, [open, defaultChamber]);
+
   const noModelsAvailable = availableSet.size === 0;
   const noCreatableModels = (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
     (model) => !availableSet.has(model) || blockedSet.has(model),
@@ -153,6 +186,7 @@ export function ReconstructionConfigDialog({
       numIterations,
       resolution,
       segmentationModel: selectedModel,
+      chamber,
     });
   };
 
@@ -296,6 +330,77 @@ export function ReconstructionConfigDialog({
                 Reconstruction will only use the editable mask for the selected
                 model. The other model&apos;s data is ignored.
               </p>
+            )}
+          </div>
+
+          {/* Chamber selection. LV is the clinical product and the default; RV is a separate,
+              research-only reconstruction of the same scan. Choosing RV surfaces the accuracy
+              warning here, before the job is submitted, as well as later in the viewer. */}
+          <div className="space-y-2">
+            <Label>Chamber</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                {
+                  value: "lv" as ReconstructionChamber,
+                  title: "LV myocardium",
+                  blurb: "Standard 4D reconstruction",
+                },
+                {
+                  value: "rv" as ReconstructionChamber,
+                  title: "RV cavity",
+                  blurb: "Research / reference only",
+                },
+              ]).map((option) => {
+                const isSelected = chamber === option.value;
+                return (
+                  <div
+                    key={option.value}
+                    role="button"
+                    tabIndex={isLoading ? -1 : 0}
+                    onClick={() => !isLoading && setChamber(option.value)}
+                    onKeyDown={(event) => {
+                      if (isLoading) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setChamber(option.value);
+                      }
+                    }}
+                    className={cn(
+                      "rounded-lg border p-3 transition-colors",
+                      isLoading ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+                      isSelected
+                        ? option.value === "rv"
+                          ? "border-amber-500 bg-amber-500/10"
+                          : "border-primary bg-primary/5"
+                        : "border-border hover:border-primary/50",
+                    )}
+                  >
+                    <p className="text-sm font-medium flex items-center gap-1.5">
+                      {option.value === "rv" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
+                      {option.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{option.blurb}</p>
+                  </div>
+                );
+              })}
+            </div>
+            {chamber === "rv" && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs space-y-1">
+                <p className="font-semibold flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  RV reconstruction is not validated for clinical use
+                </p>
+                <p className="text-muted-foreground">
+                  The RV shape model has not passed accuracy validation. Its output is for
+                  research and reference only and must not be used for clinical diagnosis or
+                  measurement. It is created as a separate reconstruction and does not replace
+                  the LV result.
+                </p>
+                <p className="text-muted-foreground">
+                  Requires an RV checkpoint configured on the inference service; without one the
+                  request is rejected rather than answered with an LV mesh.
+                </p>
+              </div>
             )}
           </div>
 
