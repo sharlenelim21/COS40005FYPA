@@ -561,6 +561,9 @@ def main() -> None:
     # haemodynamics; do not conflate the two).
     LV_SVI = _indexed(LV_SV)
     RV_SVI = _indexed(RV_SV)
+    # LV mass index — the LVMI feature compute_disease_similarity.py's indexed
+    # mode uses for HCM-morphology scoring.
+    LVMI = _indexed(LV_mass_g)
 
     # 9. Emit result JSON. All numeric fields go through _safe_float so no
     #    NaN/Inf ever hits the wire.
@@ -582,6 +585,7 @@ def main() -> None:
         "ESVI":         LVESVI,
         "StrokeVolume": LV_SV,
         "StrokeVolumeIndex": LV_SVI,
+        "LVMI":         LVMI,
         "PeakGRS":      None,  # filled by strain, not computed here
         "PeakGCS":      None,  # filled by strain, not computed here
     }
@@ -610,6 +614,7 @@ def main() -> None:
         "RVEDVI": RVEDVI,
         "RVESVI": RVESVI,
         "LV_SVI": LV_SVI,
+        "LVMI": LVMI,
         "RV_SVI": RV_SVI,
         "voxel_mm3": _safe_float(voxel_mm3),
         "spacing_mm": [_safe_float(dx), _safe_float(dy), _safe_float(dz)],

@@ -45,7 +45,7 @@ export default function ReportPage() {
   const {
     model, measurements, healthStatus, similarity, strain, strainSeries,
     computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain,
-    rvStrainSeries,
+    rvStrainSeries, recomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // BSA input — optional. Entered here (not persisted server-side) since it's
@@ -156,6 +156,14 @@ export default function ReportPage() {
             pct: Math.round(s.percent),
             color: PATTERN_COLORS[s.code] ?? "#64748b",
           })) ?? [],
+        // Headline/confidence/gate — see compute_disease_similarity.py. Headline
+        // reads "Indeterminate"/"...cannot be assessed reliably" instead of a
+        // confident profile label whenever the top profile's essential gate
+        // failed or couldn't be checked; the bars above are unaffected.
+        phenotypeHeadline: similarity?.phenotype_headline ?? null,
+        diseaseSimilarityConfidence: similarity?.confidence ?? null,
+        diseaseSimilarityMode: similarity?.mode ?? null,
+        diseaseSimilarityGateReason: similarity?.gate?.reason ?? null,
         isRealData: true,
       }
     : { ...PLACEHOLDER_PATIENT_SUMMARY, patientLabel, isRealData: false };
@@ -252,6 +260,9 @@ export default function ReportPage() {
           weightKg={weightKg}
           onHeightCmChange={setHeightCm}
           onWeightKgChange={setWeightKg}
+          onRecomputeSimilarityWithBsa={recomputeSimilarityWithBsa}
+          recomputingSimilarity={recomputingSimilarity}
+          recomputeSimilarityError={recomputeSimilarityError}
         />
       </div>
 

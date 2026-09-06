@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "visheart-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "cardiac-component-segmentation-ai/visheart-frontend"],
+      "port": 5001
+    }
+  ]
+}

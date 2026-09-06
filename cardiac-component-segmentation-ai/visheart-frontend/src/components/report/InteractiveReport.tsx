@@ -14,7 +14,7 @@
  * measurement that wasn't computed.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
@@ -24,7 +24,7 @@ import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries } from "@/hooks/useProjectResults";
 import { RvStrainChart } from "@/components/landmark/RvStrainChart";
 import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
-import { buildPatientContext } from "@/lib/researchApi";
+import { buildPatientContext, buildLvPhenotypeFacts } from "@/lib/researchApi";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -498,6 +498,7 @@ export function InteractiveReport({
   measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus,
   computing, computeError, rv, lvVolumes, rvStrain, rvStrainSeries,
   bsaM2, heightCm, weightKg, onHeightCmChange, onWeightKgChange,
+  onRecomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError,
 }: {
   patientLabel: string;
   scanSummary: string;
@@ -517,10 +518,17 @@ export function InteractiveReport({
   weightKg?: string;
   onHeightCmChange?: (v: string) => void;
   onWeightKgChange?: (v: string) => void;
+  /** Re-runs Disease Pattern Similarity server-side with the current BSA/sex
+   *  so the headline actually switches into BSA-indexed mode — without this,
+   *  typing a height/weight only changes the client-side mL/m² sub-values
+   *  above and never touches the similarity result itself. */
+  onRecomputeSimilarityWithBsa?: (bsaM2: number | null, sex: "male" | "female" | "unspecified") => Promise<void>;
+  recomputingSimilarity?: boolean;
+  recomputeSimilarityError?: string | null;
   /** RV metrics — optional so existing callers and the print pages are
    *  unaffected. Absent/null means no RV cavity was segmented. */
   rv?: RvMetrics;
-  lvVolumes?: { LVEDV: number | null; LV_SV: number | null };
+  lvVolumes?: { LVEDV: number | null; LV_SV: number | null; LVMassG?: number | null; MaxWallThicknessMm?: number | null };
   /** ED→ES RV regional strain, from POST /segmentation/compute-rv-strain-from-frames. */
   rvStrain?: RvStrain;
   /** Per-frame RV strain series — the RV twin of `strainSeries`. */
@@ -651,14 +659,24 @@ export function InteractiveReport({
   // below degrades to simply not rendering.
   const indexedMlM2 = (raw: number | null | undefined): string | undefined =>
     bsaM2 && raw != null ? `${(raw / bsaM2).toFixed(1)} mL/m² indexed` : undefined;
+  // Same idea as indexedMlM2 above, but for LV mass (g -> g/m² = LVMI) — the
+  // unit Disease Pattern Similarity's indexed mode actually scores against.
+  const indexedGM2 = (raw: number | null | undefined): string | undefined =>
+    bsaM2 && raw != null ? `${(raw / bsaM2).toFixed(1)} g/m² indexed (LVMI)` : undefined;
 
   /** LEFT-ventricular cards. Every label is explicitly LV-prefixed: with RV
-   *  metrics on the same page, a bare "EDV" is ambiguous. */
+   *  metrics on the same page, a bare "EDV" is ambiguous. LV Mass and Max
+   *  Wall Thickness were added because Disease Pattern Similarity already
+   *  uses both (MaxWallThicknessMm drives the HCM gate) — showing the actual
+   *  numbers here means the score is no longer explainable only by reading
+   *  Python source. Wall thickness has no indexed form (only mass does). */
   const metricCards: { label: string; value: string; unit: string; accent?: boolean; indexed?: string }[] = [
     { label: "LV Ejection Fraction (LVEF)", value: fmt(measurements?.EF), unit: "%", accent: true },
     { label: "LV End-Diastolic Volume (LV EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true, indexed: indexedMlM2(measurements?.EDV) },
     { label: "LV End-Systolic Volume (LV ESV)", value: fmt(measurements?.ESV), unit: "mL", indexed: indexedMlM2(measurements?.ESV) },
     { label: "LV Stroke Volume (LV SV)", value: fmt(measurements?.StrokeVolume), unit: "mL", indexed: indexedMlM2(measurements?.StrokeVolume) },
+    { label: "LV Myocardial Mass (LV Mass)", value: fmt(lvVolumes?.LVMassG), unit: "g", indexed: indexedGM2(lvVolumes?.LVMassG) },
+    { label: "Maximum ED Wall Thickness", value: fmt(lvVolumes?.MaxWallThicknessMm), unit: "mm" },
     { label: "LV Peak Global Radial Strain (LV GRS)", value: fmt(measurements?.PeakGRS), unit: "%" },
     { label: "LV Peak Global Circumferential Strain (LV GCS)", value: fmt(measurements?.PeakGCS), unit: "%" },
   ];
@@ -688,7 +706,7 @@ export function InteractiveReport({
     { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL", indexed: indexedMlM2(rv?.RVEDV) },
     { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL", indexed: indexedMlM2(rv?.RVESV) },
     { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL", indexed: indexedMlM2(rv?.RV_SV) },
-    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", preview: !hasRealRvGcs },
+    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", preview: true },
     { label: "RV Peak Global Area Strain (RV GAS)", value: rvPeakGasPreview.toFixed(1), unit: "%", preview: true },
   ];
 
@@ -700,7 +718,7 @@ export function InteractiveReport({
   // Sex is required to interpret RVEDVI (the ARVC TFC cutoffs are sex-
   // specific) — not collected elsewhere in the pipeline, so it lives here as
   // a small local toggle rather than a persisted field.
-  const [rvSex, setRvSex] = useState<Sex>("unspecified");
+  const [patientSex, setPatientSex] = useState<Sex>("unspecified");
   const rvedvi = bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null;
   const rvesvi = bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null;
   const rvSvi = bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null;
@@ -710,17 +728,100 @@ export function InteractiveReport({
   const rvRegionalAbnormalPlaceholder: boolean | null = null;
   const rvGasAbnormalPlaceholder: boolean | null = null;
   const rvDiseasePatterns = computeRvDiseasePatterns({
-    rvedvi, rvesvi, rvef: rv?.RVEF ?? null, svi: rvSvi, sex: rvSex,
+    rvedvi, rvesvi, rvef: rv?.RVEF ?? null, svi: rvSvi, sex: patientSex,
     regionalContractionAbnormal: rvRegionalAbnormalPlaceholder,
     gasAbnormal: rvGasAbnormalPlaceholder,
   });
 
+  // Qualitative confidence tier — same three bands the badge used to encode as
+  // a raw percentage, now bucketed like Health Status's normal/low confidence
+  // pill instead of surfacing the number itself.
+  const diseaseConfidenceTier: "high" | "reduced" | "low" | null =
+    typeof similarity?.confidence === "number"
+      ? similarity.confidence >= 0.85 ? "high" : similarity.confidence >= 0.6 ? "reduced" : "low"
+      : null;
+
+  /**
+   * Auto-recompute Disease Pattern Similarity whenever BSA or sex actually
+   * change on screen, debounced so typing doesn't fire a request per
+   * keystroke. Without this, clearing height/weight left the mode badge and
+   * confidence note stuck on whatever was last explicitly recomputed — the
+   * fields and the explanation could silently disagree. Skips the initial
+   * mount so opening the report doesn't immediately fire a request before
+   * the user has touched anything.
+   */
+  const skipFirstRecompute = useRef(true);
+  useEffect(() => {
+    if (skipFirstRecompute.current) {
+      skipFirstRecompute.current = false;
+      return;
+    }
+    if (!onRecomputeSimilarityWithBsa) return;
+    const timer = window.setTimeout(() => {
+      onRecomputeSimilarityWithBsa(bsaM2 ?? null, patientSex);
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // onRecomputeSimilarityWithBsa is excluded deliberately: its identity
+    // changes on every poll tick while a recompute is in flight, and
+    // including it here would retrigger this effect mid-recompute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bsaM2, patientSex]);
+
   return (
     <div className="mx-auto max-w-5xl px-6 pb-16 pt-6">
-      <header className="mb-5">
-        <p className="text-xs text-muted-foreground">Cardiac Functional Analysis Report · Generated {generatedAt}</p>
-        <h1 className="mt-1 text-[22px] font-extrabold text-foreground">Patient {patientLabel}</h1>
-        <p className="mt-0.5 text-[13px] text-muted-foreground">{scanSummary}</p>
+      <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs text-muted-foreground">Cardiac Functional Analysis Report · Generated {generatedAt}</p>
+          <h1 className="mt-1 text-[22px] font-extrabold text-foreground">Patient {patientLabel}</h1>
+          <p className="mt-0.5 text-[13px] text-muted-foreground">{scanSummary}</p>
+        </div>
+        {/* BSA + sex — optional, screen-only. Lives up here (not inside the
+            Cardiac Measurements card) since it feeds two downstream pipelines
+            that live in different cards: BSA/sex recompute Disease Pattern
+            Similarity (LV), and sex alone drives the RV patterns' RVEDVI
+            cutoffs — one shared, page-level value instead of two toggles. */}
+        {(onHeightCmChange || onWeightKgChange) && (
+          <div
+            className="flex flex-wrap items-center gap-1.5 pt-0.5"
+            title="Adds BSA-indexed volumes (EDVI/ESVI, RVEDVI/RVESVI) to the tiles below. Leave blank to show raw values only."
+          >
+            <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">BSA</span>
+            <span className="flex items-center gap-1">
+              <Input
+                type="number" inputMode="decimal" min={0}
+                value={heightCm ?? ""} onChange={(e) => onHeightCmChange?.(e.target.value)}
+                placeholder="Height"
+                className="h-7 w-20 px-2 py-0 text-[9px] leading-none"
+              />
+              <span className="text-[9px] text-muted-foreground">cm</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <Input
+                type="number" inputMode="decimal" min={0}
+                value={weightKg ?? ""} onChange={(e) => onWeightKgChange?.(e.target.value)}
+                placeholder="Weight"
+                className="h-7 w-20 px-2 py-0 text-[9px] leading-none"
+              />
+              <span className="text-[9px] text-muted-foreground">kg</span>
+            </span>
+            <span className="text-[11px] font-semibold tabular-nums text-foreground">
+              {bsaM2 != null ? `${bsaM2.toFixed(2)} m²` : "—"}
+            </span>
+            <div className="inline-flex rounded-md border border-border bg-background p-0.5" title="Used for RVEDVI's sex-specific ARVC cutoffs (RV patterns below) and for sex-specific LV reference ranges in Disease Pattern Similarity.">
+              {(["male", "female", "unspecified"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setPatientSex(s)}
+                  className={`rounded px-1.5 py-0.5 text-[9px] font-medium capitalize transition-colors ${
+                    patientSex === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                >
+                  {s === "unspecified" ? "Sex: —" : s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Summary strip: measurements · health status · disease similarity.
@@ -736,41 +837,9 @@ export function InteractiveReport({
             rows. Keeps the DOM order (and the print/screen-reader order)
             unchanged while giving the table the width it needs. */}
         <div className="border-b border-border p-4 lg:col-start-1 lg:row-start-1">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
-            <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
-              <Sparkles className="h-3.5 w-3.5 text-primary" /> Cardiac Measurements
-            </p>
-            {/* BSA — optional, screen-only. Lives here (not a separate banner)
-                since this card is the only place its effect is visible: it
-                only ever changes the indexed sub-values on the EDV/ESV tiles
-                below, in this section. */}
-            {(onHeightCmChange || onWeightKgChange) && (
-              <div className="flex items-center gap-2" title="Adds BSA-indexed volumes (EDVI/ESVI, RVEDVI/RVESVI) to the tiles below. Leave blank to show raw values only.">
-                <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">BSA</span>
-                <span className="flex items-center gap-1">
-                  <Input
-                    type="number" inputMode="decimal" min={0}
-                    value={heightCm ?? ""} onChange={(e) => onHeightCmChange?.(e.target.value)}
-                    placeholder="Height"
-                    className="h-6 w-16 text-[11px]"
-                  />
-                  <span className="text-[9px] text-muted-foreground">cm</span>
-                </span>
-                <span className="flex items-center gap-1">
-                  <Input
-                    type="number" inputMode="decimal" min={0}
-                    value={weightKg ?? ""} onChange={(e) => onWeightKgChange?.(e.target.value)}
-                    placeholder="Weight"
-                    className="h-6 w-16 text-[11px]"
-                  />
-                  <span className="text-[9px] text-muted-foreground">kg</span>
-                </span>
-                <span className="text-[11px] font-semibold tabular-nums text-foreground">
-                  {bsaM2 != null ? `${bsaM2.toFixed(2)} m²` : "—"}
-                </span>
-              </div>
-            )}
-          </div>
+          <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+            <Sparkles className="h-3.5 w-3.5 text-primary" /> Cardiac Measurements
+          </p>
           <p className="mb-2 mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             Left Ventricle
           </p>
@@ -1085,15 +1154,15 @@ export function InteractiveReport({
                   so drawing coloured zones would imply a reference that
                   doesn't exist. Advisory only — never affects the LV grade. */}
               {hasRv && (() => {
-                const edviMinor = rvSex === "female" ? 90 : 100;
-                const edviMajor = rvSex === "female" ? 100 : 110;
-                const edviMax = rvSex === "female" ? 140 : 160;
-                const edviZones: Zone[] = rvSex === "unspecified"
+                const edviMinor = patientSex === "female" ? 90 : 100;
+                const edviMajor = patientSex === "female" ? 100 : 110;
+                const edviMax = patientSex === "female" ? 140 : 160;
+                const edviZones: Zone[] = patientSex === "unspecified"
                   ? []
                   : [{ from: 0, to: edviMinor, tone: "green" }, { from: edviMinor, to: edviMajor, tone: "amber" }, { from: edviMajor, to: edviMax, tone: "red" }];
                 const edviInterp = rvedvi == null
                   ? { text: "Enter BSA above to index", level: "warn" as const }
-                  : rvSex === "unspecified"
+                  : patientSex === "unspecified"
                   ? { text: "Select sex above (cutoffs are sex-specific)", level: "warn" as const }
                   : rvedvi >= edviMajor
                   ? { text: "Above ARVC major threshold", level: "warn" as const }
@@ -1101,18 +1170,28 @@ export function InteractiveReport({
                   ? { text: "Above ARVC minor threshold", level: "warn" as const }
                   : { text: "Within reference", level: "ok" as const };
 
-                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; level: "ok" | "warn" } | null }[] = [
+                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; level: "ok" | "warn" } | null; preview?: boolean }[] = [
                   { key: "RVEF", name: "RV Ejection Fraction (RVEF)", value: rv?.RVEF ?? null, unit: "%", min: 0, max: 100, normalLabel: "≥ 48",
                     zones: [{ from: 0, to: 30, tone: "red" }, { from: 30, to: 48, tone: "amber" }, { from: 48, to: 100, tone: "green" }],
                     interp: { text: rvGrade, level: rvGrade === "Normal" ? "ok" : "warn" } },
                   { key: "RVEDVI", name: "RV EDV Index (RVEDVI)", value: rvedvi, unit: "mL/m²", min: 0, max: edviMax, normalLabel: `< ${edviMinor}`,
                     zones: edviZones, interp: edviInterp },
+                  // Flagged `preview: true` for the same reason as GAS below: no paper
+                  // validates a normal range for this RV strain measure yet, so even
+                  // though the number itself is real (once computed), it gets the same
+                  // muted/"preview" tag rather than sitting next to RVEF/RVEDVI looking
+                  // like a clinically-referenced result.
                   { key: "PeakGCS_RV", name: "Peak Global Circumferential Strain", value: rvPeakGcs, unit: "%", min: -30, max: 0, normalLabel: "not validated",
                     zones: [], interp: hasRealRvGcs
-                      ? { text: "Measured — no validated RV-specific reference range", level: "warn" }
-                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" } },
+                      ? { text: "Preview — no validated RV-specific reference range", level: "warn" }
+                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" },
+                    preview: true },
+                  // Dummy number (no GAS computation exists in this pipeline yet) — flagged
+                  // `preview: true` so the value renders muted with an explicit "preview" tag,
+                  // the same visual treatment as the Cardiac Measurements tile above, instead
+                  // of looking like a real measured result next to RVEF/RVEDVI.
                   { key: "PeakGAS_RV", name: "Peak Global Area Strain", value: rvPeakGasPreview, unit: "%", min: 0, max: 50, normalLabel: "not validated",
-                    zones: [], interp: { text: "Preview — no validated reference range", level: "warn" } },
+                    zones: [], interp: { text: "Preview — no validated reference range", level: "warn" }, preview: true },
                 ];
 
                 return (
@@ -1134,10 +1213,12 @@ export function InteractiveReport({
                         {rows.map((m) => (
                           <tr key={m.key} className="border-t border-border/60">
                             <td className="px-1 py-2 align-top">
-                              <span className="text-[11.5px] font-semibold leading-tight text-foreground">{m.name}</span>
+                              <span className="text-[11.5px] font-semibold leading-tight text-foreground">
+                                {m.name}{m.preview && <span className="ml-1 text-[9.5px] font-semibold text-amber-600 dark:text-amber-400">preview</span>}
+                              </span>
                             </td>
                             <td className="px-1 py-2 align-top">
-                              <span className="text-[13px] font-bold tabular-nums text-foreground">
+                              <span className={`text-[13px] font-bold tabular-nums ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
                                 {fmt(m.value)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">{m.unit}</span>
                               </span>
                               <div className="relative mt-3 h-2.5 w-full min-w-[120px] max-w-[190px]">
@@ -1169,10 +1250,11 @@ export function InteractiveReport({
                     </table>
                     <p className="mt-2 text-[9px] leading-snug text-muted-foreground">
                       RVEF/RVEDVI are computed from this patient's data (RVEDVI needs sex + BSA, set above).
-                      Peak GCS is real (the existing RV cavity-radius strain measure) once RV strain has been
-                      run for this model. Peak GAS is still a placeholder preview — this pipeline has no
-                      area-based RV strain computation yet. RV SV {fmt(rv?.RV_SV)} mL. Advisory only — RV
-                      findings never affect the LV grade above.
+                      Peak GCS and Peak GAS are both marked preview — GCS uses this pipeline's existing RV
+                      cavity-radius strain measure (real once RV strain has been run for this model), but
+                      neither strain has a clinically validated RV-specific reference range yet, and GAS
+                      itself has no computation in this pipeline at all. RV SV {fmt(rv?.RV_SV)} mL. Advisory
+                      only — RV findings never affect the LV grade above.
                     </p>
                   </div>
                 );
@@ -1276,6 +1358,52 @@ export function InteractiveReport({
           </p>
           {similarity ? (
             <>
+              {/* Headline + mode/confidence — the headline reads "Indeterminate"
+                  or "...cannot be assessed reliably" instead of a confident
+                  profile label whenever the top profile's gate (see
+                  compute_disease_similarity.py::_apply_gate) failed or
+                  couldn't be checked, even though the bars below still show
+                  the full, untouched z-score ranking for transparency. */}
+              {similarity.phenotype_headline && (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-md bg-muted px-2 py-1 text-[11px] font-bold text-foreground">
+                    {similarity.phenotype_headline}
+                  </span>
+                  {similarity.mode && (
+                    <span className="rounded-full border border-border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {similarity.mode === "indexed" ? "BSA-indexed" : "Non-indexed"}
+                    </span>
+                  )}
+                  {/* Qualitative, not a raw percentage — same style as Health
+                      Status's normal/low confidence pill (see the RV FUNCTION
+                      badge above), just with a middle "reduced" tier since this
+                      confidence is continuous rather than Health Status's
+                      two-valued normal/low. */}
+                  {diseaseConfidenceTier && (
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-semibold ${
+                        diseaseConfidenceTier === "high" ? "border border-border bg-muted text-muted-foreground"
+                        : diseaseConfidenceTier === "reduced" ? "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                        : "border border-red-500/50 bg-red-500/15 text-red-700 dark:text-red-300"}`}
+                      title={similarity.confidence_notes?.join(" ") || "No confidence-reducing factors."}
+                    >
+                      {diseaseConfidenceTier !== "high" && <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />}
+                      {diseaseConfidenceTier === "high" ? "High confidence" : diseaseConfidenceTier === "reduced" ? "Reduced confidence" : "Low confidence"}
+                    </span>
+                  )}
+                  {/* BSA/sex above auto-recompute this result (debounced) — this
+                      just surfaces that a request is in flight or failed, since
+                      there's no button anymore to carry a loading/error state. */}
+                  {recomputingSimilarity && (
+                    <span className="inline-flex items-center gap-1 text-[9.5px] font-medium text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Updating…
+                    </span>
+                  )}
+                </div>
+              )}
+              {recomputeSimilarityError && (
+                <p className="mb-3 text-[10px] text-red-600 dark:text-red-400">{recomputeSimilarityError}</p>
+              )}
               <div className="flex flex-col gap-2.5">
                 {similarity.similarities.map((d) => (
                   <div key={d.code}>
@@ -1310,6 +1438,41 @@ export function InteractiveReport({
                   </div>
                 );
               })()}
+              {/* Gate check — the essential-criterion reasoning behind the
+                  headline above. Shown even when met=true, so the reader sees
+                  WHY the headline is confident, not just that it is. */}
+              {similarity.gate?.reason && (
+                <div className="mt-2 flex items-start gap-1.5 text-[10.5px]">
+                  {similarity.gate.met === true
+                    ? <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    : <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />}
+                  <span className="text-muted-foreground">{similarity.gate.reason}</span>
+                </div>
+              )}
+              {!!similarity.confidence_notes?.length && (
+                <ul className="mt-1.5 flex flex-col gap-0.5">
+                  {similarity.confidence_notes.map((n, i) => (
+                    <li key={i} className="flex items-start gap-1 text-[10px] leading-snug text-muted-foreground/80">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-red-600 dark:text-red-400" />
+                      <span>{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* Informational only — does NOT reduce confidence (e.g. confirming
+                  BSA-indexing was used, or the GRS/GCS strain-surrogate caveat).
+                  Neutral icon deliberately, so it doesn't read as a warning like
+                  confidence_notes above. */}
+              {!!similarity.notes?.length && (
+                <ul className="mt-1.5 flex flex-col gap-0.5">
+                  {similarity.notes.map((n, i) => (
+                    <li key={i} className="flex items-start gap-1 text-[10px] leading-snug text-muted-foreground/80">
+                      <Info className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50" />
+                      <span>{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </>
           ) : (
             <EmptyState computing={computing} error={computeError} />
@@ -1326,20 +1489,12 @@ export function InteractiveReport({
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 RV patterns <span className="normal-case tracking-normal">· prototype</span>
               </p>
-              <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-                {(["male", "female", "unspecified"] as const).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setRvSex(s)}
-                    title="RVEDVI's ARVC cutoffs are sex-specific — not collected elsewhere in this pipeline."
-                    className={`rounded px-1.5 py-0.5 text-[9px] font-medium capitalize transition-colors ${
-                      rvSex === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-                  >
-                    {s === "unspecified" ? "Sex: —" : s}
-                  </button>
-                ))}
-              </div>
+              {/* Sex toggle now lives in the Cardiac Measurements header above,
+                  shared with Disease Pattern Similarity's BSA recompute — this
+                  readout just reflects that shared value. */}
+              <span className="text-[9px] font-medium capitalize text-muted-foreground">
+                {patientSex === "unspecified" ? "Sex: —" : `Sex: ${patientSex}`}
+              </span>
             </div>
 
             <div className="flex flex-col gap-2.5">
@@ -1776,6 +1931,19 @@ export function InteractiveReport({
             PeakGRS: measurements?.PeakGRS,
             PeakGCS: measurements?.PeakGCS,
             mostSimilarPattern: similarity?.most_similar,
+          })}
+          patientFacts={buildLvPhenotypeFacts({
+            EF: measurements?.EF,
+            EDV: measurements?.EDV,
+            ESV: measurements?.ESV,
+            StrokeVolume: measurements?.StrokeVolume,
+            PeakGRS: measurements?.PeakGRS,
+            PeakGCS: measurements?.PeakGCS,
+            LVMassG: lvVolumes?.LVMassG,
+            MaxWallThicknessMm: lvVolumes?.MaxWallThicknessMm,
+            bsaM2,
+            sex: patientSex,
+            similarity,
           })}
         />
       </section>

@@ -84,14 +84,18 @@ check("Brief's healthy example (EF 58/EDV 162/ESV 68) ranks NOR", () => {
 
 // ── Real metrics output from the heart-metrics module (strain null) ───────
 // This is an actual heartMetrics.measurements block: EF 64, normal cavity, no
-// strain yet. Should read NOR using only the 4 volume features, no crash on the
-// null PeakGRS/PeakGCS.
+// strain yet. Should read NOR using only EF/EDV/ESV (non-indexed mode — no
+// EDVI supplied), no crash on the null PeakGRS/PeakGCS. StrokeVolume is
+// intentionally informational-only as of the LV-phenotype-similarity rework
+// (arithmetic EDV-ESV — see compute_disease_similarity.py docstring "Two
+// modes"), so it does NOT count toward features_used even though supplied.
 check("Real metrics output (EF 64, GRS/GCS null) ranks NOR without strain", () => {
   const out = parse(runPython({ measurements: { EF: 64.0, EDV: 144.0, ESV: 51.84, StrokeVolume: 92.16, PeakGRS: null, PeakGCS: null } }));
   assert(out.most_similar === "NOR", `expected NOR, got ${out.most_similar}`);
   assert(out.features_missing.includes("PeakGRS") && out.features_missing.includes("PeakGCS"),
     "strain features should be reported missing");
-  assert(out.features_used.length === 4, `expected 4 volume features used, got ${out.features_used.length}`);
+  assert(out.features_used.length === 3, `expected 3 features used (EF/EDV/ESV), got ${out.features_used.length}`);
+  assert(out.informational.StrokeVolume === 92.16, "StrokeVolume should be echoed informationally, not scored");
 });
 
 // ── Percentages sum to ~100 ───────────────────────────────────────────────

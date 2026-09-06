@@ -1283,9 +1283,14 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
 
             // Auto-chain disease similarity if heart metrics are present (otherwise
             // it will run when the user triggers it, or after metrics are computed).
+            // No body here — this is an automatic chain after strain compute, not
+            // a user-initiated trigger, so there's no bsa_m2/sex to read. Runs in
+            // non-indexed mode; a caller wanting indexed-mode similarity should
+            // use the manual trigger-disease-similarity route with bsa_m2/sex set.
             const simMeasurements = assembleSimilarityMeasurements(updatedMask);
             if (simMeasurements) {
-                computeDiseaseSimilarityFromMetrics(maskDoc._id.toString(), simMeasurements).catch((simErr: any) => {
+                const { sex: autoSex, ...autoMeasurementsOnly } = simMeasurements;
+                computeDiseaseSimilarityFromMetrics(maskDoc._id.toString(), autoMeasurementsOnly, autoSex).catch((simErr: any) => {
                     logger.warn(`${serviceLocation}: Auto disease-similarity after strain failed for mask ${maskDoc._id}: ${simErr?.message}`);
                 });
                 logger.info(`${serviceLocation}: Auto-fired disease similarity for mask ${maskDoc._id} after strain compute.`);
@@ -2187,17 +2192,55 @@ router.post("/trigger-heart-metrics/:maskId", isAuth, async (req: Request, res: 
  */
 function assembleSimilarityMeasurements(
     maskDoc: any,
-    bodyPeaks?: { PeakGRS?: number | null; PeakGCS?: number | null },
+    body?: {
+        PeakGRS?: number | null; PeakGCS?: number | null;
+        // BSA is never persisted (see report/page.tsx's client-side-only BSA
+        // card) — a caller wanting indexed-mode similarity must supply it fresh
+        // on every trigger call. sex is likewise request-scoped, never stored.
+        bsa_m2?: number | null;
+        sex?: "male" | "female" | "unspecified";
+    },
 ): {
     EF: number | null; EDV: number | null; ESV: number | null;
-    StrokeVolume: number | null; PeakGRS: number | null; PeakGCS: number | null;
+    EDVI?: number | null; ESVI?: number | null;
+    LVMassG?: number | null; LVMI?: number | null;
+    MaxWallThicknessMm?: number | null;
+    StrokeVolume: number | null; StrokeVolumeIndex?: number | null;
+    PeakGRS: number | null; PeakGCS: number | null;
+    sex: "male" | "female" | "unspecified";
 } | null {
     const hm = maskDoc?.heartMetrics?.measurements;
     if (!hm) return null;
 
+    const bsaM2 = typeof body?.bsa_m2 === "number" && body.bsa_m2 > 0 ? body.bsa_m2 : null;
+    const sex = body?.sex === "male" || body?.sex === "female" ? body.sex : "unspecified";
+    const lvMassG: number | null = maskDoc?.heartMetrics?.LV_mass_g ?? null;
+    const lvEdv: number | null = hm.EDV ?? null;
+    const lvEsv: number | null = hm.ESV ?? null;
+    const lvSv: number | null = hm.StrokeVolume ?? null;
+
+    // Indexed features are pure division — computed fresh here rather than
+    // read off heartMetrics (which was computed without any bsa_m2, since
+    // nothing persists BSA), so a caller can go from non-indexed to indexed
+    // mode on demand just by supplying bsa_m2 on this one request.
+    const indexed = (v: number | null): number | null => (bsaM2 && v != null ? v / bsaM2 : null);
+
+    // Maximum ED wall thickness — the one morphology feature that needs NO
+    // client input at all: it's max() over the AHA segment values already
+    // stored on this mask's own bullseye (see compute_bullseye_from_rle.py),
+    // computed at the ED frame. Real, server-side, always available once the
+    // bullseye has been computed for this mask.
+    const bullseyeValues: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values;
+    const finiteSegmentValues = (bullseyeValues ?? []).filter(
+        (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
+    );
+    const maxWallThicknessMm: number | null = finiteSegmentValues.length
+        ? Math.max(...finiteSegmentValues)
+        : null;
+
     const strain = maskDoc?.strain;
-    const bodyGRS = typeof bodyPeaks?.PeakGRS === "number" ? bodyPeaks.PeakGRS : null;
-    const bodyGCS = typeof bodyPeaks?.PeakGCS === "number" ? bodyPeaks.PeakGCS : null;
+    const bodyGRS = typeof body?.PeakGRS === "number" ? body.PeakGRS : null;
+    const bodyGCS = typeof body?.PeakGCS === "number" ? body.PeakGCS : null;
 
     // Strain peaks are only physiologically meaningful when measured between the
     // TRUE end-diastole and end-systole frames. Heart metrics auto-detects those
@@ -2217,13 +2260,23 @@ function assembleSimilarityMeasurements(
 
     return {
         EF:           hm.EF ?? null,
-        EDV:          hm.EDV ?? null,
-        ESV:          hm.ESV ?? null,
-        StrokeVolume: hm.StrokeVolume ?? null,
+        EDV:          lvEdv,
+        ESV:          lvEsv,
+        // Indexed mode (compute_disease_similarity.py picks the mode by whether
+        // EDVI is present) — null unless this specific request supplied bsa_m2.
+        EDVI:         indexed(lvEdv),
+        ESVI:         indexed(lvEsv),
+        LVMassG:      lvMassG,
+        LVMI:         indexed(lvMassG),
+        // Real regardless of BSA — see maxWallThicknessMm derivation above.
+        MaxWallThicknessMm: maxWallThicknessMm,
+        StrokeVolume: lvSv,
+        StrokeVolumeIndex: indexed(lvSv),
         // Prefer explicit body override → strain peaks (only if computed at the
         // auto ED/ES) → any value already on heartMetrics (usually null).
         PeakGRS:      bodyGRS ?? strainGRS ?? hm.PeakGRS ?? null,
         PeakGCS:      bodyGCS ?? strainGCS ?? hm.PeakGCS ?? null,
+        sex,
     };
 }
 
@@ -2233,7 +2286,11 @@ function assembleSimilarityMeasurements(
 // heartMetrics.measurements; PeakGRS/PeakGCS come from the persisted strain
 // result (strain.global_grs/global_gcs) — or from the request body if supplied.
 // POST /segmentation/trigger-disease-similarity/:maskId
-//   body (optional): { PeakGRS?: number, PeakGCS?: number }
+//   body (optional): { PeakGRS?: number, PeakGCS?: number, bsa_m2?: number,
+//                       sex?: "male"|"female"|"unspecified" }
+//   bsa_m2/sex are NEVER persisted (BSA is a client-side-only report-page
+//   input — see report/page.tsx) — supply them fresh on each call to get
+//   indexed-mode similarity; omit them for the non-indexed fallback.
 router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
     const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
@@ -2261,7 +2318,8 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
         // other trigger routes.
         res.json({ success: true, message: "Disease similarity computation started." });
 
-        computeDiseaseSimilarityFromMetrics(maskId, measurements).catch((err: any) => {
+        const { sex, ...measurementsOnly } = measurements;
+        computeDiseaseSimilarityFromMetrics(maskId, measurementsOnly, sex).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-disease-similarity async error for mask ${maskId}: ${err?.message}`);
         });
 

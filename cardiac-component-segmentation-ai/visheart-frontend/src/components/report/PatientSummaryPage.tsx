@@ -37,6 +37,17 @@ export interface PatientSummaryData {
   weightKg?: number | null;
   rvEdvi?: number | null;
   rvEsvi?: number | null;
+  /**
+   * Disease-pattern headline/confidence/gate — see compute_disease_similarity.py.
+   * phenotypeHeadline reads "Indeterminate LV phenotype pattern" or
+   * "...cannot be assessed reliably" instead of a confident profile label
+   * whenever the top profile's essential gate failed or couldn't be checked —
+   * the diseasePattern bars below are unaffected either way.
+   */
+  phenotypeHeadline?: string | null;
+  diseaseSimilarityConfidence?: number | null;
+  diseaseSimilarityMode?: "indexed" | "non_indexed" | null;
+  diseaseSimilarityGateReason?: string | null;
   voxelSize: string;
   /** Backend grades (compute_health_status.py); the longer labels are legacy. */
   healthStatus:
@@ -255,7 +266,28 @@ export function PatientSummaryPage({
       </section>
 
       <section className="mb-2">
-        <h3 className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Disease Pattern Similarity</h3>
+        <h3 className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          Disease Pattern Similarity
+          {data.phenotypeHeadline && (
+            <span className="normal-case tracking-normal text-foreground">— {data.phenotypeHeadline}</span>
+          )}
+          {data.diseaseSimilarityMode && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[8.5px] font-semibold normal-case tracking-normal text-muted-foreground">
+              {data.diseaseSimilarityMode === "indexed" ? "BSA-indexed" : "non-indexed"}
+            </span>
+          )}
+          {/* Qualitative, not a raw percentage — mirrors the on-screen badge
+              (InteractiveReport) and the Health Status normal/low pill style. */}
+          {typeof data.diseaseSimilarityConfidence === "number" && (() => {
+            const c = data.diseaseSimilarityConfidence as number;
+            const tier = c >= 0.85 ? "High" : c >= 0.6 ? "Reduced" : "Low";
+            return (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[8.5px] font-semibold normal-case tracking-normal text-muted-foreground">
+                {tier} confidence
+              </span>
+            );
+          })()}
+        </h3>
         <div className="space-y-1.5">
           {data.diseasePattern.map((d) => (
             <div key={d.label} className="flex items-center gap-2 text-[10px]">
@@ -267,6 +299,11 @@ export function PatientSummaryPage({
             </div>
           ))}
         </div>
+        {data.diseaseSimilarityGateReason && (
+          <p className="mt-1.5 text-[8.5px] leading-snug text-muted-foreground">
+            {data.diseaseSimilarityGateReason}
+          </p>
+        )}
         <p className="mt-2 text-[8.5px] leading-snug text-muted-foreground">
           Global longitudinal strain (GLS) is not reported — it needs a long-axis (4-chamber) view
           and the current pipeline is short-axis (SAX) only.

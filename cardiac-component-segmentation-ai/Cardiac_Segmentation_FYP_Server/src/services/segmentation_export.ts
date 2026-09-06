@@ -391,13 +391,24 @@ export const computeDiseaseSimilarityFromMetrics = async (
         EF: number | null;
         EDV: number | null;
         ESV: number | null;
+        // Indexed/morphology features — all optional. EDVI/ESVI/LVMI/StrokeVolumeIndex
+        // are only meaningful (non-null) when the caller supplied a bsa_m2; see
+        // assembleSimilarityMeasurements, which derives them. MaxWallThicknessMm is
+        // pulled from the mask's own stored bullseye — no BSA needed for that one.
+        EDVI?: number | null;
+        ESVI?: number | null;
+        LVMassG?: number | null;
+        LVMI?: number | null;
+        MaxWallThicknessMm?: number | null;
         StrokeVolume: number | null;
+        StrokeVolumeIndex?: number | null;
         PeakGRS: number | null;
         PeakGCS: number | null;
     },
+    sex?: "male" | "female" | "unspecified",
 ): Promise<void> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_disease_similarity.py');
-    const input = JSON.stringify({ measurements });
+    const input = JSON.stringify({ measurements, sex: sex ?? "unspecified" });
 
     return new Promise<void>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {

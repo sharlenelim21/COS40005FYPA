@@ -441,12 +441,19 @@ export const segmentationApi = {
    */
   triggerDiseaseSimilarity: async (
     maskId: string,
-    peaks?: { PeakGRS?: number | null; PeakGCS?: number | null },
+    body?: {
+      PeakGRS?: number | null; PeakGCS?: number | null;
+      /** Never persisted server-side — see report/page.tsx's BSA card. Passing
+       *  these switches the stored result to indexed mode; omitting them (or
+       *  calling with no body at all) computes/stores the non-indexed fallback. */
+      bsa_m2?: number | null;
+      sex?: "male" | "female" | "unspecified";
+    },
   ) => {
     try {
       const response = await api.post(
         `/segmentation/trigger-disease-similarity/${maskId}`,
-        peaks ?? {},
+        body ?? {},
       );
       return response.data;
     } catch (error) {

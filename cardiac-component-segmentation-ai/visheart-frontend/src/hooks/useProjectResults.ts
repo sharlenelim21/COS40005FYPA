@@ -99,8 +99,46 @@ export type SimilarityEntry = {
   reasons: string[];
 };
 
+/** Rule-based essential-criterion check for the TOP-ranked profile only — see
+ *  compute_disease_similarity.py::_apply_gate. Advisory: never changes
+ *  `most_similar` or `similarities`, only `phenotype_headline`/`confidence`. */
+export type DiseaseSimilarityGate = {
+  code: "NOR" | "HCM" | "DCM";
+  met: boolean | null;
+  reason: string;
+};
+
 export type DiseaseSimilarity = {
   most_similar: "NOR" | "HCM" | "DCM";
+  /** Display headline — same as PROFILE_LABELS[most_similar] UNLESS the gate
+   *  above failed or couldn't be assessed, in which case it reads
+   *  "Indeterminate LV phenotype pattern" or "...cannot be assessed reliably".
+   *  Prefer this over most_similar for anything user-facing. */
+  phenotype_headline?: string;
+  mode?: "indexed" | "non_indexed";
+  sex?: "male" | "female" | "unspecified";
+  /** 0-1, advisory — see compute_disease_similarity.py::_compute_confidence. */
+  confidence?: number;
+  confidence_notes?: string[];
+  /** Informational only — does NOT affect `confidence` (e.g. confirming
+   *  BSA-indexing was used, or the GRS/GCS mask-difference-strain caveat).
+   *  Render with a neutral icon, not the confidence_notes warning triangle. */
+  notes?: string[];
+  gate?: DiseaseSimilarityGate;
+  /** Authoritative gate facts for ALL THREE profiles (not just the top-ranked
+   *  one) plus two standalone facts — see
+   *  compute_disease_similarity.py::_all_gate_facts. `null` means "not enough
+   *  data to assess", which must NOT be treated as false (e.g. by the research
+   *  assistant deciding what it's allowed to say). */
+  phenotype_facts?: {
+    dcm_gate_met: boolean | null;
+    hcm_gate_met: boolean | null;
+    nor_gate_met: boolean | null;
+    lv_dilatation_present: boolean | null;
+    severe_lv_systolic_dysfunction: boolean | null;
+    hcm_wall_thickness_signal: boolean | null;
+  };
+  informational?: { StrokeVolume?: number | null; StrokeVolumeIndex?: number | null };
   similarities: SimilarityEntry[];
   features_used: string[];
   features_missing: string[];
@@ -244,6 +282,13 @@ export type MaskDoc = {
   strainSeries?: StrainSeries;
   rvStrain?: RvStrain;
   rvStrainSeries?: RvStrainSeries;
+  /** Per-AHA-segment ED wall thickness (mm) — see compute_bullseye_from_rle.py.
+   *  Max across segments is this mask's MaxWallThicknessMm, the same value
+   *  assembleSimilarityMeasurements (segmentation_routes.ts) computes
+   *  server-side for Disease Pattern Similarity's HCM gate. Surfaced here too
+   *  so the report can show it as an actual metric, not just feed it silently
+   *  into that one downstream score. */
+  bullseye?: { segment_values?: (number | null)[]; computed_at?: string };
 };
 
 export type Model = "unet" | "medsam";
@@ -595,6 +640,53 @@ export function useProjectResults(
     await ensureComputed(id, true);
   }, [doc, ensureComputed]);
 
+  const [recomputingSimilarity, setRecomputingSimilarity] = useState(false);
+  const [recomputeSimilarityError, setRecomputeSimilarityError] = useState<string | null>(null);
+
+  /**
+   * Recompute + PERSIST disease similarity specifically, with a caller-supplied
+   * bsa_m2/sex — the one way to actually get indexed-mode similarity stored on
+   * the mask doc. Deliberately separate from `recompute()` above: that function
+   * only fires triggers for results that are MISSING, so it can never switch an
+   * already-computed non-indexed result into indexed mode. This one always
+   * fires, unconditionally, because the caller is explicitly asking for a mode
+   * change, not filling a gap.
+   *
+   * Called automatically (debounced) by InteractiveReport whenever BSA/sex
+   * change on screen — including back to `null` when height/weight are
+   * cleared, which is what lets the mode badge revert to non-indexed instead
+   * of getting stuck on whatever was last explicitly recomputed.
+   */
+  const recomputeSimilarityWithBsa = useCallback(
+    async (bsa_m2: number | null, sex: "male" | "female" | "unspecified") => {
+      const id = doc?._id;
+      if (!id) return;
+      setRecomputingSimilarity(true);
+      setRecomputeSimilarityError(null);
+      try {
+        const before = doc?.diseaseSimilarity?.computed_at;
+        await segmentationApi.triggerDiseaseSimilarity(id, { bsa_m2, sex });
+        for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
+          await sleep(POLL_INTERVAL_MS);
+          const list = await loadMasks();
+          const m = list?.find((x) => x._id === id);
+          if (m?.diseaseSimilarity && m.diseaseSimilarity.computed_at !== before) {
+            return; // loadMasks() already updated `doc` via state
+          }
+        }
+        setRecomputeSimilarityError("Recompute did not finish in time — try again.");
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { message?: string } }; message?: string };
+        setRecomputeSimilarityError(
+          err?.response?.data?.message ?? err?.message ?? "Recompute failed.",
+        );
+      } finally {
+        setRecomputingSimilarity(false);
+      }
+    },
+    [doc, loadMasks],
+  );
+
   /**
    * Which models have a usable per-frame strain series (one carrying wall
    * thickness). Lets callers disable a model rather than switching to it and
@@ -636,6 +728,11 @@ export function useProjectResults(
     computing: computeState === "computing",
     /** Force a fresh recompute of metrics + status + similarity. */
     recompute,
+    /** Recompute + persist disease similarity in indexed mode for a caller-
+     *  supplied bsa_m2/sex — see the function's own docstring above. */
+    recomputeSimilarityWithBsa,
+    recomputingSimilarity,
+    recomputeSimilarityError,
     /** A newer segmentation run exists for this model but has no results yet —
      *  what's displayed comes from an earlier run. */
     newerMaskAvailable,
@@ -676,6 +773,17 @@ export function useProjectResults(
           LVEDVI: doc.heartMetrics.LVEDVI ?? null,
           LVESVI: doc.heartMetrics.LVESVI ?? null,
           LV_SVI: doc.heartMetrics.LV_SVI ?? null,
+          LVMassG: doc.heartMetrics.LV_mass_g ?? null,
+          // Same max-across-segments computation assembleSimilarityMeasurements
+          // does server-side for the disease-similarity HCM gate (see
+          // segmentation_routes.ts) — duplicated here client-side so the report
+          // can show the number itself, not just its downstream effect on a score.
+          MaxWallThicknessMm: (() => {
+            const vals = (doc.bullseye?.segment_values ?? []).filter(
+              (v): v is number => typeof v === "number" && Number.isFinite(v),
+            );
+            return vals.length ? Math.max(...vals) : null;
+          })(),
         }
       : undefined,
     /** Body surface area, if the backend compute was ever given one. Today
