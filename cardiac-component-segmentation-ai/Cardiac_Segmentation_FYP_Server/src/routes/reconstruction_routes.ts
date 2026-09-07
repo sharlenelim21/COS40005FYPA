@@ -274,6 +274,10 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     projectId: job.projectid,
                     maskId: (job as any).maskId || null,
                     segmentationModel: (job as any).segmentationModel || null,
+                    // Which chamber this job builds. Without it the viewer cannot tell an
+                    // in-flight RV job from an LV one, so a reload during an RV build showed the
+                    // chamber as "not built" with a Build button, while the job was still running.
+                    chamber: (job as any).chamber || null,
                     status: job.status,
                     name: job.segmentationName,
                     description: job.segmentationDescription,

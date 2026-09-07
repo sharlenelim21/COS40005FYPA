@@ -309,6 +309,8 @@ export interface UserJob {
      *  model name for segmentation jobs. Needed because `segmentationModel` above falls back to
      *  this value, so a reconstruction job reports as "medsam"/"unet" there. */
     modelUsed?: string | null;
+    /** 4D reconstruction jobs only: which chamber is being built. Absent means LV. */
+    chamber?: string | null;
     createdAt?: string | null;
     updatedAt?: string | null;
 }

@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/resizable";
 import { Switch } from "@/components/ui/switch";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
+import { reconstructionApi } from "@/lib/api";
 import {
   ArrowLeft,
   Play,
@@ -41,10 +42,12 @@ export default function Standalone4DViewerPage() {
   const modelParam = searchParams.get("model");
   const selectedModel = modelParam === "medsam" || modelParam === "unet" ? modelParam : null;
   const reconstructionIdParam = searchParams.get("reconstructionId");
-  // Set when a job was just started for this chamber. Used to keep polling and to show the
-  // chamber as building rather than as simply absent.
+  // Set when a job was just started for this chamber, as a hint for the very first render before
+  // the job list has loaded. It is NOT the source of truth: the param is lost on reload and on any
+  // navigation away and back, and a build takes minutes, so relying on it alone showed a chamber
+  // that was actively building as simply "not built" with a Build button next to it.
   const pendingParam = searchParams.get("pending");
-  const pendingChamber = pendingParam === "lv" || pendingParam === "rv" ? pendingParam : null;
+  const pendingHint = pendingParam === "lv" || pendingParam === "rv" ? pendingParam : null;
 
   // Get data from ProjectContext
   const {
@@ -60,6 +63,26 @@ export default function Standalone4DViewerPage() {
     refreshReconstructions,
     reconstructionResults,
   } = useProject();
+
+  // Job list is fetched here rather than read from ProjectContext on purpose. The context clears
+  // its copy as soon as any reconstruction exists ("jobs are only interesting until the first
+  // result arrives"), which is exactly the situation this needs to see through: building the RV
+  // while the LV already exists. Reading it there would always come back empty.
+  const [reconstructionJobs, setReconstructionJobs] = useState<Array<Record<string, unknown>> | null>(null);
+
+  const refreshReconstructionJobs = useCallback(async () => {
+    try {
+      const response = await reconstructionApi.getUserReconstructionJobs();
+      setReconstructionJobs(Array.isArray(response?.jobs) ? response.jobs : []);
+    } catch {
+      // Keep the previous answer. Failing to reach the endpoint is not evidence that nothing is
+      // running, and showing a Build button for a chamber that is mid-build is the bug being fixed.
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshReconstructionJobs();
+  }, [refreshReconstructionJobs]);
   const { processingUnit } = useGpuStatus();
 
   const activeReconstruction = reconstructionIdParam
@@ -126,12 +149,31 @@ export default function Standalone4DViewerPage() {
   const lvReconstruction = useMemo(() => findChamber("lv"), [findChamber]);
   const rvReconstruction = useMemo(() => findChamber("rv"), [findChamber]);
 
-  // True while a chamber we were told is being built has not landed yet. Drives both the polling
-  // loop and the "Building..." row in the sidebar.
-  const pendingChamberMissing =
-    pendingChamber === "rv" ? !rvReconstruction
-    : pendingChamber === "lv" ? !lvReconstruction
-    : false;
+  // Which chambers have a job running right now, according to the server. This is what makes the
+  // Building state survive a reload or a trip to another page -- the URL hint does not.
+  const buildingFromJobs = useMemo(() => {
+    const out = { lv: false, rv: false };
+    if (!Array.isArray(reconstructionJobs)) return out;
+    for (const job of reconstructionJobs) {
+      if (String(job.projectId ?? "") !== String(projectId)) continue;
+      const status = String(job.status ?? "").toLowerCase();
+      if (status !== "pending" && status !== "in_progress") continue;
+      // A job written before the chamber field reads as LV, which is what it was.
+      out[normalizeReconstructionChamber(job.chamber)] = true;
+    }
+    return out;
+  }, [reconstructionJobs, projectId]);
+
+  // The hint still counts, but only while the chamber is genuinely absent: it covers the gap
+  // between starting a job and the job list first loading. Once a reconstruction exists, neither
+  // source should claim it is still building.
+  const buildingLv = (buildingFromJobs.lv || pendingHint === "lv") && !lvReconstruction;
+  const buildingRv = (buildingFromJobs.rv || pendingHint === "rv") && !rvReconstruction;
+  const pendingChamber = buildingRv ? "rv" : buildingLv ? "lv" : null;
+
+  // True while a chamber that is being built has not landed yet. Drives both the polling loop and
+  // the "Building..." row in the sidebar.
+  const pendingChamberMissing = buildingLv || buildingRv;
 
   // How long to keep watching for a reconstruction that is still being built.
   //
@@ -182,7 +224,9 @@ export default function Standalone4DViewerPage() {
 
     const interval = setInterval(async () => {
       attempts++;
-      await refreshReconstructions();
+      // Both: the reconstruction list is what we are waiting for, the job list is what tells us
+      // something is still coming.
+      await Promise.all([refreshReconstructions(), refreshReconstructionJobs()]);
 
       if (attempts >= maxAttempts) {
         clearInterval(interval);
@@ -196,7 +240,7 @@ export default function Standalone4DViewerPage() {
       setIsPolling(false);
     };
   }, [loading, hasReconstructions, selectedModel, activeReconstruction, pollTimedOut,
-      refreshReconstructions, pendingChamberMissing, pollBudgetMs]);
+      refreshReconstructions, refreshReconstructionJobs, pendingChamberMissing, pollBudgetMs]);
 
   // Viewer state
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -231,7 +275,7 @@ export default function Standalone4DViewerPage() {
       recon: lvReconstruction,
       visible: showLv,
       setVisible: setShowLv,
-      building: pendingChamber === "lv" && !lvReconstruction,
+      building: buildingLv,
     },
     {
       key: "rv" as const,
@@ -240,7 +284,7 @@ export default function Standalone4DViewerPage() {
       recon: rvReconstruction,
       visible: showRv,
       setVisible: setShowRv,
-      building: pendingChamber === "rv" && !rvReconstruction,
+      building: buildingRv,
     },
   ];
 
