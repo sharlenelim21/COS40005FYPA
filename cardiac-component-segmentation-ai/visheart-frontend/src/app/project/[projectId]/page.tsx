@@ -1088,7 +1088,7 @@ function ProjectPageInner() {
                           <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/segmentation`}>
                               <div className="flex items-center gap-3 w-full">
-                                <Edit className="h-5 w-5 text-primary" />
+                                <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Edit Segmentation Masks</p>
                                   <p className="text-xs text-muted-foreground">
@@ -1121,7 +1121,7 @@ function ProjectPageInner() {
                             <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
                               <Link href={`/project/${projectId}/landmark-detection`}>
                                 <div className="flex items-center gap-3 w-full">
-                                  <Crosshair className="h-5 w-5 text-primary" />
+                                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
                                   <div className="text-left flex-1">
                                     <p className="font-semibold">Landmark Detection</p>
                                     <p className="text-xs text-muted-foreground">
@@ -1251,7 +1251,7 @@ function ProjectPageInner() {
                           <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/segmentation`}>
                               <div className="flex items-center gap-3 w-full">
-                                <Edit className="h-5 w-5 text-primary" />
+                                <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Edit Segmentation Masks</p>
                                   <p className="text-xs text-muted-foreground">
@@ -1284,7 +1284,7 @@ function ProjectPageInner() {
                             <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
                               <Link href={`/project/${projectId}/landmark-detection`}>
                                 <div className="flex items-center gap-3 w-full">
-                                  <Crosshair className="h-5 w-5 text-primary" />
+                                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
                                   <div className="text-left flex-1">
                                     <p className="font-semibold">Landmark Detection</p>
                                     <p className="text-xs text-muted-foreground">

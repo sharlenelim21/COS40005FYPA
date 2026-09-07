@@ -3,6 +3,7 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import { useProject } from "@/context/ProjectContext";
+import { useAuth } from "@/context/auth-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
@@ -10,10 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
-import { 
-  ResizablePanelGroup, 
-  ResizablePanel, 
-  ResizableHandle 
+import { GuidancePanel } from "@/components/GuidancePanel";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle
 } from "@/components/ui/resizable";
 import {
   ArrowLeft,
@@ -23,6 +25,7 @@ import {
   SkipForward,
   Loader2,
   AlertCircle,
+  Crosshair,
 } from "lucide-react";
 
 export default function Standalone4DViewerPage() {
@@ -32,6 +35,9 @@ export default function Standalone4DViewerPage() {
   const modelParam = searchParams.get("model");
   const selectedModel = modelParam === "medsam" || modelParam === "unet" ? modelParam : null;
   const reconstructionIdParam = searchParams.get("reconstructionId");
+
+  const { user } = useAuth();
+  const isGuest = user?.role === "guest";
 
   // Get data from ProjectContext
   const {
@@ -510,6 +516,23 @@ export default function Standalone4DViewerPage() {
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      {hasReconstructions && !isGuest && (
+        <GuidancePanel
+          storageKey={`recon-guidance-${projectId}`}
+          icon="🫀"
+          title="4D reconstruction ready!"
+          subtitle="Want to run Landmark Detection next?"
+          actions={[
+            {
+              label: "Run Landmark Detection",
+              icon: <Crosshair size={13} />,
+              primary: true,
+              onClick: () => router.push(`/project/${projectId}?highlight=landmark`),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 }
