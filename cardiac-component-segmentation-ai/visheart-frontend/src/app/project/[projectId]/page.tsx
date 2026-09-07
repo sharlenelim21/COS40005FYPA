@@ -752,9 +752,28 @@ function ProjectPageInner() {
       // Keep showing loading state until the job appears
       // The loading state will be cleared by the effect when hasActiveReconstructionJobs becomes true
     } catch (error: unknown) {
+      const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response;
+
+      // 409 is the server's duplicate guard answering, not a failure. Either this exact
+      // (model, chamber) already exists, or a job for it is still running -- and in both cases the
+      // useful thing to do is show the user the reconstruction rather than an error. Logging it
+      // through console.error also made Next's dev overlay pop a stack trace over the page, which
+      // is what this looked like from the outside: a crash, rather than "it is already running".
+      if (response?.status === 409) {
+        console.info("[Project] Reconstruction already exists or is running:", response?.data?.message);
+        setReconstructionError(
+          response?.data?.message ||
+          "This reconstruction already exists or is still running."
+        );
+        setIsStartingReconstruction(false);
+        setShowReconstructionDialog(false);
+        goToReconstructionViewer(config.segmentationModel, undefined, requestedChamber);
+        return;
+      }
+
       console.error("[Project] ❌ Error starting reconstruction:", error);
       setReconstructionError(
-        (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 
+        response?.data?.message ||
         "Failed to start reconstruction"
       );
       setIsStartingReconstruction(false);

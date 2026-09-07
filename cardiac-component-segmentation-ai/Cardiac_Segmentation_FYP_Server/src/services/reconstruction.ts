@@ -241,6 +241,9 @@ export const startReconstruction = async (
                 if (matchingReconstruction) {
                     const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
                     const chamberLabel = requestedChamber === "rv" ? "An RV" : "A 4D";
+                    logger.info(
+                        `${serviceLocation}: Rejected duplicate reconstruction for project ${projectId}: a ${requestedModel}/${requestedChamber} reconstruction already exists.`
+                    );
                     return {
                         success: false,
                         statusCode: 409,
@@ -269,6 +272,11 @@ export const startReconstruction = async (
             if (blockingJob) {
                 const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
                 const chamberLabel = requestedChamber === "rv" ? "An RV" : "A 4D";
+                // Logged because a silent 409 is very hard to diagnose from the outside: the
+                // request simply stops after the reconstruction lookup with no further output.
+                logger.info(
+                    `${serviceLocation}: Rejected duplicate reconstruction for project ${projectId}: ${requestedModel}/${requestedChamber} job ${blockingJob.uuid} is still ${blockingJob.status}.`
+                );
                 return {
                     success: false,
                     statusCode: 409,

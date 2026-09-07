@@ -1,6 +1,6 @@
 import { Request, Response, Router } from "express";
 import logger from "../services/logger";
-import { startInference, startModel2Inference } from "../services/inference";
+import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain } from "../services/segmentation_export";
 import {
@@ -87,6 +87,28 @@ router.post("/start-segmentation/:projectId",
         );
 
         try {
+            // Reject a duplicate before anything is uploaded or queued. The frontend disables its
+            // own button, but that flag is local state -- a refresh clears it, and a direct caller
+            // never had it. This is the only check that cannot be bypassed.
+            const blockingJob = await findBlockingSegmentationJob(
+                projectId,
+                segmentationModel === SegmentationModel.UNET
+                    ? SegmentationModel.UNET
+                    : SegmentationModel.MEDSAM,
+            );
+            if (blockingJob) {
+                const modelLabel = segmentationModel === SegmentationModel.UNET ? "UNet" : "MedSAM";
+                logger.info(
+                    `${serviceLocation}: Rejected duplicate ${modelLabel} segmentation for project ${projectId}; job ${blockingJob.uuid} is still ${blockingJob.status}.`
+                );
+                return res.status(409).json({
+                    message: `A ${modelLabel} segmentation is already running for this project. Wait for it to finish before starting another.`,
+                    jobUuid: blockingJob.uuid,
+                    jobStatus: blockingJob.status,
+                    startedAt: blockingJob.startedAt,
+                });
+            }
+
             if (segmentationModel === SegmentationModel.UNET) {
                 // DEVELOPER NOTE: New Added UNET API inference path
                 // - Uses FastAPI endpoint on the GPU inference service
@@ -364,6 +386,12 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     queuePosition: queuePosition,
                     message: job.message || "",
                     segmentationModel: job.segmentationModel || job.model_used || null,
+                    // Sent separately because `segmentationModel` above cannot carry it: a 4D
+                    // reconstruction job has BOTH fields set -- segmentationModel names the model
+                    // whose masks it consumes, model_used says it is a reconstruction. The fallback
+                    // chain therefore reports a reconstruction as "medsam"/"unet", and a caller
+                    // filtering on that alone cannot tell the two job types apart.
+                    modelUsed: job.model_used || null,
                     createdAt: (job as any).createdAt?.toISOString?.() || null,
                     updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };

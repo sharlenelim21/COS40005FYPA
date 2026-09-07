@@ -130,6 +130,29 @@ function SegmentationResultsPageInner() {
   const [revertDialogOpen, setRevertDialogOpen] = useState(false);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [runSegmentationLoading, setRunSegmentationLoading] = useState(false);
+  // `runSegmentationLoading` is local state and dies with the page. Refreshing while a job is on
+  // the GPU used to re-enable the button, so the same segmentation could be submitted repeatedly;
+  // the jobs queue behind a semaphore rather than crashing, but they delay everyone else and the
+  // last one to finish overwrites the others' masks. The server rejects duplicates with a 409 --
+  // that is the actual protection. This is only so the UI stops inviting the click.
+  const [serverJobRunning, setServerJobRunning] = useState<
+    { status: string; startedAt?: string | null } | null
+  >(null);
+
+  // "3 min ago" style, recomputed on each poll tick. Null when the job has no usable timestamp,
+  // so the caller can omit the phrase rather than print "started NaN minutes ago".
+  const serverJobElapsedLabel = useMemo(() => {
+    const raw = serverJobRunning?.startedAt;
+    if (!raw) return null;
+    const started = Date.parse(String(raw));
+    if (!Number.isFinite(started)) return null;
+    const minutes = Math.floor((Date.now() - started) / 60000);
+    if (minutes < 1) return "just now";
+    if (minutes === 1) return "1 minute ago";
+    if (minutes < 60) return `${minutes} minutes ago`;
+    const hours = Math.floor(minutes / 60);
+    return hours === 1 ? "over an hour ago" : `over ${hours} hours ago`;
+  }, [serverJobRunning]);
   const [runSegmentationError, setRunSegmentationError] = useState<string | null>(null);
   const [runSegmentationSuccess, setRunSegmentationSuccess] = useState<string | null>(null);
   const modelSessionKey = `selectedModel_${projectId}`;
@@ -562,6 +585,63 @@ function SegmentationResultsPageInner() {
     };
   }, [currentFrame, rvReconstructionForModel, showRvInPanel, getReconstructionGLB]);
 
+  // Matches the server guard in inference.ts: same project, same model, still running, and not
+  // so old that it is a job whose callback never arrived. A job with no model recorded is MedSAM
+  // -- UNet has always written the field.
+  const refreshServerJobState = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const response = await segmentationApi.getUserJobs();
+      const jobs: Array<Record<string, unknown>> = Array.isArray(response?.jobs) ? response.jobs : [];
+      // Mirrors STALE_JOB_MINUTES in the server's inference.ts. MedSAM is GPU-only (the CPU
+      // compose profile does not load it), UNet also runs on CPU where the same work takes much
+      // longer. If these drift apart the button and the server merely disagree about when to give
+      // up on a stuck job -- the server's value is the one that decides.
+      const staleMinutes = selectedModel === "unet" ? 90 : 30;
+      const staleCutoff = Date.now() - staleMinutes * 60 * 1000;
+
+      const running = jobs.find((job) => {
+        if (String(job.projectId ?? "") !== String(projectId)) return false;
+        const status = String(job.status ?? "").toLowerCase();
+        if (status !== "pending" && status !== "in_progress") return false;
+
+        // 4D reconstruction jobs share this collection and must not disable segmentation.
+        // Checked against `modelUsed`, NOT `segmentationModel`: a reconstruction job sets both,
+        // with segmentationModel naming the model whose masks it consumes, so filtering on that
+        // field alone reports every reconstruction as a MedSAM or UNet segmentation job.
+        if (String(job.modelUsed ?? "").toLowerCase() === "4d_reconstruction") return false;
+
+        const jobModelName = String(job.segmentationModel ?? "medsam").toLowerCase();
+        if (jobModelName !== selectedModel) return false;
+
+        const startedAt = job.createdAt ? Date.parse(String(job.createdAt)) : NaN;
+        if (Number.isFinite(startedAt) && startedAt < staleCutoff) return false;
+        return true;
+      });
+
+      setServerJobRunning(
+        running
+          ? { status: String(running.status), startedAt: running.createdAt as string | null }
+          : null,
+      );
+    } catch {
+      // Leave the previous answer in place. Failing to reach the jobs endpoint is not evidence
+      // that nothing is running, and the server-side 409 still covers the real case.
+    }
+  }, [projectId, selectedModel]);
+
+  // Check on mount and whenever the model changes; keep checking while something is running so the
+  // button re-enables by itself when the job lands.
+  useEffect(() => {
+    refreshServerJobState();
+  }, [refreshServerJobState]);
+
+  useEffect(() => {
+    if (!serverJobRunning) return;
+    const timer = setInterval(refreshServerJobState, 5000);
+    return () => clearInterval(timer);
+  }, [serverJobRunning, refreshServerJobState]);
+
   const handleReset = useCallback(() => {
     setZoomLevel(1);
     setResetTrigger(prev => prev + 1);
@@ -632,7 +712,7 @@ function SegmentationResultsPageInner() {
   // existing result) or from the Re-run confirm dialog (cache hit and
   // user explicitly chose to regenerate).
   const dispatchRunSegmentation = useCallback(async () => {
-    if (!projectId || runSegmentationLoading) return;
+    if (!projectId || runSegmentationLoading || serverJobRunning) return;
 
     setRunSegmentationLoading(true);
     setRunSegmentationError(null);
@@ -708,6 +788,18 @@ function SegmentationResultsPageInner() {
         router.push(`/project/${projectId}?highlight=segmentation`);
       }
     } catch (error: any) {
+      // 409 is the server's duplicate guard, not a failure. Say so in plain words and reflect the
+      // running job in the UI instead of showing a raw AxiosError.
+      if (error?.response?.status === 409) {
+        setRunSegmentationError(
+          error?.response?.data?.message ||
+            "A segmentation is already running for this project. Wait for it to finish."
+        );
+        setRunSegmentationLoading(false);
+        refreshServerJobState();
+        return;
+      }
+
       const errorMsg =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
@@ -730,11 +822,13 @@ function SegmentationResultsPageInner() {
     projectId,
     selectedModel,
     runSegmentationLoading,
+    serverJobRunning,
     modelSessionKey,
     isGpuMode,
     processingUnit,
     undecodedMasks,
     pollForNewMaskDoc,
+    refreshServerJobState,
   ]);
 
   // Top-level button handler: cache-aware gate. If the selected model
@@ -742,14 +836,14 @@ function SegmentationResultsPageInner() {
   // The user must explicitly confirm via the Re-run dialog so MedSAM in
   // particular doesn't get re-fired on every accidental click.
   const handleRunSegmentation = useCallback(() => {
-    if (!projectId || runSegmentationLoading) return;
+    if (!projectId || runSegmentationLoading || serverJobRunning) return;
     if (hasCachedResultForSelected) {
       setRunSegmentationError(null);
       setRerunDialogOpen(true);
       return;
     }
     dispatchRunSegmentation();
-  }, [projectId, runSegmentationLoading, hasCachedResultForSelected, dispatchRunSegmentation]);
+  }, [projectId, runSegmentationLoading, serverJobRunning, hasCachedResultForSelected, dispatchRunSegmentation]);
 
   const handleConfirmRerun = useCallback(() => {
     setRerunDialogOpen(false);
@@ -1172,13 +1266,21 @@ function SegmentationResultsPageInner() {
         {/* Run / Re-run Segmentation Button (cache-aware) */}
         <button
           onClick={handleRunSegmentation}
-          disabled={runSegmentationLoading}
+          disabled={runSegmentationLoading || Boolean(serverJobRunning)}
+          title={
+            serverJobRunning
+              ? `A ${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} job is already running for this project${serverJobElapsedLabel ? `, started ${serverJobElapsedLabel}` : ""}.`
+              : undefined
+          }
           className="ml-auto px-3 py-1.5 text-sm font-medium rounded-md bg-black text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 dark:bg-white dark:text-black dark:hover:bg-white/90"
         >
-          {runSegmentationLoading ? (
+          {runSegmentationLoading || serverJobRunning ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Processing...
+              {/* A job the server reports as pending has not reached the GPU yet -- saying
+                  "Processing" there would be wrong, and "Queued" tells the user their work is
+                  behind something else rather than stuck. */}
+              {serverJobRunning?.status === "pending" ? "Queued..." : "Processing..."}
             </>
           ) : hasCachedResultForSelected ? (
             <>
@@ -1194,6 +1296,21 @@ function SegmentationResultsPageInner() {
             </>
           )}
         </button>
+
+        {/* A job the server says is running, that this page did not start -- typically because the
+            user reloaded while it was still going. Without this the disabled button looks broken:
+            nothing on screen explains why it cannot be clicked. Suppressed while this page is
+            driving a run, since that path prints its own progress message. */}
+        {serverJobRunning && !runSegmentationLoading && !runSegmentationError && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+            {serverJobRunning.status === "pending"
+              ? "Queued on the server"
+              : "Running on the server"}
+            {serverJobElapsedLabel ? ` — started ${serverJobElapsedLabel}` : ""}. You can leave this
+            page; it keeps running.
+          </span>
+        )}
 
         {/* Error message */}
         {runSegmentationError && (
@@ -1276,7 +1393,7 @@ function SegmentationResultsPageInner() {
             selectedModel={selectedModel}
             onModelChange={handleModelSelect}
             isModelActive={hasMasks}
-            isModelRunning={runSegmentationLoading}
+            isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
           />
         </div>
       </div>
@@ -1412,7 +1529,7 @@ function SegmentationResultsPageInner() {
                 selectedModel={selectedModel}
                 onModelChange={handleModelSelect}
                 isModelActive={hasMasks}
-                isModelRunning={runSegmentationLoading}
+                isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
               />
             </div>
           </ResizablePanel>
@@ -1446,7 +1563,7 @@ function SegmentationResultsPageInner() {
             <AlertDialogCancel disabled={runSegmentationLoading}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmRerun}
-              disabled={runSegmentationLoading}
+              disabled={runSegmentationLoading || Boolean(serverJobRunning)}
             >
               {runSegmentationLoading ? (
                 <>

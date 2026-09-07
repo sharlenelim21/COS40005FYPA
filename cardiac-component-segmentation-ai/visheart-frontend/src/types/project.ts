@@ -305,6 +305,10 @@ export interface UserJob {
     queuePosition: number | null;
     message?: string;
     segmentationModel?: string | null;
+    /** Raw `model_used` from the job record. "4d_reconstruction" for reconstruction jobs, the
+     *  model name for segmentation jobs. Needed because `segmentationModel` above falls back to
+     *  this value, so a reconstruction job reports as "medsam"/"unet" there. */
+    modelUsed?: string | null;
     createdAt?: string | null;
     updatedAt?: string | null;
 }
