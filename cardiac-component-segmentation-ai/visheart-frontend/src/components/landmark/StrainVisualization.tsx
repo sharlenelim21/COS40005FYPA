@@ -15,6 +15,13 @@ export interface RealStrainSegment {
   wt_es_mm?: number | null;
 }
 
+export interface StrainComputedFor {
+  mode: "choose-frames" | "full-cycle" | "upload";
+  model: "unet" | "medsam";
+  edFrameIndex: number;
+  esFrameIndex?: number;
+}
+
 export interface RealStrainResult {
   segments: RealStrainSegment[];
   global_grs: number | null;
@@ -27,6 +34,7 @@ export interface RealStrainResult {
   source?: "upload" | "frames";
   edFrameIndex?: number;
   esFrameIndex?: number;
+  computedFor?: StrainComputedFor;
 }
 
 export interface StrainSegmentData {
@@ -60,6 +68,7 @@ export interface RvStrainResult {
   source?: "frames";
   edFrameIndex?: number;
   esFrameIndex?: number;
+  computedFor?: StrainComputedFor;
 }
 
 // ── dummy data ────────────────────────────────────────────────────────────────

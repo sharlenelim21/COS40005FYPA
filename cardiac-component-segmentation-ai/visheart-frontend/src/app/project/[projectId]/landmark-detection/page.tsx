@@ -63,6 +63,7 @@ import {
   type RealStrainResult,
   type RealStrainSegment,
   type RvStrainResult,
+  type StrainComputedFor,
 } from "@/components/landmark/StrainVisualization";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 import { landmarkApi, computeStrainFromFrames, computeRvStrainFromFrames } from "@/lib/landmarkApi";
@@ -2532,7 +2533,17 @@ function StrainPreviewPanel({
           edFrameIndex: doc.strain.edFrameIndex,
           esFrameIndex: doc.strain.esFrameIndex,
           source: "frames",
+          computedFor: {
+            mode: "choose-frames",
+            model: strainModel,
+            edFrameIndex: doc.strain.edFrameIndex ?? 0,
+            esFrameIndex: doc.strain.esFrameIndex,
+          },
         });
+        if (!userPickedFramesRef.current) {
+          if (typeof doc.strain.edFrameIndex === "number") setEdFrameIdx(doc.strain.edFrameIndex);
+          if (typeof doc.strain.esFrameIndex === "number") setEsFrameIdx(doc.strain.esFrameIndex);
+        }
       } else if (doc.strainSeries?.frames?.length) {
         const series = doc.strainSeries;
         const frame =
@@ -2547,6 +2558,11 @@ function StrainPreviewPanel({
           alignment_source: "stored",
           edFrameIndex: series.edFrameIndex,
           source: "frames",
+          computedFor: {
+            mode: "full-cycle",
+            model: strainModel,
+            edFrameIndex: series.edFrameIndex,
+          },
         });
       }
     }
@@ -2561,6 +2577,12 @@ function StrainPreviewPanel({
           edFrameIndex: doc.rvStrain.edFrameIndex,
           esFrameIndex: doc.rvStrain.esFrameIndex,
           source: "frames",
+          computedFor: {
+            mode: "choose-frames",
+            model: strainModel,
+            edFrameIndex: doc.rvStrain.edFrameIndex ?? 0,
+            esFrameIndex: doc.rvStrain.esFrameIndex,
+          },
         });
       } else if (doc.rvStrainSeries?.frames?.length) {
         const series = doc.rvStrainSeries;
@@ -2573,6 +2595,11 @@ function StrainPreviewPanel({
           alignment_source: "stored",
           edFrameIndex: series.edFrameIndex,
           source: "frames",
+          computedFor: {
+            mode: "full-cycle",
+            model: strainModel,
+            edFrameIndex: series.edFrameIndex,
+          },
         });
       }
     }
@@ -2657,7 +2684,10 @@ function StrainPreviewPanel({
         formData.append("rv_insertion_2_y", String(avgLm2.y));
       }
       const result = await landmarkApi.computeStrain(projectId, formData);
-      onStrainResult(result);
+      onStrainResult({
+        ...result,
+        computedFor: { mode: "upload", model: strainModel, edFrameIndex: -1 },
+      });
       setShowUploadPanel(false);
     } catch (err: any) {
       setStrainError(
@@ -2669,21 +2699,23 @@ function StrainPreviewPanel({
     }
   };
 
-  // Compute LV and RV strain together from the same ED/ES frame pair — the
-  // combined chart shows both at once, so one button drives both requests.
-  // They're independent GPU calls; run in parallel and surface a partial
-  // failure rather than losing whichever one succeeded.
   const handleComputeFromFramesBoth = async () => {
     if (edFrameIdx === esFrameIdx) return;
     setStrainError(null);
     setIsComputing(true);
     try {
+      const computedFor: StrainComputedFor = {
+        mode: "choose-frames",
+        model: strainModel,
+        edFrameIndex: edFrameIdx,
+        esFrameIndex: esFrameIdx,
+      };
       const [lvOutcome, rvOutcome] = await Promise.allSettled([
         computeStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel),
         computeRvStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel),
       ]);
-      if (lvOutcome.status === "fulfilled") onStrainResult(lvOutcome.value);
-      if (rvOutcome.status === "fulfilled") onRvStrainResult(rvOutcome.value);
+      if (lvOutcome.status === "fulfilled") onStrainResult({ ...lvOutcome.value, computedFor });
+      if (rvOutcome.status === "fulfilled") onRvStrainResult({ ...rvOutcome.value, computedFor });
 
       if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
         setStrainError("Failed to compute LV and RV strain from frames.");
@@ -2699,8 +2731,27 @@ function StrainPreviewPanel({
     }
   };
 
-  const displayData = realStrainData
-    ? realStrainData.segments.map((s) => ({
+  const strainMatchesSelection = !!(
+    realStrainData?.computedFor &&
+    realStrainData.computedFor.mode !== "full-cycle" &&
+    realStrainData.computedFor.model === strainModel &&
+    (realStrainData.computedFor.mode === "upload" ||
+      (realStrainData.computedFor.edFrameIndex === edFrameIdx &&
+        realStrainData.computedFor.esFrameIndex === esFrameIdx))
+  );
+  const rvStrainMatchesSelection = !!(
+    rvStrainResult?.computedFor &&
+    rvStrainResult.computedFor.mode !== "full-cycle" &&
+    rvStrainResult.computedFor.model === strainModel &&
+    (rvStrainResult.computedFor.mode === "upload" ||
+      (rvStrainResult.computedFor.edFrameIndex === edFrameIdx &&
+        rvStrainResult.computedFor.esFrameIndex === esFrameIdx))
+  );
+  const strainForDisplay = strainMatchesSelection ? realStrainData : null;
+  const rvStrainForDisplay = rvStrainMatchesSelection ? rvStrainResult : null;
+
+  const displayData = strainForDisplay
+    ? strainForDisplay.segments.map((s) => ({
         segment: s.segment,
         label:   s.label,
         strain:  selectedStrainType === "GRS" ? (s.grs ?? 0) : (s.gcs ?? 0),
@@ -2709,8 +2760,8 @@ function StrainPreviewPanel({
 
   // Shared colour scale — computed once and passed to both 2D and 3D panels so
   // the same strain value maps to the same colour in both views.
-  const strainVals = realStrainData
-    ? realStrainData.segments
+  const strainVals = strainForDisplay
+    ? strainForDisplay.segments
         .map((s) => (selectedStrainType === "GRS" ? s.grs : s.gcs) ?? NaN)
         .filter((v) => Number.isFinite(v))
     : [];
@@ -2978,25 +3029,43 @@ function StrainPreviewPanel({
       )}
 
       {/* ── Main area ── */}
-      {!realStrainData && !rvStrainResult ? (
-        /* Prompt — shown when neither LV nor RV strain is available */
+      {!strainForDisplay && !rvStrainForDisplay ? (
+        /* Prompt — shown when neither LV nor RV strain matches the current
+           Choose-Frames selection. Two distinct causes get distinct copy:
+           nothing has ever been computed, vs. something exists but it's for
+           a different mode/model/frame-pair (e.g. a full-cycle result, or a
+           choose-frames result for a pair the user has since changed) — see
+           strainMatchesSelection/rvStrainMatchesSelection above. */
         <div className="flex flex-1 items-center justify-center min-h-[320px]">
           <div className="flex flex-col items-center gap-3 text-center max-w-xs">
             <div className="rounded-full border-2 border-dashed border-muted-foreground/30 p-5 mb-2">
               <Heart className="w-8 h-8 text-muted-foreground/50" />
             </div>
-            <p className="font-semibold text-sm text-foreground">
-              No strain computed yet
-            </p>
-            {/* Two ways in, and the stored-mask route is the usual one — the old
-                copy named only the upload, which reads as "upload is required". */}
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Open the panel to compute LV and RV strain together from this project&apos;s
-              <strong> already-saved segmentation</strong> — pick the ED and ES frames and press
-              Compute Strain, no upload needed. Optionally, upload your own ED/ES masks in NIfTI
-              format (.nii or .nii.gz; classes 0=background, 1=RV, 2=myocardium, 3=LV cavity) for
-              manually-verified LV accuracy.
-            </p>
+            {(realStrainData || rvStrainResult) ? (
+              <>
+                <p className="font-semibold text-sm text-foreground">
+                  No result for this selection yet
+                </p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  A strain result exists, but not for the ED/ES frames and model currently
+                  selected here (it may be a full-cycle result, or was computed for a
+                  different pair). Run Compute Strain to see results for this frame pair.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-semibold text-sm text-foreground">
+                  No strain computed yet
+                </p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Open the panel to compute LV and RV strain together from this project&apos;s
+                  <strong> already-saved segmentation</strong> — pick the ED and ES frames and press
+                  Compute Strain, no upload needed. Optionally, upload your own ED/ES masks in NIfTI
+                  format (.nii or .nii.gz; classes 0=background, 1=RV, 2=myocardium, 3=LV cavity) for
+                  manually-verified LV accuracy.
+                </p>
+              </>
+            )}
             <button
               type="button"
               onClick={() => setShowUploadPanel(true)}
@@ -3025,7 +3094,7 @@ function StrainPreviewPanel({
             <StrainZoomPan className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
               <CombinedVentricularChart
                 lvData={displayData}
-                hasLv={!!realStrainData}
+                hasLv={!!strainForDisplay}
                 strainType={selectedStrainType}
                 selectedSegment={selectedSegment}
                 onSegmentClick={handleSegClick}
@@ -3033,7 +3102,7 @@ function StrainPreviewPanel({
                 sharedMin={sharedMin}
                 sharedMax={sharedMax}
                 reverseColors={reverseColors}
-                rvRegions={rvStrainResult?.regions ?? null}
+                rvRegions={rvStrainForDisplay?.regions ?? null}
                 selectedRvRegion={selectedRvRegion}
                 onRvRegionClick={(region) => setSelectedRvRegion((prev) => (prev === region ? null : region))}
                 onRvRegionHover={setTooltip}
@@ -3047,19 +3116,19 @@ function StrainPreviewPanel({
                 </span>
               ))}
             </div>
-            {rvStrainResult && (
+            {rvStrainForDisplay && (
               <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
                 <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
                   <p className="text-[8px] text-muted-foreground">Global RV Strain</p>
                   <p className="font-bold text-[10px]">
-                    {rvStrainResult.global_rv_strain != null ? `${rvStrainResult.global_rv_strain.toFixed(1)}%` : "N/A"}
+                    {rvStrainForDisplay.global_rv_strain != null ? `${rvStrainForDisplay.global_rv_strain.toFixed(1)}%` : "N/A"}
                   </p>
                   <p className="text-[7px] text-muted-foreground">Negative = shrinking (healthy)</p>
                 </div>
                 <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
                   <p className="text-[8px] text-muted-foreground">RV Frames</p>
-                  <p className="font-bold text-[10px]">{(rvStrainResult.edFrameIndex ?? 0) + 1}→{(rvStrainResult.esFrameIndex ?? 0) + 1}</p>
-                  <p className="text-[7px] text-muted-foreground capitalize">{rvStrainResult.alignment_source ?? "—"} alignment</p>
+                  <p className="font-bold text-[10px]">{(rvStrainForDisplay.edFrameIndex ?? 0) + 1}→{(rvStrainForDisplay.esFrameIndex ?? 0) + 1}</p>
+                  <p className="text-[7px] text-muted-foreground capitalize">{rvStrainForDisplay.alignment_source ?? "—"} alignment</p>
                 </div>
               </div>
             )}
@@ -3082,11 +3151,11 @@ function StrainPreviewPanel({
                   isn&apos;t generated by the backend yet.
                 </p>
               </div>
-            ) : realStrainData ? (
+            ) : strainForDisplay ? (
               <>
                 <div className="flex-1 min-h-0 w-full">
                   <StrainHeartModel
-                    segments={realStrainData.segments}
+                    segments={strainForDisplay.segments}
                     selectedStrainType={selectedStrainType}
                     selectedSegment3d={selectedSeg3d}
                     min={sharedMin}
@@ -3106,30 +3175,30 @@ function StrainPreviewPanel({
                   <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
                     <p className="text-[8px] text-muted-foreground">Peak GRS</p>
                     <p className={cn("font-bold text-[10px]",
-                      realStrainData.global_grs !== null && realStrainData.global_grs >= 40 ? "text-green-600" : "text-orange-500")}>
-                      {realStrainData.global_grs != null ? `${realStrainData.global_grs >= 0 ? "+" : ""}${realStrainData.global_grs.toFixed(1)}%` : "N/A"}
+                      strainForDisplay.global_grs !== null && strainForDisplay.global_grs >= 40 ? "text-green-600" : "text-orange-500")}>
+                      {strainForDisplay.global_grs != null ? `${strainForDisplay.global_grs >= 0 ? "+" : ""}${strainForDisplay.global_grs.toFixed(1)}%` : "N/A"}
                     </p>
                     <p className="text-[7px] text-muted-foreground">Normal &gt;+40%</p>
                   </div>
                   <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
                     <p className="text-[8px] text-muted-foreground">Peak GCS</p>
                     <p className={cn("font-bold text-[10px]",
-                      realStrainData.global_gcs !== null && realStrainData.global_gcs >= -25 && realStrainData.global_gcs <= -15 ? "text-green-600" : "text-orange-500")}>
-                      {realStrainData.global_gcs != null ? `${realStrainData.global_gcs.toFixed(1)}%` : "N/A"}
+                      strainForDisplay.global_gcs !== null && strainForDisplay.global_gcs >= -25 && strainForDisplay.global_gcs <= -15 ? "text-green-600" : "text-orange-500")}>
+                      {strainForDisplay.global_gcs != null ? `${strainForDisplay.global_gcs.toFixed(1)}%` : "N/A"}
                     </p>
                     <p className="text-[7px] text-muted-foreground">Normal -15% to -25%</p>
                   </div>
                   <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
                     <p className="text-[8px] text-muted-foreground">
-                      {realStrainData.source === "frames" ? `Frame ${(realStrainData.edFrameIndex ?? 0) + 1} WT` : "ED WT"}
+                      {strainForDisplay.source === "frames" ? `Frame ${(strainForDisplay.edFrameIndex ?? 0) + 1} WT` : "ED WT"}
                     </p>
-                    <p className="font-bold text-[10px]">{realStrainData.ed_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
+                    <p className="font-bold text-[10px]">{strainForDisplay.ed_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
                   </div>
                   <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
                     <p className="text-[8px] text-muted-foreground">
-                      {realStrainData.source === "frames" ? `Frame ${(realStrainData.esFrameIndex ?? 0) + 1} WT` : "ES WT"}
+                      {strainForDisplay.source === "frames" ? `Frame ${(strainForDisplay.esFrameIndex ?? 0) + 1} WT` : "ES WT"}
                     </p>
-                    <p className="font-bold text-[10px]">{realStrainData.es_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
+                    <p className="font-bold text-[10px]">{strainForDisplay.es_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
                   </div>
                 </div>
               </>
