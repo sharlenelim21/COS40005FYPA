@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   RefreshCw,
   Heart,
-  Download,
   FileText,
   ArrowLeft,
   Activity,
@@ -25,7 +24,6 @@ import {
 
 import { useProject } from "@/context/ProjectContext";
 import { useProjectResults } from "@/hooks/useProjectResults";
-import { downloadResultsCsv } from "@/lib/exportResultsCsv";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import {
@@ -617,7 +615,6 @@ export default function LandmarkDetectionPage() {
     setModel: setBullseyeResultsModel,
     seriesAvailable,
     seriesComputedAt,
-    byModel: resultsByModel,
   } = useProjectResults(projectId);
   useEffect(() => {
     setBullseyeResultsModel(selectedBullseyeModel);
@@ -815,22 +812,6 @@ export default function LandmarkDetectionPage() {
             >
               <FileText className="h-3.5 w-3.5" />
               Report Page
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs gap-1.5"
-              disabled={!resultsByModel?.unet && !resultsByModel?.medsam}
-              onClick={() => {
-                if (!resultsByModel?.unet && !resultsByModel?.medsam) {
-                  alert("No computed results to export yet. Run metrics and strain first.");
-                  return;
-                }
-                downloadResultsCsv(projectData?.name || String(projectId), resultsByModel);
-              }}
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Export Data
             </Button>
           </div>
         )}

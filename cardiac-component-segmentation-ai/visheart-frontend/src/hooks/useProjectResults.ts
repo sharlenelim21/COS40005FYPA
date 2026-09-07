@@ -247,7 +247,7 @@ export type StrainSeries = {
  * split: it's a single radius-based measure, closer in spirit to GCS.
  */
 export type RvStrain = {
-  regions: { region: number; label: string; strain: number | null }[];
+  regions: { region: number; label: string; strain: number | null; radius_ed_mm?: number | null; radius_es_mm?: number | null }[];
   global_rv_strain: number | null;
   edFrameIndex?: number;
   esFrameIndex?: number;
@@ -258,7 +258,7 @@ export type RvStrainSeries = {
   frames: {
     frameIndex: number;
     global_rv_strain: number | null;
-    regions: { region: number; label: string; strain: number | null }[];
+    regions: { region: number; label: string; strain: number | null; radius_mm?: number | null }[];
   }[];
   edFrameIndex: number;
   peakFrameIndex?: number | null;

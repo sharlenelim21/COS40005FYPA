@@ -499,6 +499,7 @@ export function InteractiveReport({
   computing, computeError, rv, lvVolumes, rvStrain, rvStrainSeries,
   bsaM2, heightCm, weightKg, onHeightCmChange, onWeightKgChange,
   onRecomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError,
+  patientSex: patientSexProp, onPatientSexChange,
 }: {
   patientLabel: string;
   scanSummary: string;
@@ -525,6 +526,11 @@ export function InteractiveReport({
   onRecomputeSimilarityWithBsa?: (bsaM2: number | null, sex: "male" | "female" | "unspecified") => Promise<void>;
   recomputingSimilarity?: boolean;
   recomputeSimilarityError?: string | null;
+  /** Owned by report/page.tsx (same pattern as bsaM2 above) so the CSV export
+   *  and print pages can read the sex the user actually selected here. Falls
+   *  back to "unspecified" when the caller doesn't control it. */
+  patientSex?: Sex;
+  onPatientSexChange?: (sex: Sex) => void;
   /** RV metrics — optional so existing callers and the print pages are
    *  unaffected. Absent/null means no RV cavity was segmented. */
   rv?: RvMetrics;
@@ -716,9 +722,13 @@ export function InteractiveReport({
 
   // ── RV disease-pattern prototype ──────────────────────────────────────────
   // Sex is required to interpret RVEDVI (the ARVC TFC cutoffs are sex-
-  // specific) — not collected elsewhere in the pipeline, so it lives here as
-  // a small local toggle rather than a persisted field.
-  const [patientSex, setPatientSex] = useState<Sex>("unspecified");
+  // specific) — not collected elsewhere in the pipeline. Owned by
+  // report/page.tsx (same pattern as bsaM2/heightCm/weightKg above) rather
+  // than local state, so the CSV export and the print pages can read the
+  // same value the user actually selected here instead of always assuming
+  // "unspecified".
+  const patientSex = patientSexProp ?? "unspecified";
+  const setPatientSex = onPatientSexChange ?? (() => {});
   const rvedvi = bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null;
   const rvesvi = bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null;
   const rvSvi = bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null;
