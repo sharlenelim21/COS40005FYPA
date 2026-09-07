@@ -415,15 +415,14 @@ export function ReconstructionConfigDialog({
                   <AlertTriangle className="h-3.5 w-3.5" />
                   RV reconstruction is not validated for clinical use
                 </p>
+                {/* Deliberately one line. The long version pushed the Start/Cancel buttons out of
+                    the dialog on shorter screens, which is a worse outcome than a terse warning --
+                    a warning nobody can scroll past to act on is not protecting anyone. The full
+                    text still appears in the viewer sidebar and on the canvas legend, and the
+                    record is named "RV (Research Only)" so the label survives anywhere else. */}
                 <p className="text-muted-foreground">
-                  The RV shape model has not passed accuracy validation. Its output is for
-                  research and reference only and must not be used for clinical diagnosis or
-                  measurement. It is created as a separate reconstruction and does not replace
-                  the LV result.
-                </p>
-                <p className="text-muted-foreground">
-                  Requires an RV checkpoint configured on the inference service; without one the
-                  request is rejected rather than answered with an LV mesh.
+                  Research and reference only — not for clinical diagnosis or measurement.
+                  Created as a separate reconstruction; it does not replace the LV result.
                 </p>
               </div>
             )}
