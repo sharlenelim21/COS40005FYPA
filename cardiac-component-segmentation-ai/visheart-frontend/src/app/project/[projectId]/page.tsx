@@ -9,6 +9,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 // API
 import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
+import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
 
 // UI Components
 import { Button } from "@/components/ui/button";
@@ -444,6 +445,11 @@ function ProjectPageInner() {
   // scan, so an RV record must not make it look like the model's LV slot is taken (which would
   // block creating the actual clinical reconstruction), and `existing4DByModel` must not hand the
   // "view existing" button an RV id. RV occupancy is tracked separately below.
+  // Which (model, chamber) pairs have a build in flight. Fetched by the hook rather than read
+  // from ProjectContext, which clears its job list once any reconstruction exists.
+  const { building: buildingReconstructions, refresh: refreshActiveReconstructionJobs } =
+    useActiveReconstructionJobs(projectId);
+
   const existing4DModels = useMemo(() => {
     const models = new Set<"medsam" | "unet">();
     for (const reconstruction of reconstructionRows) {
@@ -728,6 +734,7 @@ function ProjectPageInner() {
       });
 
       console.log("[Project] ✅ Reconstruction job started successfully on backend");
+      refreshActiveReconstructionJobs();
       
       // Close dialog
       setShowReconstructionDialog(false);
@@ -1837,6 +1844,8 @@ function ProjectPageInner() {
         availableModels={availableReconstructionModels}
         blockedModels={Array.from(existing4DModels)}
         blockedRvModels={Array.from(existingRvModels)}
+        buildingModels={Array.from(buildingReconstructions.lv)}
+        buildingRvModels={Array.from(buildingReconstructions.rv)}
         defaultSelectedModel={selectedModelForCreation || defaultReconstructionModel}
         defaultChamber={presetChamber ?? undefined}
         gpuAvailable={processingUnit.gpuAvailable}

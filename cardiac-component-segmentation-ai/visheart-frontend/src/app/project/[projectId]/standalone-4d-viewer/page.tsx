@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/resizable";
 import { Switch } from "@/components/ui/switch";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
-import { reconstructionApi } from "@/lib/api";
+import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
 import {
   ArrowLeft,
   Play,
@@ -64,25 +64,11 @@ export default function Standalone4DViewerPage() {
     reconstructionResults,
   } = useProject();
 
-  // Job list is fetched here rather than read from ProjectContext on purpose. The context clears
-  // its copy as soon as any reconstruction exists ("jobs are only interesting until the first
-  // result arrives"), which is exactly the situation this needs to see through: building the RV
-  // while the LV already exists. Reading it there would always come back empty.
-  const [reconstructionJobs, setReconstructionJobs] = useState<Array<Record<string, unknown>> | null>(null);
-
-  const refreshReconstructionJobs = useCallback(async () => {
-    try {
-      const response = await reconstructionApi.getUserReconstructionJobs();
-      setReconstructionJobs(Array.isArray(response?.jobs) ? response.jobs : []);
-    } catch {
-      // Keep the previous answer. Failing to reach the endpoint is not evidence that nothing is
-      // running, and showing a Build button for a chamber that is mid-build is the bug being fixed.
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshReconstructionJobs();
-  }, [refreshReconstructionJobs]);
+  // Shared with the project page: both need to know what is building, and both were independently
+  // burned by reading it from ProjectContext, which clears its job list once a reconstruction
+  // exists. See the hook for the full explanation.
+  const { building: buildingReconstructions, refresh: refreshReconstructionJobs } =
+    useActiveReconstructionJobs(projectId);
   const { processingUnit } = useGpuStatus();
 
   const activeReconstruction = reconstructionIdParam
@@ -149,26 +135,11 @@ export default function Standalone4DViewerPage() {
   const lvReconstruction = useMemo(() => findChamber("lv"), [findChamber]);
   const rvReconstruction = useMemo(() => findChamber("rv"), [findChamber]);
 
-  // Which chambers have a job running right now, according to the server. This is what makes the
-  // Building state survive a reload or a trip to another page -- the URL hint does not.
-  const buildingFromJobs = useMemo(() => {
-    const out = { lv: false, rv: false };
-    if (!Array.isArray(reconstructionJobs)) return out;
-    for (const job of reconstructionJobs) {
-      if (String(job.projectId ?? "") !== String(projectId)) continue;
-      const status = String(job.status ?? "").toLowerCase();
-      if (status !== "pending" && status !== "in_progress") continue;
-      // A job written before the chamber field reads as LV, which is what it was.
-      out[normalizeReconstructionChamber(job.chamber)] = true;
-    }
-    return out;
-  }, [reconstructionJobs, projectId]);
-
   // The hint still counts, but only while the chamber is genuinely absent: it covers the gap
   // between starting a job and the job list first loading. Once a reconstruction exists, neither
   // source should claim it is still building.
-  const buildingLv = (buildingFromJobs.lv || pendingHint === "lv") && !lvReconstruction;
-  const buildingRv = (buildingFromJobs.rv || pendingHint === "rv") && !rvReconstruction;
+  const buildingLv = (buildingReconstructions.lv.size > 0 || pendingHint === "lv") && !lvReconstruction;
+  const buildingRv = (buildingReconstructions.rv.size > 0 || pendingHint === "rv") && !rvReconstruction;
   const pendingChamber = buildingRv ? "rv" : buildingLv ? "lv" : null;
 
   // True while a chamber that is being built has not landed yet. Drives both the polling loop and
