@@ -69,10 +69,10 @@ const BASE_GCS = [-17.1, -18.3, -16.8, -17.7, -19.4, -18.5, -20.2, -19.1, -18.2,
 const BASE_GRS = [26.4, 28.2, 24.9, 25.8, 30.1, 29.4, 31.2, 30.5, 27.8, 28.6, 32.4, 31.6, 34.1, 32.7, 33.4, 31.9, 29.8];
 
 const SEGMENT_LABELS = [
-  "Basal Anterior", "Basal Anterolateral", "Basal Inferolateral",
-  "Basal Inferior", "Basal Inferoseptal", "Basal Anteroseptal",
-  "Mid Anterior", "Mid Anterolateral", "Mid Inferolateral",
-  "Mid Inferior", "Mid Inferoseptal", "Mid Anteroseptal",
+  "Basal Anterior", "Basal Anteroseptal", "Basal Inferoseptal",
+  "Basal Inferior", "Basal Inferolateral", "Basal Anterolateral",
+  "Mid Anterior", "Mid Anteroseptal", "Mid Inferoseptal",
+  "Mid Inferior", "Mid Inferolateral", "Mid Anterolateral",
   "Apical Anterior", "Apical Lateral", "Apical Inferior", "Apical Septal",
   "Apex",
 ];
@@ -229,6 +229,14 @@ export function ZoomPanContainer({
 
 // ── StrainBullseyeChart — the pure SVG chart (no chrome) ──────────────────────
 
+// Backend ray-cast start-angle fallback used when no landmark is available
+// (bullseye_analysis.py's start_angle_by_ring["basal"/"mid"] = 4*pi/3 = 240deg).
+// The frontend's fixed wedge layout below (-120 - i*60) already assumes this
+// exact fallback, so alignment_angle_deg must be rebased against it before
+// being added as a rotation — see AhaBullseyeChart's referenceAngleDeg for
+// the same pattern applied to the AHA thickness bullseye.
+const BACKEND_FIXED_FALLBACK_DEG = 240;
+
 interface ChartProps {
   data: StrainSegmentData[];
   strainType: StrainType;
@@ -240,13 +248,18 @@ interface ChartProps {
   sharedMin?: number;
   sharedMax?: number;
   reverseColors?: boolean;
+  /** Landmark-derived anterior start angle from the backend (RealStrainResult /
+   *  RvStrainResult's alignment_angle_deg). Null/undefined = fixed-angle layout. */
+  alignmentAngleDeg?: number | null;
 }
 
 export function StrainBullseyeChart({
   data, strainType, selectedSegment, onSegmentClick, onSegmentHover,
   forcedMin, forcedMax, sharedMin, sharedMax, reverseColors = false,
+  alignmentAngleDeg,
 }: ChartProps) {
   const center = 150;
+  const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
   const basalOuter = 108, basalInner = 81, midInner = 54, apicalInner = 28;
 
   const values = data.map((d) => d.strain);
@@ -266,9 +279,11 @@ export function StrainBullseyeChart({
   // AHA CCW convention — identical to AhaBullseyeChart:
   //   basal/mid: startAngle = -120 - index*60, endAngle = -60 - index*60
   //   apical:    startAngle = -135 - index*90, endAngle = -45 - index*90
+  // referenceAngleDeg rotates the whole layout to match the landmark-derived
+  // alignment_angle_deg, same as AhaBullseyeChart's referenceAngleDeg prop.
   const segPath = (i: number, innerR: number, outerR: number, ring: "bm" | "ap") => {
-    const start = ring === "bm" ? -120 - i * 60 : -135 - i * 90;
-    const end   = ring === "bm" ?  -60 - i * 60 :  -45 - i * 90;
+    const start = (ring === "bm" ? -120 - i * 60 : -135 - i * 90) + referenceAngleDeg;
+    const end   = (ring === "bm" ?  -60 - i * 60 :  -45 - i * 90) + referenceAngleDeg;
     const mid   = (start + end) / 2;
     const lr    = (innerR + outerR) / 2;
     const lp    = polarPoint(center, lr, mid);
@@ -595,6 +610,7 @@ export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
           selectedSegment={selectedSegment}
           onSegmentClick={onSelectSegment}
           onSegmentHover={setTooltip}
+          alignmentAngleDeg={realStrainData?.alignment_angle_deg}
         />
       </ZoomPanContainer>
       {tooltip && (

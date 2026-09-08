@@ -27,12 +27,20 @@ interface CombinedVentricularChartProps {
   sharedMin?: number;
   sharedMax?: number;
   reverseColors?: boolean;
+  /** Landmark-derived anterior start angle from the backend (RealStrainResult's
+   *  alignment_angle_deg). Null/undefined = fixed-angle layout. */
+  alignmentAngleDeg?: number | null;
 
   rvRegions: RvStrainRegion[] | null;
   selectedRvRegion?: number | null; // 1-based RV region
   onRvRegionClick?: (region: number) => void;
   onRvRegionHover?: (info: { x: number; y: number; label: string; value: number | null } | null) => void;
 }
+
+// Same backend ray-cast start-angle fallback as StrainBullseyeChart/RvStrainChart
+// (bullseye_analysis.py's start_angle_by_ring["basal"] = 4*pi/3 = 240deg). The
+// fixed LV/RV wedge layouts below already assume this exact fallback.
+const BACKEND_FIXED_FALLBACK_DEG = 240;
 
 // ── Layout constants (single source of truth for the geometry below) ────────
 const VIEW_W = 480, VIEW_H = 430;
@@ -55,10 +63,11 @@ const RV_SPAN_START = 120, RV_SPAN_END = 240;
 
 export function CombinedVentricularChart({
   lvData, hasLv, strainType, selectedSegment, onSegmentClick, onSegmentHover,
-  sharedMin, sharedMax, reverseColors = false,
+  sharedMin, sharedMax, reverseColors = false, alignmentAngleDeg,
   rvRegions, selectedRvRegion, onRvRegionClick, onRvRegionHover,
 }: CombinedVentricularChartProps) {
   const center = CENTER;
+  const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
 
   // ── LV (right side — unchanged 17-segment geometry, recentered) ──────────
   const lvValues = lvData.map((d) => d.strain);
@@ -76,8 +85,8 @@ export function CombinedVentricularChart({
   const isLvSel = (seg1based: number) => selectedSegment === seg1based;
 
   const lvSegPath = (i: number, innerR: number, outerR: number, ring: "bm" | "ap") => {
-    const start = ring === "bm" ? -120 - i * 60 : -135 - i * 90;
-    const end   = ring === "bm" ?  -60 - i * 60 :  -45 - i * 90;
+    const start = (ring === "bm" ? -120 - i * 60 : -135 - i * 90) + referenceAngleDeg;
+    const end   = (ring === "bm" ?  -60 - i * 60 :  -45 - i * 90) + referenceAngleDeg;
     const mid   = (start + end) / 2;
     const lr    = (innerR + outerR) / 2;
     const lp    = polarPointAt(center, lr, mid);
@@ -104,9 +113,11 @@ export function CombinedVentricularChart({
 
   // 2 bands (mid = inner, touching the LV boundary; basal = outer), 3 sectors
   // each — see RV_SPAN_START/END above for why this spans 120°→240°.
+  // Rotated by the same referenceAngleDeg as the LV rings so the crescent
+  // stays fused to the LV circle's septal-side seam as the layout rotates.
   const rvSegPath = (i: number, innerR: number, outerR: number) => {
     const sectorWidth = (RV_SPAN_END - RV_SPAN_START) / 3;
-    const start = RV_SPAN_START + i * sectorWidth;
+    const start = RV_SPAN_START + i * sectorWidth + referenceAngleDeg;
     const end = start + sectorWidth;
     const mid = (start + end) / 2;
     const lr = (innerR + outerR) / 2;
