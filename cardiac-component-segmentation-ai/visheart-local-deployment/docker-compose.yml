@@ -266,6 +266,11 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      # Landmark checkpoints live at the repo root, outside visheart-inference-gpu's
+      # build context, so a locally-built image never bakes them in (unlike the old
+      # Docker Hub image, which had them baked in some other way). Mount matches
+      # landmark_inference_api.py's own documented fallback path (/app/UNETRESNET34).
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:
@@ -325,6 +330,11 @@ services:
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      # Landmark checkpoints live at the repo root, outside visheart-inference-gpu's
+      # build context, so a locally-built image never bakes them in (unlike the old
+      # Docker Hub image, which had them baked in some other way). Mount matches
+      # landmark_inference_api.py's own documented fallback path (/app/UNETRESNET34).
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:

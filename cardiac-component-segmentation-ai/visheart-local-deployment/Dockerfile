@@ -27,6 +27,7 @@ ENV NEXT_PUBLIC_API_URL=http://localhost:5000
 ENV NEXT_PUBLIC_ENV=development
 ENV NEXT_PUBLIC_LANDMARK_USE_STUB=false
 ENV NEXT_PUBLIC_LANDMARK_ENDPOINT=/landmark-detection
+ENV NEXT_PUBLIC_RESEARCH_API_URL=http://localhost:8000
 ENV NODE_ENV=production
 
 # Build frontend
