@@ -30,6 +30,11 @@ from deep_sdf.obj_process import obj_read
 # Import from get_P.py for contour extraction and affine matrix computation
 from get_P import get_contour, get_T, CHAMBER_LABELS
 
+# RV's own CPD segmentation (see cpd_rv_segmentation.py's module docstring) -- called
+# directly here rather than threaded through deep_sdf/mesh.py's classify_aha, so the
+# LV-critical shared mesh-generation path stays untouched. See _classify_rv_mesh below.
+import cpd_rv_segmentation
+
 #New: Import device runtime utilities for better GPU management
 from app.classes.device_runtime import (
     resolve_device,
@@ -64,6 +69,45 @@ DECODE_VOLUME_SIZE_WIDE = 4.5
 # Fraction of the tight bound's half-width a shape may occupy before the wide bound is used.
 # LV's observed maximum is 0.7773 across 20 cases, so 0.95 leaves ~22% of headroom.
 DECODE_TIGHT_HEADROOM = 0.95
+
+
+def _classify_rv_mesh(mesh_file: str, cpd_warp_state: Optional[dict]) -> Tuple[Optional[List[int]], Optional[dict]]:
+    """
+    RV's equivalent of deep_sdf/mesh.py's classify_aha branch, called from OUTSIDE
+    that shared LV/RV mesh-generation code path (see cpd_rv_segmentation.py's module
+    docstring for why: keeps deep_sdf/mesh.py -- which every LV reconstruction also
+    runs through -- untouched by RV-specific logic).
+
+    Re-loads the just-exported mesh file to get its vertices, which are numerically
+    identical to what deep_sdf/mesh.py's own `mesh_points` would have been at the
+    equivalent point in the LV path: _convert_ply_to_obj/_convert_ply_to_glb are pure
+    format conversions (trimesh.load -> mesh.export, no coordinate transform), and
+    the offset/scale already applied before export is the same transform LV's
+    classify_aha branch runs against. process=False, so vertex order/count isn't
+    changed by the reload -- required for the returned labels to line up with this
+    mesh file's own vertices index-for-index.
+
+    Returns (aha_vertex_labels, new_warp_state) -- (None, cpd_warp_state) on any
+    failure, so a bad RV frame degrades to "no segmentation for this frame" rather
+    than raising and losing the (successfully generated) mesh.
+    """
+    try:
+        mesh = trimesh.load(mesh_file, process=False)
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    except Exception as exc:
+        logging.warning(f"[CPD-RV] Could not reload {mesh_file!r} for RV classification: {exc}")
+        return None, cpd_warp_state
+
+    new_warp_state = cpd_warp_state
+    if new_warp_state is None:
+        new_warp_state = cpd_rv_segmentation.register_cpd_warp(vertices)
+
+    if new_warp_state is None:
+        return None, None
+
+    labels = cpd_rv_segmentation.label_with_warp(vertices, new_warp_state)
+    labels_list = labels.tolist() if labels is not None else None
+    return labels_list, new_warp_state
 
 
 class FourDReconstructionHandler:
@@ -1154,8 +1198,9 @@ class FourDReconstructionHandler:
             output_file = os.path.join(output_dir, f"{input_filename}_reconstructed_{chamber}.{file_extension}")
 
             print("Step 5: Generating mesh...")
-            # AHA-17 classification is LV-atlas-specific -- there is no RV atlas yet, so it's
-            # forced off for an RV request regardless of what a caller might pass.
+            # AHA-17 classification is LV-atlas-specific, so it's always off for RV here --
+            # RV gets its own classifier (cpd_rv_segmentation) run separately just below,
+            # not threaded through _fit_and_mesh_sync/deep_sdf.mesh's classify_aha.
             is_rv = chamber == "rv"
             mesh_file, c_s, c_m, selection, aha_vertex_labels, _ = self._fit_and_mesh_sync(
                 sdf_data, point_cloud, output_file, resolution, export_format,
@@ -1163,6 +1208,8 @@ class FourDReconstructionHandler:
                 verbose_logging=verbose_logging, num_candidates=num_candidates, seed=seed,
                 classify_aha=not is_rv,
             )
+            if is_rv:
+                aha_vertex_labels, _ = _classify_rv_mesh(mesh_file, None)
 
 
             # Debug mode: Copy to persistent location if enabled
@@ -1352,6 +1399,10 @@ class FourDReconstructionHandler:
                 # approximation. Turns per-frame CPD labeling from ~28s/frame into a
                 # cheap nearest-neighbor lookup for every frame after the first.
                 cpd_warp_state: Optional[dict] = None
+                # RV's own warp state, same reuse-across-frames idea as cpd_warp_state above,
+                # but a DIFFERENT dict shape (cpd_rv_segmentation.register_cpd_warp's, not
+                # cpd_aha_segmentation's) -- kept separate so the two never get crossed.
+                rv_cpd_warp_state: Optional[dict] = None
 
                 os.makedirs(output_dir, exist_ok=True)
                 input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
@@ -1406,15 +1457,19 @@ class FourDReconstructionHandler:
                         print(f"Starting optimization for frame {original_frame_idx}...")
                         frame_seed = None if seed is None else int(seed) + original_frame_idx * 1000
                         is_ed_frame = original_frame_idx == ed_frame_index
-                        # AHA-17 is LV-atlas-specific (no RV atlas yet), so it's forced off for RV.
-                        # cpd_warp_state carries the CPD registration forward frame-to-frame -- see
-                        # the comment above this loop -- so it must flow through best-of-N too.
+                        is_rv = chamber == "rv"
+                        # AHA-17 (deep_sdf.mesh's classify_aha) is LV-atlas-specific, so it's
+                        # always off for RV here -- RV gets its own classifier + its own
+                        # warp-state variable (rv_cpd_warp_state) just below, reused across
+                        # frames the same way cpd_warp_state is for LV, but never mixed with it.
                         frame_mesh_file, frame_c_s, frame_c_m, frame_selection, frame_aha_labels, cpd_warp_state = self._fit_and_mesh_sync(
                             frame_sdf_data, frame_point_cloud, output_file, resolution, export_format,
                             num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
                             verbose_logging=verbose_logging, num_candidates=num_candidates,
-                            seed=frame_seed, classify_aha=(chamber != "rv"), cpd_warp_state=cpd_warp_state,
+                            seed=frame_seed, classify_aha=not is_rv, cpd_warp_state=cpd_warp_state,
                         )
+                        if is_rv:
+                            frame_aha_labels, rv_cpd_warp_state = _classify_rv_mesh(frame_mesh_file, rv_cpd_warp_state)
                         print(f"Completed optimization for frame {original_frame_idx}")
                         frame_selections[original_frame_idx] = frame_selection
                         mesh_files.append(frame_mesh_file)
@@ -1493,15 +1548,19 @@ class FourDReconstructionHandler:
                 file_extension = export_format  # "obj" or "glb"
                 output_file = os.path.join(output_dir, f"{input_filename}_4D_{chamber}_ED{ed_frame_index:02d}.{file_extension}")
 
-                # Optimize latent codes (single frame) and decode. AHA-17 is LV-atlas-specific
-                # (no RV atlas yet), so it's forced off for RV.
+                # Optimize latent codes (single frame) and decode. AHA-17 (deep_sdf.mesh's
+                # classify_aha) is LV-atlas-specific, so it's always off for RV here -- RV gets
+                # its own classifier just below instead.
                 ed_seed = None if seed is None else int(seed) + ed_frame_index * 1000
+                is_rv = chamber == "rv"
                 primary_mesh_file, c_s, c_m, ed_selection, ed_aha_vertex_labels, _ = self._fit_and_mesh_sync(
                     sdf_data, ed_point_cloud, output_file, resolution, export_format,
                     num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
                     verbose_logging=verbose_logging, num_candidates=num_candidates, seed=ed_seed,
-                    classify_aha=(chamber != "rv"),
+                    classify_aha=not is_rv,
                 )
+                if is_rv:
+                    ed_aha_vertex_labels, _ = _classify_rv_mesh(primary_mesh_file, None)
                 frame_selections[ed_frame_index] = ed_selection
                 print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
                 mesh_files = [primary_mesh_file]

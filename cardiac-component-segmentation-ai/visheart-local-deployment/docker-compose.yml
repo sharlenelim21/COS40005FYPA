@@ -260,6 +260,10 @@ services:
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
       - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
+      # RV's own CPD segmentation (models/atlas_rv, mounted via the broad models/ mount
+      # below) + the shared CUDA CPD port both use. Needed for RV segment labeling.
+      - ../visheart-inference-gpu/app/dependencies/cpd_rv_segmentation.py:/app/app/dependencies/cpd_rv_segmentation.py:ro
+      - ../visheart-inference-gpu/app/dependencies/cpd_gpu.py:/app/app/dependencies/cpd_gpu.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
       # get_P.py carries the per-chamber contour extraction (target_label). Without this mount the
       # image's baked copy is used, which only ever reads label 2, and an RV request would be
@@ -313,6 +317,7 @@ services:
     command: >
       bash -lc 'python -c "import nibabel, timm, pycpd" ||
       pip install --no-cache-dir "nibabel>=5.0.0" timm pycpd==2.0.0;
+      python -c "import cupy" || pip install --no-cache-dir "cupy-cuda12x[ctk]" || true;
       exec bash ./docker/scripts/start.sh'
     volumes:
       - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
@@ -330,6 +335,10 @@ services:
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
       - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
+      # RV's own CPD segmentation (models/atlas_rv, mounted via the broad models/ mount
+      # below) + the shared CUDA CPD port both use. Needed for RV segment labeling.
+      - ../visheart-inference-gpu/app/dependencies/cpd_rv_segmentation.py:/app/app/dependencies/cpd_rv_segmentation.py:ro
+      - ../visheart-inference-gpu/app/dependencies/cpd_gpu.py:/app/app/dependencies/cpd_gpu.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
       # get_P.py carries the per-chamber contour extraction (target_label). Without this mount the
       # image's baked copy is used, which only ever reads label 2, and an RV request would be
