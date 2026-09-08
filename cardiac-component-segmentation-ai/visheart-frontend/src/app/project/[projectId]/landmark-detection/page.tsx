@@ -1758,22 +1758,6 @@ function AhaBullseyePanel({
             <span className="text-xs">{isComputing ? "Computing bullseye…" : "Loading…"}</span>
           </div>
         </div>
-      ) : !frameThickness && !previewMode ? (
-        /* No per-frame wall thickness for this model — the panel is a
-           cardiac-cycle view, so without a series there is nothing to show.
-           Rendered as unavailable rather than dimmed so a single static
-           measurement can't be mistaken for the animated result. */
-        <div className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center">
-          <AlertCircle className="h-6 w-6 text-muted-foreground opacity-40" />
-          <p className="text-xs font-medium text-muted-foreground">
-            No strain data for {modelLabel}
-          </p>
-          <p className="max-w-[280px] text-[11px] leading-snug text-muted-foreground">
-            Open the <span className="font-medium text-foreground">Strain</span> tab and run{" "}
-            <span className="font-medium text-foreground">Compute all frames</span> to measure wall
-            thickness across the cardiac cycle for this model.
-          </p>
-        </div>
       ) : !displayBullseyeData ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
