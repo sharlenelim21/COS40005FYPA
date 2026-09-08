@@ -79,13 +79,36 @@ interface ProjectContextType {
   setSelectedSegmentationModel: (model: "medsam" | "unet") => void;
 }
 
-const normalizeReconstructionModel = (value: unknown): "medsam" | "unet" | "unknown" => {
+export const normalizeReconstructionModel = (value: unknown): "medsam" | "unet" | "unknown" => {
   const normalized = (value ?? "").toString().toLowerCase();
   if (normalized === "medsam" || normalized === "unet") {
     return normalized;
   }
   return "unknown";
 };
+
+/**
+ * Which chamber a reconstruction record represents.
+ *
+ * Anything that is not an explicit "rv" is LV. Records created before the backend had a `chamber`
+ * field carry no value at all, and those are LV — that is the only thing the pipeline produced.
+ */
+export const normalizeReconstructionChamber = (value: unknown): "lv" | "rv" =>
+  (value ?? "").toString().toLowerCase() === "rv" ? "rv" : "lv";
+
+/**
+ * The reconstruction that represents this project by default.
+ *
+ * The list arrives newest-first, and the default used to be simply the first entry. That breaks
+ * once RV exists: an RV run made after an LV run would become the project's default mesh
+ * everywhere it is read (viewer fallback, dashboard, report), presenting a research-only mesh as
+ * the clinical result. So the default is the newest LV record, and RV is only ever reached by
+ * asking for it. Falls back to the first entry when a project somehow has RV records only, so
+ * that "has a reconstruction" stays true and the UI can still show it — labelled.
+ */
+const pickDefaultReconstruction = (reconstructions: any[]): any => // eslint-disable-line @typescript-eslint/no-explicit-any
+  reconstructions.find((recon) => normalizeReconstructionChamber(recon?.chamber) === "lv") ??
+  reconstructions[0];
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
@@ -216,6 +239,15 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   const buildReconstructionsByModel = useCallback((reconstructions: Array<Record<string, unknown>>) => {
     const byModel: Record<string, any> = {}; // eslint-disable-line @typescript-eslint/no-explicit-any
     for (const recon of reconstructions) {
+      // RV reconstructions are deliberately excluded from this map.
+      //
+      // It keys on segmentation model only and keeps the newest record per model, so an RV run
+      // made after an LV run on the same model would take over that model's slot — and the
+      // viewer, the dashboard and every other `getReconstructionForModel` caller would then show
+      // the research-only RV mesh as if it were the project's clinical LV reconstruction.
+      // RV records are reached explicitly through `reconstructionResults` instead.
+      if (normalizeReconstructionChamber(recon?.chamber) === "rv") continue;
+
       const model = normalizeReconstructionModel(recon?.segmentationModel);
       const createdAt = typeof recon.createdAt === "string" || typeof recon.createdAt === "number" || recon.createdAt instanceof Date
         ? recon.createdAt
@@ -849,8 +881,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
       if (response.success && response.reconstructions && response.reconstructions.length > 0) {
         setReconstructionResults(response.reconstructions);
-        // Use the most recent reconstruction
-        const latestReconstruction = response.reconstructions[0];
+        // Most recent LV reconstruction — see pickDefaultReconstruction.
+        const latestReconstruction = pickDefaultReconstruction(response.reconstructions);
         setReconstructionMetadata(latestReconstruction);
         setHasReconstructions(true);
 
@@ -1247,8 +1279,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         if (response.success && response.reconstructions && response.reconstructions.length > 0) {
           setReconstructionResults(response.reconstructions);
-          // Use the most recent reconstruction
-          const latestReconstruction = response.reconstructions[0];
+          // Most recent LV reconstruction — see pickDefaultReconstruction.
+          const latestReconstruction = pickDefaultReconstruction(response.reconstructions);
           setReconstructionMetadata(latestReconstruction);
           setHasReconstructions(true);
 

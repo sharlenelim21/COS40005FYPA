@@ -1,9 +1,9 @@
 ﻿"use client";
-import { useEffect, useRef, Suspense, useState } from "react";
+import { useEffect, useRef, Suspense, useState, useCallback } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, useGLTF, Center } from "@react-three/drei";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
-import { AlertCircle, Settings, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -17,6 +17,8 @@ interface ViewerSettings {
   modelColor: string;
   wireframe: boolean;
   showEdges: boolean;
+  /** Average normals at shared vertices so shading crosses facet boundaries. Cosmetic only. */
+  smoothShading: boolean;
   background: 'gradient' | 'solid-dark' | 'solid-light' | 'white' | 'responsive';
   showGrid: boolean;
   roughness: number;
@@ -30,6 +32,7 @@ const DEFAULT_SETTINGS: ViewerSettings = {
   modelColor: '#c41e3a', // Cardiac tissue color
   wireframe: false,
   showEdges: false,
+  smoothShading: true,
   background: 'responsive',
   showGrid: true,
   roughness: 0.4,
@@ -50,9 +53,16 @@ const COLOR_PRESETS = {
 interface ModelProps { 
   url: string;
   settings: ViewerSettings;
+  /**
+   * Fired when real geometry is in the scene graph -- NOT when the component mounts.
+   * <Center> measures its children exactly once and never re-measures (children are not in its
+   * effect deps), so it must be told when there is something real to measure. Before this fired,
+   * it was measuring the 1x1x1 placeholder below and keeping that offset forever.
+   */
+  onReady?: () => void;
 }
 
-function Model({ url, settings }: ModelProps) {
+function Model({ url, settings, onReady }: ModelProps) {
   const [fileType, setFileType] = useState<'obj' | 'glb' | null>(null);
   
   // Detect file type from blob MIME type (for blob URLs) or extension (for regular URLs)
@@ -87,27 +97,31 @@ function Model({ url, settings }: ModelProps) {
   }, [url]);
   
   if (!fileType) {
-    // Loading state while detecting file type
+    // Placeholder while the file type is detected. This renders synchronously and does NOT
+    // suspend, which is why <Center> used to measure this box instead of the model.
     return (
-      <Center>
-        <mesh>
-          <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="#888888" wireframe />
-        </mesh>
-      </Center>
+      <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#888888" wireframe />
+      </mesh>
     );
   }
   
   if (fileType === 'obj') {
-    return <OBJModel url={url} settings={settings} />;
+    return <OBJModel url={url} settings={settings} onReady={onReady} />;
   } else {
-    return <GLBModel url={url} settings={settings} />;
+    return <GLBModel url={url} settings={settings} onReady={onReady} />;
   }
 }
 
-function GLBModel({ url, settings }: ModelProps) {
+function GLBModel({ url, settings, onReady }: ModelProps) {
   const { scene } = useGLTF(url);
-  
+
+  // useGLTF suspends until the file is parsed, so reaching here means `scene` is real geometry.
+  useEffect(() => {
+    onReady?.();
+  }, [scene, onReady]);
+
   useEffect(() => { 
     console.log("[GLBViewer] GLB/GLTF Model loaded");
     
@@ -115,6 +129,20 @@ function GLBModel({ url, settings }: ModelProps) {
     scene.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
+
+        // Marching-cubes output carries no vertex normals, so three.js falls back to flat
+        // per-face shading. At the default resolution (N=32) the facets are ~17x larger by area
+        // than at N=128, and each one reflects the environment as a single uniform value --
+        // facets angled at a bright part of the HDRI turn near-white and read as holes in a
+        // surface that is in fact closed (measured: watertight, winding-consistent, euler 2).
+        //
+        // Averaging normals at shared vertices shades across facet boundaries instead.
+        // NOTE: this is cosmetic. It makes a coarse mesh look smooth without adding any
+        // information to it -- raise the reconstruction resolution for actual detail.
+        if (mesh.geometry && (settings.smoothShading || !mesh.geometry.getAttribute("normal"))) {
+          mesh.geometry.computeVertexNormals();
+        }
+
         if (mesh.material) {
           const material = mesh.material as THREE.MeshStandardMaterial;
           
@@ -147,14 +175,13 @@ function GLBModel({ url, settings }: ModelProps) {
     });
   }, [scene, settings, url]); // Include url to trigger reapplication when frame changes
   
-  return (
-    <Center>
-      <primitive object={scene} />
-    </Center>
-  );
+  // Deliberately NOT wrapped in <Center> here. Centering happens once around the whole model
+  // group in the Canvas, so that when a second chamber is overlaid the two meshes keep their true
+  // relative position instead of each being independently snapped to the origin.
+  return <primitive object={scene} />;
 }
 
-function OBJModel({ url, settings }: ModelProps) {
+function OBJModel({ url, settings, onReady }: ModelProps) {
   const [obj, setObj] = useState<THREE.Group | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -173,6 +200,12 @@ function OBJModel({ url, settings }: ModelProps) {
             const mesh = child as THREE.Mesh;
             
             console.log("[OBJViewer] Applying material to mesh:", mesh.name || "unnamed");
+
+            // See the GLB path above: marching-cubes OBJ has no vertex normals, so without this
+            // every facet is flat-shaded and coarse meshes read as punctured.
+            if (mesh.geometry && (settings.smoothShading || !mesh.geometry.getAttribute("normal"))) {
+              mesh.geometry.computeVertexNormals();
+            }
             
             mesh.material = new THREE.MeshStandardMaterial({
               color: new THREE.Color(settings.modelColor),
@@ -203,6 +236,7 @@ function OBJModel({ url, settings }: ModelProps) {
         
         setObj(loadedObj);
         setError(null);
+        onReady?.();
       },
       (progress) => {
         console.log("[OBJViewer] Loading progress:", (progress.loaded / progress.total * 100).toFixed(2) + "%");
@@ -213,7 +247,7 @@ function OBJModel({ url, settings }: ModelProps) {
         setError(errorMessage);
       }
     );
-  }, [url, settings]);
+  }, [url, settings, onReady]);
 
   if (error) {
     console.error("[OBJViewer] Render error:", error);
@@ -235,11 +269,8 @@ function OBJModel({ url, settings }: ModelProps) {
     );
   }
   
-  return (
-    <Center>
-      <primitive object={obj} />
-    </Center>
-  );
+  // See GLBModel: centering is done once around the whole group, not per mesh.
+  return <primitive object={obj} />;
 }
 
 interface CameraState {
@@ -357,16 +388,85 @@ function CameraController({ onCameraChange, initialState, activePreset, onPreset
   );
 }
 
+/**
+ * Frames the camera on whatever is actually in the scene.
+ *
+ * The camera was pinned at [70, 20, -75] with the ground grid nailed to y=-30, sized for one
+ * particular mesh. LV alone has a much smaller bounding sphere than LV+RV, so the same fixed
+ * camera left it small and sitting high in the frame. This recomputes distance from the measured
+ * bounding sphere, so one chamber and two chambers are both framed properly.
+ *
+ * It runs only when `radius` changes -- i.e. when the set of chambers changes, not per frame --
+ * so it never fights the user's own zoom/rotate afterwards.
+ */
+function CameraFramer({ radius }: { radius: number | null }) {
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls) as
+    | { target: THREE.Vector3; update: () => void }
+    | null;
+
+  useEffect(() => {
+    if (!radius || radius <= 0) return;
+    const cam = camera as THREE.PerspectiveCamera;
+    const fovRadians = (cam.fov * Math.PI) / 180;
+    // Distance at which a sphere of this radius fills the vertical FOV, plus margin.
+    const distance = (radius / Math.sin(fovRadians / 2)) * 1.15;
+
+    // Keep whatever direction the camera is already looking from, so this reframes without
+    // yanking the user to a different viewpoint.
+    const direction = cam.position.clone().normalize();
+    if (direction.lengthSq() === 0) direction.set(1, 0.3, -1).normalize();
+    cam.position.copy(direction.multiplyScalar(distance));
+
+    cam.near = Math.max(0.01, distance - radius * 4);
+    cam.far = distance + radius * 8;
+    cam.updateProjectionMatrix();
+
+    // <Center> puts the content's centre at the origin, so that is what to orbit around.
+    if (controls) {
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
+  }, [radius, camera, controls]);
+
+  return null;
+}
+
 interface ReconstructionGLBViewerProps { 
   modelUrl: string | null; 
   frame: number; 
   className?: string; 
+  /**
+   * Optional second mesh drawn in the same scene as `modelUrl`. NOT an overlay: both meshes are
+   * opaque peers sharing one <Center>, so each sits where it actually is relative to the other.
+   *
+   * Either slot may be null independently — passing only `secondaryModelUrl` shows just that
+   * mesh. The empty state appears only when both are null.
+   *
+   * Used for the RV cavity, which is RESEARCH/REFERENCE ONLY. When this holds an RV mesh,
+   * `secondaryIsResearchOnly` must be set too — an unlabelled second mesh reads as an equally
+   * trustworthy part of the clinical result.
+   */
+  secondaryModelUrl?: string | null;
+  primaryLabel?: string;
+  secondaryLabel?: string;
+  secondaryColor?: string;
+  secondaryIsResearchOnly?: boolean;
 }
+
+// Distinct from the primary default (#c41e3a, deep red) so the two chambers are never confused
+// with each other, and readable against both light and dark backgrounds.
+const SECONDARY_DEFAULT_COLOR = '#2f9ed6';
 
 export function ReconstructionGLBViewer({ 
   modelUrl, 
   frame, 
-  className = "" 
+  className = "",
+  secondaryModelUrl = null,
+  primaryLabel = "LV myocardium",
+  secondaryLabel = "RV cavity",
+  secondaryColor = SECONDARY_DEFAULT_COLOR,
+  secondaryIsResearchOnly = false,
 }: ReconstructionGLBViewerProps) {
   // useTheme hook ensures component re-renders when theme changes (needed for responsive background)
   useTheme();
@@ -376,6 +476,40 @@ export function ReconstructionGLBViewer({
   const [showPresets, setShowPresets] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<ViewerSettings>(DEFAULT_SETTINGS);
+
+  // Which chambers currently have REAL geometry in the scene, as opposed to which were requested.
+  // <Center> keys off this rather than off the URLs: the URL changes every frame during playback,
+  // and re-centering per frame would cancel out the heart's own motion and pin it to the origin.
+  // Keying off readiness re-measures exactly when it must -- when the first mesh actually arrives,
+  // and when a chamber is added or removed.
+  const [lvReady, setLvReady] = useState(false);
+  const [rvReady, setRvReady] = useState(false);
+
+  const handleLvReady = useCallback(() => setLvReady(true), []);
+  const handleRvReady = useCallback(() => setRvReady(true), []);
+
+  // Radius of the centred content, reported by <Center> when it measures. Drives both the camera
+  // framing and the ground grid, so neither is hardcoded to one particular mesh size.
+  const [fitRadius, setFitRadius] = useState<number | null>(null);
+  // Must be referentially stable: <Center> lists onCentered in its layout-effect deps, so an
+  // inline function would re-measure on every render.
+  const handleCentered = useCallback(
+    (info: { boundingSphere?: { radius: number } }) => {
+      const radius = info?.boundingSphere?.radius;
+      if (typeof radius === "number" && Number.isFinite(radius) && radius > 0) {
+        setFitRadius(radius);
+      }
+    },
+    [],
+  );
+
+  // A hidden or absent chamber is not ready, so bringing it back re-measures.
+  useEffect(() => {
+    if (!modelUrl) setLvReady(false);
+  }, [modelUrl]);
+  useEffect(() => {
+    if (!secondaryModelUrl) setRvReady(false);
+  }, [secondaryModelUrl]);
 
   const handleCameraChange = (state: CameraState) => {
     setCameraState(state);
@@ -401,13 +535,14 @@ export function ReconstructionGLBViewer({
     }
   };
 
-  if (!modelUrl) {
+  // Either chamber alone is a valid view -- hiding LV to inspect RV on its own must still render.
+  if (!modelUrl && !secondaryModelUrl) {
     return (
       <div className={"flex items-center justify-center bg-muted/30 rounded-lg border border-dashed " + className}>
         <div className="text-center p-8">
           <AlertCircle className="h-8 w-8 mx-auto text-muted-foreground" />
           <h3 className="font-semibold mt-2">No Model Loaded</h3>
-          <p className="text-sm text-muted-foreground">Select a frame</p>
+          <p className="text-sm text-muted-foreground">Select a frame, or show a chamber</p>
         </div>
       </div>
     );
@@ -422,6 +557,41 @@ export function ReconstructionGLBViewer({
       <div className="absolute bottom-3 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-xs font-semibold">
         Frame {frame}
       </div>
+
+      {/* Chamber legend, bottom-left above the frame badge. NOT top-left: callers put their own
+          chrome there (the standalone viewer's Back button), and the legend was rendering
+          underneath it.
+          Shown whenever the RV slot is in play — including when RV is the only
+          mesh on screen, which is exactly when saying so matters most. The research-only marker
+          travels with the legend so the warning is on the image itself, not only beside it. */}
+      {secondaryModelUrl && (
+        <div className="absolute bottom-14 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-[11px] space-y-1.5 max-w-[240px]">
+          {modelUrl && (
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full border border-white/40"
+                style={{ backgroundColor: settings.modelColor }}
+              />
+              <span className="font-semibold">{primaryLabel}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full border border-white/40"
+              style={{ backgroundColor: secondaryColor }}
+            />
+            <span className="font-semibold">{secondaryLabel}</span>
+          </div>
+          {secondaryIsResearchOnly && (
+            <div className="flex items-start gap-1.5 pt-1 mt-1 border-t border-white/20 max-w-[210px] text-amber-300">
+              <AlertTriangle className="h-3 w-3 mt-[1px] shrink-0" />
+              <span className="leading-snug">
+                {secondaryLabel} is research/reference only — not for clinical diagnosis.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Camera Preset Buttons */}
       <div className="absolute top-3 right-3 z-10 space-y-2">
@@ -575,6 +745,20 @@ export function ReconstructionGLBViewer({
               />
             </div>
 
+            {/* Smooth shading. Exposed as a toggle rather than applied invisibly, because it
+                changes how coarse a mesh LOOKS without changing how coarse it IS -- turning it
+                off shows the real facet size the reconstruction actually produced. */}
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-white text-xs">Smooth Shading</Label>
+                <p className="text-white/40 text-[10px]">Cosmetic; off shows true facets</p>
+              </div>
+              <Switch
+                checked={settings.smoothShading}
+                onCheckedChange={(checked) => setSettings({ ...settings, smoothShading: checked })}
+              />
+            </div>
+
             {/* Grid Toggle */}
             <div className="flex items-center justify-between">
               <Label className="text-white text-xs">Ground Grid</Label>
@@ -654,11 +838,43 @@ export function ReconstructionGLBViewer({
           
           {/* Ground Grid for spatial reference - toggleable */}
           {settings.showGrid && (
-            <gridHelper args={[200, 20, '#666666', '#333333']} position={[0, -30, 0]} />
+            <gridHelper
+              // Scaled to the content rather than fixed at 200/-30, which was sized for one mesh
+              // and left the grid a distant sliver under a smaller one.
+              args={[fitRadius ? fitRadius * 8 : 200, 20, '#666666', '#333333']}
+              position={[0, fitRadius ? -fitRadius * 1.4 : -30, 0]}
+            />
           )}
           
-          {/* Model with settings */}
-          <Model url={modelUrl} settings={settings} />
+          {/* Models with settings.
+              One <Center> around both, so the overlaid chamber keeps its true offset from the
+              primary mesh rather than being separately re-centered on the origin. */}
+          {/* cacheKey is load-bearing, and must key off READINESS, not the requested URLs.
+              <Center> measures its children once in a layout effect and never again -- children
+              are not in its dependency array, and its default cacheKey is a constant 0. Model
+              renders a 1x1x1 placeholder synchronously while it sniffs the file type, so that
+              placeholder was what got measured, and the resulting near-zero offset was kept
+              forever. The mesh then drew at its raw world coordinates, far from the origin --
+              which is why the model sat in a corner in the segmentation panel and why turning RV
+              on looked like everything flew off screen.
+              Keying off which chambers actually have geometry re-measures exactly when it should:
+              when the first real mesh lands, and when a chamber is added or removed. It
+              deliberately does NOT change per frame -- re-centering every frame would cancel the
+              heart's own motion and pin it to the origin. */}
+          <CameraFramer radius={fitRadius} />
+          <Center
+            cacheKey={`${lvReady ? "lv" : ""}|${rvReady ? "rv" : ""}`}
+            onCentered={handleCentered}
+          >
+            {modelUrl && <Model url={modelUrl} settings={settings} onReady={handleLvReady} />}
+            {secondaryModelUrl && (
+              <Model
+                url={secondaryModelUrl}
+                settings={{ ...settings, modelColor: secondaryColor }}
+                onReady={handleRvReady}
+              />
+            )}
+          </Center>
           
           {/* Environment Map for reflections - customizable preset */}
           <Environment preset={settings.environmentPreset} />

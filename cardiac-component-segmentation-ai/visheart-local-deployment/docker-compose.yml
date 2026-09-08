@@ -5,6 +5,12 @@ x-gpu-environment: &gpu-env
   YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
   MEDSAM_MODEL_NAME: medsam_vit_b.pth
   FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
+  # RV 4D reconstruction checkpoint. Optional: leave it unset (or comment it out) and RV is simply
+  # unavailable -- every LV path behaves exactly as before, and an RV request returns 503 naming
+  # the missing configuration rather than being answered with an LV mesh.
+  # An absolute path is honoured as-is, which keeps the weights out of the shared git repo.
+  # RV output is RESEARCH/REFERENCE ONLY and is not validated for clinical use.
+  FOURD_RV_MODEL_NAME: /app/app/models/fourd_rv_epoch_50.pth
   GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
   SERVER_USERNAME: visheart-gpu-inference
   ALLOWED_NODE_USERNAME: visheart-node-server
@@ -255,7 +261,10 @@ services:
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
       - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
-      - ../visheart-inference-gpu/app/models/atlas:/app/app/models/atlas:ro
+      # get_P.py carries the per-chamber contour extraction (target_label). Without this mount the
+      # image's baked copy is used, which only ever reads label 2, and an RV request would be
+      # meshed from LV contours.
+      - ../visheart-inference-gpu/app/dependencies/get_P.py:/app/app/dependencies/get_P.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
@@ -266,6 +275,14 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      # Checkpoints live here and are read from the host, so a model can be dropped in without
+      # rebuilding the image -- the same workflow as unet.pth. The RV 4D checkpoint is picked up
+      # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
+      # Includes models/atlas (the AHA CPD atlas), so no separate atlas-only mount is needed.
+      - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      # Use checkpoint files baked into the GPU image. Mounting the local
+      # checkpoints folder can hide those files if local .pth paths are folders.
+      # - ../../UNETRESNET34/checkpoints:/app/UNETRESNET34/checkpoints:ro
     networks:
       visheart-network:
         aliases:
@@ -314,6 +331,10 @@ services:
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
       - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
+      # get_P.py carries the per-chamber contour extraction (target_label). Without this mount the
+      # image's baked copy is used, which only ever reads label 2, and an RV request would be
+      # meshed from LV contours.
+      - ../visheart-inference-gpu/app/dependencies/get_P.py:/app/app/dependencies/get_P.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
@@ -324,6 +345,9 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      # Checkpoints live here and are read from the host, so a model can be dropped in without
+      # rebuilding the image -- the same workflow as unet.pth. The RV 4D checkpoint is picked up
+      # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
     networks:
       visheart-network:

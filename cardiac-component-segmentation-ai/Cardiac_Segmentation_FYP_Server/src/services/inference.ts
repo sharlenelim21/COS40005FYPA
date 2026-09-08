@@ -3,7 +3,7 @@
 
 import { IUserSafe, ProjectCrudResult, segmentationSource, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
-import { createJob, IJob, JobStatus, readProject, updateJob } from "./database";
+import { createJob, IJob, jobModel, JobStatus, readProject, updateJob } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
@@ -158,6 +158,87 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
     }
 };
 
+/**
+ * A segmentation job for this project that is still running, or null if there is none.
+ *
+ * Without this, `POST /start-segmentation` accepted every request it was given. The frontend's
+ * only protection was a local `useState` flag, so a page refresh cleared it and the button became
+ * clickable again while the first job was still on the GPU -- and any caller hitting the endpoint
+ * directly was never restricted at all. The GPU runs jobs one at a time behind a semaphore, so
+ * duplicates do not exhaust memory; they queue. An unbounded queue is the actual damage: every
+ * extra submission delays everyone else's work, and each completed duplicate overwrites the same
+ * project's masks, so which result survives depends on ordering.
+ *
+ * Three things this deliberately does NOT do:
+ *
+ * - It does not treat a 4D reconstruction job as a blocker. Those set `model_used` to
+ *   "4d_reconstruction" and have their own per-(model, chamber) guard in reconstruction.ts.
+ * - It does not block across models. MedSAM and UNet write separate results, so running one
+ *   while the other is in flight is legitimate.
+ * - It does not block forever. A job whose callback never arrives (GPU restarted, webhook lost)
+ *   stays PENDING/IN_PROGRESS in the database for good. Without an age limit that job would lock
+ *   the project out of segmentation permanently -- a worse failure than the duplicates this is
+ *   meant to stop. Jobs older than the cutoff are ignored here and left for whatever reconciles
+ *   job state; the user can simply run again.
+ *
+ * MedSAM jobs written before `segmentationModel` was set on this path have no model recorded.
+ * They are matched as MedSAM, since UNet has always written the field.
+ */
+
+/**
+ * Age past which an in-flight job stops blocking, per model. These are not the same because the
+ * models cannot run on the same hardware.
+ *
+ * MedSAM is GPU-only: the CPU compose profile sets SKIP_MEDSAM_MODEL_LOAD=true, and the GPU
+ * service resolves the handler through a FastAPI dependency that raises when the model was not
+ * loaded -- so a MedSAM request on a CPU deployment fails during dependency resolution, before
+ * anything is queued, and never leaves a job record behind. A real MedSAM job is therefore always
+ * running on a GPU, and 30 minutes is a generous ceiling.
+ *
+ * UNet does run on CPU, where the same work takes several times longer, so its cutoff has to be
+ * higher or the guard would expire while the job is still legitimately running and let duplicates
+ * back in.
+ *
+ * Both numbers are ceilings for "this job will never finish", not estimates of runtime. Raising
+ * them makes a stuck job block for longer; lowering them lets duplicates through on slow jobs.
+ * Neither is measured -- adjust once real CPU UNet runtimes are known.
+ */
+const STALE_JOB_MINUTES: Record<string, number> = {
+    [SegmentationModel.MEDSAM]: 30,
+    [SegmentationModel.UNET]: 90,
+};
+
+export const findBlockingSegmentationJob = async (
+    projectId: string,
+    model: SegmentationModel,
+): Promise<{ uuid: string; status: string; startedAt?: Date } | null> => {
+    const modelFilter = model === SegmentationModel.UNET
+        ? { segmentationModel: SegmentationModel.UNET }
+        : { segmentationModel: { $in: [SegmentationModel.MEDSAM, null] } };
+
+    try {
+        const job = await jobModel.findOne({
+            projectid: projectId,
+            status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
+            model_used: { $ne: "4d_reconstruction" },
+            createdAt: { $gte: new Date(Date.now() - (STALE_JOB_MINUTES[model] ?? 30) * 60 * 1000) },
+            ...modelFilter,
+        }).sort({ createdAt: -1 });
+
+        if (!job) return null;
+        return {
+            uuid: job.uuid,
+            status: job.status,
+            startedAt: (job as unknown as { createdAt?: Date }).createdAt,
+        };
+    } catch (error) {
+        // A guard that throws must not take the endpoint down with it. Log and allow the request:
+        // failing open costs a duplicate job, failing closed blocks legitimate work.
+        logger.error(`${serviceLocation}: Failed to check for in-flight segmentation jobs for project ${projectId}:`, error);
+        return null;
+    }
+};
+
 export const startInference = async (projectId: string, user?: IUserSafe, gpuAuthToken?: string): Promise<{ success: boolean; message: string; uuid?: string }> => {
     logger.info(`${serviceLocation}: Received start inference request for project ${projectId} by user ${user?.username} with id ${user?._id}`);
 
@@ -246,7 +327,11 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
                 projectid: projectId,
                 uuid: trackedJobUuid,
                 status: JobStatus.IN_PROGRESS,
-                segmentationSource: segmentationSource.AI_INFERENCE
+                segmentationSource: segmentationSource.AI_INFERENCE,
+                // Recorded so the in-flight guard can tell a MedSAM job from a UNet one and block
+                // only same-model duplicates. UNet has always set this; MedSAM did not, which is
+                // why the guard also reads a missing value as MedSAM for older records.
+                segmentationModel: SegmentationModel.MEDSAM
             };
             const jobCreationResult = await createJob(jobData);
 
