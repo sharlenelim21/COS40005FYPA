@@ -131,6 +131,7 @@ export interface LandmarkSidebarProps {
   structureVentricle?: "LV" | "RV";
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
+  isPerFrame?: boolean;
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
@@ -174,6 +175,7 @@ export function LandmarkSidebar({
   structureVentricle = "LV",
   onStructureVentricleChange,
   structureStats,
+  isPerFrame,
   hasUnsavedLandmarkEdits,
   isSavingLandmarks,
   onSaveLandmarks,
@@ -392,6 +394,7 @@ export function LandmarkSidebar({
             structureVentricle={structureVentricle}
             onStructureVentricleChange={onStructureVentricleChange}
             structureStats={structureStats}
+            isPerFrame={isPerFrame}
           />
         )}
         {activeTab === "strain" && (
@@ -1155,6 +1158,7 @@ function StructureTab({
   structureVentricle,
   onStructureVentricleChange,
   structureStats,
+  isPerFrame,
 }: {
   hasPredictions: boolean;
   activeModel: "unet" | "medsam";
@@ -1162,6 +1166,10 @@ function StructureTab({
   structureVentricle: "LV" | "RV";
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
+  /** True when structureStats tracks the currently playing frame (a real
+   *  per-frame strain series exists); false when it's the single ED-frame
+   *  snapshot repeated across playback. */
+  isPerFrame?: boolean;
 }) {
   if (!hasPredictions) {
     return (
@@ -1225,13 +1233,23 @@ function StructureTab({
         </div>
       ) : structureStats && structureStats.mean != null ? (
         <>
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-medium text-foreground">Wall Thickness</h4>
+            {isPerFrame && (
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                Live per-frame
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-3 gap-2">
             <StructureStatTile label="Min" value={structureStats.min != null ? `${structureStats.min.toFixed(1)} ${unit}` : "—"} />
             <StructureStatTile label="Mean" value={`${structureStats.mean.toFixed(1)} ${unit}`} />
             <StructureStatTile label="Max" value={structureStats.max != null ? `${structureStats.max.toFixed(1)} ${unit}` : "—"} />
           </div>
           <p className="text-[9px] text-muted-foreground leading-relaxed">
-            AHA 17-segment wall thickness — a single computed snapshot, not a per-frame cycle metric.
+            {isPerFrame
+              ? "AHA 17-segment wall thickness for the frame currently playing."
+              : "AHA 17-segment wall thickness — a single snapshot for now. Per-frame values compute automatically in the background and will animate here shortly."}
           </p>
         </>
       ) : (

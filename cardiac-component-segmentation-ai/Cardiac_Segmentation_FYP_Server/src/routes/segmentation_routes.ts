@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -2146,6 +2146,13 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
 
         generateNiftiAndComputeBullseye(maskDoc, project, maskId).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-bullseye async error for mask ${maskId}: ${err?.message}`);
+        });
+
+        // Per-frame wall thickness — RLE-only, no GPU, safe to always auto-run
+        // alongside the single-snapshot bullseye above. See its own docstring
+        // for why this is deliberately kept separate from strain (GRS/GCS).
+        computeFrameWallThicknessSeries(maskId, frames, W, H).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-bullseye frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 
     } catch (error: unknown) {

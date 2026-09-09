@@ -284,9 +284,12 @@ services:
       # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
       # Includes models/atlas (the AHA CPD atlas), so no separate atlas-only mount is needed.
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
-      # Use checkpoint files baked into the GPU image. Mounting the local
-      # checkpoints folder can hide those files if local .pth paths are folders.
-      # - ../../UNETRESNET34/checkpoints:/app/UNETRESNET34/checkpoints:ro
+      # Landmark checkpoints (and unet_resnet34.py, the architecture they need) live at the
+      # repo root, outside visheart-inference-gpu's own build context, so a locally-built
+      # image never bakes them in -- confirmed at runtime: "No 2ch checkpoint found at
+      # /app/UNETRESNET34/checkpoints/best_model_2ch.pth" with this left commented out.
+      # Mount the whole folder (not just checkpoints/) so unet_resnet34.py resolves too.
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:
@@ -358,6 +361,11 @@ services:
       # rebuilding the image -- the same workflow as unet.pth. The RV 4D checkpoint is picked up
       # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      # Landmark checkpoints (and unet_resnet34.py, the architecture they need) live at the
+      # repo root, outside visheart-inference-gpu's own build context, so a locally-built
+      # image never bakes them in. Mount the whole folder (not just checkpoints/) so
+      # unet_resnet34.py resolves too.
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
         aliases:

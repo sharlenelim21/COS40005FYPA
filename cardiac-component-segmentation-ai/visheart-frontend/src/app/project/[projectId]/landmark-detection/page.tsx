@@ -205,6 +205,13 @@ export default function LandmarkDetectionPage() {
   // Bullseye data + model selector state
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
+  // Per-frame wall thickness (RLE-only, auto-computed alongside the single
+  // snapshot above) — separate from bullseyeSeries, which only exists once the
+  // user manually runs the GRS/GCS strain series. See computeFrameWallThicknessSeries.
+  const [frameBullseyeSeries, setFrameBullseyeSeries] = useState<{
+    frames: { frameIndex: number; segment_values: (number | null)[]; stats: any }[];
+    computed_at: string;
+  } | null>(null);
   const [segFrameCount, setSegFrameCount] = useState(0);
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
@@ -299,7 +306,11 @@ export default function LandmarkDetectionPage() {
     setBullseyeLoading(true);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
-      type SegItem = { _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData; strain?: RealStrainResult; heartMetrics?: { ed_frame?: number; es_frame?: number } };
+      type SegItem = {
+        _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData; strain?: RealStrainResult;
+        heartMetrics?: { ed_frame?: number; es_frame?: number };
+        frameBullseye?: { frames: { frameIndex: number; segment_values: (number | null)[]; stats: any }[]; computed_at: string };
+      };
       const segs = (res.segmentations ?? []) as SegItem[];
 
       // Editable masks only (isMedSAMOutput === false), split by inferred model
@@ -348,11 +359,14 @@ export default function LandmarkDetectionPage() {
         selectedMask = medsamWithBullseye ?? unetWithBullseye;
       }
 
-      // Auto-trigger bullseye for every editable mask that has no data yet,
-      // using a session ref so each mask is triggered at most once.
+      // Auto-trigger bullseye for every editable mask missing EITHER the single
+      // snapshot or the per-frame series — trigger-bullseye computes both, so
+      // this also backfills frameBullseye on masks from before it existed
+      // (which already have `bullseye` and would otherwise never re-fire).
+      // Session ref still caps it at one trigger per mask per page load.
       if (triggerIfMissing) {
         const masksNeedingBullseye = editables.filter(
-          (m) => m._id && !m.bullseye && !autoTriggeredBullseyeMasks.current.has(m._id)
+          (m) => m._id && (!m.bullseye || !m.frameBullseye) && !autoTriggeredBullseyeMasks.current.has(m._id)
         );
         for (const mask of masksNeedingBullseye) {
           const maskId = mask._id as string;
@@ -372,14 +386,17 @@ export default function LandmarkDetectionPage() {
         // Don't switch the active model here — activeModel (from the URL) is the
         // single source of truth; this only loads that model's bullseye data.
         setBullseyeData(selectedMask.bullseye!);
+        setFrameBullseyeSeries(selectedMask.frameBullseye ?? null);
         setBullseyeLoading(false);
         return;
       }
 
       setBullseyeData(null);
+      setFrameBullseyeSeries(null);
       setBullseyeLoading(false);
     } catch {
       setBullseyeData(null);
+      setFrameBullseyeSeries(null);
       setBullseyeLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -683,6 +700,12 @@ export default function LandmarkDetectionPage() {
     setBullseyeResultsModel(selectedBullseyeModel);
   }, [selectedBullseyeModel, setBullseyeResultsModel]);
 
+  // The full-cycle strain series (LV wall-thickness animation, GRS/GCS) stays
+  // manual -- "Compute all frames" in the Strain tab -- since it's one GPU
+  // pass per frame and shouldn't run automatically for every patient. Only
+  // the cheap single-snapshot bullseye (fetchBullseye, below) auto-computes
+  // as soon as segmentation is ready.
+
   // Hydrate strainResult/rvStrainResult (and the ED/ES picker) from whatever
   // this model's mask document already has stored — so reopening a project
   // with a previously-computed strain result shows it immediately instead of
@@ -820,18 +843,41 @@ export default function LandmarkDetectionPage() {
 
   /** Wall thickness (mm) per AHA segment at the frame currently being shown. */
   const frameThicknessValues = useMemo(() => {
-    const frames = bullseyeSeries?.frames;
-    if (!frames?.length) return null;
-    const frame =
-      frames.find((f) => f.frameIndex === strainPlaybackFrame) ?? frames[0];
-    const vals = Array.from({ length: 17 }, (_, i) => {
-      const seg = frame.segments?.find((s) => s.segment === i + 1);
-      return typeof seg?.wt_mm === "number" ? seg.wt_mm : null;
-    });
-    // Older series predate wt_mm — fall back to the static bullseye rather than
-    // rendering a plot full of gaps.
-    return vals.every((v) => v === null) ? null : vals;
-  }, [bullseyeSeries, strainPlaybackFrame]);
+    // Prefer the strain series's wt_mm when the user has run "Compute all
+    // frames" — it's derived from the same GPU comparison as GRS/GCS, so it's
+    // already loaded and consistent with whatever strain data is showing.
+    const strainFrames = bullseyeSeries?.frames;
+    if (strainFrames?.length) {
+      const frame = strainFrames.find((f) => f.frameIndex === strainPlaybackFrame) ?? strainFrames[0];
+      const vals = Array.from({ length: 17 }, (_, i) => {
+        const seg = frame.segments?.find((s) => s.segment === i + 1);
+        return typeof seg?.wt_mm === "number" ? seg.wt_mm : null;
+      });
+      if (!vals.every((v) => v === null)) return vals;
+      // Older series predate wt_mm — fall through to the RLE-only series below
+      // rather than rendering a plot full of gaps.
+    }
+    // Otherwise use the auto-computed, RLE-only per-frame series — available
+    // as soon as segmentation is done, no manual strain compute needed.
+    const rleFrames = frameBullseyeSeries?.frames;
+    if (!rleFrames?.length) return null;
+    const rleFrame = rleFrames.find((f) => f.frameIndex === strainPlaybackFrame) ?? rleFrames[0];
+    return rleFrame.segment_values.every((v) => v === null) ? null : rleFrame.segment_values;
+  }, [bullseyeSeries, frameBullseyeSeries, strainPlaybackFrame]);
+
+  /** Sidebar's compact Min/Mean/Max — tracks the current frame when a per-frame
+   *  series exists (same source as frameThicknessValues), otherwise falls back
+   *  to the single ED-frame snapshot so the sidebar isn't left blank. */
+  const currentFrameStructureStats = useMemo(() => {
+    if (!frameThicknessValues) return bullseyeData?.stats ?? null;
+    const finite = frameThicknessValues.filter((v): v is number => typeof v === "number");
+    if (!finite.length) return bullseyeData?.stats ?? null;
+    return {
+      min: Math.min(...finite),
+      mean: finite.reduce((a, b) => a + b, 0) / finite.length,
+      max: Math.max(...finite),
+    };
+  }, [frameThicknessValues, bullseyeData]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1212,7 +1258,8 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
-            structureStats={bullseyeData?.stats ?? null}
+            structureStats={currentFrameStructureStats}
+            isPerFrame={!!frameThicknessValues}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={handleSaveLandmarks}
@@ -1520,7 +1567,8 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
-            structureStats={bullseyeData?.stats ?? null}
+            structureStats={currentFrameStructureStats}
+            isPerFrame={!!frameThicknessValues}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={handleSaveLandmarks}

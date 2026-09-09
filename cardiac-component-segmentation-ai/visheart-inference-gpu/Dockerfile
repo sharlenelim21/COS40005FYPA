@@ -72,6 +72,16 @@ RUN pip install --no-cache-dir -r requirements_torch.txt --index-url https://dow
 RUN pip install --no-cache-dir -r requirements_prod.txt && \
     rm -rf /root/.cache/pip
 
+# cupy (RV CPD-GPU acceleration, cpd_gpu.py) is intentionally not in requirements_prod.txt --
+# it's GPU-only and gpu_available() already falls back to CPU cleanly without it. Baking it in
+# here means it's downloaded once at image build time instead of on every fresh container start
+# (docker-compose.yml previously installed it via a startup `command:` check, which re-ran the
+# ~1.5GB cupy-cuda12x[ctk] download from scratch every time the gpu-nvidia container was
+# recreated -- not just restarted). The [ctk] extra bundles its own CUDA 12 userspace libraries,
+# so it doesn't need to match this image's CUDA 11.8 base.
+RUN pip install --no-cache-dir "cupy-cuda12x[ctk]" && \
+    rm -rf /root/.cache/pip
+
 RUN python3 -c "import nibabel; print('NIBABEL INSTALLED OK')"
 
 #------------------------------------------------------------------------------

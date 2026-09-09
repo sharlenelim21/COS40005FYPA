@@ -287,6 +287,19 @@ export interface IProjectSegmentationMask {
     lv_centroid?: [number, number];
   };
   /**
+   * Per-cardiac-cycle-frame wall thickness — deliberately separate from the
+   * strain pipeline (`strainSeries`). Wall thickness at a single frame needs
+   * no comparison against another frame, so this is computed by looping the
+   * same RLE-only script `bullseye` uses once per frame, with no GPU call —
+   * safe to auto-run right after segmentation. Lets the Structure tab's
+   * bullseye/3D heart animate across the cycle without a manual "Compute all
+   * frames" (which remains GRS/GCS-only). See computeFrameWallThicknessSeries.
+   */
+  frameBullseye?: {
+    frames: { frameIndex: number; segment_values: (number | null)[]; stats: { min: number | null; max: number | null; mean: number | null; n_nan: number } }[];
+    computed_at: string;
+  };
+  /**
    * Cardiac clinical metrics derived from this mask's RLE frames plus the
    * project's stored 4x4 affine. Produced by compute_heart_metrics_from_rle.py
    * and stored parallel to `bullseye`. Fields may be null when the input is
