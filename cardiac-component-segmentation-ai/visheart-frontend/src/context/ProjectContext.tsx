@@ -5,6 +5,8 @@ import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
 import { decodeSegmentationMasks } from "@/lib/decode-RLE";
 import { tarImageCache } from "@/lib/tar-image-cache";
 import { reconstructionCache } from "@/lib/reconstruction-cache";
+import { getModelMaskAvailability } from "@/lib/segmentation-model-utils";
+import type { SegmentationModelId } from "@/lib/segmentation-model-utils";
 import * as ProjectTypes from "@/types/project";
 import { LoadingStage } from "@/types/project";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -77,6 +79,8 @@ interface ProjectContextType {
   // Active segmentation model (shared so ProjectDashboardBar can read it for export)
   selectedSegmentationModel: "medsam" | "unet";
   setSelectedSegmentationModel: (model: "medsam" | "unet") => void;
+
+  maskAvailabilityByModel: Record<SegmentationModelId, boolean>;
 }
 
 const normalizeReconstructionModel = (value: unknown): "medsam" | "unet" | "unknown" => {
@@ -1570,6 +1574,11 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     setSegmentationError(null); // Clear any existing errors
   }, []);
 
+  const maskAvailabilityByModel = useMemo(
+    () => getModelMaskAvailability(undecodedMasks),
+    [undecodedMasks],
+  );
+
   // Memoized context value to prevent unnecessary re-renders
   const contextValue: ProjectContextType = useMemo(
     () => ({
@@ -1624,6 +1633,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       updateContextMasks,
       selectedSegmentationModel,
       setSelectedSegmentationModel,
+      maskAvailabilityByModel,
     }),
     [
       loading,
@@ -1671,6 +1681,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       refreshReconstructionJobs,
       updateContextMasks,
       selectedSegmentationModel,
+      maskAvailabilityByModel,
     ],
   );
 
