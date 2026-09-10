@@ -390,7 +390,7 @@ export function FileUploadDialog({
             ) : (
               <>
                 <Upload className="mr-2 h-4 w-4" />
-                {selectedFiles.length > 1 ? `Upload ${selectedFiles.length} Projects` : "Upload to Cloud"}
+                {selectedFiles.length > 1 ? `Upload ${selectedFiles.length} Projects` : "Upload"}
               </>
             )}
           </Button>

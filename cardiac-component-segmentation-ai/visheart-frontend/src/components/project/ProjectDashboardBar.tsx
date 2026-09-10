@@ -6,24 +6,35 @@ import { useProject } from "@/context/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { 
-  Heart, 
-  Clock, 
-  CheckCircle2, 
-  XCircle, 
-  AlertCircle, 
-  Database, 
-  Activity, 
-  Download, 
-  ChevronUp, 
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Heart,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  Database,
+  Activity,
+  Download,
+  ChevronUp,
   ChevronDown,
   Layers,
   Box,
   Image as ImageIcon,
-  Crosshair
+  Crosshair,
+  Loader2
 } from "lucide-react";
 import { segmentationApi, reconstructionApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
+import type { SegmentationModelId } from "@/lib/segmentation-model-utils";
 
 export function ProjectDashboardBar() {
   const router = useRouter();
@@ -38,9 +49,11 @@ export function ProjectDashboardBar() {
     reconstructionMetadata,
     reconstructionCacheReady,
     reconstructionCacheError,
-    selectedSegmentationModel,
+    maskAvailabilityByModel,
   } = useProject();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportingModel, setExportingModel] = useState<SegmentationModelId | null>(null);
   const lastScrollY = useRef(0);
 
   // Auto-hide on scroll
@@ -65,20 +78,21 @@ export function ProjectDashboardBar() {
 
   if (!projectData) return null;
 
-  // Export segmentation masks
-  const handleExportProject = async () => {
-    if (!projectData?.projectId) return;
-    
+  // Export segmentation masks for a specific model, chosen from the popup.
+  const handleExportModel = async (model: SegmentationModelId) => {
+    if (!projectData?.projectId || !maskAvailabilityByModel[model]) return;
+
+    setExportingModel(model);
     try {
-      console.log(`[Export] Starting segmentation export for project: ${projectData.projectId}, model: ${selectedSegmentationModel}`);
-      const exportResult = await segmentationApi.exportProjectData(projectData.projectId, selectedSegmentationModel);
-      console.log(`[Export] Received export result:`, { 
-        blobSize: exportResult.blob.size, 
+      console.log(`[Export] Starting segmentation export for project: ${projectData.projectId}, model: ${model}`);
+      const exportResult = await segmentationApi.exportProjectData(projectData.projectId, model);
+      console.log(`[Export] Received export result:`, {
+        blobSize: exportResult.blob.size,
         blobType: exportResult.blob.type,
         expectedSize: exportResult.fileSizeBytes,
         filename: exportResult.suggestedFilename
       });
-      
+
       const url = window.URL.createObjectURL(exportResult.blob);
       const a = document.createElement("a");
       a.href = url;
@@ -87,10 +101,13 @@ export function ProjectDashboardBar() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
-      
+
       console.log(`[Export] Successfully downloaded segmentation export for project: ${projectData.projectId} as ${exportResult.suggestedFilename}`);
+      setExportDialogOpen(false);
     } catch (error) {
       console.error("Error exporting segmentation:", error);
+    } finally {
+      setExportingModel(null);
     }
   };
 
@@ -230,12 +247,11 @@ export function ProjectDashboardBar() {
                   size="sm"
                   className="h-8 text-xs"
                   disabled={!hasMasks}
-                  onClick={handleExportProject}
-                  title={hasMasks ? `Export ${selectedSegmentationModel.toUpperCase()} segmentation masks as NIfTI` : "No segmentation masks available"}
+                  onClick={() => setExportDialogOpen(true)}
+                  title={hasMasks ? "Choose a model to export its segmentation masks" : "No segmentation masks available"}
                 >
                   <Download className="h-3 w-3 mr-1.5" />
                   Export Masks
-                  <span className="ml-1 opacity-60">({selectedSegmentationModel.toUpperCase()})</span>
                 </Button>
 
                 {/* Export Reconstruction Meshes */}
@@ -393,6 +409,51 @@ export function ProjectDashboardBar() {
           </div>
         </div>
       </div>
+
+      {/* Export Masks Popup — pick which model's mask to download */}
+      <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Export Segmentation Masks</DialogTitle>
+            <DialogDescription>
+              Choose which model&apos;s segmentation masks to download. Only models with a generated mask are selectable.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2">
+            {SEGMENTATION_MODEL_OPTIONS.map((opt) => {
+              const available = maskAvailabilityByModel[opt.value];
+              const isExporting = exportingModel === opt.value;
+              return (
+                <Button
+                  key={opt.value}
+                  variant="outline"
+                  className="justify-between h-10"
+                  disabled={!available || exportingModel !== null}
+                  onClick={() => handleExportModel(opt.value)}
+                  title={available ? `Export ${opt.label} segmentation masks as NIfTI` : `No ${opt.label} segmentation masks available`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Layers className="h-3.5 w-3.5" />
+                    {opt.label}
+                  </span>
+                  {isExporting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : available ? (
+                    <Download className="h-3.5 w-3.5" />
+                  ) : (
+                    <span className="text-[11px] text-muted-foreground">No mask</span>
+                  )}
+                </Button>
+              );
+            })}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setExportDialogOpen(false)} disabled={exportingModel !== null}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Floating Toggle Button (shown when collapsed) */}
       <div 
