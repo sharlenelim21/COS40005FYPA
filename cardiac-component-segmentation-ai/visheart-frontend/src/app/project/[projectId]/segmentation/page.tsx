@@ -26,13 +26,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { useAuth } from "@/context/auth-context";
+import { inferDocModel, SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
+import type { SegmentationModelId } from "@/lib/segmentation-model-utils";
 
-export type SegmentationModelId = "medsam" | "unet";
+export type { SegmentationModelId };
 
-const MODEL_OPTIONS: { value: SegmentationModelId; label: string }[] = [
-  { value: "medsam", label: "MedSam" },
-  { value: "unet", label: "Unet" },
-];
+const MODEL_OPTIONS = SEGMENTATION_MODEL_OPTIONS;
 
 const isValidModel = (v: string | null): v is SegmentationModelId =>
   v === "medsam" || v === "unet";
@@ -322,46 +321,6 @@ function SegmentationResultsPageInner() {
     // short-circuits here and DOES NOT leak the unfiltered set.
     if (!undecodedMasks || undecodedMasks.length === 0) return null;
     if (!projectData?.dimensions?.width || !projectData?.dimensions?.height) return null;
-
-    // Robust per-doc model resolver. Order of trust:
-    //   1. Explicit `segmentationModel` / `model_used` field if present.
-    //   2. Name-based hint — the webhook stamps the model name into
-    //      the doc's `name` (e.g. `"UNET Output - Job ..."`,
-    //      `"Manual Edit (UNET) - ..."`, `"MedSAM AI Output ..."`).
-    //      We only accept this when the explicit tag is missing, and we
-    //      only accept exact "medsam" / "unet" substrings — never a
-    //      free-text guess.
-    // Returns `null` for "no signal at all" so the caller can decide
-    // legacy-fallback policy without us silently casting untagged data
-    // into the current model.
-    const inferDocModel = (m: unknown): "medsam" | "unet" | null => {
-      const raw = m as {
-        segmentationModel?: string;
-        model_used?: string;
-        name?: string;
-      };
-      const tag = (raw.segmentationModel || raw.model_used || "")
-        .toString()
-        .toLowerCase();
-      if (tag === "medsam" || tag === "unet") return tag;
-      const name = (raw.name || "").toString().toLowerCase();
-      // UNet first because its names always contain the literal word.
-      if (name.includes("unet")) return "unet";
-      if (name.includes("medsam")) return "medsam";
-      // Webhook AI-doc name templates produced by the MedSAM path:
-      //   "AI Output - Job <id>"      (no model word, the literal "AI")
-      // — they're MedSAM by construction (UNet's AI doc is "UNET Output …",
-      // already caught above). Recognising this template lets us
-      // resolve a MedSAM AI doc whose explicit `segmentationModel`
-      // field somehow didn't survive into the API response.
-      if (name.startsWith("ai output")) return "medsam";
-      // Pre-Option-2 Manual editable docs: "Manual Edit - <something>".
-      // That code path only ever ran for MedSAM, so we can resolve them
-      // safely here. New code stamps "Manual Edit (MEDSAM)" /
-      // "(UNET)" which the includes-check above already handles.
-      if (name.startsWith("manual edit -") || name === "manual edit") return "medsam";
-      return null;
-    };
 
     // Pass 1 — match docs whose resolved model equals the toggle.
     const exact = undecodedMasks.filter((m) => inferDocModel(m) === selectedModel);
