@@ -22,7 +22,6 @@ import {
   MapPin,
   LayoutGrid,
   Activity,
-  Brain,
   Play,
   Pause,
   SkipBack,
@@ -34,6 +33,7 @@ import {
   AlertCircle,
   Trash2,
   Pencil,
+  ChevronDown,
 } from "lucide-react";
 import {
   LANDMARK_DEFINITIONS,
@@ -119,6 +119,11 @@ function strainCurveData(type: StrainType, totalFrames: number) {
 // Props 
 export interface LandmarkSidebarProps {
   state: LandmarkPageState;
+  /** GPU inference quality summary (slices confident / mean-point-used /
+   * seg-guided / MRI-only counts) — rendered at the top of the Landmarks
+   * tab specifically, moved here from a page-wide header bar so it sits
+   * next to the landmark editing controls it actually describes. */
+  summaryStats?: React.ReactNode;
   currentPrediction: FramePrediction | null;
   visibleLandmarks: Set<string>;
   replacementFileError: string | null;
@@ -163,6 +168,7 @@ export interface LandmarkSidebarProps {
 
 export function LandmarkSidebar({
   state,
+  summaryStats,
   currentPrediction,
   visibleLandmarks,
   replacementFileError,
@@ -283,32 +289,10 @@ export function LandmarkSidebar({
         ))}
       </div>
 
-      {/* Model indicator strip — mirrors segmentation-sidebar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--sidebar-border)] bg-[var(--sidebar-primary)]/50 flex-shrink-0">
-        <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <span className="text-[11px] text-muted-foreground">Model:</span>
-        <span className="text-[11px] font-semibold text-foreground truncate">
-          {state.modelUsed || "UNetResNet34 Landmark"}
-        </span>
-        <span
-          className={cn(
-            "ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
-            hasPredictions
-              ? "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400"
-              : isRunning
-              ? "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400"
-              : "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
-          )}
-        >
-          <span
-            className={cn(
-              "h-1 w-1 rounded-full inline-block",
-              hasPredictions ? "bg-green-500" : isRunning ? "bg-blue-500 animate-pulse" : "bg-amber-500",
-            )}
-          />
-          {hasPredictions ? "Active" : isRunning ? "Running" : "Pending"}
-        </span>
-      </div>
+
+      {activeTab === "landmarks" && summaryStats && (
+        <div className="border-b border-border">{summaryStats}</div>
+      )}
 
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
@@ -1228,7 +1212,8 @@ function StructureTab({
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
           <LayoutGrid className="mx-auto h-7 w-7 opacity-25" />
           <p className="mt-2 text-xs text-muted-foreground">
-            RV structural view coming soon — cavity-area data isn&apos;t computed by the backend yet.
+            RV cavity-area (FAC) numbers aren&apos;t computed by the backend yet — see the main panel for the
+            real RV mesh shape with prototype (placeholder) colors.
           </p>
         </div>
       ) : structureStats && structureStats.mean != null ? (
@@ -1514,7 +1499,21 @@ function StrainTab({
 
   // Nothing computed for THIS model yet → empty state (no dummy charts). Only the
   // model toggle + compute card; results appear only for a model that was run.
-  if (!usingRealSeries && !usingRealStrain && !usingRealRvSeries && !usingRealRvStrain) {
+  //
+  // Scope-specific, not a flat OR across all four flags: a stale Quick
+  // ED->ES result (usingRealStrain/usingRealRvStrain) used to keep the Full
+  // cycle view out of its own empty state, showing a real ED->ES pair's
+  // numbers alongside a dummy-data curve while the scope toggle read "Full
+  // cycle" and nothing had actually been computed for it -- confusing, and
+  // reported as "why is there results for the chart" before Compute all
+  // frames was ever run. Likewise a Quick-scope empty state used to render
+  // its own boxes ("LV Global Strain" / "RV Global Strain") full of
+  // "Not computed yet" placeholder text instead of just staying out of the
+  // way until there's something to show.
+  const scopeHasResults = strainCompute?.scope === "quick"
+    ? (usingRealStrain || usingRealRvStrain)
+    : (usingRealSeries || usingRealRvSeries);
+  if (!scopeHasResults) {
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3">
@@ -1971,15 +1970,46 @@ function ComputeStrainCard({
   const esRef = React.useRef<HTMLInputElement>(null);
   const isQuick = sc.scope === "quick";
 
+  // Auto-collapses the config controls right after a compute finishes
+  // successfully, so the (already-visible-elsewhere) results get the space
+  // back instead of this form sitting there post-use. Tracks the PREVIOUS
+  // busy state via refs rather than keying off "isComputing === false" alone
+  // -- that's also true before anything has ever been run, which would
+  // start the card collapsed on first load instead of only after a real
+  // compute completes.
+  const [collapsed, setCollapsed] = React.useState(false);
+  const wasComputingRef = React.useRef(false);
+  const wasSeriesBusyRef = React.useRef(false);
+  React.useEffect(() => {
+    const quickJustFinished = wasComputingRef.current && !sc.isComputing && !sc.error;
+    const fullCycleJustFinished = wasSeriesBusyRef.current && !seriesBusy && !seriesError;
+    if (quickJustFinished || fullCycleJustFinished) setCollapsed(true);
+    wasComputingRef.current = sc.isComputing;
+    wasSeriesBusyRef.current = seriesBusy;
+  }, [sc.isComputing, sc.error, seriesBusy, seriesError]);
+
   return (
     <div className="rounded-lg border border-border bg-muted/10 p-2.5 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
           Compute strain
         </span>
-        <span className="text-[8px] text-muted-foreground/70">LV + RV together</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[8px] text-muted-foreground/70">LV + RV together</span>
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label={collapsed ? "Show compute strain controls" : "Hide compute strain controls"}
+            title={collapsed ? "Show" : "Hide"}
+          >
+            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsed ? "" : "rotate-180")} />
+          </button>
+        </div>
       </div>
 
+      {!collapsed && (
+      <>
       {/* Scope toggle — Quick ED→ES (single pair) vs Full cycle (every frame) */}
       <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
         {(["quick", "full"] as const).map((scope) => (
@@ -2172,6 +2202,8 @@ function ComputeStrainCard({
           </Button>
           {seriesError && <p className="text-[9px] text-destructive">{seriesError}</p>}
         </div>
+      )}
+      </>
       )}
     </div>
   );

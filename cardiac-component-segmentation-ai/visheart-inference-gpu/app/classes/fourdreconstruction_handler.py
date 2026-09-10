@@ -71,28 +71,48 @@ DECODE_VOLUME_SIZE_WIDE = 4.5
 DECODE_TIGHT_HEADROOM = 0.95
 
 
-def _classify_rv_mesh(mesh_file: str, cpd_warp_state: Optional[dict]) -> Tuple[Optional[List[int]], Optional[dict]]:
+def _classify_rv_mesh(
+    mesh_file: str, cpd_warp_state: Optional[dict], lv_reference_points: Optional[np.ndarray] = None,
+) -> Tuple[Optional[List[int]], Optional[dict]]:
     """
     RV's equivalent of deep_sdf/mesh.py's classify_aha branch, called from OUTSIDE
     that shared LV/RV mesh-generation code path (see cpd_rv_segmentation.py's module
     docstring for why: keeps deep_sdf/mesh.py -- which every LV reconstruction also
     runs through -- untouched by RV-specific logic).
 
-    Re-loads the just-exported mesh file to get its vertices, which are numerically
-    identical to what deep_sdf/mesh.py's own `mesh_points` would have been at the
-    equivalent point in the LV path: _convert_ply_to_obj/_convert_ply_to_glb are pure
-    format conversions (trimesh.load -> mesh.export, no coordinate transform), and
-    the offset/scale already applied before export is the same transform LV's
-    classify_aha branch runs against. process=False, so vertex order/count isn't
-    changed by the reload -- required for the returned labels to line up with this
-    mesh file's own vertices index-for-index.
+    Re-loads the just-exported mesh file to get its vertices. Its coordinate space:
+    convert_sdf_samples_to_ply (deep_sdf/mesh.py) computes classify_aha's mesh_points
+    BEFORE applying Ti (the rigid-alignment inverse), then applies Ti before writing
+    the file this reloads -- so this is NOT numerically identical to LV's classify_aha
+    space, despite Ti being a pure rotation+translation. It doesn't need to be: Ti is
+    the exact inverse of the T register_cpd_warp's Stage 1 already accounts for via
+    its own (translation- and rotation-invariant) centroid+PCA steps, AND Ti @ T is
+    the identity by construction, so this file's vertices end up in the same space as
+    the RAW extracted contour points (get_contour()'s own output) -- which is exactly
+    why lv_reference_points below needs no extra transform of its own to match: it's
+    that same raw contour, for the same frame, from the same NIfTI. process=False, so
+    vertex order/count isn't changed by the reload -- required for the returned labels
+    to line up with this mesh file's own vertices index-for-index.
+
+    `lv_reference_points`, when given, is this same reconstruction's LV contour point
+    cloud for the SAME frame (see the 4D-sequence and single-frame callers) -- used to
+    anchor the azimuthal rotation search to a real, patient-specific septal direction
+    instead of a pure "maximize populated segments" heuristic. See
+    cpd_rv_segmentation.register_cpd_warp/label_with_warp for how; optional and purely
+    additive (omitting it reproduces the exact prior behaviour).
 
     Returns (aha_vertex_labels, new_warp_state) -- (None, cpd_warp_state) on any
     failure, so a bad RV frame degrades to "no segmentation for this frame" rather
     than raising and losing the (successfully generated) mesh.
     """
     try:
-        mesh = trimesh.load(mesh_file, process=False)
+        # force='mesh': GLB/GLTF always loads as a trimesh.Scene by default (even
+        # for a file containing exactly one mesh, which is all these exports ever
+        # contain) -- Scene has no .vertices. force='mesh' merges the scene's
+        # geometry into a single Trimesh instead. Combined with process=False this
+        # does NOT reorder/dedupe vertices (there's only one geometry to merge),
+        # so the docstring's index-alignment guarantee above still holds.
+        mesh = trimesh.load(mesh_file, process=False, force='mesh')
         vertices = np.asarray(mesh.vertices, dtype=np.float64)
     except Exception as exc:
         logging.warning(f"[CPD-RV] Could not reload {mesh_file!r} for RV classification: {exc}")
@@ -100,12 +120,38 @@ def _classify_rv_mesh(mesh_file: str, cpd_warp_state: Optional[dict]) -> Tuple[O
 
     new_warp_state = cpd_warp_state
     if new_warp_state is None:
-        new_warp_state = cpd_rv_segmentation.register_cpd_warp(vertices)
+        new_warp_state = cpd_rv_segmentation.register_cpd_warp(vertices, lv_reference_points=lv_reference_points)
 
     if new_warp_state is None:
         return None, None
 
-    labels = cpd_rv_segmentation.label_with_warp(vertices, new_warp_state)
+    faces = np.asarray(mesh.faces, dtype=np.int64) if hasattr(mesh, "faces") else None
+    labels = cpd_rv_segmentation.label_with_warp(
+        vertices, new_warp_state, faces=faces, lv_reference_points=lv_reference_points,
+    )
+    if labels is None:
+        return None, new_warp_state
+
+    if faces is not None and faces.shape[0] > 0:
+        # The actual fix for jagged segment boundaries: genuinely finer
+        # geometry at the boundary, not a smoothed line drawn over the same
+        # coarse fill (see refine_mesh_for_smooth_boundaries' own docstring).
+        # This changes vertex/face count, so the mesh FILE itself has to be
+        # re-exported with the refined geometry -- the labels alone aren't
+        # enough, unlike every other step in this function.
+        refined_vertices, refined_faces, refined_labels = cpd_rv_segmentation.refine_mesh_for_smooth_boundaries(
+            vertices, faces, labels, new_warp_state,
+        )
+        if refined_vertices.shape[0] != vertices.shape[0]:
+            try:
+                trimesh.Trimesh(vertices=refined_vertices, faces=refined_faces, process=False).export(mesh_file)
+                labels = refined_labels
+            except Exception as exc:
+                logging.warning(
+                    f"[CPD-RV] Could not re-export refined mesh to {mesh_file!r}: {exc}; "
+                    "keeping the unrefined mesh and labels for this frame."
+                )
+
     labels_list = labels.tolist() if labels is not None else None
     return labels_list, new_warp_state
 
@@ -1209,7 +1255,14 @@ class FourDReconstructionHandler:
                 classify_aha=not is_rv,
             )
             if is_rv:
-                aha_vertex_labels, _ = _classify_rv_mesh(mesh_file, None)
+                # Extracted fresh here (not reused from `point_cloud`, which is
+                # the RV contour for this same call) rather than fetched from a
+                # separately-stored LV reconstruction: same NIfTI file, same
+                # already-proven extraction function, no cross-job I/O needed --
+                # see cpd_rv_segmentation.register_cpd_warp's own docstring for
+                # why this needs no extra coordinate transform either.
+                lv_reference_points = self._extract_contour_from_nifti_sync(nifti_file_path, "lv")
+                aha_vertex_labels, _ = _classify_rv_mesh(mesh_file, None, lv_reference_points=lv_reference_points)
 
 
             # Debug mode: Copy to persistent location if enabled
@@ -1469,7 +1522,17 @@ class FourDReconstructionHandler:
                             seed=frame_seed, classify_aha=not is_rv, cpd_warp_state=cpd_warp_state,
                         )
                         if is_rv:
-                            frame_aha_labels, rv_cpd_warp_state = _classify_rv_mesh(frame_mesh_file, rv_cpd_warp_state)
+                            # Same NIfTI frame file this frame's own RV contour
+                            # (frame_point_cloud) just came from -- see
+                            # _classify_rv_mesh's docstring for why no extra
+                            # transform is needed to match RV's classification
+                            # space. Recomputed every frame (not reused from an
+                            # ED-frame anchor) since LV and RV each move
+                            # independently across the cardiac cycle.
+                            frame_lv_reference_points = self._extract_contour_from_nifti_sync(frame_path, "lv")
+                            frame_aha_labels, rv_cpd_warp_state = _classify_rv_mesh(
+                                frame_mesh_file, rv_cpd_warp_state, lv_reference_points=frame_lv_reference_points,
+                            )
                         print(f"Completed optimization for frame {original_frame_idx}")
                         frame_selections[original_frame_idx] = frame_selection
                         mesh_files.append(frame_mesh_file)
@@ -1560,7 +1623,10 @@ class FourDReconstructionHandler:
                     classify_aha=not is_rv,
                 )
                 if is_rv:
-                    ed_aha_vertex_labels, _ = _classify_rv_mesh(primary_mesh_file, None)
+                    ed_lv_reference_points = self._extract_contour_from_nifti_sync(ed_frame_path, "lv")
+                    ed_aha_vertex_labels, _ = _classify_rv_mesh(
+                        primary_mesh_file, None, lv_reference_points=ed_lv_reference_points,
+                    )
                 frame_selections[ed_frame_index] = ed_selection
                 print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
                 mesh_files = [primary_mesh_file]

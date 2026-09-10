@@ -20,7 +20,7 @@ import {
   Save,
 } from "lucide-react";
 
-import { useProject } from "@/context/ProjectContext";
+import { useProject, normalizeReconstructionChamber } from "@/context/ProjectContext";
 import { useProjectResults, type MaskDoc } from "@/hooks/useProjectResults";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
@@ -30,11 +30,13 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
+import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
+import { RvCrescentDiagram } from "@/components/landmark/RvCrescentDiagram";
+import { RV_SEGMENT_NAMES } from "@/components/landmark/heartColor";
 import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import {
@@ -425,6 +427,11 @@ export default function LandmarkDetectionPage() {
   // Zoom reset refs — shared between bullseye panel and toolbar button
   const bullseyeZoomResetRef = useRef<(() => void) | null>(null);
   const heartZoomResetRef = useRef<(() => void) | null>(null);
+  // Same pattern as heartZoomRef/heartZoomResetRef above, for the Structure
+  // tab's standalone RV 3D panel (which isn't inside AhaBullseyePanel).
+  const structureRvHeartZoomRef = useRef<((delta: number) => void) | null>(null);
+  const structureRvHeartResetRef = useRef<(() => void) | null>(null);
+  const [structureRvTooltip, setStructureRvTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
 
   // Refetch bullseye after detection finishes; clear alignment on new run
   const prevStatus = useRef(state.status);
@@ -491,6 +498,28 @@ export default function LandmarkDetectionPage() {
   const isRunning     = state.status === "running";
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
   const autoRunStartedRef = useRef(false);
+
+  // Prefer the GPU response's own top-level summary (state.nTotal etc.),
+  // but those are optional on FramePrediction/LandmarkInferenceResponse and
+  // absent on older stored detection runs -- e.g. patient005_4d's stored
+  // result predates them, so LandmarkSummaryStats silently rendered nothing
+  // even though every prediction it needs (confidence/model_used/flag) is
+  // right there per-slice, the same fields the Detected Landmarks slice-
+  // confidence strip already counts from successfully. Falling back to
+  // counting them client-side means the summary always has something to
+  // show whenever real predictions exist, regardless of backend version.
+  const landmarkSummaryStats = useMemo(() => {
+    if (state.nTotal != null) {
+      return { nTotal: state.nTotal, nCollapsed: state.nCollapsed, n2ch: state.n2ch, n1chFallback: state.n1chFallback };
+    }
+    const preds = state.predictions;
+    return {
+      nTotal: preds.length,
+      nCollapsed: preds.filter((p) => p.flag === "collapsed_to_mean").length,
+      n2ch: preds.filter((p) => p.model_used === "2ch").length,
+      n1chFallback: preds.filter((p) => p.model_used === "1ch_fallback").length,
+    };
+  }, [state.nTotal, state.nCollapsed, state.n2ch, state.n1chFallback, state.predictions]);
 
   const runDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
@@ -865,6 +894,10 @@ export default function LandmarkDetectionPage() {
     return rleFrame.segment_values.every((v) => v === null) ? null : rleFrame.segment_values;
   }, [bullseyeSeries, frameBullseyeSeries, strainPlaybackFrame]);
 
+  // Structure tab's RV panel: real mesh + real segment boundaries, colored by
+  // segment identity — see useRvPrototypeMesh's docstring.
+  const structureRvMesh = useRvPrototypeMesh(activeModel, strainPlaybackFrame);
+
   /** Sidebar's compact Min/Mean/Max — tracks the current frame when a per-frame
    *  series exists (same source as frameThicknessValues), otherwise falls back
    *  to the single ED-frame snapshot so the sidebar isn't left blank. */
@@ -1122,10 +1155,6 @@ export default function LandmarkDetectionPage() {
 
         {/* Info pills */}
         <div className="hidden md:flex items-center gap-4 text-[11px] text-muted-foreground">
-          <InfoPill
-            label="Dataset"
-            value={`${projectData.dimensions?.width ?? 256}×${projectData.dimensions?.height ?? 256}`}
-          />
           {/* Slices and frames are different axes: landmark detection runs per
               slice, the cardiac cycle spans frames. state.totalFrames is a slice
               count despite its name, so label it as slices and take frames from
@@ -1141,36 +1170,6 @@ export default function LandmarkDetectionPage() {
             label="Frames"
             value={String(projectData.dimensions?.frames ?? "—")}
           />
-          {hasPredictions && (
-            <InfoPill label="Model" value={state.modelUsed} />
-          )}
-        </div>
-
-        {/* Model selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium hidden sm:block">
-            Model
-          </span>
-          <Select
-            value={selectedModel}
-            onValueChange={(value: string) => setSelectedModel(value as ModelId)}
-            disabled={isRunning}
-          >
-            <SelectTrigger
-              size="sm"
-              className="min-w-[150px] rounded-xl bg-background px-3 text-xs shadow-sm hover:bg-muted/40"
-              aria-label="Select landmark detection model"
-            >
-              <SelectValue placeholder="Select model" />
-            </SelectTrigger>
-            <SelectContent className="rounded-xl p-1.5 shadow-lg">
-              {MODEL_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value} className="rounded-lg py-2 text-xs">
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
 
         {/* Re-run + Export buttons. (Landmark save lives in the Landmarks tab
@@ -1213,15 +1212,6 @@ export default function LandmarkDetectionPage() {
           </button>
         </div>
       )}
-      {hasPredictions && (
-        <LandmarkSummaryStats
-          nTotal={state.nTotal}
-          nCollapsed={state.nCollapsed}
-          n2ch={state.n2ch}
-          n1chFallback={state.n1chFallback}
-        />
-      )}
-
       {/* Mobile layout */}
       <div className="lg:hidden flex-1 overflow-y-auto p-3 space-y-3">
         {/* Mobile: full-width viewer */}
@@ -1247,6 +1237,14 @@ export default function LandmarkDetectionPage() {
         <div className="rounded-xl border border-border overflow-hidden">
           <LandmarkSidebar
             state={state}
+            summaryStats={hasPredictions ? (
+              <LandmarkSummaryStats
+                nTotal={landmarkSummaryStats.nTotal}
+                nCollapsed={landmarkSummaryStats.nCollapsed}
+                n2ch={landmarkSummaryStats.n2ch}
+                n1chFallback={landmarkSummaryStats.n1chFallback}
+              />
+            ) : null}
             currentPrediction={adjustedCurrentPrediction}
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
@@ -1309,57 +1307,12 @@ export default function LandmarkDetectionPage() {
                   <h3 className="text-sm font-semibold text-foreground">
                     {structureVentricle === "LV" ? "AHA 17-Segment Bullseye" : "RV 9-Segment Bullseye"}
                   </h3>
-                  {structureVentricle === "LV" && (
-                    <Select
-                      value={selectedBullseyeModel}
-                      onValueChange={(v: string) => {
-                        const model = v as "medsam" | "unet";
-                        // An explicit choice wins over the auto-pick, including
-                        // choosing a model whose series hasn't been run yet.
-                        autoPickedSeriesModel.current = true;
-                        setSelectedBullseyeModel(model);
-                        fetchBullseye(model);
-                      }}
-                      disabled={bullseyeLoading}
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="h-7 w-[132px] shrink-0 rounded-lg bg-background px-2 text-[10px] shadow-sm hover:bg-muted/40"
-                        aria-label="Select bullseye model"
-                      >
-                        <SelectValue placeholder="Model" />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl p-1 shadow-lg">
-                        {/* Selectable whenever the segmentation exists — a model
-                            without a per-frame strain series is still worth
-                            choosing, and the panel explains what to run. */}
-                        <SelectItem
-                          value="medsam"
-                          disabled={!existingSegModels.medsam || (!isGpuMode && !availableBullseyeModels.medsam)}
-                          className="rounded-lg py-1.5 text-xs"
-                        >
-                          MedSAM{
-                            !isGpuMode && !availableBullseyeModels.medsam ? " (GPU only)" :
-                            calculatingModels.medsam ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.medsam ? " (computing…)" :
-                            ""
-                          }
-                        </SelectItem>
-                        <SelectItem
-                          value="unet"
-                          disabled={!existingSegModels.unet}
-                          className="rounded-lg py-1.5 text-xs"
-                        >
-                          UNet{
-                            !existingSegModels.unet ? " (no data)" :
-                            calculatingModels.unet ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.unet ? " (computing…)" :
-                            " (recommended)"
-                          }
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
+                  {/* Model choice lives only in the sidebar's UNet/MedSAM
+                      buttons now (right panel) — this main panel used to
+                      duplicate it with a Select dropdown for LV and RV each,
+                      which could drift out of sync with the sidebar's own
+                      control even though they shared state, and was just
+                      redundant UI either way. */}
                   {structureVentricle === "LV" && bullseyeRecomputing && (
                     <span className="text-[10px] font-medium text-muted-foreground animate-pulse">
                       Recomputing with edits…
@@ -1414,12 +1367,100 @@ export default function LandmarkDetectionPage() {
                   </div>
                 </div>
               ) : structureVentricle === "RV" ? (
-                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
-                  <AlertCircle className="h-8 w-8 opacity-40" />
-                  <p className="max-w-[280px] text-xs leading-relaxed">
-                    RV structural view coming soon — cavity-area data isn&apos;t computed by the backend yet.
-                  </p>
-                </div>
+                structureRvMesh.available && structureRvMesh.meshUrl ? (
+                  <div className="flex min-h-0 flex-1 flex-col gap-2">
+                    <div className="flex min-h-0 flex-1 gap-2 p-1">
+                      {/* LEFT: flattened 9-segment crescent (RV's equivalent of
+                          LV's circular bullseye — free-wall-only, so a half
+                          annulus rather than a full circle; see
+                          RvCrescentDiagram's own docstring). Static/decorative
+                          — there's no real per-segment RV value to plot yet,
+                          same gap the caption below already explains. */}
+                      <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
+                        <div className="mb-1 flex items-center justify-between flex-shrink-0">
+                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            RV 9-Segment Crescent
+                          </p>
+                          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            Prototype
+                          </span>
+                        </div>
+                        <div className="flex flex-1 min-h-0 items-center justify-center">
+                          <RvCrescentDiagram className="w-full h-full max-h-[260px]" />
+                        </div>
+                      </div>
+
+                      {/* RIGHT: 3D heart model */}
+                      <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
+                        <div className="mb-1 flex items-center justify-between flex-shrink-0">
+                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+                        </div>
+                        <div className="flex-1 min-h-0 w-full relative">
+                          <ReconstructedHeartModel
+                            meshUrl={structureRvMesh.meshUrl}
+                            meshFormat={structureRvMesh.meshFormat}
+                            segmentLabels={structureRvMesh.segmentLabels}
+                            colorMode="rv-segment"
+                            chamber="rv"
+                            className="w-full h-full"
+                            onZoomChange={(fn) => { structureRvHeartZoomRef.current = fn; }}
+                            onResetZoom={(fn) => { structureRvHeartResetRef.current = fn; }}
+                            onSegmentHover={setStructureRvTooltip}
+                          />
+                          {structureRvTooltip && (
+                            <div
+                              className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                              style={{ left: structureRvTooltip.x + 14, top: structureRvTooltip.y - 10 }}
+                            >
+                              <div className="font-semibold">
+                                {RV_SEGMENT_NAMES[structureRvTooltip.segment] ?? `Segment ${structureRvTooltip.segment}`}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        {/* Zoom hint + buttons — matches the LV bullseye's own
+                            3D panel (AhaHeartProjection) so RV isn't missing
+                            the control LV has. */}
+                        <div className="flex items-center justify-center gap-2 px-2 py-1 flex-shrink-0">
+                          <p className="text-[9px] text-muted-foreground">Scroll or</p>
+                          <button
+                            type="button"
+                            aria-label="Zoom in"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            onClick={() => structureRvHeartZoomRef.current?.(-1)}
+                          >
+                            <ZoomIn className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Zoom out"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            onClick={() => structureRvHeartZoomRef.current?.(1)}
+                          >
+                            <ZoomOut className="h-3 w-3" />
+                          </button>
+                          <p className="text-[9px] text-muted-foreground">to zoom</p>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[9px] text-muted-foreground leading-relaxed flex-shrink-0 px-1">
+                      The mesh shape and 9-segment boundaries are from the real RV reconstruction, colored
+                      by segment identity using the same palette as the analysis notebook. There&apos;s no
+                      real per-segment wall-thickness/FAC measurement yet — colors mark segment identity,
+                      not a value.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
+                    <AlertCircle className="h-8 w-8 opacity-40" />
+                    <p className="max-w-[280px] text-xs leading-relaxed">
+                      No RV reconstruction built yet for this model — create one from the project page to see
+                      the Results (colors will stay prototype until wall-thickness/FAC is computed by
+                      the backend).
+                    </p>
+                  </div>
+                )
               ) : (
                 <AhaBullseyePanel
                   bullseyeData={hasPredictions ? bullseyeData : null}
@@ -1436,6 +1477,7 @@ export default function LandmarkDetectionPage() {
                   reconstructionModel={selectedBullseyeModel}
                   modelLabel={selectedBullseyeModel === "unet" ? "UNet" : "MedSAM"}
                   previewMode={!hasPredictions && !isRunning}
+                  hasSegmentation={existingSegModels[selectedBullseyeModel]}
                   onBullseyeResetRef={(fn) => { bullseyeZoomResetRef.current = fn; }}
                   onHeartResetRef={(fn) => { heartZoomResetRef.current = fn; }}
                 />
@@ -1556,6 +1598,14 @@ export default function LandmarkDetectionPage() {
             <div className="h-full w-full">
               <LandmarkSidebar
                 state={state}
+                summaryStats={hasPredictions ? (
+                  <LandmarkSummaryStats
+                    nTotal={landmarkSummaryStats.nTotal}
+                    nCollapsed={landmarkSummaryStats.nCollapsed}
+                    n2ch={landmarkSummaryStats.n2ch}
+                    n1chFallback={landmarkSummaryStats.n1chFallback}
+                  />
+                ) : null}
                 currentPrediction={adjustedCurrentPrediction}
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
@@ -1665,6 +1715,61 @@ function getDummyBullseyeData(currentFrame = 0, frameCount = 1): BullseyeData {
   };
 }
 
+/**
+ * Resolves the real RV reconstruction for `model` (if one has been built) and
+ * fetches its actual per-frame mesh + real 9-segment vertex labels. The SHAPE
+ * and segment BOUNDARIES this returns are real (from the RV 4D reconstruction
+ * + CPD segmentation pipeline). There is no real per-segment wall-thickness/
+ * FAC data to color it with yet — callers should render with colorMode=
+ * "rv-segment" (identity colors matching the analysis notebook's palette,
+ * see heartColor.ts's RV_SEGMENT_PALETTE), not a value-based heatmap.
+ */
+function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
+  const { getReconstructionGLB, reconstructionResults } = useProject();
+
+  const rvReconstruction = useMemo(() => {
+    const candidates = (reconstructionResults ?? []).filter(
+      (r: any) => normalizeReconstructionChamber(r?.chamber) === "rv", // eslint-disable-line @typescript-eslint/no-explicit-any
+    );
+    if (!candidates.length) return null;
+    const sameModel = candidates.find(
+      (r: any) => (r?.segmentationModel ?? "").toString().toLowerCase() === model, // eslint-disable-line @typescript-eslint/no-explicit-any
+    );
+    // No same-model RV reconstruction: don't pair a UNet RV mesh with a
+    // MedSAM LV segmentation context — only fall back if there's just one.
+    return sameModel ?? (candidates.length === 1 ? candidates[0] : null);
+  }, [reconstructionResults, model]);
+
+  const [meshUrl, setMeshUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setMeshUrl(null);
+  }, [rvReconstruction?.reconstructionId]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!rvReconstruction?.reconstructionId) return;
+    (async () => {
+      const url = await getReconstructionGLB(currentFrame, model, rvReconstruction.reconstructionId);
+      if (!cancelled) setMeshUrl(url);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rvReconstruction, model, currentFrame, getReconstructionGLB]);
+
+  const segmentLabels = useMemo(() => {
+    const perFrame = rvReconstruction?.frameAhaVertexLabels?.[String(currentFrame)];
+    if (Array.isArray(perFrame)) return perFrame;
+    return Array.isArray(rvReconstruction?.ahaVertexLabels) ? rvReconstruction.ahaVertexLabels : null;
+  }, [rvReconstruction, currentFrame]);
+
+  return {
+    available: !!rvReconstruction && !!segmentLabels?.length,
+    meshUrl,
+    meshFormat: (rvReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb") as "obj" | "glb",
+    segmentLabels,
+  };
+}
+
 function AhaBullseyePanel({
   bullseyeData,
   loading,
@@ -1679,6 +1784,7 @@ function AhaBullseyePanel({
   onCompute,
   onBullseyeResetRef,
   onHeartResetRef,
+  hasSegmentation = true,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
@@ -1700,6 +1806,15 @@ function AhaBullseyePanel({
   onCompute?: () => void;
   onBullseyeResetRef?: (fn: () => void) => void;
   onHeartResetRef?: (fn: () => void) => void;
+  /**
+   * Whether `reconstructionModel`'s segmentation exists at all for this
+   * project. False means there's nothing to compute a bullseye OR a 3D
+   * heart FROM yet (not just "bullseye not computed yet") -- mirrors the
+   * RV structure panel's own "No RV reconstruction built yet" empty state
+   * instead of the generic "No bullseye data" one, which implied a Compute
+   * action was available when it wasn't.
+   */
+  hasSegmentation?: boolean;
 }) {
   const baseBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
 
@@ -1797,7 +1912,15 @@ function AhaBullseyePanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
-      {loading ? (
+      {!previewMode && !hasSegmentation ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
+          <AlertCircle className="h-8 w-8 opacity-40" />
+          <p className="max-w-[280px] text-xs leading-relaxed">
+            No LV reconstruction built yet for this model — create one from the project page to see
+            the results
+          </p>
+        </div>
+      ) : loading ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
@@ -2052,6 +2175,7 @@ function AhaHeartProjection({
   // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
+  const [heartTooltip, setHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
 
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
@@ -2069,7 +2193,17 @@ function AhaHeartProjection({
           onSegmentClick={(seg) =>
             onSelectSegment?.(selectedSegment === seg - 1 ? -1 : seg - 1)
           }
+          onSegmentHover={setHeartTooltip}
         />
+        {heartTooltip && (
+          <div
+            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
+          >
+            <div className="font-semibold">{AHA_SEGMENTS[heartTooltip.segment - 1] ?? `Segment ${heartTooltip.segment}`}</div>
+            <div>{(frameValues[heartTooltip.segment - 1] ?? 0).toFixed(1)} mm</div>
+          </div>
+        )}
       </div>
     );
   }
@@ -2531,6 +2665,7 @@ function StrainHeartModel({
     if (!seg) return 0;
     return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0;
   });
+  const [heartTooltip, setHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
       <div className="w-full h-full relative">
@@ -2546,7 +2681,19 @@ function StrainHeartModel({
           className="w-full h-full"
           selectedSegment={selectedSegment3d >= 0 ? selectedSegment3d + 1 : -1}
           onSegmentClick={onReconstructionSegmentClick}
+          onSegmentHover={setHeartTooltip}
         />
+        {heartTooltip && (
+          <div
+            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
+          >
+            <div className="font-semibold">
+              {segments[heartTooltip.segment - 1]?.label ?? `Segment ${heartTooltip.segment}`}
+            </div>
+            <div>{(values[heartTooltip.segment - 1] ?? 0).toFixed(1)}%</div>
+          </div>
+        )}
       </div>
     );
   }
@@ -2629,6 +2776,12 @@ function StrainPreviewPanel({
 
   const { getReconstructionGLB, reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
+
+  // RV side of the 3D Heart toggle: real mesh + real segment boundaries,
+  // colored by segment identity — see useRvPrototypeMesh's docstring.
+  // Independent of the LV reconstruction above; RV has its own reconstruction record.
+  const rvMesh = useRvPrototypeMesh(strainModel, currentFrame);
+
   const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
   // Reset ONLY when switching to a genuinely different reconstruction/model - not on
   // every frame change, otherwise fast playback spends most of its time with the mesh
@@ -2672,6 +2825,7 @@ function StrainPreviewPanel({
   // selectedSegment (1-17) since RV region numbers (1-6) would otherwise
   // collide visually with LV segment numbers in the same 1-based range.
   const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
+  const [rvHeartTooltip, setRvHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
 
   const strainMatchesSelection = !!(
     realStrainData?.computedFor &&
@@ -2848,15 +3002,19 @@ function StrainPreviewPanel({
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
               <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                LV + RV Bullseye
+                {chamberFocus === "combined" ? "LV + RV Bullseye" : chamberFocus === "LV" ? "LV Bullseye" : "RV Bullseye"}
               </p>
               <div className="flex items-center gap-1">
-                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
-                  LV {selectedStrainType}
-                </span>
-                <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
-                  Prototype — RV {rvMetricType}
-                </span>
+                {chamberFocus !== "RV" && (
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                    LV {selectedStrainType}
+                  </span>
+                )}
+                {chamberFocus !== "LV" && (
+                  <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
+                    Prototype — RV {rvMetricType}
+                  </span>
+                )}
               </div>
             </div>
             <StrainZoomPan className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
@@ -2874,6 +3032,8 @@ function StrainPreviewPanel({
                 selectedRvRegion={selectedRvRegion}
                 onRvRegionClick={(region) => setSelectedRvRegion((prev) => (prev === region ? null : region))}
                 onRvRegionHover={setTooltip}
+                showLv={chamberFocus !== "RV"}
+                showRv={chamberFocus !== "LV"}
               />
             </StrainZoomPan>
             {/* Colour legend */}
@@ -2920,15 +3080,86 @@ function StrainPreviewPanel({
               <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
                 3D Heart {chamberFocus === "combined" ? "(LV + RV)" : `(${chamberFocus})`}
               </p>
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+              <div className="flex items-center gap-1">
+                {chamberFocus === "RV" && (
+                  <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
+                    Prototype
+                  </span>
+                )}
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+              </div>
             </div>
             <ChamberFocusToggle value={chamberFocus} onChange={setChamberFocus} className="mb-2 flex-shrink-0" />
-            {chamberFocus !== "LV" ? (
+            {chamberFocus === "RV" && rvMesh.available && rvMesh.meshUrl ? (
+              <>
+                <div className="flex-1 min-h-0 w-full relative">
+                  <ReconstructedHeartModel
+                    meshUrl={rvMesh.meshUrl}
+                    meshFormat={rvMesh.meshFormat}
+                    segmentLabels={rvMesh.segmentLabels}
+                    colorMode="rv-segment"
+                    chamber="rv"
+                    className="w-full h-full"
+                    onSegmentHover={setRvHeartTooltip}
+                  />
+                  {rvHeartTooltip && (
+                    <div
+                      className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                      style={{ left: rvHeartTooltip.x + 14, top: rvHeartTooltip.y - 10 }}
+                    >
+                      <div className="font-semibold">
+                        {RV_SEGMENT_NAMES[rvHeartTooltip.segment] ?? `Segment ${rvHeartTooltip.segment}`}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                  Drag to rotate · scroll to zoom
+                </p>
+                <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
+              </>
+            ) : chamberFocus === "combined" && reconstructionMeshUrl && reconstructionLabels?.length && rvMesh.available && rvMesh.meshUrl ? (
+              <>
+                <div className="flex-1 min-h-0 w-full">
+                  <CombinedHeartModel
+                    lvMeshUrl={reconstructionMeshUrl}
+                    lvMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
+                    lvSegmentLabels={reconstructionLabels}
+                    lvValues={strainForDisplay ? Array.from({ length: 17 }, (_, i) => {
+                      const seg = strainForDisplay.segments[i];
+                      return seg ? (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0 : 0;
+                    }) : undefined}
+                    lvMin={sharedMin}
+                    lvMax={sharedMax}
+                    lvReverseColors={reverseColors}
+                    rvMeshUrl={rvMesh.meshUrl}
+                    rvMeshFormat={rvMesh.meshFormat}
+                    rvSegmentLabels={rvMesh.segmentLabels}
+                    className="w-full h-full"
+                  />
+                </div>
+                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                  Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by segment identity (prototype)
+                </p>
+                {!isFullCycle ? (
+                  <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
+                    {strainForDisplay && <LvGlobalStrainMiniBlock result={strainForDisplay} loading={isComputeBusy} />}
+                    <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
+                  </div>
+                ) : (
+                  <p className="px-4 text-center text-[10px] text-muted-foreground">
+                    Full-cycle per-frame stats are shown in the sidebar&apos;s Strain tab instead.
+                  </p>
+                )}
+              </>
+            ) : chamberFocus !== "LV" ? (
               <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto px-1 py-1">
                 <div className="flex flex-col items-center justify-center gap-1.5 px-4 py-3 text-center text-muted-foreground">
                   <AlertCircle className="h-6 w-6 opacity-40" />
                   <p className="max-w-[240px] text-[10px] leading-relaxed">
-                    {chamberFocus === "RV" ? "RV mesh" : "Combined mesh"} isn&apos;t generated by the backend yet — showing values only.
+                    {chamberFocus === "RV"
+                      ? "No RV reconstruction built yet for this model"
+                      : "Combined view needs both an LV and an RV reconstruction for this model"} — showing values only.
                   </p>
                 </div>
                 {/* Quick ED->ES has one pair for both chambers, so the values
@@ -3163,18 +3394,14 @@ function LandmarkSummaryStats({
           {" mean point used"}
         </span>
       )}
-      {segGuided > 0 && (
-        <span>
-          <span className="font-medium text-blue-500">{segGuided}/{nTotal}</span>
-          {" seg-guided (2ch)"}
-        </span>
-      )}
-      {mriOnly > 0 && (
-        <span>
-          <span className="font-medium text-amber-500">{mriOnly}/{nTotal}</span>
-          {" MRI-only (1ch)"}
-        </span>
-      )}
+      <span>
+        <span className="font-medium text-blue-500">{segGuided}/{nTotal}</span>
+        {" seg-guided (2ch)"}
+      </span>
+      <span>
+        <span className="font-medium text-amber-500">{mriOnly}/{nTotal}</span>
+        {" MRI-only (1ch)"}
+      </span>
     </div>
   );
 }

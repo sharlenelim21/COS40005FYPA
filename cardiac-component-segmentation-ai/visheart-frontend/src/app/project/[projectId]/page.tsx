@@ -1670,12 +1670,28 @@ function ProjectPageInner() {
                             {rvCompanion && (
                               <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
                                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                                <p className="text-xs leading-relaxed text-muted-foreground">
-                                  <span className="font-medium text-foreground">Includes RV.</span>{" "}
-                                  Opening 4D shows the RV cavity alongside the LV, and either can be
-                                  hidden there. RV is for reference/research only — not reliable for
-                                  clinical diagnosis.
-                                </p>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs leading-relaxed text-muted-foreground">
+                                    <span className="font-medium text-foreground">Includes RV.</span>{" "}
+                                    Opening 4D shows the RV cavity alongside the LV, and either can be
+                                    hidden there. RV is for reference/research only — not reliable for
+                                    clinical diagnosis.
+                                  </p>
+                                  <ShowForRegisteredUser>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setSelectedReconstructionForDeletion(rvCompanion);
+                                        setDeleteModelDialogOpen(true);
+                                      }}
+                                      className="h-auto p-0 mt-1.5 text-xs text-destructive hover:text-destructive hover:bg-transparent hover:underline"
+                                    >
+                                      <Trash2 className="h-3 w-3 mr-1" />
+                                      Delete RV only
+                                    </Button>
+                                  </ShowForRegisteredUser>
+                                </div>
                               </div>
                             )}
                           </div>

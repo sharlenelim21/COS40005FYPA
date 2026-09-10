@@ -19,6 +19,15 @@ interface CombinedVentricularChartProps {
   selectedRvRegion?: number | null; // 1-based RV region
   onRvRegionClick?: (region: number) => void;
   onRvRegionHover?: (info: { x: number; y: number; label: string; value: number | null } | null) => void;
+
+  /** Which chamber(s) to actually draw -- both default true (the original,
+   * always-combined layout). The Strain tab's chamber toggle sets these so
+   * picking "LV" or "RV" shows only that chamber's wedges instead of always
+   * rendering both regardless of the toggle. Geometry/centering is left
+   * unchanged either way, so a single-chamber view keeps the same layout
+   * space the combined view uses rather than re-centering around one side. */
+  showLv?: boolean;
+  showRv?: boolean;
 }
 
 // ── Layout constants (single source of truth for the geometry below) ────────
@@ -33,6 +42,7 @@ export function CombinedVentricularChart({
   lvData, hasLv, strainType, selectedSegment, onSegmentClick, onSegmentHover,
   sharedMin, sharedMax, reverseColors = false,
   rvRegions, selectedRvRegion, onRvRegionClick, onRvRegionHover,
+  showLv = true, showRv = true,
 }: CombinedVentricularChartProps) {
   const center = CENTER;
 
@@ -125,24 +135,24 @@ export function CombinedVentricularChart({
   return (
     <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`Combined LV/RV ${strainType} bullseye`}>
       {/* Background discs */}
-      <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />
-      <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
+      {showRv && <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />}
+      {showLv && <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />}
       <text x={center.x} y="14" textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Anterior</text>
-      <text x={center.x - RV_BASAL_OUTER - 20} y={center.y + 4} textAnchor="end" fontSize="12" fontWeight="700" fill="currentColor">Lateral</text>
-      <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Septal</text>
+      {showRv && <text x={center.x - RV_BASAL_OUTER - 20} y={center.y + 4} textAnchor="end" fontSize="12" fontWeight="700" fill="currentColor">Lateral</text>}
+      {showLv && <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Septal</text>}
       <text x={center.x} y={center.y + RV_BASAL_OUTER + 24} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Inferior</text>
-      {(() => {
+      {showRv && (() => {
         const tag = polarPointAt(center, RV_BASAL_OUTER + 16, 205);
         return <text x={tag.x} y={tag.y + 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="currentColor" opacity="0.7">RV</text>;
       })()}
-      <text x={center.x + LV_BASAL_OUTER - 26} y={center.y - LV_BASAL_OUTER + 16} textAnchor="start" fontSize="10" fontWeight="700" fill="currentColor" opacity="0.7">LV</text>
+      {showLv && <text x={center.x + LV_BASAL_OUTER - 26} y={center.y - LV_BASAL_OUTER + 16} textAnchor="start" fontSize="10" fontWeight="700" fill="currentColor" opacity="0.7">LV</text>}
 
       {/* ── RV crescent (drawn first, sits behind/beside the LV circle) ── */}
-      {rvRing(0, RV_BASAL_INNER, RV_BASAL_OUTER, "rvb")}
-      {rvRing(3, RV_MID_INNER, RV_MID_OUTER, "rvm")}
+      {showRv && rvRing(0, RV_BASAL_INNER, RV_BASAL_OUTER, "rvb")}
+      {showRv && rvRing(3, RV_MID_INNER, RV_MID_OUTER, "rvm")}
 
       {/* ── LV rings ── */}
-      {Array.from({ length: 6 }, (_, i) => {
+      {showLv && Array.from({ length: 6 }, (_, i) => {
         const { path, lp } = lvSegPath(i, LV_BASAL_INNER, LV_BASAL_OUTER, "bm");
         const seg = i + 1;
         return (
@@ -156,7 +166,7 @@ export function CombinedVentricularChart({
           </g>
         );
       })}
-      {Array.from({ length: 6 }, (_, i) => {
+      {showLv && Array.from({ length: 6 }, (_, i) => {
         const { path, lp } = lvSegPath(i, LV_MID_INNER, LV_BASAL_INNER, "bm");
         const seg = i + 7;
         return (
@@ -170,7 +180,7 @@ export function CombinedVentricularChart({
           </g>
         );
       })}
-      {Array.from({ length: 4 }, (_, i) => {
+      {showLv && Array.from({ length: 4 }, (_, i) => {
         const { path, lp } = lvSegPath(i, LV_APICAL_INNER, LV_MID_INNER, "ap");
         const seg = i + 13;
         return (
@@ -186,13 +196,17 @@ export function CombinedVentricularChart({
       })}
 
       {/* Apex */}
-      <circle cx={center.x} cy={center.y} r={LV_APICAL_INNER} fill={lvCol(16)}
-        stroke={isLvSel(17) ? "white" : "rgba(0,0,0,0.18)"} strokeWidth={isLvSel(17) ? 2.5 : 1}
-        style={{ transition: "fill 200ms ease", cursor: onSegmentClick ? "pointer" : "default" }}
-        onMouseMove={lvHoverHandler(16)} onMouseLeave={onSegmentHover ? () => onSegmentHover(null) : undefined}
-        onClick={onSegmentClick ? () => onSegmentClick(17) : undefined} />
-      <text x={center.x} y={center.y - 2} textAnchor="middle" fontSize="9" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>17</text>
-      <text x={center.x} y={center.y + 9} textAnchor="middle" fontSize="7.5" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(16).toFixed(1)}</text>
+      {showLv && (
+        <>
+          <circle cx={center.x} cy={center.y} r={LV_APICAL_INNER} fill={lvCol(16)}
+            stroke={isLvSel(17) ? "white" : "rgba(0,0,0,0.18)"} strokeWidth={isLvSel(17) ? 2.5 : 1}
+            style={{ transition: "fill 200ms ease", cursor: onSegmentClick ? "pointer" : "default" }}
+            onMouseMove={lvHoverHandler(16)} onMouseLeave={onSegmentHover ? () => onSegmentHover(null) : undefined}
+            onClick={onSegmentClick ? () => onSegmentClick(17) : undefined} />
+          <text x={center.x} y={center.y - 2} textAnchor="middle" fontSize="9" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>17</text>
+          <text x={center.x} y={center.y + 9} textAnchor="middle" fontSize="7.5" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(16).toFixed(1)}</text>
+        </>
+      )}
 
       {/* ── Colour scales — stacked in their own rows, well clear of the
            Inferior label above, so long RV numbers never collide with it. ── */}
