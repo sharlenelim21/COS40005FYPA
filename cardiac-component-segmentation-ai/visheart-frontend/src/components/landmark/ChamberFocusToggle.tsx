@@ -26,7 +26,7 @@ export function ChamberFocusToggle({
       role="group"
       aria-label="3D heart chamber focus"
       className={cn(
-        "grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-1",
+        "grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5",
         disabled && "pointer-events-none opacity-50",
         className,
       )}
@@ -38,7 +38,7 @@ export function ChamberFocusToggle({
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
+            "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
             value === option.value
               ? "bg-primary text-primary-foreground"
               : "text-muted-foreground hover:bg-muted hover:text-foreground",

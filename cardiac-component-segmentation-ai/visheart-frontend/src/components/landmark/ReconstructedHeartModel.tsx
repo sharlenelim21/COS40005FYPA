@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -9,6 +9,7 @@ import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { valueToColor, debugSegmentColor, rvSegmentColor } from "./heartColor";
+import { loadMesh as loadAlignmentMesh, computeLvAlignment } from "./lvAlignment";
 
 interface ReconstructedHeartModelProps {
   meshUrl: string;
@@ -44,6 +45,25 @@ interface ReconstructedHeartModelProps {
   /** Hands the caller a () => void that restores the initial camera
    * distance/target, for a "reset view" control. */
   onResetZoom?: (fn: () => void) => void;
+  /**
+   * RV only: an LV mesh (+ its AHA labels) sharing this RV's raw coordinate
+   * space, so this view can be oriented with the SAME rotation/scale
+   * CombinedHeartModel would compute from that LV mesh -- i.e. "the way
+   * this RV would be oriented next to LV" -- instead of RV's own
+   * independent apex/base alignment, which has no reason to land on the
+   * same rotation LV's convention would produce. Optional: when omitted,
+   * falls back to RV's own alignment exactly as before, so existing callers
+   * (or any caller that simply doesn't have an LV mesh handy) are
+   * unaffected.
+   */
+  lvAlignmentMeshUrl?: string | null;
+  lvAlignmentMeshFormat?: "obj" | "glb";
+  lvAlignmentLabels?: number[] | null;
+  /** Starting camera distance (world units, along +Z). Lower = closer/more
+   * zoomed in at load. Defaults to 11; still bounded by OrbitControls'
+   * fixed minDistance=5/maxDistance=20, so this only changes the initial
+   * framing, not how far the user can scroll-zoom either way. */
+  initialCameraDistance?: number;
 }
 
 function findFirstMesh(root: THREE.Object3D): THREE.Mesh | null {
@@ -259,6 +279,10 @@ export function ReconstructedHeartModel({
   chamber = "lv",
   onZoomChange,
   onResetZoom,
+  lvAlignmentMeshUrl,
+  lvAlignmentMeshFormat = "glb",
+  lvAlignmentLabels,
+  initialCameraDistance = 11,
 }: ReconstructedHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -280,6 +304,15 @@ export function ReconstructedHeartModel({
   const chamberRef = useRef(chamber);
   const isPausedRef = useRef(false);
   const [isPaused, setIsPaused] = useState(false);
+  // Hides the canvas until the FIRST mesh has actually loaded and been
+  // colored -- otherwise, right when a 4D reconstruction has just finished
+  // and this component mounts fresh, the canvas can paint one or two frames
+  // before the container has settled its real layout size (a stale/near-
+  // zero size from the mount instant) or before any mesh/lighting exists,
+  // which reads as a small black box flashing before the model appears.
+  // Fading the whole container in only once onLoaded has actually run means
+  // whatever that transient frame looks like, it's never shown.
+  const [isReady, setIsReady] = useState(false);
   useEffect(() => { selectedSegmentRef.current = selectedSegment; }, [selectedSegment]);
   useEffect(() => { onSegmentClickRef.current = onSegmentClick; }, [onSegmentClick]);
   useEffect(() => { onSegmentHoverRef.current = onSegmentHover; }, [onSegmentHover]);
@@ -339,7 +372,7 @@ export function ReconstructedHeartModel({
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000);
-    camera.position.set(0, 0.5, 11);
+    camera.position.set(0, 0.5, initialCameraDistance);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -653,14 +686,34 @@ export function ReconstructedHeartModel({
       mesh.geometry.applyMatrix4(centerAndScale);
     };
 
-    const onLoaded = (object: THREE.Object3D) => {
+    const onLoaded = async (object: THREE.Object3D) => {
       if (cancelled) return;
       const mesh = findFirstMesh(object);
       if (!mesh) {
         console.error("[ReconstructedHeartModel] Loaded mesh file contains no THREE.Mesh");
         return;
       }
-      alignCenterAndScale(mesh);
+
+      let alignedViaLv = false;
+      if (chamberRef.current === "rv" && lvAlignmentMeshUrl && lvAlignmentLabels?.length) {
+        try {
+          const lvObject = await loadAlignmentMesh(lvAlignmentMeshUrl, lvAlignmentMeshFormat);
+          if (cancelled) return;
+          const lvMesh = findFirstMesh(lvObject);
+          const lvPos = lvMesh?.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
+          if (lvPos) {
+            const matrix = computeLvAlignment(lvPos, lvAlignmentLabels);
+            mesh.geometry.applyMatrix4(matrix);
+            alignedViaLv = true;
+          }
+        } catch (err) {
+          console.warn("[ReconstructedHeartModel] Failed to load LV alignment reference, falling back to RV's own alignment:", err);
+        }
+      }
+      // Falls back to RV's (or LV's) own independent apex/base alignment
+      // whenever no LV reference was given, or loading/using one failed --
+      // never leaves the mesh unaligned.
+      if (!alignedViaLv) alignCenterAndScale(mesh);
       // Skip the flatten-to-per-triangle step for real (non-debug) color
       // modes. Flattening duplicates every vertex per-triangle and forces
       // all 3 corners of a triangle to one majority-voted label -- that's
@@ -727,6 +780,10 @@ export function ReconstructedHeartModel({
       loadedObjectRef.current = object;
       currentMeshRef.current = mesh;
       applyVertexColorsRef.current();
+      // Only the FIRST successful load reveals the canvas -- later frame
+      // swaps during playback already have a colored mesh on screen and
+      // shouldn't re-fade, or normal playback would flicker every frame.
+      setIsReady(true);
     };
 
     if (meshFormat === "glb") {
@@ -746,9 +803,21 @@ export function ReconstructedHeartModel({
     }
 
     return () => { cancelled = true; };
-  }, [meshUrl, meshFormat]);
+    // lvAlignmentMeshUrl/Format/Labels included: if the LV reference becomes
+    // available or changes AFTER this RV mesh already loaded (e.g. LV's own
+    // reconstruction finishes fetching a moment later), the mesh needs to
+    // reload and re-align against it rather than staying stuck on RV's own
+    // fallback alignment from the first pass.
+  }, [meshUrl, meshFormat, lvAlignmentMeshUrl, lvAlignmentMeshFormat, lvAlignmentLabels]);
 
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: the 2D bullseye chart (an SVG, painted
+  // synchronously as part of React's own render) and this 3D model both
+  // react to the same prop change (a new frame's values during playback),
+  // but plain useEffect runs AFTER the browser has already painted --
+  // one visible frame later than the bullseye's own color update, which
+  // read as a slight desync between the two during smooth playback.
+  // useLayoutEffect runs synchronously before paint, in the same cycle.
+  useLayoutEffect(() => {
     applyVertexColorsRef.current();
     if (boundaryLinesRef.current) {
       // Mirrors onLoaded's showBoundaryLines: on for "debug-segment" (hard-
@@ -762,6 +831,7 @@ export function ReconstructedHeartModel({
     <div
       ref={containerRef}
       className={`relative ${className ?? ""}`}
+      style={{ opacity: isReady ? 1 : 0, transition: "opacity 200ms ease" }}
       aria-label="Reconstructed patient-specific 3D heart model"
     >
       <button
@@ -770,7 +840,7 @@ export function ReconstructedHeartModel({
           isPausedRef.current = !isPausedRef.current;
           setIsPaused((p) => !p);
         }}
-        className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/50 text-white transition-colors hover:bg-black/70"
+        className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/50 text-white transition-colors hover:bg-black/70"
         title={isPaused ? "Resume rotation" : "Pause rotation"}
       >
         {isPaused ? (

@@ -39,12 +39,25 @@ interface CombinedVentricularChartProps {
 const BACKEND_FIXED_FALLBACK_DEG = 240;
 
 // ── Layout constants (single source of truth for the geometry below) ────────
-const VIEW_W = 480, VIEW_H = 430;
+const VIEW_W = 480, VIEW_H = 470;
 const LV_BASAL_OUTER = 100, LV_BASAL_INNER = 76, LV_MID_INNER = 50, LV_APICAL_INNER = 26;
-const RV_MID_INNER = LV_BASAL_OUTER, RV_MID_OUTER = RV_MID_INNER + 20;
-const RV_BASAL_INNER = RV_MID_OUTER, RV_BASAL_OUTER = RV_BASAL_INNER + 24;
-const CENTER = { x: (VIEW_W - (LV_BASAL_OUTER + 4) + RV_BASAL_OUTER) / 2, y: 168 };
-const RV_SPAN_START = 120, RV_SPAN_END = 240;
+// 3 rings (apical/mid/basal), touching the LV boundary innermost-out, same
+// apex-near-center convention the LV rings and the Structure tab's RV
+// crescent (RvCrescentDiagram) both already use. Only 2 of these 3 rings
+// have real backend data (RV strain only computes basal+mid, 6 regions) --
+// apical renders as an honest "no data" ring (see rvVal/rvCol's existing
+// null handling) rather than being left out, so the shape matches the real
+// 9-segment CPD atlas scheme instead of looking like a smaller 6-segment one.
+const RV_APICAL_INNER = LV_BASAL_OUTER, RV_APICAL_OUTER = RV_APICAL_INNER + 14;
+const RV_MID_INNER = RV_APICAL_OUTER, RV_MID_OUTER = RV_MID_INNER + 18;
+const RV_BASAL_INNER = RV_MID_OUTER, RV_BASAL_OUTER = RV_BASAL_INNER + 20;
+const CENTER = { x: (VIEW_W - (LV_BASAL_OUTER + 4) + RV_BASAL_OUTER) / 2, y: 190 };
+// Widened from a 120deg sliver to a fuller 160deg horseshoe wrapping more of
+// the LV circle's near side, closer to how published combined LV+RV
+// bullseyes (e.g. the CinC/Bazhutina figure) actually draw it -- still
+// short of a full 180deg so the crescent's own top/bottom points don't run
+// into the Anterior/Inferior labels at these radii.
+const RV_SPAN_START = 100, RV_SPAN_END = 260;
 
 export function CombinedVentricularChart({
   lvData, hasLv, strainType, selectedSegment, onSegmentClick, onSegmentHover,
@@ -52,7 +65,19 @@ export function CombinedVentricularChart({
   rvRegions, selectedRvRegion, onRvRegionClick, onRvRegionHover,
   showLv = true, showRv = true,
 }: CombinedVentricularChartProps) {
-  const center = CENTER;
+  // Combined (both chambers) keeps the shared layout center, which balances
+  // against the crescent's leftward bulge. LV-only has no crescent to
+  // balance against, so re-centering on the LV circle alone (horizontally;
+  // vertical stays the same so the Anterior/Inferior/colorbar spacing built
+  // around CENTER.y is unaffected) instead of leaving it off to one side of
+  // empty space. RV-only isn't touched here -- it already centers correctly
+  // on its own.
+  const center = (showLv && !showRv) ? { x: VIEW_W / 2, y: CENTER.y } : CENTER;
+  // How far out layout (the Inferior label, the color bars) should clear --
+  // the RV crescent's outer radius when it's drawn, or just the LV circle's
+  // when it's the only thing on screen (using the RV radius there left a
+  // large, unbalanced gap between the LV circle and everything below it).
+  const outerR = showRv ? RV_BASAL_OUTER : (LV_BASAL_OUTER + 4);
   const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
 
   // ── LV (right side — unchanged 17-segment geometry, recentered) ──────────
@@ -97,10 +122,10 @@ export function CombinedVentricularChart({
   };
   const isRvSel = (region1based: number) => selectedRvRegion === region1based;
 
-  // 2 bands (mid = inner, touching the LV boundary; basal = outer), 3 sectors
-  // each — see RV_SPAN_START/END above for why this spans 120°→240°.
-  // Rotated by the same referenceAngleDeg as the LV rings so the crescent
-  // stays fused to the LV circle's septal-side seam as the layout rotates.
+  // 3 bands (apical = inner, touching the LV boundary; mid; basal = outer),
+  // 3 sectors each — see RV_SPAN_START/END above for the span. Rotated by
+  // the same referenceAngleDeg as the LV rings so the crescent stays fused
+  // to the LV circle's septal-side seam as the layout rotates.
   const rvSegPath = (i: number, innerR: number, outerR: number) => {
     const sectorWidth = (RV_SPAN_END - RV_SPAN_START) / 3;
     const start = RV_SPAN_START + i * sectorWidth + referenceAngleDeg;
@@ -148,12 +173,34 @@ export function CombinedVentricularChart({
       {/* Background discs */}
       {showRv && <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />}
       {showLv && <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />}
-      <text x={center.x} y="14" textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Anterior</text>
-      {showRv && <text x={center.x - RV_BASAL_OUTER - 20} y={center.y + 4} textAnchor="end" fontSize="12" fontWeight="700" fill="currentColor">Lateral</text>}
-      {showLv && <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Septal</text>}
-      <text x={center.x} y={center.y + RV_BASAL_OUTER + 24} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Inferior</text>
+      {/* Anterior/Lateral/Inferior are LV-relative anatomical directions --
+          meaningful for LV-only and Combined (where LV is still the frame of
+          reference), but RV-only has nothing for them to be relative TO, so
+          they're skipped there in favor of just the R#/segment labels. */}
+      {showLv && (
+        <>
+          {/* Distance from the shape's own top edge, not a fixed offset --
+              was a fixed y=14 regardless of chamber, leaving a large,
+              awkward gap above LV-only's smaller circle. */}
+          <text x={center.x} y={center.y - outerR - 12} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Anterior</text>
+          {/* Lateral only makes sense as a single-chamber direction label --
+              in Combined, the RV crescent's own R#/segment labels already
+              occupy that side, and "Lateral" collided/clipped against them
+              there. */}
+          {!showRv && (
+            <text x={center.x - (LV_BASAL_OUTER + 4) - 20} y={center.y + 4} textAnchor="end" fontSize="12" fontWeight="700" fill="currentColor">
+              Lateral
+            </text>
+          )}
+          <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Septal</text>
+          <text x={center.x} y={center.y + outerR + 24} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Inferior</text>
+        </>
+      )}
       {showRv && (() => {
-        const tag = polarPointAt(center, RV_BASAL_OUTER + 16, 205);
+        // Clearly outside/above the crescent's own topmost point, offset
+        // toward the upper-LEFT (away from Anterior's top-center spot)
+        // rather than sitting right at the crescent's edge.
+        const tag = polarPointAt(center, RV_BASAL_OUTER + 26, RV_SPAN_START + 12);
         return <text x={tag.x} y={tag.y + 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="currentColor" opacity="0.7">RV</text>;
       })()}
       {showLv && <text x={center.x + LV_BASAL_OUTER - 26} y={center.y - LV_BASAL_OUTER + 16} textAnchor="start" fontSize="10" fontWeight="700" fill="currentColor" opacity="0.7">LV</text>}
@@ -161,6 +208,12 @@ export function CombinedVentricularChart({
       {/* ── RV crescent (drawn first, sits behind/beside the LV circle) ── */}
       {showRv && rvRing(0, RV_BASAL_INNER, RV_BASAL_OUTER, "rvb")}
       {showRv && rvRing(3, RV_MID_INNER, RV_MID_OUTER, "rvm")}
+      {/* Apical ring: RV strain has no apical computation yet (backend only
+          returns 6 basal+mid regions), so rvVal/rvCol/rvLbl's existing
+          null-safe fallbacks (gray fill, "—" label) render this ring
+          honestly as "no data" -- completing the real 9-segment shape
+          instead of a smaller 6-segment one, without fabricating values. */}
+      {showRv && rvRing(6, RV_APICAL_INNER, RV_APICAL_OUTER, "rva")}
 
       {/* ── LV rings ── */}
       {showLv && Array.from({ length: 6 }, (_, i) => {
@@ -234,11 +287,13 @@ export function CombinedVentricularChart({
         </linearGradient>
       </defs>
       {(() => {
-        // Centered on the viewBox itself (not `center`, which is offset left
-        // to balance the crescent) so these bars stay visually centered in
-        // the panel regardless of where the shapes sit.
-        const barW = 260, barMidX = VIEW_W / 2, barX = barMidX - barW / 2;
-        const rvBarY = center.y + RV_BASAL_OUTER + 40;
+        // Aligned to `center.x`, not the raw viewBox center -- the shape
+        // above isn't centered on the viewBox either (Combined balances
+        // against the crescent's bulge; LV-only recenters on the LV circle),
+        // so bars centered independently of the shape just meant the bars
+        // and the shape they describe didn't line up with each other.
+        const barW = 260, barMidX = center.x, barX = barMidX - barW / 2;
+        const rvBarY = center.y + outerR + 40;
         const lvBarY = rvBarY + 30;
         return (
           <>

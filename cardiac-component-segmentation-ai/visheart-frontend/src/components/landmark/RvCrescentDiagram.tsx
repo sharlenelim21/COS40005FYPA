@@ -69,19 +69,45 @@ export function RvCrescentDiagram({ selectedSegment, onSegmentClick, className }
           const startDeg = START_ANGLE_DEG - sectorIdx * sectorSpan;
           const endDeg = startDeg - sectorSpan;
           const isSelected = selectedSegment === segIndex;
+          // Visible on-wedge label (segment number + short name), matching
+          // the R#/value labels the Strain tab's combined bullseye puts on
+          // its own RV crescent wedges -- this one had none before, just a
+          // hover tooltip, which read as a plainer/less finished shape next
+          // to that one even though the underlying 9-segment geometry (vs.
+          // that chart's 6, since RV strain has no apical data yet) was
+          // already the more complete of the two.
+          const midDeg = (startDeg + endDeg) / 2;
+          const midR = (innerR + outerR) / 2;
+          const lp = polarToCartesian(CENTER_X, CENTER_Y, midR, midDeg);
+          const shortName = RV_SEGMENT_NAMES[segIndex].replace(/^(Apical|Basal|Mid)_/, "");
           return (
-            <path
-              key={segIndex}
-              d={wedgePath(innerR, outerR, startDeg, endDeg)}
-              fill={RV_SEGMENT_PALETTE_HEX[segIndex]}
-              stroke="var(--background, #fff)"
-              strokeWidth={isSelected ? 3 : 1.5}
-              opacity={isSelected || selectedSegment === undefined ? 1 : 0.45}
-              onClick={onSegmentClick ? () => onSegmentClick(segIndex) : undefined}
-              style={onSegmentClick ? { cursor: "pointer" } : undefined}
-            >
-              <title>{RV_SEGMENT_NAMES[segIndex]}</title>
-            </path>
+            <g key={segIndex}>
+              <path
+                d={wedgePath(innerR, outerR, startDeg, endDeg)}
+                fill={RV_SEGMENT_PALETTE_HEX[segIndex]}
+                stroke="var(--background, #fff)"
+                strokeWidth={isSelected ? 3 : 1.5}
+                opacity={isSelected || selectedSegment === undefined ? 1 : 0.45}
+                onClick={onSegmentClick ? () => onSegmentClick(segIndex) : undefined}
+                style={onSegmentClick ? { cursor: "pointer" } : undefined}
+              >
+                <title>{RV_SEGMENT_NAMES[segIndex]}</title>
+              </path>
+              <text
+                x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600"
+                fill="rgba(0,0,0,0.85)"
+                style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}
+              >
+                {segIndex + 1}
+              </text>
+              <text
+                x={lp.x} y={lp.y + 9} textAnchor="middle" fontSize="6.5" fontWeight="600"
+                fill="rgba(0,0,0,0.85)"
+                style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}
+              >
+                {shortName}
+              </text>
+            </g>
           );
         });
       })}

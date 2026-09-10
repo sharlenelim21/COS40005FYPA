@@ -23,8 +23,6 @@ import { Input } from "@/components/ui/input";
 import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries } from "@/hooks/useProjectResults";
 import { RvStrainChart } from "@/components/landmark/RvStrainChart";
-import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
-import { buildPatientContext, buildLvPhenotypeFacts } from "@/lib/researchApi";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -1925,38 +1923,6 @@ export function InteractiveReport({
           </div>
         )}
       </Card>
-
-      {/* Clinical Research Assistant — grounded, cited literature answers for
-          this report. Patient measurements are passed as read-only context so
-          "Explain these results" is specific to this scan. The panel shows a
-          clear notice if the assistant service isn't running. */}
-      <section className="mt-6">
-        <CardiacResearchAssistant
-          storageKey={patientLabel}
-          patientContext={buildPatientContext({
-            EF: measurements?.EF,
-            EDV: measurements?.EDV,
-            ESV: measurements?.ESV,
-            StrokeVolume: measurements?.StrokeVolume,
-            PeakGRS: measurements?.PeakGRS,
-            PeakGCS: measurements?.PeakGCS,
-            mostSimilarPattern: similarity?.most_similar,
-          })}
-          patientFacts={buildLvPhenotypeFacts({
-            EF: measurements?.EF,
-            EDV: measurements?.EDV,
-            ESV: measurements?.ESV,
-            StrokeVolume: measurements?.StrokeVolume,
-            PeakGRS: measurements?.PeakGRS,
-            PeakGCS: measurements?.PeakGCS,
-            LVMassG: lvVolumes?.LVMassG,
-            MaxWallThicknessMm: lvVolumes?.MaxWallThicknessMm,
-            bsaM2,
-            sex: patientSex,
-            similarity,
-          })}
-        />
-      </section>
 
       <p className="mt-6 text-center text-[11.5px] text-muted-foreground">
         Generated for clinical decision support only. Health Status is a rule-based assessment and

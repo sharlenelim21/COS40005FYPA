@@ -164,6 +164,8 @@ export default function LandmarkDetectionPage() {
     decodedMasks,
     getMRIImage,
     tarCacheReady,
+    getReconstructionGLB,
+    reconstructionsByModel,
   } = useProject();
 
   useEffect(() => {
@@ -234,6 +236,11 @@ export default function LandmarkDetectionPage() {
   // strainCompute bundle's onFullCycleBusyChange.
   const [fullCycleBusy, setFullCycleBusy] = useState(false);
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
+  // Lifted out of StrainPreviewPanel so the sidebar's Strain tab (a sibling,
+  // not a descendant) can read it too -- the sidebar's own LV/RV toggle was
+  // removed in favor of this single chamber-focus control driving both the
+  // main panel's 3D Heart AND the sidebar's Full-cycle results underneath it.
+  const [chamberFocus, setChamberFocus] = useState<ChamberFocus>("LV");
   const [strainResult, setStrainResult] = useState<RealStrainResult | null>(null);
   const [rvStrainResult, setRvStrainResult] = useState<RvStrainResult | null>(null);
   const [autoFramesByModel, setAutoFramesByModel] = useState<{
@@ -913,6 +920,31 @@ export default function LandmarkDetectionPage() {
   // segment identity — see useRvPrototypeMesh's docstring.
   const structureRvMesh = useRvPrototypeMesh(activeModel, strainPlaybackFrame);
 
+  // LV alignment reference for the Structure tab's standalone RV panel, so
+  // it orients the same way RV appears in the Combined tab (see
+  // ReconstructedHeartModel's lvAlignmentMeshUrl docs) instead of RV's own
+  // independent alignment. Only fetched while actually viewing RV (this
+  // mesh is never rendered, just used to compute a rotation), and pinned to
+  // the ED frame (0) rather than tracking playback — a fixed reference
+  // keeps the RV view's orientation stable across frames instead of
+  // wobbling as LV's own per-frame alignment shifts.
+  const lvAlignmentReconstruction = reconstructionsByModel?.[activeModel] ?? null;
+  const [structureLvAlignmentMeshUrl, setStructureLvAlignmentMeshUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (structureVentricle !== "RV" || !lvAlignmentReconstruction?.reconstructionId) {
+      return;
+    }
+    (async () => {
+      const url = await getReconstructionGLB(0, activeModel, lvAlignmentReconstruction.reconstructionId);
+      if (!cancelled) setStructureLvAlignmentMeshUrl(url);
+    })();
+    return () => { cancelled = true; };
+  }, [structureVentricle, activeModel, lvAlignmentReconstruction, getReconstructionGLB]);
+  const structureLvAlignmentLabels = Array.isArray(lvAlignmentReconstruction?.ahaVertexLabels)
+    ? lvAlignmentReconstruction.ahaVertexLabels
+    : null;
+
   /** Sidebar's compact Min/Mean/Max — tracks the current frame when a per-frame
    *  series exists (same source as frameThicknessValues), otherwise falls back
    *  to the single ED-frame snapshot so the sidebar isn't left blank. */
@@ -1300,6 +1332,7 @@ export default function LandmarkDetectionPage() {
             selectedStrainType={selectedStrainType}
             onStrainTypeChange={setSelectedStrainType}
             strainCompute={strainCompute}
+            chamberFocus={chamberFocus}
           />
         </div>
       </div>
@@ -1422,6 +1455,8 @@ export default function LandmarkDetectionPage() {
                             onZoomChange={(fn) => { structureRvHeartZoomRef.current = fn; }}
                             onResetZoom={(fn) => { structureRvHeartResetRef.current = fn; }}
                             onSegmentHover={setStructureRvTooltip}
+                            lvAlignmentMeshUrl={structureLvAlignmentMeshUrl}
+                            lvAlignmentLabels={structureLvAlignmentLabels}
                           />
                           {structureRvTooltip && (
                             <div
@@ -1492,7 +1527,16 @@ export default function LandmarkDetectionPage() {
                   reconstructionModel={selectedBullseyeModel}
                   modelLabel={selectedBullseyeModel === "unet" ? "UNet" : "MedSAM"}
                   previewMode={!hasPredictions && !isRunning}
-                  hasSegmentation={existingSegModels[selectedBullseyeModel]}
+                  // 2026-09-10: gating this on existingSegModels regressed a
+                  // real, already-built LV reconstruction to a false "No LV
+                  // reconstruction built yet" empty state -- existingSegModels
+                  // is only set once fetchBullseye's async mask fetch
+                  // resolves, and evidently wasn't reliably true here despite
+                  // real data existing (RV, sourced from the same underlying
+                  // segmentation, displayed correctly). Reverted to unblock
+                  // real data while the actual race/condition gets root-
+                  // caused properly instead of guessed at again.
+                  hasSegmentation={true}
                   onBullseyeResetRef={(fn) => { bullseyeZoomResetRef.current = fn; }}
                   onHeartResetRef={(fn) => { heartZoomResetRef.current = fn; }}
                 />
@@ -1540,8 +1584,12 @@ export default function LandmarkDetectionPage() {
                   edFrameIdx={edFrameIdx}
                   esFrameIdx={esFrameIdx}
                   rvMetricType={selectedRvMetricType}
+                  onStrainTypeChange={setSelectedStrainType}
+                  onRvMetricTypeChange={setSelectedRvMetricType}
                   computeScope={computeScope}
                   isComputeBusy={isComputeBusy}
+                  chamberFocus={chamberFocus}
+                  onChamberFocusChange={setChamberFocus}
                 />
               )}
             </div>
@@ -1661,6 +1709,7 @@ export default function LandmarkDetectionPage() {
                 selectedStrainType={selectedStrainType}
                 onStrainTypeChange={setSelectedStrainType}
                 strainCompute={strainCompute}
+                chamberFocus={chamberFocus}
               />
             </div>
           </ResizablePanel>
@@ -2697,6 +2746,7 @@ function StrainHeartModel({
           selectedSegment={selectedSegment3d >= 0 ? selectedSegment3d + 1 : -1}
           onSegmentClick={onReconstructionSegmentClick}
           onSegmentHover={setHeartTooltip}
+          initialCameraDistance={8}
         />
         {heartTooltip && (
           <div
@@ -2738,8 +2788,12 @@ function StrainPreviewPanel({
   edFrameIdx,
   esFrameIdx,
   rvMetricType,
+  onStrainTypeChange,
+  onRvMetricTypeChange,
   computeScope,
   isComputeBusy,
+  chamberFocus,
+  onChamberFocusChange,
 }: {
   selectedStrainType: StrainType;
   currentFrame: number;
@@ -2758,6 +2812,8 @@ function StrainPreviewPanel({
    *  the bullseye as an explicit "not computed" prototype state rather than
    *  colored — see the rvRegions={null} branch below. */
   rvMetricType: "GCS" | "GAS";
+  onStrainTypeChange: (type: StrainType) => void;
+  onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
   /** Which compute mode is selected in the sidebar's "Compute strain" card —
    *  determines whether this panel colors itself from the single ED->ES
    *  result (quick) or from the per-frame full-cycle series at the currently
@@ -2767,6 +2823,11 @@ function StrainPreviewPanel({
    *  cycle's seriesBusy reported up) — shows a loading state over the
    *  bullseye/3D heart and their stat tiles instead of the now-stale values. */
   isComputeBusy: boolean;
+  /** Lifted to the page so the sidebar's Strain tab (a sibling of this
+   *  panel, not a descendant) can read the same value — see the page-level
+   *  chamberFocus state's own comment. */
+  chamberFocus: ChamberFocus;
+  onChamberFocusChange: (focus: ChamberFocus) => void;
 }) {
   // Compute controls (frame/upload pickers, model select, the actual
   // compute calls) live in the sidebar's "Compute strain" card now — this
@@ -2788,6 +2849,23 @@ function StrainPreviewPanel({
     setModel: setFullCycleResultsModel,
   } = useProjectResults(fullCycleProjectId);
   useEffect(() => { setFullCycleResultsModel(strainModel); }, [strainModel, setFullCycleResultsModel]);
+
+  // True peak-over-the-whole-cycle values, for the Full-cycle "Current +
+  // Peak" tiles under the 3D model below -- strainForDisplay/rvStrainForDisplay
+  // only ever carry the CURRENTLY SCRUBBED frame's values in Full-cycle mode
+  // (see their own construction above), so "peak" needs the full series.
+  const lvPeakGrs = useMemo(() => {
+    const vals = (realSeries?.frames ?? []).map((f) => f.global_grs).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.max(...vals) : null;
+  }, [realSeries]);
+  const lvPeakGcs = useMemo(() => {
+    const vals = (realSeries?.frames ?? []).map((f) => f.global_gcs).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  }, [realSeries]);
+  const rvPeakGcs = useMemo(() => {
+    const vals = (realRvSeries?.frames ?? []).map((f) => f.global_rv_strain).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  }, [realRvSeries]);
 
   const { getReconstructionGLB, reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
@@ -2830,9 +2908,6 @@ function StrainPreviewPanel({
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number | null } | null>(null);
   const bullseyeResetRef = useRef<(() => void) | null>(null);
-  // Combined/RV aren't backed by real data yet (no RV mesh from the backend) —
-  // see ChamberFocusToggle's docstring. Only "LV" renders the real model.
-  const [chamberFocus, setChamberFocus] = useState<ChamberFocus>("LV");
   // 0-based segment index for the 3D heart (-1 = none). Kept in sync with the
   // parent's 1-based selectedSegment via handleSegClick below.
   const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
@@ -2841,6 +2916,17 @@ function StrainPreviewPanel({
   // collide visually with LV segment numbers in the same 1-based range.
   const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
   const [rvHeartTooltip, setRvHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
+  // The "Combined" chamber focus shares the SAME 2D bullseye component
+  // (CombinedVentricularChart) as LV/RV-only, just with both sides drawn
+  // instead of one hidden -- but it needs its OWN selection state. Reusing
+  // selectedSegment/selectedSeg3d/selectedRvRegion here would mean clicking
+  // a segment on the Combined bullseye also highlighted it on the LV-only
+  // or RV-only tab (and vice versa) since those all read the same state,
+  // even though the two views aren't showing the same thing. Combined's 3D
+  // panel (CombinedHeartModel) doesn't support click-to-select yet, so these
+  // only drive the Combined bullseye's own highlight for now.
+  const [selectedCombinedSegment, setSelectedCombinedSegment] = useState<number | null>(null);
+  const [selectedCombinedRvRegion, setSelectedCombinedRvRegion] = useState<number | null>(null);
 
   const strainMatchesSelection = !!(
     realStrainData?.computedFor &&
@@ -2948,9 +3034,11 @@ function StrainPreviewPanel({
             </span>
           )}
 
-          {/* Clear strain result — compute/recompute controls live in the
-              sidebar's Strain tab "Compute strain" card now. */}
-          {(realStrainData || rvStrainResult) && (
+          {/* Clear strain result — Quick ED->ES only. Full cycle's "current"
+              values come from the per-frame series (realSeries/realRvSeries),
+              not this local strainResult/rvStrainResult state, so Clear
+              wouldn't actually empty anything meaningful there. */}
+          {!isFullCycle && (realStrainData || rvStrainResult) && (
             <button type="button" onClick={() => { onStrainResult(null); onRvStrainResult(null); }}
               className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[9px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
               Clear
@@ -3037,16 +3125,18 @@ function StrainPreviewPanel({
                 lvData={displayData}
                 hasLv={!!strainForDisplay}
                 strainType={selectedStrainType}
-                selectedSegment={selectedSegment}
-                onSegmentClick={handleSegClick}
+                selectedSegment={chamberFocus === "combined" ? selectedCombinedSegment : selectedSegment}
+                onSegmentClick={chamberFocus === "combined"
+                  ? (seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))
+                  : handleSegClick}
                 onSegmentHover={setTooltip}
                 sharedMin={sharedMin}
                 sharedMax={sharedMax}
                 reverseColors={reverseColors}
                 alignmentAngleDeg={strainForDisplay?.alignment_angle_deg}
                 rvRegions={rvMetricType === "GCS" ? (rvStrainForDisplay?.regions ?? null) : null}
-                selectedRvRegion={selectedRvRegion}
-                onRvRegionClick={(region) => setSelectedRvRegion((prev) => (prev === region ? null : region))}
+                selectedRvRegion={chamberFocus === "combined" ? selectedCombinedRvRegion : selectedRvRegion}
+                onRvRegionClick={(region) => (chamberFocus === "combined" ? setSelectedCombinedRvRegion : setSelectedRvRegion)((prev) => (prev === region ? null : region))}
                 onRvRegionHover={setTooltip}
                 showLv={chamberFocus !== "RV"}
                 showRv={chamberFocus !== "LV"}
@@ -3105,7 +3195,46 @@ function StrainPreviewPanel({
                 <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
               </div>
             </div>
-            <ChamberFocusToggle value={chamberFocus} onChange={setChamberFocus} className="mb-2 flex-shrink-0" />
+            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} className="mb-2 flex-shrink-0" />
+            {/* Metric-type control, moved here (main panel, right under the
+                chamber toggle) from the sidebar's chart card -- same idea as
+                Quick ED->ES's own flat toggle (QuickCombinedStrainView, now
+                removed from the sidebar too since this replaces it), just
+                living in one place for both scopes now: Combined shows all
+                four (LV GRS/GCS, RV GCS/GAS) since nothing here is chamber-
+                exclusive; LV/RV-only show just their own pair. Small and
+                left-aligned (inline-flex, not a full-width grid) rather than
+                a second big control competing with the chamber toggle above it. */}
+            <div className="mb-2 inline-flex w-fit items-center gap-0.5 self-start rounded-md border border-border bg-muted/20 p-0.5 flex-shrink-0">
+              {chamberFocus !== "RV" && (
+                <>
+                  <button type="button" onClick={() => onStrainTypeChange("GRS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      selectedStrainType === "GRS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "LV GRS" : "GRS"}
+                  </button>
+                  <button type="button" onClick={() => onStrainTypeChange("GCS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      selectedStrainType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "LV GCS" : "GCS"}
+                  </button>
+                </>
+              )}
+              {chamberFocus !== "LV" && (
+                <>
+                  <button type="button" onClick={() => onRvMetricTypeChange("GCS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      rvMetricType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "RV GCS" : "GCS"}
+                  </button>
+                  <button type="button" onClick={() => onRvMetricTypeChange("GAS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      rvMetricType === "GAS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "RV GAS" : "GAS"}
+                  </button>
+                </>
+              )}
+            </div>
             {chamberFocus === "RV" && rvMesh.available && rvMesh.meshUrl ? (
               <>
                 <div className="flex-1 min-h-0 w-full relative">
@@ -3117,6 +3246,17 @@ function StrainPreviewPanel({
                     chamber="rv"
                     className="w-full h-full"
                     onSegmentHover={setRvHeartTooltip}
+                    // Orient this standalone RV view the same way it appears
+                    // in the Combined tab (both LV and RV are in the same
+                    // raw coordinate space, so LV's own alignment is a valid
+                    // shared reference) instead of RV's own independent
+                    // apex/base rotation, which has no reason to land on the
+                    // same orientation. Falls back to RV's own alignment
+                    // automatically if the LV mesh/labels aren't loaded yet.
+                    lvAlignmentMeshUrl={reconstructionMeshUrl}
+                    lvAlignmentMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
+                    lvAlignmentLabels={reconstructionLabels}
+                    initialCameraDistance={8}
                   />
                   {rvHeartTooltip && (
                     <div
@@ -3132,7 +3272,9 @@ function StrainPreviewPanel({
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
-                <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
+                {isFullCycle
+                  ? <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                  : <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />}
               </>
             ) : chamberFocus === "combined" && reconstructionMeshUrl && reconstructionLabels?.length && rvMesh.available && rvMesh.meshUrl ? (
               <>
@@ -3152,21 +3294,40 @@ function StrainPreviewPanel({
                     rvMeshFormat={rvMesh.meshFormat}
                     rvSegmentLabels={rvMesh.segmentLabels}
                     className="w-full h-full"
+                    initialCameraDistance={8}
+                    // Only LV is wired here, per what was asked -- the RV
+                    // bullseye's region numbering (1-9, Basal-first, from
+                    // the strain backend's own region list) and the 3D
+                    // model's RV segment numbering (0-8, Apical-first, the
+                    // CPD atlas's own order) aren't the same scheme, so
+                    // cross-linking them would need a real mapping between
+                    // the two first, not just an index shift.
+                    selectedLvSegment={selectedCombinedSegment ?? -1}
+                    onLvSegmentClick={(seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))}
                   />
                 </div>
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by segment identity (prototype)
                 </p>
-                {!isFullCycle ? (
-                  <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                    {strainForDisplay && <LvGlobalStrainMiniBlock result={strainForDisplay} loading={isComputeBusy} />}
-                    <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
-                  </div>
-                ) : (
-                  <p className="px-4 text-center text-[10px] text-muted-foreground">
-                    Full-cycle per-frame stats are shown in the sidebar&apos;s Strain tab instead.
-                  </p>
-                )}
+                <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
+                  {isFullCycle ? (
+                    <>
+                      <LvFullCycleStrainTiles
+                        currentGrs={strainForDisplay?.global_grs ?? null}
+                        currentGcs={strainForDisplay?.global_gcs ?? null}
+                        peakGrs={lvPeakGrs}
+                        peakGcs={lvPeakGcs}
+                        loading={isComputeBusy}
+                      />
+                      <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                    </>
+                  ) : (
+                    <>
+                      {strainForDisplay && <LvGlobalStrainMiniBlock result={strainForDisplay} loading={isComputeBusy} />}
+                      <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
+                    </>
+                  )}
+                </div>
               </>
             ) : chamberFocus !== "LV" ? (
               <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto px-1 py-1">
@@ -3178,21 +3339,26 @@ function StrainPreviewPanel({
                       : "Combined view needs both an LV and an RV reconstruction for this model"} — showing values only.
                   </p>
                 </div>
-                {/* Quick ED->ES has one pair for both chambers, so the values
-                    are always available here even without a mesh. Full cycle's
-                    equivalent stats live in the sidebar instead (see the gate
-                    on the LV tab's KPI grid below). */}
-                {!isFullCycle ? (
+                {isFullCycle ? (
+                  <>
+                    {chamberFocus === "combined" && (
+                      <LvFullCycleStrainTiles
+                        currentGrs={strainForDisplay?.global_grs ?? null}
+                        currentGcs={strainForDisplay?.global_gcs ?? null}
+                        peakGrs={lvPeakGrs}
+                        peakGcs={lvPeakGcs}
+                        loading={isComputeBusy}
+                      />
+                    )}
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                  </>
+                ) : (
                   <>
                     {chamberFocus === "combined" && strainForDisplay && (
                       <LvGlobalStrainMiniBlock result={strainForDisplay} loading={isComputeBusy} />
                     )}
                     <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
                   </>
-                ) : (
-                  <p className="px-4 text-center text-[10px] text-muted-foreground">
-                    Full-cycle per-frame stats are shown in the sidebar&apos;s Strain tab instead.
-                  </p>
                 )}
               </div>
             ) : strainForDisplay ? (
@@ -3214,10 +3380,15 @@ function StrainPreviewPanel({
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
-                {/* ED->ES-specific KPIs — only meaningful for the Quick scope's
-                    single computed pair; Full cycle shows its own per-frame
-                    aggregate stats in the sidebar instead. */}
-                {!isFullCycle && (
+                {isFullCycle ? (
+                  <LvFullCycleStrainTiles
+                    currentGrs={strainForDisplay?.global_grs ?? null}
+                    currentGcs={strainForDisplay?.global_gcs ?? null}
+                    peakGrs={lvPeakGrs}
+                    peakGcs={lvPeakGcs}
+                    loading={isComputeBusy}
+                  />
+                ) : (
                   <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
                     <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
                       <p className="text-[8px] text-muted-foreground">Peak GRS</p>
@@ -3344,6 +3515,49 @@ function RvGlobalStrainMiniBlock({ result, loading }: { result: RvStrainResult |
         <KpiTile label="Peak GAS" value="—" />
         <KpiTile label={`Frame ${(result?.edFrameIndex ?? 0) + 1} area`} value="—" />
         <KpiTile label={`Frame ${(result?.esFrameIndex ?? 0) + 1} area`} value="—" />
+      </div>
+    </div>
+  );
+}
+
+/** Full-cycle's LV summary — CURRENT (at the scrubbed frame) + true PEAK
+ *  (over the whole computed cycle) for both GRS and GCS, same idea as
+ *  LvGlobalStrainMiniBlock's Quick-scope box but Quick only has one ED->ES
+ *  pair so "current" isn't a meaningful separate concept there. */
+function LvFullCycleStrainTiles({
+  currentGrs, currentGcs, peakGrs, peakGcs, loading,
+}: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null; loading?: boolean }) {
+  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+  return (
+    <div>
+      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">LV Global Strain</p>
+      <div className="grid grid-cols-2 gap-1">
+        <KpiTile label="Current GRS" value={fmt(currentGrs)} loading={loading} />
+        <KpiTile label="Peak GRS" value={fmt(peakGrs)} loading={loading} />
+        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
+        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
+      </div>
+    </div>
+  );
+}
+
+/** Full-cycle's RV summary — CURRENT + PEAK GCS (real, unvalidated); GAS has
+ *  no computation at all, shown as an explicit placeholder either way. */
+function RvFullCycleStrainTiles({
+  currentGcs, peakGcs, loading,
+}: { currentGcs: number | null; peakGcs: number | null; loading?: boolean }) {
+  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+  return (
+    <div>
+      <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[7px] font-bold text-amber-700 dark:text-amber-400">Prototype</span>
+        RV Global Strain
+      </p>
+      <div className="grid grid-cols-2 gap-1">
+        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
+        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
+        <KpiTile label="Current GAS" value="—" />
+        <KpiTile label="Peak GAS" value="—" />
       </div>
     </div>
   );

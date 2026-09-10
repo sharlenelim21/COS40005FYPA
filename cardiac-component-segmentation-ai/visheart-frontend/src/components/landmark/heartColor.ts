@@ -64,9 +64,12 @@ export const RV_SEGMENT_PALETTE_HEX: readonly string[] = RV_SEGMENT_PALETTE.map(
 });
 
 // Atlas segment_names (cpd_rv_segmentation.py), same 0-8 order as
-// RV_SEGMENT_PALETTE -- display names for legends/tooltips.
+// RV_SEGMENT_PALETTE -- display names for legends/tooltips. Spelled exactly
+// as Sharlene's rv-deformation analysis notebook names them (underscored,
+// e.g. "Apical_Seg1"), not a prettified "Apical Seg 1" -- so a segment named
+// here and one named in the notebook are unambiguously the same thing.
 export const RV_SEGMENT_NAMES: readonly string[] = [
-  "Apical Seg 1", "Apical Seg 2", "Apical Seg 3",
-  "Basal Seg 1", "Basal Seg 2", "Basal Seg 3",
-  "Mid Seg 1", "Mid Seg 2", "Mid Seg 3",
+  "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
 ];
