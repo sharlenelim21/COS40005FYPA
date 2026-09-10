@@ -35,7 +35,6 @@ import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
-import { RvCrescentDiagram } from "@/components/landmark/RvCrescentDiagram";
 import { RV_SEGMENT_NAMES } from "@/components/landmark/heartColor";
 import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
@@ -1418,23 +1417,34 @@ export default function LandmarkDetectionPage() {
                 structureRvMesh.available && structureRvMesh.meshUrl ? (
                   <div className="flex min-h-0 flex-1 flex-col gap-2">
                     <div className="flex min-h-0 flex-1 gap-2 p-1">
-                      {/* LEFT: flattened 9-segment crescent (RV's equivalent of
-                          LV's circular bullseye — free-wall-only, so a half
-                          annulus rather than a full circle; see
-                          RvCrescentDiagram's own docstring). Static/decorative
-                          — there's no real per-segment RV value to plot yet,
-                          same gap the caption below already explains. */}
+                      {/* LEFT: the SAME crescent chart the Strain tab's RV
+                          view uses (CombinedVentricularChart, RV-only),
+                          instead of the separate RvCrescentDiagram this used
+                          to be -- Sharlene asked for this to look EXACTLY
+                          like what Structure/Strain's RV tab shows. No real
+                          strain data exists in this tab, so it renders with
+                          rvRegions=null the same way the Strain tab's own RV
+                          view does before anything's been computed (gray,
+                          "no data" wedges) rather than a separate identity-
+                          color scheme. */}
                       <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
                         <div className="mb-1 flex items-center justify-between flex-shrink-0">
                           <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                            RV 9-Segment Crescent
+                            RV Bullseye
                           </p>
                           <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                             Prototype
                           </span>
                         </div>
                         <div className="flex flex-1 min-h-0 items-center justify-center">
-                          <RvCrescentDiagram className="w-full h-full max-h-[260px]" />
+                          <CombinedVentricularChart
+                            lvData={[]}
+                            hasLv={false}
+                            strainType="GRS"
+                            rvRegions={null}
+                            showLv={false}
+                            showRv={true}
+                          />
                         </div>
                       </div>
 
@@ -1516,7 +1526,19 @@ export default function LandmarkDetectionPage() {
                   bullseyeData={hasPredictions ? bullseyeData : null}
                   loading={hasPredictions ? bullseyeLoading : isRunning}
                   isComputing={bullseyeRecomputing || calculatingModels[activeModel]}
-                  referenceAngleDeg={ahaAlignmentAngle ?? 0}
+                  // Prefers the manual "Align" button's own landmark-derived
+                  // angle (an explicit user action) when set; otherwise falls
+                  // back to the backend's own alignment_angle_deg (Stefani's
+                  // fix) instead of defaulting to unaligned (0) -- this
+                  // bullseye previously never used that value at all, even
+                  // though the backend has been computing it. Same -240
+                  // (start_angle_by_ring["basal"]'s fallback) conversion
+                  // CombinedVentricularChart/RvStrainChart already apply to
+                  // the identical field for the Strain tab's charts.
+                  referenceAngleDeg={
+                    ahaAlignmentAngle ??
+                    (bullseyeData?.alignment_angle_deg != null ? bullseyeData.alignment_angle_deg - 240 : 0)
+                  }
                   onCompute={() => fetchBullseye(selectedBullseyeModel, true, true)}
                   // Follows the shared cardiac-cycle playback (now driven from
                   // either the Structure or Strain tab), not the slice index —
@@ -3256,7 +3278,11 @@ function StrainPreviewPanel({
                     lvAlignmentMeshUrl={reconstructionMeshUrl}
                     lvAlignmentMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
                     lvAlignmentLabels={reconstructionLabels}
-                    initialCameraDistance={8}
+                    // A bit closer than LV/Combined's shared 8 -- the RV
+                    // crescent's own bounding box is narrower than LV's
+                    // rounder shape at the same distance, so it read as
+                    // smaller even after the earlier zoom pass.
+                    initialCameraDistance={6.5}
                   />
                   {rvHeartTooltip && (
                     <div
@@ -3272,9 +3298,14 @@ function StrainPreviewPanel({
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
-                {isFullCycle
-                  ? <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
-                  : <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />}
+                {/* Quick ED->ES already shows this same summary in the
+                    sidebar's Strain tab (QuickCombinedStrainView) -- showing
+                    it here too was a redundant duplicate. Full cycle has no
+                    sidebar equivalent (its sidebar shows the chart instead),
+                    so it keeps its own copy here. */}
+                {isFullCycle && (
+                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                )}
               </>
             ) : chamberFocus === "combined" && reconstructionMeshUrl && reconstructionLabels?.length && rvMesh.available && rvMesh.meshUrl ? (
               <>
@@ -3309,25 +3340,21 @@ function StrainPreviewPanel({
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by segment identity (prototype)
                 </p>
-                <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                  {isFullCycle ? (
-                    <>
-                      <LvFullCycleStrainTiles
-                        currentGrs={strainForDisplay?.global_grs ?? null}
-                        currentGcs={strainForDisplay?.global_gcs ?? null}
-                        peakGrs={lvPeakGrs}
-                        peakGcs={lvPeakGcs}
-                        loading={isComputeBusy}
-                      />
-                      <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
-                    </>
-                  ) : (
-                    <>
-                      {strainForDisplay && <LvGlobalStrainMiniBlock result={strainForDisplay} loading={isComputeBusy} />}
-                      <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
-                    </>
-                  )}
-                </div>
+                {/* Quick ED->ES already shows this in the sidebar's
+                    QuickCombinedStrainView -- only Full cycle needs its own
+                    copy here (its sidebar shows the chart instead). */}
+                {isFullCycle && (
+                  <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
+                    <LvFullCycleStrainTiles
+                      currentGrs={strainForDisplay?.global_grs ?? null}
+                      currentGcs={strainForDisplay?.global_gcs ?? null}
+                      peakGrs={lvPeakGrs}
+                      peakGcs={lvPeakGcs}
+                      loading={isComputeBusy}
+                    />
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                  </div>
+                )}
               </>
             ) : chamberFocus !== "LV" ? (
               <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto px-1 py-1">
@@ -3339,7 +3366,10 @@ function StrainPreviewPanel({
                       : "Combined view needs both an LV and an RV reconstruction for this model"} — showing values only.
                   </p>
                 </div>
-                {isFullCycle ? (
+                {/* Quick ED->ES already shows this in the sidebar's
+                    QuickCombinedStrainView regardless of mesh availability --
+                    only Full cycle needs its own copy here. */}
+                {isFullCycle && (
                   <>
                     {chamberFocus === "combined" && (
                       <LvFullCycleStrainTiles
@@ -3351,13 +3381,6 @@ function StrainPreviewPanel({
                       />
                     )}
                     <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
-                  </>
-                ) : (
-                  <>
-                    {chamberFocus === "combined" && strainForDisplay && (
-                      <LvGlobalStrainMiniBlock result={strainForDisplay} loading={isComputeBusy} />
-                    )}
-                    <RvGlobalStrainMiniBlock result={rvStrainForDisplay} loading={isComputeBusy} />
                   </>
                 )}
               </div>
@@ -3380,7 +3403,10 @@ function StrainPreviewPanel({
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
-                {isFullCycle ? (
+                {/* Quick ED->ES already shows this in the sidebar's
+                    QuickCombinedStrainView -- only Full cycle needs its own
+                    copy here. */}
+                {isFullCycle && (
                   <LvFullCycleStrainTiles
                     currentGrs={strainForDisplay?.global_grs ?? null}
                     currentGcs={strainForDisplay?.global_gcs ?? null}
@@ -3388,53 +3414,6 @@ function StrainPreviewPanel({
                     peakGcs={lvPeakGcs}
                     loading={isComputeBusy}
                   />
-                ) : (
-                  <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                    <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                      <p className="text-[8px] text-muted-foreground">Peak GRS</p>
-                      {isComputeBusy ? (
-                        <div className="mx-auto mt-0.5 h-3.5 w-10 animate-pulse rounded bg-muted-foreground/20" />
-                      ) : (
-                        <p className={cn("font-bold text-[10px]",
-                          strainForDisplay.global_grs !== null && strainForDisplay.global_grs >= 40 ? "text-green-600" : "text-orange-500")}>
-                          {strainForDisplay.global_grs != null ? `${strainForDisplay.global_grs >= 0 ? "+" : ""}${strainForDisplay.global_grs.toFixed(1)}%` : "N/A"}
-                        </p>
-                      )}
-                      <p className="text-[7px] text-muted-foreground">Normal &gt;+40%</p>
-                    </div>
-                    <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                      <p className="text-[8px] text-muted-foreground">Peak GCS</p>
-                      {isComputeBusy ? (
-                        <div className="mx-auto mt-0.5 h-3.5 w-10 animate-pulse rounded bg-muted-foreground/20" />
-                      ) : (
-                        <p className={cn("font-bold text-[10px]",
-                          strainForDisplay.global_gcs !== null && strainForDisplay.global_gcs >= -25 && strainForDisplay.global_gcs <= -15 ? "text-green-600" : "text-orange-500")}>
-                          {strainForDisplay.global_gcs != null ? `${strainForDisplay.global_gcs.toFixed(1)}%` : "N/A"}
-                        </p>
-                      )}
-                      <p className="text-[7px] text-muted-foreground">Normal -15% to -25%</p>
-                    </div>
-                    <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                      <p className="text-[8px] text-muted-foreground">
-                        {strainForDisplay.source === "frames" ? `Frame ${(strainForDisplay.edFrameIndex ?? 0) + 1} WT` : "ED WT"}
-                      </p>
-                      {isComputeBusy ? (
-                        <div className="mx-auto mt-0.5 h-3.5 w-10 animate-pulse rounded bg-muted-foreground/20" />
-                      ) : (
-                        <p className="font-bold text-[10px]">{strainForDisplay.ed_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
-                      )}
-                    </div>
-                    <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                      <p className="text-[8px] text-muted-foreground">
-                        {strainForDisplay.source === "frames" ? `Frame ${(strainForDisplay.esFrameIndex ?? 0) + 1} WT` : "ES WT"}
-                      </p>
-                      {isComputeBusy ? (
-                        <div className="mx-auto mt-0.5 h-3.5 w-10 animate-pulse rounded bg-muted-foreground/20" />
-                      ) : (
-                        <p className="font-bold text-[10px]">{strainForDisplay.es_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
-                      )}
-                    </div>
-                  </div>
                 )}
               </>
             ) : (
@@ -3483,42 +3462,6 @@ function KpiTile({ label, value, loading }: { label: string; value: string; load
   );
 }
 
-/** Quick ED->ES's LV summary — shown in the 3D-heart panel's Combined tab
- *  (LV tab already shows this inline alongside the mesh). */
-function LvGlobalStrainMiniBlock({ result, loading }: { result: RealStrainResult; loading?: boolean }) {
-  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
-  return (
-    <div>
-      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">LV Global Strain</p>
-      <div className="grid grid-cols-2 gap-1">
-        <KpiTile label="Peak GRS" value={fmt(result.global_grs)} loading={loading} />
-        <KpiTile label="Peak GCS" value={fmt(result.global_gcs)} loading={loading} />
-        <KpiTile label={`Frame ${(result.edFrameIndex ?? 0) + 1} WT`} value={result.ed_wt_mean_mm != null ? `${result.ed_wt_mean_mm.toFixed(2)} mm` : "—"} loading={loading} />
-        <KpiTile label={`Frame ${(result.esFrameIndex ?? 0) + 1} WT`} value={result.es_wt_mean_mm != null ? `${result.es_wt_mean_mm.toFixed(2)} mm` : "—"} loading={loading} />
-      </div>
-    </div>
-  );
-}
-
-/** Quick ED->ES's RV summary — GCS is real but unvalidated, GAS/area are
- *  entirely fabricated placeholders — every value here is labeled Prototype. */
-function RvGlobalStrainMiniBlock({ result, loading }: { result: RvStrainResult | null; loading?: boolean }) {
-  const fmt = (v: number | null | undefined) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
-  return (
-    <div>
-      <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[7px] font-bold text-amber-700 dark:text-amber-400">Prototype</span>
-        RV Global Strain
-      </p>
-      <div className="grid grid-cols-2 gap-1">
-        <KpiTile label="Peak GCS" value={fmt(result?.global_rv_strain)} loading={loading} />
-        <KpiTile label="Peak GAS" value="—" />
-        <KpiTile label={`Frame ${(result?.edFrameIndex ?? 0) + 1} area`} value="—" />
-        <KpiTile label={`Frame ${(result?.esFrameIndex ?? 0) + 1} area`} value="—" />
-      </div>
-    </div>
-  );
-}
 
 /** Full-cycle's LV summary — CURRENT (at the scrubbed frame) + true PEAK
  *  (over the whole computed cycle) for both GRS and GCS, same idea as
@@ -3610,28 +3553,35 @@ function LandmarkSummaryStats({
 }) {
   if (!nTotal) return null;
   const confident = nTotal - (nCollapsed ?? 0);
+  const collapsed = nCollapsed ?? 0;
   const segGuided = n2ch ?? 0;
   const mriOnly = n1chFallback ?? 0;
+
+  const stats: { key: string; dot: string; value: number; label: string }[] = [
+    { key: "confident", dot: "bg-green-500", value: confident, label: "slices confident" },
+  ];
+  if (collapsed > 0) {
+    stats.push({ key: "collapsed", dot: "bg-slate-500", value: collapsed, label: "mean point used" });
+  }
+  if (segGuided > 0) {
+    stats.push({ key: "2ch", dot: "bg-blue-500", value: segGuided, label: "seg-guided (2ch)" });
+  }
+  if (mriOnly > 0) {
+    stats.push({ key: "1ch", dot: "bg-amber-500", value: mriOnly, label: "MRI-only (1ch)" });
+  }
+
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-0.5 px-4 py-1.5 border-b border-border bg-muted/30 text-[11px] text-muted-foreground flex-shrink-0">
-      <span>
-        <span className="font-medium text-green-600 dark:text-green-400">{confident}/{nTotal}</span>
-        {" slices confident"}
-      </span>
-      {(nCollapsed ?? 0) > 0 && (
-        <span>
-          <span className="font-medium text-zinc-500">{nCollapsed}/{nTotal}</span>
-          {" mean point used"}
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-muted/20 p-2">
+      {stats.map((s) => (
+        <span
+          key={s.key}
+          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-2 py-1 text-[11px] leading-none text-muted-foreground"
+        >
+          <span className={cn("h-1.5 w-1.5 rounded-full flex-shrink-0", s.dot)} />
+          <span className="font-semibold text-foreground tabular-nums">{s.value}/{nTotal}</span>
+          {s.label}
         </span>
-      )}
-      <span>
-        <span className="font-medium text-blue-500">{segGuided}/{nTotal}</span>
-        {" seg-guided (2ch)"}
-      </span>
-      <span>
-        <span className="font-medium text-amber-500">{mriOnly}/{nTotal}</span>
-        {" MRI-only (1ch)"}
-      </span>
+      ))}
     </div>
   );
 }

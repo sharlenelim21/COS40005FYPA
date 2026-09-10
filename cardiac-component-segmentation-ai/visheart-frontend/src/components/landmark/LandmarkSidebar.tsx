@@ -295,10 +295,6 @@ export function LandmarkSidebar({
       </div>
 
 
-      {activeTab === "landmarks" && summaryStats && (
-        <div className="border-b border-border">{summaryStats}</div>
-      )}
-
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
           axisLabel="Slice"
@@ -373,6 +369,7 @@ export function LandmarkSidebar({
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={onHighlightLandmark}
             onReset={onReset}
+            summaryStats={summaryStats}
           />
         )}
         {activeTab === "structure" && (
@@ -613,6 +610,7 @@ function LandmarksTab({
   highlightedLandmarkId,
   onHighlightLandmark,
   onReset,
+  summaryStats,
 }: {
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
@@ -648,6 +646,7 @@ function LandmarksTab({
   onToggleEditableLandmarks?: () => void;
   highlightedLandmarkId?: string | null;
   onHighlightLandmark?: (id: string | null) => void;
+  summaryStats?: React.ReactNode;
 }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -694,12 +693,14 @@ function LandmarksTab({
           {isSavingLandmarks ? (
             <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…</>
           ) : hasUnsavedLandmarkEdits ? (
-            "● Save landmark edits"
+            "Save landmark edits"
           ) : (
             "Landmarks saved"
           )}
         </Button>
       )}
+
+      {summaryStats}
 
       {/* Section header */}
       <div className="flex items-center justify-between">
@@ -727,7 +728,7 @@ function LandmarksTab({
               Slice confidence
             </span>
             <span className="text-[9px] text-muted-foreground">
-              {allPredictions.filter((p) => p.confidence === "high").length}/{allPredictions.length} confident
+              {allPredictions.filter((p) => p.flag !== "collapsed_to_mean").length}/{allPredictions.length} confident
             </span>
           </div>
           <div className="flex flex-wrap gap-1">
@@ -1625,6 +1626,7 @@ function StrainTab({
           strainCompute={strainCompute}
           selectedStrainType={selectedStrainType}
           onStrainTypeChange={setSelectedStrainType}
+          chamberFocus={chamberFocus}
         />
       ) : chamberFocus === "RV" ? (
         <RvStrainPanel
@@ -1824,10 +1826,14 @@ function QuickCombinedStrainView({
   strainCompute: sc,
   selectedStrainType,
   onStrainTypeChange,
+  chamberFocus,
 }: {
   strainCompute: StrainComputeBundle;
   selectedStrainType: StrainType;
   onStrainTypeChange: (type: StrainType) => void;
+  /** Which chamber(s) the main panel's 3D Heart is showing -- Combined shows
+   *  both boxes below (as always), LV/RV-only now show just their own. */
+  chamberFocus: "combined" | "LV" | "RV";
 }) {
   const lv = sc.quickLvResult;
   const rv = sc.quickRvResult;
@@ -1837,6 +1843,7 @@ function QuickCombinedStrainView({
 
   return (
     <div className="space-y-3">
+      {chamberFocus !== "RV" && (
       <div className="rounded-lg border border-border bg-background p-3 space-y-2">
         <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">LV Global Strain</h4>
         {lv ? (
@@ -1850,7 +1857,9 @@ function QuickCombinedStrainView({
           <p className="text-[10px] text-muted-foreground">Not computed for the current ED/ES pair yet — use Compute ED → ES above.</p>
         )}
       </div>
+      )}
 
+      {chamberFocus !== "LV" && (
       <div className="rounded-lg border border-border bg-background p-3 space-y-2">
         <div className="flex items-center gap-1.5">
           <span className="shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
@@ -1876,6 +1885,7 @@ function QuickCombinedStrainView({
           <p className="text-[10px] text-muted-foreground">Not computed for the current ED/ES pair yet — use Compute ED → ES above.</p>
         )}
       </div>
+      )}
     </div>
   );
 }

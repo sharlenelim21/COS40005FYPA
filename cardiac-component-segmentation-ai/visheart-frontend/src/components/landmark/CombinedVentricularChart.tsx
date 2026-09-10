@@ -4,6 +4,21 @@ import React from "react";
 import { rdYlGn } from "./StrainVisualization";
 import type { StrainSegmentData, StrainType, RvStrainRegion } from "./StrainVisualization";
 
+// Notebook-style segment names (Sharlene's rv-deformation analysis notebook
+// and the CPD atlas's own segment_names, e.g. "Basal_Seg1"), in this
+// crescent's own dataIdx order (basal=0-2, mid=3-5, apical=6-8 -- see the
+// rvRing(dataOffset, ...) calls below) -- NOT the same order heartColor.ts's
+// RV_SEGMENT_NAMES uses (apical=0-2, basal=3-5, mid=6-8, the atlas's own
+// alphabetical zone order), so this is its own small lookup rather than
+// reusing that array directly. Used for hover tooltips/labels instead of
+// the backend's own RvStrainRegion.label ("Mid RV Free Wall 1" etc), which
+// doesn't match how Sharlene's notebook names these regions.
+const CRESCENT_REGION_NAMES = [
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+  "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
+];
+
 interface CombinedVentricularChartProps {
   lvData: StrainSegmentData[];
   hasLv: boolean;
@@ -113,7 +128,7 @@ export function CombinedVentricularChart({
   const rvColMin = rvValues.length ? Math.min(...rvValues) : -20;
   const rvColMax = rvValues.length ? Math.max(...rvValues) : 0;
   const rvVal = (i: number) => rvRegions?.[i]?.strain ?? null;
-  const rvLbl = (i: number) => rvRegions?.[i]?.label ?? `RV Region ${i + 1}`;
+  const rvLbl = (i: number) => CRESCENT_REGION_NAMES[i] ?? `RV Region ${i + 1}`;
   const rvCol = (i: number) => {
     const v = rvVal(i);
     if (v == null) return "#cbd5e1";
@@ -293,19 +308,34 @@ export function CombinedVentricularChart({
         // so bars centered independently of the shape just meant the bars
         // and the shape they describe didn't line up with each other.
         const barW = 260, barMidX = center.x, barX = barMidX - barW / 2;
-        const rvBarY = center.y + outerR + 40;
-        const lvBarY = rvBarY + 30;
+        const firstBarY = center.y + outerR + 40;
+        // Only shows each chamber's own bar -- RV-only had no LV data to
+        // scale a "LV %" bar against anyway, and showing both regardless of
+        // the chamber toggle just relabeled the same redundancy the wedges
+        // themselves already stopped doing. When only one bar shows, it
+        // takes the first (upper) slot instead of leaving the gap the
+        // other bar would have sat in.
+        const rvBarY = firstBarY;
+        const lvBarY = (showRv && showLv) ? firstBarY + 30 : firstBarY;
         return (
           <>
-            <rect x={barX} y={rvBarY} width={barW} height="6" rx="3" fill="url(#combinedRvBar)" opacity="0.9" />
-            <text x={barX} y={rvBarY + 16} textAnchor="start" fontSize="8" fill="currentColor" opacity="0.7">{rvColMin.toFixed(1)}</text>
-            <text x={barMidX} y={rvBarY + 16} textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.7">RV strain %</text>
-            <text x={barX + barW} y={rvBarY + 16} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.7">{rvColMax.toFixed(1)}</text>
+            {showRv && (
+              <>
+                <rect x={barX} y={rvBarY} width={barW} height="6" rx="3" fill="url(#combinedRvBar)" opacity="0.9" />
+                <text x={barX} y={rvBarY + 16} textAnchor="start" fontSize="8" fill="currentColor" opacity="0.7">{rvColMin.toFixed(1)}</text>
+                <text x={barMidX} y={rvBarY + 16} textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.7">RV strain %</text>
+                <text x={barX + barW} y={rvBarY + 16} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.7">{rvColMax.toFixed(1)}</text>
+              </>
+            )}
 
-            <rect x={barX} y={lvBarY} width={barW} height="6" rx="3" fill="url(#combinedLvBar)" opacity="0.9" />
-            <text x={barX} y={lvBarY + 16} textAnchor="start" fontSize="8" fill="currentColor" opacity="0.7">{lvColMin.toFixed(1)}</text>
-            <text x={barMidX} y={lvBarY + 16} textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.7">LV {strainType} %</text>
-            <text x={barX + barW} y={lvBarY + 16} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.7">{lvColMax.toFixed(1)}</text>
+            {showLv && (
+              <>
+                <rect x={barX} y={lvBarY} width={barW} height="6" rx="3" fill="url(#combinedLvBar)" opacity="0.9" />
+                <text x={barX} y={lvBarY + 16} textAnchor="start" fontSize="8" fill="currentColor" opacity="0.7">{lvColMin.toFixed(1)}</text>
+                <text x={barMidX} y={lvBarY + 16} textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.7">LV {strainType} %</text>
+                <text x={barX + barW} y={lvBarY + 16} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.7">{lvColMax.toFixed(1)}</text>
+              </>
+            )}
           </>
         );
       })()}
