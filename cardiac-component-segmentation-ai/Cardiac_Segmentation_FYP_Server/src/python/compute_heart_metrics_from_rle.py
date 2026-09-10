@@ -455,18 +455,28 @@ def main() -> None:
     # particular. A small difference is expected and is a measure of segmentation
     # quality on those phases, not a bug in this detection. A large difference
     # points to poor segmentation on the ED/ES frames rather than a logic error.
-    if _valid_override(ed_override):
-        ed_frame = int(ed_override)
-    else:
-        # argmax of LV-cavity voxel count → largest chamber → end-diastole.
-        ed_frame = max(positive_frames, key=lambda f: lv_counts[f])
-
     if _valid_override(es_override):
         es_frame = int(es_override)
     else:
         # argmin among frames with positive LV — an all-zero frame is an
         # unsegmented phase, not a real "smallest cavity" candidate.
         es_frame = min(positive_frames, key=lambda f: lv_counts[f])
+
+    if _valid_override(ed_override):
+        ed_frame = int(ed_override)
+    else:
+        # argmax of LV-cavity voxel count → largest chamber → end-diastole.
+        # ED must precede ES in frame order (a cine cycle contracts ED→ES,
+        # then relaxes back toward ED-like volumes later in the sequence —
+        # the global volume max can fall after ES if that relaxation phase
+        # is captured too). If the unconstrained global argmax falls at or
+        # after ES, re-search restricted to frames before ES so ED stays the
+        # start of the same contraction this ES was drawn from.
+        ed_frame = max(positive_frames, key=lambda f: lv_counts[f])
+        if ed_frame >= es_frame:
+            before_es = [f for f in positive_frames if f < es_frame]
+            if before_es:
+                ed_frame = max(before_es, key=lambda f: lv_counts[f])
 
     # 6. Chamber volumes at ED/ES.
     LVEDV = _safe_float(lv_counts.get(ed_frame, 0) * voxel_mm3 / 1000.0)

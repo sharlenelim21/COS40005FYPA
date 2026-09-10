@@ -3,7 +3,7 @@ FROM node:18-alpine AS base
 
 # Install system dependencies and pnpm
 RUN apk add --no-cache python3 py3-pip make g++ libc6-compat curl && \
-    npm install -g pnpm
+    npm install -g pnpm@9
 
 # ============================================
 # Frontend builder stage
@@ -65,7 +65,7 @@ FROM node:18-alpine AS production
 # ca-certificates + openssl: fixes SSL/TLS errors teammates get when connecting to external services
 RUN apk add --no-cache python3 py3-pip dumb-init curl ca-certificates openssl && \
     update-ca-certificates && \
-    npm install -g pm2 pnpm
+    npm install -g pm2 pnpm@9
 
 # Set working directory
 WORKDIR /app

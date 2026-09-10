@@ -237,10 +237,10 @@ async def analyze_bullseye_s3(
 # ── Route C: compute strain from ED + ES NIfTI uploads ───────────────────────
 
 _AHA_NAMES = [
-    "Basal Anterior", "Basal Anterolateral", "Basal Inferolateral",
-    "Basal Inferior",  "Basal Inferoseptal",  "Basal Anteroseptal",
-    "Mid Anterior",    "Mid Anterolateral",   "Mid Inferolateral",
-    "Mid Inferior",    "Mid Inferoseptal",    "Mid Anteroseptal",
+    "Basal Anterior", "Basal Anteroseptal", "Basal Inferoseptal",
+    "Basal Inferior", "Basal Inferolateral", "Basal Anterolateral",
+    "Mid Anterior",   "Mid Anteroseptal",    "Mid Inferoseptal",
+    "Mid Inferior",   "Mid Inferolateral",   "Mid Anterolateral",
     "Apical Anterior", "Apical Lateral",      "Apical Inferior",
     "Apical Septal",   "Apex",
 ]
@@ -292,19 +292,24 @@ def _compute_strain_sync(
 
     wt_ed   = np.array(res_ed["values"],      dtype=float)
     wt_es   = np.array(res_es["values"],      dtype=float)
-    # circ_values from mask_to_17_segments is 2π × pure endocardial inner_radius.
-    # Back out inner_radius (r = circ / 2π), then use MID-WALL radius (r + wt/2)
-    # for GCS instead of pure endocardial radius — tracking only the inner
-    # cavity edge overstates circumferential shortening as the wall thickens
-    # inward. wt_ed/wt_es and the recovered inner radii are both raw pixel
-    # values at this point (vox_xy conversion happens later, per-segment),
-    # so combining them here is unit-consistent.
-    inner_r_ed = np.array(res_ed["circ_values"], dtype=float) / (2.0 * np.pi)
-    inner_r_es = np.array(res_es["circ_values"], dtype=float) / (2.0 * np.pi)
-    r_mid_ed = inner_r_ed + (wt_ed / 2.0)
-    r_mid_es = inner_r_es + (wt_es / 2.0)
-    circ_ed = 2.0 * np.pi * r_mid_ed
-    circ_es = 2.0 * np.pi * r_mid_es
+    # GCS follows alignment_17seg_update.ipynb's method: compute circumferential
+    # strain independently at the outer, mid-wall, and inner myocardium
+    # boundaries (each boundary's "circumference" is a summed per-sector chord
+    # length, not 2π×radius), then average the three boundaries' strains.
+    # This replaced an earlier mid-wall-only formula per client instruction to
+    # follow the notebook's method.
+    outer_chord_ed = np.array(res_ed["outer_circ_chord"], dtype=float)
+    outer_chord_es = np.array(res_es["outer_circ_chord"], dtype=float)
+    mid_chord_ed   = np.array(res_ed["mid_circ_chord"],   dtype=float)
+    mid_chord_es   = np.array(res_es["mid_circ_chord"],   dtype=float)
+    inner_chord_ed = np.array(res_ed["inner_circ_chord"], dtype=float)
+    inner_chord_es = np.array(res_es["inner_circ_chord"], dtype=float)
+
+    def _boundary_strain(ed: np.ndarray, es: np.ndarray, i: int) -> float | None:
+        ed_v, es_v = float(ed[i]), float(es[i])
+        if np.isnan(ed_v) or np.isnan(es_v) or ed_v <= 0:
+            return None
+        return (es_v - ed_v) / ed_v * 100.0
 
     segments = []
     grs_vals: list[float] = []
@@ -312,14 +317,16 @@ def _compute_strain_sync(
     # Pooled for ratio-of-means global aggregation (see below).
     valid_wt_ed_for_grs: list[float] = []
     valid_wt_es_for_grs: list[float] = []
-    valid_circ_ed_for_gcs: list[float] = []
-    valid_circ_es_for_gcs: list[float] = []
+    valid_outer_ed: list[float] = []
+    valid_outer_es: list[float] = []
+    valid_mid_ed: list[float] = []
+    valid_mid_es: list[float] = []
+    valid_inner_ed: list[float] = []
+    valid_inner_es: list[float] = []
 
     for i, name in enumerate(_AHA_NAMES):
         ed_v = float(wt_ed[i])   if not np.isnan(wt_ed[i])   else None
         es_v = float(wt_es[i])   if not np.isnan(wt_es[i])   else None
-        c_ed = float(circ_ed[i]) if not np.isnan(circ_ed[i]) else None
-        c_es = float(circ_es[i]) if not np.isnan(circ_es[i]) else None
 
         grs: float | None = None
         if ed_v is not None and es_v is not None and ed_v > 0:
@@ -328,12 +335,21 @@ def _compute_strain_sync(
             valid_wt_ed_for_grs.append(ed_v)
             valid_wt_es_for_grs.append(es_v)
 
+        outer_strain = _boundary_strain(outer_chord_ed, outer_chord_es, i)
+        mid_strain   = _boundary_strain(mid_chord_ed,   mid_chord_es,   i)
+        inner_strain = _boundary_strain(inner_chord_ed, inner_chord_es, i)
+
         gcs: float | None = None
-        if c_ed is not None and c_es is not None and c_ed > 0:
-            gcs = round((c_es - c_ed) / c_ed * 100.0, 2)
+        boundary_strains = [s for s in (outer_strain, mid_strain, inner_strain) if s is not None]
+        if boundary_strains:
+            gcs = round(float(np.mean(boundary_strains)), 2)
             gcs_vals.append(gcs)
-            valid_circ_ed_for_gcs.append(c_ed)
-            valid_circ_es_for_gcs.append(c_es)
+            if outer_strain is not None:
+                valid_outer_ed.append(float(outer_chord_ed[i])); valid_outer_es.append(float(outer_chord_es[i]))
+            if mid_strain is not None:
+                valid_mid_ed.append(float(mid_chord_ed[i]));     valid_mid_es.append(float(mid_chord_es[i]))
+            if inner_strain is not None:
+                valid_inner_ed.append(float(inner_chord_ed[i])); valid_inner_es.append(float(inner_chord_es[i]))
 
         segments.append({
             "segment":   i + 1,
@@ -344,10 +360,12 @@ def _compute_strain_sync(
             "wt_es_mm":  round(es_v * vox_xy, 3) if es_v is not None else None,
         })
 
-    # Global metrics: ratio-of-means (pool valid segments' wt/circ first, then
-    # take one ratio) instead of mean-of-ratios (averaging 17 percent-changes).
+    # Global metrics: ratio-of-means (pool valid segments' wt/chord-sum first,
+    # then take one ratio) instead of mean-of-ratios (averaging 17 percent-changes).
     # Mean-of-ratios gives small/noisy segments (e.g. apex) equal weight to
     # large, stable ones — a known source of bias in per-segment strain pooling.
+    # For GCS this ratio-of-means is computed per boundary, then the three
+    # boundaries' global strains are averaged — mirroring the per-segment method.
     if valid_wt_ed_for_grs:
         mean_wt_ed = float(np.mean(valid_wt_ed_for_grs))
         mean_wt_es = float(np.mean(valid_wt_es_for_grs))
@@ -355,12 +373,21 @@ def _compute_strain_sync(
     else:
         global_grs = None
 
-    if valid_circ_ed_for_gcs:
-        mean_circ_ed = float(np.mean(valid_circ_ed_for_gcs))
-        mean_circ_es = float(np.mean(valid_circ_es_for_gcs))
-        global_gcs = round((mean_circ_es - mean_circ_ed) / mean_circ_ed * 100.0, 2) if mean_circ_ed > 0 else None
-    else:
-        global_gcs = None
+    def _global_boundary_strain(ed_list: list[float], es_list: list[float]) -> float | None:
+        if not ed_list:
+            return None
+        mean_ed = float(np.mean(ed_list))
+        mean_es = float(np.mean(es_list))
+        return (mean_es - mean_ed) / mean_ed * 100.0 if mean_ed > 0 else None
+
+    global_boundary_strains = [
+        s for s in (
+            _global_boundary_strain(valid_outer_ed, valid_outer_es),
+            _global_boundary_strain(valid_mid_ed, valid_mid_es),
+            _global_boundary_strain(valid_inner_ed, valid_inner_es),
+        ) if s is not None
+    ]
+    global_gcs = round(float(np.mean(global_boundary_strains)), 2) if global_boundary_strains else None
 
     valid_ed_mm = [float(v) * vox_xy for v in wt_ed if not np.isnan(v)]
     valid_es_mm = [float(v) * vox_xy for v in wt_es if not np.isnan(v)]
