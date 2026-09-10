@@ -32,12 +32,20 @@ Each is EMITTED only when the underlying value is present and trustworthy.
 Thresholds are approximate references; strain thresholds in particular vary
 by vendor / software (see docs §2 for citations and caveats).
 
-    EDV      : "ok" if 60 <= EDV <= 250 mL, else "warn"
-               (raw adult reference band — NOT BSA-indexed; body-size caveat
-               noted in `detail`). SUPPRESSED entirely when
-               `heart_metrics_warnings[]` is non-empty (bad affine / duplicated
-               slice / plausibility flag) — replaced by a single "warn" line
-               explaining why absolute volumes are considered unreliable.
+    EDV / EDVI : when `measurements.EDVI` is present (caller supplied a BSA to
+               compute_heart_metrics_from_rle.py), this axis grades EDVI
+               against a BSA-indexed band instead — "ok" if 60 <= EDVI <= 100
+               mL/m^2 (approximate CMR reference; see EDVI_MIN_MAX below and
+               HEALTH_STATUS_IMPLEMENTATION.md §2 for the sex-specific caveat,
+               same simplification already applied to the LVEF threshold).
+               Falls back to the raw-EDV band ("ok" if 60 <= EDV <= 250 mL,
+               NOT BSA-indexed) whenever EDVI is absent, so behaviour is
+               unchanged for every caller that hasn't supplied a BSA.
+               SUPPRESSED entirely when `heart_metrics_warnings[]` is
+               non-empty (bad affine / duplicated slice / plausibility flag)
+               — replaced by a single "warn" line explaining why absolute
+               volumes (indexed or not — EDVI is derived from the same EDV)
+               are considered unreliable.
     Peak GCS : "ok" if PeakGCS <= -17 %  (more negative = better contraction)
     Peak GRS : "ok" if PeakGRS >= 25 %   (approximate soft threshold)
     (Strain peaks are only emitted when the strain module ran at the
@@ -70,8 +78,10 @@ Defensive behaviour
 Input (stdin JSON)
 ------------------
     measurements               — flat block from heartMetrics.measurements:
-        { EF, EDV, ESV, StrokeVolume, PeakGRS, PeakGCS }
-        (any subset accepted; any field may be null)
+        { EF, EDV, ESV, EDVI, StrokeVolume, PeakGRS, PeakGCS }
+        (any subset accepted; any field may be null. EDVI is null unless the
+        heart-metrics compute was given a bsa_m2 — see
+        compute_heart_metrics_from_rle.py)
     heart_metrics_warnings     — list[str] from heartMetrics.warnings
                                  (empty list if the compute was clean)
 
@@ -98,6 +108,13 @@ LVEF_MODERATE_MIN = 30.0
 # EDV raw-adult reference band (mL). NOT BSA-indexed — body-size caveat is
 # repeated in the emitted `detail` string so downstream readers see it.
 EDV_MIN_MAX = (60.0, 250.0)
+
+# EDVI (BSA-indexed) reference band, mL/m^2 — approximate CMR normal range
+# (Kawel-Boehm et al. 2020 SCMR consensus reference values; sex-averaged,
+# rounded — same "traditional simplified single threshold" trade-off already
+# made for LVEF above, pending patient sex being collected). Used INSTEAD of
+# EDV_MIN_MAX whenever measurements.EDVI is present.
+EDVI_MIN_MAX = (60.0, 100.0)
 
 # Strain-peak reference thresholds — APPROXIMATE, see docs §2 (Voigt et al.
 # 2015 EACVI/ASE strain standardization; vendor/software variation).
@@ -160,6 +177,7 @@ def compute(measurements: dict, hm_warnings: list) -> dict:
     tested via scripts/check_health_status.js by feeding the same JSON."""
     ef      = _num(measurements.get("EF"))
     edv     = _num(measurements.get("EDV"))
+    edvi    = _num(measurements.get("EDVI"))
     peakGCS = _num(measurements.get("PeakGCS"))
     peakGRS = _num(measurements.get("PeakGRS"))
 
@@ -225,6 +243,33 @@ def compute(measurements: dict, hm_warnings: list) -> dict:
             "EDV evidence suppressed due to heartMetrics.warnings — "
             "confidence set to low."
         )
+    elif edvi is not None:
+        # BSA was supplied upstream (compute_heart_metrics_from_rle.py) — grade
+        # the indexed volume instead of raw EDV. This is the one place a
+        # caller-supplied BSA can change `status`: a patient whose raw EDV
+        # reads "warn" on the unindexed band may grade "ok" once indexed for a
+        # large body size, or vice versa for a small one — see the raw-EDV
+        # branch below for what would have been reported without a BSA.
+        features_used.append("EDVI")
+        lo, hi = EDVI_MIN_MAX
+        raw_note = f" (raw EDV {edv:.1f} mL)" if edv is not None else ""
+        if lo <= edvi <= hi:
+            evidence.append({
+                "label":  "End-Diastolic Volume Index (EDVI)",
+                "level":  "ok",
+                "detail": f"EDVI {edvi:.1f} mL/m²{raw_note} — within the approximate "
+                          f"BSA-indexed reference band ({lo:.0f}-{hi:.0f} mL/m²).",
+            })
+        else:
+            direction = "below" if edvi < lo else "above"
+            evidence.append({
+                "label":  "End-Diastolic Volume Index (EDVI)",
+                "level":  "warn",
+                "detail": f"EDVI {edvi:.1f} mL/m²{raw_note} — {direction} the "
+                          f"approximate BSA-indexed reference band ({lo:.0f}-{hi:.0f} "
+                          "mL/m²).",
+            })
+            edv_warn_counts = True
     elif edv is None:
         features_missing.append("EDV")
     else:

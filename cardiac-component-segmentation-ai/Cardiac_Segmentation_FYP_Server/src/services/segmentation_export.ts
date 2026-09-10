@@ -18,6 +18,46 @@ import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
 const serviceLocation = 'SegmentationExport';
 
 /**
+ * Run compute_bullseye_from_rle.py on an arbitrary frames[] subset and return
+ * its parsed result (or null on any failure/reported error). Pure stdin/stdout
+ * subprocess call — no GPU, no NIfTI file, no network round-trip. Shared by
+ * computeBullseyeFromMaskDoc (one combined-frame result) and
+ * computeFrameWallThicknessSeries (one result per cardiac-cycle frame).
+ */
+const runBullseyeRleScript = (
+    frames: any[],
+    width: number,
+    height: number,
+    logTag: string,
+): Promise<any | null> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
+    const input = JSON.stringify({ frames, width, height });
+
+    return new Promise<any | null>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [Bullseye] Python script failed for ${logTag}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [Bullseye] stderr: ${stderr.substring(0, 500)}`);
+                return resolve(null);
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [Bullseye] Script reported error for ${logTag}: ${result.error}`);
+                    return resolve(null);
+                }
+                resolve(result);
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [Bullseye] Failed to parse Python output for ${logTag}: ${parseErr?.message}`);
+                resolve(null);
+            }
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
  * Compute AHA 17-segment bullseye analysis directly from the mask's RLE frame data
  * using the local Python script. No GPU or NIfTI file required.
  * Stores the result in MongoDB on the segmentation mask document.
@@ -28,36 +68,52 @@ export const computeBullseyeFromMaskDoc = async (
     width: number,
     height: number,
 ): Promise<void> => {
-    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
-    const input = JSON.stringify({ frames, width, height });
+    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`);
+    if (!result) return;
+    result.computed_at = new Date().toISOString();
+    const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(maskId) },
+        { $set: { bullseye: result, updatedAt: new Date() } },
+    );
+    logger.info(`${serviceLocation}: [Bullseye] Stored RLE-derived bullseye for mask ${maskId} — stats: ${JSON.stringify(result.stats)} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
+};
 
-    return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
-            if (error) {
-                logger.warn(`${serviceLocation}: [Bullseye] Python script failed for mask ${maskId}: ${error.message}`);
-                if (stderr) logger.warn(`${serviceLocation}: [Bullseye] stderr: ${stderr.substring(0, 500)}`);
-                return resolve();
-            }
-            try {
-                const result = JSON.parse(stdout.trim());
-                if (result.error) {
-                    logger.warn(`${serviceLocation}: [Bullseye] Script reported error for mask ${maskId}: ${result.error}`);
-                    return resolve();
-                }
-                result.computed_at = new Date().toISOString();
-                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
-                    { _id: new mongoose.Types.ObjectId(maskId) },
-                    { $set: { bullseye: result, updatedAt: new Date() } },
-                );
-                logger.info(`${serviceLocation}: [Bullseye] Stored RLE-derived bullseye for mask ${maskId} — stats: ${JSON.stringify(result.stats)} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
-            } catch (parseErr: any) {
-                logger.warn(`${serviceLocation}: [Bullseye] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
-            }
-            resolve();
-        });
-        child.stdin?.write(input);
-        child.stdin?.end();
-    });
+/**
+ * Per-frame wall thickness, decoupled entirely from the GPU strain pipeline.
+ * Wall thickness at a single frame is a property of that frame's own mask —
+ * unlike GRS/GCS strain, it needs no comparison against another frame — so
+ * this loops the same RLE-only script once per cardiac-cycle frame instead of
+ * once per ED-vs-frame GPU comparison. Cheap enough to auto-run right after
+ * segmentation, so the Structure tab's bullseye/3D heart can animate without
+ * waiting on a manual "Compute all frames" (which stays GRS/GCS-only).
+ * Stores the result under `frameBullseye` on the mask document.
+ */
+export const computeFrameWallThicknessSeries = async (
+    maskId: string,
+    frames: any[],
+    width: number,
+    height: number,
+): Promise<void> => {
+    const frameIndices = Array.from(new Set(frames.map((f: any) => f.frameindex))).sort((a, b) => a - b);
+    if (frameIndices.length <= 1) return; // nothing to animate with only one frame
+
+    const results: { frameIndex: number; segment_values: (number | null)[]; stats: any }[] = [];
+    for (const frameIndex of frameIndices) {
+        const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
+        const result = await runBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`);
+        if (result) {
+            results.push({ frameIndex, segment_values: result.segment_values, stats: result.stats });
+        }
+    }
+    if (!results.length) {
+        logger.warn(`${serviceLocation}: [FrameWallThickness] No frames produced a result for mask ${maskId} — not storing.`);
+        return;
+    }
+    const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(maskId) },
+        { $set: { frameBullseye: { frames: results, computed_at: new Date().toISOString() }, updatedAt: new Date() } },
+    );
+    logger.info(`${serviceLocation}: [FrameWallThickness] Stored ${results.length}/${frameIndices.length} frame(s) for mask ${maskId} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
 };
 
 /**
@@ -391,13 +447,24 @@ export const computeDiseaseSimilarityFromMetrics = async (
         EF: number | null;
         EDV: number | null;
         ESV: number | null;
+        // Indexed/morphology features — all optional. EDVI/ESVI/LVMI/StrokeVolumeIndex
+        // are only meaningful (non-null) when the caller supplied a bsa_m2; see
+        // assembleSimilarityMeasurements, which derives them. MaxWallThicknessMm is
+        // pulled from the mask's own stored bullseye — no BSA needed for that one.
+        EDVI?: number | null;
+        ESVI?: number | null;
+        LVMassG?: number | null;
+        LVMI?: number | null;
+        MaxWallThicknessMm?: number | null;
         StrokeVolume: number | null;
+        StrokeVolumeIndex?: number | null;
         PeakGRS: number | null;
         PeakGCS: number | null;
     },
+    sex?: "male" | "female" | "unspecified",
 ): Promise<void> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_disease_similarity.py');
-    const input = JSON.stringify({ measurements });
+    const input = JSON.stringify({ measurements, sex: sex ?? "unspecified" });
 
     return new Promise<void>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {

@@ -13,6 +13,13 @@
 
 FROM sveltes/visheart-inference-gpu:faithful-latest
 
+# Bake in packages the base image is missing but the app requires at import time
+# (nibabel, timm, pycpd - see cpd_aha_segmentation.py and external_unet_inference.py).
+# Without this, docker-compose's command re-installs them from PyPI on every single
+# container start/restart (~15-30s), which is what was delaying /status/server and
+# /status/gpu from responding at all - the pip install runs before uvicorn binds.
+RUN pip install --no-cache-dir "nibabel>=5.0.0" timm pycpd==2.0.0
+
 # Copy landmark detection model weights.
 # Source paths are relative to the build context (repo root COS40005FYPA/).
 COPY UNETRESNET34/checkpoints/best_model_1ch.pth /app/UNETRESNET34/checkpoints/best_model_1ch.pth

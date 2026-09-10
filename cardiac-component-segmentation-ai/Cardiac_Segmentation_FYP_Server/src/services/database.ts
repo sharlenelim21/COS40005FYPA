@@ -777,6 +777,7 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
   bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
+  frameBullseye: { type: Schema.Types.Mixed, required: false }, // Per-frame wall thickness, RLE-only — see IProjectSegmentationMask.frameBullseye
   heartMetrics: { type: Schema.Types.Mixed, required: false }, // Chamber volumes / EF / LV mass — see IProjectSegmentationMask.heartMetrics
   healthStatus: { type: Schema.Types.Mixed, required: false }, // Rule-based LV systolic-function health-status assessment (Task 2)
   regionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // Layer 2 — advisory per-AHA-segment assessment from regional strain. Mixed for the same reason as healthStatus/bullseye: a typed sub-schema would strip unknown keys.
@@ -892,6 +893,12 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
     numIterations: { type: Number, required: false }, // Number of iterations used in SDF reconstruction (optional)
     resolution: { type: Number, required: false }, // Resolution of the reconstruction grid (optional)
   },
+
+  ahaVertexLabels: { type: [Number], required: false },
+  // Per-frame labels, keyed by original frame index (string keys). Mongoose's Map
+  // type stores this as a real BSON map (not a nested-object schema), which is what
+  // an arbitrary/variable set of frame-index keys needs.
+  frameAhaVertexLabels: { type: Map, of: [Number], required: false },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Hooks for pre-save and pre-delete operations (must be before the model creation)

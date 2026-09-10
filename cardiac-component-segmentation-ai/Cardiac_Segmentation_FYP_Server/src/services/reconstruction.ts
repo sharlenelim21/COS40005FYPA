@@ -166,7 +166,7 @@ export const startReconstruction = async (
     export_format?: string,
     segmentationModel?: string,
     chamber?: string
-): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number }> => {
+): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number; reason?: "already_exists" | "job_in_progress" }> => {
     // Normalise the requested segmentation model. Allowed values:
     //   "medsam" — only MedSAM-tagged editable masks
     //   "unet"   — only UNet-tagged editable masks
@@ -247,6 +247,7 @@ export const startReconstruction = async (
                     return {
                         success: false,
                         statusCode: 409,
+                        reason: "already_exists",
                         message: `${chamberLabel} reconstruction already exists for ${modelLabel}. Delete it before creating a new one.`,
                     };
                 }
@@ -280,6 +281,7 @@ export const startReconstruction = async (
                 return {
                     success: false,
                     statusCode: 409,
+                    reason: "job_in_progress",
                     message: `${chamberLabel} reconstruction for ${modelLabel} is already running. Wait for it to finish, or delete it.`,
                 };
             }

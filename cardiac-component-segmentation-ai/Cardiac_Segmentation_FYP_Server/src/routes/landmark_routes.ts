@@ -393,15 +393,7 @@ function mergeLandmarkFramesData(
         const dbSlice = slicesMap.get(reqSlice.sliceindex);
         if (dbSlice) {
           if (reqSlice.landmarks !== undefined) {
-            const pointsMap = new Map<string, IProjectLandmarkDocument['frames'][0]['slices'][0]['landmarks'][0]>();
-            const currentPoints = Array.isArray(dbSlice.landmarks) ? dbSlice.landmarks : [];
-            for (const point of currentPoints) {
-              pointsMap.set(point.key, point);
-            }
-            for (const reqPoint of reqSlice.landmarks) {
-              pointsMap.set(reqPoint.key, JSON.parse(JSON.stringify(reqPoint)));
-            }
-            dbSlice.landmarks = Array.from(pointsMap.values());
+            dbSlice.landmarks = reqSlice.landmarks.map((point) => JSON.parse(JSON.stringify(point)));
           }
         } else {
           slicesMap.set(reqSlice.sliceindex, JSON.parse(JSON.stringify(reqSlice)));

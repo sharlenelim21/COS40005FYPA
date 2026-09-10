@@ -15,6 +15,13 @@ export interface RealStrainSegment {
   wt_es_mm?: number | null;
 }
 
+export interface StrainComputedFor {
+  mode: "choose-frames" | "full-cycle" | "upload";
+  model: "unet" | "medsam";
+  edFrameIndex: number;
+  esFrameIndex?: number;
+}
+
 export interface RealStrainResult {
   segments: RealStrainSegment[];
   global_grs: number | null;
@@ -27,6 +34,7 @@ export interface RealStrainResult {
   source?: "upload" | "frames";
   edFrameIndex?: number;
   esFrameIndex?: number;
+  computedFor?: StrainComputedFor;
 }
 
 export interface StrainSegmentData {
@@ -60,6 +68,7 @@ export interface RvStrainResult {
   source?: "frames";
   edFrameIndex?: number;
   esFrameIndex?: number;
+  computedFor?: StrainComputedFor;
 }
 
 // ── dummy data ────────────────────────────────────────────────────────────────
@@ -68,7 +77,7 @@ export interface RvStrainResult {
 const BASE_GCS = [-17.1, -18.3, -16.8, -17.7, -19.4, -18.5, -20.2, -19.1, -18.2, -19.7, -20.8, -20.1, -21.0, -19.5, -20.4, -19.8, -18.9];
 const BASE_GRS = [26.4, 28.2, 24.9, 25.8, 30.1, 29.4, 31.2, 30.5, 27.8, 28.6, 32.4, 31.6, 34.1, 32.7, 33.4, 31.9, 29.8];
 
-const SEGMENT_LABELS = [
+export const SEGMENT_LABELS = [
   "Basal Anterior", "Basal Anterolateral", "Basal Inferolateral",
   "Basal Inferior", "Basal Inferoseptal", "Basal Anteroseptal",
   "Mid Anterior", "Mid Anterolateral", "Mid Inferolateral",
@@ -99,7 +108,7 @@ export function getDummyStrainData(
 
 // ── color helpers ─────────────────────────────────────────────────────────────
 
-// Same ramp as ClientHeartModel: red(0) → yellow(0.5) → green(1)
+// Same ramp as the 3D heart model: red(0) → yellow(0.5) → green(1)
 export function rdYlGn(t: number): string {
   const r = t < 0.5 ? 1 : 1 - (t - 0.5) * 2;
   const g = t < 0.5 ? t * 2 : 1;
@@ -285,9 +294,9 @@ export function StrainBullseyeChart({
 
       {/* Direction labels */}
       <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Anterior</text>
-      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
+      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
       <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Inferior</text>
-      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
+      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
 
       {/* Basal ring — segments 1–6 */}
       {Array.from({ length: 6 }, (_, i) => {

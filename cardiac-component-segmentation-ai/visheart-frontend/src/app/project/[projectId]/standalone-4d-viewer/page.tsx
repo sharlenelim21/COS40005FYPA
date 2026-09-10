@@ -3,6 +3,7 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useProject, normalizeReconstructionChamber } from "@/context/ProjectContext";
+import { useAuth } from "@/context/auth-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
@@ -12,10 +13,10 @@ import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { GuidancePanel } from "@/components/GuidancePanel";
 import { Layers, Crosshair, AlertTriangle } from "lucide-react";
-import { 
-  ResizablePanelGroup, 
-  ResizablePanel, 
-  ResizableHandle 
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle
 } from "@/components/ui/resizable";
 import { Switch } from "@/components/ui/switch";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
@@ -48,6 +49,9 @@ export default function Standalone4DViewerPage() {
   // that was actively building as simply "not built" with a Build button next to it.
   const pendingParam = searchParams.get("pending");
   const pendingHint = pendingParam === "lv" || pendingParam === "rv" ? pendingParam : null;
+
+  const { user } = useAuth();
+  const isGuest = user?.role === "guest";
 
   // Get data from ProjectContext
   const {
@@ -176,6 +180,7 @@ export default function Standalone4DViewerPage() {
   // Poll for reconstruction when it doesn't exist yet (job was just started)
   const [isPolling, setIsPolling] = useState(false);
   const [pollTimedOut, setPollTimedOut] = useState(false);
+  const isMissing = !hasReconstructions || (!!selectedModel && !activeReconstruction);
 
   useEffect(() => {
     // Only poll after initial context load is done and something we expect is still missing.
@@ -397,7 +402,7 @@ export default function Standalone4DViewerPage() {
   }
 
   // No reconstruction data — show waiting UI while polling, error only on timeout
-  if (!hasReconstructions || (selectedModel && !activeReconstruction)) {
+  if (isMissing) {
     if (isPolling) {
       return (
         <div className="container mx-auto p-6 max-w-4xl">
@@ -415,11 +420,11 @@ export default function Standalone4DViewerPage() {
             <CardContent className="pt-6">
               <div className="text-center py-12">
                 <Loader2 className="h-12 w-12 mx-auto text-primary mb-4 animate-spin" />
-                <h3 className="text-lg font-semibold mb-2">Generating 4D Reconstruction...</h3>
+                <h3 className="text-lg font-semibold mb-2">Reconstruction in Progress</h3>
                 <p className="text-sm text-muted-foreground mb-4">
                   {selectedModel
-                    ? `Building the ${selectedModel.toUpperCase()} 4D model. This may take several minutes.`
-                    : "Building the 4D model. This may take several minutes."}
+                    ? `Your ${selectedModel.toUpperCase()} 4D reconstruction is processing, this usually takes 2-5 minutes.`
+                    : "Your 4D reconstruction is processing, this usually takes 2-5 minutes."}
                 </p>
               </div>
             </CardContent>
@@ -444,9 +449,13 @@ export default function Standalone4DViewerPage() {
           <CardContent className="pt-6">
             <div className="text-center py-12">
               <AlertCircle className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No 4D Reconstruction Available</h3>
+              <h3 className="text-lg font-semibold mb-2">
+                {pollTimedOut ? "Still Processing" : "No 4D Reconstruction Available"}
+              </h3>
               <p className="text-sm text-muted-foreground mb-4">
-                {selectedModel
+                {pollTimedOut
+                  ? "This is taking longer than the usual 2-5 minutes. It may still finish - check back shortly, or contact support if it doesn't complete."
+                  : selectedModel
                   ? `This project does not have a ${selectedModel.toUpperCase()} 4D reconstruction yet.`
                   : "This project does not have a 4D reconstruction yet."}
               </p>
@@ -797,30 +806,22 @@ export default function Standalone4DViewerPage() {
         </ResizablePanel>
       </ResizablePanelGroup>
 
-      <GuidancePanel
-        storageKey={`4d-guidance-${projectId}-${selectedModel ?? "unknown"}`}
-        icon="🫀"
-        title="What would you like to do next?"
-        subtitle="4D Reconstruction is ready"
-        actions={[
-          {
-            label: "View Segmentation Mask",
-            icon: <Layers size={13} />,
-            onClick: () => {
-              const params = new URLSearchParams();
-              if (selectedModel) params.set("model", selectedModel);
-              params.set("from", "4d");
-              router.push(`/project/${projectId}/segmentation?${params.toString()}`);
+      {hasReconstructions && !isGuest && (
+        <GuidancePanel
+          storageKey={`recon-guidance-${projectId}`}
+          icon="🫀"
+          title="4D reconstruction ready!"
+          subtitle="Want to run Landmark Detection next?"
+          actions={[
+            {
+              label: "Run Landmark Detection",
+              icon: <Crosshair size={13} />,
+              primary: true,
+              onClick: () => router.push(`/project/${projectId}?highlight=landmark`),
             },
-          },
-          {
-            label: "Run Landmark Detection",
-            icon: <Crosshair size={13} />,
-            primary: true,
-            onClick: () => router.push(`/project/${projectId}?highlight=landmark`),
-          },
-        ]}
-      />
+          ]}
+        />
+      )}
     </div>
   );
 }

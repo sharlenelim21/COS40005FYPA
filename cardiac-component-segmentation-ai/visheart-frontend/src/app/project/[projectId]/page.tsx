@@ -759,7 +759,7 @@ function ProjectPageInner() {
       // Keep showing loading state until the job appears
       // The loading state will be cleared by the effect when hasActiveReconstructionJobs becomes true
     } catch (error: unknown) {
-      const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response;
+      const response = (error as { response?: { status?: number; data?: { message?: string; reason?: string } } })?.response;
 
       // 409 is the server's duplicate guard answering, not a failure. Either this exact
       // (model, chamber) already exists, or a job for it is still running -- and in both cases the
@@ -767,6 +767,15 @@ function ProjectPageInner() {
       // through console.error also made Next's dev overlay pop a stack trace over the page, which
       // is what this looked like from the outside: a crash, rather than "it is already running".
       if (response?.status === 409) {
+        if (response.data?.reason === "job_in_progress") {
+          // Already building -- sync silently onto the running job rather than surfacing an
+          // error banner for something that isn't a failure.
+          console.log("[Project] Reconstruction already in progress for this model - syncing job state.");
+          setShowReconstructionDialog(false);
+          goToReconstructionViewer(config.segmentationModel, undefined, requestedChamber);
+          await refreshReconstructionJobs();
+          return;
+        }
         console.info("[Project] Reconstruction already exists or is running:", response?.data?.message);
         setReconstructionError(
           response?.data?.message ||
@@ -780,8 +789,7 @@ function ProjectPageInner() {
 
       console.error("[Project] ❌ Error starting reconstruction:", error);
       setReconstructionError(
-        response?.data?.message ||
-        "Failed to start reconstruction"
+        response?.data?.message || "Failed to start reconstruction"
       );
       setIsStartingReconstruction(false);
     }
@@ -1198,7 +1206,7 @@ function ProjectPageInner() {
                           <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/segmentation`}>
                               <div className="flex items-center gap-3 w-full">
-                                <Edit className="h-5 w-5 text-primary" />
+                                <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Edit Segmentation Masks</p>
                                   <p className="text-xs text-muted-foreground">
@@ -1231,7 +1239,7 @@ function ProjectPageInner() {
                             <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
                               <Link href={`/project/${projectId}/landmark-detection`}>
                                 <div className="flex items-center gap-3 w-full">
-                                  <Crosshair className="h-5 w-5 text-primary" />
+                                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
                                   <div className="text-left flex-1">
                                     <p className="font-semibold">Landmark Detection</p>
                                     <p className="text-xs text-muted-foreground">
@@ -1361,7 +1369,7 @@ function ProjectPageInner() {
                           <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
                             <Link href={`/project/${projectId}/segmentation`}>
                               <div className="flex items-center gap-3 w-full">
-                                <Edit className="h-5 w-5 text-primary" />
+                                <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
                                 <div className="text-left flex-1">
                                   <p className="font-semibold">Edit Segmentation Masks</p>
                                   <p className="text-xs text-muted-foreground">
@@ -1394,7 +1402,7 @@ function ProjectPageInner() {
                             <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
                               <Link href={`/project/${projectId}/landmark-detection`}>
                                 <div className="flex items-center gap-3 w-full">
-                                  <Crosshair className="h-5 w-5 text-primary" />
+                                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
                                   <div className="text-left flex-1">
                                     <p className="font-semibold">Landmark Detection</p>
                                     <p className="text-xs text-muted-foreground">

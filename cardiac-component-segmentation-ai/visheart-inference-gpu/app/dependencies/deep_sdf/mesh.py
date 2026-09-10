@@ -7,9 +7,13 @@ import torch
 import deep_sdf.utils
 import SimpleITK as sitk
 
+from cpd_aha_segmentation import register_cpd_warp, label_with_warp
+from aha_segmentation_3d import classify_vertices_to_aha17
+
 
 def create_mesh_4dsdf(
-    decoder, c_s, c_m, t, filename, motion_filename=None, N=256, max_batch=(32 ** 3 * 4), offset=None, scale=None, Ti=None, volume_size=2.0
+    decoder, c_s, c_m, t, filename, motion_filename=None, N=256, max_batch=(32 ** 3 * 4), offset=None, scale=None, Ti=None, volume_size=2.0,
+    classify_aha=False, cpd_warp_state=None,
 ):
     start = time.time()
     ply_filename = filename
@@ -62,20 +66,24 @@ def create_mesh_4dsdf(
     end = time.time()
     logging.debug("sampling takes: %f" % (end - start))
 
-    convert_sdf_samples_to_ply(
+    aha_labels, new_warp_state = convert_sdf_samples_to_ply(
         sdf_values.data.cpu(),
         voxel_origin,
         voxel_size,
         ply_filename + ".ply",
         offset,
         scale,
-        Ti
+        Ti,
+        classify_aha=classify_aha,
+        cpd_warp_state=cpd_warp_state,
     )
     if motion_filename is not None:
         motion_data = sitk.GetImageFromArray(motion)
         motion_data.SetOrigin(voxel_origin)
         motion_data.SetSpacing([voxel_size, voxel_size, voxel_size])
         sitk.WriteImage(motion_data, motion_filename + ".nii.gz")
+
+    return aha_labels, new_warp_state
 
 
 def create_mesh(
@@ -256,7 +264,9 @@ def convert_sdf_samples_to_ply(
     ply_filename_out,
     offset=None,
     scale=None,
-    Ti=None
+    Ti=None,
+    classify_aha=False,
+    cpd_warp_state=None,
 ):
     """
     Convert sdf samples to .ply
@@ -265,6 +275,12 @@ def convert_sdf_samples_to_ply(
     :voxel_grid_origin: a list of three floats: the bottom, left, down origin of the voxel grid
     :voxel_size: float, the size of the voxels
     :ply_filename_out: string, path of the filename to save to
+    :cpd_warp_state: an optional warp state from a PRIOR frame's CPD registration (see
+        cpd_aha_segmentation.register_cpd_warp). When given, this call reuses it for a
+        CHEAP per-frame label lookup instead of re-running the expensive registration -
+        valid across every frame of the same reconstruction, since they share one
+        canonical coordinate space. Pass None on the first call of a multi-frame
+        sequence; take the returned warp_state and pass it into every subsequent call.
 
     This function adapted from: https://github.com/RobotLocomotion/spartan
     """
@@ -293,6 +309,19 @@ def convert_sdf_samples_to_ply(
         mesh_points = mesh_points / scale
     if offset is not None:
         mesh_points = mesh_points - offset
+
+    new_warp_state = cpd_warp_state
+    if classify_aha:
+        if new_warp_state is None:
+            new_warp_state = register_cpd_warp(mesh_points)
+
+        aha_labels = label_with_warp(mesh_points, new_warp_state) if new_warp_state is not None else None
+        if aha_labels is None:
+            logging.warning("[CPD-AHA] CPD labeling unavailable for this frame; falling back to fixed-rule classification.")
+            aha_labels = classify_vertices_to_aha17(mesh_points)
+    else:
+        aha_labels = None
+
     if Ti is not None:
         homogeneous = np.column_stack((mesh_points, np.ones([mesh_points.shape[0], 1])))
         mesh_points = np.dot(Ti, homogeneous.transpose())[0:3, :].transpose()
@@ -324,3 +353,5 @@ def convert_sdf_samples_to_ply(
             time.time() - start_time
         )
     )
+
+    return aha_labels, new_warp_state

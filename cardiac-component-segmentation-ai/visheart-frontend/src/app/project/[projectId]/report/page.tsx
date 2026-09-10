@@ -1,4 +1,4 @@
-"use client";
+     "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { Source_Sans_3 } from "next/font/google";
@@ -7,21 +7,34 @@ import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
-import { PatientSummaryPage, PLACEHOLDER_PATIENT_SUMMARY, type PatientSummaryData } from "@/components/report/PatientSummaryPage";
-import { RegionalStrainBullseyePage } from "@/components/report/RegionalStrainBullseyePage";
-import { StrainDetailPage } from "@/components/report/StrainDetailPage";
+import { ExecutiveSummaryPage } from "@/components/report/ExecutiveSummaryPage";
+import { HeartMetricsPage } from "@/components/report/HeartMetricsPage";
+import { WallThicknessCavityAreaPage } from "@/components/report/WallThicknessCavityAreaPage";
+import { WallThicknessCyclePage, wallThicknessCyclePageCount } from "@/components/report/WallThicknessCyclePage";
+import { StrainAnalysisPage, strainAnalysisPageCount, type StrainAnalysisRow } from "@/components/report/StrainAnalysisPage";
+import { LvRegionalStrainPage, lvRegionalStrainPageCount } from "@/components/report/LvRegionalStrainPage";
+import { RvRegionalStrainPage, rvRegionalStrainPageCount } from "@/components/report/RvRegionalStrainPage";
+import { RvCavityGeometryPage, rvCavityGeometryPageCount } from "@/components/report/RvCavityGeometryPage";
+import { DiseasePatternSimilarityPage } from "@/components/report/DiseasePatternSimilarityPage";
+import { ReferenceCriteriaPage } from "@/components/report/ReferenceCriteriaPage";
+import { MethodologyPage } from "@/components/report/MethodologyPage";
+import { MriOverlayPage, mriOverlayPageCount } from "@/components/report/MriOverlayPage";
+import type { RvDiseasePatternInputs, Sex } from "@/lib/rvDiseasePattern";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
-import { ArrowLeft, ArrowUp, Printer, AlertTriangle } from "lucide-react";
+import { downloadResultsCsv } from "@/lib/exportResultsCsv";
+import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle } from "lucide-react";
 
-/** Bar colours for the disease-similarity rows, keyed by pattern code. */
-const PATTERN_COLORS: Record<string, string> = {
-  NOR: "#15803d",
-  DCM: "#fab219",
-  HCM: "#d03b3b",
-};
+// The printed report follows the approved mockup's 9-section structure, but
+// several sections (wall thickness cycle, full-cycle strain values, regional
+// strain, RV cavity volume, MRI overlay) now render as many physical A4
+// sheets as their per-frame data needs — see each page's own `*PageCount`
+// helper — so the running page numbering below is computed, not hardcoded.
 
-const TOTAL_PAGES = 5;
+// No RV area-strain (GAS) computation exists anywhere in the pipeline yet —
+// same fixed preview constant InteractiveReport.tsx uses on screen, so the
+// print and screen views never disagree about what the placeholder says.
+const RV_PEAK_GAS_PREVIEW = 28.7;
 
 // Source Sans 3 — designed for documents/UI at small sizes, noticeably more
 // legible than the app's unstyled system-font fallback once printed. Scoped
@@ -40,9 +53,29 @@ export default function ReportPage() {
   const {
     model, measurements, healthStatus, similarity, strain, strainSeries,
     computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain,
-    rvStrainSeries,
+    rvStrainSeries, recomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError, doc, byModel,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
+  // BSA input — optional. Entered here (not persisted server-side) since it's
+  // a report-time convenience, not a clinical record; height/weight are kept
+  // as separate fields (rather than a single BSA field) because that's what a
+  // user actually has on hand, with BSA itself derived via the Mosteller
+  // formula. Blank either field and every BSA-indexed row simply doesn't print.
+  const [heightCm, setHeightCm] = useState("");
+  const [weightKg, setWeightKg] = useState("");
+  // Sex — needed alongside BSA for the sex-specific ARVC RVEDVI cutoffs (RV
+  // disease-pattern scoring). Same "report-time convenience, never persisted"
+  // treatment as height/weight above; owned here (not in InteractiveReport)
+  // so the CSV export and the print DiseasePatternSimilarityPage can read the
+  // exact same value the user selected on screen, instead of assuming
+  // "unspecified" independently in three different places.
+  const [patientSex, setPatientSex] = useState<Sex>("unspecified");
+  const heightNum = parseFloat(heightCm);
+  const weightNum = parseFloat(weightKg);
+  const bsaM2 =
+    Number.isFinite(heightNum) && Number.isFinite(weightNum) && heightNum > 0 && weightNum > 0
+      ? Math.sqrt((heightNum * weightNum) / 3600)
+      : null;
   // The toolbar's sticky *top* offset (not padding — see below), kept in sync
   // with the real bottom edge of whatever's fixed above it (site header +
   // ProjectDashboardBar's floating pill, whichever is currently taller).
@@ -84,73 +117,150 @@ export default function ReportPage() {
   const patientLabel = projectData?.name || projectId || "Unknown";
   const totalFrames = projectData?.dimensions?.frames || 9;
 
-  // Map the stored pipeline output onto the report's summary shape. Falls back
-  // to the placeholder only when nothing has been computed for this project yet.
-  const hasRealData = !!(measurements || healthStatus || similarity);
-  const summaryData: PatientSummaryData = hasRealData
-    ? {
-        patientLabel,
-        scanSummary: [
-          "Cine MRI",
-          projectData?.dimensions?.slices ? `${projectData.dimensions.slices} slices` : null,
-          totalFrames ? `${totalFrames} frames` : null,
-          `Model: ${model === "unet" ? "UNetResNet34" : "MedSAM"}`,
-        ].filter(Boolean).join(" · "),
-        ef: measurements?.EF ?? null,
-        edv: measurements?.EDV ?? null,
-        esv: measurements?.ESV ?? null,
-        strokeVolume: measurements?.StrokeVolume ?? null,
-        peakGrs: measurements?.PeakGRS ?? null,
-        peakGcs: measurements?.PeakGCS ?? null,
-        // RV — printed only when present. Ratio/difference are derived here so
-        // the print page stays a pure presentation component.
-        rvEf: rv?.RVEF ?? null,
-        rvEdv: rv?.RVEDV ?? null,
-        rvEsv: rv?.RVESV ?? null,
-        rvSv: rv?.RV_SV ?? null,
-        rvLvRatio:
-          rv?.RVEDV != null && (lvVolumes?.LVEDV ?? measurements?.EDV)
-            ? rv.RVEDV / (lvVolumes?.LVEDV ?? measurements!.EDV!)
-            : null,
-        svDifference:
-          rv?.RV_SV != null && (lvVolumes?.LV_SV ?? measurements?.StrokeVolume) != null
-            ? rv.RV_SV - (lvVolumes?.LV_SV ?? measurements!.StrokeVolume!)
-            : null,
-        voxelSize: PLACEHOLDER_PATIENT_SUMMARY.voxelSize,
-        healthStatus: healthStatus?.status ?? "Indeterminate",
-        healthEvidence:
-          healthStatus?.evidence?.map((e) => ({
-            text: `${e.label}: ${e.detail}`,
-            ok: e.level === "ok",
-          })) ?? [],
-        diseasePattern:
-          similarity?.similarities?.map((s) => ({
-            label: s.label,
-            pct: Math.round(s.percent),
-            color: PATTERN_COLORS[s.code] ?? "#64748b",
-          })) ?? [],
-        isRealData: true,
-      }
-    : { ...PLACEHOLDER_PATIENT_SUMMARY, patientLabel, isRealData: false };
-
-  // Map the stored per-frame series into the chart shape the strain pages use
-  // (one array of 17 segments per frame). Undefined when the series hasn't been
-  // computed, which makes those pages fall back to a clearly-labelled preview.
-  const seriesFor = (type: "GRS" | "GCS") => {
-    if (!strainSeries?.frames?.length) return undefined;
-    const k = type === "GRS" ? "grs" : "gcs";
-    return strainSeries.frames.map((f) =>
-      (f.segments ?? []).map((s) => ({
-        segment: s.segment,
-        label: s.label,
-        // Indexing by the narrowed "grs" | "gcs" key needs no cast — the
-        // segment type declares both fields.
-        strain: (s[k] ?? 0) as number,
-      })),
-    );
+  // Chrome/Edge's "Save as PDF" dialog suggests document.title as the default
+  // filename, so the title is swapped to a sanitised "<patient>_<date>_report"
+  // just for the print call and restored afterwards — the on-screen tab title
+  // (and anything else reading document.title) is otherwise unaffected.
+  const handlePrint = () => {
+    const safePatientLabel = patientLabel.replace(/[\\/:*?"<>|]/g, "").trim().replace(/\s+/g, "_");
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const originalTitle = document.title;
+    document.title = `${safePatientLabel}_${dateStr}_report`;
+    let restored = false;
+    const restore = () => {
+      if (restored) return;
+      restored = true;
+      document.title = originalTitle;
+      window.removeEventListener("afterprint", restore);
+    };
+    window.addEventListener("afterprint", restore);
+    window.print();
+    // Backstop in case `afterprint` never fires (some browser/PDF-export
+    // paths skip it) — by this point the dialog has already read the title.
+    setTimeout(restore, 5000);
   };
-  const grsSeries = seriesFor("GRS");
-  const gcsSeries = seriesFor("GCS");
+
+  // Reads the exact BSA/height/weight/sex state entered on this page, so the
+  // CSV includes the same indexed values (EDVI/ESVI/LVMI, RVEDVI/RVESVI) and
+  // RV disease-pattern scores the printed report shows, instead of the
+  // landmark-detection page's export (which has no BSA/sex inputs at all and
+  // so can only ever emit raw values).
+  const handleDownloadCsv = () => {
+    downloadResultsCsv(patientLabel, byModel, { bsaM2, heightCm: bsaM2 != null ? heightNum : null, weightKg: bsaM2 != null ? weightNum : null, sex: patientSex });
+  };
+  const hasRealData = !!(measurements || healthStatus || similarity);
+  const scanSummary = [
+    "Cine MRI",
+    projectData?.dimensions?.slices ? `${projectData.dimensions.slices} slices` : null,
+    totalFrames ? `${totalFrames} frames` : null,
+    `Model: ${model === "unet" ? "UNetResNet34" : "MedSAM"}`,
+  ].filter(Boolean).join(" · ");
+  const voxelSize = projectData?.voxelsize
+    ? `${projectData.voxelsize.x.toFixed(2)} × ${projectData.voxelsize.y.toFixed(2)} × ${(projectData.voxelsize.z ?? 0).toFixed(2)} mm`
+    : "—";
+
+  // ── RV strain reads (real, radius-based cavity-boundary measure) ───────────
+  const rvPeakGcs = rvStrainSeries?.peak_global_rv_strain ?? rvStrain?.global_rv_strain ?? null;
+
+  // ── Wall thickness ED frame / ED→ES/mid frames (page 3) ─────────────────────
+  const edFrame = doc?.heartMetrics?.ed_frame ?? null;
+  const esFrame = doc?.heartMetrics?.es_frame ?? null;
+
+  // ── Per-frame series, sorted by the ACTUAL computed frame indices — a
+  // project may have strain for every frame or only a chosen subset, so
+  // nothing here assumes a 0..totalFrames-1 range. Shared by the wall-
+  // thickness cycle, strain-analysis, and regional-strain pages below.
+  const sortedLvFrames = strainSeries?.frames?.length
+    ? [...strainSeries.frames].sort((a, b) => a.frameIndex - b.frameIndex)
+    : [];
+  const sortedRvFrames = rvStrainSeries?.frames?.length
+    ? [...rvStrainSeries.frames].sort((a, b) => a.frameIndex - b.frameIndex)
+    : [];
+
+  const wtFrames = sortedLvFrames.map((f) => ({
+    frameIndex: f.frameIndex,
+    segments: f.segments.map((s) => ({ segment: s.segment, wt_mm: s.wt_mm })),
+  }));
+  const toSegmentValues = (segments: { segment: number; grs?: number | null; gcs?: number | null }[] | undefined, key: "grs" | "gcs") => {
+    const bySeg = new Map((segments ?? []).map((s) => [s.segment, s[key] ?? null]));
+    return Array.from({ length: 17 }, (_, i) => bySeg.get(i + 1) ?? null);
+  };
+  const lvGrsFrames = sortedLvFrames.map((f) => ({ frameIndex: f.frameIndex, values: toSegmentValues(f.segments, "grs") }));
+  const lvGcsFrames = sortedLvFrames.map((f) => ({ frameIndex: f.frameIndex, values: toSegmentValues(f.segments, "gcs") }));
+  const rvGcsFrames = sortedRvFrames.map((f) => {
+    const byRegion = new Map(f.regions.map((r) => [r.region, r.strain]));
+    return { frameIndex: f.frameIndex, values: Array.from({ length: 6 }, (_, i) => byRegion.get(i + 1) ?? null) };
+  });
+
+  // ── Full-cycle values, joined by ACTUAL frame index (page 4) ────────────────
+  // LV and RV strain can be computed over different frame subsets, so this is
+  // a proper join on frameIndex rather than assuming the two series line up
+  // positionally.
+  const lvByFrameIndex = new Map(sortedLvFrames.map((f) => [f.frameIndex, f]));
+  const rvByFrameIndex = new Map(sortedRvFrames.map((f) => [f.frameIndex, f]));
+  const allStrainFrameIndices = Array.from(new Set([
+    ...sortedLvFrames.map((f) => f.frameIndex),
+    ...sortedRvFrames.map((f) => f.frameIndex),
+  ])).sort((a, b) => a - b);
+  const strainRows: StrainAnalysisRow[] = allStrainFrameIndices.map((frameIndex) => ({
+    frameIndex,
+    lvGrs: lvByFrameIndex.get(frameIndex)?.global_grs ?? null,
+    lvGcs: lvByFrameIndex.get(frameIndex)?.global_gcs ?? null,
+    rvGcs: rvByFrameIndex.get(frameIndex)?.global_rv_strain ?? null,
+  }));
+
+  // ── RV disease-pattern inputs (page 7) ──────────────────────────────────────
+  // Sex now comes from the toggle in the Cardiac Measurements header
+  // (patientSex state above), shared with the on-screen RV patterns card —
+  // the sex-specific ARVC RVEDVI cutoffs only render as "pending" when the
+  // user genuinely hasn't picked one, not unconditionally.
+  const rvInputs: RvDiseasePatternInputs = {
+    rvedvi: bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null,
+    rvesvi: bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null,
+    rvef: rv?.RVEF ?? null,
+    svi: bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null,
+    sex: patientSex,
+    regionalContractionAbnormal: null,
+    gasAbnormal: null,
+  };
+
+  // The MRI-overlay page needs real MRI pixels (dimensions), real decoded RLE
+  // masks (a mask document id to fetch raw frames from), and real ED/ES frame
+  // indices to pick — any missing piece means there's nothing genuine to
+  // render, so the page is skipped rather than showing a placeholder image.
+  const hasMriOverlay = !!(
+    doc?._id &&
+    projectData?.dimensions?.width &&
+    projectData?.dimensions?.height &&
+    edFrame != null &&
+    esFrame != null
+  );
+
+  // Running page count — each section claims as many physical sheets as its
+  // own per-frame data needs (see each page's `*PageCount` helper) instead of
+  // a fixed literal, since frame counts vary per project (and per how many
+  // frames the user chose to compute strain for).
+  const wtCyclePages = wallThicknessCyclePageCount(wtFrames.length);
+  const strainPages = strainAnalysisPageCount(strainRows.length);
+  const lvRegionalPages = lvRegionalStrainPageCount(Math.max(lvGrsFrames.length, lvGcsFrames.length));
+  const rvRegionalPages = rvRegionalStrainPageCount(rvGcsFrames.length);
+  const rvCavityPages = rvCavityGeometryPageCount(rv?.rv_volumes_ml?.length ?? 0);
+  const mriPages = hasMriOverlay ? mriOverlayPageCount(totalFrames) : 0;
+
+  let nextPage = 1;
+  const executiveSummaryPageNumber = nextPage++;
+  const heartMetricsPageNumber = nextPage++;
+  const wallThicknessPageNumber = nextPage++;
+  const wallThicknessCyclePageNumber = nextPage; nextPage += wtCyclePages;
+  const strainAnalysisPageNumber = nextPage; nextPage += strainPages;
+  const lvRegionalPageNumber = nextPage; nextPage += lvRegionalPages;
+  const rvRegionalPageNumber = nextPage; nextPage += rvRegionalPages;
+  const rvCavityPageNumber = nextPage; nextPage += rvCavityPages;
+  const diseasePatternPageNumber = nextPage++;
+  const referenceCriteriaPageNumber = nextPage++;
+  const methodologyPageNumber = nextPage++;
+  const mriOverlayPageNumber = nextPage; nextPage += mriPages;
+  const totalPages = nextPage - 1;
 
   return (
     <div className="min-h-screen bg-muted/20 pb-16">
@@ -171,10 +281,16 @@ export default function ReportPage() {
               {model === "unet" ? "UNet" : "MedSAM"} (most recent run)
             </p>
           </div>
-          <Button size="sm" className="gap-1.5 text-xs" onClick={() => window.print()}>
-            <Printer className="h-3.5 w-3.5" />
-            Print / Save as PDF
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={handleDownloadCsv} disabled={!hasRealData}>
+              <Download className="h-3.5 w-3.5" />
+              Download CSV
+            </Button>
+            <Button size="sm" className="gap-1.5 text-xs" onClick={handlePrint}>
+              <Printer className="h-3.5 w-3.5" />
+              Print / Save as PDF
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -199,7 +315,7 @@ export default function ReportPage() {
       <div className="vh-screen-only">
         <InteractiveReport
           patientLabel={patientLabel}
-          scanSummary={summaryData.scanSummary}
+          scanSummary={scanSummary}
           generatedAt={generatedAt}
           measurements={measurements}
           healthStatus={healthStatus}
@@ -213,6 +329,16 @@ export default function ReportPage() {
           rvStrainSeries={rvStrainSeries}
           computing={computing}
           computeError={computeError}
+          bsaM2={bsaM2}
+          heightCm={heightCm}
+          weightKg={weightKg}
+          onHeightCmChange={setHeightCm}
+          onWeightKgChange={setWeightKg}
+          onRecomputeSimilarityWithBsa={recomputeSimilarityWithBsa}
+          recomputingSimilarity={recomputingSimilarity}
+          recomputeSimilarityError={recomputeSimilarityError}
+          patientSex={patientSex}
+          onPatientSexChange={setPatientSex}
         />
       </div>
 
@@ -231,43 +357,146 @@ export default function ReportPage() {
           </div>
         ) : (
           <>
-        <PatientSummaryPage data={summaryData} patientLabel={patientLabel} pageNumber={1} totalPages={TOTAL_PAGES} generatedAt={generatedAt} />
-        <RegionalStrainBullseyePage
-          strainType="GRS"
-          patientLabel={patientLabel}
-          totalFrames={totalFrames}
-          pageNumber={2}
-          totalPages={TOTAL_PAGES}
-          generatedAt={generatedAt}
-          realSeries={grsSeries}
-        />
-        <RegionalStrainBullseyePage
-          strainType="GCS"
-          patientLabel={patientLabel}
-          totalFrames={totalFrames}
-          pageNumber={3}
-          totalPages={TOTAL_PAGES}
-          generatedAt={generatedAt}
-          realSeries={gcsSeries}
-        />
-        <StrainDetailPage
-          strainType="GRS"
-          patientLabel={patientLabel}
-          totalFrames={totalFrames}
-          pageNumber={4}
-          totalPages={TOTAL_PAGES}
-          generatedAt={generatedAt}
-          realSeries={grsSeries}
-        />
-        <StrainDetailPage
-          strainType="GCS"
-          patientLabel={patientLabel}
-          totalFrames={totalFrames}
-          pageNumber={5}
-          totalPages={TOTAL_PAGES}
-          generatedAt={generatedAt}
-          realSeries={gcsSeries}
-        />
+            <ExecutiveSummaryPage
+              patientLabel={patientLabel}
+              pageNumber={executiveSummaryPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              modelLabel={model === "unet" ? "UNetResNet34" : "MedSAM"}
+              slices={projectData?.dimensions?.slices ?? null}
+              frames={projectData?.dimensions?.frames ?? null}
+              voxelSize={voxelSize}
+              bsaM2={bsaM2}
+              heightCm={bsaM2 != null ? heightNum : null}
+              weightKg={bsaM2 != null ? weightNum : null}
+              ef={measurements?.EF ?? null}
+              edv={measurements?.EDV ?? null}
+              esv={measurements?.ESV ?? null}
+              strokeVolume={measurements?.StrokeVolume ?? null}
+              peakGrs={measurements?.PeakGRS ?? null}
+              peakGcs={measurements?.PeakGCS ?? null}
+              maxWallThicknessMm={lvVolumes?.MaxWallThicknessMm ?? null}
+              rvEf={rv?.RVEF ?? null}
+              rvEdv={rv?.RVEDV ?? null}
+              rvEsv={rv?.RVESV ?? null}
+              rvSv={rv?.RV_SV ?? null}
+              rvPeakGcs={rvPeakGcs}
+              rvPeakGasPreview={RV_PEAK_GAS_PREVIEW}
+              healthStatusText={healthStatus?.status ?? null}
+              phenotypeHeadline={similarity?.phenotype_headline ?? null}
+              isRealData
+            />
+            <HeartMetricsPage
+              patientLabel={patientLabel}
+              pageNumber={heartMetricsPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              bsaM2={bsaM2}
+              heightCm={bsaM2 != null ? heightNum : null}
+              weightKg={bsaM2 != null ? weightNum : null}
+              edv={measurements?.EDV ?? null}
+              esv={measurements?.ESV ?? null}
+              ef={measurements?.EF ?? null}
+              strokeVolume={measurements?.StrokeVolume ?? null}
+              lvMassG={lvVolumes?.LVMassG ?? null}
+              maxWallThicknessMm={lvVolumes?.MaxWallThicknessMm ?? null}
+              rvEdv={rv?.RVEDV ?? null}
+              rvEsv={rv?.RVESV ?? null}
+              rvEf={rv?.RVEF ?? null}
+              rvSv={rv?.RV_SV ?? null}
+            />
+            <WallThicknessCavityAreaPage
+              patientLabel={patientLabel}
+              pageNumber={wallThicknessPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              edWallThicknessMm={doc?.bullseye?.segment_values}
+              edFrameIndex={edFrame}
+            />
+            <WallThicknessCyclePage
+              patientLabel={patientLabel}
+              pageNumber={wallThicknessCyclePageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              frames={wtFrames}
+              edFrameIndex={edFrame}
+              esFrameIndex={esFrame}
+            />
+            <StrainAnalysisPage
+              patientLabel={patientLabel}
+              pageNumber={strainAnalysisPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              lvPeakGrs={measurements?.PeakGRS ?? null}
+              lvPeakGcs={measurements?.PeakGCS ?? null}
+              rvPeakGcs={rvPeakGcs}
+              rvPeakGasPreview={RV_PEAK_GAS_PREVIEW}
+              rows={strainRows}
+            />
+            <LvRegionalStrainPage
+              patientLabel={patientLabel}
+              pageNumber={lvRegionalPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              grsFrames={lvGrsFrames}
+              gcsFrames={lvGcsFrames}
+              edFrameIndex={edFrame}
+              esFrameIndex={esFrame}
+            />
+            <RvRegionalStrainPage
+              patientLabel={patientLabel}
+              pageNumber={rvRegionalPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              gcsFrames={rvGcsFrames}
+              edFrameIndex={edFrame}
+              esFrameIndex={esFrame}
+            />
+            <RvCavityGeometryPage
+              patientLabel={patientLabel}
+              pageNumber={rvCavityPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              rvEdv={rv?.RVEDV ?? null}
+              rvEsv={rv?.RVESV ?? null}
+              rvVolumesMl={rv?.rv_volumes_ml}
+            />
+            <DiseasePatternSimilarityPage
+              patientLabel={patientLabel}
+              pageNumber={diseasePatternPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+              similarity={similarity}
+              rvInputs={rvInputs}
+            />
+            <ReferenceCriteriaPage
+              patientLabel={patientLabel}
+              pageNumber={referenceCriteriaPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+            />
+            <MethodologyPage
+              patientLabel={patientLabel}
+              pageNumber={methodologyPageNumber}
+              totalPages={totalPages}
+              generatedAt={generatedAt}
+            />
+            {hasMriOverlay && (
+              <MriOverlayPage
+                projectId={projectId}
+                patientLabel={patientLabel}
+                pageNumber={mriOverlayPageNumber}
+                totalPages={totalPages}
+                generatedAt={generatedAt}
+                maskDocId={doc?._id}
+                width={projectData?.dimensions?.width}
+                height={projectData?.dimensions?.height}
+                totalSlices={projectData?.dimensions?.slices}
+                totalFrames={totalFrames}
+                edFrame={edFrame}
+                esFrame={esFrame}
+              />
+            )}
           </>
         )}
       </div>

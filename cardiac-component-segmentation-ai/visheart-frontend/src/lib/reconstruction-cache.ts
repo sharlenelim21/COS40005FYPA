@@ -339,6 +339,7 @@ export class ReconstructionCache {
   private db: ReconstructionCacheDB; // IndexedDB wrapper instance
   private isInitialized: boolean = false; // Tracks initialization status
   private urlCache: Map<string, string> = new Map(); // In-memory cache to prevent duplicate object URLs
+  private inFlightExtractions: Map<string, Promise<TarExtractionResult>> = new Map();
   private debugInfo: TarFetchDebugInfo = { // Debug information for troubleshooting
     presignedUrlFetched: false,
     presignedUrl: null,
@@ -450,6 +451,27 @@ export class ReconstructionCache {
    * @returns Promise with extraction results including success status and statistics
    */
   async fetchAndExtractProjectModels(
+    projectId: string,
+    reconstructionId: string,
+    getPresignedUrl: (projectId: string, reconstructionId: string) => Promise<{ success: boolean; presignedUrl?: string; expiresAt?: number; message?: string }>,
+    segmentationModel?: string,
+  ): Promise<TarExtractionResult> {
+    const lockKey = `${projectId}:${reconstructionId}`;
+    const existing = this.inFlightExtractions.get(lockKey);
+    if (existing) {
+      console.log(`[ReconstructionCache] ⏳ Extraction already in flight for ${lockKey}, awaiting it instead of starting a duplicate`);
+      return existing;
+    }
+
+    const promise = this.fetchAndExtractProjectModelsUnlocked(projectId, reconstructionId, getPresignedUrl, segmentationModel)
+      .finally(() => {
+        this.inFlightExtractions.delete(lockKey);
+      });
+    this.inFlightExtractions.set(lockKey, promise);
+    return promise;
+  }
+
+  private async fetchAndExtractProjectModelsUnlocked(
     projectId: string,
     reconstructionId: string,
     getPresignedUrl: (projectId: string, reconstructionId: string) => Promise<{ success: boolean; presignedUrl?: string; expiresAt?: number; message?: string }>,
