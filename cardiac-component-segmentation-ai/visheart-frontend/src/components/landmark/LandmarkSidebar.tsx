@@ -700,8 +700,6 @@ function LandmarksTab({
         </Button>
       )}
 
-      {summaryStats}
-
       {/* Section header */}
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-foreground">Detected Landmarks</h3>
@@ -776,6 +774,8 @@ function LandmarksTab({
           </div>
         </div>
       )}
+
+      {summaryStats}
 
       {/* Landmark rows */}
       <div className="space-y-1">
@@ -1666,6 +1666,11 @@ function StrainTab({
         </div>
       )}
 
+      {/* Full-cycle curve/segment views are LV-specific -- Combined intentionally shows
+          no chart here (the main panel's bullseye/3D heart already covers both chambers
+          together; switch to the LV or RV tab for that chamber's own curve). */}
+      {chamberFocus === "LV" && (
+      <>
       <div className="sticky top-0 z-10 rounded-lg border border-border bg-background p-3 shadow-sm">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
@@ -1808,6 +1813,8 @@ function StrainTab({
             <SegmentValuesTable segmentValues={segmentValues} strainType={selectedStrainType} />
           )}
         </div>
+      )}
+      </>
       )}
       </>
       )}

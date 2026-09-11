@@ -3,7 +3,7 @@ import { useEffect, useRef, Suspense, useState, useCallback } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, useGLTF, Center } from "@react-three/drei";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
-import { AlertCircle, AlertTriangle, Settings, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Loader2, Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -535,6 +535,15 @@ export function ReconstructionGLBViewer({
     }
   };
 
+  // True until every REQUESTED chamber has produced real geometry at least once. Before that, the
+  // scene only has the Suspense fallback (a 1x1 placeholder cube) sitting at the un-framed default
+  // camera distance -- which reads as an empty canvas with a stray dot, not as "loading". Once a
+  // chamber goes ready it stays ready (see the lvReady/rvReady effects above), so this only covers
+  // the genuine first-load gap, not every per-frame mesh swap during playback.
+  const lvPending = !!modelUrl && !lvReady;
+  const rvPending = !!secondaryModelUrl && !rvReady;
+  const showLoadingOverlay = lvPending || rvPending;
+
   // Either chamber alone is a valid view -- hiding LV to inspect RV on its own must still render.
   if (!modelUrl && !secondaryModelUrl) {
     return (
@@ -553,6 +562,17 @@ export function ReconstructionGLBViewer({
       ref={containerRef} 
       className={"relative rounded-lg border overflow-hidden " + getBackgroundClass() + " " + className}
     >
+      {/* Loading overlay -- hides the tiny un-framed placeholder cube while the first real mesh is
+          still in flight, so the viewer reads as "loading" instead of "broken/empty". */}
+      {showLoadingOverlay && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center bg-background/70 backdrop-blur-sm pointer-events-none">
+          <div className="flex flex-col items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <span className="text-xs font-medium">Loading model…</span>
+          </div>
+        </div>
+      )}
+
       {/* Frame Badge */}
       <div className="absolute bottom-3 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-xs font-semibold">
         Frame {frame}

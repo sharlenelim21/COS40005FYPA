@@ -595,7 +595,7 @@ function DashboardPage() {
                 </Button>
               </Link>
 
-              <ShowForUser fallback={null}>
+              {/* <ShowForUser fallback={null}>
                 {user?.role === "admin" && (
                   <Link href="/admin">
                     <Button variant="outline" className="w-full justify-start">
@@ -604,7 +604,7 @@ function DashboardPage() {
                     </Button>
                   </Link>
                 )}
-              </ShowForUser>
+              </ShowForUser> */}
             </CardContent>
           </Card>
 

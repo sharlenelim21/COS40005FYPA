@@ -3571,11 +3571,11 @@ function LandmarkSummaryStats({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-muted/20 p-2">
+    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
       {stats.map((s) => (
         <span
           key={s.key}
-          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-2 py-1 text-[11px] leading-none text-muted-foreground"
+          className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground"
         >
           <span className={cn("h-1.5 w-1.5 rounded-full flex-shrink-0", s.dot)} />
           <span className="font-semibold text-foreground tabular-nums">{s.value}/{nTotal}</span>

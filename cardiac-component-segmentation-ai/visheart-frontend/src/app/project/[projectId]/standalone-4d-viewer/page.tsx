@@ -371,13 +371,20 @@ export default function Standalone4DViewerPage() {
   // Playback animation
   useEffect(() => {
     if (!isPlaying || totalFrames === 0) return;
+    // Skip while the current frame's mesh is still fetching. Without this, clicking Play right
+    // after a reconstruction finishes lets the timer keep yanking currentFrame forward before the
+    // very first mesh ever finishes loading -- lvReady never flips true, the camera never frames
+    // on real geometry, and the viewer is stuck showing the tiny un-framed placeholder cube for
+    // the rest of playback. The effect re-runs once loading clears, so it just delays the next
+    // advance rather than skipping a frame outright.
+    if (isLoadingModel) return;
 
     const interval = setInterval(() => {
       setCurrentFrame((prev) => (prev + 1) % totalFrames);
     }, playbackSpeed);
 
     return () => clearInterval(interval);
-  }, [isPlaying, totalFrames, playbackSpeed]);
+  }, [isPlaying, totalFrames, playbackSpeed, isLoadingModel]);
 
   // Keyboard navigation for frame control
   useEffect(() => {
