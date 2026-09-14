@@ -54,6 +54,7 @@ export default function ReportPage() {
     model, measurements, healthStatus, similarity, strain, strainSeries,
     computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain,
     rvStrainSeries, recomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError, doc, byModel,
+    rvHealthStatus, recomputeRvHealthStatus, recomputingRvHealthStatus, recomputeRvHealthStatusError,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // BSA input — optional. Entered here (not persisted server-side) since it's
@@ -339,6 +340,11 @@ export default function ReportPage() {
           recomputeSimilarityError={recomputeSimilarityError}
           patientSex={patientSex}
           onPatientSexChange={setPatientSex}
+          rvHealthStatus={rvHealthStatus}
+          onRecomputeRvHealthStatus={recomputeRvHealthStatus}
+          recomputingRvHealthStatus={recomputingRvHealthStatus}
+          recomputeRvHealthStatusError={recomputeRvHealthStatusError}
+          heartMetricsComputedAt={doc?.heartMetrics?.computed_at ?? null}
         />
       </div>
 

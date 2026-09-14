@@ -237,6 +237,14 @@ export const computeHealthStatusFromMetrics = async (
     const input = JSON.stringify({
         measurements: hm.measurements,
         heart_metrics_warnings: Array.isArray(hm.warnings) ? hm.warnings : [],
+        // Structured fields the grader uses to decide whether absolute LV
+        // volumes are reliable. heartMetrics.warnings alone cannot say: it also
+        // carries warnings unrelated to LV volume (e.g. "No RV voxels at ED"),
+        // and without these fields any warning at all suppresses EDV evidence.
+        volume_signals: {
+            voxel_mm3: hm.voxel_mm3 ?? null,
+            duplicate_slices: Array.isArray(hm.duplicate_slices) ? hm.duplicate_slices : [],
+        },
     });
 
     return new Promise<void>((resolve) => {
@@ -272,6 +280,83 @@ export const computeHealthStatusFromMetrics = async (
                 }
             } catch (parseErr: any) {
                 logger.warn(`${serviceLocation}: [HealthStatus] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
+ * RV health status — sex-specific reference-range comparison. NOT a diagnosis
+ * and not a severity grade (see compute_rv_health_status.py for why).
+ *
+ * Reads RVEF/RVEDV/RVESV and the volume-reliability fields off the mask's
+ * heartMetrics, runs the Python module, and $set-stores the result under
+ * `rvHealthStatus`, beside `healthStatus`. It never reads or writes the LV
+ * result. `sex` and `bsa_m2` come from the report page on each call, as for
+ * disease similarity; the module echoes them back so the page can tell whether
+ * a stored result matches what is on screen. Without a sex the stored status is
+ * "Not assessable" — no sex-blind limit is substituted. Never rejects.
+ */
+export const computeRvHealthStatusFromMetrics = async (
+    maskId: string,
+    sex?: "male" | "female" | "unspecified",
+    bsa_m2?: number | null,
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_rv_health_status.py');
+
+    const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+    if (!maskDoc) {
+        logger.warn(`${serviceLocation}: [RvHealthStatus] Mask ${maskId} not found — skipping compute.`);
+        return;
+    }
+    const hm: any = (maskDoc as any).heartMetrics;
+    if (!hm) {
+        logger.info(`${serviceLocation}: [RvHealthStatus] Mask ${maskId} has no heartMetrics yet — skipping.`);
+        return;
+    }
+
+    const input = JSON.stringify({
+        rv: { RVEF: hm.RVEF ?? null, RVEDV: hm.RVEDV ?? null, RVESV: hm.RVESV ?? null },
+        sex: sex ?? "unspecified",
+        bsa_m2: typeof bsa_m2 === "number" && bsa_m2 > 0 ? bsa_m2 : null,
+        // Same structured fields the LV grader uses (see volume_reliability.py):
+        // a suspicious voxel volume or a duplicated RV-cavity slice withholds the
+        // RV volume evidence; an LV-cavity duplicate does not.
+        volume_signals: {
+            voxel_mm3: hm.voxel_mm3 ?? null,
+            duplicate_slices: Array.isArray(hm.duplicate_slices) ? hm.duplicate_slices : [],
+        },
+    });
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [RvHealthStatus] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [RvHealthStatus] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [RvHealthStatus] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { rvHealthStatus: result, updatedAt: new Date() } },
+                );
+                // Sex and BSA are deliberately left out of the log line.
+                logger.info(
+                    `${serviceLocation}: [RvHealthStatus] Stored RV health status for mask ${maskId} — ` +
+                    `status=${result.status} confidence=${result.confidence} | ` +
+                    `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
+                );
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [RvHealthStatus] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
             resolve();
         });

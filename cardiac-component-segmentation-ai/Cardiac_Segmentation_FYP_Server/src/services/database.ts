@@ -781,6 +781,7 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   heartMetrics: { type: Schema.Types.Mixed, required: false }, // Chamber volumes / EF / LV mass — see IProjectSegmentationMask.heartMetrics
   healthStatus: { type: Schema.Types.Mixed, required: false }, // Rule-based LV systolic-function health-status assessment (Task 2)
   regionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // Layer 2 — advisory per-AHA-segment assessment from regional strain. Mixed for the same reason as healthStatus/bullseye: a typed sub-schema would strip unknown keys.
+  rvHealthStatus: { type: Schema.Types.Mixed, required: false }, // RV health status — sex-specific reference-range comparison (no severity grade), beside healthStatus; never changes the LV grade. Mixed for the same reason as regionalHealthStatus.
   strain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES strain result (global + 17-segment) — see IProjectSegmentationMask.strain
   strainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame strain vs. the fixed ED reference — see IProjectSegmentationMask.strainSeries
   rvStrain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES regional RV (cavity-radius) strain — see IProjectSegmentationMask.rvStrain

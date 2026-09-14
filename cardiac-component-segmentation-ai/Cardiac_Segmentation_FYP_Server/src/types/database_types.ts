@@ -372,14 +372,17 @@ export interface IProjectSegmentationMask {
    * Rule-based cardiac health-status assessment — NOT a diagnosis.
    *
    * Produced by compute_health_status.py from this mask's stored
-   * heartMetrics.measurements (plus heartMetrics.warnings for the low-
-   * confidence branch). Uses the LVEF band as the primary axis, with
+   * heartMetrics.measurements, plus heartMetrics.voxel_mm3 and
+   * heartMetrics.duplicate_slices to judge whether absolute volumes are
+   * reliable. Uses the LVEF band as the primary axis, with
    * supporting evidence lines for EDV / Peak GCS / Peak GRS. See
    * HEALTH_STATUS_IMPLEMENTATION.md for the exact bands and the
    * downgrade heuristic. `status` may be "Indeterminate" when EF is null
    * (single phase or ED == ES). `confidence` drops to "low" when EF is
-   * null OR when volume evidence was suppressed because
-   * heartMetrics.warnings flagged the affine as suspicious.
+   * null OR when volume evidence was suppressed because absolute LV volumes
+   * are unreliable (suspicious voxel_mm3, LVEDV outside 30–400 mL, or a
+   * duplicated LV-cavity slice). Warnings unrelated to LV volume, such as
+   * "No RV voxels at ED", do not lower confidence.
    */
   healthStatus?: {
     status: "Healthy" | "Mild" | "Moderate" | "Severe" | "Indeterminate";
@@ -437,6 +440,51 @@ export interface IProjectSegmentationMask {
     patient_mean_gcs: number | null;
     relative_rule_applied?: boolean;
     thresholds: Record<string, number>;
+    disclaimer: string;
+    method: string;
+    warnings: string[];
+    computed_at: string;
+  };
+  /**
+   * RV health status — sex-specific reference-range comparison (SCMR 2025),
+   * NOT a diagnosis and not a severity grade. Produced by
+   * compute_rv_health_status.py from heartMetrics RVEF/RVEDV/RVESV plus the sex
+   * and BSA the report page supplied on that call, both echoed back here so the
+   * page can tell whether this result matches what is on screen. Sits beside
+   * `healthStatus` and never changes it. Without a sex, each value is checked
+   * against both sexes' limits and gets a verdict only where they agree;
+   * `status` is "Depends on sex" when a value differs by sex and no value is
+   * outside both ranges, and "Not assessable" when RVEF could not be computed.
+   */
+  rvHealthStatus?: {
+    status: "Within reference range" | "Outside reference range" | "Depends on sex" | "Not assessable";
+    confidence: "normal" | "low";
+    sex: "male" | "female" | "unspecified";
+    bsa_m2: number | null;
+    evidence: {
+      label: string;
+      level: "ok" | "warn" | "unavailable";
+      detail: string;
+      // True when no sex was given and the value is normal for one sex only.
+      depends_on_sex?: boolean;
+    }[];
+    features_used: string[];
+    features_missing: string[];
+    reference: {
+      source: string;
+      convention: string;
+      sex: "male" | "female" | null;
+      rvef_lower_limit: number | null;
+      rvedvi_range: [number, number] | null;
+      rvesvi_range: [number, number] | null;
+      // Both sexes' limits, always present (the three fields above are null
+      // when no sex was given).
+      by_sex: Record<"male" | "female", {
+        rvef_lower_limit: number;
+        rvedvi_range: [number, number];
+        rvesvi_range: [number, number];
+      }>;
+    };
     disclaimer: string;
     method: string;
     warnings: string[];

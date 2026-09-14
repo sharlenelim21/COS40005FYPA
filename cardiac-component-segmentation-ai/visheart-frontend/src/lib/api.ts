@@ -461,6 +461,24 @@ export const segmentationApi = {
     }
   },
 
+  /**
+   * RV health status — sex-specific reference ranges, NOT a diagnosis and not a
+   * severity grade. Reads heartMetrics off the mask (400 without it). Supply sex
+   * and BSA on every call, as for disease similarity: the stored result echoes
+   * both back, and with no sex it is "Not assessable" rather than a guess.
+   */
+  triggerRvHealthStatus: async (
+    maskId: string,
+    body: { sex: "male" | "female" | "unspecified"; bsa_m2: number | null },
+  ) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-rv-health-status/${maskId}`, body);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
   // Export project data
   exportProjectData: async (projectId: string, model?: "medsam" | "unet") => {
     try {

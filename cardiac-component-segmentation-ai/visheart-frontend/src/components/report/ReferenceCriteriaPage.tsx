@@ -121,6 +121,24 @@ export function ReferenceCriteriaPage({
       />
 
       <RefTable
+        caption="RV normal reference ranges — SCMR 2025"
+        columns={["Measure", "Male", "Female"]}
+        rows={[
+          ["RVEF (lower limit of normal)", "≥ 44%", "≥ 47%"],
+          ["RVEDVI", "47 – 116 mL/m²", "44 – 99 mL/m²"],
+          ["RVESVI", "16 – 52 mL/m²", "13 – 43 mL/m²"],
+        ]}
+        cite={
+          <>
+            Kawel-Boehm et al., <em>J Cardiovasc Magn Reson</em> 2025;27:101853 — pooled healthy adults, 2.5th–97.5th
+            percentiles, with papillary muscles and trabeculations counted as blood-pool volume (the convention of
+            this project&apos;s ACDC and M&amp;Ms training labels). The ARVC RVEDVI cutoffs above overlap this range in
+            men (≥ 110 mL/m² lies inside 47–116), so they apply only alongside a regional RV wall-motion abnormality.
+          </>
+        }
+      />
+
+      <RefTable
         caption="LV Phenotype Similarity — reference profiles used for scoring (mean ± SD)"
         columns={["Feature", "NOR-like", "HCM-like", "DCM-like"]}
         rows={[

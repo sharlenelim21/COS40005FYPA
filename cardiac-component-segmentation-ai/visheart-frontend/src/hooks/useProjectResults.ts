@@ -162,6 +162,44 @@ export type HealthStatus = {
 };
 
 /**
+ * RV health status — graded by compute_rv_health_status.py against
+ * sex-specific SCMR 2025 reference ranges. NOT a diagnosis and not a severity
+ * grade. `sex` and `bsa_m2` are echoed from the call that produced it, so the
+ * report can tell whether a stored result matches the inputs on screen.
+ */
+export type RvHealthStatus = {
+  /** "Depends on sex": no sex was given, a value differs between the men's and
+   *  women's limits, and no value is outside both. */
+  status: "Within reference range" | "Outside reference range" | "Depends on sex" | "Not assessable";
+  confidence: "normal" | "low";
+  sex: "male" | "female" | "unspecified";
+  bsa_m2: number | null;
+  /** depends_on_sex: no sex was given and this value is normal for one sex only. */
+  evidence: { label: string; level: "ok" | "warn" | "unavailable"; detail: string; depends_on_sex?: boolean }[];
+  features_used: string[];
+  features_missing: string[];
+  reference: {
+    source: string;
+    convention: string;
+    /** The limits applied — null for all three when no sex was given. */
+    sex: "male" | "female" | null;
+    rvef_lower_limit: number | null;
+    rvedvi_range: [number, number] | null;
+    rvesvi_range: [number, number] | null;
+    /** Both sexes' limits, always present — used to draw the bars when no sex is chosen. */
+    by_sex: Record<"male" | "female", {
+      rvef_lower_limit: number;
+      rvedvi_range: [number, number];
+      rvesvi_range: [number, number];
+    }>;
+  };
+  disclaimer: string;
+  method: string;
+  warnings: string[];
+  computed_at: string;
+};
+
+/**
  * Layer 2 — advisory per-AHA-segment assessment. Sits BESIDE `healthStatus` and
  * never changes it (`overall_grade_unchanged` is always true). `status` is
  * "unavailable" — never "healthy" — when regional strain is missing or its
@@ -278,6 +316,7 @@ export type MaskDoc = {
   diseaseSimilarity?: DiseaseSimilarity;
   healthStatus?: HealthStatus;
   regionalHealthStatus?: RegionalHealthStatus;
+  rvHealthStatus?: RvHealthStatus;
   strain?: Strain;
   strainSeries?: StrainSeries;
   rvStrain?: RvStrain;
@@ -687,6 +726,45 @@ export function useProjectResults(
     [doc, loadMasks],
   );
 
+  const [recomputingRvHealthStatus, setRecomputingRvHealthStatus] = useState(false);
+  const [recomputeRvHealthStatusError, setRecomputeRvHealthStatusError] = useState<string | null>(null);
+
+  /**
+   * Recompute + persist RV health status for the BSA and sex currently on the
+   * report page. RV limits are sex-specific, so this is driven by the page
+   * (see InteractiveReport) rather than filled in by `recompute()` — without a
+   * sex there is nothing to assess. Polls until a newer result lands.
+   */
+  const recomputeRvHealthStatus = useCallback(
+    async (bsa_m2: number | null, sex: "male" | "female" | "unspecified") => {
+      const id = doc?._id;
+      if (!id) return;
+      setRecomputingRvHealthStatus(true);
+      setRecomputeRvHealthStatusError(null);
+      try {
+        const before = doc?.rvHealthStatus?.computed_at;
+        await segmentationApi.triggerRvHealthStatus(id, { sex, bsa_m2 });
+        for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
+          await sleep(POLL_INTERVAL_MS);
+          const list = await loadMasks();
+          const m = list?.find((x) => x._id === id);
+          if (m?.rvHealthStatus && m.rvHealthStatus.computed_at !== before) {
+            return; // loadMasks() already updated `doc` via state
+          }
+        }
+        setRecomputeRvHealthStatusError("RV health status did not finish in time — try again.");
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { message?: string } }; message?: string };
+        setRecomputeRvHealthStatusError(
+          err?.response?.data?.message ?? err?.message ?? "RV health status failed.",
+        );
+      } finally {
+        setRecomputingRvHealthStatus(false);
+      }
+    },
+    [doc, loadMasks],
+  );
+
   /**
    * Which models have a usable per-frame strain series (one carrying wall
    * thickness). Lets callers disable a model rather than switching to it and
@@ -733,6 +811,10 @@ export function useProjectResults(
     recomputeSimilarityWithBsa,
     recomputingSimilarity,
     recomputeSimilarityError,
+    /** Recompute + persist RV health status for the page's BSA/sex. */
+    recomputeRvHealthStatus,
+    recomputingRvHealthStatus,
+    recomputeRvHealthStatusError,
     /** A newer segmentation run exists for this model but has no results yet —
      *  what's displayed comes from an earlier run. */
     newerMaskAvailable,
@@ -794,6 +876,8 @@ export function useProjectResults(
     healthStatus: doc?.healthStatus,
     /** Layer 2 — advisory regional assessment; never changes healthStatus. */
     regionalHealthStatus: doc?.regionalHealthStatus,
+    /** RV health status — sex-specific reference ranges; echoes the sex/BSA it used. */
+    rvHealthStatus: doc?.rvHealthStatus,
     similarity: doc?.diseaseSimilarity,
     strain: doc?.strain,
     strainSeries: doc?.strainSeries,
