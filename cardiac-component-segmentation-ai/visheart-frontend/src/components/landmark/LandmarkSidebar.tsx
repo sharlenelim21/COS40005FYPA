@@ -41,7 +41,7 @@ import {
 } from "@/types/landmark";
 import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
 import { getDummyStrainData, getStrainColor, type StrainType, type RealStrainResult, type RvStrainResult } from "@/components/landmark/StrainVisualization";
-import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries } from "@/components/landmark/RegionalStrainCharts";
+import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries, ringForRvSegment } from "@/components/landmark/RegionalStrainCharts";
 import { DualFrameRangePicker } from "@/components/landmark/DualFrameRangePicker";
 
 /**
@@ -125,6 +125,15 @@ export interface LandmarkSidebarProps {
    * next to the landmark editing controls it actually describes. */
   summaryStats?: React.ReactNode;
   currentPrediction: FramePrediction | null;
+  /** The RAW (un-edited) prediction for the current slice — used to tell a
+   *  deliberately deleted landmark ("was detected, now missing via an edit")
+   *  apart from one that was simply never detected in the first place. */
+  rawPrediction?: FramePrediction | null;
+  /** currentPrediction merged with the last SAVED edits (not the current
+   *  working ones) — tells "deleted but not saved yet" (Restore offered)
+   *  apart from "deleted and saved" (Restore removed; re-adding it is a
+   *  fresh manual placement). */
+  savedPrediction?: FramePrediction | null;
   visibleLandmarks: Set<string>;
   replacementFileError: string | null;
   confidentCount?: number;
@@ -142,7 +151,6 @@ export interface LandmarkSidebarProps {
   onSaveLandmarks?: () => void;
   onToggleLandmark: (id: string) => void;
   currentSliceKey?: string;
-  pendingDeletions?: Record<string, number>;
   onDeleteLandmark?: (id: string) => void;
   onUndoDeleteLandmark?: (id: string) => void;
   manuallyDeletedSliceKeys?: Set<string>;
@@ -174,6 +182,8 @@ export function LandmarkSidebar({
   state,
   summaryStats,
   currentPrediction,
+  rawPrediction,
+  savedPrediction,
   visibleLandmarks,
   replacementFileError,
   confidentCount,
@@ -191,7 +201,6 @@ export function LandmarkSidebar({
   onSaveLandmarks,
   onToggleLandmark,
   currentSliceKey,
-  pendingDeletions,
   onDeleteLandmark,
   onUndoDeleteLandmark,
   manuallyDeletedSliceKeys,
@@ -341,10 +350,11 @@ export function LandmarkSidebar({
             allPredictions={state.predictions}
             onSliceSelect={onSliderChange}
             prediction={currentPrediction}
+            rawPrediction={rawPrediction}
+            savedPrediction={savedPrediction}
             visibleLandmarks={visibleLandmarks}
             onToggleLandmark={onToggleLandmark}
             currentSliceKey={currentSliceKey ?? ""}
-            pendingDeletions={pendingDeletions ?? {}}
             onDeleteLandmark={onDeleteLandmark ?? (() => {})}
             onUndoDeleteLandmark={onUndoDeleteLandmark ?? (() => {})}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys ?? EMPTY_STRING_SET}
@@ -523,24 +533,6 @@ function stateSpeedClass(fps: number, currentFps?: number) {
 }
 
 // Landmarks tab
-function RemovedRowCountdown({ deletedAt }: { deletedAt: number }) {
-  const [remaining, setRemaining] = useState(() => Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
-
-  useEffect(() => {
-    setRemaining(Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
-    const id = setInterval(() => {
-      setRemaining(Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
-    }, 250);
-    return () => clearInterval(id);
-  }, [deletedAt]);
-
-  return (
-    <span className="text-[9px] font-mono tabular-nums text-muted-foreground shrink-0" aria-live="polite">
-      {remaining}s
-    </span>
-  );
-}
-
 function SliceConfidenceDot({
   flag,
   confidence,
@@ -582,10 +574,11 @@ function LandmarksTab({
   allPredictions,
   onSliceSelect,
   prediction,
+  rawPrediction,
+  savedPrediction,
   visibleLandmarks,
   onToggleLandmark,
   currentSliceKey,
-  pendingDeletions,
   onDeleteLandmark,
   onUndoDeleteLandmark,
   manuallyDeletedSliceKeys,
@@ -618,10 +611,11 @@ function LandmarksTab({
   allPredictions?: FramePrediction[];
   onSliceSelect?: (slice: number) => void;
   prediction: FramePrediction | null;
+  rawPrediction?: FramePrediction | null;
+  savedPrediction?: FramePrediction | null;
   visibleLandmarks: Set<string>;
   onToggleLandmark: (id: string) => void;
   currentSliceKey: string;
-  pendingDeletions: Record<string, number>;
   onDeleteLandmark: (id: string) => void;
   onUndoDeleteLandmark: (id: string) => void;
   manuallyDeletedSliceKeys: Set<string>;
@@ -721,13 +715,11 @@ function LandmarksTab({
           strip shows every slice at once and doubles as a jump target. */}
       {allPredictions && allPredictions.length > 1 && (
         <div className="rounded-lg border border-border bg-muted/20 p-2">
-          <div className="mb-1.5 flex items-center justify-between">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Slice confidence
             </span>
-            <span className="text-[9px] text-muted-foreground">
-              {allPredictions.filter((p) => p.flag !== "collapsed_to_mean").length}/{allPredictions.length} confident
-            </span>
+            {summaryStats}
           </div>
           <div className="flex flex-wrap gap-1">
             {allPredictions.map((p, i) => {
@@ -775,17 +767,23 @@ function LandmarksTab({
         </div>
       )}
 
-      {summaryStats}
-
       {/* Landmark rows */}
       <div className="space-y-1">
         {LANDMARK_DEFINITIONS.filter((def) => SIDEBAR_LANDMARK_IDS.has(def.id)).map((def) => {
           const coord = getLandmarkCoord(prediction, def.id);
           const isVisible = visibleLandmarks.has(def.id);
           const hasCoord  = !!coord;
-          const deletedAt = pendingDeletions[`${currentSliceKey}:${def.id}`];
+          // Deleted but NOT saved yet: the raw AI prediction had a coordinate for
+          // this landmark, the current (edited) one doesn't, and the last SAVED
+          // copy still does. Restore is only offered in this window — once the
+          // deletion itself has been saved, the row falls back to the plain
+          // "not detected" state below, and getting the point back is a fresh
+          // manual placement (focus it, then click the image), not an undo.
+          const wasDetected = !!getLandmarkCoord(rawPrediction, def.id);
+          const isSavedCoordPresent = !!getLandmarkCoord(savedPrediction, def.id);
+          const isPendingDelete = !hasCoord && wasDetected && isSavedCoordPresent;
 
-          if (deletedAt !== undefined) {
+          if (isPendingDelete) {
             return (
               <div
                 key={def.id}
@@ -795,32 +793,36 @@ function LandmarksTab({
                 <span className="flex-1 text-xs text-muted-foreground">
                   {def.label} removed from Slice {currentFrame + 1}
                 </span>
-                <RemovedRowCountdown deletedAt={deletedAt} />
                 <button
                   type="button"
                   onClick={() => onUndoDeleteLandmark(def.id)}
                   className="text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                 >
-                  Undo
+                  Restore
                 </button>
               </div>
             );
           }
 
+          const isPlacing = !hasCoord && highlightedLandmarkId === def.id;
+
           return (
             <button
               key={def.id}
               type="button"
-              onClick={() => onToggleLandmark(def.id)}
+              // Toggling visibility only makes sense once there's a coordinate to
+              // show/hide — for a coord-less row this button exists purely so the
+              // "place"/focus control below stays clickable (it no longer sits
+              // inside a disabled ancestor).
+              onClick={() => { if (hasCoord) onToggleLandmark(def.id); }}
               className={cn(
                 "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left transition-all",
                 isVisible && hasCoord
                   ? "border-border bg-background hover:bg-muted/40"
                   : !hasCoord
-                  ? "border-dashed border-border/40 bg-transparent opacity-40 cursor-default"
+                  ? cn("border-dashed bg-transparent", isPlacing ? "border-primary/60" : "border-border/40 opacity-70")
                   : "border-border/50 bg-transparent opacity-55",
               )}
-              disabled={!hasCoord}
               aria-pressed={isVisible}
             >
               {/* Color dot */}
@@ -840,6 +842,8 @@ function LandmarksTab({
                 <span className="text-[10px] text-muted-foreground font-mono tabular-nums shrink-0">
                   {coord![0]}, {coord![1]}
                 </span>
+              ) : isPlacing ? (
+                <span className="text-[9px] font-medium text-primary shrink-0">Click the image to place</span>
               ) : (
                 <span className="text-[10px] text-muted-foreground/40 shrink-0">—</span>
               )}
@@ -855,9 +859,13 @@ function LandmarksTab({
                     event.stopPropagation();
                     onHighlightLandmark(highlightedLandmarkId === def.id ? null : def.id);
                   }}
-                  title={highlightedLandmarkId === def.id ? "Remove highlight" : "Highlight this landmark"}
+                  title={
+                    highlightedLandmarkId === def.id
+                      ? "Cancel"
+                      : hasCoord ? "Highlight this landmark" : "Place this landmark by clicking the image"
+                  }
                 >
-                  {highlightedLandmarkId === def.id ? "clear" : "focus"}
+                  {highlightedLandmarkId === def.id ? "clear" : hasCoord ? "focus" : "place"}
                 </span>
               )}
               {hasCoord && (
@@ -1383,11 +1391,11 @@ function StrainTab({
         realRvSeries.frames.find((f) => f.frameIndex === currentFrame) ??
         realRvSeries.frames.find((f) => f.frameIndex === realRvSeries.peakFrameIndex);
       if (frame?.regions?.length) {
-        return frame.regions.map((r) => ({ segment: r.region, label: r.label, strain: r.strain ?? 0 }));
+        return frame.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
       }
     }
     if (realRvStrain?.regions?.length) {
-      return realRvStrain.regions.map((r) => ({ segment: r.region, label: r.label, strain: r.strain ?? 0 }));
+      return realRvStrain.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
     }
     return [];
   }, [realRvSeries, realRvStrain, currentFrame]);
@@ -1844,12 +1852,37 @@ function QuickCombinedStrainView({
 }) {
   const lv = sc.quickLvResult;
   const rv = sc.quickRvResult;
+  // Same staleness signal the Full-cycle view warns on (LandmarkSidebar.tsx's
+  // strainIsStale) — landmarks define the AHA segment alignment, so editing
+  // them after this pair was computed invalidates it here too. LV-only, same
+  // as strainIsStale: the backend doesn't stamp staleSince on RV strain docs
+  // at all yet (RvStrain/RvStrainSeries have no such field).
+  const isStale = !!lv?.staleSince;
 
   const fmtPct = (v: number | null | undefined) => (v == null ? "N/A" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
   const fmtMm = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(2)} mm`);
 
   return (
     <div className="space-y-3">
+      {isStale && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
+          <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Landmarks edited</span> since this strain was computed —
+            the segment alignment has changed, so these values are out of date.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2 h-7 w-full text-[10px]"
+            disabled={sc.isComputing}
+            onClick={sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames}
+          >
+            {sc.isComputing ? "Recomputing…" : `Recompute ED → ES with current landmarks (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          </Button>
+          {sc.error && <p className="mt-1 text-[9px] text-destructive">{sc.error}</p>}
+        </div>
+      )}
+
       {chamberFocus !== "RV" && (
       <div className="rounded-lg border border-border bg-background p-3 space-y-2">
         <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">LV Global Strain</h4>
@@ -2192,10 +2225,21 @@ function ComputeStrainCard({
  *  this exists purely to preview the eventual layout, sharing LV's
  *  RegionalStrainByRegion/FullCycleChart components (they only care about
  *  segment numbers/labels/values, not that they're LV-specific). */
+// Same convention as CRESCENT_REGION_NAMES (landmark-detection page.tsx) and
+// RV_SEGMENT_NAMES (heartColor.ts) — the RV-deformation notebook's naming, not
+// LV's anatomical Anterior/Lateral/Inferior labels.
 const RV_DUMMY_SEGMENT_LABELS = [
-  "Basal Anterior", "Basal Lateral", "Basal Inferior",
-  "Mid Anterior", "Mid Lateral", "Mid Inferior",
-  "Apical Anterior", "Apical Lateral", "Apical Inferior",
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+  "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
+];
+
+// Notebook-style names for the REAL 6-region RV free-wall breakdown the backend
+// actually computes (basal 1-3, mid 1-3 — see rvRegionValues below). Same
+// convention/order as RV_DUMMY_SEGMENT_LABELS' first six entries.
+const RV_REAL_REGION_NAMES = [
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
 ];
 function buildDummyRvCycleSeries(totalFrames: number): { segment: number; label: string; strain: number }[][] {
   const frames = Math.max(totalFrames || 9, 2);
@@ -2347,11 +2391,11 @@ function RvStrainPanel({
           <p className="py-4 text-center text-[10px] text-muted-foreground">No RV strain computed for this model yet.</p>
         )}
 
-        {rvCurveView === "region" && <RegionalStrainByRegion series={dummyRvSeries} />}
+        {rvCurveView === "region" && <RegionalStrainByRegion series={dummyRvSeries} ringForSegment={ringForRvSegment} />}
 
         {rvCurveView === "cycle" && (
           <div className="w-full overflow-x-auto">
-            <FullCycleChart series={dummyRvSeries} strainType="GCS" width={480} height={240} />
+            <FullCycleChart series={dummyRvSeries} strainType="GCS" width={480} height={240} ringForSegment={ringForRvSegment} />
           </div>
         )}
 

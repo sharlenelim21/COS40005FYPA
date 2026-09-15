@@ -1,8 +1,9 @@
 "use client";
 
 import React from "react";
-import { HeartPulse } from "lucide-react";
+import { HeartPulse, AlertTriangle, CheckCircle2, HelpCircle } from "lucide-react";
 import { ReportPageFrame } from "./ReportPageFrame";
+import type { RvHealthStatus } from "@/hooks/useProjectResults";
 
 function fmt(v: number | null | undefined, digits = 1): string {
   return v === null || v === undefined || Number.isNaN(v) ? "—" : v.toFixed(digits);
@@ -42,6 +43,7 @@ export function HeartMetricsPage({
   bsaM2, heightCm, weightKg,
   edv, esv, ef, strokeVolume, lvMassG, maxWallThicknessMm,
   rvEdv, rvEsv, rvEf, rvSv,
+  rvHealthStatus,
 }: {
   patientLabel: string;
   pageNumber: number;
@@ -51,6 +53,11 @@ export function HeartMetricsPage({
   edv: number | null; esv: number | null; ef: number | null; strokeVolume: number | null;
   lvMassG: number | null; maxWallThicknessMm: number | null;
   rvEdv: number | null; rvEsv: number | null; rvEf: number | null; rvSv: number | null;
+  /** Null when nothing has been graded yet for the sex/BSA currently on this
+   *  page (see report/page.tsx's matching rule) — rendered as "not graded"
+   *  rather than omitted, so the report's structure stays identical whether
+   *  or not this has been computed. */
+  rvHealthStatus?: RvHealthStatus | null;
 }) {
   const idx = (raw: number | null) => (bsaM2 && raw != null ? raw / bsaM2 : null);
 
@@ -107,6 +114,53 @@ export function HeartMetricsPage({
           </h3>
           <DataTable rows={rvRows} />
         </div>
+      </div>
+
+      {/* RV Health Status verdict — the interactive report shows this on screen
+          (InteractiveReport.tsx) but it never had a print equivalent, so a
+          printed report could carry the raw RV numbers with no conclusion
+          drawn from them at all. No severity colour scale here on purpose —
+          see compute_rv_health_status.py: no validated CMR severity grading
+          exists for RV function, so this is deliberately in/out-of-range
+          only, never a gradient. */}
+      <div className="mt-3 rounded-lg border border-gray-300 bg-gray-50 p-3">
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-[11.5px] font-extrabold text-gray-900">
+            <HeartPulse className="h-3.5 w-3.5 text-rose-700" strokeWidth={2.5} />RV Health Status
+          </h3>
+          {rvHealthStatus && (
+            <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-gray-700 border border-gray-300">
+              {rvHealthStatus.status}
+            </span>
+          )}
+        </div>
+        {!rvHealthStatus ? (
+          <p className="text-[10px] text-gray-600">
+            Not graded for this sex/BSA yet — open the on-screen report to compute it, then reprint.
+          </p>
+        ) : (
+          <>
+            <ul className="flex flex-col gap-1">
+              {rvHealthStatus.evidence.map((e, i) => (
+                <li key={i} className="flex items-start gap-1.5 text-[10px] leading-snug text-gray-900">
+                  {e.level === "ok" ? (
+                    <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
+                  ) : e.level === "warn" ? (
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />
+                  ) : (
+                    <HelpCircle className="mt-0.5 h-3 w-3 shrink-0 text-gray-400" />
+                  )}
+                  <span><span className="font-semibold">{e.label}:</span> {e.detail}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
+              {rvHealthStatus.reference.source} · confidence: {rvHealthStatus.confidence}
+              {rvHealthStatus.confidence === "low" ? " (RVEF missing or absolute RV volumes unreliable)" : ""}.
+              {" "}{rvHealthStatus.disclaimer}
+            </p>
+          </>
+        )}
       </div>
 
       <p className="mt-3 text-[8.5px] leading-snug text-gray-600">

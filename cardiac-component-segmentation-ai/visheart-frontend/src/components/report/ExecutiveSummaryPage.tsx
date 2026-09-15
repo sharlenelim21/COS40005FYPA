@@ -40,6 +40,7 @@ export function ExecutiveSummaryPage({
   ef, edv, esv, strokeVolume, peakGrs, peakGcs, maxWallThicknessMm,
   rvEf, rvEdv, rvEsv, rvSv, rvPeakGcs, rvPeakGasPreview,
   healthStatusText,
+  rvHealthStatusText,
   phenotypeHeadline,
   isRealData,
 }: {
@@ -62,6 +63,7 @@ export function ExecutiveSummaryPage({
   /** No RV area-strain computation exists anywhere yet — fixed preview constant. */
   rvPeakGasPreview: number;
   healthStatusText: string | null;
+  rvHealthStatusText: string | null;
   phenotypeHeadline: string | null;
   isRealData: boolean;
 }) {
@@ -73,8 +75,10 @@ export function ExecutiveSummaryPage({
         healthStatusText
           ? `Left-ventricular function is assessed as ${healthStatusText.toLowerCase()}${ef != null ? ` (LVEF ${fmt(ef)}%)` : ""}.`
           : null,
+        rvHealthStatusText
+          ? `Right-ventricular function is assessed as ${rvHealthStatusText.toLowerCase()}${rvEf != null ? ` (RVEF ${fmt(rvEf)}%)` : ""} — see Heart Metrics for the reference-range evidence.`
+          : hasRv ? `Right-ventricular volumes and function are shown alongside the left ventricle above.` : null,
         phenotypeHeadline ? `Disease pattern similarity: ${phenotypeHeadline}.` : null,
-        hasRv ? `Right-ventricular volumes and function are shown alongside the left ventricle above.` : null,
       ].filter(Boolean).join(" ") || "Quantitative cardiac measurements were generated from the provided cardiac MRI segmentation.";
 
   return (

@@ -87,7 +87,7 @@ export function DiseasePatternSimilarityPage({
               <span className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
                 <span className="block h-full rounded-full" style={{ width: `${p.score}%`, background: RV_PATTERN_COLORS[p.code] }} />
               </span>
-              <span className="w-14 shrink-0 text-right font-mono text-[11px] font-bold text-gray-900">{p.score}/100</span>
+              <span className="w-14 shrink-0 text-right font-mono text-[11px] font-bold text-gray-900">{p.score}%</span>
             </div>
           ))}
         </div>

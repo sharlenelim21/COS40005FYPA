@@ -46,6 +46,14 @@ function row(...cells: unknown[]): string {
   return cells.map(cell).join(",");
 }
 
+/** Placeholder row for a per-model table when nothing was computed — padded
+ *  to the section's own header column count so every row in a section has
+ *  the same number of cells (a short 2-cell row next to full ones reads as
+ *  ragged/misaligned in a spreadsheet, even though CSV itself allows it). */
+function notComputedRow(modelLabel: string, totalColumns: number): string {
+  return row(modelLabel, "not computed", ...Array(Math.max(0, totalColumns - 2)).fill(""));
+}
+
 const MODELS: Model[] = ["unet", "medsam"];
 const MODEL_LABEL: Record<Model, string> = { unet: "UNet", medsam: "MedSAM" };
 
@@ -153,9 +161,24 @@ export function buildResultsCsv(
   lines.push(row("Model", "Status", "Confidence", "Evidence"));
   for (const m of present) {
     const hs = byModel[m]!.healthStatus;
-    if (!hs) { lines.push(row(MODEL_LABEL[m], "not computed")); continue; }
+    if (!hs) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
     const evidence = (hs.evidence ?? []).map((e) => `${e.label}: ${e.detail}`).join(" | ");
     lines.push(row(MODEL_LABEL[m], hs.status, hs.confidence, evidence));
+  }
+  lines.push("");
+
+  // ── RV Health status ────────────────────────────────────────────────────
+  // Mirrors the LV section above — same MaskDoc-stored shape (rvHealthStatus),
+  // just no severity gradient (see compute_rv_health_status.py: no validated
+  // CMR severity grading exists for RV function, so this is in/out-of-range
+  // only, never a gradient).
+  lines.push(row("RV HEALTH STATUS (rule-based — not a diagnosis; no severity grading, see disclaimer)"));
+  lines.push(row("Model", "Status", "Confidence", "Sex", "Evidence"));
+  for (const m of present) {
+    const rhs = byModel[m]!.rvHealthStatus;
+    if (!rhs) { lines.push(notComputedRow(MODEL_LABEL[m], 5)); continue; }
+    const evidence = (rhs.evidence ?? []).map((e) => `${e.label}: ${e.detail}`).join(" | ");
+    lines.push(row(MODEL_LABEL[m], rhs.status, rhs.confidence, rhs.sex, evidence));
   }
   lines.push("");
 
@@ -164,7 +187,7 @@ export function buildResultsCsv(
   lines.push(row("Model", "Headline", "Confidence", "Mode", "Gate", "Notes"));
   for (const m of present) {
     const ds = byModel[m]!.diseaseSimilarity;
-    if (!ds) { lines.push(row(MODEL_LABEL[m], "not computed")); continue; }
+    if (!ds) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
     lines.push(row(
       MODEL_LABEL[m],
       ds.phenotype_headline ?? "",
@@ -178,7 +201,7 @@ export function buildResultsCsv(
   lines.push(row("Model", "Pattern", "Similarity %", "Reasoning"));
   for (const m of present) {
     const ds = byModel[m]!.diseaseSimilarity;
-    if (!ds) { lines.push(row(MODEL_LABEL[m], "not computed")); continue; }
+    if (!ds) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
     for (const s of ds.similarities ?? []) {
       lines.push(row(
         MODEL_LABEL[m],
@@ -195,7 +218,7 @@ export function buildResultsCsv(
   lines.push(row("Model", "Status", "Reduced segment count", "Summary"));
   for (const m of present) {
     const rhs = byModel[m]!.regionalHealthStatus;
-    if (!rhs) { lines.push(row(MODEL_LABEL[m], "not computed")); continue; }
+    if (!rhs) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
     lines.push(row(MODEL_LABEL[m], rhs.status, rhs.reduced_count, rhs.summary));
   }
   lines.push("");
@@ -236,7 +259,7 @@ export function buildResultsCsv(
   lines.push(row("Model", "Segment", "Label", "GRS %", "GCS %", "WT ED (mm)", "WT ES (mm)"));
   for (const m of present) {
     const segs = byModel[m]!.strain?.segments;
-    if (!segs?.length) { lines.push(row(MODEL_LABEL[m], "not computed")); continue; }
+    if (!segs?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 7)); continue; }
     for (const s of segs) {
       lines.push(row(MODEL_LABEL[m], s.segment, s.label, s.grs, s.gcs,
         s.wt_ed_mm ?? null, s.wt_es_mm ?? null));
@@ -273,7 +296,7 @@ export function buildResultsCsv(
   lines.push(row("Model", "Region", "Label", "RV Strain %", "Radius ED (mm)", "Radius ES (mm)"));
   for (const m of present) {
     const regions = byModel[m]!.rvStrain?.regions;
-    if (!regions?.length) { lines.push(row(MODEL_LABEL[m], "not computed")); continue; }
+    if (!regions?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
     for (const r of regions) {
       lines.push(row(MODEL_LABEL[m], r.region, r.label, r.strain,
         r.radius_ed_mm ?? null, r.radius_es_mm ?? null));

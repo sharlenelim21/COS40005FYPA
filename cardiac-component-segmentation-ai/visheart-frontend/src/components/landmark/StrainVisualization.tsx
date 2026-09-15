@@ -35,6 +35,10 @@ export interface RealStrainResult {
   edFrameIndex?: number;
   esFrameIndex?: number;
   computedFor?: StrainComputedFor;
+  /** Set when hydrated from a stored doc whose landmarks were edited since it
+   *  was computed (mirrors Strain/StrainSeries' own staleSince in
+   *  useProjectResults.ts); absent on a freshly-computed result. */
+  staleSince?: string;
 }
 
 export interface StrainSegmentData {

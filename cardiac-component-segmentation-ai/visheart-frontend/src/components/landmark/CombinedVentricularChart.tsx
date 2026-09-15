@@ -46,6 +46,17 @@ interface CombinedVentricularChartProps {
    * space the combined view uses rather than re-centering around one side. */
   showLv?: boolean;
   showRv?: boolean;
+
+  /** RV wedge border color when NOT selected. Defaults to the translucent
+   *  black outline this chart already draws everywhere (Strain/Structure
+   *  tabs) -- override only where a caller wants a different divider style
+   *  (e.g. the printed report matching its own LV bullseye's white-on-card
+   *  dividers) without changing every other place this chart renders. */
+  rvWedgeStrokeColor?: string;
+  /** RV region label ("R#"/value) text fill + weight -- same "override this
+   *  usage only" idea as rvWedgeStrokeColor above. */
+  rvLabelColor?: string;
+  rvLabelFontWeight?: number;
 }
 
 // Same backend ray-cast start-angle fallback as StrainBullseyeChart/RvStrainChart
@@ -79,6 +90,9 @@ export function CombinedVentricularChart({
   sharedMin, sharedMax, reverseColors = false, alignmentAngleDeg,
   rvRegions, selectedRvRegion, onRvRegionClick, onRvRegionHover,
   showLv = true, showRv = true,
+  rvWedgeStrokeColor = "rgba(0,0,0,0.18)",
+  rvLabelColor = "rgba(0,0,0,0.85)",
+  rvLabelFontWeight = 600,
 }: CombinedVentricularChartProps) {
   // Combined (both chambers) keeps the shared layout center, which balances
   // against the crescent's leftward bulge. LV-only has no crescent to
@@ -166,17 +180,17 @@ export function CombinedVentricularChart({
           <path
             d={path}
             fill={rvCol(dataIdx)}
-            stroke={isRvSel(region) ? "white" : "rgba(0,0,0,0.18)"}
+            stroke={isRvSel(region) ? "white" : rvWedgeStrokeColor}
             strokeWidth={isRvSel(region) ? 2.5 : 1}
             style={{ transition: "fill 200ms ease", cursor: onRvRegionClick ? "pointer" : "default" }}
             onMouseMove={rvHoverHandler(dataIdx)}
             onMouseLeave={onRvRegionHover ? () => onRvRegionHover(null) : undefined}
             onClick={onRvRegionClick ? () => onRvRegionClick(region) : undefined}
           />
-          <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="8" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
+          <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="8" fontWeight={rvLabelFontWeight} fill={rvLabelColor} style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
             R{region}
           </text>
-          <text x={lp.x} y={lp.y + 9} textAnchor="middle" fontSize="7" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
+          <text x={lp.x} y={lp.y + 9} textAnchor="middle" fontSize="7" fontWeight={rvLabelFontWeight} fill={rvLabelColor} style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
             {v != null ? v.toFixed(0) : "—"}
           </text>
         </g>

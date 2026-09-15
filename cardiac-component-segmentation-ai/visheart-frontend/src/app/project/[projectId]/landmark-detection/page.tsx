@@ -273,10 +273,13 @@ export default function LandmarkDetectionPage() {
   const [editableLandmarks, setEditableLandmarks] = useState(true);
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
+  // Snapshot of landmarkEdits as of the last successful save (or load) — lets a
+  // row tell "deleted but not saved yet" (Restore still offered) apart from
+  // "deleted and saved" (Restore removed; re-adding it is a fresh manual
+  // placement, not an undo of history that's already been committed).
+  const [savedLandmarkEdits, setSavedLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
   const [isSavingLandmarks, setIsSavingLandmarks] = useState(false);
   const [hasUnsavedLandmarkEdits, setHasUnsavedLandmarkEdits] = useState(false);
-  const [pendingDeletions, setPendingDeletions] = useState<Record<string, number>>({});
-  const pendingDeletionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [bullseyeRecomputing, setBullseyeRecomputing] = useState(false);
 
   // (Model default now comes from the URL via activeModel — UNet unless the
@@ -544,12 +547,14 @@ export default function LandmarkDetectionPage() {
 
   const runDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
+    setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
     handleRunDetection(model);
   }, [handleRunDetection]);
 
   const rerunDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
+    setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
     handleRerunDetection(model);
   }, [handleRerunDetection]);
@@ -590,6 +595,17 @@ export default function LandmarkDetectionPage() {
     } as FramePrediction;
   }, [currentPrediction, currentLandmarkEditKey, landmarkEdits]);
 
+  // Raw prediction merged with the last SAVED edits (as opposed to the current
+  // working ones above) — lets the sidebar tell "deleted but not saved yet"
+  // apart from "deleted and saved" for the Restore action.
+  const savedCurrentPrediction = useMemo(() => {
+    if (!currentPrediction) return null;
+    return {
+      ...currentPrediction,
+      ...(savedLandmarkEdits[currentLandmarkEditKey] ?? {}),
+    } as FramePrediction;
+  }, [currentPrediction, currentLandmarkEditKey, savedLandmarkEdits]);
+
   const handleLandmarkMove = useCallback((id: string, coord: [number, number]) => {
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey] ?? {};
@@ -607,40 +623,45 @@ export default function LandmarkDetectionPage() {
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
+  /** Deletes immediately (no undo-countdown window) — it's an edit like a move,
+   *  so it dirties the save button right away instead of waiting 5s to commit. */
   const handleLandmarkDeleteRequest = useCallback((id: string) => {
     const sliceKey = currentLandmarkEditKey;
-    const fullKey = `${sliceKey}:${id}`;
-    setPendingDeletions((prev) => ({ ...prev, [fullKey]: Date.now() }));
-    pendingDeletionTimers.current[fullKey] = setTimeout(() => {
-      setLandmarkEdits((prev) => ({
+    setLandmarkEdits((prev) => {
+      const existing = prev[sliceKey] ?? {};
+      const wasCollapsed = (currentPrediction?.flag === "collapsed_to_mean") && !("flag" in existing);
+      return {
         ...prev,
-        [sliceKey]: { ...(prev[sliceKey] ?? {}), [id]: undefined },
-      }));
-      setHasUnsavedLandmarkEdits(true);
-      setPendingDeletions((prev) => {
-        const next = { ...prev };
-        delete next[fullKey];
-        return next;
-      });
-      delete pendingDeletionTimers.current[fullKey];
-    }, 5000);
-  }, [currentLandmarkEditKey]);
+        [sliceKey]: {
+          ...existing,
+          [id]: undefined,
+          ...(wasCollapsed ? { flag: "normal" as const } : {}),
+        },
+      };
+    });
+    setHasUnsavedLandmarkEdits(true);
+  }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
-  /** Undo a pending delete before its 5s window expires. Safe to key off the
-   *  CURRENT slice: the row that renders this action only exists while
-   *  viewing the same slice the deletion was started on. */
+  /** Restores a deleted landmark back to its original AI-predicted coordinate —
+   *  available any time the landmark is currently deleted, whether that
+   *  deletion has been saved yet or not (removing the delete edit itself is a
+   *  change from whatever is currently saved, so this dirties the save button
+   *  the same as deleting does). */
   const handleUndoLandmarkDelete = useCallback((id: string) => {
-    const fullKey = `${currentLandmarkEditKey}:${id}`;
-    const timer = pendingDeletionTimers.current[fullKey];
-    if (timer) {
-      clearTimeout(timer);
-      delete pendingDeletionTimers.current[fullKey];
-    }
-    setPendingDeletions((prev) => {
+    setLandmarkEdits((prev) => {
+      const existing = prev[currentLandmarkEditKey];
+      if (!existing || !(id in existing)) return prev;
+      const rest = { ...existing };
+      delete (rest as Record<string, unknown>)[id];
       const next = { ...prev };
-      delete next[fullKey];
+      if (Object.keys(rest).length > 0) {
+        next[currentLandmarkEditKey] = rest;
+      } else {
+        delete next[currentLandmarkEditKey];
+      }
       return next;
     });
+    setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey]);
 
   const handleSaveLandmarks = useCallback(async () => {
@@ -653,6 +674,7 @@ export default function LandmarkDetectionPage() {
         segmentationModel: selectedBullseyeModel,
       });
       setHasUnsavedLandmarkEdits(false);
+      setSavedLandmarkEdits(landmarkEdits);
 
       // Landmark points just changed, so the stored AHA-17 bullseye is now stale.
       // Re-trigger bullseye for every editable mask — the backend prefers the
@@ -700,7 +722,9 @@ export default function LandmarkDetectionPage() {
     let cancelled = false;
     landmarkApi.loadSavedLandmarks(projectId).then((doc) => {
       if (cancelled || !doc) return;
-      setLandmarkEdits(landmarkFramesToEdits(doc));
+      const edits = landmarkFramesToEdits(doc, state.predictions);
+      setLandmarkEdits(edits);
+      setSavedLandmarkEdits(edits);
     }).catch(() => {
       // No saved doc yet, or load failed — leave landmarkEdits as-is (empty from the reset).
     });
@@ -794,6 +818,7 @@ export default function LandmarkDetectionPage() {
           edFrameIndex: doc.strain.edFrameIndex,
           esFrameIndex: doc.strain.esFrameIndex,
           source: "frames",
+          staleSince: doc.strain.staleSince,
           computedFor: {
             mode: "choose-frames",
             model: activeModel,
@@ -819,6 +844,7 @@ export default function LandmarkDetectionPage() {
           alignment_source: "stored",
           edFrameIndex: series.edFrameIndex,
           source: "frames",
+          staleSince: series.staleSince,
           computedFor: {
             mode: "full-cycle",
             model: activeModel,
@@ -946,8 +972,13 @@ export default function LandmarkDetectionPage() {
 
   /** Sidebar's compact Min/Mean/Max — tracks the current frame when a per-frame
    *  series exists (same source as frameThicknessValues), otherwise falls back
-   *  to the single ED-frame snapshot so the sidebar isn't left blank. */
+   *  to the single ED-frame snapshot so the sidebar isn't left blank.
+   *  Hidden entirely (null) when the active model has no 4D reconstruction —
+   *  matches the main panel's own AhaBullseyePanel gate (activeReconstruction),
+   *  so the sidebar numbers and the main panel's bullseye/3D heart appear and
+   *  disappear together instead of the sidebar showing stale/orphaned values. */
   const currentFrameStructureStats = useMemo(() => {
+    if (!lvAlignmentReconstruction) return null;
     if (!frameThicknessValues) return bullseyeData?.stats ?? null;
     const finite = frameThicknessValues.filter((v): v is number => typeof v === "number");
     if (!finite.length) return bullseyeData?.stats ?? null;
@@ -956,7 +987,7 @@ export default function LandmarkDetectionPage() {
       mean: finite.reduce((a, b) => a + b, 0) / finite.length,
       max: Math.max(...finite),
     };
-  }, [frameThicknessValues, bullseyeData]);
+  }, [lvAlignmentReconstruction, frameThicknessValues, bullseyeData]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1008,30 +1039,14 @@ export default function LandmarkDetectionPage() {
     return overlays;
   }, [decodedMasks, hasPredictions, currentImageFrame, currentImageSlice]);
 
-  // Landmark ids to hide from the CURRENTLY VIEWED slice's canvas while their
-  // deletion is pending undo — scoped to this slice only, so navigating away
-  // and back doesn't leak the fade into an unrelated slice.
-  const currentSliceFadingIds = useMemo(() => {
-    const prefix = `${currentLandmarkEditKey}:`;
-    return new Set(
-      Object.keys(pendingDeletions)
-        .filter((key) => key.startsWith(prefix))
-        .map((key) => key.slice(prefix.length)),
-    );
-  }, [pendingDeletions, currentLandmarkEditKey]);
-
-  // Slices with a manual deletion — pending OR already committed to
-  // landmarkEdits — for the Slice Confidence strip's pencil badge.
+  // Slices with a manual deletion, for the Slice Confidence strip's pencil badge.
   const manuallyDeletedSliceKeys = useMemo(() => {
     const set = new Set<string>();
-    for (const key of Object.keys(pendingDeletions)) {
-      set.add(key.slice(0, key.lastIndexOf(":")));
-    }
     for (const [key, edit] of Object.entries(landmarkEdits)) {
       if (Object.values(edit).some((value) => value === undefined)) set.add(key);
     }
     return set;
-  }, [pendingDeletions, landmarkEdits]);
+  }, [landmarkEdits]);
 
   // Frame count for the ED/ES picker — prefer the MASK's actual frame count
   // (segFrameCount), the same set heart-metrics uses to detect ED/ES, so the
@@ -1271,7 +1286,6 @@ export default function LandmarkDetectionPage() {
             maskOverlays={currentMaskOverlays}
             maskDimensions={maskDimensions}
             visibleLandmarks={visibleLandmarks}
-            fadingLandmarkIds={currentSliceFadingIds}
             showLabels={showLabels}
             editableLandmarks={editableLandmarks}
             highlightedLandmarkId={highlightedLandmarkId}
@@ -1292,6 +1306,8 @@ export default function LandmarkDetectionPage() {
               />
             ) : null}
             currentPrediction={adjustedCurrentPrediction}
+            rawPrediction={currentPrediction}
+            savedPrediction={savedCurrentPrediction}
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
@@ -1309,7 +1325,6 @@ export default function LandmarkDetectionPage() {
             onSaveLandmarks={handleSaveLandmarks}
             onToggleLandmark={handleToggleLandmark}
             currentSliceKey={currentLandmarkEditKey}
-            pendingDeletions={pendingDeletions}
             onDeleteLandmark={handleLandmarkDeleteRequest}
             onUndoDeleteLandmark={handleUndoLandmarkDelete}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
@@ -1515,9 +1530,8 @@ export default function LandmarkDetectionPage() {
                   <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
                     <AlertCircle className="h-8 w-8 opacity-40" />
                     <p className="max-w-[280px] text-xs leading-relaxed">
-                      No RV reconstruction built yet for this model — create one from the project page to see
-                      the Results (colors will stay prototype until wall-thickness/FAC is computed by
-                      the backend).
+                      4D reconstruction for {activeModel === "unet" ? "UNet" : "MedSAM"} is unavailable — please
+                      run it from the project page to see results.
                     </p>
                   </div>
                 )
@@ -1549,16 +1563,6 @@ export default function LandmarkDetectionPage() {
                   reconstructionModel={selectedBullseyeModel}
                   modelLabel={selectedBullseyeModel === "unet" ? "UNet" : "MedSAM"}
                   previewMode={!hasPredictions && !isRunning}
-                  // 2026-09-10: gating this on existingSegModels regressed a
-                  // real, already-built LV reconstruction to a false "No LV
-                  // reconstruction built yet" empty state -- existingSegModels
-                  // is only set once fetchBullseye's async mask fetch
-                  // resolves, and evidently wasn't reliably true here despite
-                  // real data existing (RV, sourced from the same underlying
-                  // segmentation, displayed correctly). Reverted to unblock
-                  // real data while the actual race/condition gets root-
-                  // caused properly instead of guessed at again.
-                  hasSegmentation={true}
                   onBullseyeResetRef={(fn) => { bullseyeZoomResetRef.current = fn; }}
                   onHeartResetRef={(fn) => { heartZoomResetRef.current = fn; }}
                 />
@@ -1664,7 +1668,6 @@ export default function LandmarkDetectionPage() {
                   maskOverlays={currentMaskOverlays}
                   maskDimensions={maskDimensions}
                   visibleLandmarks={visibleLandmarks}
-                  fadingLandmarkIds={currentSliceFadingIds}
                   showLabels={showLabels}
                   editableLandmarks={editableLandmarks}
                   highlightedLandmarkId={highlightedLandmarkId}
@@ -1692,6 +1695,8 @@ export default function LandmarkDetectionPage() {
                   />
                 ) : null}
                 currentPrediction={adjustedCurrentPrediction}
+                rawPrediction={currentPrediction}
+                savedPrediction={savedCurrentPrediction}
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
@@ -1709,7 +1714,6 @@ export default function LandmarkDetectionPage() {
             onSaveLandmarks={handleSaveLandmarks}
                 onToggleLandmark={handleToggleLandmark}
             currentSliceKey={currentLandmarkEditKey}
-            pendingDeletions={pendingDeletions}
             onDeleteLandmark={handleLandmarkDeleteRequest}
             onUndoDeleteLandmark={handleUndoLandmarkDelete}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
@@ -1870,7 +1874,6 @@ function AhaBullseyePanel({
   onCompute,
   onBullseyeResetRef,
   onHeartResetRef,
-  hasSegmentation = true,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
@@ -1892,15 +1895,6 @@ function AhaBullseyePanel({
   onCompute?: () => void;
   onBullseyeResetRef?: (fn: () => void) => void;
   onHeartResetRef?: (fn: () => void) => void;
-  /**
-   * Whether `reconstructionModel`'s segmentation exists at all for this
-   * project. False means there's nothing to compute a bullseye OR a 3D
-   * heart FROM yet (not just "bullseye not computed yet") -- mirrors the
-   * RV structure panel's own "No RV reconstruction built yet" empty state
-   * instead of the generic "No bullseye data" one, which implied a Compute
-   * action was available when it wasn't.
-   */
-  hasSegmentation?: boolean;
 }) {
   const baseBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
 
@@ -1998,12 +1992,12 @@ function AhaBullseyePanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
-      {!previewMode && !hasSegmentation ? (
+      {!previewMode && !activeReconstruction ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
           <AlertCircle className="h-8 w-8 opacity-40" />
           <p className="max-w-[280px] text-xs leading-relaxed">
-            No LV reconstruction built yet for this model — create one from the project page to see
-            the results
+            4D reconstruction for {modelLabel} is unavailable — please run it from the project page
+            to see results.
           </p>
         </div>
       ) : loading ? (
@@ -3172,32 +3166,11 @@ function StrainPreviewPanel({
                 </span>
               ))}
             </div>
-            {rvMetricType === "GAS" ? (
+            {rvMetricType === "GAS" && (
               <div className="mt-1 flex-shrink-0 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1 text-center">
                 <p className="text-[8.5px] leading-snug text-amber-700 dark:text-amber-400">
                   RV GAS has no computation in this pipeline yet — switch to RV GCS for computed (still prototype) values.
                 </p>
-              </div>
-            ) : (!isFullCycle && rvStrainForDisplay) && (
-              /* ED->ES-specific stat row — Full cycle shows its own per-frame
-                 aggregate stats in the sidebar instead, so this stays Quick-only. */
-              <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                  <p className="text-[8px] text-muted-foreground">Prototype — RV GCS</p>
-                  {isComputeBusy ? (
-                    <div className="mx-auto mt-0.5 h-3.5 w-10 animate-pulse rounded bg-muted-foreground/20" />
-                  ) : (
-                    <p className="font-bold text-[10px]">
-                      {rvStrainForDisplay.global_rv_strain != null ? `${rvStrainForDisplay.global_rv_strain.toFixed(1)}%` : "N/A"}
-                    </p>
-                  )}
-                  <p className="text-[7px] text-muted-foreground">Negative = shrinking (healthy)</p>
-                </div>
-                <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                  <p className="text-[8px] text-muted-foreground">RV Frames</p>
-                  <p className="font-bold text-[10px]">{(rvStrainForDisplay.edFrameIndex ?? 0) + 1}→{(rvStrainForDisplay.esFrameIndex ?? 0) + 1}</p>
-                  <p className="text-[7px] text-muted-foreground capitalize">{rvStrainForDisplay.alignment_source ?? "—"} alignment</p>
-                </div>
               </div>
             )}
           </div>
@@ -3571,11 +3544,11 @@ function LandmarkSummaryStats({
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       {stats.map((s) => (
         <span
           key={s.key}
-          className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground"
+          className="inline-flex items-center gap-1 text-[9px] text-muted-foreground"
         >
           <span className={cn("h-1.5 w-1.5 rounded-full flex-shrink-0", s.dot)} />
           <span className="font-semibold text-foreground tabular-nums">{s.value}/{nTotal}</span>

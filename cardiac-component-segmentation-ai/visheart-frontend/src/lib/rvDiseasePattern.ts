@@ -85,21 +85,30 @@ const NON_DIAGNOSTIC_DISCLAIMER =
   "not a validated diagnostic probability. It must be interpreted by a qualified clinician " +
   "alongside the full clinical picture.";
 
-function edviBand(rvedvi: number | null, sex: Sex): "major" | "minor" | "none" | "unknown" {
-  if (rvedvi == null) return "unknown";
+function edviBandForSex(rvedvi: number, sex: "male" | "female"): "major" | "minor" | "none" {
   if (sex === "male") {
     if (rvedvi >= 110) return "major";
     if (rvedvi >= 100) return "minor";
     return "none";
   }
-  if (sex === "female") {
-    if (rvedvi >= 100) return "major";
-    if (rvedvi >= 90) return "minor";
-    return "none";
-  }
-  // Sex not specified — TFC's cutoffs are sex-specific and we don't collect
-  // sex today, so we can only say "unknown" rather than silently picking one.
-  return "unknown";
+  if (rvedvi >= 100) return "major";
+  if (rvedvi >= 90) return "minor";
+  return "none";
+}
+
+function edviBand(rvedvi: number | null, sex: Sex): "major" | "minor" | "none" | "unknown" {
+  if (rvedvi == null) return "unknown";
+  if (sex === "male" || sex === "female") return edviBandForSex(rvedvi, sex);
+  // Sex not specified — TFC's RVEDVI cutoffs are sex-specific, so rather than
+  // guessing, check both sexes' bands and only commit when they agree (same
+  // "verdict only where the sexes agree" rule compute_rv_health_status.py
+  // already uses for RV reference ranges). Female's cutoffs (100/90) sit
+  // below male's (110/100), so this still resolves at the extremes (e.g.
+  // >=110 is "major" either way) and only stays "unknown" in the disagreement
+  // band between them.
+  const maleBand = edviBandForSex(rvedvi, "male");
+  const femaleBand = edviBandForSex(rvedvi, "female");
+  return maleBand === femaleBand ? maleBand : "unknown";
 }
 
 function efBandArvc(rvef: number | null): "major" | "minor" | "none" | "unknown" {
@@ -122,13 +131,19 @@ function scoreArvc(inputs: RvDiseasePatternInputs): RvDiseasePatternResult {
 
   if (inputs.rvedvi == null && inputs.rvef == null) {
     factors.push({ label: "Structural/functional criterion", status: "pending", detail: "Need RVEDVI (enter BSA above) or RVEF." });
-  } else if (inputs.sex === "unspecified" && inputs.rvedvi != null && inputs.rvef == null) {
-    factors.push({ label: "RVEDVI", status: "pending", detail: `RVEDVI is sex-specific — select male/female above to evaluate ${inputs.rvedvi.toFixed(1)} mL/m².` });
   } else {
     if (best === "major") { points += 60; factors.push({ label: "Structural/functional criterion", status: "met", detail: rank[edvi] > rank[ef] ? `RVEDVI ${inputs.rvedvi?.toFixed(1)} mL/m² meets the major threshold.` : `RVEF ${inputs.rvef?.toFixed(1)}% meets the major threshold (≤40%).` }); }
     else if (best === "minor") { points += 30; factors.push({ label: "Structural/functional criterion", status: "met", detail: rank[edvi] > rank[ef] ? `RVEDVI ${inputs.rvedvi?.toFixed(1)} mL/m² is in the minor range.` : `RVEF ${inputs.rvef?.toFixed(1)}% is in the minor range (40-45%).` }); }
     else if (best === "none") { factors.push({ label: "Structural/functional criterion", status: "not-met", detail: "RVEDVI and RVEF both within the published reference range." }); }
-    else { factors.push({ label: "Structural/functional criterion", status: "pending", detail: "Sex not specified — RVEDVI cutoffs are sex-specific." }); }
+    else {
+      // best === "unknown": RVEF is either missing or in its own "none" band
+      // (ranked below edvi's "unknown" only when edvi truly IS unknown), and
+      // RVEDVI (if present) falls in the male/female disagreement zone.
+      const detail = inputs.rvedvi != null
+        ? `RVEDVI ${inputs.rvedvi.toFixed(1)} mL/m² falls where the male/female bands disagree — select male/female above to resolve.`
+        : "Sex not specified — RVEDVI cutoffs are sex-specific.";
+      factors.push({ label: "Structural/functional criterion", status: "pending", detail });
+    }
   }
 
   if (inputs.regionalContractionAbnormal === true) {
@@ -211,14 +226,32 @@ function scorePah(inputs: RvDiseasePatternInputs): RvDiseasePatternResult {
   };
 }
 
+// SCMR 2025 sex-specific RVEF lower limit of normal — the same reference
+// RV Health Status (compute_rv_health_status.py) already uses. Reused here
+// (rather than an uncited flat 45% cutoff) since General isn't tied to a
+// fixed-band citation the way ARVC/PAH's own RVEF bands are, so it's free to
+// use the more precise sex-specific reference when sex is known.
+const RVEF_LLN_BY_SEX = { male: 44, female: 47 } as const;
+
 /** Catch-all — abnormal RV that doesn't strongly match either named pattern. */
 function scoreGeneral(inputs: RvDiseasePatternInputs, arvc: number, pah: number): RvDiseasePatternResult {
   const factors: ScoreFactor[] = [];
   let points = 0;
 
   if (inputs.rvef != null) {
-    if (inputs.rvef < 45) { points += 40; factors.push({ label: "RVEF", status: "met", detail: `RVEF ${inputs.rvef.toFixed(1)}% is reduced.` }); }
-    else factors.push({ label: "RVEF", status: "not-met", detail: "RVEF not reduced." });
+    if (inputs.sex === "male" || inputs.sex === "female") {
+      const lln = RVEF_LLN_BY_SEX[inputs.sex];
+      if (inputs.rvef < lln) { points += 40; factors.push({ label: "RVEF", status: "met", detail: `RVEF ${inputs.rvef.toFixed(1)}% is below the ${inputs.sex} lower limit of normal (${lln}%, SCMR 2025).` }); }
+      else factors.push({ label: "RVEF", status: "not-met", detail: `RVEF ${inputs.rvef.toFixed(1)}% is at or above the ${inputs.sex} lower limit of normal (${lln}%, SCMR 2025).` });
+    } else {
+      // Sex not specified — same agree-only rule as RVEDVI above: only commit
+      // when the value clears (or falls under) both sexes' limits.
+      const strictestLln = Math.max(RVEF_LLN_BY_SEX.male, RVEF_LLN_BY_SEX.female);
+      const loosestLln = Math.min(RVEF_LLN_BY_SEX.male, RVEF_LLN_BY_SEX.female);
+      if (inputs.rvef < loosestLln) { points += 40; factors.push({ label: "RVEF", status: "met", detail: `RVEF ${inputs.rvef.toFixed(1)}% is below both sexes' lower limits of normal (${RVEF_LLN_BY_SEX.male}/${RVEF_LLN_BY_SEX.female}%, SCMR 2025).` }); }
+      else if (inputs.rvef >= strictestLln) factors.push({ label: "RVEF", status: "not-met", detail: `RVEF ${inputs.rvef.toFixed(1)}% is at or above both sexes' lower limits of normal (${RVEF_LLN_BY_SEX.male}/${RVEF_LLN_BY_SEX.female}%, SCMR 2025).` });
+      else factors.push({ label: "RVEF", status: "pending", detail: `RVEF ${inputs.rvef.toFixed(1)}% falls between the male (${RVEF_LLN_BY_SEX.male}%) and female (${RVEF_LLN_BY_SEX.female}%) lower limits — select male/female above to resolve.` });
+    }
   } else factors.push({ label: "RVEF", status: "pending", detail: "Not available." });
 
   if (inputs.rvesvi != null) {
@@ -242,7 +275,7 @@ function scoreGeneral(inputs: RvDiseasePatternInputs, arvc: number, pah: number)
     score: Math.max(0, Math.min(100, score)),
     factors,
     disclaimer: NON_DIAGNOSTIC_DISCLAIMER,
-    reference: "Project heuristic — not tied to a single published criterion; catches abnormal RV profiles that don't clearly match ARVC or PAH.",
+    reference: "RVEF vs SCMR 2025 sex-specific lower limits of normal (Kawel-Boehm et al., J Cardiovasc Magn Reson 2025;27:101853); RVESVI enlargement reuses the PAH ESC/ERS >54 mL/m² cutoff as a heuristic — the rest of this pattern is a project heuristic, not a single published ARVC/PAH criterion, and catches abnormal RV profiles that don't clearly match either.",
   };
 }
 

@@ -238,9 +238,23 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
         onPointerDown={(event) => {
           const landmarkId = hitTestLandmark(event);
-          if (!landmarkId) return;
-          draggingLandmarkRef.current = landmarkId;
-          event.currentTarget.setPointerCapture(event.pointerId);
+          if (landmarkId) {
+            draggingLandmarkRef.current = landmarkId;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            return;
+          }
+          // No existing dot was hit -- if the sidebar has a landmark "placing"
+          // (highlighted AND currently coordinate-less), treat this click as
+          // dropping it here instead of doing nothing. Re-adding a landmark
+          // that was deleted-and-saved is a fresh placement, not a drag, so it
+          // has no existing dot to hit-test against.
+          if (
+            editableLandmarks &&
+            highlightedLandmarkId &&
+            !getLandmarkCoord(prediction, highlightedLandmarkId)
+          ) {
+            onLandmarkMove?.(highlightedLandmarkId, canvasToImageCoord(event));
+          }
         }}
         onPointerMove={(event) => {
           if (!draggingLandmarkRef.current) return;

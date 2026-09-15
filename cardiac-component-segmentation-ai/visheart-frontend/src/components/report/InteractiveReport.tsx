@@ -22,7 +22,7 @@ import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw 
 import { Input } from "@/components/ui/input";
 import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
-import { RvStrainChart } from "@/components/landmark/RvStrainChart";
+import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -33,6 +33,17 @@ const RINGS = [
 
 const PATTERN_COLORS: Record<string, string> = { NOR: "#15803d", DCM: "#b45309", HCM: "#dc2626" };
 const RV_PATTERN_COLORS: Record<string, string> = { ARVC: "#dc2626", PAH: "#7c3aed", GENERAL: "#64748b" };
+
+// Notebook-style names for the real 6-region RV free-wall breakdown (basal 1-3,
+// mid 1-3) — same convention/order as CRESCENT_REGION_NAMES in
+// CombinedVentricularChart.tsx and RV_REAL_REGION_NAMES in LandmarkSidebar.tsx.
+// The backend's own RvStrainRegion.label ("Basal RV Free Wall 1") doesn't match
+// the RV-deformation notebook's naming, so this overrides it for display.
+const RV_REAL_REGION_NAMES = [
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+];
+const rvSegLabel = (region: number, fallback: string) => RV_REAL_REGION_NAMES[region - 1] ?? fallback;
 
 /**
  * Curves are coloured by AHA RING, not per-segment. 17 distinct hues is
@@ -561,6 +572,12 @@ export function InteractiveReport({
   const [strainType, setStrainType] = useState<StrainType>("GCS");
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
   const [hoverFrame, setHoverFrame] = useState<number | null>(null);
+  // RV's own metric toggle, mirroring LV's strainType above. GAS has no backend
+  // computation yet (see RvStrainPanel in LandmarkSidebar.tsx) — selecting it
+  // here shows the same "not computed yet" placeholder the sidebar does,
+  // rather than pretending rvStrain.regions (which is always the GCS-style
+  // cavity-radius measure) is GAS data.
+  const [rvMetricType, setRvMetricType] = useState<"GCS" | "GAS">("GCS");
 
   const key = strainType === "GRS" ? "grs" : "gcs";
 
@@ -604,6 +621,7 @@ export function InteractiveReport({
   const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
   const [showAllSegments, setShowAllSegments] = useState(false);
   const strainCardRef = React.useRef<HTMLDivElement | null>(null);
+  const rvCardRef = React.useRef<HTMLDivElement | null>(null);
   const [pulse, setPulse] = useState(false);
 
   /** Regional entry for the selected segment; falls back to the ED→ES strain. */
@@ -650,7 +668,7 @@ export function InteractiveReport({
    *  every frame) and falls back to the single ED→ES result. */
   const rvRegionLabels = useMemo(() => {
     const src = rvStrainSeries?.frames?.[0]?.regions ?? rvStrain?.regions ?? [];
-    return src.map((r) => ({ region: r.region, label: r.label }));
+    return src.map((r) => ({ region: r.region, label: rvSegLabel(r.region, r.label) }));
   }, [rvStrainSeries, rvStrain]);
 
   const hasRvCurves = rvCurves.length > 1;
@@ -1417,70 +1435,115 @@ export function InteractiveReport({
                   </div>
                 ))}
 
-              {/* ── Regional Findings (Layer 2) ─────────────────────────────
-                  Interactive entry point into the strain card: each affected
-                  segment is a button that selects it and scrolls to the charts.
-                  Still advisory — the grade badge above is Layer 1 only. */}
-              {regionalHealthStatus && (
-                <div className="mt-3 border-t border-border pt-3" title={regionalHealthStatus.disclaimer}>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xs font-bold text-foreground">Regional Findings</h3>
-                    <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
-                      Advisory
-                    </span>
-                  </div>
-
-                  {hasFindings ? (
-                    <>
-                      <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        {showAllSegments ? "All Segments" : "Affected Segments"}
-                      </p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {findingIds.map((idx) => {
-                          const lvl = levelOf(idx);
-                          const isSel = selectedSeg === idx;
-                          const quiet = lvl === "normal";
-                          return (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); selectAndReveal(idx); }}
-                              title={`Segment ${idx} — ${LEVEL_WORD[lvl] ?? lvl}`}
-                              className={`min-w-[46px] rounded-lg border px-2 py-1.5 text-center transition-all hover:-translate-y-0.5 hover:shadow-sm ${
-                                isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
-                              } ${quiet ? "bg-muted/40" : "bg-card"}`}
-                            >
-                              <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
-                                {idx}
-                              </span>
-                              <span className={`mt-1 block text-[9px] font-semibold leading-none ${
-                                lvl === "severe" ? "text-red-700 dark:text-red-400"
-                                : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
-                                : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
-                                : "text-muted-foreground"}`}>
-                                {LEVEL_WORD[lvl] ?? lvl}
-                              </span>
-                            </button>
-                          );
-                        })}
+              {/* ── Regional Findings (Layer 2) — LV | RV side by side ───────
+                  LV's half is the interactive entry point into the strain
+                  card: each affected segment is a button that selects it and
+                  scrolls to the charts. Still advisory — the grade badge
+                  above is Layer 1 only. RV's half is a compact pointer to the
+                  full "RV Regional Findings" card below (not a duplicate of
+                  it) — RV strain has no validated severity bands to tile the
+                  same way LV's segments are, so showing "Severe/Moderate"
+                  wedges for RV here would be an unsupported clinical claim. */}
+              {(regionalHealthStatus || hasRv) && (
+                <div className="mt-3 grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-2">
+                  {regionalHealthStatus && (
+                    <div title={regionalHealthStatus.disclaimer}>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs font-bold text-foreground">LV Regional Findings</h3>
+                        <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                          Advisory
+                        </span>
                       </div>
-                      <p className="mt-2 text-[11px] text-muted-foreground">{regionalHealthStatus.summary}</p>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); setShowAllSegments((v) => !v); }}
-                        className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
-                      >
-                        {showAllSegments ? "← Show affected only" : "View all segments →"}
-                      </button>
-                    </>
-                  ) : (
-                    /* status !== "ok", or no focal defect — keep the plain
-                       advisory sentence rather than an empty button row. */
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      {regionalOk
-                        ? regionalHealthStatus.summary
-                        : "Regional assessment unavailable for this model."}
-                    </p>
+
+                      {hasFindings ? (
+                        <>
+                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {showAllSegments ? "All Segments" : "Affected Segments"}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {findingIds.map((idx) => {
+                              const lvl = levelOf(idx);
+                              const isSel = selectedSeg === idx;
+                              const quiet = lvl === "normal";
+                              return (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); selectAndReveal(idx); }}
+                                  title={`Segment ${idx} — ${LEVEL_WORD[lvl] ?? lvl}`}
+                                  className={`min-w-[46px] rounded-lg border px-2 py-1.5 text-center transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                                    isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
+                                  } ${quiet ? "bg-muted/40" : "bg-card"}`}
+                                >
+                                  <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
+                                    {idx}
+                                  </span>
+                                  <span className={`mt-1 block text-[9px] font-semibold leading-none ${
+                                    lvl === "severe" ? "text-red-700 dark:text-red-400"
+                                    : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
+                                    : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
+                                    : "text-muted-foreground"}`}>
+                                    {LEVEL_WORD[lvl] ?? lvl}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-2 text-[11px] text-muted-foreground">{regionalHealthStatus.summary}</p>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setShowAllSegments((v) => !v); }}
+                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                          >
+                            {showAllSegments ? "← Show affected only" : "View all segments →"}
+                          </button>
+                        </>
+                      ) : (
+                        /* status !== "ok", or no focal defect — keep the plain
+                           advisory sentence rather than an empty button row. */
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {regionalOk
+                            ? regionalHealthStatus.summary
+                            : "Regional assessment unavailable for this model."}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {hasRv && (
+                    <div className={regionalHealthStatus ? "border-t border-border pt-3 sm:border-t-0 sm:border-l sm:pl-4 sm:pt-0" : undefined}>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs font-bold text-foreground">RV Regional Findings</h3>
+                        <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                          Advisory
+                        </span>
+                      </div>
+                      {rvStrain?.regions?.length ? (
+                        <>
+                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Global RV {rvMetricType}
+                          </p>
+                          <p className="text-[19px] font-bold tabular-nums text-foreground">
+                            {fmt(rvStrain.global_rv_strain)}
+                            <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
+                          </p>
+                          <p className="mt-2 text-[11px] text-muted-foreground">
+                            No validated severity grading exists for RV strain — see the full breakdown below for per-region values.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); rvCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}
+                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                          >
+                            View full RV Regional Findings ↓
+                          </button>
+                        </>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          No RV regional strain computed for this model yet.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -1916,29 +1979,83 @@ export function InteractiveReport({
           validated longitudinal one, taken from short-axis slices. Exploratory. */}
       <Card
         title="RV Regional Findings"
-        subtitle="Exploratory · RV cavity-radius strain, short-axis · advisory"
+        subtitle={`Exploratory · RV cavity-radius strain (${rvMetricType}), short-axis · advisory`}
         icon={<Heart className="h-4 w-4 text-primary" />}
+        sectionRef={rvCardRef}
         action={
-          <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
-            Advisory
-          </span>
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {rvMetricType === "GCS" && selectedRvRegion !== null && (
+              <button
+                type="button"
+                onClick={() => setSelectedRvRegion(null)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Clear the selected region"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reset
+              </button>
+            )}
+            <div className="inline-flex rounded-lg border border-border bg-background p-0.5">
+              {(["GCS", "GAS"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setRvMetricType(t)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                    rvMetricType === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+              Advisory
+            </span>
+          </div>
         }
       >
-        {!rvStrain?.regions?.length ? (
+        {rvMetricType === "GAS" ? (
+          <p className="py-5 text-center text-sm text-muted-foreground">
+            RV GAS has no computation in this pipeline yet — switch to GCS for the computed
+            (still prototype) cavity-radius strain.
+          </p>
+        ) : !rvStrain?.regions?.length ? (
           <p className="py-5 text-center text-sm text-muted-foreground">
             No RV regional strain computed for this model yet — run RV strain from the
             Landmark Detection page.
           </p>
         ) : (
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-[300px_1fr]">
-            {/* Same chart the landmark page draws RV strain with — 2 rings
-                (basal, mid) x 3 free-wall sectors. Reused rather than
-                reimplemented so the two views can never disagree. */}
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-[420px_1fr]">
+            {/* Same crescent shape the Strain/Structure tabs draw RV with —
+                reused (not reimplemented) so no view can ever disagree, and
+                the two rings of real data (basal, mid) plus the honest
+                "no data" apical ring read the same way everywhere. Sized
+                wider than the LV bullseye's own 260px column: this chart's
+                480x470 viewBox always reserves the LV-side canvas space even
+                when showLv is off, so the visible crescent needs a bigger box
+                to render at a comparable size instead of looking small in the
+                unused margin. Fill/selection already animate the same way as
+                LV's own Bullseye (see rvRing's transition: "fill 200ms ease"
+                in CombinedVentricularChart.tsx) and use the same rdYlGn
+                color scale, so only size needed correcting here. */}
             <div onClick={(e) => e.stopPropagation()}>
-              <RvStrainChart
-                regions={rvStrain.regions}
-                selectedRegion={selectedRvRegion}
-                onRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
+              <CombinedVentricularChart
+                lvData={[]}
+                hasLv={false}
+                strainType="GRS"
+                showLv={false}
+                showRv={true}
+                rvRegions={rvStrain.regions}
+                selectedRvRegion={selectedRvRegion}
+                onRvRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
+                // Match the LV Bullseye's own divider/label treatment above
+                // (stroke: "var(--card)", fill: "#0b1220", fontWeight 700)
+                // instead of this chart's default black-ish dividers — report
+                // page only, via these optional overrides (defaults elsewhere
+                // are unchanged).
+                rvWedgeStrokeColor="var(--card)"
+                rvLabelColor="#0b1220"
+                rvLabelFontWeight={700}
               />
             </div>
 
@@ -1946,7 +2063,7 @@ export function InteractiveReport({
               <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                 <div>
                   <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Global RV Strain
+                    Global RV {rvMetricType}
                   </span>
                   <span className="text-[19px] font-bold tabular-nums text-foreground">
                     {fmt(rvStrain.global_rv_strain)}
@@ -2024,7 +2141,7 @@ export function InteractiveReport({
                         : "border-border hover:bg-muted/50"}`}
                   >
                     <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {r.label}
+                      {rvSegLabel(r.region, r.label)}
                     </span>
                     <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
                       {fmt(r.strain)}

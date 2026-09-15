@@ -32,7 +32,19 @@ export function ringForSegment(segment: number): Ring {
   return "apex";
 }
 
-const stripRingPrefix = (label: string) => label.replace(/^(Basal|Mid|Apical)\s*/, "");
+/** RV's 9-segment scheme (basal 1-3, mid 4-6, apical 7-9) is a different numbering
+ *  from LV's 17-segment one above -- reusing ringForSegment on RV data misclassified
+ *  segments 4-6 as still "basal" and 7-9 as "mid", showing a "Basal ring (6) / Mid
+ *  ring (3)" split with no apical ring at all instead of three even rings of 3. */
+export function ringForRvSegment(segment: number): Ring {
+  if (segment <= 3) return "basal";
+  if (segment <= 6) return "mid";
+  return "apical";
+}
+
+// Handles both LV's space-separated labels ("Basal Anterior" -> "Anterior") and
+// RV's underscored notebook convention ("Basal_Seg1" -> "Seg1").
+const stripRingPrefix = (label: string) => label.replace(/^(Basal|Mid|Apical)[\s_]*/, "");
 
 /**
  * One frame's worth of per-segment strain, repeated across the cardiac cycle.
@@ -80,40 +92,32 @@ export function frameLabel(f: number, frames: number): string {
 
 export function RegionalStrainByRegion({
   series,
+  ringForSegment: ringFn = ringForSegment,
 }: {
   series: StrainSegmentData[][];
+  /** Override for a non-LV numbering scheme, e.g. ringForRvSegment for RV's 9-segment set. */
+  ringForSegment?: (segment: number) => Ring;
 }) {
   const frames = series.length;
   const segmentIds = series[0]?.map((d) => d.segment) ?? [];
-  const ringsPresent = RING_ORDER.filter((r) => segmentIds.some((s) => ringForSegment(s) === r));
+  const ringsPresent = RING_ORDER.filter((r) => segmentIds.some((s) => ringFn(s) === r));
 
-  // One ring at a time — the four toggles switch which ring's chart is shown,
-  // rather than tiling all four at once (clearer, and gives each chart room for
-  // a hover tooltip).
+  // One ring at a time — the four toggles switch which ring's charts are shown,
+  // rather than tiling all rings at once.
   const [ring, setRing] = useState<Ring>(ringsPresent[0] ?? "basal");
-  // Hover by FRAME (not by point): the tooltip lists every segment's value at
-  // that frame, matching the report's shared-tooltip behaviour.
-  const [hoverFrame, setHoverFrame] = useState<number | null>(null);
-
-  const segs = segmentIds.filter((s) => ringForSegment(s) === ring);
-  const values = segs.flatMap((s) => Array.from({ length: frames }, (_, f) => valueAtFrame(series, s, f)));
-  const yMin = Math.min(...values, 0) - 1;
-  const yMax = Math.max(...values, 0) + 1;
-  const w = 460, h = 230, padL = 34, padR = 14, padT = 10, padB = 22;
-  const x = (f: number) => padL + (w - padL - padR) * (f / Math.max(frames - 1, 1));
-  const y = (v: number) => padT + (h - padT - padB) * (1 - (v - yMin) / (yMax - yMin || 1));
+  const segs = segmentIds.filter((s) => ringFn(s) === ring);
 
   return (
     <div className="rounded-lg border border-border bg-background p-2.5">
       {/* Ring selector */}
       <div className="mb-2 inline-flex rounded-md border border-border bg-muted/30 p-0.5">
         {ringsPresent.map((r) => {
-          const count = segmentIds.filter((s) => ringForSegment(s) === r).length;
+          const count = segmentIds.filter((s) => ringFn(s) === r).length;
           return (
             <button
               key={r}
               type="button"
-              onClick={() => { setRing(r); setHoverFrame(null); }}
+              onClick={() => setRing(r)}
               className={cn(
                 "flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
                 ring === r ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
@@ -126,35 +130,65 @@ export function RegionalStrainByRegion({
         })}
       </div>
 
+      {/* Small multiples — one mini chart per segment, each styled like the
+          Global curve (smooth line, own auto-scaled axis, hover dot) — instead
+          of up to 6 overlapping lines in the same hue fighting for attention. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {segs.map((seg) => (
+          <RegionSegmentMiniChart
+            key={seg}
+            label={stripRingPrefix(series[0]?.find((d) => d.segment === seg)?.label ?? `Seg ${seg}`)}
+            values={Array.from({ length: frames }, (_, f) => valueAtFrame(series, seg, f))}
+            color={RING_COLOR_VAR[ring]}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** One segment's curve across the cycle, styled like the app's "Global" line chart
+ *  (smooth curve, light grid, own auto-scaled y-axis) but small enough to tile. */
+function RegionSegmentMiniChart({
+  label,
+  values,
+  color,
+}: {
+  label: string;
+  values: number[];
+  color: string;
+}) {
+  const frames = values.length;
+  const [hoverFrame, setHoverFrame] = useState<number | null>(null);
+  const yMin = Math.min(...values, 0) - 1;
+  const yMax = Math.max(...values, 0) + 1;
+  const w = 150, h = 84, padL = 24, padR = 6, padT = 8, padB = 8;
+  const x = (f: number) => padL + (w - padL - padR) * (f / Math.max(frames - 1, 1));
+  const y = (v: number) => padT + (h - padT - padB) * (1 - (v - yMin) / (yMax - yMin || 1));
+  const points = Array.from({ length: frames }, (_, f) => ({ x: x(f), y: y(values[f]) }));
+
+  return (
+    <div className="rounded-md border border-border bg-muted/10 p-1.5">
+      <p className="mb-0.5 truncate text-[9px] font-medium text-foreground" title={label}>{label}</p>
       <div className="relative">
         <svg viewBox={`0 0 ${w} ${h}`} className="h-auto w-full">
-          {/* gridlines + y labels */}
-          {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
-            const gy = padT + (h - padT - padB) * frac;
-            const val = yMax - (yMax - yMin) * frac;
-            return (
-              <g key={frac}>
-                <line x1={padL} x2={w - padR} y1={gy} y2={gy} stroke="var(--border)" strokeWidth={1} opacity={0.5} />
-                <text x={padL - 4} y={gy + 3} textAnchor="end" fontSize={9} fill="var(--muted-foreground)">{val.toFixed(0)}</text>
-              </g>
-            );
-          })}
-          {segs.map((seg, idx) => {
-            const opacity = 0.55 + (idx / Math.max(segs.length - 1, 1)) * 0.45;
-            const points = Array.from({ length: frames }, (_, f) => `${x(f)},${y(valueAtFrame(series, seg, f))}`).join(" ");
-            return <polyline key={seg} points={points} fill="none" stroke={RING_COLOR_VAR[ring]} strokeWidth={1.8} opacity={opacity} strokeLinecap="round" />;
-          })}
-          {/* Vertical guide + dots at the hovered frame for every segment. */}
+          {[0, 0.5, 1].map((frac) => (
+            <line
+              key={frac}
+              x1={padL} x2={w - padR}
+              y1={padT + (h - padT - padB) * frac} y2={padT + (h - padT - padB) * frac}
+              stroke="var(--border)" strokeDasharray="2 2" opacity={0.5}
+            />
+          ))}
+          <text x={padL - 3} y={padT + 3} textAnchor="end" fontSize={7} fill="var(--muted-foreground)">{yMax.toFixed(0)}</text>
+          <text x={padL - 3} y={h - padB + 3} textAnchor="end" fontSize={7} fill="var(--muted-foreground)">{yMin.toFixed(0)}</text>
+          <path d={smoothPathD(points)} fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" />
           {hoverFrame !== null && (
             <>
-              <line x1={x(hoverFrame)} x2={x(hoverFrame)} y1={padT} y2={h - padB} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="3 3" />
-              {segs.map((seg) => (
-                <circle key={`dot-${seg}`} cx={x(hoverFrame)} cy={y(valueAtFrame(series, seg, hoverFrame))} r={2.4} fill={RING_COLOR_VAR[ring]} />
-              ))}
+              <line x1={x(hoverFrame)} x2={x(hoverFrame)} y1={padT} y2={h - padB} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="2 2" />
+              <circle cx={x(hoverFrame)} cy={y(values[hoverFrame])} r={2.4} fill={color} />
             </>
           )}
-          {/* Full-height hit columns, one per frame — hovering anywhere in a
-              column selects that frame (report-style shared tooltip). */}
           {Array.from({ length: frames }, (_, f) => (
             <rect
               key={`hit-${f}`}
@@ -167,33 +201,17 @@ export function RegionalStrainByRegion({
               onMouseLeave={() => setHoverFrame(null)}
             />
           ))}
-          <line x1={padL} x2={w - padR} y1={h - padB} y2={h - padB} stroke="var(--muted-foreground)" strokeWidth={1} />
-          <text x={padL} y={h - 6} fontSize={9} fill="var(--muted-foreground)">ED</text>
-          <text x={(padL + w - padR) / 2} y={h - 6} textAnchor="middle" fontSize={9} fill="var(--muted-foreground)">cardiac frame →</text>
-          <text x={w - padR} y={h - 6} textAnchor="end" fontSize={9} fill="var(--muted-foreground)">ED</text>
         </svg>
         {hoverFrame !== null && (
           <div
-            className="pointer-events-none absolute z-10 min-w-[120px] rounded border border-border bg-popover px-2 py-1.5 text-[9px] text-popover-foreground shadow-lg"
+            className="pointer-events-none absolute z-10 rounded border border-border bg-popover px-1.5 py-1 text-[8px] font-mono tabular-nums text-popover-foreground shadow-lg"
             style={{
               left: `${(x(hoverFrame) / w) * 100}%`,
-              top: 4,
+              top: 0,
               transform: `translateX(${hoverFrame > frames / 2 ? "-105%" : "5%"})`,
             }}
           >
-            <div className="mb-1 font-semibold">Frame {hoverFrame} · {RING_LABEL[ring]}</div>
-            {segs.map((seg) => {
-              const label = stripRingPrefix(series[0]?.find((d) => d.segment === seg)?.label ?? `Seg ${seg}`);
-              return (
-                <div key={seg} className="flex items-center justify-between gap-3">
-                  <span className="flex items-center gap-1 text-muted-foreground">
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: RING_COLOR_VAR[ring] }} />
-                    {label}
-                  </span>
-                  <span className="font-mono tabular-nums">{valueAtFrame(series, seg, hoverFrame).toFixed(1)}%</span>
-                </div>
-              );
-            })}
+            {values[hoverFrame].toFixed(1)}%
           </div>
         )}
       </div>
@@ -217,12 +235,15 @@ export function FullCycleChart({
   width = 560,
   height = 240,
   highlightSeg = null,
+  ringForSegment: ringFn = ringForSegment,
 }: {
   series: StrainSegmentData[][];
   strainType: StrainType;
   width?: number;
   height?: number;
   highlightSeg?: number | null;
+  /** Override for a non-LV numbering scheme, e.g. ringForRvSegment for RV's 9-segment set. */
+  ringForSegment?: (segment: number) => Ring;
 }) {
   const frames = series.length;
   const segmentIds = series[0]?.map((d) => d.segment) ?? [];
@@ -286,8 +307,8 @@ export function FullCycleChart({
           <line key={key} x1={x(f)} x2={x(f)} y1={padT} y2={height - padB} stroke="var(--border)" strokeDasharray="2 2" />
         ))}
         {orderedSegments.map((seg) => {
-          const ring = ringForSegment(seg);
-          const segsInRing = segmentIds.filter((s) => ringForSegment(s) === ring);
+          const ring = ringFn(seg);
+          const segsInRing = segmentIds.filter((s) => ringFn(s) === ring);
           const idxInRing = segsInRing.indexOf(seg);
           const isHovered = highlightSeg === seg;
           const dimmed = highlightSeg !== null && !isHovered;
@@ -310,7 +331,7 @@ export function FullCycleChart({
           <>
             <line x1={x(hoverFrame)} x2={x(hoverFrame)} y1={padT} y2={height - padB} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="3 3" />
             {segmentIds.map((seg) => (
-              <circle key={`dot-${seg}`} cx={x(hoverFrame)} cy={y(valueAtFrame(series, seg, hoverFrame))} r={2} fill={RING_COLOR_VAR[ringForSegment(seg)]} />
+              <circle key={`dot-${seg}`} cx={x(hoverFrame)} cy={y(valueAtFrame(series, seg, hoverFrame))} r={2} fill={RING_COLOR_VAR[ringFn(seg)]} />
             ))}
           </>
         )}
@@ -343,7 +364,7 @@ export function FullCycleChart({
             return (
               <div key={seg} className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1 truncate text-muted-foreground">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: RING_COLOR_VAR[ringForSegment(seg)] }} />
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: RING_COLOR_VAR[ringFn(seg)] }} />
                   {label}
                 </span>
                 <span className="font-mono tabular-nums">{valueAtFrame(series, seg, hoverFrame).toFixed(1)}</span>

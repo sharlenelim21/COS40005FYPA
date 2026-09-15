@@ -225,6 +225,22 @@ export default function ReportPage() {
     gasAbnormal: null,
   };
 
+  // A stored RV health status result is shown only when it was graded for the
+  // sex/BSA now selected on this page and after the latest heart-metrics
+  // compute — same matching rule InteractiveReport.tsx applies on screen, so
+  // the printed verdict never disagrees with (or shows a stale copy of) what
+  // the interactive report currently displays.
+  const sameBsa = (a: number | null | undefined, b: number | null | undefined) =>
+    a == null || b == null ? a == null && b == null : Math.abs(a - b) < 1e-6;
+  const heartMetricsComputedAt = doc?.heartMetrics?.computed_at ?? null;
+  const rvHealthCurrent =
+    rvHealthStatus &&
+    rvHealthStatus.sex === patientSex &&
+    sameBsa(rvHealthStatus.bsa_m2, bsaM2) &&
+    (!heartMetricsComputedAt || rvHealthStatus.computed_at >= heartMetricsComputedAt)
+      ? rvHealthStatus
+      : null;
+
   // The MRI-overlay page needs real MRI pixels (dimensions), real decoded RLE
   // masks (a mask document id to fetch raw frames from), and real ED/ES frame
   // indices to pick — any missing piece means there's nothing genuine to
@@ -389,6 +405,7 @@ export default function ReportPage() {
               rvPeakGcs={rvPeakGcs}
               rvPeakGasPreview={RV_PEAK_GAS_PREVIEW}
               healthStatusText={healthStatus?.status ?? null}
+              rvHealthStatusText={rvHealthCurrent?.status ?? null}
               phenotypeHeadline={similarity?.phenotype_headline ?? null}
               isRealData
             />
@@ -410,6 +427,7 @@ export default function ReportPage() {
               rvEsv={rv?.RVESV ?? null}
               rvEf={rv?.RVEF ?? null}
               rvSv={rv?.RV_SV ?? null}
+              rvHealthStatus={rvHealthCurrent}
             />
             <WallThicknessCavityAreaPage
               patientLabel={patientLabel}
