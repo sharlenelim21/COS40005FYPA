@@ -24,7 +24,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronDown, Settings, Sparkles, AlertTriangle, Eye } from "lucide-react";
+import { ChevronDown, Settings, Sparkles, AlertTriangle, Eye, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Latent-fit iterations, per processing unit. The fit is measurably under-converged at the old
@@ -97,6 +97,14 @@ interface ReconstructionConfigDialogProps {
    */
   blockedRvModels?: ReconstructionSegmentationModel[];
   /**
+   * Models whose reconstruction for this chamber is being built RIGHT NOW. Distinct from
+   * `blockedModels`/`blockedRvModels`, which mean "a result already exists": that state is
+   * resolved by deleting the old result, this one is resolved by waiting. Saying "already exists"
+   * to someone whose job is 30 seconds old sends them to delete something that is not there.
+   */
+  buildingModels?: ReconstructionSegmentationModel[];
+  buildingRvModels?: ReconstructionSegmentationModel[];
+  /**
    * Chamber to open on. Omitted means LV — RV should stay a deliberate choice. Set only when the
    * caller already knows the user asked for that chamber (e.g. the viewer's "Build RV" button).
    */
@@ -127,6 +135,8 @@ export function ReconstructionConfigDialog({
   existingReconstructionsByModel,
   onViewReconstruction,
   blockedRvModels,
+  buildingModels,
+  buildingRvModels,
   defaultChamber,
 }: ReconstructionConfigDialogProps) {
   // LV unless the caller explicitly asked otherwise. RV stays a deliberate choice.
@@ -153,6 +163,13 @@ export function ReconstructionConfigDialog({
       (chamber === "rv" ? blockedRvModels : blockedModels) ?? []
     ),
     [blockedModels, blockedRvModels, chamber]
+  );
+
+  const buildingSet = useMemo(
+    () => new Set<ReconstructionSegmentationModel>(
+      (chamber === "rv" ? buildingRvModels : buildingModels) ?? []
+    ),
+    [buildingModels, buildingRvModels, chamber]
   );
 
   // Choose an initial model: prefer the caller's default if available,
@@ -200,8 +217,10 @@ export function ReconstructionConfigDialog({
   const noCreatableModels = (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
     (model) => !availableSet.has(model) || blockedSet.has(model),
   );
+  const selectedIsBuilding = buildingSet.has(selectedModel);
   const startDisabled =
-    isLoading || noModelsAvailable || noCreatableModels || !availableSet.has(selectedModel) || blockedSet.has(selectedModel);
+    isLoading || noModelsAvailable || noCreatableModels || !availableSet.has(selectedModel)
+    || blockedSet.has(selectedModel) || selectedIsBuilding;
 
   const handleStart = () => {
     if (startDisabled) return;
@@ -577,6 +596,19 @@ export function ReconstructionConfigDialog({
             </CollapsibleContent>
           </Collapsible>
         </div>
+
+        {/* Says why Start is unavailable. A disabled button with no explanation reads as broken,
+            and the fix here ("wait") is the opposite of the fix for an existing result ("delete"). */}
+        {selectedIsBuilding && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+            <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+            <span>
+              A {chamber === "rv" ? "RV" : "4D"} reconstruction for{" "}
+              {selectedModel === "medsam" ? "MedSAM" : "UNet"} is already being built. It appears in
+              the viewer by itself when it finishes — no need to start another.
+            </span>
+          </div>
+        )}
 
         <DialogFooter>
           <Button

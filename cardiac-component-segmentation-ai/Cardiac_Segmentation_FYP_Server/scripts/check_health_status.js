@@ -17,6 +17,14 @@
  *   [7] Null strain     (EF 64, EDV 150, PeakGRS/PeakGCS both null)
  *   [8] Downgrade       (EF 60 = Healthy but EDV 310 warn + GCS -12 warn
  *                        + GRS 18 warn → 3 warns → Healthy → Mild)
+ *   [9] Reproduction    (RV-absent / myo-absent / ignored-BSA warnings with
+ *                        clean volume_signals → output byte-identical to no
+ *                        warnings; LV grade stays Mild, confidence normal)
+ *  [10] Real problems   (suspicious voxel_mm3 / implausible LVEDV / duplicated
+ *                        LV-cavity slice → EDV suppressed, reason names cause)
+ *  [11] RV duplicate    (duplicated RV-cavity slice → LV evidence untouched)
+ *  [12] Legacy caller   (no volume_signals → conservative suppression, without
+ *                        blaming the affine)
  *
  * Run:  node scripts/check_health_status.js
  * Exits 0 on all assertions passing, 1 otherwise.
@@ -229,6 +237,127 @@ function test_downgrade_healthy_to_mild() {
     assert('warnings mention downgrade',     (out.warnings ?? []).some(w => /downgrad/i.test(w)));
 }
 
+// ── Non-volume heart-metrics warnings must not move the LV grade ─────────────
+//
+// compute_heart_metrics_from_rle.py writes EVERY warning into one
+// heartMetrics.warnings list, and only some of them concern absolute-volume
+// reliability (suspicious voxel_mm3, duplicated slices, implausible LVEDV).
+// "No RV voxels at ED", "No myocardium ... at ED" and an ignored bsa_m2 say
+// nothing about LV volumes. The service passes `volume_signals` (structured
+// heartMetrics fields) so the grader decides from those, not from how many
+// warnings exist. Scenarios [9]-[12] pin that.
+
+// Warning strings copied verbatim from compute_heart_metrics_from_rle.py.
+const RV_ABSENT_WARNING   = 'No RV voxels at ED — RVEF and RV_SV set to null.';
+const MYO_ABSENT_WARNING  = 'No myocardium (class 2) voxels at ED frame (0) — LV_mass_g set to null.';
+const BSA_IGNORED_WARNING = 'Ignoring non-positive bsa_m2=0.0 — indexed volumes (EDVI/ESVI) set to null.';
+
+// EF 60 grades Healthy; EDV 280 (above 60-250) and PeakGCS -12 are two
+// supporting warns, so a correctly graded result is downgraded to Mild.
+const REPRO_MEASUREMENTS   = { EF: 60, EDV: 280, ESV: 112, StrokeVolume: 168, PeakGRS: 30, PeakGCS: -12 };
+const CLEAN_VOLUME_SIGNALS = { voxel_mm3: 18.0, duplicate_slices: [] };
+
+/** A heartMetrics.duplicate_slices entry; `cls` is "lvc" | "myo" | "rv". */
+function dupEntry(cls, frame, keep, remove) {
+    return { frame, class: cls, slice_keep: keep, slice_remove: remove,
+             voxel_count: 900, iou: 1.0, est_inflation_ml: 16.2 };
+}
+
+function test_non_volume_warnings_do_not_move_lv_grade() {
+    console.log('\n[9] Reproduction — RV-absent / myo-absent / ignored-BSA warnings must not change the LV result');
+    const baseline = runPython({
+        measurements: REPRO_MEASUREMENTS,
+        heart_metrics_warnings: [],
+        volume_signals: CLEAN_VOLUME_SIGNALS,
+    });
+    const withWarnings = runPython({
+        measurements: REPRO_MEASUREMENTS,
+        heart_metrics_warnings: [RV_ABSENT_WARNING, MYO_ABSENT_WARNING, BSA_IGNORED_WARNING],
+        volume_signals: CLEAN_VOLUME_SIGNALS,
+    });
+    const base = safeJson(baseline.stdout, baseline.stderr);
+    const out = safeJson(withWarnings.stdout, withWarnings.stderr);
+    console.log('  no warnings   ->', JSON.stringify({ status: base.status, confidence: base.confidence }));
+    console.log('  with warnings ->', JSON.stringify({ status: out.status, confidence: out.confidence }));
+
+    assert('baseline exits 0',                            baseline.status === 0, baseline.stderr);
+    assert('baseline status = Mild (2 supporting warns)', base.status === 'Mild', base.status);
+    assert('status unchanged by non-volume warnings',     out.status === 'Mild', out.status);
+    assert('confidence stays normal',                     out.confidence === 'normal', out.confidence);
+    assert('EDV evidence still emitted as warn',          evByLabel(out, 'End-Diastolic Volume')?.level === 'warn');
+    assert('no Absolute volumes suppression line',        evByLabel(out, 'Absolute volumes') === undefined);
+    assert('stdout byte-identical to the no-warning run', withWarnings.stdout.trim() === baseline.stdout.trim());
+}
+
+function test_structured_volume_problems_still_suppress() {
+    console.log('\n[10] Genuine volume problems still suppress EDV evidence, and the reason names the real cause');
+    const cases = [
+        {
+            name: 'voxel size',
+            measurements: { EF: 64, EDV: 150, ESV: 54, StrokeVolume: 96, PeakGRS: 35, PeakGCS: -20 },
+            warnings: ['Suspicious voxel_mm3=0.0500 mm^3 (< 0.1). Typical cardiac MRI voxels are 1-30 mm^3. Check project.affineMatrix — absolute volumes may be scaled down by orders of magnitude. EF (a ratio) is unaffected.'],
+            signals: { voxel_mm3: 0.05, duplicate_slices: [] },
+            reason: /voxel volume 0\.05 mm³/i,
+        },
+        {
+            name: 'implausible LVEDV',
+            measurements: { EF: 64, EDV: 1.3, ESV: 0.5, StrokeVolume: 0.8, PeakGRS: 35, PeakGCS: -20 },
+            warnings: ['LVEDV=1.3 mL is below the typical adult range (60-250 mL). Verify affine and segmentation coverage — this often indicates an identity/bad affine (voxel_mm3 too small) or missing basal slices.'],
+            signals: CLEAN_VOLUME_SIGNALS,
+            reason: /LVEDV 1\.3 mL/,
+        },
+        {
+            name: 'duplicated LV-cavity slice',
+            measurements: { EF: 64, EDV: 150, ESV: 54, StrokeVolume: 96, PeakGRS: 35, PeakGCS: -20 },
+            warnings: ['Possible duplicate slice: frame 0, slices 4 & 5 (class lvc) — identical voxel count (900) and 100% overlap. Est. inflation +16.2 mL.'],
+            signals: { voxel_mm3: 18.0, duplicate_slices: [dupEntry('lvc', 0, 4, 5)] },
+            reason: /duplicated LV cavity slice.*frame 0, slices 4 & 5/i,
+        },
+    ];
+    for (const c of cases) {
+        const out = safeJson(runPython({
+            measurements: c.measurements,
+            heart_metrics_warnings: c.warnings,
+            volume_signals: c.signals,
+        }).stdout);
+        const sup = evByLabel(out, 'Absolute volumes');
+        console.log(`  ${c.name} ->`, JSON.stringify({ status: out.status, confidence: out.confidence, detail: sup?.detail }));
+        assert(`${c.name}: suppression line emitted`,         sup?.level === 'warn');
+        assert(`${c.name}: EDV evidence NOT emitted`,         evByLabel(out, 'End-Diastolic Volume') === undefined);
+        assert(`${c.name}: confidence = low`,                 out.confidence === 'low', out.confidence);
+        assert(`${c.name}: reason names the cause`,           c.reason.test(sup?.detail ?? ''), sup?.detail);
+        assert(`${c.name}: no blanket affine/spacing claim`,  !/affine \/ spacing as suspicious/i.test(sup?.detail ?? ''));
+    }
+}
+
+function test_rv_duplicate_does_not_suppress_lv() {
+    console.log('\n[11] A duplicated RV-cavity slice cannot inflate LVEDV, so LV volume evidence stays');
+    const out = safeJson(runPython({
+        measurements: REPRO_MEASUREMENTS,
+        heart_metrics_warnings: ['Possible duplicate slice: frame 0, slices 7 & 8 (class rv) — identical voxel count (900) and 100% overlap. Est. inflation +16.2 mL.'],
+        volume_signals: { voxel_mm3: 18.0, duplicate_slices: [dupEntry('rv', 0, 7, 8)] },
+    }).stdout);
+    console.log('  ->', JSON.stringify({ status: out.status, confidence: out.confidence }));
+    assert('status = Mild (same as the clean run)',  out.status === 'Mild', out.status);
+    assert('confidence = normal',                    out.confidence === 'normal', out.confidence);
+    assert('EDV evidence emitted as warn',           evByLabel(out, 'End-Diastolic Volume')?.level === 'warn');
+    assert('no Absolute volumes suppression line',   evByLabel(out, 'Absolute volumes') === undefined);
+}
+
+function test_legacy_caller_without_volume_signals() {
+    console.log('\n[12] Legacy caller (no volume_signals) — stays conservative, but no longer blames the affine');
+    const out = safeJson(runPython({
+        measurements: REPRO_MEASUREMENTS,
+        heart_metrics_warnings: [RV_ABSENT_WARNING],
+    }).stdout);
+    const sup = evByLabel(out, 'Absolute volumes');
+    console.log('  ->', JSON.stringify({ status: out.status, confidence: out.confidence, detail: sup?.detail }));
+    assert('suppression line still emitted (conservative)', sup?.level === 'warn');
+    assert('confidence = low',                              out.confidence === 'low', out.confidence);
+    assert('reason does not claim a bad affine or spacing', !/affine|spacing/i.test(sup?.detail ?? ''), sup?.detail);
+    assert('reason says structured signals were missing',   /no structured volume signals/i.test(sup?.detail ?? ''), sup?.detail);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 (function main() {
@@ -243,6 +372,10 @@ function test_downgrade_healthy_to_mild() {
         test_low_confidence_bad_affine();
         test_null_strain();
         test_downgrade_healthy_to_mild();
+        test_non_volume_warnings_do_not_move_lv_grade();
+        test_structured_volume_problems_still_suppress();
+        test_rv_duplicate_does_not_suppress_lv();
+        test_legacy_caller_without_volume_signals();
     } catch (err) {
         console.error('Runner crashed:', err);
         process.exit(2);

@@ -21,7 +21,7 @@ import {
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
-import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries } from "@/hooks/useProjectResults";
+import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
 import { RvStrainChart } from "@/components/landmark/RvStrainChart";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
@@ -283,38 +283,29 @@ function fmt(v: number | null | undefined, digits = 1): string {
 // segmented, so nothing here describes them.
 
 /**
- * RV ejection-fraction bands. Mirrors the SHAPE of _grade_from_lvef in
- * compute_health_status.py (descending thresholds, "Indeterminate" on null) but
- * is a SEPARATE frontend helper — the LV grader is not touched and the overall
- * badge is never computed from these.
- *
- * ⚠️ APPROXIMATE. Anchored on the 2024 CMR meta-analysis normal lower limit,
- * NOT sex-specific, and not validated for this pipeline. RV normal ranges
- * differ meaningfully between males and females; these MUST be replaced with
- * sex-specific validated values before any clinical use. Advisory only.
+ * RV health status is graded by the BACKEND (compute_rv_health_status.py)
+ * against sex-specific SCMR 2025 reference ranges and rendered here as-is.
+ * There are deliberately no severity bands: no validated CMR severity grading
+ * exists for the RV. The frontend used to grade RVEF itself against sex-blind
+ * 48 / 40 / 30 % bands; that was removed so the report cannot contradict the
+ * backend. "Outside reference range" is amber, never red — it is not a grade.
  */
-const RVEF_NORMAL_MIN = 48.0;
-const RVEF_MILD_MIN = 40.0;
-const RVEF_MODERATE_MIN = 30.0;
-
-type RvGrade = "Normal" | "Mildly reduced" | "Moderately reduced" | "Severely reduced" | "Indeterminate";
-
-function rvFunctionGrade(rvef: number | null | undefined): RvGrade {
-  if (rvef === null || rvef === undefined || Number.isNaN(rvef)) return "Indeterminate";
-  if (rvef >= RVEF_NORMAL_MIN) return "Normal";
-  if (rvef >= RVEF_MILD_MIN) return "Mildly reduced";
-  if (rvef >= RVEF_MODERATE_MIN) return "Moderately reduced";
-  return "Severely reduced";
-}
-
-/** Reuses the existing status token vocabulary — no new colour system. */
-const RV_GRADE_BADGE: Record<RvGrade, string> = {
-  "Normal": "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
-  "Mildly reduced": "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  "Moderately reduced": "bg-orange-500/10 text-orange-700 dark:text-orange-400",
-  "Severely reduced": "bg-red-600/10 text-red-700 dark:text-red-400",
-  "Indeterminate": "bg-muted text-muted-foreground",
+const RV_STATUS_BADGE: Record<string, string> = {
+  "Within reference range": "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
+  "Outside reference range": "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  "Depends on sex": "bg-muted text-foreground/80",
+  "Not assessable": "bg-muted text-muted-foreground",
 };
+
+/** Short verdict for one backend RV evidence line; the full sentence becomes the tooltip. */
+function rvInterpretation(line: { level: string; detail: string; depends_on_sex?: boolean } | undefined) {
+  if (!line) return null;
+  const text = line.level === "ok" ? "Within reference range"
+    : line.level === "warn" ? "Outside reference range"
+    : line.depends_on_sex ? "Depends on sex"
+    : "Not assessed";
+  return { text, full: line.detail, level: line.level as "ok" | "warn" | "unavailable" };
+}
 
 /**
  * Stroke-volume balance. In a closed circulation LV and RV stroke volumes
@@ -348,7 +339,8 @@ function rvLvRatio(rvedv: number | null | undefined, lvedv: number | null | unde
   return rvedv / lvedv;
 }
 
-type Zone = { from: number; to: number; tone: "green" | "amber" | "red" };
+/** "grey" marks a band whose verdict depends on sex (RV bars with no sex chosen). */
+type Zone = { from: number; to: number; tone: "green" | "amber" | "red" | "grey" };
 
 type MetricBar = {
   key: "EF" | "EDV" | "PeakGCS" | "PeakGRS";
@@ -384,6 +376,7 @@ const ZONE_FILL: Record<Zone["tone"], string> = {
   green: "bg-emerald-500/35 dark:bg-emerald-500/30",
   amber: "bg-amber-500/35 dark:bg-amber-500/30",
   red: "bg-red-500/35 dark:bg-red-500/30",
+  grey: "bg-muted-foreground/25 dark:bg-muted-foreground/30",
 };
 
 /** Position of `v` along the bar, clamped to 0–100 %. */
@@ -422,9 +415,10 @@ function interpretationFor(hs: HealthStatus | undefined, evidenceLabel: string) 
  * One short line explaining WHY the health status is low-confidence.
  *
  * The backend sets confidence="low" for exactly two reasons
- * (compute_health_status.py): EF was not computable, or heart-metrics warnings
- * caused the volume evidence to be suppressed. Each leaves a distinctive
- * `warn` evidence line, so we match those two specifically.
+ * (compute_health_status.py): EF was not computable, or absolute LV volumes
+ * were judged unreliable (suspicious voxel size, duplicated LV-cavity slice or
+ * implausible LVEDV) and the volume evidence was suppressed. Each leaves a
+ * distinctive `warn` evidence line, so we match those two specifically.
  *
  * Deliberately NOT "any warn line". Peak GCS, Peak GRS, End-Diastolic Volume
  * and a *present-but-low* EF all emit level:"warn" while confidence stays
@@ -457,9 +451,14 @@ function confidenceReason(hs: HealthStatus): string {
     (e) => e.label === "Absolute volumes" && e.level === "warn",
   );
   if (volumesUnreliable) {
+    // The cause varies (voxel size, duplicated LV-cavity slice, implausible
+    // LVEDV) and the backend names it in the Absolute volumes evidence line,
+    // rendered below with the other uncovered evidence. Point there rather than
+    // guess: this used to blame "affine / spacing" for every case, including a
+    // mask whose only warning was that it had no RV voxels.
     return (
-      "Volume measurements may be unreliable — the heart-metrics compute flagged the " +
-      "affine / spacing, so the status is graded from EF alone."
+      "Absolute volume measurements may be unreliable, so volume evidence is left out " +
+      "of the grade — the Absolute volumes note below gives the reason."
     );
   }
 
@@ -498,7 +497,19 @@ export function InteractiveReport({
   bsaM2, heightCm, weightKg, onHeightCmChange, onWeightKgChange,
   onRecomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError,
   patientSex: patientSexProp, onPatientSexChange,
+  rvHealthStatus, onRecomputeRvHealthStatus, recomputingRvHealthStatus, recomputeRvHealthStatusError,
+  heartMetricsComputedAt,
 }: {
+  /** RV health status graded by the backend against sex-specific reference
+   *  ranges. Shown only when it was graded for the sex/BSA now on screen and
+   *  after the latest heart metrics — see `rvCurrent` below. */
+  rvHealthStatus?: RvHealthStatus;
+  /** Recomputes and persists RV health status for the given BSA/sex. */
+  onRecomputeRvHealthStatus?: (bsaM2: number | null, sex: "male" | "female" | "unspecified") => Promise<void>;
+  recomputingRvHealthStatus?: boolean;
+  recomputeRvHealthStatusError?: string | null;
+  /** heartMetrics.computed_at — a stored RV result older than this is stale. */
+  heartMetricsComputedAt?: string | null;
   patientLabel: string;
   scanSummary: string;
   generatedAt: string;
@@ -714,7 +725,37 @@ export function InteractiveReport({
     { label: "RV Peak Global Area Strain (RV GAS)", value: rvPeakGasPreview.toFixed(1), unit: "%", preview: true },
   ];
 
-  const rvGrade = rvFunctionGrade(rv?.RVEF);
+  // RV health status (graded by the backend). A stored result is shown only
+  // when it was graded for the sex and BSA now on screen and after the latest
+  // heart-metrics compute. Sex and BSA are entered on this page and reset when
+  // it is reopened, so an older result would otherwise present a verdict for
+  // inputs the page no longer shows. With no sex selected the backend checks
+  // each value against BOTH sexes' limits and gives a verdict only where they
+  // agree — never a sex-blind threshold.
+  const rvSex = patientSexProp ?? "unspecified";
+  const rvSexChosen = rvSex === "male" || rvSex === "female";
+  const sameBsa = (a: number | null | undefined, b: number | null | undefined) =>
+    a == null || b == null ? a == null && b == null : Math.abs(a - b) < 1e-6;
+  const rvCurrent: RvHealthStatus | null =
+    rvHealthStatus &&
+    rvHealthStatus.sex === rvSex &&
+    sameBsa(rvHealthStatus.bsa_m2, bsaM2) &&
+    (!heartMetricsComputedAt || rvHealthStatus.computed_at >= heartMetricsComputedAt)
+      ? rvHealthStatus
+      : null;
+  const rvEvidence = (label: string) => rvCurrent?.evidence.find((e) => e.label === label);
+
+  useEffect(() => {
+    if (!hasRv || rvCurrent || !onRecomputeRvHealthStatus) return;
+    const timer = window.setTimeout(() => {
+      onRecomputeRvHealthStatus(bsaM2 ?? null, rvSex);
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // Depends on the inputs only. onRecomputeRvHealthStatus changes identity on
+    // every poll tick, and depending on the stored result would let two tabs
+    // with different sexes keep overwriting each other.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasRv, rvSex, bsaM2, heartMetricsComputedAt]);
   const ratio = rvLvRatio(rv?.RVEDV, lvVolumes?.LVEDV ?? measurements?.EDV);
   const sv = svBalance(lvVolumes?.LV_SV ?? measurements?.StrokeVolume, rv?.RV_SV);
 
@@ -1034,12 +1075,25 @@ export function InteractiveReport({
                       <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
                         RV Function <span className="normal-case tracking-normal">· advisory</span>
                       </span>
-                      <span
-                        className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_GRADE_BADGE[rvGrade]}`}
-                        title="Approximate, non-sex-specific RVEF thresholds — must be clinically validated before use."
-                      >
-                        {rvGrade}
-                      </span>
+                      {rvCurrent ? (
+                        <>
+                          <span
+                            className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_STATUS_BADGE[rvCurrent.status] ?? RV_STATUS_BADGE["Not assessable"]}`}
+                            title={rvCurrent.disclaimer}
+                          >
+                            {rvCurrent.status}
+                          </span>
+                          {!rvSexChosen && (
+                            <span className="mt-0.5 block text-[9px] text-muted-foreground">
+                              No sex selected — checked against both sexes
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                          {recomputingRvHealthStatus ? "Updating…" : "Not graded yet"}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -1056,8 +1110,8 @@ export function InteractiveReport({
                   )}
 
                   <p className="mt-2 text-[9.5px] leading-snug text-muted-foreground">
-                    RV thresholds are approximate and not sex-specific — they must be clinically
-                    validated before use. RV function does not affect the grade above.
+                    RV function is compared with sex-specific SCMR 2025 reference ranges — within or
+                    outside range, not a severity grade. It does not affect the LV grade above.
                   </p>
                 </div>
               )}
@@ -1154,36 +1208,89 @@ export function InteractiveReport({
               {/* ── RV Health ───────────────────────────────────────────────
                   Same 3-column table as the LV metric table above (Metric /
                   Result (this study) / Interpretation), same bar+zone
-                  language. RVEF and RVEDVI are real; RVEDVI's zones depend on
-                  the sex toggle since the ARVC cutoffs are sex-specific (te
-                  Riele/Tandri/Bluemke 2014, Table 1). Peak GCS/GAS are
-                  PREVIEW placeholders with NO colour zones — no paper
-                  validates a normal range for either in this pipeline yet,
-                  so drawing coloured zones would imply a reference that
-                  doesn't exist. Advisory only — never affects the LV grade. */}
+                  language. RVEF, RVEDVI and RVESVI are graded by the BACKEND
+                  (compute_rv_health_status.py) against sex-specific SCMR 2025
+                  limits, and the zones are drawn from the limits that result
+                  carries, so the bar and the verdict cannot disagree. There is
+                  no severity band: outside the range is amber, never red.
+                  RVEDVI used to be coloured with the ARVC Task Force cutoffs as
+                  if they were the normal range; those cutoffs overlap normal in
+                  men and apply only with a regional wall-motion abnormality, so
+                  they stay in the RV patterns card and on the reference page.
+                  Peak GCS/GAS are PREVIEW placeholders with NO colour zones —
+                  no paper validates a normal range for either in this pipeline
+                  yet. Advisory only — never affects the LV grade. */}
               {hasRv && (() => {
-                const edviMinor = patientSex === "female" ? 90 : 100;
-                const edviMajor = patientSex === "female" ? 100 : 110;
-                const edviMax = patientSex === "female" ? 140 : 160;
-                const edviZones: Zone[] = patientSex === "unspecified"
-                  ? []
-                  : [{ from: 0, to: edviMinor, tone: "green" }, { from: edviMinor, to: edviMajor, tone: "amber" }, { from: edviMajor, to: edviMax, tone: "red" }];
-                const edviInterp = rvedvi == null
-                  ? { text: "Enter BSA above to index", level: "warn" as const }
-                  : patientSex === "unspecified"
-                  ? { text: "Select sex above (cutoffs are sex-specific)", level: "warn" as const }
-                  : rvedvi >= edviMajor
-                  ? { text: "Above ARVC major threshold", level: "warn" as const }
-                  : rvedvi >= edviMinor
-                  ? { text: "Above ARVC minor threshold", level: "warn" as const }
-                  : { text: "Within reference", level: "ok" as const };
+                const ref = rvCurrent?.reference ?? null;
+                const men = ref?.by_sex.male ?? null;
+                const women = ref?.by_sex.female ?? null;
+                // With a sex chosen the bars show that sex's limits. Without one they show
+                // where both sexes agree — green normal for both, amber abnormal for both —
+                // and a grey band where the verdict depends on sex.
+                const rvefBar = ((): { zones: Zone[]; label: string } => {
+                  if (ref?.rvef_lower_limit != null) {
+                    const l = ref.rvef_lower_limit;
+                    return { zones: [{ from: 0, to: l, tone: "amber" }, { from: l, to: 100, tone: "green" }], label: `≥ ${l}` };
+                  }
+                  if (men && women) {
+                    const lo = Math.min(men.rvef_lower_limit, women.rvef_lower_limit);
+                    const hi = Math.max(men.rvef_lower_limit, women.rvef_lower_limit);
+                    return {
+                      zones: [{ from: 0, to: lo, tone: "amber" }, { from: lo, to: hi, tone: "grey" }, { from: hi, to: 100, tone: "green" }],
+                      label: `≥ ${hi} both sexes`,
+                    };
+                  }
+                  return { zones: [], label: "sex-specific" };
+                })();
+                const volumeBar = (
+                  single: [number, number] | null | undefined,
+                  m: [number, number] | undefined,
+                  w: [number, number] | undefined,
+                  max: number,
+                ): { zones: Zone[]; label: string } => {
+                  if (single) {
+                    return {
+                      zones: [{ from: 0, to: single[0], tone: "amber" }, { from: single[0], to: single[1], tone: "green" }, { from: single[1], to: max, tone: "amber" }],
+                      label: `${single[0]}–${single[1]}`,
+                    };
+                  }
+                  if (m && w) {
+                    const outerLo = Math.min(m[0], w[0]);
+                    const innerLo = Math.max(m[0], w[0]);
+                    const innerHi = Math.min(m[1], w[1]);
+                    const outerHi = Math.max(m[1], w[1]);
+                    return {
+                      zones: [
+                        { from: 0, to: outerLo, tone: "amber" }, { from: outerLo, to: innerLo, tone: "grey" },
+                        { from: innerLo, to: innerHi, tone: "green" },
+                        { from: innerHi, to: outerHi, tone: "grey" }, { from: outerHi, to: max, tone: "amber" },
+                      ],
+                      label: `${innerLo}–${innerHi} both sexes`,
+                    };
+                  }
+                  return { zones: [], label: "sex-specific" };
+                };
+                const edviBar = volumeBar(ref?.rvedvi_range, men?.rvedvi_range, women?.rvedvi_range, 160);
+                const esviBar = volumeBar(ref?.rvesvi_range, men?.rvesvi_range, women?.rvesvi_range, 80);
+                // When the backend withheld RV volumes (implausible voxel size or a
+                // duplicated RV-cavity slice), both indexed rows show that line instead.
+                const volumesWithheld = rvEvidence("Absolute RV volumes");
+                const pending: { text: string; full?: string; level: "ok" | "warn" | "unavailable" } = recomputingRvHealthStatus
+                  ? { text: "Updating…", level: "unavailable" }
+                  : { text: "Not graded yet", full: recomputeRvHealthStatusError ?? undefined, level: "unavailable" };
+                const verdict = (label: string, isVolume: boolean) =>
+                  rvCurrent ? rvInterpretation(isVolume && volumesWithheld ? volumesWithheld : rvEvidence(label)) : pending;
 
-                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; level: "ok" | "warn" } | null; preview?: boolean }[] = [
-                  { key: "RVEF", name: "RV Ejection Fraction (RVEF)", value: rv?.RVEF ?? null, unit: "%", min: 0, max: 100, normalLabel: "≥ 48",
-                    zones: [{ from: 0, to: 30, tone: "red" }, { from: 30, to: 48, tone: "amber" }, { from: 48, to: 100, tone: "green" }],
-                    interp: { text: rvGrade, level: rvGrade === "Normal" ? "ok" : "warn" } },
-                  { key: "RVEDVI", name: "RV EDV Index (RVEDVI)", value: rvedvi, unit: "mL/m²", min: 0, max: edviMax, normalLabel: `< ${edviMinor}`,
-                    zones: edviZones, interp: edviInterp },
+                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; full?: string; level: "ok" | "warn" | "unavailable" } | null; preview?: boolean }[] = [
+                  { key: "RVEF", name: "RV Ejection Fraction (RVEF)", value: rv?.RVEF ?? null, unit: "%", min: 0, max: 100,
+                    normalLabel: rvefBar.label, zones: rvefBar.zones,
+                    interp: verdict("RV Ejection Fraction", false) },
+                  { key: "RVEDVI", name: "RV EDV Index (RVEDVI)", value: rvedvi, unit: "mL/m²", min: 0, max: 160,
+                    normalLabel: edviBar.label, zones: edviBar.zones,
+                    interp: verdict("RV End-Diastolic Volume Index", true) },
+                  { key: "RVESVI", name: "RV ESV Index (RVESVI)", value: rvesvi, unit: "mL/m²", min: 0, max: 80,
+                    normalLabel: esviBar.label, zones: esviBar.zones,
+                    interp: verdict("RV End-Systolic Volume Index", true) },
                   // Flagged `preview: true` for the same reason as GAS below: no paper
                   // validates a normal range for this RV strain measure yet, so even
                   // though the number itself is real (once computed), it gets the same
@@ -1247,7 +1354,13 @@ export function InteractiveReport({
                             </td>
                             <td className="px-1 py-2 align-top">
                               {m.interp ? (
-                                <span className={`text-[11px] font-semibold leading-tight ${m.interp.level === "ok" ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`}>
+                                <span
+                                  title={m.interp.full || undefined}
+                                  className={`text-[11px] font-semibold leading-tight ${
+                                    m.interp.level === "ok" ? "text-emerald-700 dark:text-emerald-400"
+                                    : m.interp.level === "warn" ? "text-amber-700 dark:text-amber-400"
+                                    : "text-muted-foreground"}`}
+                                >
                                   {m.interp.text}
                                 </span>
                               ) : <span className="text-[11px] text-muted-foreground">—</span>}
@@ -1257,13 +1370,33 @@ export function InteractiveReport({
                       </tbody>
                     </table>
                     <p className="mt-2 text-[9px] leading-snug text-muted-foreground">
-                      RVEF/RVEDVI are computed from this patient's data (RVEDVI needs sex + BSA, set above).
-                      Peak GCS and Peak GAS are both marked preview — GCS uses this pipeline's existing RV
-                      cavity-radius strain measure (real once RV strain has been run for this model), but
-                      neither strain has a clinically validated RV-specific reference range yet, and GAS
-                      itself has no computation in this pipeline at all. RV SV {fmt(rv?.RV_SV)} mL. Advisory
-                      only — RV findings never affect the LV grade above.
+                      RVEF, RVEDVI and RVESVI are compared with sex-specific SCMR 2025 reference ranges
+                      (papillary muscles and trabeculations counted as blood pool) — within or outside the
+                      range, not a severity grade; hover a verdict for the full reason. With no sex selected
+                      each value is checked against both sexes: green and amber mean both agree, grey means the
+                      verdict depends on sex. Indexing needs height and weight above. The ARVC criteria in the
+                      RV patterns card below overlap this normal range in men (RVEDVI ≥ 110 mL/m² lies inside
+                      47–116) and apply only with a regional RV wall-motion abnormality. Peak GCS and Peak GAS
+                      are both marked preview — GCS uses this pipeline's existing RV cavity-radius strain
+                      measure (real once RV strain has been run for this model), but neither strain has a
+                      clinically validated RV-specific reference range yet, and GAS itself has no computation
+                      in this pipeline at all.
+                      RV SV {fmt(rv?.RV_SV)} mL. Advisory only — RV findings never affect the LV grade above.
                     </p>
+                    {rvCurrent && rvCurrent.warnings.length > 0 && (
+                      <p className="mt-1 text-[9px] leading-snug text-muted-foreground">{rvCurrent.warnings.join(" ")}</p>
+                    )}
+                    {!rvCurrent && !recomputingRvHealthStatus && onRecomputeRvHealthStatus && (
+                      <button
+                        type="button"
+                        onClick={() => onRecomputeRvHealthStatus(bsaM2 ?? null, rvSex)}
+                        className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        title="Grade RV health status for the sex and BSA entered above"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Grade RV now
+                      </button>
+                    )}
                   </div>
                 );
               })()}

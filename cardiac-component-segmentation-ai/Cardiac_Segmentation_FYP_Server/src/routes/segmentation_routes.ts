@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -2406,6 +2406,55 @@ router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: 
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering health status for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// Trigger RV health status for a single mask: sex-specific reference ranges
+// (SCMR 2025), NOT a diagnosis and not a severity grade. Stores `rvHealthStatus`
+// beside `healthStatus` and never touches the LV grade.
+// POST /segmentation/trigger-rv-health-status/:maskId
+//   body (optional): { sex?: "male"|"female"|"unspecified", bsa_m2?: number }
+//   Supply both on each call, as for trigger-disease-similarity; the stored
+//   result echoes them back. Without a sex the status is "Not assessable" —
+//   no sex-blind limit is substituted.
+router.post("/trigger-rv-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        if (!(maskDoc as any).heartMetrics) {
+            return res.status(400).json({
+                success: false,
+                message: "Heart metrics not computed for this mask yet — run trigger-heart-metrics first.",
+            });
+        }
+
+        const sex = req.body?.sex === "male" || req.body?.sex === "female" ? req.body.sex : "unspecified";
+        const bsaM2 = typeof req.body?.bsa_m2 === "number" && req.body.bsa_m2 > 0 ? req.body.bsa_m2 : null;
+
+        // Respond immediately and run the compute async — same pattern as the
+        // other trigger routes.
+        res.json({ success: true, message: "RV health-status computation started." });
+
+        computeRvHealthStatusFromMetrics(maskId, sex, bsaM2).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-rv-health-status async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering RV health status for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }
