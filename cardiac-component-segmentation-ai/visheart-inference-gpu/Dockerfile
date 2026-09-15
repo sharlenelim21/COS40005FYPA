@@ -147,6 +147,21 @@ WORKDIR /app
 # Copy the rest of application code
 COPY . .
 
+# Landmark checkpoints. UNETRESNET34 (architecture + trained weights) lives
+# outside this repo's own build context (a sibling of the outer monorepo's
+# cardiac-component-segmentation-ai/ folder, and its checkpoints/ is
+# gitignored there too), so it can never be reached by a plain `COPY`
+# rooted at this Dockerfile's context. build.ps1 / build.sh stage exactly
+# the files needed (the architecture file + both .pth checkpoints) into
+# _landmark_assets/ before invoking `docker build` -- run one of those
+# instead of `docker build .` directly, or this COPY fails the build with a
+# clear "no such file or directory" instead of silently shipping an image
+# that's missing landmark detection (the previous behaviour: the image
+# built fine, and only failed at runtime when a request needed the
+# checkpoint that was never copied in).
+COPY _landmark_assets/models/unet_resnet34.py /app/UNETRESNET34/models/unet_resnet34.py
+COPY _landmark_assets/checkpoints/ /app/UNETRESNET34/checkpoints/
+
 # Check if the models exist (and make script executable)
 RUN chmod +x ./docker/scripts/docker_requisite_check.sh && \
     bash ./docker/scripts/docker_requisite_check.sh

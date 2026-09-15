@@ -284,11 +284,13 @@ services:
       # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
       # Includes models/atlas (the AHA CPD atlas), so no separate atlas-only mount is needed.
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
-      # Landmark checkpoints (and unet_resnet34.py, the architecture they need) live at the
-      # repo root, outside visheart-inference-gpu's own build context, so a locally-built
-      # image never bakes them in -- confirmed at runtime: "No 2ch checkpoint found at
-      # /app/UNETRESNET34/checkpoints/best_model_2ch.pth" with this left commented out.
-      # Mount the whole folder (not just checkpoints/) so unet_resnet34.py resolves too.
+      # Since visheart-inference-gpu/build.ps1 (or build.sh) now stages these
+      # into the image at build time, this mount is only needed for local dev
+      # against source (docker-compose up) -- it shadows the baked-in copy
+      # with whatever's on disk, so editing UNETRESNET34 doesn't need a
+      # rebuild. An image built without that script (e.g. plain `docker
+      # build .`) has no landmark checkpoint at all and this mount is
+      # required; an image pulled from Docker Hub already has one baked in.
       - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:
@@ -361,10 +363,10 @@ services:
       # rebuilding the image -- the same workflow as unet.pth. The RV 4D checkpoint is picked up
       # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
-      # Landmark checkpoints (and unet_resnet34.py, the architecture they need) live at the
-      # repo root, outside visheart-inference-gpu's own build context, so a locally-built
-      # image never bakes them in. Mount the whole folder (not just checkpoints/) so
-      # unet_resnet34.py resolves too.
+      # Since visheart-inference-gpu/build.ps1 (or build.sh) now stages these
+      # into the image at build time, this mount is only needed for local dev
+      # against source (docker-compose up) -- see the gpu-cpu service above
+      # for the full explanation.
       - ../../UNETRESNET34:/app/UNETRESNET34:ro
     networks:
       visheart-network:

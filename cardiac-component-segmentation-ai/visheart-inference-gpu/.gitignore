@@ -15,3 +15,9 @@ venv/
 mamba-unet-env/
 unet.pth
 mamba-unet-env/
+
+# Staged by build.ps1/build.sh from the sibling UNETRESNET34 repo (outside this
+# repo's own build context) so the Dockerfile can COPY the landmark checkpoints
+# into the image. Never committed here -- checkpoints/ is gitignored in
+# UNETRESNET34 itself too; this is a build-time-only local copy.
+_landmark_assets/
