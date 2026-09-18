@@ -52,6 +52,13 @@ const runBullseyeRleScript = (
                 resolve(null);
             }
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -194,6 +201,13 @@ export const computeHeartMetricsFromMaskDoc = async (
             }
             resolve();
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -283,6 +297,13 @@ export const computeHealthStatusFromMetrics = async (
             }
             resolve();
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -359,6 +380,13 @@ export const computeRvHealthStatusFromMetrics = async (
                 logger.warn(`${serviceLocation}: [RvHealthStatus] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
             resolve();
+        });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
         });
         child.stdin?.write(input);
         child.stdin?.end();
@@ -508,6 +536,13 @@ export const computeRegionalHealthStatusFromStrain = async (
             }
             resolve();
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -579,6 +614,13 @@ export const computeDiseaseSimilarityFromMetrics = async (
                 logger.warn(`${serviceLocation}: [DiseaseSimilarity] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
             resolve();
+        });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
         });
         child.stdin?.write(input);
         child.stdin?.end();
