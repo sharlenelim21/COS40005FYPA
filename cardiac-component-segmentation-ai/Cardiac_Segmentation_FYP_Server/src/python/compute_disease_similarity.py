@@ -121,43 +121,70 @@ Output (stdout JSON):
     similarities          — [{code,label,percent,distance,reasons[]}] sorted desc
     features_used         — list[str]          # metrics that were non-null AND weighted
     features_missing      — list[str]
-    informational         — {StrokeVolume, StrokeVolumeIndex} echoed, not scored
+    informational         — {StrokeVolume, StrokeVolumeIndex, PeakGRS, PeakGCS} echoed,
+                             not scored (see "excluded from the weighted z-score" below)
     disclaimer            — fixed non-diagnostic disclaimer string
     method                — short method identifier for audit
     warnings              — list[str]
+    reference_source            — "published_research_cohort" (always, this sprint)
+    reference_status             — "provisional_external" (always, this sprint)
+    validated_on_deployed_pipeline — False (always, this sprint)
+    strain_reference_used        — False (GRS/GCS never scored, see above)
+    reference_provenance_notes   — str, which paper backs which profile
 
-Reference values - provenance
-------------------------------
-EF/EDV/ESV (all profiles) are ACDC cohort group statistics (mean +/- SD over the
-30 patients in each group) - the same dataset this project's segmentation is built
-on. PeakGRS/PeakGCS are ACDC cohort strain statistics. NONE of these were computed
-by re-running THIS project's own pipeline end-to-end on the ACDC cohort (only EF
-was independently spot-checked, on 6 usable DCM patients - see
-scripts/derive_acdc_reference_ranges.py) - they are external/published-cohort
-numbers feeding directly into this z-score engine. Treat this whole module as a
-research-oriented exploratory similarity score, not a validated classifier, until
-a dedicated validation pass regenerates every profile from a single consistently-
-processed labelled dataset (see docs/DISEASE_SIMILARITY_REFERENCES.md).
+Reference values - provenance (updated to published, cited cohorts)
+---------------------------------------------------------------------
+Status: PROVISIONAL EXTERNAL REFERENCES, not yet validated on this project's own
+deployed pipeline. reference_status="provisional_external" is stamped on every
+output (see compute_similarity's return dict). A future sprint should recompute
+NOR/HCM/DCM profiles from patient-level ACDC data using this project's own
+segmentation + geometric calculations, then compare against (and potentially
+replace/recalibrate) the external profiles below - see
+scripts/derive_acdc_reference_ranges.py for the one existing (partial, EF-only)
+attempt at that.
 
-NOR's EDVI/ESVI/LVMI (added for indexed mode) come from a real, verified paper:
-Zhan et al., "Meta-Analysis of Normal Reference Values for Right and Left
-Ventricular Quantification by Cardiovascular Magnetic Resonance," Circulation:
-Cardiovascular Imaging 2024;17(2):e016090 (doi: 10.1161/CIRCIMAGING.123.016090).
-Verified to exist and to use the papillary-muscle-in-cavity convention (matching
-ACDC) via web search, since the publisher blocks automated access to the full
-text - the specific male/female range figures below are AS PROVIDED, not
-independently re-extracted by this codebase's author from the primary source.
-A published range is converted to (mean, sd) by treating it as an approximate
-95% interval: mean = (lo+hi)/2, sd = (hi-lo)/4 - a standard, defensible but
-approximate conversion when only a range (not a raw mean/SD) is published.
+NOR (indexed EF/EDVI/ESVI/LVMI, sex-specific): Zhan Y, Friedrich MG, Dendukuri N,
+et al. "Meta-Analysis of Normal Reference Values for Right and Left Ventricular
+Quantification by Cardiovascular Magnetic Resonance." Circulation: Cardiovascular
+Imaging 2024;17(2):e016090 (doi: 10.1161/CIRCIMAGING.123.016090). Uses the
+papillary-muscle-in-cavity convention, matching ACDC.
 
-HCM/DCM's LVMI, LVMassG and MaxWallThicknessMm have NO published disease-group
-mean/SD available anywhere in this codebase's sources - they are PROJECT
-HEURISTIC estimates, constructed to straddle the qualitative ACDC/TFC-style
-morphology thresholds (HCM: >=15 mm wall thickness per multiple diastolic
-segments per the ACDC classification framework; DCM: <12 mm wall thickness with
-LVEDVI >100 mL/m^2 and LVEF <40%). Explicitly NOT dataset-derived or
-literature-cited - flagged inline below.
+HCM/DCM (indexed EF/EDVI/ESVI/LVMI): Kubler J, Burgstahler C, Brendel JM, et al.
+"Cardiac MRI findings to differentiate athlete's heart from hypertrophic (HCM),
+arrhythmogenic right ventricular (ARVC) and dilated (DCM) cardiomyopathy."
+International Journal of Cardiovascular Imaging 2021;37:2501-2515
+(doi: 10.1007/s10554-021-02280-6). Values are that paper's mean +/- SD directly,
+not sex-specific (the paper doesn't break these down by sex).
+
+Non-indexed (absolute EDV/ESV/LVMassG, all three profiles): derived from the
+indexed values above by multiplying by a declared generic reference BSA
+(REFERENCE_BSA_GENERIC = 1.91 m^2, from an assumed 175cm/75kg adult - the
+client's own proposed generic-fallback figure), i.e.
+absolute = indexed * REFERENCE_BSA_GENERIC. NOR uses the pooled (sex-unspecified)
+Zhan range for this conversion, since the non-indexed fallback doesn't branch by
+sex. EF is never BSA-scaled (unchanged between indexed/non-indexed). This
+fallback is explicitly less reliable than patient-specific BSA indexing -
+confidence is reduced accordingly (see _compute_confidence's mode=="non_indexed"
+penalty).
+
+Wall thickness and GRS/GCS are deliberately EXCLUDED from the weighted z-score
+distance this sprint, for two different reasons:
+  - MaxWallThicknessMm: Kubler et al. reports interventricular SEPTAL thickness
+    (HCM 12.4+/-2.4mm, DCM 8.8+/-1.8mm), which is not necessarily the same
+    measurement as this pipeline's own max-per-AHA-segment ED wall thickness.
+    Rather than mixing two different measurement methods in one z-score term,
+    wall thickness is used ONLY as the existing ACDC-threshold GATE (>=15mm
+    HCM / <12mm DCM - see _apply_gate), which was already independent of any
+    disease-cohort mean/SD.
+  - PeakGRS/PeakGCS: this pipeline's strain is a GEOMETRIC mask-deformation
+    surrogate (independently segmented ED/ES masks, not tracked material
+    points), not conventional CMR feature-tracking strain. External papers'
+    GRS/GCS values come from feature-tracking, tagging, or different slice
+    coverage - using their means/SDs directly in this z-score risks comparing
+    two different measurement methods as if they were one. They remain
+    available as INFORMATIONAL fields (see `informational` in the output) but
+    are not scored until this project derives its own geometric-strain
+    reference ranges.
 
 Pure Python + numpy. No cv2 / nibabel / scipy.
 """
@@ -175,11 +202,22 @@ import numpy as np
 # ── Feature sets (mode-dependent) ───────────────────────────────────────────────
 # StrokeVolume/StrokeVolumeIndex are intentionally absent from both — see module
 # docstring "Two modes" section for why (arithmetic double-count of EDV/ESV).
-FEATURES_INDEXED: list[str] = ["EF", "EDVI", "ESVI", "MaxWallThicknessMm", "LVMI", "PeakGCS", "PeakGRS"]
-FEATURES_NON_INDEXED: list[str] = ["EF", "EDV", "ESV", "MaxWallThicknessMm", "LVMassG", "PeakGCS", "PeakGRS"]
+# MaxWallThicknessMm and PeakGRS/PeakGCS are ALSO absent from scoring (see the
+# module docstring's "excluded from the weighted z-score" section) — wall
+# thickness is gate-only, strain is informational-only, both for measurement-
+# method-mismatch reasons, not because they're unavailable.
+FEATURES_INDEXED: list[str] = ["EF", "EDVI", "ESVI", "LVMI"]
+FEATURES_NON_INDEXED: list[str] = ["EF", "EDV", "ESV", "LVMassG"]
+# Parsed into `patient` (for _apply_gate) but never scored/weighted.
+GATE_ONLY_FEATURES: list[str] = ["MaxWallThicknessMm"]
 # Union — used only for input parsing / FEATURE_LABELS lookups, never for scoring.
-FEATURES: list[str] = list(dict.fromkeys(FEATURES_INDEXED + FEATURES_NON_INDEXED))
-INFORMATIONAL_FEATURES: list[str] = ["StrokeVolume", "StrokeVolumeIndex"]
+FEATURES: list[str] = list(dict.fromkeys(FEATURES_INDEXED + FEATURES_NON_INDEXED + GATE_ONLY_FEATURES))
+INFORMATIONAL_FEATURES: list[str] = ["StrokeVolume", "StrokeVolumeIndex", "PeakGRS", "PeakGCS"]
+
+# Generic reference BSA used to convert the indexed research profiles to
+# absolute (non-indexed) values when the patient's own BSA is unavailable — the
+# client's own proposed 175cm/75kg adult fallback. See module docstring.
+REFERENCE_BSA_GENERIC = 1.91
 
 FEATURE_LABELS: dict[str, str] = {
     "EF":                 "Ejection Fraction",
@@ -196,29 +234,27 @@ FEATURE_LABELS: dict[str, str] = {
     "PeakGCS":            "Peak Global Circumferential Strain",
 }
 
-# Per-feature weights, mode-dependent. Both sum to 1.00 by construction; renormalised
-# at run time anyway over whichever of the mode's features the patient actually has.
+# Per-feature weights, mode-dependent — only the 4 scored features per mode.
+# Renormalised at run time anyway over whichever of the mode's features the
+# patient actually has. Relative proportions kept from the original 7-feature
+# weighting (EF most discriminative, then EDVI/ESVI, LVMI last); wall
+# thickness/strain's old weight share simply no longer exists since they're
+# gate-only/informational now, not renormalised into the remaining features.
 FEATURE_WEIGHTS_INDEXED: dict[str, float] = {
-    "EF": 0.22, "EDVI": 0.18, "ESVI": 0.18, "MaxWallThicknessMm": 0.20,
-    "LVMI": 0.12, "PeakGCS": 0.06, "PeakGRS": 0.04,
+    "EF": 0.22, "EDVI": 0.18, "ESVI": 0.18, "LVMI": 0.12,
 }
 FEATURE_WEIGHTS_NON_INDEXED: dict[str, float] = {
-    "EF": 0.30, "MaxWallThicknessMm": 0.20, "EDV": 0.15, "ESV": 0.15,
-    "LVMassG": 0.10, "PeakGCS": 0.06, "PeakGRS": 0.04,
+    "EF": 0.30, "EDV": 0.15, "ESV": 0.15, "LVMassG": 0.10,
 }
 
 # ── Published adult NORMAL reference ranges (NOT disease-group stats) ──────────
-# Zhan et al. 2024 (see module docstring for full citation + verification caveat).
-# Used to build NOR's EDVI/ESVI/LVMI/EF mean/sd, sex-specific when sex is known,
-# pooled (union of both sexes' ranges) when it isn't.
+# Zhan et al. 2024 (see module docstring for full citation). Used to build NOR's
+# EDVI/ESVI/LVMI/EF mean/sd, sex-specific when sex is known, pooled (union of
+# both sexes' ranges) when it isn't.
 ADULT_NORMAL_RANGES: dict[str, dict[str, tuple[float, float]]] = {
     "male":   {"EF": (52.0, 73.0), "EDVI": (60.0, 109.0), "ESVI": (18.0, 45.0), "LVMI": (41.0, 76.0)},
     "female": {"EF": (54.0, 75.0), "EDVI": (56.0, 96.0),  "ESVI": (16.0, 38.0), "LVMI": (33.0, 57.0)},
 }
-# Reference BSA used ONLY to keep LVMassG/LVMI and EDV/EDVI internally consistent
-# with each other when converting between indexed and raw project-heuristic
-# numbers below (Du Bois "standard" adult BSA) - see PROVISIONAL notes inline.
-_REFERENCE_BSA_M2 = 1.73
 
 
 def _range_to_mean_sd(lo: float, hi: float) -> tuple[float, float]:
@@ -236,8 +272,9 @@ def _pooled_range(feature: str) -> tuple[float, float]:
 
 def _nor_indexed_stats(sex: str) -> dict[str, tuple[float, float]]:
     """NOR profile's EF/EDVI/ESVI/LVMI mean/sd - sex-specific range when sex is
-    known, pooled (wider, honest) range otherwise. EDV/ESV/PeakGRS/PeakGCS keep
-    their fixed ACDC-derived stats regardless of sex (see REFERENCE_PROFILES)."""
+    known, pooled (wider, honest) range otherwise. EDV/ESV/LVMassG (non-indexed
+    mode) keep their fixed pooled-derived stats regardless of sex, since the
+    non-indexed fallback doesn't branch by sex (see REFERENCE_PROFILES)."""
     table = ADULT_NORMAL_RANGES.get(sex)
     out: dict[str, tuple[float, float]] = {}
     for feature in ("EF", "EDVI", "ESVI", "LVMI"):
@@ -249,51 +286,46 @@ def _nor_indexed_stats(sex: str) -> dict[str, tuple[float, float]]:
 # ── Reference profiles (mean, sd) per feature ─────────────────────────────────
 #   NOR - healthy adult LV.
 #   HCM - hypertrophic cardiomyopathy: preserved/high EF, hypertrophied wall,
-#         elevated mass, small-to-normal cavity, impaired circumferential strain.
-#   DCM - dilated cardiomyopathy: large cavity, thin wall, low EF, low strain.
+#         elevated mass, small-to-normal cavity.
+#   DCM - dilated cardiomyopathy: large cavity, thin wall, low EF.
 #
-# Units: EF %, volumes mL, EDVI/ESVI/LVMI mL/m^2 or g/m^2, mass g,
-# MaxWallThicknessMm mm, PeakGRS %, PeakGCS % (negative by convention).
+# Units: EF %, volumes mL, EDVI/ESVI/LVMI mL/m^2 or g/m^2, mass g.
+# Only EF/EDV(I)/ESV(I)/LVMI/LVMassG are here — MaxWallThicknessMm (gate-only)
+# and PeakGRS/PeakGCS (informational-only) are deliberately not part of this
+# dict any more; see the module docstring's exclusion rationale.
+#
+# NOR indexed (EDVI/ESVI/LVMI/EF): Zhan et al. 2024, sex-specific — see
+# _nor_indexed_stats(), which overrides these pooled defaults per-request.
+# HCM/DCM indexed: Kubler et al. 2021, mean +/- SD as published (not sex-split).
+# All three profiles' non-indexed (EDV/ESV/LVMassG) are the indexed mean/sd
+# multiplied by REFERENCE_BSA_GENERIC (1.91) — see module docstring.
 REFERENCE_PROFILES: dict[str, dict[str, tuple[float, float]]] = {
     "NOR": {
-        "EF":                 (62.7,  5.6),    # ACDC group mean (n=30)
-        "EDV":                (139.1, 33.2),   # ACDC group mean (n=30)
-        "ESV":                (53.8,  18.0),   # ACDC group mean (n=30)
-        # EDVI/ESVI/LVMI default (pooled) filled in below by _nor_indexed_stats("unspecified");
-        # overridden per-request when sex is known - see compute_similarity().
-        "EDVI":               _range_to_mean_sd(*_pooled_range("EDVI")),
-        "ESVI":               _range_to_mean_sd(*_pooled_range("ESVI")),
-        "LVMI":               _range_to_mean_sd(*_pooled_range("LVMI")),
-        "LVMassG":            (94.3,  18.6),   # PROVISIONAL: LVMI mean/sd x reference BSA 1.73 - see caveat
-        "MaxWallThicknessMm": (9.0,   1.5),    # PROVISIONAL: project heuristic, typical normal ED wall
-        "PeakGRS":            (40.3,  10.2),   # ACDC cohort strain stats
-        "PeakGCS":            (-16.8, 2.3),    # ACDC cohort strain stats
+        "EF":      _range_to_mean_sd(*_pooled_range("EF")),     # Zhan 2024, pooled
+        "EDV":     (157.6, 25.3),                                # pooled EDVI (82.5, 13.25) x 1.91
+        "ESV":     (58.3,  13.8),                                 # pooled ESVI (30.5, 7.25) x 1.91
+        "EDVI":    _range_to_mean_sd(*_pooled_range("EDVI")),    # Zhan 2024, pooled; per-request sex override below
+        "ESVI":    _range_to_mean_sd(*_pooled_range("ESVI")),    # Zhan 2024, pooled
+        "LVMI":    _range_to_mean_sd(*_pooled_range("LVMI")),    # Zhan 2024, pooled
+        "LVMassG": (104.1, 20.5),                                 # pooled LVMI (54.5, 10.75) x 1.91
     },
     "HCM": {
-        "EF":                 (61.9,  12.6),   # ACDC group mean (n=30)
-        "EDV":                (138.4, 56.8),   # ACDC group mean (n=30)
-        "ESV":                (53.6,  34.3),   # ACDC group mean (n=30)
-        "EDVI":               (80.0,  32.8),   # PROVISIONAL: HCM EDV / reference BSA 1.73 - see caveat
-        "ESVI":               (31.0,  19.8),   # PROVISIONAL: HCM ESV / reference BSA 1.73 - see caveat
-        "LVMI":               (130.0, 35.0),   # PROVISIONAL: no published HCM LVMI mean/sd found - set to
-                                                # straddle the >110 g/m^2 "strong support" gate. NOT cited.
-        "LVMassG":            (224.9, 60.6),   # PROVISIONAL: LVMI mean/sd x reference BSA 1.73
-        "MaxWallThicknessMm": (19.0,  4.5),    # PROVISIONAL: set to straddle the >=15 mm essential gate. NOT cited.
-        "PeakGRS":            (37.8,  13.2),   # ACDC cohort strain stats
-        "PeakGCS":            (-14.5, 3.3),    # ACDC cohort strain stats
+        "EF":      (59.0,  9.0),     # Kubler et al. 2021
+        "EDV":     (179.5, 24.8),    # EDVI (94, 13) x 1.91
+        "ESV":     (74.5,  17.2),    # ESVI (39, 9) x 1.91
+        "EDVI":    (94.0,  13.0),    # Kubler et al. 2021
+        "ESVI":    (39.0,  9.0),     # Kubler et al. 2021
+        "LVMI":    (77.0,  12.0),    # Kubler et al. 2021
+        "LVMassG": (147.1, 22.9),    # LVMI (77, 12) x 1.91
     },
     "DCM": {
-        "EF":                 (25.2,  9.0),    # ACDC group mean (n=30) - see validation caveat in docstring
-        "EDV":                (248.3, 73.1),   # ACDC group mean (n=30)
-        "ESV":                (170.8, 58.7),   # ACDC group mean (n=30)
-        "EDVI":               (143.5, 42.3),   # PROVISIONAL: DCM EDV / reference BSA 1.73 - see caveat
-        "ESVI":               (98.7,  33.9),   # PROVISIONAL: DCM ESV / reference BSA 1.73 - see caveat
-        "LVMI":               (68.0,  20.0),   # PROVISIONAL: no published DCM LVMI mean/sd found - mild
-                                                # eccentric-hypertrophy estimate, well below HCM. NOT cited.
-        "LVMassG":            (117.6, 34.6),   # PROVISIONAL: LVMI mean/sd x reference BSA 1.73
-        "MaxWallThicknessMm": (8.5,   1.5),    # PROVISIONAL: set to sit below the <12 mm DCM gate. NOT cited.
-        "PeakGRS":            (11.2,  6.5),    # ACDC cohort strain stats
-        "PeakGCS":            (-5.6,  2.2),    # ACDC cohort strain stats
+        "EF":      (29.0,  13.0),    # Kubler et al. 2021
+        "EDV":     (252.1, 78.3),    # EDVI (132, 41) x 1.91
+        "ESV":     (183.4, 76.4),    # ESVI (96, 40) x 1.91
+        "EDVI":    (132.0, 41.0),    # Kubler et al. 2021
+        "ESVI":    (96.0,  40.0),    # Kubler et al. 2021
+        "LVMI":    (70.0,  21.0),    # Kubler et al. 2021
+        "LVMassG": (133.7, 40.1),    # LVMI (70, 21) x 1.91
     },
 }
 
@@ -314,9 +346,11 @@ _HEADLINE_LABELS: dict[str, str] = {
 }
 
 DISCLAIMER = (
-    "This is a research-oriented LV phenotype similarity comparison, not a diagnosis. "
-    "It reports which reference imaging phenotype (NOR-like, HCM-like, or DCM-like) the "
-    "available Cine-CMR LV measurements most resemble. A NOR-like result does not "
+    "This is a research-based relative phenotype similarity comparison, not a validated "
+    "disease likelihood or a diagnosis. It reports which reference imaging phenotype "
+    "(NOR-like, HCM-like, or DCM-like) the available Cine-CMR LV measurements most resemble, "
+    "using published cohort statistics as provisional external references — not yet derived "
+    "from this project's own deployed segmentation pipeline. A NOR-like result does not "
     "exclude cardiac disease, regional abnormalities, tissue abnormalities, or non-LV "
     "conditions. Interpretation by a qualified clinician is required."
 )
@@ -434,6 +468,7 @@ def _all_gate_facts(patient: dict) -> dict:
 def _compute_confidence(
     mode: str, sex: str, active_weights: dict[str, float],
     features_used: list[str], percents: dict[str, float], top_code: str, gate: dict,
+    wall_thickness_available: bool,
 ) -> tuple[float, list[str]]:
     """0.0-1.0 advisory confidence + the reasons it was reduced. Multiplicative,
     starts at 1.0. See module docstring for the factors considered."""
@@ -462,7 +497,9 @@ def _compute_confidence(
     # Standalone HCM caveat (client-provided UI spec) - only added when the generic
     # missing-high-weight note above didn't already cover it via a more specific
     # message (see _apply_gate's own HCM reason, used when HCM IS the top match).
-    if "MaxWallThicknessMm" not in features_used and top_code != "HCM":
+    # Checks whether wall thickness was actually MEASURED (gate-only now, never
+    # in features_used) - not whether it's a scored z-score feature.
+    if not wall_thickness_available and top_code != "HCM":
         notes.append(
             "HCM-like assessment limited: reliable HCM-like pattern assessment requires maximum LV "
             "wall thickness (and preferably BSA-indexed LV mass); functional metrics alone cannot "
@@ -485,22 +522,27 @@ def _compute_confidence(
     return max(0.0, min(1.0, round(conf, 3))), notes
 
 
-def _general_notes(mode: str, features_used: list[str]) -> list[str]:
+def _general_notes(mode: str, informational: dict[str, Optional[float]]) -> list[str]:
     """Informational, NON-confidence-affecting notes (client-provided UI spec) -
     kept separate from `_compute_confidence`'s notes because these don't reduce
     confidence; one of them is actively reassuring. Rendered by the frontend
-    with a neutral icon rather than the red confidence-reducing warning."""
+    with a neutral icon rather than the red confidence-reducing warning.
+
+    Checks `informational` (not features_used) for GRS/GCS, since strain is
+    never a scored z-score feature any more — but the caveat about it being a
+    geometric surrogate, not feature-tracking strain, still applies whenever
+    the value is actually present and shown to the user."""
     notes: list[str] = []
     if mode == "indexed":
         notes.append(
             "Height and weight were used to index LV volume and mass to body surface area. "
             "This improves comparison across different body sizes."
         )
-    if "PeakGRS" in features_used or "PeakGCS" in features_used:
+    if informational.get("PeakGRS") is not None or informational.get("PeakGCS") is not None:
         notes.append(
             "GRS and GCS are derived from differences between independently segmented cine-MRI "
-            "masks. They are supportive deformation features and are not equivalent to CMR "
-            "feature-tracking strain."
+            "masks. They are supportive, informational-only measurements (not used in the "
+            "similarity score this sprint) and are not equivalent to CMR feature-tracking strain."
         )
     return notes
 
@@ -533,7 +575,11 @@ def compute_similarity(
     mode_features = FEATURES_INDEXED if mode == "indexed" else FEATURES_NON_INDEXED
     active_weights = FEATURE_WEIGHTS_INDEXED if mode == "indexed" else FEATURE_WEIGHTS_NON_INDEXED
 
-    patient = {f: provided[f] for f in mode_features if f in provided}
+    # `patient` also carries GATE_ONLY_FEATURES (MaxWallThicknessMm) so
+    # _apply_gate/_all_gate_facts can read it, even though it's excluded from
+    # `features_used`/scoring below — a gate check and a z-score feature are
+    # different things now (see module docstring's exclusion rationale).
+    patient = {f: provided[f] for f in (mode_features + GATE_ONLY_FEATURES) if f in provided}
     features_used = [f for f in mode_features if f in patient]
     features_missing = [f for f in mode_features if f not in patient]
 
@@ -627,8 +673,9 @@ def compute_similarity(
     gate = _apply_gate(top_code, patient)
     confidence, confidence_notes = _compute_confidence(
         mode, sex, active_weights, features_used, percents, top_code, gate,
+        wall_thickness_available=patient.get("MaxWallThicknessMm") is not None,
     )
-    general_notes = _general_notes(mode, features_used)
+    general_notes = _general_notes(mode, informational)
     phenotype_facts = _all_gate_facts(patient)
 
     # Headline priority (client-provided decision-gate spec), most fundamental
@@ -670,6 +717,20 @@ def compute_similarity(
         "disclaimer":          DISCLAIMER,
         "method":              "zscore-weighted-distance+softmax+gate",
         "warnings":            warnings_out,
+        # Provenance — explicit per-request, not just in the module docstring, so a
+        # downstream consumer (UI, export, RAG service) can label the result
+        # correctly without having to know this module's internal history.
+        "reference_source":          "published_research_cohort",
+        "reference_status":          "provisional_external",
+        "validated_on_deployed_pipeline": False,
+        "strain_reference_used":     False,
+        "reference_provenance_notes": (
+            "NOR: Zhan et al. 2024 (doi:10.1161/CIRCIMAGING.123.016090). "
+            "HCM/DCM: Kubler et al. 2021 (doi:10.1007/s10554-021-02280-6). "
+            "Non-indexed values derived via generic BSA "
+            f"{REFERENCE_BSA_GENERIC} m^2. Wall thickness is gate-only "
+            "(ACDC threshold); GRS/GCS are informational-only (not scored)."
+        ),
     }
 
 

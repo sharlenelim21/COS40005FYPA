@@ -344,6 +344,7 @@ export function LandmarkSidebar({
         )}
         {activeTab === "landmarks" && (
           <LandmarksTab
+            activeModel={activeModel}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={onSaveLandmarks}
@@ -537,13 +538,17 @@ function SliceConfidenceDot({
   flag,
   confidence,
   model_used,
+  segModelLabel,
 }: {
   flag?: "normal" | "collapsed_to_mean";
   confidence?: "high" | "low";
   model_used?: "2ch" | "1ch_fallback";
+  /** "UNet" | "MedSAM" — which mask fed the 2ch model, for the tooltip text. */
+  segModelLabel?: string;
 }) {
   if (!flag && !confidence) return null;
 
+  const segTag = model_used === "2ch" ? `${segModelLabel ?? "seg"}-guided 2ch` : "MRI-only 1ch";
   let color: string;
   let tip: string;
 
@@ -552,10 +557,10 @@ function SliceConfidenceDot({
     tip = "Landmarks too close — mean point used";
   } else if (confidence === "high") {
     color = "bg-green-500";
-    tip = model_used === "2ch" ? "High confidence (seg-guided 2ch)" : "High confidence (MRI-only 1ch)";
+    tip = `High confidence (${segTag})`;
   } else {
     color = "bg-orange-400";
-    tip = `Low confidence — ${model_used === "2ch" ? "seg-guided 2ch" : "MRI-only 1ch"}`;
+    tip = `Low confidence — ${segTag}`;
   }
 
   return (
@@ -604,6 +609,7 @@ function LandmarksTab({
   onHighlightLandmark,
   onReset,
   summaryStats,
+  activeModel,
 }: {
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
@@ -641,7 +647,10 @@ function LandmarksTab({
   highlightedLandmarkId?: string | null;
   onHighlightLandmark?: (id: string | null) => void;
   summaryStats?: React.ReactNode;
+  /** Which segmentation model's mask is fed into the 2ch landmark model, when available. */
+  activeModel?: "unet" | "medsam";
 }) {
+  const segModelLabel = activeModel === "medsam" ? "MedSAM" : "UNet";
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   if (!hasPredictions) {
@@ -702,12 +711,24 @@ function LandmarksTab({
             flag={prediction?.flag}
             confidence={prediction?.confidence}
             model_used={prediction?.model_used}
+            segModelLabel={segModelLabel}
           />
           <span className="text-xs text-muted-foreground tabular-nums">
             Slice {currentFrame + 1}
           </span>
         </div>
       </div>
+
+      {/* Which mask is actually feeding this slice's detection — the dot above
+          only surfaces this on hover, so it's easy to miss that a slice fell
+          back to MRI-only (no mask available/valid) even with a model selected
+          in the toggle above. */}
+      <p className="text-[11px] text-muted-foreground -mt-2">
+        Segmentation mask fed to landmark model:{" "}
+        <span className="font-medium text-foreground">
+          {prediction?.model_used === "2ch" ? `${segModelLabel} (2ch)` : "None — MRI only (1ch fallback)"}
+        </span>
+      </p>
 
       {/* Per-slice confidence overview. The single dot above only describes the
           slice currently in view, so there was no way to see which slices the
@@ -723,7 +744,8 @@ function LandmarksTab({
           </div>
           <div className="flex flex-wrap gap-1">
             {allPredictions.map((p, i) => {
-              const isCurrent = i === currentFrame;
+              const sliceNum = p.slice_id ?? i;
+              const isCurrent = sliceNum === currentFrame;
               const color =
                 p.flag === "collapsed_to_mean" ? "bg-zinc-400"
                 : p.confidence === "high" ? "bg-green-500"
@@ -739,8 +761,8 @@ function LandmarksTab({
                 <button
                   key={i}
                   type="button"
-                  onClick={() => onSliceSelect?.(i)}
-                  title={wasManuallyEdited ? `Slice ${i + 1} — ${tip} — landmark manually removed` : `Slice ${i + 1} — ${tip}`}
+                  onClick={() => onSliceSelect?.(sliceNum)}
+                  title={wasManuallyEdited ? `Slice ${sliceNum + 1} — ${tip} — landmark manually removed` : `Slice ${sliceNum + 1} — ${tip}`}
                   className={cn(
                     "relative flex h-5 w-5 items-center justify-center rounded text-[8px] font-medium transition-all",
                     color,
@@ -748,7 +770,7 @@ function LandmarksTab({
                     p.confidence === "high" || p.flag === "collapsed_to_mean" ? "text-white" : "text-white",
                   )}
                 >
-                  {i + 1}
+                  {sliceNum + 1}
                   {wasManuallyEdited && (
                     <Pencil
                       className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-background p-[1px] text-foreground shadow"

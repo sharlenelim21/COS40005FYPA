@@ -624,12 +624,17 @@ export const computeBullseyeAndStore = async (
         if (savedLandmarkDoc) {
             const lm1Points: number[][] = [];
             const lm2Points: number[][] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
-                        if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
-                    }
+            // ED (frame 0) only — a saved doc can now hold every cardiac frame's
+            // landmarks; averaging RV insertion points across cardiac phases
+            // (not just across slices within one phase) would blend positions
+            // from a heart that's moved throughout the cycle into a physically
+            // meaningless point. Bullseye alignment has always meant "relative
+            // to ED" elsewhere in this codebase.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
+                    if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
                 }
             }
             const meanPt = (pts: number[][]): number[] | null =>

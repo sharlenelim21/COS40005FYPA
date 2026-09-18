@@ -317,6 +317,13 @@ def run_landmark_inference_from_nifti(
                 model_1ch = model_2ch
 
     # --- Load MRI volume ---
+    # Reverted back to ED (frame 0) only. Bullseye/strain alignment is
+    # anchored to ED everywhere else in this codebase (the CPD warp fit, the
+    # 4D reconstruction's star topology, the ED-vs-ES strain comparison all
+    # use one fixed reference) — running landmark detection across every
+    # cardiac frame cost ~n_frames times the inference time for coordinates
+    # that would mostly never feed anything downstream, since only ED's
+    # points are ever used for alignment.
     nii = nib.load(nifti_path)
     img = nii.get_fdata().astype(np.float32)
     if img.ndim == 4:

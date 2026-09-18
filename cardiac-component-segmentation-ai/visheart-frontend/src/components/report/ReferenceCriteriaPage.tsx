@@ -142,25 +142,33 @@ export function ReferenceCriteriaPage({
         caption="LV Phenotype Similarity — reference profiles used for scoring (mean ± SD)"
         columns={["Feature", "NOR-like", "HCM-like", "DCM-like"]}
         rows={[
-          ["EF (%)", "62.7 ± 5.6", "61.9 ± 12.6", "25.2 ± 9.0"],
-          ["EDV (mL) / EDVI (mL/m²)", "139.1 ± 33.2 / 82.5 ± 13.3", "138.4 ± 56.8 / 80.0 ± 32.8", "248.3 ± 73.1 / 143.5 ± 42.3"],
-          ["ESV (mL) / ESVI (mL/m²)", "53.8 ± 18.0 / 30.5 ± 7.3", "53.6 ± 34.3 / 31.0 ± 19.8", "170.8 ± 58.7 / 98.7 ± 33.9"],
-          ["Max wall thickness (mm)", "9.0 ± 1.5", "19.0 ± 4.5", "8.5 ± 1.5"],
-          ["LV mass (g) / LVMI (g/m²)", "94.3 ± 18.6 / 54.5 ± 10.8", "224.9 ± 60.6 / 130.0 ± 35.0", "117.6 ± 34.6 / 68.0 ± 20.0"],
-          ["Peak GRS (%)", "40.3 ± 10.2", "37.8 ± 13.2", "11.2 ± 6.5"],
-          ["Peak GCS (%)", "−16.8 ± 2.3", "−14.5 ± 3.3", "−5.6 ± 2.2"],
+          ["EF (%)", "63.5 ± 5.8 (pooled)", "59.0 ± 9.0", "29.0 ± 13.0"],
+          ["EDV (mL) / EDVI (mL/m²)", "157.6 ± 25.3 / 82.5 ± 13.3", "179.5 ± 24.8 / 94.0 ± 13.0", "252.1 ± 78.3 / 132.0 ± 41.0"],
+          ["ESV (mL) / ESVI (mL/m²)", "58.3 ± 13.8 / 30.5 ± 7.3", "74.5 ± 17.2 / 39.0 ± 9.0", "183.4 ± 76.4 / 96.0 ± 40.0"],
+          ["LV mass (g) / LVMI (g/m²)", "104.1 ± 20.5 / 54.5 ± 10.8", "147.1 ± 22.9 / 77.0 ± 12.0", "133.7 ± 40.1 / 70.0 ± 21.0"],
         ]}
         cite={
           <>
             Both indexed (…I / BSA-adjusted) and non-indexed forms shown — whichever the patient&apos;s own BSA
-            availability selected on earlier pages is the one actually scored. EF, EDV, ESV, Peak GRS/GCS are ACDC
-            cohort statistics (n=30/group, this project&apos;s own training data). NOR&apos;s EDVI/ESVI/LVMI come
-            from Zhan et al. 2024 (pooled shown; sex-specific used when sex is known). Every other indexed/mass/
-            wall-thickness value — HCM/DCM&apos;s EDVI/ESVI/LVMI/LV mass, and all three profiles&apos; own LV mass
-            and max wall thickness — is a project heuristic, not literature-cited.
+            availability selected on earlier pages is the one actually scored. Indexed NOR: Zhan et al. 2024 (pooled
+            shown; sex-specific used when sex is known). Indexed HCM/DCM: Kübler et al., <em>Int J Cardiovasc
+            Imaging</em> 2021;37:2501–2515 (not sex-specific in the source). Non-indexed (absolute) values for all
+            three profiles are the indexed figures multiplied by a declared generic reference BSA of 1.91 m² — an
+            approximation used only when the patient&apos;s own height/weight are unavailable. These are provisional
+            external references, not yet derived from this project&apos;s own deployed segmentation pipeline.
           </>
         }
       />
+
+      <p className="mb-3 text-[8.5px] leading-snug text-gray-600">
+        <strong>Not scored, shown for context only:</strong> maximum ED wall thickness is used only as a threshold
+        gate (≥ 15 mm supports HCM-like, &lt; 12 mm supports DCM-like — the ACDC classification thresholds), not as a
+        weighted similarity feature, since the nearest published cohort measures interventricular septal thickness
+        specifically (Kübler et al.: HCM 12.4 ± 2.4 mm, DCM 8.8 ± 1.8 mm), which is not necessarily the same
+        measurement as this pipeline&apos;s own per-segment maximum. Peak GRS/GCS are geometric mask-deformation
+        measurements, not conventional CMR feature-tracking strain, and are displayed as informational values only —
+        they are not compared against any reference range or included in the similarity score.
+      </p>
 
       <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
         These are disease-specific criteria, published risk ranges, and this project&apos;s own scoring reference
