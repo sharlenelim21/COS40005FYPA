@@ -549,8 +549,20 @@ export default function Standalone4DViewerPage() {
 
         {/* Controls Panel */}
         <ResizablePanel defaultSize={30} minSize={0}>
-          <div className="h-full overflow-y-auto p-4">
-            <Card className="h-full">
+          {/* overflow-anchor-none: without it, the browser's scroll-anchoring
+              silently re-scrolls this panel to compensate for the layout
+              shift when the GLB viewer next door finishes loading (isLoadingModel
+              flips, canvas gets its final size) or ResizablePanelGroup redistributes
+              panel sizes — which is why the jump shows up right around the first
+              Play click and hides the header above the fold instead of leaving
+              scroll where it was. Also drop the Card's forced h-full: sizing it to
+              exactly the scroll container's height while its own content (slider +
+              buttons + chambers + info + shortcuts) is taller than that is the
+              layout conflict that gives scroll-anchoring something to "fix" in the
+              first place. Letting the card size to its natural content height and
+              scrolling the outer div instead avoids that entirely. */}
+          <div className="h-full overflow-y-auto p-4 [overflow-anchor:none]">
+            <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center justify-between">
                   <span>Playback Controls</span>
