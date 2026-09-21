@@ -291,7 +291,15 @@ services:
       # rebuild. An image built without that script (e.g. plain `docker
       # build .`) has no landmark checkpoint at all and this mount is
       # required; an image pulled from Docker Hub already has one baked in.
+      # checkpoints/ is deliberately excluded from this mount: it's gitignored
+      # and typically absent on a fresh host checkout (best_model_2ch.pth /
+      # best_model_1ch.pth live outside this repo's build context -- see the
+      # Dockerfile's landmark-checkpoint COPY comment), so mounting the whole
+      # UNETRESNET34 folder shadowed the image's baked-in checkpoints with an
+      # empty directory and broke landmark inference at runtime with "Could
+      # not find 2ch landmark checkpoint" even though the image had one.
       - ../../UNETRESNET34:/app/UNETRESNET34:ro
+      - /app/UNETRESNET34/checkpoints
     networks:
       visheart-network:
         aliases:
@@ -367,7 +375,10 @@ services:
       # into the image at build time, this mount is only needed for local dev
       # against source (docker-compose up) -- see the gpu-cpu service above
       # for the full explanation.
+      # checkpoints/ is deliberately excluded from this mount -- see the
+      # gpu-cpu service above for why.
       - ../../UNETRESNET34:/app/UNETRESNET34:ro
+      - /app/UNETRESNET34/checkpoints
     networks:
       visheart-network:
         aliases:
