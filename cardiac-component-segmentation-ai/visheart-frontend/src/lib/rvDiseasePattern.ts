@@ -285,3 +285,23 @@ export function computeRvDiseasePatterns(inputs: RvDiseasePatternInputs): RvDise
   const general = scoreGeneral(inputs, arvc.score, pah.score);
   return [arvc, pah, general];
 }
+
+/**
+ * Below this, nothing is "most similar" — every pattern here is a disease
+ * axis (ARVC-like / PAH-associated / general dysfunction); there is no
+ * "Normal" candidate in the array to fall back to. Without a floor,
+ * `reduce`-picking the highest score always names ARVC, PAH, or General even
+ * for a genuinely normal RV (all near 0), just because one of the three has
+ * to be numerically largest. 20 mirrors the "minor" TFC/PAH band being the
+ * lowest score any single met criterion actually contributes (e.g. ARVC's
+ * minor RVEDVI/RVEF band = 30 points) — below it, nothing has been met.
+ */
+export const RV_PATTERN_SIGNIFICANCE_THRESHOLD = 20;
+
+/** Highest-scoring pattern, or null when none clears the significance floor
+ * (i.e. nothing here should be reported as "most similar" — nothing was met). */
+export function getTopRvPattern(patterns: RvDiseasePatternResult[]): RvDiseasePatternResult | null {
+  if (!patterns.length) return null;
+  const top = patterns.reduce((a, b) => (b.score > a.score ? b : a), patterns[0]);
+  return top.score >= RV_PATTERN_SIGNIFICANCE_THRESHOLD ? top : null;
+}
