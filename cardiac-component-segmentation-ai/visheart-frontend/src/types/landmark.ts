@@ -175,12 +175,25 @@ export function framePredictionsToLandmarkFrames(
  *  indicator even after a real edit moved the points away from it. Only reconstruct an edit entry
  *  for slices that were genuinely promoted to "normal"; leave untouched collapsed slices with no
  *  entry so they keep falling back to the raw AI prediction (and its collapsed_to_mean flag).
+ *
+ *  `predictions` (the raw, un-edited AI output) is needed to tell a deliberate deletion apart from
+ *  "never detected": a saved slice's landmarks[] simply omits both cases the same way. A landmark
+ *  key that IS present in the raw prediction but MISSING from the saved slice must have been
+ *  deleted by the user, so it's reconstructed here as an explicit `[key]: undefined` entry —
+ *  otherwise the deletion silently reverses itself on reload, since a landmarkEdits entry with no
+ *  such key at all falls straight back to showing the original AI coordinate.
  */
 export function landmarkFramesToEdits(
   doc: PersistedLandmarkDoc | null | undefined,
+  predictions: FramePrediction[] = [],
 ): Record<string, Partial<FramePrediction>> {
   const edits: Record<string, Partial<FramePrediction>> = {};
   if (!doc?.frames) return edits;
+
+  const rawByKey = new Map<string, FramePrediction>();
+  for (const pred of predictions) {
+    rawByKey.set(`${pred.frame_id}:${pred.slice_id ?? 0}`, pred);
+  }
 
   for (const frame of doc.frames) {
     for (const slice of frame.slices ?? []) {
@@ -188,10 +201,19 @@ export function landmarkFramesToEdits(
 
       const key = `${frame.frameindex}:${slice.sliceindex}`;
       const entry: Partial<FramePrediction> = {};
+      const savedKeys = new Set((slice.landmarks ?? []).map((p) => p.key));
       for (const point of slice.landmarks ?? []) {
         (entry as Record<string, unknown>)[point.key] = [point.x, point.y] as LandmarkCoord;
         if (point.flag) entry.flag = point.flag;
         if (point.confidence) entry.confidence = point.confidence;
+      }
+      const raw = rawByKey.get(key);
+      if (raw) {
+        for (const pointKey of LANDMARK_POINT_KEYS) {
+          if (!savedKeys.has(pointKey) && getLandmarkCoord(raw, pointKey)) {
+            (entry as Record<string, unknown>)[pointKey] = undefined;
+          }
+        }
       }
       if (Object.keys(entry).length > 0) {
         edits[key] = entry;

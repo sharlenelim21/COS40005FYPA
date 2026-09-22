@@ -13,16 +13,25 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { BookOpen, Sparkles, Send, ExternalLink, Loader2, AlertTriangle, FileText } from "lucide-react";
+import { BookOpen, Sparkles, Send, ExternalLink, Loader2, AlertTriangle, FileText, Trash2, BadgeCheck } from "lucide-react";
 import {
   researchApi,
   researchAssistantEnabled,
   type ResearchAnswer,
+  type LvPhenotypeFacts,
 } from "@/lib/researchApi";
 
 type Props = {
   /** Prebuilt patient-context string (see buildPatientContext). Empty = none. */
   patientContext?: string;
+  /**
+   * Structured, backend-computed phenotype facts (see buildLvPhenotypeFacts) —
+   * sent alongside `patientContext` so the assistant's answer is constrained
+   * to the deterministic gate result instead of inferring the phenotype from
+   * raw numbers + whatever literature it happens to retrieve. Optional so a
+   * caller with no disease-similarity result yet still gets a plain /explain.
+   */
+  patientFacts?: LvPhenotypeFacts;
   /**
    * Identifies which report this panel belongs to (e.g. the project ID), so
    * the persisted conversation and session_id are scoped per-report — opening
@@ -76,26 +85,50 @@ function saveTurns(key: string, turns: Turn[]) {
   }
 }
 
+function freshSessionId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function loadOrCreateSessionId(key: string): string {
   const storageKey = `cra:session:${key}`;
   const existing = storage()?.getItem(storageKey);
   if (existing) return existing;
-  const fresh =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const fresh = freshSessionId();
   storage()?.setItem(storageKey, fresh);
   return fresh;
 }
 
-export default function CardiacResearchAssistant({ patientContext, storageKey = "default" }: Props) {
+export default function CardiacResearchAssistant({ patientContext, patientFacts, storageKey = "default" }: Props) {
   const [online, setOnline] = useState<boolean | null>(null);
   const [input, setInput] = useState("");
   // Restored synchronously from sessionStorage so a tab switch never shows an
   // empty panel before the effect below runs.
   const [turns, setTurns] = useState<Turn[]>(() => loadTurns(storageKey));
-  const [sessionId] = useState<string>(() => loadOrCreateSessionId(storageKey));
+  // NOT `const [sessionId]` -- "New conversation" below needs to replace this,
+  // e.g. after a backend fix, so an old answer sitting in the transcript
+  // doesn't get mistaken for what the CURRENT code would produce, and so a
+  // stale server-side follow-up topic can't leak into a fresh question.
+  const [sessionId, setSessionId] = useState<string>(() => loadOrCreateSessionId(storageKey));
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  /** Wipes this patient's persisted chat + starts a new session_id. The old
+   *  turns are just static text -- they never re-run against updated backend
+   *  logic, so without this, a bug fix can look like it "didn't work" when
+   *  really the panel is just showing an answer from before the fix. */
+  function startNewConversation() {
+    setTurns([]);
+    const fresh = freshSessionId();
+    setSessionId(fresh);
+    try {
+      storage()?.removeItem(`cra:turns:${storageKey}`);
+      storage()?.setItem(`cra:session:${storageKey}`, fresh);
+    } catch {
+      // Storage unavailable -- the in-memory state above still resets for
+      // this tab, it just won't stick if the tab is somehow restored.
+    }
+  }
 
   // Check the service is up once on mount (only if a URL is configured).
   useEffect(() => {
@@ -130,9 +163,9 @@ export default function CardiacResearchAssistant({ patientContext, storageKey = 
       // context; anything else is a free-text /ask.
       const useExplain = patientContext && /explain these results/i.test(q);
       const res = useExplain
-        ? await researchApi.explain(patientContext!, undefined, sessionId)
+        ? await researchApi.explain(patientContext!, undefined, sessionId, patientFacts)
         : patientContext
-          ? await researchApi.explain(patientContext, q, sessionId)
+          ? await researchApi.explain(patientContext, q, sessionId, patientFacts)
           : await researchApi.ask(q, sessionId);
       setTurns((prev) =>
         prev.map((t, i) => (i === index ? { ...t, answer: res, loading: false } : t)),
@@ -156,6 +189,21 @@ export default function CardiacResearchAssistant({ patientContext, storageKey = 
         <span className="ml-auto rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-teal-600 dark:bg-teal-900/30 dark:text-teal-300">
           Research aid · not diagnostic
         </span>
+        {/* Old turns are static text — they never re-run against updated
+            backend logic, so after a fix this is the only way to confirm a
+            genuinely fresh answer instead of re-reading a stale one. */}
+        {turns.length > 0 && (
+          <button
+            type="button"
+            onClick={startNewConversation}
+            disabled={busy}
+            title="Start a new conversation — clears this patient's saved chat"
+            className="flex items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10px] text-slate-500 transition-colors hover:border-red-300 hover:text-red-600 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400 dark:hover:text-red-400"
+          >
+            <Trash2 className="h-3 w-3" aria-hidden />
+            New conversation
+          </button>
+        )}
       </div>
 
       {/* Offline notice */}
@@ -229,6 +277,26 @@ export default function CardiacResearchAssistant({ patientContext, storageKey = 
                                   <ExternalLink className="ml-1 inline h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
                                 )}
                               </a>
+                              {/* Citation count — Europe PMC's own number,
+                                  backfilled via OpenAlex when missing/zero.
+                                  Plain text, not a badge: it's a magnitude
+                                  signal ("how established"), not a pass/fail
+                                  check like the ones below. */}
+                              {typeof s.citation_count === "number" && (
+                                <span className="ml-1.5 text-slate-400 dark:text-slate-500">
+                                  · {s.citation_count.toLocaleString()} citation{s.citation_count === 1 ? "" : "s"}
+                                </span>
+                              )}
+                              {/* Semantic Scholar's one-line AI summary — a
+                                  quick preview before clicking through. Absent
+                                  more often than not (its keyless endpoint
+                                  rate-limits hard), so this simply doesn't
+                                  render rather than showing a placeholder. */}
+                              {s.tldr && (
+                                <p className="mt-0.5 text-[11px] italic leading-snug text-slate-500 dark:text-slate-400">
+                                  {s.tldr}
+                                </p>
+                              )}
                               {/* Only shown when Unpaywall found a legally-free
                                   full text — abstracts alone often aren't enough. */}
                               {s.pdf_url && (
@@ -241,6 +309,47 @@ export default function CardiacResearchAssistant({ patientContext, storageKey = 
                                   <FileText className="h-2.5 w-2.5" aria-hidden />
                                   Free PDF
                                 </a>
+                              )}
+                              {/* Crossref DOI check — `verified === false` is a
+                                  real red flag (title doesn't match the DOI's
+                                  own bibliographic record) worth surfacing;
+                                  `null`/`undefined` (not checked — no DOI, or
+                                  the lookup failed) shows nothing rather than
+                                  implying every unchecked source is suspect. */}
+                              {s.verified === true && (
+                                <span
+                                  className="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                                  title="This citation's title matches the DOI's own Crossref record."
+                                >
+                                  <BadgeCheck className="h-2.5 w-2.5" aria-hidden />
+                                  Verified
+                                </span>
+                              )}
+                              {s.verified === false && (
+                                <span
+                                  className="ml-2 inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300"
+                                  title="This citation's title does not match the DOI's own Crossref record — treat with caution."
+                                >
+                                  <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
+                                  Title mismatch
+                                </span>
+                              )}
+                              {/* Lexical-overlap heuristic, not true entailment
+                                  — only the negative case is shown (a softer,
+                                  lower-confidence signal than Crossref, so no
+                                  positive badge to avoid overclaiming). Flags
+                                  a citation whose neighbouring sentence shares
+                                  almost no vocabulary with that source's own
+                                  abstract — worth a second look, not proof the
+                                  claim is wrong. */}
+                              {s.content_supported === false && (
+                                <span
+                                  className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                                  title="The text next to this citation shares little vocabulary with the source's own abstract — it may not actually address the claim."
+                                >
+                                  <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
+                                  May not support claim
+                                </span>
                               )}
                             </div>
                           </div>

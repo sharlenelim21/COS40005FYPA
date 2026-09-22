@@ -6,6 +6,21 @@ export enum SegmentationModel {
   UNET = "unet"
 }
 
+/**
+ * Which cardiac chamber a 4D reconstruction represents.
+ *
+ * LV is the myocardial wall and is the clinical product; every reconstruction created before
+ * this field existed is LV, so LV is the default everywhere and untagged records read as LV.
+ *
+ * RV is the right-ventricular cavity. It is RESEARCH/REFERENCE ONLY -- the RV shape model is
+ * under a documented accuracy no-go and its output must not be used for clinical diagnosis.
+ * Anything that surfaces an RV reconstruction to a user is required to label it as such.
+ */
+export enum ReconstructionChamber {
+  LV = "lv",
+  RV = "rv"
+}
+
 /* Interfaces */
 // Enumeration for user roles
 /**
@@ -272,6 +287,19 @@ export interface IProjectSegmentationMask {
     lv_centroid?: [number, number];
   };
   /**
+   * Per-cardiac-cycle-frame wall thickness — deliberately separate from the
+   * strain pipeline (`strainSeries`). Wall thickness at a single frame needs
+   * no comparison against another frame, so this is computed by looping the
+   * same RLE-only script `bullseye` uses once per frame, with no GPU call —
+   * safe to auto-run right after segmentation. Lets the Structure tab's
+   * bullseye/3D heart animate across the cycle without a manual "Compute all
+   * frames" (which remains GRS/GCS-only). See computeFrameWallThicknessSeries.
+   */
+  frameBullseye?: {
+    frames: { frameIndex: number; segment_values: (number | null)[]; stats: { min: number | null; max: number | null; mean: number | null; n_nan: number } }[];
+    computed_at: string;
+  };
+  /**
    * Cardiac clinical metrics derived from this mask's RLE frames plus the
    * project's stored 4x4 affine. Produced by compute_heart_metrics_from_rle.py
    * and stored parallel to `bullseye`. Fields may be null when the input is
@@ -344,14 +372,17 @@ export interface IProjectSegmentationMask {
    * Rule-based cardiac health-status assessment — NOT a diagnosis.
    *
    * Produced by compute_health_status.py from this mask's stored
-   * heartMetrics.measurements (plus heartMetrics.warnings for the low-
-   * confidence branch). Uses the LVEF band as the primary axis, with
+   * heartMetrics.measurements, plus heartMetrics.voxel_mm3 and
+   * heartMetrics.duplicate_slices to judge whether absolute volumes are
+   * reliable. Uses the LVEF band as the primary axis, with
    * supporting evidence lines for EDV / Peak GCS / Peak GRS. See
    * HEALTH_STATUS_IMPLEMENTATION.md for the exact bands and the
    * downgrade heuristic. `status` may be "Indeterminate" when EF is null
    * (single phase or ED == ES). `confidence` drops to "low" when EF is
-   * null OR when volume evidence was suppressed because
-   * heartMetrics.warnings flagged the affine as suspicious.
+   * null OR when volume evidence was suppressed because absolute LV volumes
+   * are unreliable (suspicious voxel_mm3, LVEDV outside 30–400 mL, or a
+   * duplicated LV-cavity slice). Warnings unrelated to LV volume, such as
+   * "No RV voxels at ED", do not lower confidence.
    */
   healthStatus?: {
     status: "Healthy" | "Mild" | "Moderate" | "Severe" | "Indeterminate";
@@ -409,6 +440,51 @@ export interface IProjectSegmentationMask {
     patient_mean_gcs: number | null;
     relative_rule_applied?: boolean;
     thresholds: Record<string, number>;
+    disclaimer: string;
+    method: string;
+    warnings: string[];
+    computed_at: string;
+  };
+  /**
+   * RV health status — sex-specific reference-range comparison (SCMR 2025),
+   * NOT a diagnosis and not a severity grade. Produced by
+   * compute_rv_health_status.py from heartMetrics RVEF/RVEDV/RVESV plus the sex
+   * and BSA the report page supplied on that call, both echoed back here so the
+   * page can tell whether this result matches what is on screen. Sits beside
+   * `healthStatus` and never changes it. Without a sex, each value is checked
+   * against both sexes' limits and gets a verdict only where they agree;
+   * `status` is "Depends on sex" when a value differs by sex and no value is
+   * outside both ranges, and "Not assessable" when RVEF could not be computed.
+   */
+  rvHealthStatus?: {
+    status: "Within reference range" | "Outside reference range" | "Depends on sex" | "Not assessable";
+    confidence: "normal" | "low";
+    sex: "male" | "female" | "unspecified";
+    bsa_m2: number | null;
+    evidence: {
+      label: string;
+      level: "ok" | "warn" | "unavailable";
+      detail: string;
+      // True when no sex was given and the value is normal for one sex only.
+      depends_on_sex?: boolean;
+    }[];
+    features_used: string[];
+    features_missing: string[];
+    reference: {
+      source: string;
+      convention: string;
+      sex: "male" | "female" | null;
+      rvef_lower_limit: number | null;
+      rvedvi_range: [number, number] | null;
+      rvesvi_range: [number, number] | null;
+      // Both sexes' limits, always present (the three fields above are null
+      // when no sex was given).
+      by_sex: Record<"male" | "female", {
+        rvef_lower_limit: number;
+        rvedvi_range: [number, number];
+        rvesvi_range: [number, number];
+      }>;
+    };
     disclaimer: string;
     method: string;
     warnings: string[];
@@ -694,6 +770,9 @@ export interface IProjectReconstruction {
   isAIGenerated: boolean; // Indicates if the reconstruction is AI-generated (should not delete if it's AI output)
   meshFormat: MeshFormat; // Format of the 4D mesh file
   segmentationModel?: string; // Which segmentation model was used to generate this reconstruction (medsam or unet)
+  chamber?: ReconstructionChamber; // Which chamber this mesh is (lv = myocardium, rv = RV cavity).
+                                   // Absent means LV: every record predating this field is LV.
+                                   // RV is research-only and must be labelled wherever it is shown.
   
   // File properties 
   filename: string; // Server-generated reconstruction filename (e.g., projectid_reconstructionid_4d)
@@ -765,6 +844,9 @@ export interface IJob {
   segmentationDescription?: string; // Optional user-defined description for the resulting segmentation
   segmentationSource?: segmentationSource; // Source of the image for segmentation
   segmentationModel?: SegmentationModel; // Track which model was used
+  chamber?: ReconstructionChamber; // 4D reconstruction jobs only: which chamber this job builds.
+                                   // Absent means LV. Needed so an in-flight RV job does not block
+                                   // an LV job for the same segmentation model, and vice versa.
   model_used?: string; // Compatibility field mirrored to DB for external tools (string)
 }
 export interface IJobDocument extends IJob, Document {}

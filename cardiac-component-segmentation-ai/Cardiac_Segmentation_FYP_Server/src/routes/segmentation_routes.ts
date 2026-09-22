@@ -1,8 +1,8 @@
 import { Request, Response, Router } from "express";
 import logger from "../services/logger";
-import { startInference, startModel2Inference } from "../services/inference";
+import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -87,6 +87,28 @@ router.post("/start-segmentation/:projectId",
         );
 
         try {
+            // Reject a duplicate before anything is uploaded or queued. The frontend disables its
+            // own button, but that flag is local state -- a refresh clears it, and a direct caller
+            // never had it. This is the only check that cannot be bypassed.
+            const blockingJob = await findBlockingSegmentationJob(
+                projectId,
+                segmentationModel === SegmentationModel.UNET
+                    ? SegmentationModel.UNET
+                    : SegmentationModel.MEDSAM,
+            );
+            if (blockingJob) {
+                const modelLabel = segmentationModel === SegmentationModel.UNET ? "UNet" : "MedSAM";
+                logger.info(
+                    `${serviceLocation}: Rejected duplicate ${modelLabel} segmentation for project ${projectId}; job ${blockingJob.uuid} is still ${blockingJob.status}.`
+                );
+                return res.status(409).json({
+                    message: `A ${modelLabel} segmentation is already running for this project. Wait for it to finish before starting another.`,
+                    jobUuid: blockingJob.uuid,
+                    jobStatus: blockingJob.status,
+                    startedAt: blockingJob.startedAt,
+                });
+            }
+
             if (segmentationModel === SegmentationModel.UNET) {
                 // DEVELOPER NOTE: New Added UNET API inference path
                 // - Uses FastAPI endpoint on the GPU inference service
@@ -364,6 +386,12 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     queuePosition: queuePosition,
                     message: job.message || "",
                     segmentationModel: job.segmentationModel || job.model_used || null,
+                    // Sent separately because `segmentationModel` above cannot carry it: a 4D
+                    // reconstruction job has BOTH fields set -- segmentationModel names the model
+                    // whose masks it consumes, model_used says it is a reconstruction. The fallback
+                    // chain therefore reports a reconstruction as "medsam"/"unet", and a caller
+                    // filtering on that alone cannot tell the two job types apart.
+                    modelUsed: job.model_used || null,
                     createdAt: (job as any).createdAt?.toISOString?.() || null,
                     updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };
@@ -1172,17 +1200,20 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             .lean();
 
         if (savedLandmarkDoc) {
-            // Average rv_insertion_1 / rv_insertion_2 points across every frame/slice,
-            // matching the GPU's own unconditional-mean avg_lm1/avg_lm2 aggregation
-            // (visheart-inference-gpu/app/helpers/landmark_inference_api.py lines 410-432).
+            // Average rv_insertion_1 / rv_insertion_2 points across every slice of
+            // ED (frame 0) only, matching the GPU's own per-frame avg_lm1/avg_lm2
+            // aggregation (visheart-inference-gpu/app/helpers/landmark_inference_api.py) —
+            // a saved doc can now hold every cardiac frame's landmarks, and averaging
+            // across cardiac phases (not just slices within one phase) would blend
+            // positions from a heart that's moved throughout the cycle into a
+            // physically meaningless point.
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
@@ -1283,9 +1314,14 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
 
             // Auto-chain disease similarity if heart metrics are present (otherwise
             // it will run when the user triggers it, or after metrics are computed).
+            // No body here — this is an automatic chain after strain compute, not
+            // a user-initiated trigger, so there's no bsa_m2/sex to read. Runs in
+            // non-indexed mode; a caller wanting indexed-mode similarity should
+            // use the manual trigger-disease-similarity route with bsa_m2/sex set.
             const simMeasurements = assembleSimilarityMeasurements(updatedMask);
             if (simMeasurements) {
-                computeDiseaseSimilarityFromMetrics(maskDoc._id.toString(), simMeasurements).catch((simErr: any) => {
+                const { sex: autoSex, ...autoMeasurementsOnly } = simMeasurements;
+                computeDiseaseSimilarityFromMetrics(maskDoc._id.toString(), autoMeasurementsOnly, autoSex).catch((simErr: any) => {
                     logger.warn(`${serviceLocation}: Auto disease-similarity after strain failed for mask ${maskDoc._id}: ${simErr?.message}`);
                 });
                 logger.info(`${serviceLocation}: Auto-fired disease similarity for mask ${maskDoc._id} after strain compute.`);
@@ -1470,12 +1506,14 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
         if (savedLandmarkDoc) {
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            // ED (frame 0) only — see the comment on this same pattern earlier in
+            // this file for why averaging across cardiac frames (not just slices)
+            // would be wrong now that a saved doc can hold every cardiac frame.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
@@ -1694,12 +1732,14 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         if (savedLandmarkDoc) {
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            // ED (frame 0) only — see the comment on this same pattern earlier in
+            // this file for why averaging across cardiac frames (not just slices)
+            // would be wrong now that a saved doc can hold every cardiac frame.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (pts: { x: number; y: number }[]) =>
@@ -1956,12 +1996,14 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
         if (savedLandmarkDoc) {
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            // ED (frame 0) only — see the comment on this same pattern earlier in
+            // this file for why averaging across cardiac frames (not just slices)
+            // would be wrong now that a saved doc can hold every cardiac frame.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (pts: { x: number; y: number }[]) =>
@@ -2115,6 +2157,13 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
             logger.warn(`SegmentationRoutes: trigger-bullseye async error for mask ${maskId}: ${err?.message}`);
         });
 
+        // Per-frame wall thickness — RLE-only, no GPU, safe to always auto-run
+        // alongside the single-snapshot bullseye above. See its own docstring
+        // for why this is deliberately kept separate from strain (GRS/GCS).
+        computeFrameWallThicknessSeries(maskId, frames, W, H).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-bullseye frame-series async error for mask ${maskId}: ${err?.message}`);
+        });
+
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering bullseye for mask ${maskId}`);
         if (!res.headersSent) {
@@ -2187,17 +2236,55 @@ router.post("/trigger-heart-metrics/:maskId", isAuth, async (req: Request, res: 
  */
 function assembleSimilarityMeasurements(
     maskDoc: any,
-    bodyPeaks?: { PeakGRS?: number | null; PeakGCS?: number | null },
+    body?: {
+        PeakGRS?: number | null; PeakGCS?: number | null;
+        // BSA is never persisted (see report/page.tsx's client-side-only BSA
+        // card) — a caller wanting indexed-mode similarity must supply it fresh
+        // on every trigger call. sex is likewise request-scoped, never stored.
+        bsa_m2?: number | null;
+        sex?: "male" | "female" | "unspecified";
+    },
 ): {
     EF: number | null; EDV: number | null; ESV: number | null;
-    StrokeVolume: number | null; PeakGRS: number | null; PeakGCS: number | null;
+    EDVI?: number | null; ESVI?: number | null;
+    LVMassG?: number | null; LVMI?: number | null;
+    MaxWallThicknessMm?: number | null;
+    StrokeVolume: number | null; StrokeVolumeIndex?: number | null;
+    PeakGRS: number | null; PeakGCS: number | null;
+    sex: "male" | "female" | "unspecified";
 } | null {
     const hm = maskDoc?.heartMetrics?.measurements;
     if (!hm) return null;
 
+    const bsaM2 = typeof body?.bsa_m2 === "number" && body.bsa_m2 > 0 ? body.bsa_m2 : null;
+    const sex = body?.sex === "male" || body?.sex === "female" ? body.sex : "unspecified";
+    const lvMassG: number | null = maskDoc?.heartMetrics?.LV_mass_g ?? null;
+    const lvEdv: number | null = hm.EDV ?? null;
+    const lvEsv: number | null = hm.ESV ?? null;
+    const lvSv: number | null = hm.StrokeVolume ?? null;
+
+    // Indexed features are pure division — computed fresh here rather than
+    // read off heartMetrics (which was computed without any bsa_m2, since
+    // nothing persists BSA), so a caller can go from non-indexed to indexed
+    // mode on demand just by supplying bsa_m2 on this one request.
+    const indexed = (v: number | null): number | null => (bsaM2 && v != null ? v / bsaM2 : null);
+
+    // Maximum ED wall thickness — the one morphology feature that needs NO
+    // client input at all: it's max() over the AHA segment values already
+    // stored on this mask's own bullseye (see compute_bullseye_from_rle.py),
+    // computed at the ED frame. Real, server-side, always available once the
+    // bullseye has been computed for this mask.
+    const bullseyeValues: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values;
+    const finiteSegmentValues = (bullseyeValues ?? []).filter(
+        (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
+    );
+    const maxWallThicknessMm: number | null = finiteSegmentValues.length
+        ? Math.max(...finiteSegmentValues)
+        : null;
+
     const strain = maskDoc?.strain;
-    const bodyGRS = typeof bodyPeaks?.PeakGRS === "number" ? bodyPeaks.PeakGRS : null;
-    const bodyGCS = typeof bodyPeaks?.PeakGCS === "number" ? bodyPeaks.PeakGCS : null;
+    const bodyGRS = typeof body?.PeakGRS === "number" ? body.PeakGRS : null;
+    const bodyGCS = typeof body?.PeakGCS === "number" ? body.PeakGCS : null;
 
     // Strain peaks are only physiologically meaningful when measured between the
     // TRUE end-diastole and end-systole frames. Heart metrics auto-detects those
@@ -2217,13 +2304,23 @@ function assembleSimilarityMeasurements(
 
     return {
         EF:           hm.EF ?? null,
-        EDV:          hm.EDV ?? null,
-        ESV:          hm.ESV ?? null,
-        StrokeVolume: hm.StrokeVolume ?? null,
+        EDV:          lvEdv,
+        ESV:          lvEsv,
+        // Indexed mode (compute_disease_similarity.py picks the mode by whether
+        // EDVI is present) — null unless this specific request supplied bsa_m2.
+        EDVI:         indexed(lvEdv),
+        ESVI:         indexed(lvEsv),
+        LVMassG:      lvMassG,
+        LVMI:         indexed(lvMassG),
+        // Real regardless of BSA — see maxWallThicknessMm derivation above.
+        MaxWallThicknessMm: maxWallThicknessMm,
+        StrokeVolume: lvSv,
+        StrokeVolumeIndex: indexed(lvSv),
         // Prefer explicit body override → strain peaks (only if computed at the
         // auto ED/ES) → any value already on heartMetrics (usually null).
         PeakGRS:      bodyGRS ?? strainGRS ?? hm.PeakGRS ?? null,
         PeakGCS:      bodyGCS ?? strainGCS ?? hm.PeakGCS ?? null,
+        sex,
     };
 }
 
@@ -2233,7 +2330,11 @@ function assembleSimilarityMeasurements(
 // heartMetrics.measurements; PeakGRS/PeakGCS come from the persisted strain
 // result (strain.global_grs/global_gcs) — or from the request body if supplied.
 // POST /segmentation/trigger-disease-similarity/:maskId
-//   body (optional): { PeakGRS?: number, PeakGCS?: number }
+//   body (optional): { PeakGRS?: number, PeakGCS?: number, bsa_m2?: number,
+//                       sex?: "male"|"female"|"unspecified" }
+//   bsa_m2/sex are NEVER persisted (BSA is a client-side-only report-page
+//   input — see report/page.tsx) — supply them fresh on each call to get
+//   indexed-mode similarity; omit them for the non-indexed fallback.
 router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
     const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
@@ -2261,7 +2362,8 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
         // other trigger routes.
         res.json({ success: true, message: "Disease similarity computation started." });
 
-        computeDiseaseSimilarityFromMetrics(maskId, measurements).catch((err: any) => {
+        const { sex, ...measurementsOnly } = measurements;
+        computeDiseaseSimilarityFromMetrics(maskId, measurementsOnly, sex).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-disease-similarity async error for mask ${maskId}: ${err?.message}`);
         });
 
@@ -2313,6 +2415,55 @@ router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: 
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering health status for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// Trigger RV health status for a single mask: sex-specific reference ranges
+// (SCMR 2025), NOT a diagnosis and not a severity grade. Stores `rvHealthStatus`
+// beside `healthStatus` and never touches the LV grade.
+// POST /segmentation/trigger-rv-health-status/:maskId
+//   body (optional): { sex?: "male"|"female"|"unspecified", bsa_m2?: number }
+//   Supply both on each call, as for trigger-disease-similarity; the stored
+//   result echoes them back. Without a sex the status is "Not assessable" —
+//   no sex-blind limit is substituted.
+router.post("/trigger-rv-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        if (!(maskDoc as any).heartMetrics) {
+            return res.status(400).json({
+                success: false,
+                message: "Heart metrics not computed for this mask yet — run trigger-heart-metrics first.",
+            });
+        }
+
+        const sex = req.body?.sex === "male" || req.body?.sex === "female" ? req.body.sex : "unspecified";
+        const bsaM2 = typeof req.body?.bsa_m2 === "number" && req.body.bsa_m2 > 0 ? req.body.bsa_m2 : null;
+
+        // Respond immediately and run the compute async — same pattern as the
+        // other trigger routes.
+        res.json({ success: true, message: "RV health-status computation started." });
+
+        computeRvHealthStatusFromMetrics(maskId, sex, bsaM2).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-rv-health-status async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering RV health status for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }

@@ -223,6 +223,13 @@ export interface BullseyeData {
     stats: BullseyeStats;
     computed_at: string;
     lv_centroid?: [number, number];
+    /** Anterior start angle in degrees, landmark-derived (bullseye_analysis.py's
+     *  own alignment logic — Stefani's fix). Same field/convention as
+     *  RealStrainResult's alignment_angle_deg: subtract the backend's
+     *  start_angle_by_ring["basal"] fallback (240deg) before using it as a
+     *  chart rotation offset — see CombinedVentricularChart/RvStrainChart's
+     *  own referenceAngleDeg for the identical conversion. */
+    alignment_angle_deg?: number | null;
 }
 
 /*==================================== Bullseye Section ends here ==========================================*/
@@ -305,6 +312,12 @@ export interface UserJob {
     queuePosition: number | null;
     message?: string;
     segmentationModel?: string | null;
+    /** Raw `model_used` from the job record. "4d_reconstruction" for reconstruction jobs, the
+     *  model name for segmentation jobs. Needed because `segmentationModel` above falls back to
+     *  this value, so a reconstruction job reports as "medsam"/"unet" there. */
+    modelUsed?: string | null;
+    /** 4D reconstruction jobs only: which chamber is being built. Absent means LV. */
+    chamber?: string | null;
     createdAt?: string | null;
     updatedAt?: string | null;
 }

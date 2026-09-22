@@ -235,12 +235,26 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         ref={canvasRef}
         className={cn("block max-w-full max-h-full", editableLandmarks && "cursor-crosshair")}
         style={{ imageRendering: "pixelated" }}
-        aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
+        aria-label={`MRI slice ${currentFrame + 1} of ${totalFrames}`}
         onPointerDown={(event) => {
           const landmarkId = hitTestLandmark(event);
-          if (!landmarkId) return;
-          draggingLandmarkRef.current = landmarkId;
-          event.currentTarget.setPointerCapture(event.pointerId);
+          if (landmarkId) {
+            draggingLandmarkRef.current = landmarkId;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            return;
+          }
+          // No existing dot was hit -- if the sidebar has a landmark "placing"
+          // (highlighted AND currently coordinate-less), treat this click as
+          // dropping it here instead of doing nothing. Re-adding a landmark
+          // that was deleted-and-saved is a fresh placement, not a drag, so it
+          // has no existing dot to hit-test against.
+          if (
+            editableLandmarks &&
+            highlightedLandmarkId &&
+            !getLandmarkCoord(prediction, highlightedLandmarkId)
+          ) {
+            onLandmarkMove?.(highlightedLandmarkId, canvasToImageCoord(event));
+          }
         }}
         onPointerMove={(event) => {
           if (!draggingLandmarkRef.current) return;
@@ -425,7 +439,7 @@ function drawFrameLabel(
   current: number,
   total: number,
 ) {
-  const text = `Frame ${current + 1} / ${total}`;
+  const text = `Slice ${current + 1} / ${total}`;
   ctx.font = "10px/1 monospace";
   const tw = ctx.measureText(text).width;
 

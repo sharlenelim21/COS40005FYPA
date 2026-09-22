@@ -15,7 +15,7 @@ const serviceLocation = "Database"; // Service location for error logging
 // Import Types
 import { IUser, IUserDocument, IUserSafe, UserRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
 import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
-import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat } from "../types/database_types"; // Import the project reconstruction types
+import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, ReconstructionChamber } from "../types/database_types"; // Import the project reconstruction types
 import { IProjectLandmark, IProjectLandmarkDocument, ProjectLandmarkCrudResult } from "../types/database_types"; // Import the project landmark types
 import { JobStatus, IJob, IJobDocument, JobCrudResult, SegmentationModel } from "../types/database_types"; // Import the job types
 import { IGPUHost, IGPUHostDocument, GPUHostCrudResult } from "../types/database_types"; // Import the GPU host types
@@ -777,9 +777,11 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   // Index should be 0 based
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
   bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
+  frameBullseye: { type: Schema.Types.Mixed, required: false }, // Per-frame wall thickness, RLE-only — see IProjectSegmentationMask.frameBullseye
   heartMetrics: { type: Schema.Types.Mixed, required: false }, // Chamber volumes / EF / LV mass — see IProjectSegmentationMask.heartMetrics
   healthStatus: { type: Schema.Types.Mixed, required: false }, // Rule-based LV systolic-function health-status assessment (Task 2)
   regionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // Layer 2 — advisory per-AHA-segment assessment from regional strain. Mixed for the same reason as healthStatus/bullseye: a typed sub-schema would strip unknown keys.
+  rvHealthStatus: { type: Schema.Types.Mixed, required: false }, // RV health status — sex-specific reference-range comparison (no severity grade), beside healthStatus; never changes the LV grade. Mixed for the same reason as regionalHealthStatus.
   strain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES strain result (global + 17-segment) — see IProjectSegmentationMask.strain
   strainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame strain vs. the fixed ED reference — see IProjectSegmentationMask.strainSeries
   rvStrain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES regional RV (cavity-radius) strain — see IProjectSegmentationMask.rvStrain
@@ -866,6 +868,10 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
   isAIGenerated: { type: Boolean, required: true, default: false }, // Indicates if the reconstruction is AI generated
   meshFormat: { type: String, required: true, enum: Object.values(MeshFormat) }, // Format of the mesh file
   segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional source model for the reconstruction
+  // Which chamber this reconstruction is. Defaulted rather than left undefined so every new
+  // record is explicit; records written before this field existed have no value and are read
+  // as LV by the readers, which is what they are.
+  chamber: { type: String, required: false, default: ReconstructionChamber.LV, enum: Object.values(ReconstructionChamber) },
   
   // File properties
   filename: { type: String, required: true }, // Server-generated unique filename
@@ -2226,6 +2232,9 @@ const jobSchema = new mongoose.Schema({
   segmentationDescription: { type: String, required: false }, // Optional user-defined description
   segmentationSource: { type: String, required: false, enum: Object.values(segmentationSource) }, // Optional source of the segmentation
   segmentationModel: { type: String, required: false, enum: Object.values(SegmentationModel) }, // Optional model used for segmentation
+  // 4D reconstruction jobs only. Absent on every other job type, and on 4D jobs created before
+  // this field existed -- both read as LV, which is what they were.
+  chamber: { type: String, required: false, enum: Object.values(ReconstructionChamber) },
   model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
 }, { timestamps: true });
 const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);

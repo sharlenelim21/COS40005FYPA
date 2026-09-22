@@ -11,21 +11,17 @@ import {
   CheckCircle2,
   RefreshCw,
   Heart,
-  Download,
   FileText,
   ArrowLeft,
   Activity,
   ZoomIn,
   ZoomOut,
-  Upload,
   Stethoscope,
-  X,
   Save,
 } from "lucide-react";
 
-import { useProject } from "@/context/ProjectContext";
+import { useProject, normalizeReconstructionChamber } from "@/context/ProjectContext";
 import { useProjectResults, type MaskDoc } from "@/hooks/useProjectResults";
-import { downloadResultsCsv } from "@/lib/exportResultsCsv";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import {
@@ -34,11 +30,12 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
-import { LandmarkSidebar } from "@/components/landmark/LandmarkSidebar";
+import { LandmarkSidebar, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
+import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
+import { RV_SEGMENT_NAMES } from "@/components/landmark/heartColor";
 import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import {
@@ -88,17 +85,17 @@ type ModelId = typeof MODEL_OPTIONS[number]["value"];
 
 const AHA_SEGMENTS = [
   "Basal Anterior",
-  "Basal Anterolateral",
-  "Basal Inferolateral",
-  "Basal Inferior",
-  "Basal Inferoseptal",
   "Basal Anteroseptal",
+  "Basal Inferoseptal",
+  "Basal Inferior",
+  "Basal Inferolateral",
+  "Basal Anterolateral",
   "Mid Anterior",
-  "Mid Anterolateral",
-  "Mid Inferolateral",
-  "Mid Inferior",
-  "Mid Inferoseptal",
   "Mid Anteroseptal",
+  "Mid Inferoseptal",
+  "Mid Inferior",
+  "Mid Inferolateral",
+  "Mid Anterolateral",
   "Apical Anterior",
   "Apical Lateral",
   "Apical Inferior",
@@ -135,8 +132,20 @@ export default function LandmarkDetectionPage() {
     searchParams.get("tab") === "strain" ? "strain"
     : searchParams.get("tab") === "structure" ? "structure"
     : "landmarks";
+  // Tracks whether the editable mask itself exists (independent of whether bullseye is computed).
+  // Declared here (rather than lower down with the other bullseye state) because activeModel's
+  // default below needs it.
+  const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  const modelParam = searchParams.get("model");
   const activeModel: "unet" | "medsam" =
-    searchParams.get("model") === "medsam" ? "medsam" : "unet";
+    modelParam === "medsam" ? "medsam"
+    : modelParam === "unet" ? "unet"
+    // No explicit choice in the URL: prefer UNet, but only when it's actually available —
+    // fall back to MedSAM if UNet has no mask for this project yet. Before existingSegModels
+    // has loaded (both false), this still reads as "unet", matching the old hardcoded default.
+    : existingSegModels.unet ? "unet"
+    : existingSegModels.medsam ? "medsam"
+    : "unet";
 
   const updateUrlState = useCallback(
     (next: { tab?: "landmarks" | "structure" | "strain"; model?: "unet" | "medsam" }) => {
@@ -166,6 +175,8 @@ export default function LandmarkDetectionPage() {
     decodedMasks,
     getMRIImage,
     tarCacheReady,
+    getReconstructionGLB,
+    reconstructionsByModel,
   } = useProject();
 
   useEffect(() => {
@@ -209,29 +220,77 @@ export default function LandmarkDetectionPage() {
   // Bullseye data + model selector state
   const [bullseyeData, setBullseyeData] = useState<BullseyeData | null | undefined>(undefined);
   const [bullseyeLoading, setBullseyeLoading] = useState(true);
+  // Per-frame wall thickness (RLE-only, auto-computed alongside the single
+  // snapshot above) — separate from bullseyeSeries, which only exists once the
+  // user manually runs the GRS/GCS strain series. See computeFrameWallThicknessSeries.
+  const [frameBullseyeSeries, setFrameBullseyeSeries] = useState<{
+    frames: { frameIndex: number; segment_values: (number | null)[]; stats: any }[];
+    computed_at: string;
+  } | null>(null);
   const [segFrameCount, setSegFrameCount] = useState(0);
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
-  // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
-  const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  // existingSegModels is declared earlier (with activeModel) since that computation needs it.
   const [calculatingModels, setCalculatingModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   const [calcCountdown, setCalcCountdown] = useState(15);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [structureVentricle, setStructureVentricle] = useState<"LV" | "RV">("LV");
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GRS");
+  // RV's own metric toggle (GCS/GAS) — separate from selectedStrainType (LV's
+  // GRS/GCS) since RV has different metrics: GCS is real once computed, GAS is
+  // an entirely unimplemented placeholder, so switching to it must render as
+  // an obvious prototype state rather than fabricate colored values.
+  const [selectedRvMetricType, setSelectedRvMetricType] = useState<"GCS" | "GAS">("GCS");
+  // Full cycle's "Compute/Recompute all frames" busy state lives in StrainTab
+  // (LandmarkSidebar.tsx) as local state, but the main panel needs to know
+  // about it too (to show its own loading state) — reported up via the
+  // strainCompute bundle's onFullCycleBusyChange.
+  const [fullCycleBusy, setFullCycleBusy] = useState(false);
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
+  // Lifted out of StrainPreviewPanel so the sidebar's Strain tab (a sibling,
+  // not a descendant) can read it too -- the sidebar's own LV/RV toggle was
+  // removed in favor of this single chamber-focus control driving both the
+  // main panel's 3D Heart AND the sidebar's Full-cycle results underneath it.
+  const [chamberFocus, setChamberFocus] = useState<ChamberFocus>("LV");
   const [strainResult, setStrainResult] = useState<RealStrainResult | null>(null);
   const [rvStrainResult, setRvStrainResult] = useState<RvStrainResult | null>(null);
   const [autoFramesByModel, setAutoFramesByModel] = useState<{
     unet: { ed: number; es: number } | null;
     medsam: { ed: number; es: number } | null;
   }>({ unet: null, medsam: null });
+
+  // Compute-strain state — lifted here (not owned by StrainPreviewPanel) since
+  // the compute controls live in the sidebar's Strain tab ("Compute strain"
+  // card) while the bullseye/3D-heart visualization they feed lives in the
+  // main panel; both sibling trees need it.
+  const [computeScope, setComputeScope] = useState<"quick" | "full">("quick");
+  const [strainInputMode, setStrainInputMode] = useState<"frames" | "upload">("frames");
+  const autoFramesForActiveModel = autoFramesByModel[activeModel];
+  const [edFrameIdx, setEdFrameIdx] = useState<number>(autoFramesForActiveModel?.ed ?? 0);
+  const [esFrameIdx, setEsFrameIdx] = useState<number>(autoFramesForActiveModel?.es ?? 13);
+  // Sync the picker to the auto ED/ES when they load (metrics are async) or
+  // when the active model changes — but only while the user hasn't manually
+  // dragged the picker.
+  const userPickedFramesRef = useRef(false);
+  useEffect(() => {
+    if (userPickedFramesRef.current) return;
+    const auto = autoFramesByModel[activeModel];
+    if (typeof auto?.ed === "number") setEdFrameIdx(auto.ed);
+    if (typeof auto?.es === "number") setEsFrameIdx(auto.es);
+  }, [autoFramesByModel, activeModel]);
+  const [edFile, setEdFile] = useState<File | null>(null);
+  const [esFile, setEsFile] = useState<File | null>(null);
+  const [isComputingStrain, setIsComputingStrain] = useState(false);
+  const [strainComputeError, setStrainComputeError] = useState<string | null>(null);
   const [editableLandmarks, setEditableLandmarks] = useState(true);
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
+  // Snapshot of landmarkEdits as of the last successful save (or load) — lets a
+  // row tell "deleted but not saved yet" (Restore still offered) apart from
+  // "deleted and saved" (Restore removed; re-adding it is a fresh manual
+  // placement, not an undo of history that's already been committed).
+  const [savedLandmarkEdits, setSavedLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
   const [isSavingLandmarks, setIsSavingLandmarks] = useState(false);
   const [hasUnsavedLandmarkEdits, setHasUnsavedLandmarkEdits] = useState(false);
-  const [pendingDeletions, setPendingDeletions] = useState<Record<string, number>>({});
-  const pendingDeletionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [bullseyeRecomputing, setBullseyeRecomputing] = useState(false);
 
   // (Model default now comes from the URL via activeModel — UNet unless the
@@ -265,11 +324,15 @@ export default function LandmarkDetectionPage() {
   // Tracks which mask IDs have already had bullseye auto-triggered this session
   const autoTriggeredBullseyeMasks = useRef<Set<string>>(new Set());
 
-  const fetchBullseye = useCallback(async (preferredModel?: "medsam" | "unet", triggerIfMissing = true) => {
+  const fetchBullseye = useCallback(async (preferredModel?: "medsam" | "unet", triggerIfMissing = true, forceRecompute = false) => {
     setBullseyeLoading(true);
     try {
       const res = await segmentationApi.getSegmentationResults(projectId);
-      type SegItem = { _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData; strain?: RealStrainResult; heartMetrics?: { ed_frame?: number; es_frame?: number } };
+      type SegItem = {
+        _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData; strain?: RealStrainResult;
+        heartMetrics?: { ed_frame?: number; es_frame?: number };
+        frameBullseye?: { frames: { frameIndex: number; segment_values: (number | null)[]; stats: any }[]; computed_at: string };
+      };
       const segs = (res.segmentations ?? []) as SegItem[];
 
       // Editable masks only (isMedSAMOutput === false), split by inferred model
@@ -319,10 +382,14 @@ export default function LandmarkDetectionPage() {
       }
 
       // Auto-trigger bullseye for every editable mask that has no data yet,
-      // using a session ref so each mask is triggered at most once.
+      // using a session ref so each mask is triggered at most once. When
+      // forceRecompute is set (user explicitly clicked Recompute), also
+      // re-trigger masks that already have a (possibly stale) bullseye —
+      // otherwise a mask that already has ANY stored bullseye, even one
+      // computed before a backend fix, is never regenerated by this button.
       if (triggerIfMissing) {
         const masksNeedingBullseye = editables.filter(
-          (m) => m._id && !m.bullseye && !autoTriggeredBullseyeMasks.current.has(m._id)
+          (m) => m._id && (!m.bullseye || !m.frameBullseye) && !autoTriggeredBullseyeMasks.current.has(m._id)
         );
         for (const mask of masksNeedingBullseye) {
           const maskId = mask._id as string;
@@ -336,20 +403,37 @@ export default function LandmarkDetectionPage() {
           // Re-fetch after ~15s to pick up newly computed bullseye data
           setTimeout(() => fetchBullseye(preferredModel, false), 15000);
         }
+
+        if (forceRecompute) {
+          const staleMaskIds = editables
+            .filter((m) => m._id && m.bullseye && !masksNeedingBullseye.includes(m))
+            .map((m) => m._id as string);
+          if (staleMaskIds.length > 0) {
+            await Promise.all(staleMaskIds.map((id) => segmentationApi.triggerBullseye(id).catch(() => {})));
+            setBullseyeRecomputing(true);
+            setTimeout(() => {
+              fetchBullseye(preferredModel, false);
+              setBullseyeRecomputing(false);
+            }, 8000);
+          }
+        }
       }
 
       if (selectedMask) {
         // Don't switch the active model here — activeModel (from the URL) is the
         // single source of truth; this only loads that model's bullseye data.
         setBullseyeData(selectedMask.bullseye!);
+        setFrameBullseyeSeries(selectedMask.frameBullseye ?? null);
         setBullseyeLoading(false);
         return;
       }
 
       setBullseyeData(null);
+      setFrameBullseyeSeries(null);
       setBullseyeLoading(false);
     } catch {
       setBullseyeData(null);
+      setFrameBullseyeSeries(null);
       setBullseyeLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -378,6 +462,11 @@ export default function LandmarkDetectionPage() {
   // Zoom reset refs — shared between bullseye panel and toolbar button
   const bullseyeZoomResetRef = useRef<(() => void) | null>(null);
   const heartZoomResetRef = useRef<(() => void) | null>(null);
+  // Same pattern as heartZoomRef/heartZoomResetRef above, for the Structure
+  // tab's standalone RV 3D panel (which isn't inside AhaBullseyePanel).
+  const structureRvHeartZoomRef = useRef<((delta: number) => void) | null>(null);
+  const structureRvHeartResetRef = useRef<(() => void) | null>(null);
+  const [structureRvTooltip, setStructureRvTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
 
   // Refetch bullseye after detection finishes; clear alignment on new run
   const prevStatus = useRef(state.status);
@@ -445,14 +534,38 @@ export default function LandmarkDetectionPage() {
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
   const autoRunStartedRef = useRef(false);
 
+  // Prefer the GPU response's own top-level summary (state.nTotal etc.),
+  // but those are optional on FramePrediction/LandmarkInferenceResponse and
+  // absent on older stored detection runs -- e.g. patient005_4d's stored
+  // result predates them, so LandmarkSummaryStats silently rendered nothing
+  // even though every prediction it needs (confidence/model_used/flag) is
+  // right there per-slice, the same fields the Detected Landmarks slice-
+  // confidence strip already counts from successfully. Falling back to
+  // counting them client-side means the summary always has something to
+  // show whenever real predictions exist, regardless of backend version.
+  const landmarkSummaryStats = useMemo(() => {
+    if (state.nTotal != null) {
+      return { nTotal: state.nTotal, nCollapsed: state.nCollapsed, n2ch: state.n2ch, n1chFallback: state.n1chFallback };
+    }
+    const preds = state.predictions;
+    return {
+      nTotal: preds.length,
+      nCollapsed: preds.filter((p) => p.flag === "collapsed_to_mean").length,
+      n2ch: preds.filter((p) => p.model_used === "2ch").length,
+      n1chFallback: preds.filter((p) => p.model_used === "1ch_fallback").length,
+    };
+  }, [state.nTotal, state.nCollapsed, state.n2ch, state.n1chFallback, state.predictions]);
+
   const runDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
+    setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
     handleRunDetection(model);
   }, [handleRunDetection]);
 
   const rerunDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
+    setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
     handleRerunDetection(model);
   }, [handleRerunDetection]);
@@ -493,6 +606,17 @@ export default function LandmarkDetectionPage() {
     } as FramePrediction;
   }, [currentPrediction, currentLandmarkEditKey, landmarkEdits]);
 
+  // Raw prediction merged with the last SAVED edits (as opposed to the current
+  // working ones above) — lets the sidebar tell "deleted but not saved yet"
+  // apart from "deleted and saved" for the Restore action.
+  const savedCurrentPrediction = useMemo(() => {
+    if (!currentPrediction) return null;
+    return {
+      ...currentPrediction,
+      ...(savedLandmarkEdits[currentLandmarkEditKey] ?? {}),
+    } as FramePrediction;
+  }, [currentPrediction, currentLandmarkEditKey, savedLandmarkEdits]);
+
   const handleLandmarkMove = useCallback((id: string, coord: [number, number]) => {
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey] ?? {};
@@ -510,40 +634,45 @@ export default function LandmarkDetectionPage() {
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
+  /** Deletes immediately (no undo-countdown window) — it's an edit like a move,
+   *  so it dirties the save button right away instead of waiting 5s to commit. */
   const handleLandmarkDeleteRequest = useCallback((id: string) => {
     const sliceKey = currentLandmarkEditKey;
-    const fullKey = `${sliceKey}:${id}`;
-    setPendingDeletions((prev) => ({ ...prev, [fullKey]: Date.now() }));
-    pendingDeletionTimers.current[fullKey] = setTimeout(() => {
-      setLandmarkEdits((prev) => ({
+    setLandmarkEdits((prev) => {
+      const existing = prev[sliceKey] ?? {};
+      const wasCollapsed = (currentPrediction?.flag === "collapsed_to_mean") && !("flag" in existing);
+      return {
         ...prev,
-        [sliceKey]: { ...(prev[sliceKey] ?? {}), [id]: undefined },
-      }));
-      setHasUnsavedLandmarkEdits(true);
-      setPendingDeletions((prev) => {
-        const next = { ...prev };
-        delete next[fullKey];
-        return next;
-      });
-      delete pendingDeletionTimers.current[fullKey];
-    }, 5000);
-  }, [currentLandmarkEditKey]);
+        [sliceKey]: {
+          ...existing,
+          [id]: undefined,
+          ...(wasCollapsed ? { flag: "normal" as const } : {}),
+        },
+      };
+    });
+    setHasUnsavedLandmarkEdits(true);
+  }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
-  /** Undo a pending delete before its 5s window expires. Safe to key off the
-   *  CURRENT slice: the row that renders this action only exists while
-   *  viewing the same slice the deletion was started on. */
+  /** Restores a deleted landmark back to its original AI-predicted coordinate —
+   *  available any time the landmark is currently deleted, whether that
+   *  deletion has been saved yet or not (removing the delete edit itself is a
+   *  change from whatever is currently saved, so this dirties the save button
+   *  the same as deleting does). */
   const handleUndoLandmarkDelete = useCallback((id: string) => {
-    const fullKey = `${currentLandmarkEditKey}:${id}`;
-    const timer = pendingDeletionTimers.current[fullKey];
-    if (timer) {
-      clearTimeout(timer);
-      delete pendingDeletionTimers.current[fullKey];
-    }
-    setPendingDeletions((prev) => {
+    setLandmarkEdits((prev) => {
+      const existing = prev[currentLandmarkEditKey];
+      if (!existing || !(id in existing)) return prev;
+      const rest = { ...existing };
+      delete (rest as Record<string, unknown>)[id];
       const next = { ...prev };
-      delete next[fullKey];
+      if (Object.keys(rest).length > 0) {
+        next[currentLandmarkEditKey] = rest;
+      } else {
+        delete next[currentLandmarkEditKey];
+      }
       return next;
     });
+    setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey]);
 
   const handleSaveLandmarks = useCallback(async () => {
@@ -556,28 +685,53 @@ export default function LandmarkDetectionPage() {
         segmentationModel: selectedBullseyeModel,
       });
       setHasUnsavedLandmarkEdits(false);
+      setSavedLandmarkEdits(landmarkEdits);
 
       // Landmark points just changed, so the stored AHA-17 bullseye is now stale.
       // Re-trigger bullseye for every editable mask — the backend prefers the
-      // saved edits we just wrote — then re-fetch so the chart reflects the new
-      // alignment. Best-effort: a failed recompute never blocks the save.
+      // saved edits we just wrote — then poll for each mask's OWN bullseye.computed_at
+      // to actually change (not just re-appear) before refreshing the chart, instead
+      // of guessing a fixed delay. Same before/after-timestamp poll convention as
+      // useProjectResults.ts's ensureComputed. Best-effort: a failed recompute never
+      // blocks the save.
       try {
         const res = await segmentationApi.getSegmentationResults(projectId);
-        const editableMaskIds = ((res.segmentations ?? []) as { _id?: string; isMedSAMOutput: boolean }[])
-          .filter((m) => !m.isMedSAMOutput && m._id)
-          .map((m) => m._id as string);
-        await Promise.all(
-          editableMaskIds.map((id) => segmentationApi.triggerBullseye(id).catch(() => {})),
+        type EditableMask = { _id?: string; isMedSAMOutput: boolean; bullseye?: { computed_at?: string } };
+        const editableMasks = ((res.segmentations ?? []) as EditableMask[]).filter(
+          (m) => !m.isMedSAMOutput && m._id,
         );
-        // Bullseye compute is async on the server; re-fetch after a short delay
-        // to pick up the freshly-recomputed, edit-aligned result.
+        const beforeByMaskId = new Map(editableMasks.map((m) => [m._id as string, m.bullseye?.computed_at]));
+        await Promise.all(
+          editableMasks.map((m) => segmentationApi.triggerBullseye(m._id as string).catch(() => {})),
+        );
+
         setBullseyeRecomputing(true);
-        setTimeout(() => {
-          fetchBullseye(selectedBullseyeModel, false);
-          setBullseyeRecomputing(false);
-        }, 8000);
+        const POLL_INTERVAL_MS = 1500;
+        const POLL_MAX_ATTEMPTS = 20; // ~30s, matching useProjectResults.ts's ensureComputed
+        let allRecomputed = false;
+        for (let i = 0; i < POLL_MAX_ATTEMPTS && !allRecomputed; i++) {
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+          try {
+            const pollRes = await segmentationApi.getSegmentationResults(projectId);
+            const byId = new Map(
+              ((pollRes.segmentations ?? []) as EditableMask[]).map((m) => [m._id as string, m]),
+            );
+            allRecomputed = [...beforeByMaskId.entries()].every(([id, before]) => {
+              const after = byId.get(id)?.bullseye?.computed_at;
+              return !!after && after !== before;
+            });
+          } catch {
+            /* transient network error — keep polling */
+          }
+        }
+        if (!allRecomputed) {
+          console.warn("[Landmark] Bullseye recompute did not confirm within ~30s — refreshing with whatever landed.");
+        }
+        await fetchBullseye(selectedBullseyeModel, false);
+        setBullseyeRecomputing(false);
       } catch (recomputeErr) {
         console.error("[Landmark] Bullseye recompute after save failed:", recomputeErr);
+        setBullseyeRecomputing(false);
       }
     } catch (err) {
       console.error("[Landmark] Failed to save landmark edits:", err);
@@ -603,7 +757,9 @@ export default function LandmarkDetectionPage() {
     let cancelled = false;
     landmarkApi.loadSavedLandmarks(projectId).then((doc) => {
       if (cancelled || !doc) return;
-      setLandmarkEdits(landmarkFramesToEdits(doc));
+      const edits = landmarkFramesToEdits(doc, state.predictions);
+      setLandmarkEdits(edits);
+      setSavedLandmarkEdits(edits);
     }).catch(() => {
       // No saved doc yet, or load failed — leave landmarkEdits as-is (empty from the reset).
     });
@@ -653,6 +809,124 @@ export default function LandmarkDetectionPage() {
     setBullseyeResultsModel(selectedBullseyeModel);
   }, [selectedBullseyeModel, setBullseyeResultsModel]);
 
+  // The full-cycle strain series (LV wall-thickness animation, GRS/GCS) stays
+  // manual -- "Compute all frames" in the Strain tab -- since it's one GPU
+  // pass per frame and shouldn't run automatically for every patient. Only
+  // the cheap single-snapshot bullseye (fetchBullseye, below) auto-computes
+  // as soon as segmentation is ready.
+
+  // Hydrate strainResult/rvStrainResult (and the ED/ES picker) from whatever
+  // this model's mask document already has stored — so reopening a project
+  // with a previously-computed strain result shows it immediately instead of
+  // an empty state, without re-running the compute. Moved here (not owned by
+  // StrainPreviewPanel) since strainResult/rvStrainResult/edFrameIdx are all
+  // lifted to this level now.
+  const strainResultRef = useRef(strainResult);
+  strainResultRef.current = strainResult;
+  const rvStrainResultRef = useRef(rvStrainResult);
+  rvStrainResultRef.current = rvStrainResult;
+  const hydratedModelsRef = useRef<Set<"unet" | "medsam">>(new Set());
+  useEffect(() => {
+    if (hydratedModelsRef.current.has(activeModel)) return;
+    const doc = resultsByModel?.[activeModel];
+    if (!doc) return;
+
+    const hasLvData = !!doc.strain || !!doc.strainSeries?.frames?.length;
+    if (!hasLvData) return;
+    hydratedModelsRef.current.add(activeModel);
+
+    const meanOfNullable = (vals: (number | null | undefined)[]): number | null => {
+      const nums = vals.filter((v): v is number => typeof v === "number");
+      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+    };
+
+    if (!strainResultRef.current) {
+      if (doc.strain) {
+        setStrainResult({
+          segments: doc.strain.segments,
+          global_grs: doc.strain.global_grs,
+          global_gcs: doc.strain.global_gcs,
+          ed_wt_mean_mm: meanOfNullable(doc.strain.segments.map((s) => s.wt_ed_mm)),
+          es_wt_mean_mm: meanOfNullable(doc.strain.segments.map((s) => s.wt_es_mm)),
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: doc.strain.edFrameIndex,
+          esFrameIndex: doc.strain.esFrameIndex,
+          source: "frames",
+          staleSince: doc.strain.staleSince,
+          computedFor: {
+            mode: "choose-frames",
+            model: activeModel,
+            edFrameIndex: doc.strain.edFrameIndex ?? 0,
+            esFrameIndex: doc.strain.esFrameIndex,
+          },
+        });
+        if (!userPickedFramesRef.current) {
+          if (typeof doc.strain.edFrameIndex === "number") setEdFrameIdx(doc.strain.edFrameIndex);
+          if (typeof doc.strain.esFrameIndex === "number") setEsFrameIdx(doc.strain.esFrameIndex);
+        }
+      } else if (doc.strainSeries?.frames?.length) {
+        const series = doc.strainSeries;
+        const frame =
+          series.frames.find((f) => f.frameIndex === series.edFrameIndex) ?? series.frames[0];
+        setStrainResult({
+          segments: frame.segments.map((s) => ({ segment: s.segment, label: s.label, grs: s.grs, gcs: s.gcs })),
+          global_grs: frame.global_grs,
+          global_gcs: frame.global_gcs,
+          ed_wt_mean_mm: null,
+          es_wt_mean_mm: null,
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: series.edFrameIndex,
+          source: "frames",
+          staleSince: series.staleSince,
+          computedFor: {
+            mode: "full-cycle",
+            model: activeModel,
+            edFrameIndex: series.edFrameIndex,
+          },
+        });
+      }
+    }
+
+    if (!rvStrainResultRef.current) {
+      if (doc.rvStrain) {
+        setRvStrainResult({
+          regions: doc.rvStrain.regions,
+          global_rv_strain: doc.rvStrain.global_rv_strain,
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: doc.rvStrain.edFrameIndex,
+          esFrameIndex: doc.rvStrain.esFrameIndex,
+          source: "frames",
+          computedFor: {
+            mode: "choose-frames",
+            model: activeModel,
+            edFrameIndex: doc.rvStrain.edFrameIndex ?? 0,
+            esFrameIndex: doc.rvStrain.esFrameIndex,
+          },
+        });
+      } else if (doc.rvStrainSeries?.frames?.length) {
+        const series = doc.rvStrainSeries;
+        const frame =
+          series.frames.find((f) => f.frameIndex === series.edFrameIndex) ?? series.frames[0];
+        setRvStrainResult({
+          regions: frame.regions,
+          global_rv_strain: frame.global_rv_strain,
+          vox_xy_mm: 0,
+          alignment_source: "stored",
+          edFrameIndex: series.edFrameIndex,
+          source: "frames",
+          computedFor: {
+            mode: "full-cycle",
+            model: activeModel,
+            edFrameIndex: series.edFrameIndex,
+          },
+        });
+      }
+    }
+  }, [activeModel, resultsByModel]);
+
   // On first load with NO model in the URL, land on a model that actually has
   // per-frame data (or the most recently computed when both do). When the URL
   // already names a model — e.g. after a reload — that choice wins and this is
@@ -680,18 +954,75 @@ export default function LandmarkDetectionPage() {
 
   /** Wall thickness (mm) per AHA segment at the frame currently being shown. */
   const frameThicknessValues = useMemo(() => {
-    const frames = bullseyeSeries?.frames;
-    if (!frames?.length) return null;
-    const frame =
-      frames.find((f) => f.frameIndex === strainPlaybackFrame) ?? frames[0];
-    const vals = Array.from({ length: 17 }, (_, i) => {
-      const seg = frame.segments?.find((s) => s.segment === i + 1);
-      return typeof seg?.wt_mm === "number" ? seg.wt_mm : null;
-    });
-    // Older series predate wt_mm — fall back to the static bullseye rather than
-    // rendering a plot full of gaps.
-    return vals.every((v) => v === null) ? null : vals;
-  }, [bullseyeSeries, strainPlaybackFrame]);
+    // Prefer the strain series's wt_mm when the user has run "Compute all
+    // frames" — it's derived from the same GPU comparison as GRS/GCS, so it's
+    // already loaded and consistent with whatever strain data is showing.
+    const strainFrames = bullseyeSeries?.frames;
+    if (strainFrames?.length) {
+      const frame = strainFrames.find((f) => f.frameIndex === strainPlaybackFrame) ?? strainFrames[0];
+      const vals = Array.from({ length: 17 }, (_, i) => {
+        const seg = frame.segments?.find((s) => s.segment === i + 1);
+        return typeof seg?.wt_mm === "number" ? seg.wt_mm : null;
+      });
+      if (!vals.every((v) => v === null)) return vals;
+      // Older series predate wt_mm — fall through to the RLE-only series below
+      // rather than rendering a plot full of gaps.
+    }
+    // Otherwise use the auto-computed, RLE-only per-frame series — available
+    // as soon as segmentation is done, no manual strain compute needed.
+    const rleFrames = frameBullseyeSeries?.frames;
+    if (!rleFrames?.length) return null;
+    const rleFrame = rleFrames.find((f) => f.frameIndex === strainPlaybackFrame) ?? rleFrames[0];
+    return rleFrame.segment_values.every((v) => v === null) ? null : rleFrame.segment_values;
+  }, [bullseyeSeries, frameBullseyeSeries, strainPlaybackFrame]);
+
+  // Structure tab's RV panel: real mesh + real segment boundaries, colored by
+  // segment identity — see useRvPrototypeMesh's docstring.
+  const structureRvMesh = useRvPrototypeMesh(activeModel, strainPlaybackFrame);
+
+  // LV alignment reference for the Structure tab's standalone RV panel, so
+  // it orients the same way RV appears in the Combined tab (see
+  // ReconstructedHeartModel's lvAlignmentMeshUrl docs) instead of RV's own
+  // independent alignment. Only fetched while actually viewing RV (this
+  // mesh is never rendered, just used to compute a rotation), and pinned to
+  // the ED frame (0) rather than tracking playback — a fixed reference
+  // keeps the RV view's orientation stable across frames instead of
+  // wobbling as LV's own per-frame alignment shifts.
+  const lvAlignmentReconstruction = reconstructionsByModel?.[activeModel] ?? null;
+  const [structureLvAlignmentMeshUrl, setStructureLvAlignmentMeshUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (structureVentricle !== "RV" || !lvAlignmentReconstruction?.reconstructionId) {
+      return;
+    }
+    (async () => {
+      const url = await getReconstructionGLB(0, activeModel, lvAlignmentReconstruction.reconstructionId);
+      if (!cancelled) setStructureLvAlignmentMeshUrl(url);
+    })();
+    return () => { cancelled = true; };
+  }, [structureVentricle, activeModel, lvAlignmentReconstruction, getReconstructionGLB]);
+  const structureLvAlignmentLabels = Array.isArray(lvAlignmentReconstruction?.ahaVertexLabels)
+    ? lvAlignmentReconstruction.ahaVertexLabels
+    : null;
+
+  /** Sidebar's compact Min/Mean/Max — tracks the current frame when a per-frame
+   *  series exists (same source as frameThicknessValues), otherwise falls back
+   *  to the single ED-frame snapshot so the sidebar isn't left blank.
+   *  Hidden entirely (null) when the active model has no 4D reconstruction —
+   *  matches the main panel's own AhaBullseyePanel gate (activeReconstruction),
+   *  so the sidebar numbers and the main panel's bullseye/3D heart appear and
+   *  disappear together instead of the sidebar showing stale/orphaned values. */
+  const currentFrameStructureStats = useMemo(() => {
+    if (!lvAlignmentReconstruction) return null;
+    if (!frameThicknessValues) return bullseyeData?.stats ?? null;
+    const finite = frameThicknessValues.filter((v): v is number => typeof v === "number");
+    if (!finite.length) return bullseyeData?.stats ?? null;
+    return {
+      min: Math.min(...finite),
+      mean: finite.reduce((a, b) => a + b, 0) / finite.length,
+      max: Math.max(...finite),
+    };
+  }, [lvAlignmentReconstruction, frameThicknessValues, bullseyeData]);
 
   useEffect(() => {
     let cancelled = false;
@@ -743,30 +1074,151 @@ export default function LandmarkDetectionPage() {
     return overlays;
   }, [decodedMasks, hasPredictions, currentImageFrame, currentImageSlice]);
 
-  // Landmark ids to hide from the CURRENTLY VIEWED slice's canvas while their
-  // deletion is pending undo — scoped to this slice only, so navigating away
-  // and back doesn't leak the fade into an unrelated slice.
-  const currentSliceFadingIds = useMemo(() => {
-    const prefix = `${currentLandmarkEditKey}:`;
-    return new Set(
-      Object.keys(pendingDeletions)
-        .filter((key) => key.startsWith(prefix))
-        .map((key) => key.slice(prefix.length)),
-    );
-  }, [pendingDeletions, currentLandmarkEditKey]);
-
-  // Slices with a manual deletion — pending OR already committed to
-  // landmarkEdits — for the Slice Confidence strip's pencil badge.
+  // Slices with a manual deletion, for the Slice Confidence strip's pencil badge.
   const manuallyDeletedSliceKeys = useMemo(() => {
     const set = new Set<string>();
-    for (const key of Object.keys(pendingDeletions)) {
-      set.add(key.slice(0, key.lastIndexOf(":")));
-    }
     for (const [key, edit] of Object.entries(landmarkEdits)) {
       if (Object.values(edit).some((value) => value === undefined)) set.add(key);
     }
     return set;
-  }, [pendingDeletions, landmarkEdits]);
+  }, [landmarkEdits]);
+
+  // Frame count for the ED/ES picker — prefer the MASK's actual frame count
+  // (segFrameCount), the same set heart-metrics uses to detect ED/ES, so the
+  // auto-detected ED/ES frames are always reachable and strain runs at frames
+  // that match heartMetrics. Shared by the main panel and the sidebar's
+  // "Compute strain" card so their pickers always agree.
+  const strainFrameCount =
+    segFrameCount > 0
+      ? segFrameCount
+      : (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
+        ? projectData.dimensions.frames
+        : state.totalFrames || 1;
+
+  const handleComputeStrainFromUpload = useCallback(async () => {
+    if (!edFile || !esFile) return;
+    setIsComputingStrain(true);
+    setStrainComputeError(null);
+    try {
+      const formData = new FormData();
+      formData.append("ed_file", edFile);
+      formData.append("es_file", esFile);
+      if (state.avgLm1 && state.avgLm2) {
+        formData.append("rv_insertion_1_x", String(state.avgLm1.x));
+        formData.append("rv_insertion_1_y", String(state.avgLm1.y));
+        formData.append("rv_insertion_2_x", String(state.avgLm2.x));
+        formData.append("rv_insertion_2_y", String(state.avgLm2.y));
+      }
+      const result = await landmarkApi.computeStrain(projectId, formData);
+      setStrainResult({
+        ...result,
+        computedFor: { mode: "upload", model: activeModel, edFrameIndex: -1 },
+      });
+    } catch (err: any) {
+      setStrainComputeError(
+        err?.response?.data?.message ??
+        "Strain computation failed. Check that both files are valid segmentation NIfTI masks."
+      );
+    } finally {
+      setIsComputingStrain(false);
+    }
+  }, [edFile, esFile, state.avgLm1, state.avgLm2, projectId, activeModel]);
+
+  const handleComputeStrainFromFrames = useCallback(async () => {
+    if (edFrameIdx === esFrameIdx) return;
+    setStrainComputeError(null);
+    setIsComputingStrain(true);
+    try {
+      const computedFor: StrainComputedFor = {
+        mode: "choose-frames",
+        model: activeModel,
+        edFrameIndex: edFrameIdx,
+        esFrameIndex: esFrameIdx,
+      };
+      const [lvOutcome, rvOutcome] = await Promise.allSettled([
+        computeStrainFromFrames(projectId, edFrameIdx, esFrameIdx, activeModel),
+        computeRvStrainFromFrames(projectId, edFrameIdx, esFrameIdx, activeModel),
+      ]);
+      if (lvOutcome.status === "fulfilled") setStrainResult({ ...lvOutcome.value, computedFor });
+      if (rvOutcome.status === "fulfilled") setRvStrainResult({ ...rvOutcome.value, computedFor });
+
+      if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
+        setStrainComputeError("Failed to compute LV and RV strain from frames.");
+      } else if (lvOutcome.status === "rejected") {
+        setStrainComputeError("RV strain computed, but LV strain failed.");
+      } else if (rvOutcome.status === "rejected") {
+        setStrainComputeError("LV strain computed, but RV strain failed.");
+      }
+    } finally {
+      setIsComputingStrain(false);
+    }
+  }, [edFrameIdx, esFrameIdx, projectId, activeModel]);
+
+  // Whether the currently-stored strainResult/rvStrainResult actually matches
+  // the Quick ED->ES pair/model selected right now (as opposed to a full-cycle
+  // result, or a choose-frames result for a pair the user has since changed) —
+  // same matching StrainPreviewPanel uses for its own display, duplicated here
+  // (not lifted, to avoid an extra render dependency) so the sidebar's Quick
+  // scope view shows exactly the same "is this actually the ED->ES result for
+  // my current selection" answer as the bullseye/3D heart do.
+  const quickLvResult = (() => {
+    const cf = strainResult?.computedFor;
+    const matches = !!(
+      cf && cf.mode !== "full-cycle" && cf.model === activeModel &&
+      (cf.mode === "upload" || (cf.edFrameIndex === edFrameIdx && cf.esFrameIndex === esFrameIdx))
+    );
+    return matches ? strainResult : null;
+  })();
+  const quickRvResult = (() => {
+    const cf = rvStrainResult?.computedFor;
+    const matches = !!(
+      cf && cf.mode !== "full-cycle" && cf.model === activeModel &&
+      (cf.mode === "upload" || (cf.edFrameIndex === edFrameIdx && cf.esFrameIndex === esFrameIdx))
+    );
+    return matches ? rvStrainResult : null;
+  })();
+
+  // Bundled and passed to LandmarkSidebar's "Compute strain" card (Strain tab) —
+  // a single prop instead of ~18 individual ones, since the card and the main
+  // panel's visualization both need this same state/these same handlers.
+  const strainCompute: StrainComputeBundle = {
+    scope: computeScope,
+    onScopeChange: setComputeScope,
+    inputMode: strainInputMode,
+    onInputModeChange: setStrainInputMode,
+    edFrameIdx,
+    esFrameIdx,
+    onEdFrameChange: (v) => { userPickedFramesRef.current = true; setEdFrameIdx(v); setStrainComputeError(null); },
+    onEsFrameChange: (v) => { userPickedFramesRef.current = true; setEsFrameIdx(v); setStrainComputeError(null); },
+    autoFrames: autoFramesByModel[activeModel] ?? null,
+    onResetToAuto: () => {
+      const auto = autoFramesByModel[activeModel];
+      if (!auto) return;
+      userPickedFramesRef.current = false;
+      setEdFrameIdx(auto.ed);
+      setEsFrameIdx(auto.es);
+      setStrainComputeError(null);
+    },
+    frameCount: strainFrameCount,
+    edFile,
+    esFile,
+    onEdFileChange: (f) => { setEdFile(f); setStrainComputeError(null); },
+    onEsFileChange: (f) => { setEsFile(f); setStrainComputeError(null); },
+    isComputing: isComputingStrain,
+    error: strainComputeError,
+    hasLandmarkAlignment: !!(state.avgLm1 && state.avgLm2),
+    strainModel: activeModel,
+    onComputeFrames: handleComputeStrainFromFrames,
+    onComputeUpload: handleComputeStrainFromUpload,
+    quickLvResult,
+    quickRvResult,
+    rvMetricType: selectedRvMetricType,
+    onRvMetricTypeChange: setSelectedRvMetricType,
+    onFullCycleBusyChange: setFullCycleBusy,
+  };
+  // Whichever compute is relevant to the CURRENT scope — the main panel
+  // shows one loading state regardless of which of the two ran.
+  const isComputeBusy = computeScope === "quick" ? isComputingStrain : fullCycleBusy;
 
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
@@ -799,10 +1251,6 @@ export default function LandmarkDetectionPage() {
 
         {/* Info pills */}
         <div className="hidden md:flex items-center gap-4 text-[11px] text-muted-foreground">
-          <InfoPill
-            label="Dataset"
-            value={`${projectData.dimensions?.width ?? 256}×${projectData.dimensions?.height ?? 256}`}
-          />
           {/* Slices and frames are different axes: landmark detection runs per
               slice, the cardiac cycle spans frames. state.totalFrames is a slice
               count despite its name, so label it as slices and take frames from
@@ -818,36 +1266,6 @@ export default function LandmarkDetectionPage() {
             label="Frames"
             value={String(projectData.dimensions?.frames ?? "—")}
           />
-          {hasPredictions && (
-            <InfoPill label="Model" value={state.modelUsed} />
-          )}
-        </div>
-
-        {/* Model selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium hidden sm:block">
-            Model
-          </span>
-          <Select
-            value={selectedModel}
-            onValueChange={(value: string) => setSelectedModel(value as ModelId)}
-            disabled={isRunning}
-          >
-            <SelectTrigger
-              size="sm"
-              className="min-w-[150px] rounded-xl bg-background px-3 text-xs shadow-sm hover:bg-muted/40"
-              aria-label="Select landmark detection model"
-            >
-              <SelectValue placeholder="Select model" />
-            </SelectTrigger>
-            <SelectContent className="rounded-xl p-1.5 shadow-lg">
-              {MODEL_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value} className="rounded-lg py-2 text-xs">
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
 
         {/* Re-run + Export buttons. (Landmark save lives in the Landmarks tab
@@ -871,22 +1289,6 @@ export default function LandmarkDetectionPage() {
               <FileText className="h-3.5 w-3.5" />
               Report Page
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs gap-1.5"
-              disabled={!resultsByModel?.unet && !resultsByModel?.medsam}
-              onClick={() => {
-                if (!resultsByModel?.unet && !resultsByModel?.medsam) {
-                  alert("No computed results to export yet. Run metrics and strain first.");
-                  return;
-                }
-                downloadResultsCsv(projectData?.name || String(projectId), resultsByModel);
-              }}
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Export Data
-            </Button>
           </div>
         )}
       </header>
@@ -906,15 +1308,6 @@ export default function LandmarkDetectionPage() {
           </button>
         </div>
       )}
-      {hasPredictions && (
-        <LandmarkSummaryStats
-          nTotal={state.nTotal}
-          nCollapsed={state.nCollapsed}
-          n2ch={state.n2ch}
-          n1chFallback={state.n1chFallback}
-        />
-      )}
-
       {/* Mobile layout */}
       <div className="lg:hidden flex-1 overflow-y-auto p-3 space-y-3">
         {/* Mobile: full-width viewer */}
@@ -928,7 +1321,6 @@ export default function LandmarkDetectionPage() {
             maskOverlays={currentMaskOverlays}
             maskDimensions={maskDimensions}
             visibleLandmarks={visibleLandmarks}
-            fadingLandmarkIds={currentSliceFadingIds}
             showLabels={showLabels}
             editableLandmarks={editableLandmarks}
             highlightedLandmarkId={highlightedLandmarkId}
@@ -940,7 +1332,17 @@ export default function LandmarkDetectionPage() {
         <div className="rounded-xl border border-border overflow-hidden">
           <LandmarkSidebar
             state={state}
+            summaryStats={hasPredictions ? (
+              <LandmarkSummaryStats
+                nTotal={landmarkSummaryStats.nTotal}
+                nCollapsed={landmarkSummaryStats.nCollapsed}
+                n2ch={landmarkSummaryStats.n2ch}
+                n1chFallback={landmarkSummaryStats.n1chFallback}
+              />
+            ) : null}
             currentPrediction={adjustedCurrentPrediction}
+            rawPrediction={currentPrediction}
+            savedPrediction={savedCurrentPrediction}
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
@@ -951,13 +1353,13 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
-            structureStats={bullseyeData?.stats ?? null}
+            structureStats={currentFrameStructureStats}
+            isPerFrame={!!frameThicknessValues}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={handleSaveLandmarks}
             onToggleLandmark={handleToggleLandmark}
             currentSliceKey={currentLandmarkEditKey}
-            pendingDeletions={pendingDeletions}
             onDeleteLandmark={handleLandmarkDeleteRequest}
             onUndoDeleteLandmark={handleUndoLandmarkDelete}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
@@ -977,6 +1379,9 @@ export default function LandmarkDetectionPage() {
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={setHighlightedLandmarkId}
             selectedStrainType={selectedStrainType}
+            onStrainTypeChange={setSelectedStrainType}
+            strainCompute={strainCompute}
+            chamberFocus={chamberFocus}
           />
         </div>
       </div>
@@ -997,59 +1402,14 @@ export default function LandmarkDetectionPage() {
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-semibold text-foreground">
-                    {structureVentricle === "LV" ? "AHA 17-Segment Bullseye" : "RV 9-Segment Bullseye"}
+                    {structureVentricle === "LV" ? "Wall Thickness" : "RV Cavity Area (FAC)"}
                   </h3>
-                  {structureVentricle === "LV" && (
-                    <Select
-                      value={selectedBullseyeModel}
-                      onValueChange={(v: string) => {
-                        const model = v as "medsam" | "unet";
-                        // An explicit choice wins over the auto-pick, including
-                        // choosing a model whose series hasn't been run yet.
-                        autoPickedSeriesModel.current = true;
-                        setSelectedBullseyeModel(model);
-                        fetchBullseye(model);
-                      }}
-                      disabled={bullseyeLoading}
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="h-7 w-[132px] shrink-0 rounded-lg bg-background px-2 text-[10px] shadow-sm hover:bg-muted/40"
-                        aria-label="Select bullseye model"
-                      >
-                        <SelectValue placeholder="Model" />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl p-1 shadow-lg">
-                        {/* Selectable whenever the segmentation exists — a model
-                            without a per-frame strain series is still worth
-                            choosing, and the panel explains what to run. */}
-                        <SelectItem
-                          value="medsam"
-                          disabled={!existingSegModels.medsam || (!isGpuMode && !availableBullseyeModels.medsam)}
-                          className="rounded-lg py-1.5 text-xs"
-                        >
-                          MedSAM{
-                            !isGpuMode && !availableBullseyeModels.medsam ? " (GPU only)" :
-                            calculatingModels.medsam ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.medsam ? " (computing…)" :
-                            ""
-                          }
-                        </SelectItem>
-                        <SelectItem
-                          value="unet"
-                          disabled={!existingSegModels.unet}
-                          className="rounded-lg py-1.5 text-xs"
-                        >
-                          UNet{
-                            !existingSegModels.unet ? " (no data)" :
-                            calculatingModels.unet ? ` (Calculating... ${calcCountdown}s)` :
-                            !availableBullseyeModels.unet ? " (computing…)" :
-                            " (recommended)"
-                          }
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
+                  {/* Model choice lives only in the sidebar's UNet/MedSAM
+                      buttons now (right panel) — this main panel used to
+                      duplicate it with a Select dropdown for LV and RV each,
+                      which could drift out of sync with the sidebar's own
+                      control even though they shared state, and was just
+                      redundant UI either way. */}
                   {structureVentricle === "LV" && bullseyeRecomputing && (
                     <span className="text-[10px] font-medium text-muted-foreground animate-pulse">
                       Recomputing with edits…
@@ -1099,24 +1459,136 @@ export default function LandmarkDetectionPage() {
                   <div>
                     <p className="text-sm font-medium">No landmark data yet</p>
                     <p className="text-xs mt-1 opacity-70">
-                      Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the AHA 17-Segment Bullseye.
+                      Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the {structureVentricle === "LV" ? "Wall Thickness" : "RV Cavity Area (FAC)"} panel.
                     </p>
                   </div>
                 </div>
               ) : structureVentricle === "RV" ? (
-                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
-                  <AlertCircle className="h-8 w-8 opacity-40" />
-                  <p className="max-w-[280px] text-xs leading-relaxed">
-                    RV structural view coming soon — cavity-area data isn&apos;t computed by the backend yet.
-                  </p>
-                </div>
+                structureRvMesh.available && structureRvMesh.meshUrl ? (
+                  <div className="flex min-h-0 flex-1 flex-col gap-2">
+                    <div className="flex min-h-0 flex-1 gap-2 p-1">
+                      {/* LEFT: the SAME crescent chart the Strain tab's RV
+                          view uses (CombinedVentricularChart, RV-only),
+                          instead of the separate RvCrescentDiagram this used
+                          to be -- Sharlene asked for this to look EXACTLY
+                          like what Structure/Strain's RV tab shows. No real
+                          strain data exists in this tab, so it renders with
+                          rvRegions=null the same way the Strain tab's own RV
+                          view does before anything's been computed (gray,
+                          "no data" wedges) rather than a separate identity-
+                          color scheme. */}
+                      <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
+                        <div className="mb-1 flex items-center justify-between flex-shrink-0">
+                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            RV Bullseye
+                          </p>
+                          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            Prototype
+                          </span>
+                        </div>
+                        <div className="flex flex-1 min-h-0 items-center justify-center">
+                          <CombinedVentricularChart
+                            lvData={[]}
+                            hasLv={false}
+                            strainType="GRS"
+                            rvRegions={null}
+                            showLv={false}
+                            showRv={true}
+                          />
+                        </div>
+                      </div>
+
+                      {/* RIGHT: 3D heart model */}
+                      <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
+                        <div className="mb-1 flex items-center justify-between flex-shrink-0">
+                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+                        </div>
+                        <div className="flex-1 min-h-0 w-full relative">
+                          <ReconstructedHeartModel
+                            meshUrl={structureRvMesh.meshUrl}
+                            meshFormat={structureRvMesh.meshFormat}
+                            segmentLabels={structureRvMesh.segmentLabels}
+                            colorMode="rv-segment"
+                            chamber="rv"
+                            className="w-full h-full"
+                            onZoomChange={(fn) => { structureRvHeartZoomRef.current = fn; }}
+                            onResetZoom={(fn) => { structureRvHeartResetRef.current = fn; }}
+                            onSegmentHover={setStructureRvTooltip}
+                            lvAlignmentMeshUrl={structureLvAlignmentMeshUrl}
+                            lvAlignmentLabels={structureLvAlignmentLabels}
+                          />
+                          {structureRvTooltip && (
+                            <div
+                              className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                              style={{ left: structureRvTooltip.x + 14, top: structureRvTooltip.y - 10 }}
+                            >
+                              <div className="font-semibold">
+                                {RV_SEGMENT_NAMES[structureRvTooltip.segment] ?? `Segment ${structureRvTooltip.segment}`}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        {/* Zoom hint + buttons — matches the LV bullseye's own
+                            3D panel (AhaHeartProjection) so RV isn't missing
+                            the control LV has. */}
+                        <div className="flex items-center justify-center gap-2 px-2 py-1 flex-shrink-0">
+                          <p className="text-[9px] text-muted-foreground">Scroll or</p>
+                          <button
+                            type="button"
+                            aria-label="Zoom in"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            onClick={() => structureRvHeartZoomRef.current?.(-1)}
+                          >
+                            <ZoomIn className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Zoom out"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            onClick={() => structureRvHeartZoomRef.current?.(1)}
+                          >
+                            <ZoomOut className="h-3 w-3" />
+                          </button>
+                          <p className="text-[9px] text-muted-foreground">to zoom</p>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[9px] text-muted-foreground leading-relaxed flex-shrink-0 px-1">
+                      The mesh shape and 9-segment boundaries are from the real RV reconstruction, colored
+                      by segment identity using the same palette as the analysis notebook. There&apos;s no
+                      real per-segment wall-thickness/FAC measurement yet — colors mark segment identity,
+                      not a value.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
+                    <AlertCircle className="h-8 w-8 opacity-40" />
+                    <p className="max-w-[280px] text-xs leading-relaxed">
+                      4D reconstruction for {activeModel === "unet" ? "UNet" : "MedSAM"} is unavailable — please
+                      run it from the project page to see results.
+                    </p>
+                  </div>
+                )
               ) : (
                 <AhaBullseyePanel
                   bullseyeData={hasPredictions ? bullseyeData : null}
                   loading={hasPredictions ? bullseyeLoading : isRunning}
                   isComputing={bullseyeRecomputing || calculatingModels[activeModel]}
-                  referenceAngleDeg={ahaAlignmentAngle ?? 0}
-                  onCompute={() => fetchBullseye(selectedBullseyeModel, true)}
+                  // Prefers the manual "Align" button's own landmark-derived
+                  // angle (an explicit user action) when set; otherwise falls
+                  // back to the backend's own alignment_angle_deg (Stefani's
+                  // fix) instead of defaulting to unaligned (0) -- this
+                  // bullseye previously never used that value at all, even
+                  // though the backend has been computing it. Same -240
+                  // (start_angle_by_ring["basal"]'s fallback) conversion
+                  // CombinedVentricularChart/RvStrainChart already apply to
+                  // the identical field for the Strain tab's charts.
+                  referenceAngleDeg={
+                    ahaAlignmentAngle ??
+                    (bullseyeData?.alignment_angle_deg != null ? bullseyeData.alignment_angle_deg - 240 : 0)
+                  }
+                  onCompute={() => fetchBullseye(selectedBullseyeModel, true, true)}
                   // Follows the shared cardiac-cycle playback (now driven from
                   // either the Structure or Strain tab), not the slice index —
                   // the bullseye is a per-frame view of the cycle.
@@ -1161,34 +1633,24 @@ export default function LandmarkDetectionPage() {
               ) : (
                 <StrainPreviewPanel
                   selectedStrainType={selectedStrainType}
-                  onStrainTypeChange={setSelectedStrainType}
-                  resultsByModel={resultsByModel}
                   activeModel={activeModel}
-                  onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
-                  currentFrame={state.currentFrame}
-                  frameCount={
-                    // Prefer the MASK's actual frame count (segFrameCount) — this is
-                    // the same frame set heart-metrics uses to detect ED/ES, so the
-                    // auto-detected ED/ES frames are always reachable in the picker
-                    // and strain runs at frames that match heartMetrics. Fall back to
-                    // project dimensions / total frames only when the mask count is
-                    // unknown.
-                    segFrameCount > 0
-                      ? segFrameCount
-                      : (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
-                        ? projectData.dimensions.frames
-                        : state.totalFrames || 1
-                  }
+                  currentFrame={strainPlaybackFrame}
                   selectedSegment={selectedStrainSegment}
                   onSelectSegment={setSelectedStrainSegment}
-                  projectId={projectId}
                   avgLm1={state.avgLm1 ?? null}
-                  avgLm2={state.avgLm2 ?? null}
                   strainResult={strainResult}
                   onStrainResult={setStrainResult}
                   rvStrainResult={rvStrainResult}
                   onRvStrainResult={setRvStrainResult}
-                  autoFramesByModel={autoFramesByModel}
+                  edFrameIdx={edFrameIdx}
+                  esFrameIdx={esFrameIdx}
+                  rvMetricType={selectedRvMetricType}
+                  onStrainTypeChange={setSelectedStrainType}
+                  onRvMetricTypeChange={setSelectedRvMetricType}
+                  computeScope={computeScope}
+                  isComputeBusy={isComputeBusy}
+                  chamberFocus={chamberFocus}
+                  onChamberFocusChange={setChamberFocus}
                 />
               )}
             </div>
@@ -1241,7 +1703,6 @@ export default function LandmarkDetectionPage() {
                   maskOverlays={currentMaskOverlays}
                   maskDimensions={maskDimensions}
                   visibleLandmarks={visibleLandmarks}
-                  fadingLandmarkIds={currentSliceFadingIds}
                   showLabels={showLabels}
                   editableLandmarks={editableLandmarks}
                   highlightedLandmarkId={highlightedLandmarkId}
@@ -1260,7 +1721,17 @@ export default function LandmarkDetectionPage() {
             <div className="h-full w-full">
               <LandmarkSidebar
                 state={state}
+                summaryStats={hasPredictions ? (
+                  <LandmarkSummaryStats
+                    nTotal={landmarkSummaryStats.nTotal}
+                    nCollapsed={landmarkSummaryStats.nCollapsed}
+                    n2ch={landmarkSummaryStats.n2ch}
+                    n1chFallback={landmarkSummaryStats.n1chFallback}
+                  />
+                ) : null}
                 currentPrediction={adjustedCurrentPrediction}
+                rawPrediction={currentPrediction}
+                savedPrediction={savedCurrentPrediction}
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
@@ -1271,13 +1742,13 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
-            structureStats={bullseyeData?.stats ?? null}
+            structureStats={currentFrameStructureStats}
+            isPerFrame={!!frameThicknessValues}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={handleSaveLandmarks}
                 onToggleLandmark={handleToggleLandmark}
             currentSliceKey={currentLandmarkEditKey}
-            pendingDeletions={pendingDeletions}
             onDeleteLandmark={handleLandmarkDeleteRequest}
             onUndoDeleteLandmark={handleUndoLandmarkDelete}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
@@ -1297,6 +1768,9 @@ export default function LandmarkDetectionPage() {
                 highlightedLandmarkId={highlightedLandmarkId}
                 onHighlightLandmark={setHighlightedLandmarkId}
                 selectedStrainType={selectedStrainType}
+                onStrainTypeChange={setSelectedStrainType}
+                strainCompute={strainCompute}
+                chamberFocus={chamberFocus}
               />
             </div>
           </ResizablePanel>
@@ -1363,6 +1837,63 @@ function getDummyBullseyeData(currentFrame = 0, frameCount = 1): BullseyeData {
     })),
     stats,
     computed_at: new Date(0).toISOString(),
+  };
+}
+
+/**
+ * Resolves the real RV reconstruction for `model` (if one has been built) and
+ * fetches its actual per-frame mesh + real 9-segment vertex labels. The SHAPE
+ * and segment BOUNDARIES this returns are real (from the RV 4D reconstruction
+ * + CPD segmentation pipeline). There is no real per-segment wall-thickness/
+ * FAC data to color it with yet — callers should render with colorMode=
+ * "rv-segment" (identity colors matching the analysis notebook's palette,
+ * see heartColor.ts's RV_SEGMENT_PALETTE), not a value-based heatmap.
+ */
+function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
+  const { getReconstructionGLB, reconstructionResults } = useProject();
+
+  const rvReconstruction = useMemo(() => {
+    const candidates = (reconstructionResults ?? []).filter(
+      (r: any) => normalizeReconstructionChamber(r?.chamber) === "rv", // eslint-disable-line @typescript-eslint/no-explicit-any
+    );
+    if (!candidates.length) return null;
+    const sameModel = candidates.find(
+      (r: any) => (r?.segmentationModel ?? "").toString().toLowerCase() === model, // eslint-disable-line @typescript-eslint/no-explicit-any
+    );
+    // Strict per-model match only, same as LV's reconstructionsByModel?.[activeModel]
+    // lookup — no falling back to a different model's reconstruction just because it's
+    // the only one that exists. Showing MedSAM's panel with UNet's mesh when MedSAM has
+    // no reconstruction is exactly the mismatch this function's own docs warn against.
+    return sameModel ?? null;
+  }, [reconstructionResults, model]);
+
+  const [meshUrl, setMeshUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setMeshUrl(null);
+  }, [rvReconstruction?.reconstructionId]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!rvReconstruction?.reconstructionId) return;
+    (async () => {
+      const url = await getReconstructionGLB(currentFrame, model, rvReconstruction.reconstructionId);
+      if (!cancelled) setMeshUrl(url);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rvReconstruction, model, currentFrame, getReconstructionGLB]);
+
+  const segmentLabels = useMemo(() => {
+    const perFrame = rvReconstruction?.frameAhaVertexLabels?.[String(currentFrame)];
+    if (Array.isArray(perFrame)) return perFrame;
+    return Array.isArray(rvReconstruction?.ahaVertexLabels) ? rvReconstruction.ahaVertexLabels : null;
+  }, [rvReconstruction, currentFrame]);
+
+  return {
+    available: !!rvReconstruction && !!segmentLabels?.length,
+    meshUrl,
+    meshFormat: (rvReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb") as "obj" | "glb",
+    segmentLabels,
   };
 }
 
@@ -1498,7 +2029,15 @@ function AhaBullseyePanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
-      {loading ? (
+      {!previewMode && !activeReconstruction ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
+          <AlertCircle className="h-8 w-8 opacity-40" />
+          <p className="max-w-[280px] text-xs leading-relaxed">
+            4D reconstruction for {modelLabel} is unavailable — please run it from the project page
+            to see results.
+          </p>
+        </div>
+      ) : loading ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
@@ -1506,22 +2045,6 @@ function AhaBullseyePanel({
                 otherwise we're just loading already-stored data. */}
             <span className="text-xs">{isComputing ? "Computing bullseye…" : "Loading…"}</span>
           </div>
-        </div>
-      ) : !frameThickness && !previewMode ? (
-        /* No per-frame wall thickness for this model — the panel is a
-           cardiac-cycle view, so without a series there is nothing to show.
-           Rendered as unavailable rather than dimmed so a single static
-           measurement can't be mistaken for the animated result. */
-        <div className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center">
-          <AlertCircle className="h-6 w-6 text-muted-foreground opacity-40" />
-          <p className="text-xs font-medium text-muted-foreground">
-            No strain data for {modelLabel}
-          </p>
-          <p className="max-w-[280px] text-[11px] leading-snug text-muted-foreground">
-            Open the <span className="font-medium text-foreground">Strain</span> tab and run{" "}
-            <span className="font-medium text-foreground">Compute all frames</span> to measure wall
-            thickness across the cardiac cycle for this model.
-          </p>
         </div>
       ) : !displayBullseyeData ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
@@ -1769,6 +2292,7 @@ function AhaHeartProjection({
   // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
   const frameMin = Math.min(...frameValues);
   const frameMax = Math.max(...frameValues);
+  const [heartTooltip, setHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
 
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
@@ -1786,7 +2310,17 @@ function AhaHeartProjection({
           onSegmentClick={(seg) =>
             onSelectSegment?.(selectedSegment === seg - 1 ? -1 : seg - 1)
           }
+          onSegmentHover={setHeartTooltip}
         />
+        {heartTooltip && (
+          <div
+            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
+          >
+            <div className="font-semibold">{AHA_SEGMENTS[heartTooltip.segment - 1] ?? `Segment ${heartTooltip.segment}`}</div>
+            <div>{(frameValues[heartTooltip.segment - 1] ?? 0).toFixed(1)} mm</div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1982,7 +2516,7 @@ function AhaBullseyeChart({
     <svg
       viewBox="0 0 300 300"
       role="img"
-      aria-label="AHA 17-segment bullseye chart"
+      aria-label="Wall thickness bullseye chart"
       className="h-full w-full text-[#475569] dark:text-slate-300"
     >
       <circle cx={center} cy={center} r="112" className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
@@ -2248,6 +2782,7 @@ function StrainHeartModel({
     if (!seg) return 0;
     return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0;
   });
+  const [heartTooltip, setHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
     return (
       <div className="w-full h-full relative">
@@ -2263,7 +2798,20 @@ function StrainHeartModel({
           className="w-full h-full"
           selectedSegment={selectedSegment3d >= 0 ? selectedSegment3d + 1 : -1}
           onSegmentClick={onReconstructionSegmentClick}
+          onSegmentHover={setHeartTooltip}
+          initialCameraDistance={8}
         />
+        {heartTooltip && (
+          <div
+            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
+          >
+            <div className="font-semibold">
+              {segments[heartTooltip.segment - 1]?.label ?? `Segment ${heartTooltip.segment}`}
+            </div>
+            <div>{(values[heartTooltip.segment - 1] ?? 0).toFixed(1)}%</div>
+          </div>
+        )}
       </div>
     );
   }
@@ -2279,334 +2827,107 @@ function StrainHeartModel({
   );
 }
 
-/**
- * Dual-handle range picker for ED/ES frame selection — a single track with two
- * draggable handles (hollow = ED, filled = ES), with the interval between them
- * visually filled. Replaces two independent sliders so the ED-to-ES gap is
- * immediately visible. Purely a rendering/interaction layer over the same
- * edFrameIdx/esFrameIdx state StrainPreviewPanel already owns — no new source
- * of truth for frame selection.
- */
-function DualFrameRangePicker({
-  min,
-  max,
-  edValue,
-  esValue,
-  onEdChange,
-  onEsChange,
-}: {
-  min: number;
-  max: number;
-  edValue: number;
-  esValue: number;
-  onEdChange: (value: number) => void;
-  onEsChange: (value: number) => void;
-}) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const draggingHandle = useRef<"ed" | "es" | null>(null);
-
-  const clamp = (v: number) => Math.min(max, Math.max(min, v));
-  const pctFor = (value: number) => (max > min ? ((value - min) / (max - min)) * 100 : 0);
-
-  const valueFromClientX = useCallback((clientX: number): number => {
-    const track = trackRef.current;
-    if (!track) return min;
-    const rect = track.getBoundingClientRect();
-    const ratio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-    const raw = min + ratio * (max - min);
-    return clamp(Math.round(raw));
-  }, [min, max]);
-
-  const applyDrag = useCallback((clientX: number) => {
-    const handle = draggingHandle.current;
-    if (!handle) return;
-    const value = valueFromClientX(clientX);
-    if (handle === "ed") {
-      // ED cannot cross or equal ES.
-      onEdChange(Math.min(value, esValue - 1));
-    } else {
-      // ES cannot cross or equal ED.
-      onEsChange(Math.max(value, edValue + 1));
-    }
-  }, [valueFromClientX, edValue, esValue, onEdChange, onEsChange]);
-
-  // Fast drags can momentarily move the pointer off the small handle circle
-  // (onto the track or page), so cursor-grabbing set only via Tailwind classes
-  // on the handle flickers back to the default arrow. Set it explicitly on
-  // document.body for the duration of the drag instead — same technique this
-  // codebase already uses on a container ref for canvas panning
-  // (image-canvas.tsx), scoped to body here since this drag isn't bounded to
-  // one container. user-select is also suppressed so a fast drag doesn't
-  // trigger accidental text selection on nearby labels.
-  const endDrag = useCallback(() => {
-    draggingHandle.current = null;
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-  }, []);
-
-  useEffect(() => {
-    if (!draggingHandle.current) return undefined;
-    const onMove = (e: PointerEvent) => applyDrag(e.clientX);
-    const onUp = () => endDrag();
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-    // Safety net: if the pointer is released outside the window entirely
-    // (no pointerup fires), still restore cursor/selection on blur.
-    window.addEventListener("blur", onUp, { once: true });
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("blur", onUp);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [edValue, esValue]);
-
-  const startDrag = (handle: "ed" | "es") => (e: React.PointerEvent) => {
-    e.preventDefault();
-    draggingHandle.current = handle;
-    document.body.style.cursor = "grabbing";
-    document.body.style.userSelect = "none";
-    // Kick off listeners immediately (effect above re-attaches on next render,
-    // but we also want the very first move to register without waiting).
-    const onMove = (ev: PointerEvent) => applyDrag(ev.clientX);
-    const onUp = () => {
-      endDrag();
-      window.removeEventListener("pointermove", onMove);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-    window.addEventListener("blur", onUp, { once: true });
-  };
-
-  const onKeyDown = (handle: "ed" | "es") => (e: React.KeyboardEvent) => {
-    let delta = 0;
-    if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -1;
-    else if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = 1;
-    else return;
-    e.preventDefault();
-    if (handle === "ed") {
-      onEdChange(clamp(Math.min(edValue + delta, esValue - 1)));
-    } else {
-      onEsChange(clamp(Math.max(esValue + delta, edValue + 1)));
-    }
-  };
-
-  const edPct = pctFor(edValue);
-  const esPct = pctFor(esValue);
-  const rangeStartPct = Math.min(edPct, esPct);
-  const rangeWidthPct = Math.abs(esPct - edPct);
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div
-        ref={trackRef}
-        className="relative h-1.5 w-full rounded-full bg-muted"
-      >
-        {/* Filled segment between the two handles */}
-        <div
-          className="absolute h-full rounded-full bg-primary/70"
-          style={{ left: `${rangeStartPct}%`, width: `${rangeWidthPct}%` }}
-        />
-        {/* ED handle — hollow/outlined */}
-        <div
-          role="slider"
-          tabIndex={0}
-          aria-label={`End-diastole frame, ${edValue + 1} of ${max - min + 1}`}
-          aria-valuemin={min}
-          aria-valuemax={max}
-          aria-valuenow={edValue}
-          onPointerDown={startDrag("ed")}
-          onKeyDown={onKeyDown("ed")}
-          className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-background shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring active:cursor-grabbing"
-          style={{ left: `${edPct}%` }}
-        />
-        {/* ES handle — filled */}
-        <div
-          role="slider"
-          tabIndex={0}
-          aria-label={`End-systole frame, ${esValue + 1} of ${max - min + 1}`}
-          aria-valuemin={min}
-          aria-valuemax={max}
-          aria-valuenow={esValue}
-          onPointerDown={startDrag("es")}
-          onKeyDown={onKeyDown("es")}
-          className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-primary shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring active:cursor-grabbing"
-          style={{ left: `${esPct}%` }}
-        />
-      </div>
-      <div className="relative h-7 text-[10px] font-mono">
-        <span
-          className="absolute -translate-x-1/2 text-muted-foreground"
-          style={{ left: `${edPct}%` }}
-        >
-          ED · {edValue + 1}
-        </span>
-        <span
-          className="absolute -translate-x-1/2 font-semibold text-primary"
-          style={{ left: `${esPct}%` }}
-        >
-          ES · {esValue + 1}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function StrainPreviewPanel({
   selectedStrainType,
-  onStrainTypeChange,
   currentFrame,
-  frameCount,
   selectedSegment,
   onSelectSegment,
-  projectId,
   avgLm1,
-  avgLm2,
   strainResult,
   onStrainResult,
   rvStrainResult,
   onRvStrainResult,
-  autoFramesByModel,
-  resultsByModel,
   activeModel,
-  onModelChange,
+  edFrameIdx,
+  esFrameIdx,
+  rvMetricType,
+  onStrainTypeChange,
+  onRvMetricTypeChange,
+  computeScope,
+  isComputeBusy,
+  chamberFocus,
+  onChamberFocusChange,
 }: {
   selectedStrainType: StrainType;
-  onStrainTypeChange: (type: StrainType) => void;
   currentFrame: number;
-  frameCount: number;
   selectedSegment: number | null;
   onSelectSegment: (segment: number) => void;
-  projectId: string;
   avgLm1: { x: number; y: number } | null;
-  avgLm2: { x: number; y: number } | null;
   strainResult: RealStrainResult | null;
   onStrainResult: (result: RealStrainResult | null) => void;
   rvStrainResult: RvStrainResult | null;
   onRvStrainResult: (result: RvStrainResult | null) => void;
-  autoFramesByModel: {
-    unet: { ed: number; es: number } | null;
-    medsam: { ed: number; es: number } | null;
-  };
-  resultsByModel: { unet: MaskDoc | null; medsam: MaskDoc | null };
   activeModel: "unet" | "medsam";
-  onModelChange?: (m: "unet" | "medsam") => void;
+  edFrameIdx: number;
+  esFrameIdx: number;
+  /** RV's own metric selection (GCS/GAS), chosen from the sidebar's Strain
+   *  tab. GAS has no computation at all yet, so it renders the RV side of
+   *  the bullseye as an explicit "not computed" prototype state rather than
+   *  colored — see the rvRegions={null} branch below. */
+  rvMetricType: "GCS" | "GAS";
+  onStrainTypeChange: (type: StrainType) => void;
+  onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
+  /** Which compute mode is selected in the sidebar's "Compute strain" card —
+   *  determines whether this panel colors itself from the single ED->ES
+   *  result (quick) or from the per-frame full-cycle series at the currently
+   *  scrubbed frame (full). */
+  computeScope: "quick" | "full";
+  /** A (re)compute is running right now (Quick's isComputing, or Full
+   *  cycle's seriesBusy reported up) — shows a loading state over the
+   *  bullseye/3D heart and their stat tiles instead of the now-stale values. */
+  isComputeBusy: boolean;
+  /** Lifted to the page so the sidebar's Strain tab (a sibling of this
+   *  panel, not a descendant) can read the same value — see the page-level
+   *  chamberFocus state's own comment. */
+  chamberFocus: ChamberFocus;
+  onChamberFocusChange: (focus: ChamberFocus) => void;
 }) {
-  const edRef  = useRef<HTMLInputElement>(null);
-  const esRef  = useRef<HTMLInputElement>(null);
-  const [edFile, setEdFile] = useState<File | null>(null);
-  const [esFile, setEsFile] = useState<File | null>(null);
-  const [isComputing, setIsComputing] = useState(false);
-  const [strainError, setStrainError] = useState<string | null>(null);
-  const [strainInputMode, setStrainInputMode] = useState<"upload" | "frames">("frames");
+  // Compute controls (frame/upload pickers, model select, the actual
+  // compute calls) live in the sidebar's "Compute strain" card now — this
+  // panel is visualization-only (bullseye + 3D heart), driven by the
+  // edFrameIdx/esFrameIdx/strainResult/rvStrainResult the parent lifted so
+  // both trees agree on what's selected and what's been computed.
   const strainModel = activeModel;
-  const setStrainModel = (m: "unet" | "medsam") => onModelChange?.(m);
-  const strainResultRef = useRef(strainResult);
-  strainResultRef.current = strainResult;
-  const rvStrainResultRef = useRef(rvStrainResult);
-  rvStrainResultRef.current = rvStrainResult;
-  const hydratedModelsRef = useRef<Set<"unet" | "medsam">>(new Set());
-  useEffect(() => {
-    if (hydratedModelsRef.current.has(strainModel)) return;
-    const doc = resultsByModel?.[strainModel];
-    if (!doc) return; 
+  const realStrainData = strainResult;
+  const isFullCycle = computeScope === "full";
 
-    const hasLvData = !!doc.strain || !!doc.strainSeries?.frames?.length;
-    if (!hasLvData) return;
-    hydratedModelsRef.current.add(strainModel);
+  // Full-cycle per-frame series — a separate subscription from the sidebar's
+  // own useProjectResults call (safe: the hook just reads/caches the mask
+  // doc), so this panel can color itself from the SAME per-frame series the
+  // sidebar's Full-cycle scope computed, at whichever frame is scrubbed.
+  const { projectId: fullCycleProjectId } = useParams<{ projectId: string }>();
+  const {
+    strainSeries: realSeries,
+    rvStrainSeries: realRvSeries,
+    setModel: setFullCycleResultsModel,
+  } = useProjectResults(fullCycleProjectId);
+  useEffect(() => { setFullCycleResultsModel(strainModel); }, [strainModel, setFullCycleResultsModel]);
 
-    const meanOfNullable = (vals: (number | null | undefined)[]): number | null => {
-      const nums = vals.filter((v): v is number => typeof v === "number");
-      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
-    };
-
-    if (!strainResultRef.current) {
-      if (doc.strain) {
-        onStrainResult({
-          segments: doc.strain.segments,
-          global_grs: doc.strain.global_grs,
-          global_gcs: doc.strain.global_gcs,
-          ed_wt_mean_mm: meanOfNullable(doc.strain.segments.map((s) => s.wt_ed_mm)),
-          es_wt_mean_mm: meanOfNullable(doc.strain.segments.map((s) => s.wt_es_mm)),
-          vox_xy_mm: 0,
-          alignment_source: "stored",
-          edFrameIndex: doc.strain.edFrameIndex,
-          esFrameIndex: doc.strain.esFrameIndex,
-          source: "frames",
-          computedFor: {
-            mode: "choose-frames",
-            model: strainModel,
-            edFrameIndex: doc.strain.edFrameIndex ?? 0,
-            esFrameIndex: doc.strain.esFrameIndex,
-          },
-        });
-        if (!userPickedFramesRef.current) {
-          if (typeof doc.strain.edFrameIndex === "number") setEdFrameIdx(doc.strain.edFrameIndex);
-          if (typeof doc.strain.esFrameIndex === "number") setEsFrameIdx(doc.strain.esFrameIndex);
-        }
-      } else if (doc.strainSeries?.frames?.length) {
-        const series = doc.strainSeries;
-        const frame =
-          series.frames.find((f) => f.frameIndex === series.edFrameIndex) ?? series.frames[0];
-        onStrainResult({
-          segments: frame.segments.map((s) => ({ segment: s.segment, label: s.label, grs: s.grs, gcs: s.gcs })),
-          global_grs: frame.global_grs,
-          global_gcs: frame.global_gcs,
-          ed_wt_mean_mm: null,
-          es_wt_mean_mm: null,
-          vox_xy_mm: 0,
-          alignment_source: "stored",
-          edFrameIndex: series.edFrameIndex,
-          source: "frames",
-          computedFor: {
-            mode: "full-cycle",
-            model: strainModel,
-            edFrameIndex: series.edFrameIndex,
-          },
-        });
-      }
-    }
-
-    if (!rvStrainResultRef.current) {
-      if (doc.rvStrain) {
-        onRvStrainResult({
-          regions: doc.rvStrain.regions,
-          global_rv_strain: doc.rvStrain.global_rv_strain,
-          vox_xy_mm: 0,
-          alignment_source: "stored",
-          edFrameIndex: doc.rvStrain.edFrameIndex,
-          esFrameIndex: doc.rvStrain.esFrameIndex,
-          source: "frames",
-          computedFor: {
-            mode: "choose-frames",
-            model: strainModel,
-            edFrameIndex: doc.rvStrain.edFrameIndex ?? 0,
-            esFrameIndex: doc.rvStrain.esFrameIndex,
-          },
-        });
-      } else if (doc.rvStrainSeries?.frames?.length) {
-        const series = doc.rvStrainSeries;
-        const frame =
-          series.frames.find((f) => f.frameIndex === series.edFrameIndex) ?? series.frames[0];
-        onRvStrainResult({
-          regions: frame.regions,
-          global_rv_strain: frame.global_rv_strain,
-          vox_xy_mm: 0,
-          alignment_source: "stored",
-          edFrameIndex: series.edFrameIndex,
-          source: "frames",
-          computedFor: {
-            mode: "full-cycle",
-            model: strainModel,
-            edFrameIndex: series.edFrameIndex,
-          },
-        });
-      }
-    }
-  }, [strainModel, resultsByModel]);
+  // True peak-over-the-whole-cycle values, for the Full-cycle "Current +
+  // Peak" tiles under the 3D model below -- strainForDisplay/rvStrainForDisplay
+  // only ever carry the CURRENTLY SCRUBBED frame's values in Full-cycle mode
+  // (see their own construction above), so "peak" needs the full series.
+  const lvPeakGrs = useMemo(() => {
+    const vals = (realSeries?.frames ?? []).map((f) => f.global_grs).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.max(...vals) : null;
+  }, [realSeries]);
+  const lvPeakGcs = useMemo(() => {
+    const vals = (realSeries?.frames ?? []).map((f) => f.global_gcs).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  }, [realSeries]);
+  const rvPeakGcs = useMemo(() => {
+    const vals = (realRvSeries?.frames ?? []).map((f) => f.global_rv_strain).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  }, [realRvSeries]);
 
   const { getReconstructionGLB, reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
+
+  // RV side of the 3D Heart toggle: real mesh + real segment boundaries,
+  // colored by segment identity — see useRvPrototypeMesh's docstring.
+  // Independent of the LV reconstruction above; RV has its own reconstruction record.
+  const rvMesh = useRvPrototypeMesh(strainModel, currentFrame);
+
   const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
   // Reset ONLY when switching to a genuinely different reconstruction/model - not on
   // every frame change, otherwise fast playback spends most of its time with the mesh
@@ -2638,29 +2959,8 @@ function StrainPreviewPanel({
     return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
   }, [activeReconstruction, currentFrame]);
 
-  // The auto-detected ED/ES for the CURRENTLY-selected strain model — so the
-  // picker defaults to the frames that this model's heart-metrics found, keeping
-  // strain, heart-metrics, and the similarity guard consistent.
-  const autoFrames = autoFramesByModel[strainModel];
-  // Default the picker to the auto-detected ED/ES (physiologically correct pair)
-  // when available, so computed strain peaks are meaningful and match the volumes.
-  const [edFrameIdx, setEdFrameIdx] = useState<number>(autoFrames?.ed ?? 0);
-  const [esFrameIdx, setEsFrameIdx] = useState<number>(autoFrames?.es ?? 13);
-  // Sync the picker to the auto ED/ES when they load (metrics are async) or when
-  // the strain model changes — but only while the user hasn't manually dragged.
-  const userPickedFramesRef = useRef(false);
-  useEffect(() => {
-    if (userPickedFramesRef.current) return;
-    if (typeof autoFrames?.ed === "number") setEdFrameIdx(autoFrames.ed);
-    if (typeof autoFrames?.es === "number") setEsFrameIdx(autoFrames.es);
-  }, [autoFrames?.ed, autoFrames?.es]);
-  const realStrainData = strainResult;
-  const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number | null } | null>(null);
   const bullseyeResetRef = useRef<(() => void) | null>(null);
-  // Combined/RV aren't backed by real data yet (no RV mesh from the backend) —
-  // see ChamberFocusToggle's docstring. Only "LV" renders the real model.
-  const [chamberFocus, setChamberFocus] = useState<ChamberFocus>("LV");
   // 0-based segment index for the 3D heart (-1 = none). Kept in sync with the
   // parent's 1-based selectedSegment via handleSegClick below.
   const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
@@ -2668,68 +2968,18 @@ function StrainPreviewPanel({
   // selectedSegment (1-17) since RV region numbers (1-6) would otherwise
   // collide visually with LV segment numbers in the same 1-based range.
   const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
-
-  const handleComputeStrain = async () => {
-    if (!edFile || !esFile) return;
-    setIsComputing(true);
-    setStrainError(null);
-    try {
-      const formData = new FormData();
-      formData.append("ed_file", edFile);
-      formData.append("es_file", esFile);
-      if (avgLm1 && avgLm2) {
-        formData.append("rv_insertion_1_x", String(avgLm1.x));
-        formData.append("rv_insertion_1_y", String(avgLm1.y));
-        formData.append("rv_insertion_2_x", String(avgLm2.x));
-        formData.append("rv_insertion_2_y", String(avgLm2.y));
-      }
-      const result = await landmarkApi.computeStrain(projectId, formData);
-      onStrainResult({
-        ...result,
-        computedFor: { mode: "upload", model: strainModel, edFrameIndex: -1 },
-      });
-      setShowUploadPanel(false);
-    } catch (err: any) {
-      setStrainError(
-        err?.response?.data?.message ??
-        "Strain computation failed. Check that both files are valid segmentation NIfTI masks."
-      );
-    } finally {
-      setIsComputing(false);
-    }
-  };
-
-  const handleComputeFromFramesBoth = async () => {
-    if (edFrameIdx === esFrameIdx) return;
-    setStrainError(null);
-    setIsComputing(true);
-    try {
-      const computedFor: StrainComputedFor = {
-        mode: "choose-frames",
-        model: strainModel,
-        edFrameIndex: edFrameIdx,
-        esFrameIndex: esFrameIdx,
-      };
-      const [lvOutcome, rvOutcome] = await Promise.allSettled([
-        computeStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel),
-        computeRvStrainFromFrames(projectId, edFrameIdx, esFrameIdx, strainModel),
-      ]);
-      if (lvOutcome.status === "fulfilled") onStrainResult({ ...lvOutcome.value, computedFor });
-      if (rvOutcome.status === "fulfilled") onRvStrainResult({ ...rvOutcome.value, computedFor });
-
-      if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
-        setStrainError("Failed to compute LV and RV strain from frames.");
-      } else if (lvOutcome.status === "rejected") {
-        setStrainError("RV strain computed, but LV strain failed.");
-      } else if (rvOutcome.status === "rejected") {
-        setStrainError("LV strain computed, but RV strain failed.");
-      } else {
-        setShowUploadPanel(false);
-      }
-    } finally {
-      setIsComputing(false);
-    }
-  };
+  const [rvHeartTooltip, setRvHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
+  // The "Combined" chamber focus shares the SAME 2D bullseye component
+  // (CombinedVentricularChart) as LV/RV-only, just with both sides drawn
+  // instead of one hidden -- but it needs its OWN selection state. Reusing
+  // selectedSegment/selectedSeg3d/selectedRvRegion here would mean clicking
+  // a segment on the Combined bullseye also highlighted it on the LV-only
+  // or RV-only tab (and vice versa) since those all read the same state,
+  // even though the two views aren't showing the same thing. Combined's 3D
+  // panel (CombinedHeartModel) doesn't support click-to-select yet, so these
+  // only drive the Combined bullseye's own highlight for now.
+  const [selectedCombinedSegment, setSelectedCombinedSegment] = useState<number | null>(null);
+  const [selectedCombinedRvRegion, setSelectedCombinedRvRegion] = useState<number | null>(null);
 
   const strainMatchesSelection = !!(
     realStrainData?.computedFor &&
@@ -2747,8 +2997,40 @@ function StrainPreviewPanel({
       (rvStrainResult.computedFor.edFrameIndex === edFrameIdx &&
         rvStrainResult.computedFor.esFrameIndex === esFrameIdx))
   );
-  const strainForDisplay = strainMatchesSelection ? realStrainData : null;
-  const rvStrainForDisplay = rvStrainMatchesSelection ? rvStrainResult : null;
+
+  // Full cycle: color from the per-frame series at whichever frame is
+  // currently scrubbed — this is what was missing before (the bullseye/3D
+  // heart only ever read the Quick ED->ES result, so switching to Full cycle
+  // and running "Compute all frames" never changed what was displayed here).
+  const fullCycleFrame = isFullCycle ? realSeries?.frames?.find((f) => f.frameIndex === currentFrame) ?? null : null;
+  const fullCycleRvFrame = isFullCycle ? realRvSeries?.frames?.find((f) => f.frameIndex === currentFrame) ?? null : null;
+
+  const strainForDisplay: RealStrainResult | null = isFullCycle
+    ? (fullCycleFrame ? {
+        segments: fullCycleFrame.segments.map((s) => ({ segment: s.segment, label: s.label, grs: s.grs, gcs: s.gcs })),
+        global_grs: fullCycleFrame.global_grs,
+        global_gcs: fullCycleFrame.global_gcs,
+        ed_wt_mean_mm: null,
+        es_wt_mean_mm: null,
+        vox_xy_mm: 0,
+        alignment_source: "stored",
+        edFrameIndex: realSeries?.edFrameIndex,
+        source: "frames",
+        computedFor: { mode: "full-cycle", model: strainModel, edFrameIndex: realSeries?.edFrameIndex ?? 0 },
+      } : null)
+    : (strainMatchesSelection ? realStrainData : null);
+
+  const rvStrainForDisplay: RvStrainResult | null = isFullCycle
+    ? (fullCycleRvFrame ? {
+        regions: fullCycleRvFrame.regions,
+        global_rv_strain: fullCycleRvFrame.global_rv_strain,
+        vox_xy_mm: 0,
+        alignment_source: "stored",
+        edFrameIndex: realRvSeries?.edFrameIndex,
+        source: "frames",
+        computedFor: { mode: "full-cycle", model: strainModel, edFrameIndex: realRvSeries?.edFrameIndex ?? 0 },
+      } : null)
+    : (rvStrainMatchesSelection ? rvStrainResult : null);
 
   const displayData = strainForDisplay
     ? strainForDisplay.segments.map((s) => ({
@@ -2782,17 +3064,20 @@ function StrainPreviewPanel({
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border flex-shrink-0">
-        {/* Strain type toggle — applies to the LV side of the combined chart.
-            RV strain is a single cavity-radius measure with no GRS/GCS sub-type. */}
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
-          {(["GCS", "GRS"] as const).map((type) => (
-            <button key={type} type="button" onClick={() => onStrainTypeChange(type)}
-              className={cn("rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors",
-                selectedStrainType === type ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>
-              {type}
-            </button>
-          ))}
-        </div>
+        {/* GRS/GCS (and RV's GCS/GAS) are chosen from the sidebar's Strain tab
+            now — this panel just displays whatever metric is currently
+            selected there, so there's no second toggle here to fall out of
+            sync with it. Labeled per-chamber (not a bare "GCS") since LV and
+            RV each have their own independent metric toggle in the sidebar —
+            this one never flips when you switch RV's toggle, by design. */}
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-medium text-muted-foreground">
+          LV {selectedStrainType}
+        </span>
+        {/* RV is always labeled Prototype first — GCS is real but has no
+            published reference range, GAS has no computation at all. */}
+        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
+          Prototype — RV {rvMetricType}
+        </span>
 
         <div className="ml-auto flex items-center gap-1.5">
           {/* Source badge — only when real data exists */}
@@ -2802,233 +3087,29 @@ function StrainPreviewPanel({
             </span>
           )}
 
-          {/* Clear strain result */}
-          {(realStrainData || rvStrainResult) && (
-            <button type="button" onClick={() => { onStrainResult(null); onRvStrainResult(null); setStrainInputMode("frames"); setShowUploadPanel(false); }}
+          {/* Clear strain result — Quick ED->ES only. Full cycle's "current"
+              values come from the per-frame series (realSeries/realRvSeries),
+              not this local strainResult/rvStrainResult state, so Clear
+              wouldn't actually empty anything meaningful there. */}
+          {!isFullCycle && (realStrainData || rvStrainResult) && (
+            <button type="button" onClick={() => { onStrainResult(null); onRvStrainResult(null); }}
               className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[9px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
               Clear
             </button>
           )}
-
-          {/* Upload trigger — always visible */}
-          <button type="button" onClick={() => setShowUploadPanel((p) => !p)}
-            title="Compute strain from this project's stored segmentation"
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-medium transition-colors shrink-0",
-              showUploadPanel
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-border bg-background text-muted-foreground hover:bg-muted"
-            )}>
-            <Upload className="h-3 w-3" />
-            {(realStrainData || rvStrainResult) ? "Recompute" : "Compute"}
-          </button>
         </div>
       </div>
 
-      {/* ── Upload drawer — slides in below toolbar ── */}
-      {showUploadPanel && (
-        <div className="flex-shrink-0 border-b border-border bg-muted/10 px-3 py-2.5 space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-semibold text-foreground">
-              Compute Strain
-            </p>
-            <button type="button" onClick={() => setShowUploadPanel(false)}
-              className="text-muted-foreground hover:text-foreground transition-colors">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          {/* Mode toggle — compact segmented control, "Choose frames" first/default.
-              Upload mode is LV-only: there's no RV-strain upload endpoint yet, only
-              the frames-from-stored-segmentation route, so uploading masks here
-              computes LV strain and leaves the RV crescent ungrayed-out until a
-              frames-based (re)compute also runs. */}
-          <div className="inline-flex w-fit rounded-lg border border-border bg-muted/20 p-0.5 text-[10px] flex-shrink-0">
-            <button
-              type="button"
-              onClick={() => setStrainInputMode("frames")}
-              className={cn(
-                "rounded-md px-2.5 py-1 font-medium transition-colors",
-                strainInputMode === "frames"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted"
-              )}
-            >
-              Choose frames
-            </button>
-            <button
-              type="button"
-              onClick={() => setStrainInputMode("upload")}
-              className={cn(
-                "rounded-md px-2.5 py-1 font-medium transition-colors",
-                strainInputMode === "upload"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted"
-              )}
-            >
-              Upload masks (LV only)
-            </button>
-          </div>
-
-          {strainInputMode === "upload" && (
-            <>
-              <p className="text-[9px] text-muted-foreground leading-relaxed">
-                Any NIfTI segmentation mask (.nii or .nii.gz) with classes 0=background, 1=RV, 2=myocardium, 3=LV cavity. You can use masks exported from VisHeart or from any other cardiac segmentation tool. This computes LV strain only — use &quot;Choose frames&quot; for RV.
-                {avgLm1 && avgLm2 && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {/* ED */}
-                <div>
-                  <p className="text-[9px] text-muted-foreground mb-1">End-Diastole (ED)</p>
-                  <input ref={edRef} type="file" accept=".nii,.nii.gz" className="sr-only"
-                    onChange={(e) => { setEdFile(e.target.files?.[0] ?? null); setStrainError(null); }} />
-                  <button type="button" onClick={() => edRef.current?.click()}
-                    className={cn(
-                      "w-full flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-medium transition-colors",
-                      edFile ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400"
-                             : "border-dashed border-border bg-background text-muted-foreground hover:bg-muted/50"
-                    )}>
-                    <Upload className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{edFile ? edFile.name : "Choose ED .nii/.gz"}</span>
-                  </button>
-                </div>
-                {/* ES */}
-                <div>
-                  <p className="text-[9px] text-muted-foreground mb-1">End-Systole (ES)</p>
-                  <input ref={esRef} type="file" accept=".nii,.nii.gz" className="sr-only"
-                    onChange={(e) => { setEsFile(e.target.files?.[0] ?? null); setStrainError(null); }} />
-                  <button type="button" onClick={() => esRef.current?.click()}
-                    className={cn(
-                      "w-full flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-medium transition-colors",
-                      esFile ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400"
-                             : "border-dashed border-border bg-background text-muted-foreground hover:bg-muted/50"
-                    )}>
-                    <Upload className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{esFile ? esFile.name : "Choose ES .nii/.gz"}</span>
-                  </button>
-                </div>
-              </div>
-              {strainError && (
-                <p className="text-[9px] text-destructive rounded bg-destructive/10 px-2 py-1">{strainError}</p>
-              )}
-              <button type="button" disabled={!edFile || !esFile || isComputing} onClick={handleComputeStrain}
-                className={cn(
-                  "w-full rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
-                  (!edFile || !esFile || isComputing)
-                    ? "bg-muted text-muted-foreground cursor-not-allowed"
-                    : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
-                )}>
-                {isComputing ? (
-                  <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Computing…</span>
-                ) : "Compute Strain"}
-              </button>
-            </>
-          )}
-
-          {strainInputMode === "frames" && (
-            <div className="flex flex-col gap-3 px-1">
-              <p className="text-[11px] text-muted-foreground">
-                Select any two frames from the stored segmentation to compute LV and RV strain between them.
-                {avgLm1 && avgLm2 && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
-              </p>
-
-              {/* ED/ES dual-handle frame range */}
-              <div className="flex flex-col gap-1.5">
-                <span className="text-[10px] text-muted-foreground">{frameCount} frames</span>
-                <DualFrameRangePicker
-                  min={0}
-                  max={Math.max(0, frameCount - 1)}
-                  edValue={edFrameIdx}
-                  esValue={esFrameIdx}
-                  onEdChange={(v) => { userPickedFramesRef.current = true; setEdFrameIdx(v); setStrainError(null); }}
-                  onEsChange={(v) => { userPickedFramesRef.current = true; setEsFrameIdx(v); setStrainError(null); }}
-                />
-              </div>
-
-              {edFrameIdx === esFrameIdx && (
-                <p className="text-[10px] text-destructive">
-                  ED and ES frames must be different.
-                </p>
-              )}
-
-              {/* Peak strain is only physiologically meaningful between the TRUE
-                  end-diastole and end-systole. When the picker is moved off the
-                  auto-detected pair the backend deliberately withholds the peaks
-                  from heartMetrics (and therefore from disease similarity and
-                  health status) — surface that here so the omission isn't silent. */}
-              {/* Peak backfill into Disease Similarity / Health Status is LV-specific
-                  (computeDiseaseSimilarityFromMetrics/computeHealthStatusFromMetrics
-                  consume LV strain peaks only) — RV strain isn't part of that chain. */}
-              {typeof autoFrames?.ed === "number" && typeof autoFrames?.es === "number" &&
-               (edFrameIdx !== autoFrames.ed || esFrameIdx !== autoFrames.es) && (
-                <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
-                  <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
-                    <span className="font-semibold">Custom frames.</span>{" "}
-                    Computing {edFrameIdx + 1}→{esFrameIdx + 1} instead of the auto-detected{" "}
-                    {autoFrames.ed + 1}→{autoFrames.es + 1} ({strainModel === "unet" ? "UNet" : "MedSAM"}).
-                    Strain will still be computed for inspection, but the peaks will{" "}
-                    <span className="font-semibold">not</span> feed Disease Similarity or Health
-                    Status — those need the true ED/ES pair.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      userPickedFramesRef.current = false;
-                      setEdFrameIdx(autoFrames.ed);
-                      setEsFrameIdx(autoFrames.es);
-                      setStrainError(null);
-                    }}
-                    className="mt-1 text-[9px] font-medium text-amber-800 underline underline-offset-2 hover:no-underline dark:text-amber-300"
-                  >
-                    Reset to auto-detected frames
-                  </button>
-                </div>
-              )}
-
-              {typeof autoFrames?.ed === "number" && typeof autoFrames?.es === "number" &&
-               edFrameIdx === autoFrames.ed && esFrameIdx === autoFrames.es && (
-                <p className="text-[9px] leading-relaxed text-emerald-700 dark:text-emerald-400">
-                  Using the auto-detected ED/ES ({autoFrames.ed + 1}→{autoFrames.es + 1}) — peaks
-                  will feed Disease Similarity and Health Status.
-                </p>
-              )}
-
-              {/* Model selector + demoted accuracy note — paired since the note
-                  is specifically about auto-segmentation model quality. */}
-              <div className="flex items-start gap-2 rounded-md border border-border bg-muted/10 px-2 py-1.5">
-                <select
-                  value={strainModel}
-                  onChange={(e) => setStrainModel(e.target.value as "unet" | "medsam")}
-                  className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                >
-                  <option value="unet">UNet</option>
-                  <option value="medsam">MedSAM</option>
-                </select>
-                <p className="text-[9px] leading-relaxed text-muted-foreground">
-                  Values are indicative only — auto-segmentation masks have limited wall boundary accuracy. For clinical accuracy, use Upload Masks with manually verified masks.
-                </p>
-              </div>
-
-              {strainError && (
-                <p className="text-[9px] text-destructive rounded bg-destructive/10 px-2 py-1">{strainError}</p>
-              )}
-
-              <button
-                type="button"
-                disabled={edFrameIdx === esFrameIdx || frameCount <= 1 || isComputing}
-                onClick={handleComputeFromFramesBoth}
-                className="w-full rounded-md bg-primary px-3 py-1.5 text-[11px] text-primary-foreground disabled:opacity-50 transition-colors hover:bg-primary/90"
-              >
-                {isComputing ? (
-                  <span className="inline-flex items-center justify-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Computing…</span>
-                ) : "Compute Strain"}
-              </button>
-            </div>
-          )}
+      {/* ── Main area ── */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      {isComputeBusy && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background/80 backdrop-blur-sm">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <p className="text-xs font-medium text-muted-foreground">
+            {computeScope === "quick" ? "Computing…" : "Computing all frames…"}
+          </p>
         </div>
       )}
-
-      {/* ── Main area ── */}
       {!strainForDisplay && !rvStrainForDisplay ? (
         /* Prompt — shown when neither LV nor RV strain matches the current
            Choose-Frames selection. Two distinct causes get distinct copy:
@@ -3049,7 +3130,7 @@ function StrainPreviewPanel({
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   A strain result exists, but not for the ED/ES frames and model currently
                   selected here (it may be a full-cycle result, or was computed for a
-                  different pair). Run Compute Strain to see results for this frame pair.
+                  different pair). Use the sidebar&apos;s Strain tab to compute this pair.
                 </p>
               </>
             ) : (
@@ -3058,22 +3139,14 @@ function StrainPreviewPanel({
                   No strain computed yet
                 </p>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Open the panel to compute LV and RV strain together from this project&apos;s
-                  <strong> already-saved segmentation</strong> — pick the ED and ES frames and press
-                  Compute Strain, no upload needed. Optionally, upload your own ED/ES masks in NIfTI
-                  format (.nii or .nii.gz; classes 0=background, 1=RV, 2=myocardium, 3=LV cavity) for
-                  manually-verified LV accuracy.
+                  Use the <strong>Compute strain</strong> card in the sidebar&apos;s Strain tab to
+                  compute LV and RV strain together from this project&apos;s already-saved
+                  segmentation, or upload your own ED/ES masks in NIfTI format (.nii or .nii.gz;
+                  classes 0=background, 1=RV, 2=myocardium, 3=LV cavity) for manually-verified
+                  LV accuracy.
                 </p>
               </>
             )}
-            <button
-              type="button"
-              onClick={() => setShowUploadPanel(true)}
-              className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
-            >
-              <Upload className="w-3 h-3" />
-              Compute or upload masks
-            </button>
           </div>
         </div>
       ) : (
@@ -3085,27 +3158,41 @@ function StrainPreviewPanel({
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
               <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                LV + RV Bullseye
+                {chamberFocus === "combined" ? "LV + RV Bullseye" : chamberFocus === "LV" ? "LV Bullseye" : "RV Bullseye"}
               </p>
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
-                {selectedStrainType}
-              </span>
+              <div className="flex items-center gap-1">
+                {chamberFocus !== "RV" && (
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                    LV {selectedStrainType}
+                  </span>
+                )}
+                {chamberFocus !== "LV" && (
+                  <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
+                    Prototype — RV {rvMetricType}
+                  </span>
+                )}
+              </div>
             </div>
             <StrainZoomPan className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
               <CombinedVentricularChart
                 lvData={displayData}
                 hasLv={!!strainForDisplay}
                 strainType={selectedStrainType}
-                selectedSegment={selectedSegment}
-                onSegmentClick={handleSegClick}
+                selectedSegment={chamberFocus === "combined" ? selectedCombinedSegment : selectedSegment}
+                onSegmentClick={chamberFocus === "combined"
+                  ? (seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))
+                  : handleSegClick}
                 onSegmentHover={setTooltip}
                 sharedMin={sharedMin}
                 sharedMax={sharedMax}
                 reverseColors={reverseColors}
-                rvRegions={rvStrainForDisplay?.regions ?? null}
-                selectedRvRegion={selectedRvRegion}
-                onRvRegionClick={(region) => setSelectedRvRegion((prev) => (prev === region ? null : region))}
+                alignmentAngleDeg={strainForDisplay?.alignment_angle_deg}
+                rvRegions={rvMetricType === "GCS" ? (rvStrainForDisplay?.regions ?? null) : null}
+                selectedRvRegion={chamberFocus === "combined" ? selectedCombinedRvRegion : selectedRvRegion}
+                onRvRegionClick={(region) => (chamberFocus === "combined" ? setSelectedCombinedRvRegion : setSelectedRvRegion)((prev) => (prev === region ? null : region))}
                 onRvRegionHover={setTooltip}
+                showLv={chamberFocus !== "RV"}
+                showRv={chamberFocus !== "LV"}
               />
             </StrainZoomPan>
             {/* Colour legend */}
@@ -3116,20 +3203,11 @@ function StrainPreviewPanel({
                 </span>
               ))}
             </div>
-            {rvStrainForDisplay && (
-              <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                  <p className="text-[8px] text-muted-foreground">Global RV Strain</p>
-                  <p className="font-bold text-[10px]">
-                    {rvStrainForDisplay.global_rv_strain != null ? `${rvStrainForDisplay.global_rv_strain.toFixed(1)}%` : "N/A"}
-                  </p>
-                  <p className="text-[7px] text-muted-foreground">Negative = shrinking (healthy)</p>
-                </div>
-                <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                  <p className="text-[8px] text-muted-foreground">RV Frames</p>
-                  <p className="font-bold text-[10px]">{(rvStrainForDisplay.edFrameIndex ?? 0) + 1}→{(rvStrainForDisplay.esFrameIndex ?? 0) + 1}</p>
-                  <p className="text-[7px] text-muted-foreground capitalize">{rvStrainForDisplay.alignment_source ?? "—"} alignment</p>
-                </div>
+            {rvMetricType === "GAS" && (
+              <div className="mt-1 flex-shrink-0 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1 text-center">
+                <p className="text-[8.5px] leading-snug text-amber-700 dark:text-amber-400">
+                  RV GAS has no computation in this pipeline yet — switch to RV GCS for computed (still prototype) values.
+                </p>
               </div>
             )}
           </div>
@@ -3140,16 +3218,181 @@ function StrainPreviewPanel({
               <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
                 3D Heart {chamberFocus === "combined" ? "(LV + RV)" : `(${chamberFocus})`}
               </p>
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+              <div className="flex items-center gap-1">
+                {chamberFocus === "RV" && (
+                  <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
+                    Prototype
+                  </span>
+                )}
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+              </div>
             </div>
-            <ChamberFocusToggle value={chamberFocus} onChange={setChamberFocus} className="mb-2 flex-shrink-0" />
-            {chamberFocus !== "LV" ? (
-              <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
-                <AlertCircle className="h-8 w-8 opacity-40" />
-                <p className="max-w-[240px] text-xs leading-relaxed">
-                  {chamberFocus === "RV" ? "RV view coming soon" : "Combined LV + RV view coming soon"} — the RV mesh
-                  isn&apos;t generated by the backend yet.
+            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} className="mb-2 flex-shrink-0" />
+            {/* Metric-type control, moved here (main panel, right under the
+                chamber toggle) from the sidebar's chart card -- same idea as
+                Quick ED->ES's own flat toggle (QuickCombinedStrainView, now
+                removed from the sidebar too since this replaces it), just
+                living in one place for both scopes now: Combined shows all
+                four (LV GRS/GCS, RV GCS/GAS) since nothing here is chamber-
+                exclusive; LV/RV-only show just their own pair. Small and
+                left-aligned (inline-flex, not a full-width grid) rather than
+                a second big control competing with the chamber toggle above it. */}
+            <div className="mb-2 inline-flex w-fit items-center gap-0.5 self-start rounded-md border border-border bg-muted/20 p-0.5 flex-shrink-0">
+              {chamberFocus !== "RV" && (
+                <>
+                  <button type="button" onClick={() => onStrainTypeChange("GRS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      selectedStrainType === "GRS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "LV GRS" : "GRS"}
+                  </button>
+                  <button type="button" onClick={() => onStrainTypeChange("GCS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      selectedStrainType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "LV GCS" : "GCS"}
+                  </button>
+                </>
+              )}
+              {chamberFocus !== "LV" && (
+                <>
+                  <button type="button" onClick={() => onRvMetricTypeChange("GCS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      rvMetricType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "RV GCS" : "GCS"}
+                  </button>
+                  <button type="button" onClick={() => onRvMetricTypeChange("GAS")}
+                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                      rvMetricType === "GAS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                    {chamberFocus === "combined" ? "RV GAS" : "GAS"}
+                  </button>
+                </>
+              )}
+            </div>
+            {chamberFocus === "RV" && rvMesh.available && rvMesh.meshUrl ? (
+              <>
+                <div className="flex-1 min-h-0 w-full relative">
+                  <ReconstructedHeartModel
+                    meshUrl={rvMesh.meshUrl}
+                    meshFormat={rvMesh.meshFormat}
+                    segmentLabels={rvMesh.segmentLabels}
+                    colorMode="rv-segment"
+                    chamber="rv"
+                    className="w-full h-full"
+                    onSegmentHover={setRvHeartTooltip}
+                    // Orient this standalone RV view the same way it appears
+                    // in the Combined tab (both LV and RV are in the same
+                    // raw coordinate space, so LV's own alignment is a valid
+                    // shared reference) instead of RV's own independent
+                    // apex/base rotation, which has no reason to land on the
+                    // same orientation. Falls back to RV's own alignment
+                    // automatically if the LV mesh/labels aren't loaded yet.
+                    lvAlignmentMeshUrl={reconstructionMeshUrl}
+                    lvAlignmentMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
+                    lvAlignmentLabels={reconstructionLabels}
+                    // A bit closer than LV/Combined's shared 8 -- the RV
+                    // crescent's own bounding box is narrower than LV's
+                    // rounder shape at the same distance, so it read as
+                    // smaller even after the earlier zoom pass.
+                    initialCameraDistance={6.5}
+                  />
+                  {rvHeartTooltip && (
+                    <div
+                      className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                      style={{ left: rvHeartTooltip.x + 14, top: rvHeartTooltip.y - 10 }}
+                    >
+                      <div className="font-semibold">
+                        {RV_SEGMENT_NAMES[rvHeartTooltip.segment] ?? `Segment ${rvHeartTooltip.segment}`}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                  Drag to rotate · scroll to zoom
                 </p>
+                {/* Quick ED->ES already shows this same summary in the
+                    sidebar's Strain tab (QuickCombinedStrainView) -- showing
+                    it here too was a redundant duplicate. Full cycle has no
+                    sidebar equivalent (its sidebar shows the chart instead),
+                    so it keeps its own copy here. */}
+                {isFullCycle && (
+                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                )}
+              </>
+            ) : chamberFocus === "combined" && reconstructionMeshUrl && reconstructionLabels?.length && rvMesh.available && rvMesh.meshUrl ? (
+              <>
+                <div className="flex-1 min-h-0 w-full">
+                  <CombinedHeartModel
+                    lvMeshUrl={reconstructionMeshUrl}
+                    lvMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
+                    lvSegmentLabels={reconstructionLabels}
+                    lvValues={strainForDisplay ? Array.from({ length: 17 }, (_, i) => {
+                      const seg = strainForDisplay.segments[i];
+                      return seg ? (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0 : 0;
+                    }) : undefined}
+                    lvMin={sharedMin}
+                    lvMax={sharedMax}
+                    lvReverseColors={reverseColors}
+                    rvMeshUrl={rvMesh.meshUrl}
+                    rvMeshFormat={rvMesh.meshFormat}
+                    rvSegmentLabels={rvMesh.segmentLabels}
+                    className="w-full h-full"
+                    initialCameraDistance={8}
+                    // Only LV is wired here, per what was asked -- the RV
+                    // bullseye's region numbering (1-9, Basal-first, from
+                    // the strain backend's own region list) and the 3D
+                    // model's RV segment numbering (0-8, Apical-first, the
+                    // CPD atlas's own order) aren't the same scheme, so
+                    // cross-linking them would need a real mapping between
+                    // the two first, not just an index shift.
+                    selectedLvSegment={selectedCombinedSegment ?? -1}
+                    onLvSegmentClick={(seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))}
+                  />
+                </div>
+                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                  Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by segment identity (prototype)
+                </p>
+                {/* Quick ED->ES already shows this in the sidebar's
+                    QuickCombinedStrainView -- only Full cycle needs its own
+                    copy here (its sidebar shows the chart instead). */}
+                {isFullCycle && (
+                  <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
+                    <LvFullCycleStrainTiles
+                      currentGrs={strainForDisplay?.global_grs ?? null}
+                      currentGcs={strainForDisplay?.global_gcs ?? null}
+                      peakGrs={lvPeakGrs}
+                      peakGcs={lvPeakGcs}
+                      loading={isComputeBusy}
+                    />
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                  </div>
+                )}
+              </>
+            ) : chamberFocus !== "LV" ? (
+              <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto px-1 py-1">
+                <div className="flex flex-col items-center justify-center gap-1.5 px-4 py-3 text-center text-muted-foreground">
+                  <AlertCircle className="h-6 w-6 opacity-40" />
+                  <p className="max-w-[240px] text-[10px] leading-relaxed">
+                    {chamberFocus === "RV"
+                      ? "No RV reconstruction built yet for this model"
+                      : "Combined view needs both an LV and an RV reconstruction for this model"} — showing values only.
+                  </p>
+                </div>
+                {/* Quick ED->ES already shows this in the sidebar's
+                    QuickCombinedStrainView regardless of mesh availability --
+                    only Full cycle needs its own copy here. */}
+                {isFullCycle && (
+                  <>
+                    {chamberFocus === "combined" && (
+                      <LvFullCycleStrainTiles
+                        currentGrs={strainForDisplay?.global_grs ?? null}
+                        currentGcs={strainForDisplay?.global_gcs ?? null}
+                        peakGrs={lvPeakGrs}
+                        peakGcs={lvPeakGcs}
+                        loading={isComputeBusy}
+                      />
+                    )}
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                  </>
+                )}
               </div>
             ) : strainForDisplay ? (
               <>
@@ -3170,37 +3413,18 @@ function StrainPreviewPanel({
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
-                {/* Real strain KPIs below 3D view */}
-                <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                    <p className="text-[8px] text-muted-foreground">Peak GRS</p>
-                    <p className={cn("font-bold text-[10px]",
-                      strainForDisplay.global_grs !== null && strainForDisplay.global_grs >= 40 ? "text-green-600" : "text-orange-500")}>
-                      {strainForDisplay.global_grs != null ? `${strainForDisplay.global_grs >= 0 ? "+" : ""}${strainForDisplay.global_grs.toFixed(1)}%` : "N/A"}
-                    </p>
-                    <p className="text-[7px] text-muted-foreground">Normal &gt;+40%</p>
-                  </div>
-                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                    <p className="text-[8px] text-muted-foreground">Peak GCS</p>
-                    <p className={cn("font-bold text-[10px]",
-                      strainForDisplay.global_gcs !== null && strainForDisplay.global_gcs >= -25 && strainForDisplay.global_gcs <= -15 ? "text-green-600" : "text-orange-500")}>
-                      {strainForDisplay.global_gcs != null ? `${strainForDisplay.global_gcs.toFixed(1)}%` : "N/A"}
-                    </p>
-                    <p className="text-[7px] text-muted-foreground">Normal -15% to -25%</p>
-                  </div>
-                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                    <p className="text-[8px] text-muted-foreground">
-                      {strainForDisplay.source === "frames" ? `Frame ${(strainForDisplay.edFrameIndex ?? 0) + 1} WT` : "ED WT"}
-                    </p>
-                    <p className="font-bold text-[10px]">{strainForDisplay.ed_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
-                  </div>
-                  <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-                    <p className="text-[8px] text-muted-foreground">
-                      {strainForDisplay.source === "frames" ? `Frame ${(strainForDisplay.esFrameIndex ?? 0) + 1} WT` : "ES WT"}
-                    </p>
-                    <p className="font-bold text-[10px]">{strainForDisplay.es_wt_mean_mm?.toFixed(2) ?? "—"} mm</p>
-                  </div>
-                </div>
+                {/* Quick ED->ES already shows this in the sidebar's
+                    QuickCombinedStrainView -- only Full cycle needs its own
+                    copy here. */}
+                {isFullCycle && (
+                  <LvFullCycleStrainTiles
+                    currentGrs={strainForDisplay?.global_grs ?? null}
+                    currentGcs={strainForDisplay?.global_gcs ?? null}
+                    peakGrs={lvPeakGrs}
+                    peakGcs={lvPeakGcs}
+                    loading={isComputeBusy}
+                  />
+                )}
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-center px-4">
@@ -3214,6 +3438,7 @@ function StrainPreviewPanel({
           </div>
         </div>
       )}
+      </div>
 
       {/* Hover tooltip */}
       {tooltip && (
@@ -3231,6 +3456,66 @@ function StrainPreviewPanel({
     </div>
   );
 }
+
+/** Small neutral stat tile — no color-coding, for values that aren't a
+ *  strain % (wall thickness in mm, cavity area). */
+function KpiTile({ label, value, loading }: { label: string; value: string; loading?: boolean }) {
+  return (
+    <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
+      <p className="text-[8px] text-muted-foreground">{label}</p>
+      {loading ? (
+        <div className="mx-auto mt-0.5 h-3 w-10 animate-pulse rounded bg-muted-foreground/20" />
+      ) : (
+        <p className="font-bold text-[10px]">{value}</p>
+      )}
+    </div>
+  );
+}
+
+
+/** Full-cycle's LV summary — CURRENT (at the scrubbed frame) + true PEAK
+ *  (over the whole computed cycle) for both GRS and GCS, same idea as
+ *  LvGlobalStrainMiniBlock's Quick-scope box but Quick only has one ED->ES
+ *  pair so "current" isn't a meaningful separate concept there. */
+function LvFullCycleStrainTiles({
+  currentGrs, currentGcs, peakGrs, peakGcs, loading,
+}: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null; loading?: boolean }) {
+  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+  return (
+    <div>
+      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">LV Global Strain</p>
+      <div className="grid grid-cols-2 gap-1">
+        <KpiTile label="Current GRS" value={fmt(currentGrs)} loading={loading} />
+        <KpiTile label="Peak GRS" value={fmt(peakGrs)} loading={loading} />
+        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
+        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
+      </div>
+    </div>
+  );
+}
+
+/** Full-cycle's RV summary — CURRENT + PEAK GCS (real, unvalidated); GAS has
+ *  no computation at all, shown as an explicit placeholder either way. */
+function RvFullCycleStrainTiles({
+  currentGcs, peakGcs, loading,
+}: { currentGcs: number | null; peakGcs: number | null; loading?: boolean }) {
+  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+  return (
+    <div>
+      <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[7px] font-bold text-amber-700 dark:text-amber-400">Prototype</span>
+        RV Global Strain
+      </p>
+      <div className="grid grid-cols-2 gap-1">
+        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
+        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
+        <KpiTile label="Current GAS" value="—" />
+        <KpiTile label="Peak GAS" value="—" />
+      </div>
+    </div>
+  );
+}
+
 function StatusBadge({ status }: { status: LandmarkPageState["status"] }) {
   const map = {
     idle:    { label: "Ready",     cls: "bg-muted text-muted-foreground" },
@@ -3278,32 +3563,35 @@ function LandmarkSummaryStats({
 }) {
   if (!nTotal) return null;
   const confident = nTotal - (nCollapsed ?? 0);
+  const collapsed = nCollapsed ?? 0;
   const segGuided = n2ch ?? 0;
   const mriOnly = n1chFallback ?? 0;
+
+  const stats: { key: string; dot: string; value: number; label: string }[] = [
+    { key: "confident", dot: "bg-green-500", value: confident, label: "slices confident" },
+  ];
+  if (collapsed > 0) {
+    stats.push({ key: "collapsed", dot: "bg-slate-500", value: collapsed, label: "mean point used" });
+  }
+  if (segGuided > 0) {
+    stats.push({ key: "2ch", dot: "bg-blue-500", value: segGuided, label: "seg-guided (2ch)" });
+  }
+  if (mriOnly > 0) {
+    stats.push({ key: "1ch", dot: "bg-amber-500", value: mriOnly, label: "MRI-only (1ch)" });
+  }
+
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-0.5 px-4 py-1.5 border-b border-border bg-muted/30 text-[11px] text-muted-foreground flex-shrink-0">
-      <span>
-        <span className="font-medium text-green-600 dark:text-green-400">{confident}/{nTotal}</span>
-        {" slices confident"}
-      </span>
-      {(nCollapsed ?? 0) > 0 && (
-        <span>
-          <span className="font-medium text-zinc-500">{nCollapsed}/{nTotal}</span>
-          {" mean point used"}
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+      {stats.map((s) => (
+        <span
+          key={s.key}
+          className="inline-flex items-center gap-1 text-[9px] text-muted-foreground"
+        >
+          <span className={cn("h-1.5 w-1.5 rounded-full flex-shrink-0", s.dot)} />
+          <span className="font-semibold text-foreground tabular-nums">{s.value}/{nTotal}</span>
+          {s.label}
         </span>
-      )}
-      {segGuided > 0 && (
-        <span>
-          <span className="font-medium text-blue-500">{segGuided}/{nTotal}</span>
-          {" seg-guided (2ch)"}
-        </span>
-      )}
-      {mriOnly > 0 && (
-        <span>
-          <span className="font-medium text-amber-500">{mriOnly}/{nTotal}</span>
-          {" MRI-only (1ch)"}
-        </span>
-      )}
+      ))}
     </div>
   );
 }

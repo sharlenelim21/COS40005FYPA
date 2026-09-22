@@ -83,3 +83,6 @@ node_modules/*.pyo
 # Backup files
 *.bak
 *.backup
+
+# Local docker-compose overrides (machine-specific image tags)
+docker-compose.override.yml

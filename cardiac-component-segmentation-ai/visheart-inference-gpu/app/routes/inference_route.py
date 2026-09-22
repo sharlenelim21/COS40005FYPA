@@ -22,7 +22,10 @@ from app.dependencies.model_init import get_yolo_model
 from app.classes.medsam_handler import MedSamHandler
 from app.dependencies.model_init import get_medsam_model
 from app.classes.fourdreconstruction_handler import FourDReconstructionHandler
-from app.dependencies.model_init import get_fourd_reconstruction_model
+from app.dependencies.model_init import (
+    get_fourd_reconstruction_model,
+    get_fourd_reconstruction_model_for_chamber,
+)
 
 # Import the verification dependency and the payload model
 from app.security.backend_authentication import conditional_verify_jwt, TokenPayLoad
@@ -351,6 +354,18 @@ async def queue_4d_reconstruction(
         Job acceptance confirmation with UUID
     """
     try:
+        # The injected handler is the LV checkpoint, which is what every existing caller wants.
+        # An RV request needs the RV checkpoint instead; chamber lives in the request body, so it
+        # cannot be resolved by Depends. Plan task 4.13/4.14.
+        if (request.chamber or "lv").lower() == "rv":
+            try:
+                fourd_handler = get_fourd_reconstruction_model_for_chamber("rv")
+            except RuntimeError as e:
+                # A configuration problem, not a request problem -- and better to say so than to
+                # reconstruct an RV request with the LV model and return a wrong mesh.
+                raise HTTPException(status_code=503, detail={"detail": str(e),
+                                                             "uuid": str(request.uuid)})
+
         # Start the 4D reconstruction job in background
         asyncio.create_task(
             process_fourd_reconstruction_job_with_semaphore(
@@ -360,6 +375,9 @@ async def queue_4d_reconstruction(
         )
 
         return JobAcceptedResponse(uuid=request.uuid)
+
+    except HTTPException:
+        raise
 
     except Exception as e:
         print(f"Error queuing 4D reconstruction job {request.uuid}: {e}")

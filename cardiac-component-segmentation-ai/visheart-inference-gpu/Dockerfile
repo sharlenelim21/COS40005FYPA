@@ -14,6 +14,7 @@ ENV MPLBACKEND=Agg
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     software-properties-common \
+    gnupg \
     wget \
     ca-certificates \
     libgl1 \
@@ -40,7 +41,13 @@ RUN apt-get update && \
     libgles2 \
     libglvnd0 \
     libglx0 && \
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+    # Add deadsnakes PPA directly via keyserver, not `add-apt-repository` --
+    # that shells out to Launchpad's launchpadlib REST API for the signing
+    # key, which intermittently 500s with GPGKeyTemporarilyNotFoundError.
+    # This talks to the keyserver directly instead, sidestepping that API.
+    mkdir -p /etc/apt/keyrings && \
+    wget -qO- "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBA6932366A755776" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu jammy main" > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.12 \
@@ -72,6 +79,16 @@ RUN pip install --no-cache-dir -r requirements_torch.txt --index-url https://dow
 RUN pip install --no-cache-dir -r requirements_prod.txt && \
     rm -rf /root/.cache/pip
 
+# cupy (RV CPD-GPU acceleration, cpd_gpu.py) is intentionally not in requirements_prod.txt --
+# it's GPU-only and gpu_available() already falls back to CPU cleanly without it. Baking it in
+# here means it's downloaded once at image build time instead of on every fresh container start
+# (docker-compose.yml previously installed it via a startup `command:` check, which re-ran the
+# ~1.5GB cupy-cuda12x[ctk] download from scratch every time the gpu-nvidia container was
+# recreated -- not just restarted). The [ctk] extra bundles its own CUDA 12 userspace libraries,
+# so it doesn't need to match this image's CUDA 11.8 base.
+RUN pip install --no-cache-dir "cupy-cuda12x[ctk]" && \
+    rm -rf /root/.cache/pip
+
 RUN python3 -c "import nibabel; print('NIBABEL INSTALLED OK')"
 
 #------------------------------------------------------------------------------
@@ -85,6 +102,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     software-properties-common \
+    gnupg \
     wget \
     ca-certificates \
     libgl1 \
@@ -111,8 +129,13 @@ RUN apt-get update && \
     libgles2 \
     libglvnd0 \
     libglx0 && \
-    # Add deadsnakes PPA for Python 3.12 runtime
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+    # Add deadsnakes PPA for Python 3.12 runtime, directly via keyserver --
+    # `add-apt-repository` shells out to Launchpad's launchpadlib REST API
+    # for the signing key, which intermittently 500s with
+    # GPGKeyTemporarilyNotFoundError. This talks to the keyserver directly.
+    mkdir -p /etc/apt/keyrings && \
+    wget -qO- "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBA6932366A755776" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu jammy main" > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.12 && \
@@ -136,6 +159,21 @@ WORKDIR /app
 
 # Copy the rest of application code
 COPY . .
+
+# Landmark checkpoints. UNETRESNET34 (architecture + trained weights) lives
+# outside this repo's own build context (a sibling of the outer monorepo's
+# cardiac-component-segmentation-ai/ folder, and its checkpoints/ is
+# gitignored there too), so it can never be reached by a plain `COPY`
+# rooted at this Dockerfile's context. build.ps1 / build.sh stage exactly
+# the files needed (the architecture file + both .pth checkpoints) into
+# _landmark_assets/ before invoking `docker build` -- run one of those
+# instead of `docker build .` directly, or this COPY fails the build with a
+# clear "no such file or directory" instead of silently shipping an image
+# that's missing landmark detection (the previous behaviour: the image
+# built fine, and only failed at runtime when a request needed the
+# checkpoint that was never copied in).
+COPY _landmark_assets/models/unet_resnet34.py /app/UNETRESNET34/models/unet_resnet34.py
+COPY _landmark_assets/checkpoints/ /app/UNETRESNET34/checkpoints/
 
 # Check if the models exist (and make script executable)
 RUN chmod +x ./docker/scripts/docker_requisite_check.sh && \

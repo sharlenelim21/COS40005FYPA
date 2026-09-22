@@ -200,12 +200,20 @@ export const AuthenticatedUserView = () => {
             </Button>
           </Link>
           <ShowForAdmin fallback={null}>
-            <Link href="/admin">
-              <Button variant="outline" className="w-full justify-start h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200">
+            {/* Not ready for the demo yet -- kept visible (so it doesn't look
+                missing) but blurred and non-interactive rather than a live
+                link, since the admin panel itself isn't in a state to show. */}
+            <div className="relative" title="Admin Panel — not available yet">
+              <Button
+                variant="outline"
+                disabled
+                aria-disabled="true"
+                className="w-full justify-start h-11 text-sm sm:text-base blur-[1.5px] opacity-60 pointer-events-none select-none"
+              >
                 <Shield className="mr-2 h-4 w-4 flex-shrink-0" />
                 Admin Panel
               </Button>
-            </Link>
+            </div>
           </ShowForAdmin>
           <ShowForUser fallback={null}>
             <Link href="/profile">

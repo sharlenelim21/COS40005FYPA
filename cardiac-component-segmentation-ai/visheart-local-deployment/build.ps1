@@ -1,14 +1,21 @@
 # Build script for combined local deployment container
 # This builds a single Docker image containing both frontend and backend
+#
+# Usage:
+#   .\build.ps1                 # builds sharlene21/visheart-local:1.4.0 (+ :latest)
+#   .\build.ps1 -Version 1.5.0  # builds a different version tag (+ :latest)
+
+param(
+    [string]$Version = "1.4.0",
+    [string]$ImageName = "sharlene21/visheart-local"
+)
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Building VisHeart Combined Local Image" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-$IMAGE_NAME = "jesmineting/visheart-local"
-$VERSION = "1.0.0"
-$FULL_IMAGE_NAME = "${IMAGE_NAME}:${VERSION}"
+$FULL_IMAGE_NAME = "${ImageName}:${Version}"
 
 Write-Host "Image: $FULL_IMAGE_NAME" -ForegroundColor Green
 Write-Host ""
@@ -37,7 +44,7 @@ Write-Host "Building combined image..." -ForegroundColor Yellow
 Write-Host "This will take several minutes..." -ForegroundColor Gray
 Write-Host ""
 
-docker build -f visheart-local-deployment/Dockerfile -t $FULL_IMAGE_NAME -t "${IMAGE_NAME}:latest" --build-arg BUILDKIT_INLINE_CACHE=1 .
+docker build -f visheart-local-deployment/Dockerfile -t $FULL_IMAGE_NAME -t "${ImageName}:latest" --build-arg BUILDKIT_INLINE_CACHE=1 .
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -8,13 +8,14 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
-import { valueToColor, debugSegmentColor } from "./heartColor";
+import { valueToColor, debugSegmentColor, rvSegmentColor } from "./heartColor";
+import { loadMesh as loadAlignmentMesh, computeLvAlignment } from "./lvAlignment";
 
 interface ReconstructedHeartModelProps {
   meshUrl: string;
   meshFormat: "obj" | "glb";
   segmentLabels: number[];
-  colorMode: "debug-segment" | "strain";
+  colorMode: "debug-segment" | "strain" | "rv-segment";
   values?: number[];
   min?: number;
   max?: number;
@@ -22,6 +23,47 @@ interface ReconstructedHeartModelProps {
   className?: string;
   selectedSegment?: number;
   onSegmentClick?: (segment: number) => void;
+  /** Fired as the pointer moves over a segment (screen coords + segment id,
+   * same numbering as onSegmentClick), and with null when it leaves the
+   * mesh entirely -- for a hover tooltip, same pattern the 2D bullseye
+   * charts already use for their own onSegmentHover/onSegmentLeave. */
+  onSegmentHover?: (info: { x: number; y: number; segment: number } | null) => void;
+  /**
+   * Which apex/base/azimuth label convention to align the mesh's long axis
+   * against before centering/scaling it for the camera (see
+   * alignCenterAndScale below). LV's 17-segment AHA labels (1-indexed) and
+   * RV's 9-segment CPD labels (0-indexed, see cpd_rv_segmentation.py) don't
+   * share label numbering, so this can't be inferred from segmentLabels
+   * alone. Defaults to "lv" for existing callers.
+   */
+  chamber?: "lv" | "rv";
+  /** Hands the caller a (delta: number) => void to drive zoom from an
+   * external button, e.g. AhaHeartProjection's zoom in/out controls --
+   * positive delta zooms out, negative zooms in, matching OrbitControls'
+   * own dolly direction. */
+  onZoomChange?: (fn: (delta: number) => void) => void;
+  /** Hands the caller a () => void that restores the initial camera
+   * distance/target, for a "reset view" control. */
+  onResetZoom?: (fn: () => void) => void;
+  /**
+   * RV only: an LV mesh (+ its AHA labels) sharing this RV's raw coordinate
+   * space, so this view can be oriented with the SAME rotation/scale
+   * CombinedHeartModel would compute from that LV mesh -- i.e. "the way
+   * this RV would be oriented next to LV" -- instead of RV's own
+   * independent apex/base alignment, which has no reason to land on the
+   * same rotation LV's convention would produce. Optional: when omitted,
+   * falls back to RV's own alignment exactly as before, so existing callers
+   * (or any caller that simply doesn't have an LV mesh handy) are
+   * unaffected.
+   */
+  lvAlignmentMeshUrl?: string | null;
+  lvAlignmentMeshFormat?: "obj" | "glb";
+  lvAlignmentLabels?: number[] | null;
+  /** Starting camera distance (world units, along +Z). Lower = closer/more
+   * zoomed in at load. Defaults to 11; still bounded by OrbitControls'
+   * fixed minDistance=5/maxDistance=20, so this only changes the initial
+   * framing, not how far the user can scroll-zoom either way. */
+  initialCameraDistance?: number;
 }
 
 function findFirstMesh(root: THREE.Object3D): THREE.Mesh | null {
@@ -233,6 +275,14 @@ export function ReconstructedHeartModel({
   className,
   selectedSegment = -1,
   onSegmentClick,
+  onSegmentHover,
+  chamber = "lv",
+  onZoomChange,
+  onResetZoom,
+  lvAlignmentMeshUrl,
+  lvAlignmentMeshFormat = "glb",
+  lvAlignmentLabels,
+  initialCameraDistance = 11,
 }: ReconstructedHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -248,14 +298,27 @@ export function ReconstructedHeartModel({
 
   const selectedSegmentRef = useRef(selectedSegment);
   const onSegmentClickRef = useRef(onSegmentClick);
+  const onSegmentHoverRef = useRef(onSegmentHover);
   const segmentLabelsRef = useRef(segmentLabels);
   const colorModeRef = useRef(colorMode);
+  const chamberRef = useRef(chamber);
   const isPausedRef = useRef(false);
   const [isPaused, setIsPaused] = useState(false);
+  // Hides the canvas until the FIRST mesh has actually loaded and been
+  // colored -- otherwise, right when a 4D reconstruction has just finished
+  // and this component mounts fresh, the canvas can paint one or two frames
+  // before the container has settled its real layout size (a stale/near-
+  // zero size from the mount instant) or before any mesh/lighting exists,
+  // which reads as a small black box flashing before the model appears.
+  // Fading the whole container in only once onLoaded has actually run means
+  // whatever that transient frame looks like, it's never shown.
+  const [isReady, setIsReady] = useState(false);
   useEffect(() => { selectedSegmentRef.current = selectedSegment; }, [selectedSegment]);
   useEffect(() => { onSegmentClickRef.current = onSegmentClick; }, [onSegmentClick]);
+  useEffect(() => { onSegmentHoverRef.current = onSegmentHover; }, [onSegmentHover]);
   useEffect(() => { segmentLabelsRef.current = segmentLabels; }, [segmentLabels]);
   useEffect(() => { colorModeRef.current = colorMode; }, [colorMode]);
+  useEffect(() => { chamberRef.current = chamber; }, [chamber]);
 
   const applyVertexColorsRef = useRef<() => void>(() => {});
   applyVertexColorsRef.current = () => {
@@ -279,6 +342,8 @@ export function ReconstructedHeartModel({
       const color =
         colorMode === "debug-segment"
           ? debugSegmentColor(segment)
+          : colorMode === "rv-segment"
+          ? rvSegmentColor(segment)
           : valueToColor(values?.[segment - 1] ?? min, min, max, reverseColors);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
@@ -307,7 +372,7 @@ export function ReconstructedHeartModel({
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000);
-    camera.position.set(0, 0.5, 11);
+    camera.position.set(0, 0.5, initialCameraDistance);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -330,6 +395,27 @@ export function ReconstructedHeartModel({
     controls.maxDistance = 20;
     controls.target.set(0, 0, 0);
     controls.update();
+
+    const initialCameraPosition = camera.position.clone();
+    // OrbitControls' own dollyIn/dollyOut aren't in this version's public
+    // type declarations (present at runtime on some builds, not others) --
+    // moving the camera along its own offset from the target by a fixed
+    // factor, clamped to the same min/maxDistance OrbitControls enforces,
+    // gets the identical zoom effect without depending on that.
+    onZoomChange?.((delta: number) => {
+      if (delta === 0) return;
+      const offset = camera.position.clone().sub(controls.target);
+      const distance = offset.length();
+      const factor = delta < 0 ? 1 / 1.2 : 1.2;
+      const nextDistance = THREE.MathUtils.clamp(distance * factor, controls.minDistance, controls.maxDistance);
+      camera.position.copy(controls.target).add(offset.setLength(nextDistance));
+      controls.update();
+    });
+    onResetZoom?.(() => {
+      camera.position.copy(initialCameraPosition);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    });
 
     let isDragging = false;
     const onStart = () => { isDragging = true; };
@@ -372,9 +458,20 @@ export function ReconstructedHeartModel({
       if (!mesh) return;
       pointerFromEvent(event);
       raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(mesh, false).length > 0;
+      const intersects = raycaster.intersectObject(mesh, false);
+      const hit = intersects.length > 0;
       renderer.domElement.style.cursor = hit && onSegmentClickRef.current ? "pointer" : "default";
+
+      const vertexIndex = intersects[0]?.face?.a;
+      const segment = vertexIndex !== undefined ? flatSegmentLabelsRef.current?.[vertexIndex] : undefined;
+      if (segment !== undefined) {
+        onSegmentHoverRef.current?.({ x: event.clientX, y: event.clientY, segment });
+      } else {
+        onSegmentHoverRef.current?.(null);
+      }
     };
+    const onMouseLeave = () => onSegmentHoverRef.current?.(null);
+    renderer.domElement.addEventListener("mouseleave", onMouseLeave);
     renderer.domElement.addEventListener("click", onClick);
     renderer.domElement.addEventListener("mousemove", onMouseMove);
 
@@ -413,10 +510,52 @@ export function ReconstructedHeartModel({
       }
     };
 
+    // Rotates the pivot so a newly-selected segment's centroid faces the
+    // camera (+Z, matching alignCenterAndScale's own azimuth convention),
+    // instead of only pulsing its color in place -- a selection made while
+    // that segment happens to be rotated out of view was otherwise
+    // invisible. Recomputed only when the selection actually CHANGES (not
+    // every frame), then eased toward over several frames via the shortest
+    // angular path. Auto-rotation pauses for as long as a segment stays
+    // selected, so the view doesn't spin away right after arriving.
+    let lastFocusedSegment = -1;
+    let focusTargetY: number | null = null;
+    const FOCUS_LERP_RATE = 0.12;
+    const updateFocusRotation = (): boolean => {
+      const mesh = currentMeshRef.current;
+      const segmentVertexIndices = segmentVertexIndicesRef.current;
+      const pivot = pivotRef.current;
+      const sel = selectedSegmentRef.current ?? -1;
+      if (!mesh || !segmentVertexIndices || !pivot) return false;
+
+      if (sel !== lastFocusedSegment) {
+        lastFocusedSegment = sel;
+        const indices = sel >= 1 ? segmentVertexIndices.get(sel) : undefined;
+        const posAttr = mesh.geometry.getAttribute("position");
+        if (indices && indices.length && posAttr) {
+          let sumX = 0, sumZ = 0;
+          for (const vi of indices) {
+            sumX += posAttr.getX(vi);
+            sumZ += posAttr.getZ(vi);
+          }
+          focusTargetY = -Math.atan2(sumX / indices.length, sumZ / indices.length);
+        } else {
+          focusTargetY = null;
+        }
+      }
+
+      if (focusTargetY === null || isDragging) return false;
+      let delta = focusTargetY - pivot.rotation.y;
+      delta = ((delta + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+      pivot.rotation.y += delta * FOCUS_LERP_RATE;
+      return true;
+    };
+
     let animationId = 0;
     const animate = () => {
       animationId = requestAnimationFrame(animate);
-      if (!isDragging && !isPausedRef.current) {
+      const focusing = updateFocusRotation();
+      if (!isDragging && !isPausedRef.current && !focusing && (selectedSegmentRef.current ?? -1) < 1) {
         pivot.rotation.y += 0.006;
       }
       updateSelectionHighlight();
@@ -431,6 +570,7 @@ export function ReconstructedHeartModel({
       controls.removeEventListener("end", onEnd);
       renderer.domElement.removeEventListener("click", onClick);
       renderer.domElement.removeEventListener("mousemove", onMouseMove);
+      renderer.domElement.removeEventListener("mouseleave", onMouseLeave);
       resizeObserver.disconnect();
       controls.dispose();
       if (loadedObjectRef.current) disposeObject(loadedObjectRef.current);
@@ -475,13 +615,26 @@ export function ReconstructedHeartModel({
     };
 
     const APEX_DIRECTION_SIGN = 1;
-    const AZIMUTH_ANCHOR_LABEL = 1;
     const AZIMUTH_TARGET_DIRECTION = new THREE.Vector3(0, 0, 1);
+
+    // LV's 17-segment AHA labels are 1-indexed (apex=17, base ring=1-6,
+    // azimuth anchor=1). RV's 9-segment CPD labels are 0-indexed and zoned
+    // differently (see cpd_rv_segmentation.py's segment_names order: Apical_
+    // Seg1/2/3=0,1,2, Basal_Seg1/2/3=3,4,5, Mid_Seg1/2/3=6,7,8) -- apex is the
+    // Apical zone, base is the Basal zone, and the azimuth anchor is label 0
+    // (Apical_Seg1), the same file the GPU pipeline's own _ANCHOR_FILE uses
+    // to anchor the atlas. Without this split, RV meshes matched against
+    // LV's label numbers, which don't exist on a 0-8 mesh, so alignment
+    // silently no-opped and RV rendered in whatever raw orientation the
+    // reconstruction pipeline happened to produce.
+    const APEX_LABELS = chamberRef.current === "rv" ? [0, 1, 2] : [17];
+    const BASE_LABELS = chamberRef.current === "rv" ? [3, 4, 5] : [1, 2, 3, 4, 5, 6];
+    const AZIMUTH_ANCHOR_LABEL = chamberRef.current === "rv" ? 0 : 1;
 
     const alignCenterAndScale = (mesh: THREE.Mesh) => {
       let rotation = new THREE.Quaternion();
-      const apexCentroid = labelCentroidLocal(mesh, new Set([17]));
-      const baseCentroid = labelCentroidLocal(mesh, new Set([1, 2, 3, 4, 5, 6]));
+      const apexCentroid = labelCentroidLocal(mesh, new Set(APEX_LABELS));
+      const baseCentroid = labelCentroidLocal(mesh, new Set(BASE_LABELS));
       if (!apexCentroid || !baseCentroid) {
         console.warn("[ReconstructedHeartModel] Apex/base labels too sparse to align long axis.");
       } else {
@@ -516,23 +669,83 @@ export function ReconstructedHeartModel({
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       const maxDimension = Math.max(size.x, size.y, size.z, 0.0001);
-      const scale = 3.55 / maxDimension;
+      // RV's crescent is naturally much taller (apex-base, Y) than wide (X/Z)
+      // -- fitting its longest dimension to the SAME target as LV's rounder
+      // shape leaves a lot of unused width in a roughly-square viewport, so
+      // it reads as "too small" even though it's correctly not clipped. A
+      // modestly bigger target for RV specifically (LV's target is
+      // untouched) makes it visually fill the box better; safe against the
+      // OrbitControls zoom range (minDistance=5) since 4.3 stays under the
+      // ~3.44-unit visible-height ceiling at only the most extreme zoom-in,
+      // same margin the original 3.55 already accepted for LV.
+      const target = chamber === "rv" ? 4.3 : 3.55;
+      const scale = target / maxDimension;
       const centerAndScale = new THREE.Matrix4()
         .makeScale(scale, scale, scale)
         .multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
       mesh.geometry.applyMatrix4(centerAndScale);
     };
 
-    const onLoaded = (object: THREE.Object3D) => {
+    const onLoaded = async (object: THREE.Object3D) => {
       if (cancelled) return;
       const mesh = findFirstMesh(object);
       if (!mesh) {
         console.error("[ReconstructedHeartModel] Loaded mesh file contains no THREE.Mesh");
         return;
       }
-      alignCenterAndScale(mesh);
-      const boundaryLinePositions = buildSegmentBoundaryEdges(mesh, segmentLabelsRef.current);
-      flatSegmentLabelsRef.current = flattenToFaceLabels(mesh, segmentLabelsRef.current);
+
+      let alignedViaLv = false;
+      if (chamberRef.current === "rv" && lvAlignmentMeshUrl && lvAlignmentLabels?.length) {
+        try {
+          const lvObject = await loadAlignmentMesh(lvAlignmentMeshUrl, lvAlignmentMeshFormat);
+          if (cancelled) return;
+          const lvMesh = findFirstMesh(lvObject);
+          const lvPos = lvMesh?.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
+          if (lvPos) {
+            const matrix = computeLvAlignment(lvPos, lvAlignmentLabels);
+            mesh.geometry.applyMatrix4(matrix);
+            alignedViaLv = true;
+          }
+        } catch (err) {
+          console.warn("[ReconstructedHeartModel] Failed to load LV alignment reference, falling back to RV's own alignment:", err);
+        }
+      }
+      // Falls back to RV's (or LV's) own independent apex/base alignment
+      // whenever no LV reference was given, or loading/using one failed --
+      // never leaves the mesh unaligned.
+      if (!alignedViaLv) alignCenterAndScale(mesh);
+      // Skip the flatten-to-per-triangle step for real (non-debug) color
+      // modes. Flattening duplicates every vertex per-triangle and forces
+      // all 3 corners of a triangle to one majority-voted label -- that's
+      // what makes boundaries hard-edged/jagged, for LV's "strain" bullseye
+      // exactly as much as it did for RV: confirmed 2026-09-10 by rendering
+      // RV's real, current pipeline output directly (no flattening) and
+      // seeing smooth boundaries where the flattened version looked jagged
+      // -- this was never a data problem, only this flattening step's own
+      // effect. Keeping the ORIGINAL indexed geometry (triangles still share
+      // vertices with their neighbours) lets Three.js interpolate each
+      // triangle's vertex colors the normal way, so a vertex near a segment
+      // boundary blends smoothly into its neighbour instead of stepping
+      // across a hard triangle edge. "debug-segment" keeps the old flattened/
+      // hard-edge behaviour -- it's a distinct, deliberately categorical
+      // debug view, not the clinical one this fix targets.
+      const useSmoothFill = colorModeRef.current !== "debug-segment";
+      // Boundary lines stay ON for LV even with a smooth fill -- a pure
+      // color gradient between adjacent AHA segments can be too subtle to
+      // read at a glance, so the (already Catmull-Rom-smoothed) line
+      // overlay is kept as a visual separator. This is exactly the
+      // combination the mesh's own long-standing jagged-line problem
+      // blocked: a smoothed line over a HARD-edged fill looked glued-on and
+      // mismatched (see the note above LV's line-smoothing code); over a
+      // smooth fill, it reads as an intentional boundary marker instead.
+      // RV skips it, per Sharlene's preference, 2026-09-10.
+      const showBoundaryLines = !useSmoothFill || chamberRef.current !== "rv";
+      const boundaryLinePositions = showBoundaryLines
+        ? buildSegmentBoundaryEdges(mesh, segmentLabelsRef.current)
+        : new Float32Array(0);
+      flatSegmentLabelsRef.current = useSmoothFill
+        ? segmentLabelsRef.current
+        : flattenToFaceLabels(mesh, segmentLabelsRef.current);
 
       if (loadedObjectRef.current) {
         pivot.remove(loadedObjectRef.current);
@@ -558,7 +771,7 @@ export function ReconstructedHeartModel({
         lineMaterial.resolution.set(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1));
       }
       const boundaryLines = new LineSegments2(lineGeometry, lineMaterial);
-      boundaryLines.visible = colorModeRef.current !== "debug-segment";
+      boundaryLines.visible = showBoundaryLines;
       pivot.add(boundaryLines);
       boundaryLinesRef.current = boundaryLines;
       lineMaterialRef.current = lineMaterial;
@@ -567,6 +780,10 @@ export function ReconstructedHeartModel({
       loadedObjectRef.current = object;
       currentMeshRef.current = mesh;
       applyVertexColorsRef.current();
+      // Only the FIRST successful load reveals the canvas -- later frame
+      // swaps during playback already have a colored mesh on screen and
+      // shouldn't re-fade, or normal playback would flicker every frame.
+      setIsReady(true);
     };
 
     if (meshFormat === "glb") {
@@ -586,19 +803,35 @@ export function ReconstructedHeartModel({
     }
 
     return () => { cancelled = true; };
-  }, [meshUrl, meshFormat]);
+    // lvAlignmentMeshUrl/Format/Labels included: if the LV reference becomes
+    // available or changes AFTER this RV mesh already loaded (e.g. LV's own
+    // reconstruction finishes fetching a moment later), the mesh needs to
+    // reload and re-align against it rather than staying stuck on RV's own
+    // fallback alignment from the first pass.
+  }, [meshUrl, meshFormat, lvAlignmentMeshUrl, lvAlignmentMeshFormat, lvAlignmentLabels]);
 
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: the 2D bullseye chart (an SVG, painted
+  // synchronously as part of React's own render) and this 3D model both
+  // react to the same prop change (a new frame's values during playback),
+  // but plain useEffect runs AFTER the browser has already painted --
+  // one visible frame later than the bullseye's own color update, which
+  // read as a slight desync between the two during smooth playback.
+  // useLayoutEffect runs synchronously before paint, in the same cycle.
+  useLayoutEffect(() => {
     applyVertexColorsRef.current();
     if (boundaryLinesRef.current) {
-      boundaryLinesRef.current.visible = colorMode !== "debug-segment";
+      // Mirrors onLoaded's showBoundaryLines: on for "debug-segment" (hard-
+      // edge fill) and for LV (smoothed line over a smooth fill), off for
+      // RV's smooth-fill view.
+      boundaryLinesRef.current.visible = colorMode === "debug-segment" || chamber !== "rv";
     }
-  }, [colorMode, values, min, max, reverseColors, segmentLabels]);
+  }, [colorMode, values, min, max, reverseColors, segmentLabels, chamber]);
 
   return (
     <div
       ref={containerRef}
       className={`relative ${className ?? ""}`}
+      style={{ opacity: isReady ? 1 : 0, transition: "opacity 200ms ease" }}
       aria-label="Reconstructed patient-specific 3D heart model"
     >
       <button

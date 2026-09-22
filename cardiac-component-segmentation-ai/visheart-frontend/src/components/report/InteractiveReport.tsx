@@ -14,15 +14,15 @@
  * measurement that wasn't computed.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
-import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries } from "@/hooks/useProjectResults";
-import { RvStrainChart } from "@/components/landmark/RvStrainChart";
-import CardiacResearchAssistant from "@/components/report/CardiacResearchAssistant";
-import { buildPatientContext } from "@/lib/researchApi";
+import { Input } from "@/components/ui/input";
+import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
+import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
+import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -32,6 +32,18 @@ const RINGS = [
 ];
 
 const PATTERN_COLORS: Record<string, string> = { NOR: "#15803d", DCM: "#b45309", HCM: "#dc2626" };
+const RV_PATTERN_COLORS: Record<string, string> = { ARVC: "#dc2626", PAH: "#7c3aed", GENERAL: "#64748b" };
+
+// Notebook-style names for the real 6-region RV free-wall breakdown (basal 1-3,
+// mid 1-3) — same convention/order as CRESCENT_REGION_NAMES in
+// CombinedVentricularChart.tsx and RV_REAL_REGION_NAMES in LandmarkSidebar.tsx.
+// The backend's own RvStrainRegion.label ("Basal RV Free Wall 1") doesn't match
+// the RV-deformation notebook's naming, so this overrides it for display.
+const RV_REAL_REGION_NAMES = [
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+];
+const rvSegLabel = (region: number, fallback: string) => RV_REAL_REGION_NAMES[region - 1] ?? fallback;
 
 /**
  * Curves are coloured by AHA RING, not per-segment. 17 distinct hues is
@@ -282,38 +294,29 @@ function fmt(v: number | null | undefined, digits = 1): string {
 // segmented, so nothing here describes them.
 
 /**
- * RV ejection-fraction bands. Mirrors the SHAPE of _grade_from_lvef in
- * compute_health_status.py (descending thresholds, "Indeterminate" on null) but
- * is a SEPARATE frontend helper — the LV grader is not touched and the overall
- * badge is never computed from these.
- *
- * ⚠️ APPROXIMATE. Anchored on the 2024 CMR meta-analysis normal lower limit,
- * NOT sex-specific, and not validated for this pipeline. RV normal ranges
- * differ meaningfully between males and females; these MUST be replaced with
- * sex-specific validated values before any clinical use. Advisory only.
+ * RV health status is graded by the BACKEND (compute_rv_health_status.py)
+ * against sex-specific SCMR 2025 reference ranges and rendered here as-is.
+ * There are deliberately no severity bands: no validated CMR severity grading
+ * exists for the RV. The frontend used to grade RVEF itself against sex-blind
+ * 48 / 40 / 30 % bands; that was removed so the report cannot contradict the
+ * backend. "Outside reference range" is amber, never red — it is not a grade.
  */
-const RVEF_NORMAL_MIN = 48.0;
-const RVEF_MILD_MIN = 40.0;
-const RVEF_MODERATE_MIN = 30.0;
-
-type RvGrade = "Normal" | "Mildly reduced" | "Moderately reduced" | "Severely reduced" | "Indeterminate";
-
-function rvFunctionGrade(rvef: number | null | undefined): RvGrade {
-  if (rvef === null || rvef === undefined || Number.isNaN(rvef)) return "Indeterminate";
-  if (rvef >= RVEF_NORMAL_MIN) return "Normal";
-  if (rvef >= RVEF_MILD_MIN) return "Mildly reduced";
-  if (rvef >= RVEF_MODERATE_MIN) return "Moderately reduced";
-  return "Severely reduced";
-}
-
-/** Reuses the existing status token vocabulary — no new colour system. */
-const RV_GRADE_BADGE: Record<RvGrade, string> = {
-  "Normal": "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
-  "Mildly reduced": "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  "Moderately reduced": "bg-orange-500/10 text-orange-700 dark:text-orange-400",
-  "Severely reduced": "bg-red-600/10 text-red-700 dark:text-red-400",
-  "Indeterminate": "bg-muted text-muted-foreground",
+const RV_STATUS_BADGE: Record<string, string> = {
+  "Within reference range": "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
+  "Outside reference range": "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  "Depends on sex": "bg-muted text-foreground/80",
+  "Not assessable": "bg-muted text-muted-foreground",
 };
+
+/** Short verdict for one backend RV evidence line; the full sentence becomes the tooltip. */
+function rvInterpretation(line: { level: string; detail: string; depends_on_sex?: boolean } | undefined) {
+  if (!line) return null;
+  const text = line.level === "ok" ? "Within reference range"
+    : line.level === "warn" ? "Outside reference range"
+    : line.depends_on_sex ? "Depends on sex"
+    : "Not assessed";
+  return { text, full: line.detail, level: line.level as "ok" | "warn" | "unavailable" };
+}
 
 /**
  * Stroke-volume balance. In a closed circulation LV and RV stroke volumes
@@ -347,7 +350,8 @@ function rvLvRatio(rvedv: number | null | undefined, lvedv: number | null | unde
   return rvedv / lvedv;
 }
 
-type Zone = { from: number; to: number; tone: "green" | "amber" | "red" };
+/** "grey" marks a band whose verdict depends on sex (RV bars with no sex chosen). */
+type Zone = { from: number; to: number; tone: "green" | "amber" | "red" | "grey" };
 
 type MetricBar = {
   key: "EF" | "EDV" | "PeakGCS" | "PeakGRS";
@@ -383,6 +387,7 @@ const ZONE_FILL: Record<Zone["tone"], string> = {
   green: "bg-emerald-500/35 dark:bg-emerald-500/30",
   amber: "bg-amber-500/35 dark:bg-amber-500/30",
   red: "bg-red-500/35 dark:bg-red-500/30",
+  grey: "bg-muted-foreground/25 dark:bg-muted-foreground/30",
 };
 
 /** Position of `v` along the bar, clamped to 0–100 %. */
@@ -421,9 +426,10 @@ function interpretationFor(hs: HealthStatus | undefined, evidenceLabel: string) 
  * One short line explaining WHY the health status is low-confidence.
  *
  * The backend sets confidence="low" for exactly two reasons
- * (compute_health_status.py): EF was not computable, or heart-metrics warnings
- * caused the volume evidence to be suppressed. Each leaves a distinctive
- * `warn` evidence line, so we match those two specifically.
+ * (compute_health_status.py): EF was not computable, or absolute LV volumes
+ * were judged unreliable (suspicious voxel size, duplicated LV-cavity slice or
+ * implausible LVEDV) and the volume evidence was suppressed. Each leaves a
+ * distinctive `warn` evidence line, so we match those two specifically.
  *
  * Deliberately NOT "any warn line". Peak GCS, Peak GRS, End-Diastolic Volume
  * and a *present-but-low* EF all emit level:"warn" while confidence stays
@@ -456,9 +462,14 @@ function confidenceReason(hs: HealthStatus): string {
     (e) => e.label === "Absolute volumes" && e.level === "warn",
   );
   if (volumesUnreliable) {
+    // The cause varies (voxel size, duplicated LV-cavity slice, implausible
+    // LVEDV) and the backend names it in the Absolute volumes evidence line,
+    // rendered below with the other uncovered evidence. Point there rather than
+    // guess: this used to blame "affine / spacing" for every case, including a
+    // mask whose only warning was that it had no RV voxels.
     return (
-      "Volume measurements may be unreliable — the heart-metrics compute flagged the " +
-      "affine / spacing, so the status is graded from EF alone."
+      "Absolute volume measurements may be unreliable, so volume evidence is left out " +
+      "of the grade — the Absolute volumes note below gives the reason."
     );
   }
 
@@ -494,15 +505,56 @@ export function InteractiveReport({
   patientLabel, scanSummary, generatedAt,
   measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus,
   computing, computeError, rv, lvVolumes, rvStrain, rvStrainSeries,
+  bsaM2, heightCm, weightKg, onHeightCmChange, onWeightKgChange,
+  onRecomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError,
+  patientSex: patientSexProp, onPatientSexChange,
+  rvHealthStatus, onRecomputeRvHealthStatus, recomputingRvHealthStatus, recomputeRvHealthStatusError,
+  heartMetricsComputedAt,
 }: {
+  /** RV health status graded by the backend against sex-specific reference
+   *  ranges. Shown only when it was graded for the sex/BSA now on screen and
+   *  after the latest heart metrics — see `rvCurrent` below. */
+  rvHealthStatus?: RvHealthStatus;
+  /** Recomputes and persists RV health status for the given BSA/sex. */
+  onRecomputeRvHealthStatus?: (bsaM2: number | null, sex: "male" | "female" | "unspecified") => Promise<void>;
+  recomputingRvHealthStatus?: boolean;
+  recomputeRvHealthStatusError?: string | null;
+  /** heartMetrics.computed_at — a stored RV result older than this is stale. */
+  heartMetricsComputedAt?: string | null;
   patientLabel: string;
   scanSummary: string;
   generatedAt: string;
   measurements?: Measurements;
+  /**
+   * Body surface area (m²) plus the raw height/weight strings that produced
+   * it — all owned by report/page.tsx (so PatientSummaryPage's print output
+   * can use the same numbers) and rendered here as inline inputs in the
+   * Cardiac Measurements header. Purely a display-time divisor: computed
+   * client-side from EDV/ESV, never sent to or stored by the backend.
+   * bsaM2 null means height/weight are blank, so every indexed sub-value
+   * below simply doesn't render.
+   */
+  bsaM2?: number | null;
+  heightCm?: string;
+  weightKg?: string;
+  onHeightCmChange?: (v: string) => void;
+  onWeightKgChange?: (v: string) => void;
+  /** Re-runs Disease Pattern Similarity server-side with the current BSA/sex
+   *  so the headline actually switches into BSA-indexed mode — without this,
+   *  typing a height/weight only changes the client-side mL/m² sub-values
+   *  above and never touches the similarity result itself. */
+  onRecomputeSimilarityWithBsa?: (bsaM2: number | null, sex: "male" | "female" | "unspecified") => Promise<void>;
+  recomputingSimilarity?: boolean;
+  recomputeSimilarityError?: string | null;
+  /** Owned by report/page.tsx (same pattern as bsaM2 above) so the CSV export
+   *  and print pages can read the sex the user actually selected here. Falls
+   *  back to "unspecified" when the caller doesn't control it. */
+  patientSex?: Sex;
+  onPatientSexChange?: (sex: Sex) => void;
   /** RV metrics — optional so existing callers and the print pages are
    *  unaffected. Absent/null means no RV cavity was segmented. */
   rv?: RvMetrics;
-  lvVolumes?: { LVEDV: number | null; LV_SV: number | null };
+  lvVolumes?: { LVEDV: number | null; LV_SV: number | null; LVMassG?: number | null; MaxWallThicknessMm?: number | null };
   /** ED→ES RV regional strain, from POST /segmentation/compute-rv-strain-from-frames. */
   rvStrain?: RvStrain;
   /** Per-frame RV strain series — the RV twin of `strainSeries`. */
@@ -520,6 +572,12 @@ export function InteractiveReport({
   const [strainType, setStrainType] = useState<StrainType>("GCS");
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
   const [hoverFrame, setHoverFrame] = useState<number | null>(null);
+  // RV's own metric toggle, mirroring LV's strainType above. GAS has no backend
+  // computation yet (see RvStrainPanel in LandmarkSidebar.tsx) — selecting it
+  // here shows the same "not computed yet" placeholder the sidebar does,
+  // rather than pretending rvStrain.regions (which is always the GCS-style
+  // cavity-radius measure) is GAS data.
+  const [rvMetricType, setRvMetricType] = useState<"GCS" | "GAS">("GCS");
 
   const key = strainType === "GRS" ? "grs" : "gcs";
 
@@ -563,6 +621,7 @@ export function InteractiveReport({
   const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
   const [showAllSegments, setShowAllSegments] = useState(false);
   const strainCardRef = React.useRef<HTMLDivElement | null>(null);
+  const rvCardRef = React.useRef<HTMLDivElement | null>(null);
   const [pulse, setPulse] = useState(false);
 
   /** Regional entry for the selected segment; falls back to the ED→ES strain. */
@@ -609,7 +668,7 @@ export function InteractiveReport({
    *  every frame) and falls back to the single ED→ES result. */
   const rvRegionLabels = useMemo(() => {
     const src = rvStrainSeries?.frames?.[0]?.regions ?? rvStrain?.regions ?? [];
-    return src.map((r) => ({ region: r.region, label: r.label }));
+    return src.map((r) => ({ region: r.region, label: rvSegLabel(r.region, r.label) }));
   }, [rvStrainSeries, rvStrain]);
 
   const hasRvCurves = rvCurves.length > 1;
@@ -624,13 +683,33 @@ export function InteractiveReport({
         : (regionalHealthStatus?.affected_idx ?? []).slice().sort((a, b) => a - b))
     : [];
 
+  // BSA-indexed sub-values (mL/m²) — pure client-side division, shown as a
+  // secondary line ON the same EDV/ESV tile rather than as separate tiles.
+  // Rationale: an indexed number is only meaningful alongside its raw
+  // counterpart, so putting it in its own card would force the reader to
+  // cross-reference two tiles instead of reading one. Undefined whenever
+  // bsaM2 or the underlying raw volume is missing — every indexed line
+  // below degrades to simply not rendering.
+  const indexedMlM2 = (raw: number | null | undefined): string | undefined =>
+    bsaM2 && raw != null ? `${(raw / bsaM2).toFixed(1)} mL/m² indexed` : undefined;
+  // Same idea as indexedMlM2 above, but for LV mass (g -> g/m² = LVMI) — the
+  // unit Disease Pattern Similarity's indexed mode actually scores against.
+  const indexedGM2 = (raw: number | null | undefined): string | undefined =>
+    bsaM2 && raw != null ? `${(raw / bsaM2).toFixed(1)} g/m² indexed (LVMI)` : undefined;
+
   /** LEFT-ventricular cards. Every label is explicitly LV-prefixed: with RV
-   *  metrics on the same page, a bare "EDV" is ambiguous. */
-  const metricCards: { label: string; value: string; unit: string; accent?: boolean }[] = [
+   *  metrics on the same page, a bare "EDV" is ambiguous. LV Mass and Max
+   *  Wall Thickness were added because Disease Pattern Similarity already
+   *  uses both (MaxWallThicknessMm drives the HCM gate) — showing the actual
+   *  numbers here means the score is no longer explainable only by reading
+   *  Python source. Wall thickness has no indexed form (only mass does). */
+  const metricCards: { label: string; value: string; unit: string; accent?: boolean; indexed?: string }[] = [
     { label: "LV Ejection Fraction (LVEF)", value: fmt(measurements?.EF), unit: "%", accent: true },
-    { label: "LV End-Diastolic Volume (LV EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true },
-    { label: "LV End-Systolic Volume (LV ESV)", value: fmt(measurements?.ESV), unit: "mL" },
-    { label: "LV Stroke Volume (LV SV)", value: fmt(measurements?.StrokeVolume), unit: "mL" },
+    { label: "LV End-Diastolic Volume (LV EDV)", value: fmt(measurements?.EDV), unit: "mL", accent: true, indexed: indexedMlM2(measurements?.EDV) },
+    { label: "LV End-Systolic Volume (LV ESV)", value: fmt(measurements?.ESV), unit: "mL", indexed: indexedMlM2(measurements?.ESV) },
+    { label: "LV Stroke Volume (LV SV)", value: fmt(measurements?.StrokeVolume), unit: "mL", indexed: indexedMlM2(measurements?.StrokeVolume) },
+    { label: "LV Myocardial Mass (LV Mass)", value: fmt(lvVolumes?.LVMassG), unit: "g", indexed: indexedGM2(lvVolumes?.LVMassG) },
+    { label: "Maximum ED Wall Thickness", value: fmt(lvVolumes?.MaxWallThicknessMm), unit: "mm" },
     { label: "LV Peak Global Radial Strain (LV GRS)", value: fmt(measurements?.PeakGRS), unit: "%" },
     { label: "LV Peak Global Circumferential Strain (LV GCS)", value: fmt(measurements?.PeakGCS), unit: "%" },
   ];
@@ -640,23 +719,176 @@ export function InteractiveReport({
   // of em-dashes that implies a measurement was attempted and came back empty.
   const hasRv = !!rv && (rv.RVEF !== null || rv.RVEDV !== null || rv.RVESV !== null || rv.RV_SV !== null);
 
-  const rvCards: { label: string; value: string; unit: string }[] = [
+  // REAL — this is the existing radius-based RV strain measure, which the
+  // backend's own type comment already calls "closer in spirit to GCS" (see
+  // RvStrain/RvStrainSeries in useProjectResults.ts). Same "peak = most
+  // negative" convention the sidebar's rvPeakValue already uses. null when
+  // RV strain hasn't been computed for this model — the tiles/table below
+  // fall back to "—", not a fake number.
+  const rvPeakGcs: number | null = rvStrainSeries?.peak_global_rv_strain ?? rvStrain?.global_rv_strain ?? null;
+  const hasRealRvGcs = rvPeakGcs != null;
+  // DUMMY — Global Area Strain has no computation anywhere in this pipeline
+  // yet (needs a per-frame single-slice RV cavity-area script, not built).
+  // Fixed preview number stands in until that exists, clearly labelled
+  // "preview" everywhere it's shown (Cardiac Measurements tiles + RV Health
+  // table) — unlike GCS above, this one is NOT real data.
+  const rvPeakGasPreview = 28.7;
+
+  const rvCards: { label: string; value: string; unit: string; indexed?: string; preview?: boolean }[] = [
     { label: "RV Ejection Fraction (RVEF)", value: fmt(rv?.RVEF), unit: "%" },
-    { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL" },
-    { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL" },
-    { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL" },
+    { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL", indexed: indexedMlM2(rv?.RVEDV) },
+    { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL", indexed: indexedMlM2(rv?.RVESV) },
+    { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL", indexed: indexedMlM2(rv?.RV_SV) },
+    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", preview: true },
+    { label: "RV Peak Global Area Strain (RV GAS)", value: rvPeakGasPreview.toFixed(1), unit: "%", preview: true },
   ];
 
-  const rvGrade = rvFunctionGrade(rv?.RVEF);
+  // RV health status (graded by the backend). A stored result is shown only
+  // when it was graded for the sex and BSA now on screen and after the latest
+  // heart-metrics compute. Sex and BSA are entered on this page and reset when
+  // it is reopened, so an older result would otherwise present a verdict for
+  // inputs the page no longer shows. With no sex selected the backend checks
+  // each value against BOTH sexes' limits and gives a verdict only where they
+  // agree — never a sex-blind threshold.
+  const rvSex = patientSexProp ?? "unspecified";
+  const rvSexChosen = rvSex === "male" || rvSex === "female";
+  const sameBsa = (a: number | null | undefined, b: number | null | undefined) =>
+    a == null || b == null ? a == null && b == null : Math.abs(a - b) < 1e-6;
+  const rvCurrent: RvHealthStatus | null =
+    rvHealthStatus &&
+    rvHealthStatus.sex === rvSex &&
+    sameBsa(rvHealthStatus.bsa_m2, bsaM2) &&
+    (!heartMetricsComputedAt || rvHealthStatus.computed_at >= heartMetricsComputedAt)
+      ? rvHealthStatus
+      : null;
+  const rvEvidence = (label: string) => rvCurrent?.evidence.find((e) => e.label === label);
+
+  useEffect(() => {
+    if (!hasRv || rvCurrent || !onRecomputeRvHealthStatus) return;
+    const timer = window.setTimeout(() => {
+      onRecomputeRvHealthStatus(bsaM2 ?? null, rvSex);
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // Depends on the inputs only. onRecomputeRvHealthStatus changes identity on
+    // every poll tick, and depending on the stored result would let two tabs
+    // with different sexes keep overwriting each other.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasRv, rvSex, bsaM2, heartMetricsComputedAt]);
   const ratio = rvLvRatio(rv?.RVEDV, lvVolumes?.LVEDV ?? measurements?.EDV);
   const sv = svBalance(lvVolumes?.LV_SV ?? measurements?.StrokeVolume, rv?.RV_SV);
 
+  // ── RV disease-pattern prototype ──────────────────────────────────────────
+  // Sex is required to interpret RVEDVI (the ARVC TFC cutoffs are sex-
+  // specific) — not collected elsewhere in the pipeline. Owned by
+  // report/page.tsx (same pattern as bsaM2/heightCm/weightKg above) rather
+  // than local state, so the CSV export and the print pages can read the
+  // same value the user actually selected here instead of always assuming
+  // "unspecified".
+  const patientSex = patientSexProp ?? "unspecified";
+  const setPatientSex = onPatientSexChange ?? (() => {});
+  const rvedvi = bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null;
+  const rvesvi = bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null;
+  const rvSvi = bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null;
+  // Placeholders: neither the RV regional-contraction classifier nor the GAS
+  // geometric module exist in this pipeline yet (see rvDiseasePattern.ts).
+  // `null` = "not yet assessed", deliberately not defaulted to true/false.
+  const rvRegionalAbnormalPlaceholder: boolean | null = null;
+  const rvGasAbnormalPlaceholder: boolean | null = null;
+  const rvDiseasePatterns = computeRvDiseasePatterns({
+    rvedvi, rvesvi, rvef: rv?.RVEF ?? null, svi: rvSvi, sex: patientSex,
+    regionalContractionAbnormal: rvRegionalAbnormalPlaceholder,
+    gasAbnormal: rvGasAbnormalPlaceholder,
+  });
+
+  // Qualitative confidence tier — same three bands the badge used to encode as
+  // a raw percentage, now bucketed like Health Status's normal/low confidence
+  // pill instead of surfacing the number itself.
+  const diseaseConfidenceTier: "high" | "reduced" | "low" | null =
+    typeof similarity?.confidence === "number"
+      ? similarity.confidence >= 0.85 ? "high" : similarity.confidence >= 0.6 ? "reduced" : "low"
+      : null;
+
+  /**
+   * Auto-recompute Disease Pattern Similarity whenever BSA or sex actually
+   * change on screen, debounced so typing doesn't fire a request per
+   * keystroke. Without this, clearing height/weight left the mode badge and
+   * confidence note stuck on whatever was last explicitly recomputed — the
+   * fields and the explanation could silently disagree. Skips the initial
+   * mount so opening the report doesn't immediately fire a request before
+   * the user has touched anything.
+   */
+  const skipFirstRecompute = useRef(true);
+  useEffect(() => {
+    if (skipFirstRecompute.current) {
+      skipFirstRecompute.current = false;
+      return;
+    }
+    if (!onRecomputeSimilarityWithBsa) return;
+    const timer = window.setTimeout(() => {
+      onRecomputeSimilarityWithBsa(bsaM2 ?? null, patientSex);
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // onRecomputeSimilarityWithBsa is excluded deliberately: its identity
+    // changes on every poll tick while a recompute is in flight, and
+    // including it here would retrigger this effect mid-recompute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bsaM2, patientSex]);
+
   return (
     <div className="mx-auto max-w-5xl px-6 pb-16 pt-6">
-      <header className="mb-5">
-        <p className="text-xs text-muted-foreground">Cardiac Functional Analysis Report · Generated {generatedAt}</p>
-        <h1 className="mt-1 text-[22px] font-extrabold text-foreground">Patient {patientLabel}</h1>
-        <p className="mt-0.5 text-[13px] text-muted-foreground">{scanSummary}</p>
+      <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs text-muted-foreground">Cardiac Functional Analysis Report · Generated {generatedAt}</p>
+          <h1 className="mt-1 text-[22px] font-extrabold text-foreground">Patient {patientLabel}</h1>
+          <p className="mt-0.5 text-[13px] text-muted-foreground">{scanSummary}</p>
+        </div>
+        {/* BSA + sex — optional, screen-only. Lives up here (not inside the
+            Cardiac Measurements card) since it feeds two downstream pipelines
+            that live in different cards: BSA/sex recompute Disease Pattern
+            Similarity (LV), and sex alone drives the RV patterns' RVEDVI
+            cutoffs — one shared, page-level value instead of two toggles. */}
+        {(onHeightCmChange || onWeightKgChange) && (
+          <div
+            className="flex flex-wrap items-center gap-1.5 pt-0.5"
+            title="Adds BSA-indexed volumes (EDVI/ESVI, RVEDVI/RVESVI) to the tiles below. Leave blank to show raw values only."
+          >
+            <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">BSA</span>
+            <span className="flex items-center gap-1">
+              <Input
+                type="number" inputMode="decimal" min={0}
+                value={heightCm ?? ""} onChange={(e) => onHeightCmChange?.(e.target.value)}
+                placeholder="Height"
+                className="h-7 w-20 px-2 py-0 text-[9px] leading-none"
+              />
+              <span className="text-[9px] text-muted-foreground">cm</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <Input
+                type="number" inputMode="decimal" min={0}
+                value={weightKg ?? ""} onChange={(e) => onWeightKgChange?.(e.target.value)}
+                placeholder="Weight"
+                className="h-7 w-20 px-2 py-0 text-[9px] leading-none"
+              />
+              <span className="text-[9px] text-muted-foreground">kg</span>
+            </span>
+            <span className="text-[11px] font-semibold tabular-nums text-foreground">
+              {bsaM2 != null ? `${bsaM2.toFixed(2)} m²` : "—"}
+            </span>
+            <div className="inline-flex rounded-md border border-border bg-background p-0.5" title="Used for RVEDVI's sex-specific ARVC cutoffs (RV patterns below) and for sex-specific LV reference ranges in Disease Pattern Similarity.">
+              {(["male", "female", "unspecified"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setPatientSex(s)}
+                  className={`rounded px-1.5 py-0.5 text-[9px] font-medium capitalize transition-colors ${
+                    patientSex === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                >
+                  {s === "unspecified" ? "Sex: —" : s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Summary strip: measurements · health status · disease similarity.
@@ -700,6 +932,12 @@ export function InteractiveReport({
                   {m.value}
                   <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
                 </span>
+                {/* BSA-indexed sub-value — only present when the report-screen
+                    BSA card has been filled in; otherwise this line is absent
+                    and the tile looks exactly as it did before BSA existed. */}
+                {m.indexed && (
+                  <span className="mt-0.5 block text-[9.5px] font-medium text-muted-foreground">{m.indexed}</span>
+                )}
               </div>
             ))}
           </div>
@@ -714,17 +952,20 @@ export function InteractiveReport({
               </p>
               <div className="grid grid-cols-2 gap-2">
                 {rvCards.map((m) => (
-                  <div key={m.label} className="rounded-lg border border-border px-2.5 py-2">
+                  <div key={m.label} className={`rounded-lg border px-2.5 py-2 ${m.preview ? "border-dashed border-border bg-muted/20" : "border-border"}`}>
                     <div className="flex items-start gap-1.5">
                       <Heart className="mt-[1px] h-3 w-3 shrink-0 text-muted-foreground" />
                       <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
-                        {m.label}
+                        {m.label}{m.preview && <span className="ml-1 text-amber-600 dark:text-amber-400">preview</span>}
                       </span>
                     </div>
-                    <span className="mt-1 block text-[17px] font-bold leading-none tracking-tight text-foreground">
+                    <span className={`mt-1 block text-[17px] font-bold leading-none tracking-tight ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
                       {m.value}
                       <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
                     </span>
+                    {m.indexed && (
+                      <span className="mt-0.5 block text-[9.5px] font-medium text-muted-foreground">{m.indexed}</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -852,12 +1093,25 @@ export function InteractiveReport({
                       <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
                         RV Function <span className="normal-case tracking-normal">· advisory</span>
                       </span>
-                      <span
-                        className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_GRADE_BADGE[rvGrade]}`}
-                        title="Approximate, non-sex-specific RVEF thresholds — must be clinically validated before use."
-                      >
-                        {rvGrade}
-                      </span>
+                      {rvCurrent ? (
+                        <>
+                          <span
+                            className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_STATUS_BADGE[rvCurrent.status] ?? RV_STATUS_BADGE["Not assessable"]}`}
+                            title={rvCurrent.disclaimer}
+                          >
+                            {rvCurrent.status}
+                          </span>
+                          {!rvSexChosen && (
+                            <span className="mt-0.5 block text-[9px] text-muted-foreground">
+                              No sex selected — checked against both sexes
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                          {recomputingRvHealthStatus ? "Updating…" : "Not graded yet"}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -874,8 +1128,8 @@ export function InteractiveReport({
                   )}
 
                   <p className="mt-2 text-[9.5px] leading-snug text-muted-foreground">
-                    RV thresholds are approximate and not sex-specific — they must be clinically
-                    validated before use. RV function does not affect the grade above.
+                    RV function is compared with sex-specific SCMR 2025 reference ranges — within or
+                    outside range, not a severity grade. It does not affect the LV grade above.
                   </p>
                 </div>
               )}
@@ -970,65 +1224,200 @@ export function InteractiveReport({
               </table>
 
               {/* ── RV Health ───────────────────────────────────────────────
-                  RVEF gets a reference bar in the same visual language as the
-                  LV rows. RV VOLUMES are listed raw and ungraded: there is no
-                  BSA indexing here, exactly as noted for LV EDV. No strain
-                  grade — RV strain is exploratory and lives elsewhere. */}
-              {hasRv && (
-                <div className="mt-4 border-t border-border pt-3">
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    RV Health · advisory
-                  </p>
-                  <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-                    <div>
-                      <span className="text-[11.5px] font-semibold text-foreground">RV Ejection Fraction (RVEF)</span>
-                      <span className="ml-2 text-[13px] font-bold tabular-nums text-foreground">
-                        {fmt(rv?.RVEF)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">%</span>
-                      </span>
-                      {/* Same zone language as the LV bars: green normal,
-                          amber borderline, red far. Thresholds approximate. */}
-                      <div className="relative mt-2 h-2.5 w-[150px]">
-                        <div className="absolute inset-0 overflow-hidden rounded-full bg-muted">
-                          {[
-                            { from: 0, to: 30, tone: "red" as const },
-                            { from: 30, to: 40, tone: "amber" as const },
-                            { from: 40, to: 48, tone: "amber" as const },
-                            { from: 48, to: 100, tone: "green" as const },
-                          ].map((z) => (
-                            <div
-                              key={z.from}
-                              className={`absolute inset-y-0 ${ZONE_FILL[z.tone]}`}
-                              style={{ left: `${pct(z.from, 0, 100)}%`, width: `${pct(z.to, 0, 100) - pct(z.from, 0, 100)}%` }}
-                            />
+                  Same 3-column table as the LV metric table above (Metric /
+                  Result (this study) / Interpretation), same bar+zone
+                  language. RVEF, RVEDVI and RVESVI are graded by the BACKEND
+                  (compute_rv_health_status.py) against sex-specific SCMR 2025
+                  limits, and the zones are drawn from the limits that result
+                  carries, so the bar and the verdict cannot disagree. There is
+                  no severity band: outside the range is amber, never red.
+                  RVEDVI used to be coloured with the ARVC Task Force cutoffs as
+                  if they were the normal range; those cutoffs overlap normal in
+                  men and apply only with a regional wall-motion abnormality, so
+                  they stay in the RV patterns card and on the reference page.
+                  Peak GCS/GAS are PREVIEW placeholders with NO colour zones —
+                  no paper validates a normal range for either in this pipeline
+                  yet. Advisory only — never affects the LV grade. */}
+              {hasRv && (() => {
+                const ref = rvCurrent?.reference ?? null;
+                const men = ref?.by_sex.male ?? null;
+                const women = ref?.by_sex.female ?? null;
+                // With a sex chosen the bars show that sex's limits. Without one they show
+                // where both sexes agree — green normal for both, amber abnormal for both —
+                // and a grey band where the verdict depends on sex.
+                const rvefBar = ((): { zones: Zone[]; label: string } => {
+                  if (ref?.rvef_lower_limit != null) {
+                    const l = ref.rvef_lower_limit;
+                    return { zones: [{ from: 0, to: l, tone: "amber" }, { from: l, to: 100, tone: "green" }], label: `≥ ${l}` };
+                  }
+                  if (men && women) {
+                    const lo = Math.min(men.rvef_lower_limit, women.rvef_lower_limit);
+                    const hi = Math.max(men.rvef_lower_limit, women.rvef_lower_limit);
+                    return {
+                      zones: [{ from: 0, to: lo, tone: "amber" }, { from: lo, to: hi, tone: "grey" }, { from: hi, to: 100, tone: "green" }],
+                      label: `≥ ${hi} both sexes`,
+                    };
+                  }
+                  return { zones: [], label: "sex-specific" };
+                })();
+                const volumeBar = (
+                  single: [number, number] | null | undefined,
+                  m: [number, number] | undefined,
+                  w: [number, number] | undefined,
+                  max: number,
+                ): { zones: Zone[]; label: string } => {
+                  if (single) {
+                    return {
+                      zones: [{ from: 0, to: single[0], tone: "amber" }, { from: single[0], to: single[1], tone: "green" }, { from: single[1], to: max, tone: "amber" }],
+                      label: `${single[0]}–${single[1]}`,
+                    };
+                  }
+                  if (m && w) {
+                    const outerLo = Math.min(m[0], w[0]);
+                    const innerLo = Math.max(m[0], w[0]);
+                    const innerHi = Math.min(m[1], w[1]);
+                    const outerHi = Math.max(m[1], w[1]);
+                    return {
+                      zones: [
+                        { from: 0, to: outerLo, tone: "amber" }, { from: outerLo, to: innerLo, tone: "grey" },
+                        { from: innerLo, to: innerHi, tone: "green" },
+                        { from: innerHi, to: outerHi, tone: "grey" }, { from: outerHi, to: max, tone: "amber" },
+                      ],
+                      label: `${innerLo}–${innerHi} both sexes`,
+                    };
+                  }
+                  return { zones: [], label: "sex-specific" };
+                };
+                const edviBar = volumeBar(ref?.rvedvi_range, men?.rvedvi_range, women?.rvedvi_range, 160);
+                const esviBar = volumeBar(ref?.rvesvi_range, men?.rvesvi_range, women?.rvesvi_range, 80);
+                // When the backend withheld RV volumes (implausible voxel size or a
+                // duplicated RV-cavity slice), both indexed rows show that line instead.
+                const volumesWithheld = rvEvidence("Absolute RV volumes");
+                const pending: { text: string; full?: string; level: "ok" | "warn" | "unavailable" } = recomputingRvHealthStatus
+                  ? { text: "Updating…", level: "unavailable" }
+                  : { text: "Not graded yet", full: recomputeRvHealthStatusError ?? undefined, level: "unavailable" };
+                const verdict = (label: string, isVolume: boolean) =>
+                  rvCurrent ? rvInterpretation(isVolume && volumesWithheld ? volumesWithheld : rvEvidence(label)) : pending;
+
+                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; full?: string; level: "ok" | "warn" | "unavailable" } | null; preview?: boolean }[] = [
+                  { key: "RVEF", name: "RV Ejection Fraction (RVEF)", value: rv?.RVEF ?? null, unit: "%", min: 0, max: 100,
+                    normalLabel: rvefBar.label, zones: rvefBar.zones,
+                    interp: verdict("RV Ejection Fraction", false) },
+                  { key: "RVEDVI", name: "RV EDV Index (RVEDVI)", value: rvedvi, unit: "mL/m²", min: 0, max: 160,
+                    normalLabel: edviBar.label, zones: edviBar.zones,
+                    interp: verdict("RV End-Diastolic Volume Index", true) },
+                  { key: "RVESVI", name: "RV ESV Index (RVESVI)", value: rvesvi, unit: "mL/m²", min: 0, max: 80,
+                    normalLabel: esviBar.label, zones: esviBar.zones,
+                    interp: verdict("RV End-Systolic Volume Index", true) },
+                  // Flagged `preview: true` for the same reason as GAS below: no paper
+                  // validates a normal range for this RV strain measure yet, so even
+                  // though the number itself is real (once computed), it gets the same
+                  // muted/"preview" tag rather than sitting next to RVEF/RVEDVI looking
+                  // like a clinically-referenced result.
+                  { key: "PeakGCS_RV", name: "Peak Global Circumferential Strain", value: rvPeakGcs, unit: "%", min: -30, max: 0, normalLabel: "not validated",
+                    zones: [], interp: hasRealRvGcs
+                      ? { text: "Preview — no validated RV-specific reference range", level: "warn" }
+                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" },
+                    preview: true },
+                  // Dummy number (no GAS computation exists in this pipeline yet) — flagged
+                  // `preview: true` so the value renders muted with an explicit "preview" tag,
+                  // the same visual treatment as the Cardiac Measurements tile above, instead
+                  // of looking like a real measured result next to RVEF/RVEDVI.
+                  { key: "PeakGAS_RV", name: "Peak Global Area Strain", value: rvPeakGasPreview, unit: "%", min: 0, max: 50, normalLabel: "not validated",
+                    zones: [], interp: { text: "Preview — no validated reference range", level: "warn" }, preview: true },
+                ];
+
+                return (
+                  <div className="mt-4 border-t border-border pt-3">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      RV Health · advisory
+                    </p>
+                    <table className="w-full table-fixed border-collapse">
+                      <thead>
+                        <tr>
+                          {([["Metric", "w-[29%]"], ["Result (this study)", "w-[43%]"], ["Interpretation", "w-[28%]"]] as const).map(([h, w]) => (
+                            <th key={h} className={`${w} px-1 pb-1.5 text-left align-top text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground`}>
+                              {h}
+                            </th>
                           ))}
-                        </div>
-                        {rv?.RVEF != null && (
-                          <div
-                            className="absolute top-1/2 h-[22px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground ring-[1.5px] ring-card"
-                            style={{ left: `${pct(rv.RVEF, 0, 100)}%` }}
-                            title={`RVEF ${fmt(rv.RVEF)} %`}
-                          />
-                        )}
-                      </div>
-                      <div className="mt-2 flex w-[150px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
-                        <span>0</span><span className="text-foreground/70">normal ≥ 48</span><span>100</span>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Interpretation
-                      </span>
-                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_GRADE_BADGE[rvGrade]}`}>
-                        {rvGrade}
-                      </span>
-                    </div>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((m) => (
+                          <tr key={m.key} className="border-t border-border/60">
+                            <td className="px-1 py-2 align-top">
+                              <span className="text-[11.5px] font-semibold leading-tight text-foreground">
+                                {m.name}{m.preview && <span className="ml-1 text-[9.5px] font-semibold text-amber-600 dark:text-amber-400">preview</span>}
+                              </span>
+                            </td>
+                            <td className="px-1 py-2 align-top">
+                              <span className={`text-[13px] font-bold tabular-nums ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
+                                {fmt(m.value)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">{m.unit}</span>
+                              </span>
+                              <div className="relative mt-3 h-2.5 w-full min-w-[120px] max-w-[190px]">
+                                <div className="absolute inset-0 overflow-hidden rounded-full bg-muted">
+                                  {m.zones.map((z) => (
+                                    <div key={`${z.from}-${z.to}`} className={`absolute inset-y-0 ${ZONE_FILL[z.tone]}`}
+                                      style={{ left: `${pct(z.from, m.min, m.max)}%`, width: `${pct(z.to, m.min, m.max) - pct(z.from, m.min, m.max)}%` }} />
+                                  ))}
+                                </div>
+                                {m.value !== null && (
+                                  <div className="absolute top-1/2 h-[22px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-[2px] bg-foreground ring-[1.5px] ring-card"
+                                    style={{ left: `${pct(m.value, m.min, m.max)}%` }} title={`This study: ${fmt(m.value)} ${m.unit}`} />
+                                )}
+                              </div>
+                              <div className="mt-2 flex w-full min-w-[120px] max-w-[190px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
+                                <span>{m.min}</span><span className="text-foreground/70">{m.zones.length ? `normal ${m.normalLabel}` : m.normalLabel}</span><span>{m.max}</span>
+                              </div>
+                            </td>
+                            <td className="px-1 py-2 align-top">
+                              {m.interp ? (
+                                <span
+                                  title={m.interp.full || undefined}
+                                  className={`text-[11px] font-semibold leading-tight ${
+                                    m.interp.level === "ok" ? "text-emerald-700 dark:text-emerald-400"
+                                    : m.interp.level === "warn" ? "text-amber-700 dark:text-amber-400"
+                                    : "text-muted-foreground"}`}
+                                >
+                                  {m.interp.text}
+                                </span>
+                              ) : <span className="text-[11px] text-muted-foreground">—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <p className="mt-2 text-[9px] leading-snug text-muted-foreground">
+                      RVEF, RVEDVI and RVESVI are compared with sex-specific SCMR 2025 reference ranges
+                      (papillary muscles and trabeculations counted as blood pool) — within or outside the
+                      range, not a severity grade; hover a verdict for the full reason. With no sex selected
+                      each value is checked against both sexes: green and amber mean both agree, grey means the
+                      verdict depends on sex. Indexing needs height and weight above. The ARVC criteria in the
+                      RV patterns card below overlap this normal range in men (RVEDVI ≥ 110 mL/m² lies inside
+                      47–116) and apply only with a regional RV wall-motion abnormality. Peak GCS and Peak GAS
+                      are both marked preview — GCS uses this pipeline's existing RV cavity-radius strain
+                      measure (real once RV strain has been run for this model), but neither strain has a
+                      clinically validated RV-specific reference range yet, and GAS itself has no computation
+                      in this pipeline at all.
+                      RV SV {fmt(rv?.RV_SV)} mL. Advisory only — RV findings never affect the LV grade above.
+                    </p>
+                    {rvCurrent && rvCurrent.warnings.length > 0 && (
+                      <p className="mt-1 text-[9px] leading-snug text-muted-foreground">{rvCurrent.warnings.join(" ")}</p>
+                    )}
+                    {!rvCurrent && !recomputingRvHealthStatus && onRecomputeRvHealthStatus && (
+                      <button
+                        type="button"
+                        onClick={() => onRecomputeRvHealthStatus(bsaM2 ?? null, rvSex)}
+                        className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        title="Grade RV health status for the sex and BSA entered above"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Grade RV now
+                      </button>
+                    )}
                   </div>
-                  <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-                    RV EDV {fmt(rv?.RVEDV)} mL · RV ESV {fmt(rv?.RVESV)} mL · RV SV {fmt(rv?.RV_SV)} mL —
-                    raw values, not BSA-indexed and not graded; body size is not accounted for.
-                  </p>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Any evidence line the table doesn't cover (e.g. "Absolute
                   volumes suppressed") still shows, so nothing the backend
@@ -1046,70 +1435,115 @@ export function InteractiveReport({
                   </div>
                 ))}
 
-              {/* ── Regional Findings (Layer 2) ─────────────────────────────
-                  Interactive entry point into the strain card: each affected
-                  segment is a button that selects it and scrolls to the charts.
-                  Still advisory — the grade badge above is Layer 1 only. */}
-              {regionalHealthStatus && (
-                <div className="mt-3 border-t border-border pt-3" title={regionalHealthStatus.disclaimer}>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xs font-bold text-foreground">Regional Findings</h3>
-                    <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
-                      Advisory
-                    </span>
-                  </div>
-
-                  {hasFindings ? (
-                    <>
-                      <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        {showAllSegments ? "All Segments" : "Affected Segments"}
-                      </p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {findingIds.map((idx) => {
-                          const lvl = levelOf(idx);
-                          const isSel = selectedSeg === idx;
-                          const quiet = lvl === "normal";
-                          return (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); selectAndReveal(idx); }}
-                              title={`Segment ${idx} — ${LEVEL_WORD[lvl] ?? lvl}`}
-                              className={`min-w-[46px] rounded-lg border px-2 py-1.5 text-center transition-all hover:-translate-y-0.5 hover:shadow-sm ${
-                                isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
-                              } ${quiet ? "bg-muted/40" : "bg-card"}`}
-                            >
-                              <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
-                                {idx}
-                              </span>
-                              <span className={`mt-1 block text-[9px] font-semibold leading-none ${
-                                lvl === "severe" ? "text-red-700 dark:text-red-400"
-                                : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
-                                : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
-                                : "text-muted-foreground"}`}>
-                                {LEVEL_WORD[lvl] ?? lvl}
-                              </span>
-                            </button>
-                          );
-                        })}
+              {/* ── Regional Findings (Layer 2) — LV | RV side by side ───────
+                  LV's half is the interactive entry point into the strain
+                  card: each affected segment is a button that selects it and
+                  scrolls to the charts. Still advisory — the grade badge
+                  above is Layer 1 only. RV's half is a compact pointer to the
+                  full "RV Regional Findings" card below (not a duplicate of
+                  it) — RV strain has no validated severity bands to tile the
+                  same way LV's segments are, so showing "Severe/Moderate"
+                  wedges for RV here would be an unsupported clinical claim. */}
+              {(regionalHealthStatus || hasRv) && (
+                <div className="mt-3 grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-2">
+                  {regionalHealthStatus && (
+                    <div title={regionalHealthStatus.disclaimer}>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs font-bold text-foreground">LV Regional Findings</h3>
+                        <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                          Advisory
+                        </span>
                       </div>
-                      <p className="mt-2 text-[11px] text-muted-foreground">{regionalHealthStatus.summary}</p>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); setShowAllSegments((v) => !v); }}
-                        className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
-                      >
-                        {showAllSegments ? "← Show affected only" : "View all segments →"}
-                      </button>
-                    </>
-                  ) : (
-                    /* status !== "ok", or no focal defect — keep the plain
-                       advisory sentence rather than an empty button row. */
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      {regionalOk
-                        ? regionalHealthStatus.summary
-                        : "Regional assessment unavailable for this model."}
-                    </p>
+
+                      {hasFindings ? (
+                        <>
+                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {showAllSegments ? "All Segments" : "Affected Segments"}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {findingIds.map((idx) => {
+                              const lvl = levelOf(idx);
+                              const isSel = selectedSeg === idx;
+                              const quiet = lvl === "normal";
+                              return (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); selectAndReveal(idx); }}
+                                  title={`Segment ${idx} — ${LEVEL_WORD[lvl] ?? lvl}`}
+                                  className={`min-w-[46px] rounded-lg border px-2 py-1.5 text-center transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                                    isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
+                                  } ${quiet ? "bg-muted/40" : "bg-card"}`}
+                                >
+                                  <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
+                                    {idx}
+                                  </span>
+                                  <span className={`mt-1 block text-[9px] font-semibold leading-none ${
+                                    lvl === "severe" ? "text-red-700 dark:text-red-400"
+                                    : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
+                                    : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
+                                    : "text-muted-foreground"}`}>
+                                    {LEVEL_WORD[lvl] ?? lvl}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-2 text-[11px] text-muted-foreground">{regionalHealthStatus.summary}</p>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setShowAllSegments((v) => !v); }}
+                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                          >
+                            {showAllSegments ? "← Show affected only" : "View all segments →"}
+                          </button>
+                        </>
+                      ) : (
+                        /* status !== "ok", or no focal defect — keep the plain
+                           advisory sentence rather than an empty button row. */
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {regionalOk
+                            ? regionalHealthStatus.summary
+                            : "Regional assessment unavailable for this model."}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {hasRv && (
+                    <div className={regionalHealthStatus ? "border-t border-border pt-3 sm:border-t-0 sm:border-l sm:pl-4 sm:pt-0" : undefined}>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs font-bold text-foreground">RV Regional Findings</h3>
+                        <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                          Advisory
+                        </span>
+                      </div>
+                      {rvStrain?.regions?.length ? (
+                        <>
+                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Global RV {rvMetricType}
+                          </p>
+                          <p className="text-[19px] font-bold tabular-nums text-foreground">
+                            {fmt(rvStrain.global_rv_strain)}
+                            <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
+                          </p>
+                          <p className="mt-2 text-[11px] text-muted-foreground">
+                            No validated severity grading exists for RV strain — see the full breakdown below for per-region values.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); rvCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}
+                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                          >
+                            View full RV Regional Findings ↓
+                          </button>
+                        </>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          No RV regional strain computed for this model yet.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -1128,6 +1562,52 @@ export function InteractiveReport({
           </p>
           {similarity ? (
             <>
+              {/* Headline + mode/confidence — the headline reads "Indeterminate"
+                  or "...cannot be assessed reliably" instead of a confident
+                  profile label whenever the top profile's gate (see
+                  compute_disease_similarity.py::_apply_gate) failed or
+                  couldn't be checked, even though the bars below still show
+                  the full, untouched z-score ranking for transparency. */}
+              {similarity.phenotype_headline && (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-md bg-muted px-2 py-1 text-[11px] font-bold text-foreground">
+                    {similarity.phenotype_headline}
+                  </span>
+                  {similarity.mode && (
+                    <span className="rounded-full border border-border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {similarity.mode === "indexed" ? "BSA-indexed" : "Non-indexed"}
+                    </span>
+                  )}
+                  {/* Qualitative, not a raw percentage — same style as Health
+                      Status's normal/low confidence pill (see the RV FUNCTION
+                      badge above), just with a middle "reduced" tier since this
+                      confidence is continuous rather than Health Status's
+                      two-valued normal/low. */}
+                  {diseaseConfidenceTier && (
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-semibold ${
+                        diseaseConfidenceTier === "high" ? "border border-border bg-muted text-muted-foreground"
+                        : diseaseConfidenceTier === "reduced" ? "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                        : "border border-red-500/50 bg-red-500/15 text-red-700 dark:text-red-300"}`}
+                      title={similarity.confidence_notes?.join(" ") || "No confidence-reducing factors."}
+                    >
+                      {diseaseConfidenceTier !== "high" && <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />}
+                      {diseaseConfidenceTier === "high" ? "High confidence" : diseaseConfidenceTier === "reduced" ? "Reduced confidence" : "Low confidence"}
+                    </span>
+                  )}
+                  {/* BSA/sex above auto-recompute this result (debounced) — this
+                      just surfaces that a request is in flight or failed, since
+                      there's no button anymore to carry a loading/error state. */}
+                  {recomputingSimilarity && (
+                    <span className="inline-flex items-center gap-1 text-[9.5px] font-medium text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Updating…
+                    </span>
+                  )}
+                </div>
+              )}
+              {recomputeSimilarityError && (
+                <p className="mb-3 text-[10px] text-red-600 dark:text-red-400">{recomputeSimilarityError}</p>
+              )}
               <div className="flex flex-col gap-2.5">
                 {similarity.similarities.map((d) => (
                   <div key={d.code}>
@@ -1162,21 +1642,103 @@ export function InteractiveReport({
                   </div>
                 );
               })()}
+              {/* Gate check — the essential-criterion reasoning behind the
+                  headline above. Shown even when met=true, so the reader sees
+                  WHY the headline is confident, not just that it is. */}
+              {similarity.gate?.reason && (
+                <div className="mt-2 flex items-start gap-1.5 text-[10.5px]">
+                  {similarity.gate.met === true
+                    ? <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    : <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />}
+                  <span className="text-muted-foreground">{similarity.gate.reason}</span>
+                </div>
+              )}
+              {!!similarity.confidence_notes?.length && (
+                <ul className="mt-1.5 flex flex-col gap-0.5">
+                  {similarity.confidence_notes.map((n, i) => (
+                    <li key={i} className="flex items-start gap-1 text-[10px] leading-snug text-muted-foreground/80">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-red-600 dark:text-red-400" />
+                      <span>{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* Informational only — does NOT reduce confidence (e.g. confirming
+                  BSA-indexing was used, or the GRS/GCS strain-surrogate caveat).
+                  Neutral icon deliberately, so it doesn't read as a warning like
+                  confidence_notes above. */}
+              {!!similarity.notes?.length && (
+                <ul className="mt-1.5 flex flex-col gap-0.5">
+                  {similarity.notes.map((n, i) => (
+                    <li key={i} className="flex items-start gap-1 text-[10px] leading-snug text-muted-foreground/80">
+                      <Info className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50" />
+                      <span>{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </>
           ) : (
             <EmptyState computing={computing} error={computeError} />
           )}
 
-          {/* RV patterns deliberately NOT modelled. The reference profiles
-              (NOR/HCM/DCM) are LV-derived, so applying them to the RV would
-              fabricate a classifier that doesn't exist. */}
+          {/* RV patterns — prototype. Rule-based against published ARVC TFC /
+              PAH risk-stratification cutoffs (see rvDiseasePattern.ts for the
+              exact citations), NOT the NOR/HCM/DCM z-score engine above —
+              those reference profiles are LV-derived and don't apply here.
+              Every score is explicitly non-diagnostic; the disclaimer is
+              rendered with every result, never omitted. */}
           <div className="mt-4 border-t border-border pt-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              RV patterns
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Not available — future work. The reference profiles are LV-derived; no RV
-              classifier exists in this pipeline.
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                RV patterns <span className="normal-case tracking-normal">· prototype</span>
+              </p>
+              {/* Sex toggle now lives in the Cardiac Measurements header above,
+                  shared with Disease Pattern Similarity's BSA recompute — this
+                  readout just reflects that shared value. */}
+              <span className="text-[9px] font-medium capitalize text-muted-foreground">
+                {patientSex === "unspecified" ? "Sex: —" : `Sex: ${patientSex}`}
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-2.5">
+              {rvDiseasePatterns.map((p) => (
+                <div key={p.code}>
+                  <div className="mb-1 flex justify-between text-[11.5px]">
+                    <span className="text-foreground">{p.label}</span>
+                    <span className="font-bold text-foreground">{p.score}%</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full rounded-full" style={{ width: `${p.score}%`, background: RV_PATTERN_COLORS[p.code] }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Why the top pattern scored the way it did — same "Why {label}"
+                treatment as the LV patterns above, only for the highest-
+                scoring RV pattern instead of every row. */}
+            {(() => {
+              const top = rvDiseasePatterns.reduce((a, b) => (b.score > a.score ? b : a), rvDiseasePatterns[0]);
+              if (!top) return null;
+              return (
+                <div className="mt-3 border-t border-border pt-2">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Why {top.label}
+                  </p>
+                  <ul className="flex flex-col gap-0.5">
+                    {top.factors.filter((f) => f.status !== "pending").slice(0, 4).map((f, i) => (
+                      <li key={i} className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                        <span className="text-muted-foreground/50">•</span>
+                        <span>{f.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1.5 text-[8.5px] leading-snug text-muted-foreground/80">{top.reference}</p>
+                </div>
+              );
+            })()}
+            <p className="mt-3 border-t border-border pt-2 text-[9px] leading-snug text-muted-foreground">
+              {rvDiseasePatterns[0]?.disclaimer}
             </p>
           </div>
         </div>
@@ -1417,29 +1979,83 @@ export function InteractiveReport({
           validated longitudinal one, taken from short-axis slices. Exploratory. */}
       <Card
         title="RV Regional Findings"
-        subtitle="Exploratory · RV cavity-radius strain, short-axis · advisory"
+        subtitle={`Exploratory · RV cavity-radius strain (${rvMetricType}), short-axis · advisory`}
         icon={<Heart className="h-4 w-4 text-primary" />}
+        sectionRef={rvCardRef}
         action={
-          <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
-            Advisory
-          </span>
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {rvMetricType === "GCS" && selectedRvRegion !== null && (
+              <button
+                type="button"
+                onClick={() => setSelectedRvRegion(null)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Clear the selected region"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reset
+              </button>
+            )}
+            <div className="inline-flex rounded-lg border border-border bg-background p-0.5">
+              {(["GCS", "GAS"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setRvMetricType(t)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                    rvMetricType === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+              Advisory
+            </span>
+          </div>
         }
       >
-        {!rvStrain?.regions?.length ? (
+        {rvMetricType === "GAS" ? (
+          <p className="py-5 text-center text-sm text-muted-foreground">
+            RV GAS has no computation in this pipeline yet — switch to GCS for the computed
+            (still prototype) cavity-radius strain.
+          </p>
+        ) : !rvStrain?.regions?.length ? (
           <p className="py-5 text-center text-sm text-muted-foreground">
             No RV regional strain computed for this model yet — run RV strain from the
             Landmark Detection page.
           </p>
         ) : (
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-[300px_1fr]">
-            {/* Same chart the landmark page draws RV strain with — 2 rings
-                (basal, mid) x 3 free-wall sectors. Reused rather than
-                reimplemented so the two views can never disagree. */}
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-[420px_1fr]">
+            {/* Same crescent shape the Strain/Structure tabs draw RV with —
+                reused (not reimplemented) so no view can ever disagree, and
+                the two rings of real data (basal, mid) plus the honest
+                "no data" apical ring read the same way everywhere. Sized
+                wider than the LV bullseye's own 260px column: this chart's
+                480x470 viewBox always reserves the LV-side canvas space even
+                when showLv is off, so the visible crescent needs a bigger box
+                to render at a comparable size instead of looking small in the
+                unused margin. Fill/selection already animate the same way as
+                LV's own Bullseye (see rvRing's transition: "fill 200ms ease"
+                in CombinedVentricularChart.tsx) and use the same rdYlGn
+                color scale, so only size needed correcting here. */}
             <div onClick={(e) => e.stopPropagation()}>
-              <RvStrainChart
-                regions={rvStrain.regions}
-                selectedRegion={selectedRvRegion}
-                onRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
+              <CombinedVentricularChart
+                lvData={[]}
+                hasLv={false}
+                strainType="GRS"
+                showLv={false}
+                showRv={true}
+                rvRegions={rvStrain.regions}
+                selectedRvRegion={selectedRvRegion}
+                onRvRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
+                // Match the LV Bullseye's own divider/label treatment above
+                // (stroke: "var(--card)", fill: "#0b1220", fontWeight 700)
+                // instead of this chart's default black-ish dividers — report
+                // page only, via these optional overrides (defaults elsewhere
+                // are unchanged).
+                rvWedgeStrokeColor="var(--card)"
+                rvLabelColor="#0b1220"
+                rvLabelFontWeight={700}
               />
             </div>
 
@@ -1447,7 +2063,7 @@ export function InteractiveReport({
               <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                 <div>
                   <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Global RV Strain
+                    Global RV {rvMetricType}
                   </span>
                   <span className="text-[19px] font-bold tabular-nums text-foreground">
                     {fmt(rvStrain.global_rv_strain)}
@@ -1525,7 +2141,7 @@ export function InteractiveReport({
                         : "border-border hover:bg-muted/50"}`}
                   >
                     <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {r.label}
+                      {rvSegLabel(r.region, r.label)}
                     </span>
                     <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
                       {fmt(r.strain)}
@@ -1557,25 +2173,6 @@ export function InteractiveReport({
           </div>
         )}
       </Card>
-
-      {/* Clinical Research Assistant — grounded, cited literature answers for
-          this report. Patient measurements are passed as read-only context so
-          "Explain these results" is specific to this scan. The panel shows a
-          clear notice if the assistant service isn't running. */}
-      <section className="mt-6">
-        <CardiacResearchAssistant
-          storageKey={patientLabel}
-          patientContext={buildPatientContext({
-            EF: measurements?.EF,
-            EDV: measurements?.EDV,
-            ESV: measurements?.ESV,
-            StrokeVolume: measurements?.StrokeVolume,
-            PeakGRS: measurements?.PeakGRS,
-            PeakGCS: measurements?.PeakGCS,
-            mostSimilarPattern: similarity?.most_similar,
-          })}
-        />
-      </section>
 
       <p className="mt-6 text-center text-[11.5px] text-muted-foreground">
         Generated for clinical decision support only. Health Status is a rule-based assessment and

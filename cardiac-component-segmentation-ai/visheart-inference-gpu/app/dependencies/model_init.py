@@ -19,6 +19,10 @@ MODEL_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "model
 yolo_model = None
 medsam_model = None
 fourd_reconstruction_model = None
+# Second 4D checkpoint, for the right ventricle. Loading both costs ~17 MB total (the 4D
+# checkpoint is 8.69 MB) against MedSAM's 357 MB, so swap-per-request was rejected in favour of
+# holding both. Plan task 4.13.
+fourd_reconstruction_model_rv = None
 landmark_model_2ch = None
 landmark_model_1ch = None
 
@@ -123,7 +127,8 @@ def start_model_bootstrap() -> None:
         _bootstrap_started = True
 
     def _runner() -> None:
-        global yolo_model, medsam_model, fourd_reconstruction_model, _bootstrap_finished
+        global yolo_model, medsam_model, fourd_reconstruction_model
+        global fourd_reconstruction_model_rv, _bootstrap_finished
 
         logger = logging.getLogger("visheart")
         logger.info("🚀 Starting background model bootstrap (server will be available immediately)")
@@ -155,6 +160,29 @@ def start_model_bootstrap() -> None:
             model_name = os.environ.get("FOURD_RECONSTRUCTION_MODEL_NAME", "fourd_model_epoch_250.pth")
             model_path = os.path.join(MODEL_DIR, model_name)
             _load_model_safely("fourd_reconstruction", model_path, lambda path: globals().__setitem__("fourd_reconstruction_model", FourDReconstructionHandler(path)))
+
+            # RV checkpoint, optional. Absent means RV reconstruction is simply unavailable and
+            # every LV path behaves exactly as before -- so this can be deployed before the
+            # checkpoint is in place. The RV model shares the LV network architecture (CsLength
+            # and CmLength are both 256 in its training specs), so the default specs load it.
+            rv_model_name = os.environ.get("FOURD_RV_MODEL_NAME", "")
+            if rv_model_name:
+                # An absolute path is honoured as-is so the RV checkpoint can live outside this
+                # repository. It is a shared team repo and the RV model is still under a
+                # production no-go, so committing its weights here would be the wrong signal.
+                rv_model_path = (rv_model_name if os.path.isabs(rv_model_name)
+                                 else os.path.join(MODEL_DIR, rv_model_name))
+                if os.path.isfile(rv_model_path):
+                    _load_model_safely(
+                        "fourd_reconstruction_rv", rv_model_path,
+                        lambda path: globals().__setitem__(
+                            "fourd_reconstruction_model_rv", FourDReconstructionHandler(path)))
+                else:
+                    logger.warning(
+                        f"FOURD_RV_MODEL_NAME is set to '{rv_model_name}' but no such file exists "
+                        f"at {rv_model_path}; RV reconstruction will be unavailable")
+            else:
+                logger.info("FOURD_RV_MODEL_NAME not set; RV reconstruction is unavailable")
 
         # Load landmark models (UNetResNet34 1ch + 2ch)
         _load_landmark_models(logger)
@@ -295,6 +323,24 @@ def get_fourd_reconstruction_model():
     if fourd_reconstruction_model is None:
         raise RuntimeError("4D Reconstruction model is not initialized")
     return fourd_reconstruction_model
+
+
+def get_fourd_reconstruction_model_for_chamber(chamber: str = "lv"):
+    """Return the 4D handler for a chamber.
+
+    'lv' is the shipped checkpoint and always available. 'rv' requires FOURD_RV_MODEL_NAME to
+    point at an RV checkpoint in the model directory; if it does not, this raises rather than
+    silently reconstructing an RV request with the LV model, which would return a plausible-looking
+    but wrong mesh. Plan task 4.13.
+    """
+    key = (chamber or "lv").lower()
+    if key == "rv":
+        if fourd_reconstruction_model_rv is None:
+            raise RuntimeError(
+                "RV 4D reconstruction was requested but no RV checkpoint is loaded. "
+                "Set FOURD_RV_MODEL_NAME to a checkpoint in the model directory and restart.")
+        return fourd_reconstruction_model_rv
+    return get_fourd_reconstruction_model()
 
 
 @asynccontextmanager

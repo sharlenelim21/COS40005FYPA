@@ -260,6 +260,19 @@ def register_cpd_warp(mesh_points_canonical: np.ndarray) -> dict | None:
     try:
         atlas = _get_atlas()
 
+        # The atlas is centred at the origin (_load_canonical_atlas subtracts its
+        # own centroid). mesh_points_canonical from the reconstruction pipeline is
+        # NOT centred -- it's in the pipeline's own absolute voxel/world coordinates
+        # (typically ~100+ units from the origin), so without this every atlas
+        # rotation candidate is being compared against a point cloud translated far
+        # away from it. No rotation can ever fix a translation offset: this was the
+        # actual cause of the "always only ~3-4/17 populate" failure, not a bad
+        # rotation search. Store the centroid so label_with_warp's later frames use
+        # the SAME reference frame (all frames of one reconstruction decode through
+        # the same canonical coordinate space, so one centroid is valid for all).
+        patient_centroid = pts.mean(axis=0)
+        pts = pts - patient_centroid
+
         # Match the atlas's unit-envelope scale to this patient's own point cloud so
         # CPD's beta/lambda (tuned in v5_deform.ipynb on comparably-scaled clouds)
         # behave consistently regardless of this pipeline's absolute coordinate scale.
@@ -299,7 +312,11 @@ def register_cpd_warp(mesh_points_canonical: np.ndarray) -> dict | None:
         # rather than being limited to the ~2000-point registration cap.
         warped_dense_atlas = _apply_cpd_field(dense_points_scaled, reg.Y, reg.W, reg.beta)
 
-        return {"warped_dense_atlas": warped_dense_atlas, "dense_labels": atlas["dense_labels"]}
+        return {
+            "warped_dense_atlas": warped_dense_atlas,
+            "dense_labels": atlas["dense_labels"],
+            "patient_centroid": patient_centroid,
+        }
 
     except Exception as exc:
         logger.warning(f"[CPD-AHA] CPD registration failed ({exc}).")
@@ -330,6 +347,14 @@ def label_with_warp(mesh_points_canonical: np.ndarray, warp_state: dict) -> np.n
         return None
 
     try:
+        # Same centring register_cpd_warp applied, reusing ITS centroid (not a
+        # fresh one for this frame) so every frame of the reconstruction is
+        # compared against the atlas in the exact same reference frame the warp
+        # was fitted in — see register_cpd_warp's comment for why this matters.
+        patient_centroid = warp_state.get("patient_centroid")
+        if patient_centroid is not None:
+            pts = pts - patient_centroid
+
         best_rotation, rigid_check_populated = _find_best_rigid_rotation(
             warp_state["warped_dense_atlas"], warp_state["dense_labels"], pts,
         )

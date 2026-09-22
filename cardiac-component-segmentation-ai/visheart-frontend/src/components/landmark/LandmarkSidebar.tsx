@@ -22,7 +22,6 @@ import {
   MapPin,
   LayoutGrid,
   Activity,
-  Brain,
   Play,
   Pause,
   SkipBack,
@@ -32,18 +31,67 @@ import {
   Upload,
   X,
   AlertCircle,
-  Download,
-  FileText,
   Trash2,
   Pencil,
+  ChevronDown,
 } from "lucide-react";
 import {
   LANDMARK_DEFINITIONS,
   getLandmarkCoord,
 } from "@/types/landmark";
 import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
-import { getDummyStrainData, getStrainColor, type StrainType } from "@/components/landmark/StrainVisualization";
-import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries } from "@/components/landmark/RegionalStrainCharts";
+import { getDummyStrainData, getStrainColor, type StrainType, type RealStrainResult, type RvStrainResult } from "@/components/landmark/StrainVisualization";
+import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries, ringForRvSegment } from "@/components/landmark/RegionalStrainCharts";
+import { DualFrameRangePicker } from "@/components/landmark/DualFrameRangePicker";
+
+/**
+ * Everything the sidebar's "Compute strain" card (Strain tab) needs to render
+ * and act — state and real compute handlers are owned by the page
+ * (landmark-detection/page.tsx) since the bullseye/3D-heart visualization
+ * that consumes the same edFrameIdx/esFrameIdx/results also lives there, as a
+ * sibling of this sidebar. Bundled into one prop instead of ~18 individual
+ * ones passed down through LandmarkSidebar -> StrainTab.
+ */
+export interface StrainComputeBundle {
+  scope: "quick" | "full";
+  onScopeChange: (scope: "quick" | "full") => void;
+  inputMode: "frames" | "upload";
+  onInputModeChange: (mode: "frames" | "upload") => void;
+  edFrameIdx: number;
+  esFrameIdx: number;
+  onEdFrameChange: (value: number) => void;
+  onEsFrameChange: (value: number) => void;
+  autoFrames: { ed: number; es: number } | null;
+  onResetToAuto: () => void;
+  /** Frame count for the ED/ES picker — the mask's actual frame count, same
+   *  set heart-metrics uses, so the auto-detected ED/ES stay reachable. */
+  frameCount: number;
+  edFile: File | null;
+  esFile: File | null;
+  onEdFileChange: (file: File | null) => void;
+  onEsFileChange: (file: File | null) => void;
+  isComputing: boolean;
+  error: string | null;
+  hasLandmarkAlignment: boolean;
+  strainModel: "unet" | "medsam";
+  onComputeFrames: () => void;
+  onComputeUpload: () => void;
+  /** The stored LV/RV strain result IF it matches the current Quick ED->ES
+   *  selection (right model, right frame pair) — null otherwise, including
+   *  when nothing has been computed yet or the stored result is a full-cycle
+   *  one. Drives the Quick-scope "peak value only" view in the Strain tab. */
+  quickLvResult: RealStrainResult | null;
+  quickRvResult: RvStrainResult | null;
+  /** RV's own metric toggle (GCS/GAS) — GAS has no computation in the
+   *  pipeline at all, so selecting it must render as an explicit prototype
+   *  state, never fabricated values. */
+  rvMetricType: "GCS" | "GAS";
+  onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
+  /** Reports Full cycle's busy state up to the page, so the main panel can
+   *  show a loading state too while "Compute/Recompute all frames" runs
+   *  (StrainTab's own seriesBusy is local and the page can't see it otherwise). */
+  onFullCycleBusyChange: (busy: boolean) => void;
+}
 
 const NAV_ITEMS = [
   { key: "landmarks", icon: MapPin,     label: "Landmarks" },
@@ -71,7 +119,21 @@ function strainCurveData(type: StrainType, totalFrames: number) {
 // Props 
 export interface LandmarkSidebarProps {
   state: LandmarkPageState;
+  /** GPU inference quality summary (slices confident / mean-point-used /
+   * seg-guided / MRI-only counts) — rendered at the top of the Landmarks
+   * tab specifically, moved here from a page-wide header bar so it sits
+   * next to the landmark editing controls it actually describes. */
+  summaryStats?: React.ReactNode;
   currentPrediction: FramePrediction | null;
+  /** The RAW (un-edited) prediction for the current slice — used to tell a
+   *  deliberately deleted landmark ("was detected, now missing via an edit")
+   *  apart from one that was simply never detected in the first place. */
+  rawPrediction?: FramePrediction | null;
+  /** currentPrediction merged with the last SAVED edits (not the current
+   *  working ones) — tells "deleted but not saved yet" (Restore offered)
+   *  apart from "deleted and saved" (Restore removed; re-adding it is a
+   *  fresh manual placement). */
+  savedPrediction?: FramePrediction | null;
   visibleLandmarks: Set<string>;
   replacementFileError: string | null;
   confidentCount?: number;
@@ -83,12 +145,12 @@ export interface LandmarkSidebarProps {
   structureVentricle?: "LV" | "RV";
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
+  isPerFrame?: boolean;
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
   onToggleLandmark: (id: string) => void;
   currentSliceKey?: string;
-  pendingDeletions?: Record<string, number>;
   onDeleteLandmark?: (id: string) => void;
   onUndoDeleteLandmark?: (id: string) => void;
   manuallyDeletedSliceKeys?: Set<string>;
@@ -108,11 +170,20 @@ export interface LandmarkSidebarProps {
   highlightedLandmarkId?: string | null;
   onHighlightLandmark?: (id: string | null) => void;
   selectedStrainType?: StrainType;
+  onStrainTypeChange?: (type: StrainType) => void;
+  strainCompute?: StrainComputeBundle;
+  /** Which chamber(s) the main panel's Strain tab 3D Heart is showing --
+   *  drives the sidebar's own Full-cycle results display too now (see
+   *  StrainTab's chamberFocus prop). Only meaningful on the Strain tab. */
+  chamberFocus?: "combined" | "LV" | "RV";
 }
 
 export function LandmarkSidebar({
   state,
+  summaryStats,
   currentPrediction,
+  rawPrediction,
+  savedPrediction,
   visibleLandmarks,
   replacementFileError,
   confidentCount,
@@ -124,12 +195,12 @@ export function LandmarkSidebar({
   structureVentricle = "LV",
   onStructureVentricleChange,
   structureStats,
+  isPerFrame,
   hasUnsavedLandmarkEdits,
   isSavingLandmarks,
   onSaveLandmarks,
   onToggleLandmark,
   currentSliceKey,
-  pendingDeletions,
   onDeleteLandmark,
   onUndoDeleteLandmark,
   manuallyDeletedSliceKeys,
@@ -149,6 +220,9 @@ export function LandmarkSidebar({
   highlightedLandmarkId,
   onHighlightLandmark,
   selectedStrainType = "GCS",
+  onStrainTypeChange,
+  strainCompute,
+  chamberFocus = "LV",
 }: LandmarkSidebarProps) {
   // Controlled by the page when provided (see activeTab prop) so a remount
   // can't desync the sidebar tab from the page's workspace; otherwise falls
@@ -229,32 +303,6 @@ export function LandmarkSidebar({
         ))}
       </div>
 
-      {/* Model indicator strip — mirrors segmentation-sidebar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--sidebar-border)] bg-[var(--sidebar-primary)]/50 flex-shrink-0">
-        <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <span className="text-[11px] text-muted-foreground">Model:</span>
-        <span className="text-[11px] font-semibold text-foreground truncate">
-          {state.modelUsed || "UNetResNet34 Landmark"}
-        </span>
-        <span
-          className={cn(
-            "ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
-            hasPredictions
-              ? "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400"
-              : isRunning
-              ? "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400"
-              : "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
-          )}
-        >
-          <span
-            className={cn(
-              "h-1 w-1 rounded-full inline-block",
-              hasPredictions ? "bg-green-500" : isRunning ? "bg-blue-500 animate-pulse" : "bg-amber-500",
-            )}
-          />
-          {hasPredictions ? "Active" : isRunning ? "Running" : "Pending"}
-        </span>
-      </div>
 
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
@@ -274,7 +322,10 @@ export function LandmarkSidebar({
 
       {/* Scrollable tab content */}
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
-        {(activeTab === "strain" || activeTab === "structure") && hasPredictions && (
+        {/* Quick ED->ES has no per-frame cycle to scrub — a single computed
+            pair, not an animated series — so the playback bar (and its Play
+            button) only makes sense in Full cycle scope, matching the mockup. */}
+        {(activeTab === "structure" || (activeTab === "strain" && strainCompute?.scope !== "quick")) && hasPredictions && (
           <div className="-mx-4 -mt-4 mb-4">
             <PlaybackBar
               axisLabel="Frame"
@@ -293,16 +344,18 @@ export function LandmarkSidebar({
         )}
         {activeTab === "landmarks" && (
           <LandmarksTab
+            activeModel={activeModel}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={onSaveLandmarks}
             allPredictions={state.predictions}
             onSliceSelect={onSliderChange}
             prediction={currentPrediction}
+            rawPrediction={rawPrediction}
+            savedPrediction={savedPrediction}
             visibleLandmarks={visibleLandmarks}
             onToggleLandmark={onToggleLandmark}
             currentSliceKey={currentSliceKey ?? ""}
-            pendingDeletions={pendingDeletions ?? {}}
             onDeleteLandmark={onDeleteLandmark ?? (() => {})}
             onUndoDeleteLandmark={onUndoDeleteLandmark ?? (() => {})}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys ?? EMPTY_STRING_SET}
@@ -327,6 +380,7 @@ export function LandmarkSidebar({
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={onHighlightLandmark}
             onReset={onReset}
+            summaryStats={summaryStats}
           />
         )}
         {activeTab === "structure" && (
@@ -337,6 +391,7 @@ export function LandmarkSidebar({
             structureVentricle={structureVentricle}
             onStructureVentricleChange={onStructureVentricleChange}
             structureStats={structureStats}
+            isPerFrame={isPerFrame}
           />
         )}
         {activeTab === "strain" && (
@@ -346,28 +401,12 @@ export function LandmarkSidebar({
               currentFrame={strainFrame}
               totalFrames={strainFrameCount}
               selectedStrainType={selectedStrainType}
+              onStrainTypeChange={onStrainTypeChange}
               activeModel={activeModel ?? "unet"}
               onModelChange={onModelChange}
+              strainCompute={strainCompute}
+              chamberFocus={chamberFocus}
             />
-            {/* Strain-view toggles live here rather than with the landmark
-                controls — they affect this tab's rendering, not the points. */}
-            {hasPredictions && (
-              <DetectionSettingsPanel
-                scope="strain"
-                showLabels={showLabels}
-                onToggleShowLabels={onToggleShowLabels}
-                showCentroid={showCentroid}
-                onToggleShowCentroid={() => setShowCentroid((p) => !p)}
-                showRadialLines={showRadialLines}
-                onToggleShowRadialLines={() => setShowRadialLines((p) => !p)}
-                showStrainOverlay={showStrainOverlay}
-                onToggleShowStrainOverlay={() => setShowStrainOverlay((p) => !p)}
-                autoAlignAha={autoAlignAha}
-                onToggleAutoAlignAha={() => setAutoAlignAha((p) => !p)}
-                editableLandmarks={editableLandmarks}
-                onToggleEditableLandmarks={onToggleEditableLandmarks}
-              />
-            )}
           </div>
         )}
       </div>
@@ -495,35 +534,21 @@ function stateSpeedClass(fps: number, currentFps?: number) {
 }
 
 // Landmarks tab
-function RemovedRowCountdown({ deletedAt }: { deletedAt: number }) {
-  const [remaining, setRemaining] = useState(() => Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
-
-  useEffect(() => {
-    setRemaining(Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
-    const id = setInterval(() => {
-      setRemaining(Math.max(0, 5 - Math.floor((Date.now() - deletedAt) / 1000)));
-    }, 250);
-    return () => clearInterval(id);
-  }, [deletedAt]);
-
-  return (
-    <span className="text-[9px] font-mono tabular-nums text-muted-foreground shrink-0" aria-live="polite">
-      {remaining}s
-    </span>
-  );
-}
-
 function SliceConfidenceDot({
   flag,
   confidence,
   model_used,
+  segModelLabel,
 }: {
   flag?: "normal" | "collapsed_to_mean";
   confidence?: "high" | "low";
   model_used?: "2ch" | "1ch_fallback";
+  /** "UNet" | "MedSAM" — which mask fed the 2ch model, for the tooltip text. */
+  segModelLabel?: string;
 }) {
   if (!flag && !confidence) return null;
 
+  const segTag = model_used === "2ch" ? `${segModelLabel ?? "seg"}-guided 2ch` : "MRI-only 1ch";
   let color: string;
   let tip: string;
 
@@ -532,10 +557,10 @@ function SliceConfidenceDot({
     tip = "Landmarks too close — mean point used";
   } else if (confidence === "high") {
     color = "bg-green-500";
-    tip = model_used === "2ch" ? "High confidence (seg-guided 2ch)" : "High confidence (MRI-only 1ch)";
+    tip = `High confidence (${segTag})`;
   } else {
     color = "bg-orange-400";
-    tip = `Low confidence — ${model_used === "2ch" ? "seg-guided 2ch" : "MRI-only 1ch"}`;
+    tip = `Low confidence — ${segTag}`;
   }
 
   return (
@@ -554,10 +579,11 @@ function LandmarksTab({
   allPredictions,
   onSliceSelect,
   prediction,
+  rawPrediction,
+  savedPrediction,
   visibleLandmarks,
   onToggleLandmark,
   currentSliceKey,
-  pendingDeletions,
   onDeleteLandmark,
   onUndoDeleteLandmark,
   manuallyDeletedSliceKeys,
@@ -582,6 +608,8 @@ function LandmarksTab({
   highlightedLandmarkId,
   onHighlightLandmark,
   onReset,
+  summaryStats,
+  activeModel,
 }: {
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
@@ -589,10 +617,11 @@ function LandmarksTab({
   allPredictions?: FramePrediction[];
   onSliceSelect?: (slice: number) => void;
   prediction: FramePrediction | null;
+  rawPrediction?: FramePrediction | null;
+  savedPrediction?: FramePrediction | null;
   visibleLandmarks: Set<string>;
   onToggleLandmark: (id: string) => void;
   currentSliceKey: string;
-  pendingDeletions: Record<string, number>;
   onDeleteLandmark: (id: string) => void;
   onUndoDeleteLandmark: (id: string) => void;
   manuallyDeletedSliceKeys: Set<string>;
@@ -617,7 +646,11 @@ function LandmarksTab({
   onToggleEditableLandmarks?: () => void;
   highlightedLandmarkId?: string | null;
   onHighlightLandmark?: (id: string | null) => void;
+  summaryStats?: React.ReactNode;
+  /** Which segmentation model's mask is fed into the 2ch landmark model, when available. */
+  activeModel?: "unet" | "medsam";
 }) {
+  const segModelLabel = activeModel === "medsam" ? "MedSAM" : "UNet";
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   if (!hasPredictions) {
@@ -663,7 +696,7 @@ function LandmarksTab({
           {isSavingLandmarks ? (
             <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…</>
           ) : hasUnsavedLandmarkEdits ? (
-            "● Save landmark edits"
+            "Save landmark edits"
           ) : (
             "Landmarks saved"
           )}
@@ -678,6 +711,7 @@ function LandmarksTab({
             flag={prediction?.flag}
             confidence={prediction?.confidence}
             model_used={prediction?.model_used}
+            segModelLabel={segModelLabel}
           />
           <span className="text-xs text-muted-foreground tabular-nums">
             Slice {currentFrame + 1}
@@ -685,23 +719,33 @@ function LandmarksTab({
         </div>
       </div>
 
+      {/* Which mask is actually feeding this slice's detection — the dot above
+          only surfaces this on hover, so it's easy to miss that a slice fell
+          back to MRI-only (no mask available/valid) even with a model selected
+          in the toggle above. */}
+      <p className="text-[11px] text-muted-foreground -mt-2">
+        Segmentation mask fed to landmark model:{" "}
+        <span className="font-medium text-foreground">
+          {prediction?.model_used === "2ch" ? `${segModelLabel} (2ch)` : "None — MRI only (1ch fallback)"}
+        </span>
+      </p>
+
       {/* Per-slice confidence overview. The single dot above only describes the
           slice currently in view, so there was no way to see which slices the
           detector was unsure about without scrubbing through all of them. This
           strip shows every slice at once and doubles as a jump target. */}
       {allPredictions && allPredictions.length > 1 && (
         <div className="rounded-lg border border-border bg-muted/20 p-2">
-          <div className="mb-1.5 flex items-center justify-between">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Slice confidence
             </span>
-            <span className="text-[9px] text-muted-foreground">
-              {allPredictions.filter((p) => p.confidence === "high").length}/{allPredictions.length} confident
-            </span>
+            {summaryStats}
           </div>
           <div className="flex flex-wrap gap-1">
             {allPredictions.map((p, i) => {
-              const isCurrent = i === currentFrame;
+              const sliceNum = p.slice_id ?? i;
+              const isCurrent = sliceNum === currentFrame;
               const color =
                 p.flag === "collapsed_to_mean" ? "bg-zinc-400"
                 : p.confidence === "high" ? "bg-green-500"
@@ -717,8 +761,8 @@ function LandmarksTab({
                 <button
                   key={i}
                   type="button"
-                  onClick={() => onSliceSelect?.(i)}
-                  title={wasManuallyEdited ? `Slice ${i + 1} — ${tip} — landmark manually removed` : `Slice ${i + 1} — ${tip}`}
+                  onClick={() => onSliceSelect?.(sliceNum)}
+                  title={wasManuallyEdited ? `Slice ${sliceNum + 1} — ${tip} — landmark manually removed` : `Slice ${sliceNum + 1} — ${tip}`}
                   className={cn(
                     "relative flex h-5 w-5 items-center justify-center rounded text-[8px] font-medium transition-all",
                     color,
@@ -726,7 +770,7 @@ function LandmarksTab({
                     p.confidence === "high" || p.flag === "collapsed_to_mean" ? "text-white" : "text-white",
                   )}
                 >
-                  {i + 1}
+                  {sliceNum + 1}
                   {wasManuallyEdited && (
                     <Pencil
                       className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-background p-[1px] text-foreground shadow"
@@ -751,9 +795,17 @@ function LandmarksTab({
           const coord = getLandmarkCoord(prediction, def.id);
           const isVisible = visibleLandmarks.has(def.id);
           const hasCoord  = !!coord;
-          const deletedAt = pendingDeletions[`${currentSliceKey}:${def.id}`];
+          // Deleted but NOT saved yet: the raw AI prediction had a coordinate for
+          // this landmark, the current (edited) one doesn't, and the last SAVED
+          // copy still does. Restore is only offered in this window — once the
+          // deletion itself has been saved, the row falls back to the plain
+          // "not detected" state below, and getting the point back is a fresh
+          // manual placement (focus it, then click the image), not an undo.
+          const wasDetected = !!getLandmarkCoord(rawPrediction, def.id);
+          const isSavedCoordPresent = !!getLandmarkCoord(savedPrediction, def.id);
+          const isPendingDelete = !hasCoord && wasDetected && isSavedCoordPresent;
 
-          if (deletedAt !== undefined) {
+          if (isPendingDelete) {
             return (
               <div
                 key={def.id}
@@ -763,32 +815,36 @@ function LandmarksTab({
                 <span className="flex-1 text-xs text-muted-foreground">
                   {def.label} removed from Slice {currentFrame + 1}
                 </span>
-                <RemovedRowCountdown deletedAt={deletedAt} />
                 <button
                   type="button"
                   onClick={() => onUndoDeleteLandmark(def.id)}
                   className="text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                 >
-                  Undo
+                  Restore
                 </button>
               </div>
             );
           }
 
+          const isPlacing = !hasCoord && highlightedLandmarkId === def.id;
+
           return (
             <button
               key={def.id}
               type="button"
-              onClick={() => onToggleLandmark(def.id)}
+              // Toggling visibility only makes sense once there's a coordinate to
+              // show/hide — for a coord-less row this button exists purely so the
+              // "place"/focus control below stays clickable (it no longer sits
+              // inside a disabled ancestor).
+              onClick={() => { if (hasCoord) onToggleLandmark(def.id); }}
               className={cn(
                 "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left transition-all",
                 isVisible && hasCoord
                   ? "border-border bg-background hover:bg-muted/40"
                   : !hasCoord
-                  ? "border-dashed border-border/40 bg-transparent opacity-40 cursor-default"
+                  ? cn("border-dashed bg-transparent", isPlacing ? "border-primary/60" : "border-border/40 opacity-70")
                   : "border-border/50 bg-transparent opacity-55",
               )}
-              disabled={!hasCoord}
               aria-pressed={isVisible}
             >
               {/* Color dot */}
@@ -808,6 +864,8 @@ function LandmarksTab({
                 <span className="text-[10px] text-muted-foreground font-mono tabular-nums shrink-0">
                   {coord![0]}, {coord![1]}
                 </span>
+              ) : isPlacing ? (
+                <span className="text-[9px] font-medium text-primary shrink-0">Click the image to place</span>
               ) : (
                 <span className="text-[10px] text-muted-foreground/40 shrink-0">—</span>
               )}
@@ -823,9 +881,13 @@ function LandmarksTab({
                     event.stopPropagation();
                     onHighlightLandmark(highlightedLandmarkId === def.id ? null : def.id);
                   }}
-                  title={highlightedLandmarkId === def.id ? "Remove highlight" : "Highlight this landmark"}
+                  title={
+                    highlightedLandmarkId === def.id
+                      ? "Cancel"
+                      : hasCoord ? "Highlight this landmark" : "Place this landmark by clicking the image"
+                  }
                 >
-                  {highlightedLandmarkId === def.id ? "clear" : "focus"}
+                  {highlightedLandmarkId === def.id ? "clear" : hasCoord ? "focus" : "place"}
                 </span>
               )}
               {hasCoord && (
@@ -1098,6 +1160,7 @@ function StructureTab({
   structureVentricle,
   onStructureVentricleChange,
   structureStats,
+  isPerFrame,
 }: {
   hasPredictions: boolean;
   activeModel: "unet" | "medsam";
@@ -1105,6 +1168,10 @@ function StructureTab({
   structureVentricle: "LV" | "RV";
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
+  /** True when structureStats tracks the currently playing frame (a real
+   *  per-frame strain series exists); false when it's the single ED-frame
+   *  snapshot repeated across playback. */
+  isPerFrame?: boolean;
 }) {
   if (!hasPredictions) {
     return (
@@ -1163,18 +1230,29 @@ function StructureTab({
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
           <LayoutGrid className="mx-auto h-7 w-7 opacity-25" />
           <p className="mt-2 text-xs text-muted-foreground">
-            RV structural view coming soon — cavity-area data isn&apos;t computed by the backend yet.
+            RV cavity-area (FAC) numbers aren&apos;t computed by the backend yet — see the main panel for the
+            real RV mesh shape with prototype (placeholder) colors.
           </p>
         </div>
       ) : structureStats && structureStats.mean != null ? (
         <>
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-medium text-foreground">Wall Thickness</h4>
+            {isPerFrame && (
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                Live per-frame
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-3 gap-2">
             <StructureStatTile label="Min" value={structureStats.min != null ? `${structureStats.min.toFixed(1)} ${unit}` : "—"} />
             <StructureStatTile label="Mean" value={`${structureStats.mean.toFixed(1)} ${unit}`} />
             <StructureStatTile label="Max" value={structureStats.max != null ? `${structureStats.max.toFixed(1)} ${unit}` : "—"} />
           </div>
           <p className="text-[9px] text-muted-foreground leading-relaxed">
-            AHA 17-segment wall thickness — a single computed snapshot, not a per-frame cycle metric.
+            {isPerFrame
+              ? "AHA 17-segment wall thickness for the frame currently playing."
+              : "AHA 17-segment wall thickness — a single snapshot for now. Per-frame values compute automatically in the background and will animate here shortly."}
           </p>
         </>
       ) : (
@@ -1191,21 +1269,36 @@ function StrainTab({
   currentFrame,
   totalFrames,
   selectedStrainType: externalStrainType,
+  onStrainTypeChange,
   activeModel,
   onModelChange,
+  strainCompute,
+  chamberFocus,
 }: {
   hasPredictions: boolean;
   currentFrame: number;
   totalFrames: number;
   selectedStrainType?: StrainType;
+  onStrainTypeChange?: (type: StrainType) => void;
   activeModel: "unet" | "medsam";
   onModelChange?: (m: "unet" | "medsam") => void;
+  strainCompute?: StrainComputeBundle;
+  /** Which chamber(s) the main panel's 3D Heart is currently showing --
+   * drives the Full-cycle results below too now, replacing what used to be
+   * this tab's own independent LV/RV toggle (see the removed ventricleView
+   * state) so there's a single source of truth instead of two controls that
+   * could say different things. */
+  chamberFocus: "combined" | "LV" | "RV";
 }) {
   const router = useRouter();
   const { projectId } = useParams<{ projectId: string }>();
-  const [selectedStrainType, setSelectedStrainType] = useState<StrainType>(
-    externalStrainType && externalStrainType !== ("GLS" as string) ? externalStrainType : "GRS"
-  );
+  // Controlled by the page when provided, so the sidebar's GRS/GCS choice is
+  // the single source of truth the main panel's bullseye/3D heart also reads
+  // — no more independent local toggle that could drift out of sync with it.
+  const [localStrainType, setLocalStrainType] = useState<StrainType>("GRS");
+  const selectedStrainType: StrainType =
+    externalStrainType && externalStrainType !== ("GLS" as string) ? externalStrainType : localStrainType;
+  const setSelectedStrainType = onStrainTypeChange ?? setLocalStrainType;
   const [curveView, setCurveView] = useState<"global" | "region" | "cycle">("global");
   const [labelsView, setLabelsView] = useState<"lvSegments" | "values">("lvSegments");
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
@@ -1224,10 +1317,8 @@ function StrainTab({
     available: modelAvailable,
     setModel: setResultsModel,
     autoEdFrame,
+    refresh: refreshResults,
   } = useProjectResults(projectId);
-  // LV/RV toggle for the results panel below — RV has no GRS/GCS split or
-  // region/cycle chart parity with LV yet, so it gets a simpler dedicated panel.
-  const [ventricleView, setVentricleView] = useState<"LV" | "RV">("LV");
   useEffect(() => { setResultsModel(strainModel); }, [strainModel, setResultsModel]);
 
   const strainKey = selectedStrainType === "GRS" ? "grs" : "gcs";
@@ -1272,6 +1363,7 @@ function StrainTab({
       autoEdFrame ??
       0;
     setSeriesBusy(true);
+    strainCompute?.onFullCycleBusyChange(true);
     setSeriesError(null);
     try {
       // Fire LV and RV series together — one button, both computed. Independent
@@ -1285,12 +1377,18 @@ function StrainTab({
         setSeriesError(err?.response?.data?.error ?? err?.message ?? "Strain series failed.");
         return;
       }
-      // Stored on the mask — reload so every consumer picks it up.
-      window.location.reload();
+      // Stored on the mask — re-read it so every consumer (this tab, the
+      // main panel's bullseye/3D heart) picks up the new series. A full
+      // window.location.reload() used to do this instead, which also reset
+      // every other piece of client state (scope toggle back to "Quick
+      // ED->ES", active tab, scroll position...) as a side effect -- refresh
+      // only re-fetches the masks themselves.
+      await refreshResults();
     } finally {
       setSeriesBusy(false);
+      strainCompute?.onFullCycleBusyChange(false);
     }
-  }, [projectId, realStrain, realSeries, strainModel, autoEdFrame]);
+  }, [projectId, realStrain, realSeries, strainModel, autoEdFrame, strainCompute, refreshResults]);
 
   const usingRealRvSeries = !!realRvSeries?.frames?.length;
   const usingRealRvStrain = !!realRvStrain?.regions?.length;
@@ -1315,11 +1413,11 @@ function StrainTab({
         realRvSeries.frames.find((f) => f.frameIndex === currentFrame) ??
         realRvSeries.frames.find((f) => f.frameIndex === realRvSeries.peakFrameIndex);
       if (frame?.regions?.length) {
-        return frame.regions.map((r) => ({ segment: r.region, label: r.label, strain: r.strain ?? 0 }));
+        return frame.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
       }
     }
     if (realRvStrain?.regions?.length) {
-      return realRvStrain.regions.map((r) => ({ segment: r.region, label: r.label, strain: r.strain ?? 0 }));
+      return realRvStrain.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
     }
     return [];
   }, [realRvSeries, realRvStrain, currentFrame]);
@@ -1416,6 +1514,46 @@ function StrainTab({
   }, [realSeries, realStrain, selectedStrainType, curveData]);
   const currentTime = curveData[Math.min(currentFrame, curveData.length - 1)]?.time ?? 0;
 
+  /**
+   * Same current/peak computation as currentAverage/peakValue above, but for
+   * a FIXED type instead of whichever the GRS/GCS toggle has selected --
+   * needed by the Combined chamber-focus summary, which shows both GRS and
+   * GCS at once (see chamberFocus's own render branch below).
+   */
+  const computeLvStats = (type: StrainType): { current: number; peak: number } => {
+    const key = type === "GRS" ? "grs" : "gcs";
+    let segVals: number[] = [];
+    if (realSeries?.frames?.length) {
+      const frame =
+        realSeries.frames.find((f) => f.frameIndex === currentFrame) ??
+        realSeries.frames.find((f) => f.frameIndex === realSeries.peakFrameIndex);
+      if (frame?.segments?.length) segVals = frame.segments.map((s) => ((s as any)[key] ?? 0) as number);
+    }
+    if (!segVals.length && realStrain?.segments?.length) {
+      segVals = realStrain.segments.map((s) => ((s as any)[key] ?? 0) as number);
+    }
+    if (!segVals.length) {
+      segVals = getDummyStrainData(type, currentFrame, frameCount).map((d) => d.strain);
+    }
+    const current = segVals.length ? segVals.reduce((sum, v) => sum + v, 0) / segVals.length : 0;
+
+    const isGRS = type === "GRS";
+    let peak: number | null = null;
+    if (realSeries?.frames?.length) {
+      const globals = realSeries.frames
+        .map((f) => (isGRS ? f.global_grs : f.global_gcs))
+        .filter((v): v is number => typeof v === "number");
+      if (globals.length) peak = isGRS ? Math.max(...globals) : Math.min(...globals);
+    }
+    if (peak === null) {
+      const single = isGRS ? realStrain?.global_grs : realStrain?.global_gcs;
+      peak = typeof single === "number" ? single : (segVals.length ? (isGRS ? Math.max(...segVals) : Math.min(...segVals)) : 0);
+    }
+    return { current, peak };
+  };
+  const lvGrsStats = computeLvStats("GRS");
+  const lvGcsStats = computeLvStats("GCS");
+
   if (!hasPredictions) {
     return (
       <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
@@ -1428,8 +1566,31 @@ function StrainTab({
   }
 
   // Nothing computed for THIS model yet → empty state (no dummy charts). Only the
-  // model toggle + compute button; results appear only for a model that was run.
-  if (!usingRealSeries && !usingRealStrain && !usingRealRvSeries && !usingRealRvStrain) {
+  // model toggle + compute card; results appear only for a model that was run.
+  //
+  // Scope-specific, not a flat OR across all four flags: a stale Quick
+  // ED->ES result (usingRealStrain/usingRealRvStrain) used to keep the Full
+  // cycle view out of its own empty state, showing a real ED->ES pair's
+  // numbers alongside a dummy-data curve while the scope toggle read "Full
+  // cycle" and nothing had actually been computed for it -- confusing, and
+  // reported as "why is there results for the chart" before Compute all
+  // frames was ever run. Likewise a Quick-scope empty state used to render
+  // its own boxes ("LV Global Strain" / "RV Global Strain") full of
+  // "Not computed yet" placeholder text instead of just staying out of the
+  // way until there's something to show.
+  // Quick scope reads quickLvResult/quickRvResult specifically (not
+  // usingRealStrain/usingRealRvStrain) -- those track ANY stored ED->ES
+  // result for this model regardless of which frame pair, straight from the
+  // backend, so they never change when the main panel's "Clear" button
+  // nulls the page's local strainResult/rvStrainResult state. quickLvResult/
+  // quickRvResult are already gated on BOTH matching the current ED/ES
+  // selection AND being non-null, deriving from that same local state, so
+  // Clear correctly empties this view too instead of leaving it showing a
+  // now-hidden result.
+  const scopeHasResults = strainCompute?.scope === "quick"
+    ? !!(strainCompute?.quickLvResult || strainCompute?.quickRvResult)
+    : (usingRealSeries || usingRealRvSeries);
+  if (!scopeHasResults) {
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3">
@@ -1439,16 +1600,14 @@ function StrainTab({
           </div>
           <ModelToggle strainModel={strainModel} setStrainModel={setStrainModel} modelAvailable={modelAvailable} />
         </div>
-        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
-          <Activity className="mx-auto h-7 w-7 opacity-25" />
-          <p className="mt-2 text-xs text-muted-foreground">
-            No LV or RV strain has been computed for {strainModel === "unet" ? "UNet" : "MedSAM"} yet.
-          </p>
-          <Button size="sm" variant="outline" className="mt-3 h-7 text-[10px]" disabled={seriesBusy} onClick={runStrainSeries}>
-            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={frameCount} /> : `Compute all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
-          </Button>
-          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
-        </div>
+        {strainCompute && (
+          <ComputeStrainCard
+            strainCompute={strainCompute}
+            seriesBusy={seriesBusy}
+            seriesError={seriesError}
+            onRunFullCycle={runStrainSeries}
+          />
+        )}
       </div>
     );
   }
@@ -1459,40 +1618,47 @@ function StrainTab({
         <div>
           <h3 className="text-sm font-medium text-foreground">Strain Results</h3>
           <p className="text-[10px] text-muted-foreground">
-            {usingRealSeries ? "Computed strain (per-frame)"
-              : usingRealStrain ? "Computed strain (ED→ES)"
-              : "Dummy preview values"}, frame {currentFrame + 1}/{frameCount}
+            {strainCompute?.scope === "quick"
+              ? "Quick result — single ED→ES pair"
+              : `${usingRealSeries ? "Computed strain (per-frame)"
+                  : usingRealStrain ? "Computed strain (ED→ES)"
+                  : "Dummy preview values"}, frame ${currentFrame + 1}/${frameCount}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {/* UNet and MedSAM segment differently, so their strain differs —
               each model's result is stored on its own mask document. */}
           <ModelToggle strainModel={strainModel} setStrainModel={setStrainModel} modelAvailable={modelAvailable} />
-          <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-mono text-muted-foreground">
-            {currentTime} ms
-          </span>
+          {strainCompute?.scope !== "quick" && (
+            <span className="rounded-md border border-border bg-background px-2 py-1 text-[10px] font-mono text-muted-foreground">
+              {currentTime} ms
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
-        {(["LV", "RV"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => setVentricleView(v)}
-            className={cn(
-              "rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
-              ventricleView === v
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            {v}
-          </button>
-        ))}
-      </div>
+      {strainCompute && (
+        <ComputeStrainCard
+          strainCompute={strainCompute}
+          seriesBusy={seriesBusy}
+          seriesError={seriesError}
+          onRunFullCycle={runStrainSeries}
+        />
+      )}
 
-      {ventricleView === "RV" ? (
+      {strainCompute && strainCompute.scope === "quick" ? (
+        /* Quick ED->ES: a single computed pair for both chambers — show LV
+           and RV side by side instead of the LV/RV + per-chamber metric
+           toggles below (those are for Full cycle's charts/curves, which
+           don't exist here), with one flat toggle to pick what colors the
+           main panel's bullseye/3D heart. */
+        <QuickCombinedStrainView
+          strainCompute={strainCompute}
+          selectedStrainType={selectedStrainType}
+          onStrainTypeChange={setSelectedStrainType}
+          chamberFocus={chamberFocus}
+        />
+      ) : chamberFocus === "RV" ? (
         <RvStrainPanel
           usingRealRvSeries={usingRealRvSeries}
           usingRealRvStrain={usingRealRvStrain}
@@ -1501,55 +1667,11 @@ function StrainTab({
           rvCurrentAverage={rvCurrentAverage}
           rvPeakValue={rvPeakValue}
           currentTime={currentTime}
-          frameCount={frameCount}
-          strainModel={strainModel}
+          strainCompute={strainCompute}
           seriesBusy={seriesBusy}
-          seriesError={seriesError}
-          runStrainSeries={runStrainSeries}
         />
       ) : (
       <>
-      <div className="flex items-center gap-4 border-b border-border">
-        {(["GRS", "GCS"] as const).map((type) => (
-          <button
-            key={type}
-            type="button"
-            onClick={() => setSelectedStrainType(type)}
-            className={cn(
-              "-mb-px border-b-2 px-0.5 pb-1.5 text-[11px] font-medium transition-colors",
-              selectedStrainType === type
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {type}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <StrainMetricCard
-          label={
-            usingRealSeries ? `Current ${selectedStrainType}`
-            : usingRealStrain ? `Mean ${selectedStrainType} (ED→ES)`
-            : `Current ${selectedStrainType} (preview)`
-          }
-          value={`${currentAverage > 0 ? "+" : ""}${currentAverage.toFixed(1)}%`}
-          strainType={selectedStrainType}
-          valueNumber={currentAverage}
-        />
-        <StrainMetricCard
-          label={
-            usingRealSeries ? `Peak ${selectedStrainType}`
-            : usingRealStrain ? `Peak ${selectedStrainType} (ED→ES)`
-            : `Peak ${selectedStrainType} (preview)`
-          }
-          value={`${peakValue > 0 ? "+" : ""}${peakValue.toFixed(1)}%`}
-          strainType={selectedStrainType}
-          valueNumber={peakValue}
-        />
-      </div>
-
       {/* Landmarks define the AHA segment alignment, so editing them invalidates
           previously-computed strain. The backend stamps `staleSince` on save
           rather than auto-recomputing (the series is one GPU pass per frame). */}
@@ -1574,41 +1696,11 @@ function StrainTab({
         </div>
       )}
 
-      {/* Full-cycle strain is opt-in: it costs one GPU pass per frame, so it is
-          not chained automatically after the ED→ES compute. Shown until a series
-          exists for the selected model. */}
-      {/* Full-cycle strain: one GPU pass per frame, so it is opt-in rather than
-          chained after the ED→ES compute. Always available — a recompute is
-          needed after landmark edits, and after any pipeline change that adds
-          new per-frame fields. The stale banner above covers the landmark case. */}
-      {!strainIsStale && (
-        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">
-          <p className="text-[10px] leading-snug text-muted-foreground">
-            {usingRealSeries
-              ? `Full-cycle strain computed for ${realSeries!.frames.length} frames${
-                  realSeries!.computed_at
-                    ? ` on ${new Date(realSeries!.computed_at).toLocaleDateString()}`
-                    : ""
-                }.`
-              : usingRealStrain
-              ? "Only the ED→ES strain is stored for this model — the curves below are a preview shape."
-              : "No strain computed for this model yet — values below are a dummy preview."}
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="mt-2 h-7 w-full text-[10px]"
-            disabled={seriesBusy}
-            onClick={runStrainSeries}
-          >
-            {seriesBusy
-              ? <ComputeBusyLabel verb={usingRealSeries ? "Recomputing" : "Computing"} frames={frameCount} />
-              : `${usingRealSeries ? "Recompute" : "Compute"} all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
-          </Button>
-          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
-        </div>
-      )}
-
+      {/* Full-cycle curve/segment views are LV-specific -- Combined intentionally shows
+          no chart here (the main panel's bullseye/3D heart already covers both chambers
+          together; switch to the LV or RV tab for that chamber's own curve). */}
+      {chamberFocus === "LV" && (
+      <>
       <div className="sticky top-0 z-10 rounded-lg border border-border bg-background p-3 shadow-sm">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
@@ -1619,7 +1711,7 @@ function StrainTab({
               : "Full Cycle — All Segments"}
           </h4>
           {curveView === "global" && (
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[10px] text-muted-foreground shrink-0">
               {usingRealSeries ? `${realSeries!.frames.length} frames` : "Preview"}
             </span>
           )}
@@ -1754,27 +1846,389 @@ function StrainTab({
       )}
       </>
       )}
+      </>
+      )}
+    </div>
+  );
+}
 
-      <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-xs gap-1.5"
-          onClick={() => router.push(`/project/${projectId}/report`)}
-        >
-          <Download className="h-3.5 w-3.5" />
-          Report
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-xs gap-1.5"
-          onClick={() => alert("Strain CSV export is a placeholder.")}
-        >
-          <FileText className="h-3.5 w-3.5" />
-          Data
-        </Button>
+/**
+ * Quick ED->ES's sidebar content — a single computed pair for BOTH chambers,
+ * so instead of the LV/RV ventricle toggle + per-chamber GRS/GCS or GCS/GAS
+ * toggle (which exist for Full cycle's charts/curves, not applicable here),
+ * this shows both chambers' values together with one flat toggle that picks
+ * what colors the main panel's bullseye/3D heart.
+ */
+function QuickCombinedStrainView({
+  strainCompute: sc,
+  selectedStrainType,
+  onStrainTypeChange,
+  chamberFocus,
+}: {
+  strainCompute: StrainComputeBundle;
+  selectedStrainType: StrainType;
+  onStrainTypeChange: (type: StrainType) => void;
+  /** Which chamber(s) the main panel's 3D Heart is showing -- Combined shows
+   *  both boxes below (as always), LV/RV-only now show just their own. */
+  chamberFocus: "combined" | "LV" | "RV";
+}) {
+  const lv = sc.quickLvResult;
+  const rv = sc.quickRvResult;
+  // Same staleness signal the Full-cycle view warns on (LandmarkSidebar.tsx's
+  // strainIsStale) — landmarks define the AHA segment alignment, so editing
+  // them after this pair was computed invalidates it here too. LV-only, same
+  // as strainIsStale: the backend doesn't stamp staleSince on RV strain docs
+  // at all yet (RvStrain/RvStrainSeries have no such field).
+  const isStale = !!lv?.staleSince;
+
+  const fmtPct = (v: number | null | undefined) => (v == null ? "N/A" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
+  const fmtMm = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(2)} mm`);
+
+  return (
+    <div className="space-y-3">
+      {isStale && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
+          <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Landmarks edited</span> since this strain was computed —
+            the segment alignment has changed, so these values are out of date.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2 h-7 w-full text-[10px]"
+            disabled={sc.isComputing}
+            onClick={sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames}
+          >
+            {sc.isComputing ? "Recomputing…" : `Recompute ED → ES with current landmarks (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          </Button>
+          {sc.error && <p className="mt-1 text-[9px] text-destructive">{sc.error}</p>}
+        </div>
+      )}
+
+      {chamberFocus !== "RV" && (
+      <div className="rounded-lg border border-border bg-background p-3 space-y-2">
+        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">LV Global Strain</h4>
+        {lv ? (
+          <div className="grid grid-cols-2 gap-2">
+            <StrainMetricCard label="Peak GRS" value={fmtPct(lv.global_grs)} strainType="GRS" valueNumber={lv.global_grs ?? 0} loading={sc.isComputing} />
+            <StrainMetricCard label="Peak GCS" value={fmtPct(lv.global_gcs)} strainType="GCS" valueNumber={lv.global_gcs ?? 0} loading={sc.isComputing} />
+            <PlainMetricTile label={`Frame ${(lv.edFrameIndex ?? 0) + 1} WT`} value={fmtMm(lv.ed_wt_mean_mm)} loading={sc.isComputing} />
+            <PlainMetricTile label={`Frame ${(lv.esFrameIndex ?? 0) + 1} WT`} value={fmtMm(lv.es_wt_mean_mm)} loading={sc.isComputing} />
+          </div>
+        ) : (
+          <p className="text-[10px] text-muted-foreground">Not computed for the current ED/ES pair yet — use Compute ED → ES above.</p>
+        )}
       </div>
+      )}
+
+      {chamberFocus !== "LV" && (
+      <div className="rounded-lg border border-border bg-background p-3 space-y-2">
+        <div className="flex items-center gap-1.5">
+          <span className="shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+            Prototype
+          </span>
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">RV Global Strain</h4>
+        </div>
+        <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
+          <p className="text-[9px] leading-snug text-amber-800 dark:text-amber-300">
+            RV metrics are still prototype and in progress — GCS is computed but not yet validated against a
+            reference range, and GAS/cavity area have no computation at all. Every value below is labeled
+            Prototype until that work is done.
+          </p>
+        </div>
+        {rv ? (
+          <div className="grid grid-cols-2 gap-2">
+            <StrainMetricCard label="Peak GCS" value={fmtPct(rv.global_rv_strain)} strainType="GCS" valueNumber={rv.global_rv_strain ?? 0} loading={sc.isComputing} />
+            <PlainMetricTile label="Peak GAS" value="—" />
+            <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value="—" />
+            <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value="—" />
+          </div>
+        ) : (
+          <p className="text-[10px] text-muted-foreground">Not computed for the current ED/ES pair yet — use Compute ED → ES above.</p>
+        )}
+      </div>
+      )}
+    </div>
+  );
+}
+
+/** Neutral (no color-coding) stat tile — for values that aren't a strain %
+ *  (wall thickness in mm, cavity area), where StrainMetricCard's GRS/GCS
+ *  color mapping wouldn't mean anything. */
+function PlainMetricTile({ label, value, loading }: { label: string; value: string; loading?: boolean }) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/20 p-3">
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+      {loading ? (
+        <div className="mt-1.5 h-5 w-16 animate-pulse rounded bg-muted-foreground/20" />
+      ) : (
+        <p className="mt-1 text-lg font-semibold text-foreground">{value}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Sidebar "Compute strain" card — matches structure_strain_mockup.html's
+ * compact layout (Quick ED→ES vs Full cycle scope toggle; Choose-frames vs
+ * Upload-masks sub-toggle in Quick mode) while running the SAME real logic
+ * that used to live in the main panel's StrainPreviewPanel toolbar/drawer:
+ * the ED/ES picker, the auto-vs-custom-frame warning that gates whether
+ * peaks feed Disease Similarity/Health Status, real file upload, and the
+ * two real backend calls (strainCompute.onComputeFrames/onComputeUpload).
+ * "Full cycle" reuses StrainTab's own runStrainSeries — kept where it
+ * already lives rather than moved, since it already works.
+ */
+function ComputeStrainCard({
+  strainCompute: sc,
+  seriesBusy,
+  seriesError,
+  onRunFullCycle,
+}: {
+  strainCompute: StrainComputeBundle;
+  seriesBusy: boolean;
+  seriesError: string | null;
+  onRunFullCycle: () => void;
+}) {
+  const edRef = React.useRef<HTMLInputElement>(null);
+  const esRef = React.useRef<HTMLInputElement>(null);
+  const isQuick = sc.scope === "quick";
+
+  // Auto-collapses the config controls right after a compute finishes
+  // successfully, so the (already-visible-elsewhere) results get the space
+  // back instead of this form sitting there post-use. Tracks the PREVIOUS
+  // busy state via refs rather than keying off "isComputing === false" alone
+  // -- that's also true before anything has ever been run, which would
+  // start the card collapsed on first load instead of only after a real
+  // compute completes.
+  const [collapsed, setCollapsed] = React.useState(false);
+  const wasComputingRef = React.useRef(false);
+  const wasSeriesBusyRef = React.useRef(false);
+  React.useEffect(() => {
+    const quickJustFinished = wasComputingRef.current && !sc.isComputing && !sc.error;
+    const fullCycleJustFinished = wasSeriesBusyRef.current && !seriesBusy && !seriesError;
+    if (quickJustFinished || fullCycleJustFinished) setCollapsed(true);
+    wasComputingRef.current = sc.isComputing;
+    wasSeriesBusyRef.current = seriesBusy;
+  }, [sc.isComputing, sc.error, seriesBusy, seriesError]);
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/10 p-2.5 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Compute strain
+        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[8px] text-muted-foreground/70">LV + RV together</span>
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label={collapsed ? "Show compute strain controls" : "Hide compute strain controls"}
+            title={collapsed ? "Show" : "Hide"}
+          >
+            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsed ? "" : "rotate-180")} />
+          </button>
+        </div>
+      </div>
+
+      {!collapsed && (
+      <>
+      {/* Scope toggle — Quick ED→ES (single pair) vs Full cycle (every frame) */}
+      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
+        {(["quick", "full"] as const).map((scope) => (
+          <button
+            key={scope}
+            type="button"
+            onClick={() => sc.onScopeChange(scope)}
+            className={cn(
+              "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+              sc.scope === scope
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            )}
+          >
+            {scope === "quick" ? "Quick ED→ES" : "Full cycle"}
+          </button>
+        ))}
+      </div>
+
+      {isQuick ? (
+        <>
+          {/* Choose frames / Upload masks sub-toggle */}
+          <div className="inline-flex w-fit rounded-lg border border-border bg-muted/20 p-0.5 text-[10px]">
+            <button
+              type="button"
+              onClick={() => sc.onInputModeChange("frames")}
+              className={cn(
+                "rounded-md px-2 py-1 font-medium transition-colors",
+                sc.inputMode === "frames"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              Choose frames
+            </button>
+            <button
+              type="button"
+              onClick={() => sc.onInputModeChange("upload")}
+              className={cn(
+                "rounded-md px-2 py-1 font-medium transition-colors",
+                sc.inputMode === "upload"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              Upload masks (LV only)
+            </button>
+          </div>
+
+          {sc.inputMode === "frames" ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-[9px] text-muted-foreground leading-relaxed">
+                Select any two frames from the stored segmentation to compute LV and RV strain between them.
+                {sc.hasLandmarkAlignment && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
+              </p>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] text-muted-foreground">{sc.frameCount} frames</span>
+                <DualFrameRangePicker
+                  min={0}
+                  max={Math.max(0, sc.frameCount - 1)}
+                  edValue={sc.edFrameIdx}
+                  esValue={sc.esFrameIdx}
+                  onEdChange={sc.onEdFrameChange}
+                  onEsChange={sc.onEsFrameChange}
+                />
+              </div>
+
+              {sc.edFrameIdx === sc.esFrameIdx && (
+                <p className="text-[10px] text-destructive">ED and ES frames must be different.</p>
+              )}
+
+              {/* Peak strain is only physiologically meaningful between the TRUE
+                  end-diastole and end-systole. When the picker is moved off the
+                  auto-detected pair the backend deliberately withholds the peaks
+                  from heartMetrics (and therefore from disease similarity and
+                  health status) — surface that here so the omission isn't silent. */}
+              {sc.autoFrames && (sc.edFrameIdx !== sc.autoFrames.ed || sc.esFrameIdx !== sc.autoFrames.es) && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
+                  <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
+                    <span className="font-semibold">Custom frames.</span>{" "}
+                    Computing {sc.edFrameIdx + 1}→{sc.esFrameIdx + 1} instead of the auto-detected{" "}
+                    {sc.autoFrames.ed + 1}→{sc.autoFrames.es + 1} ({sc.strainModel === "unet" ? "UNet" : "MedSAM"}).
+                    Strain will still be computed for inspection, but the peaks will{" "}
+                    <span className="font-semibold">not</span> feed Disease Similarity or Health
+                    Status — those need the true ED/ES pair.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={sc.onResetToAuto}
+                    className="mt-1 text-[9px] font-medium text-amber-800 underline underline-offset-2 hover:no-underline dark:text-amber-300"
+                  >
+                    Reset to auto-detected frames
+                  </button>
+                </div>
+              )}
+
+              {sc.autoFrames && sc.edFrameIdx === sc.autoFrames.ed && sc.esFrameIdx === sc.autoFrames.es && (
+                <p className="text-[9px] leading-relaxed text-emerald-700 dark:text-emerald-400">
+                  Using the auto-detected ED/ES ({sc.autoFrames.ed + 1}→{sc.autoFrames.es + 1}) — peaks
+                  will feed Disease Similarity and Health Status.
+                </p>
+              )}
+
+              <p className="text-[8.5px] leading-relaxed text-muted-foreground">
+                Values are indicative only — auto-segmentation masks have limited wall boundary accuracy. For
+                clinical accuracy, use Upload Masks with manually verified masks.
+              </p>
+
+              {sc.error && (
+                <p className="text-[9px] text-destructive rounded bg-destructive/10 px-2 py-1">{sc.error}</p>
+              )}
+
+              <button
+                type="button"
+                disabled={sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1 || sc.isComputing}
+                onClick={sc.onComputeFrames}
+                className="w-full rounded-md bg-primary px-3 py-1.5 text-[10px] font-semibold text-primary-foreground disabled:opacity-50 transition-colors hover:bg-primary/90"
+              >
+                {sc.isComputing ? (
+                  <span className="inline-flex items-center justify-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Computing…</span>
+                ) : "Compute ED → ES"}
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p className="text-[9px] text-muted-foreground leading-relaxed">
+                Any NIfTI segmentation mask (.nii or .nii.gz) with classes 0=background, 1=RV, 2=myocardium,
+                3=LV cavity. Computes LV strain only — use &quot;Choose frames&quot; for RV.
+                {sc.hasLandmarkAlignment && <span className="text-green-600 ml-1">Landmark alignment will be applied automatically.</span>}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <p className="text-[8px] text-muted-foreground mb-1">End-Diastole (ED)</p>
+                  <input ref={edRef} type="file" accept=".nii,.nii.gz" className="sr-only"
+                    onChange={(e) => sc.onEdFileChange(e.target.files?.[0] ?? null)} />
+                  <button type="button" onClick={() => edRef.current?.click()}
+                    className={cn(
+                      "w-full flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-medium transition-colors",
+                      sc.edFile ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400"
+                                : "border-dashed border-border bg-background text-muted-foreground hover:bg-muted/50"
+                    )}>
+                    <Upload className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{sc.edFile ? sc.edFile.name : "Choose ED .nii/.gz"}</span>
+                  </button>
+                </div>
+                <div>
+                  <p className="text-[8px] text-muted-foreground mb-1">End-Systole (ES)</p>
+                  <input ref={esRef} type="file" accept=".nii,.nii.gz" className="sr-only"
+                    onChange={(e) => sc.onEsFileChange(e.target.files?.[0] ?? null)} />
+                  <button type="button" onClick={() => esRef.current?.click()}
+                    className={cn(
+                      "w-full flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-medium transition-colors",
+                      sc.esFile ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400"
+                                : "border-dashed border-border bg-background text-muted-foreground hover:bg-muted/50"
+                    )}>
+                    <Upload className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{sc.esFile ? sc.esFile.name : "Choose ES .nii/.gz"}</span>
+                  </button>
+                </div>
+              </div>
+              {sc.error && (
+                <p className="text-[9px] text-destructive rounded bg-destructive/10 px-2 py-1">{sc.error}</p>
+              )}
+              <button
+                type="button"
+                disabled={!sc.edFile || !sc.esFile || sc.isComputing}
+                onClick={sc.onComputeUpload}
+                className={cn(
+                  "w-full rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
+                  (!sc.edFile || !sc.esFile || sc.isComputing)
+                    ? "bg-muted text-muted-foreground cursor-not-allowed"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90"
+                )}
+              >
+                {sc.isComputing ? (
+                  <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Computing…</span>
+                ) : "Compute Strain"}
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <p className="text-[8.5px] leading-relaxed text-muted-foreground">
+            Uses the auto-detected ED frame as reference — no frame picker or upload needed for the full cycle.
+          </p>
+          <Button size="sm" variant="outline" className="h-7 text-[10px]" disabled={seriesBusy} onClick={onRunFullCycle}>
+            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          </Button>
+          {seriesError && <p className="text-[9px] text-destructive">{seriesError}</p>}
+        </div>
+      )}
+      </>
+      )}
     </div>
   );
 }
@@ -1787,6 +2241,40 @@ function StrainTab({
  * Reuses getStrainColor(..., "GCS") for coloring since RV strain shares
  * GCS's "more negative is healthier" convention.
  */
+/** AHA-style label set for RV's prototype 9-segment breakdown — there is no
+ *  real per-region time series at this granularity yet (the real pipeline
+ *  only produces the 6 basal/mid free-wall regions in rvRegionValues), so
+ *  this exists purely to preview the eventual layout, sharing LV's
+ *  RegionalStrainByRegion/FullCycleChart components (they only care about
+ *  segment numbers/labels/values, not that they're LV-specific). */
+// Same convention as CRESCENT_REGION_NAMES (landmark-detection page.tsx) and
+// RV_SEGMENT_NAMES (heartColor.ts) — the RV-deformation notebook's naming, not
+// LV's anatomical Anterior/Lateral/Inferior labels.
+const RV_DUMMY_SEGMENT_LABELS = [
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+  "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
+];
+
+// Notebook-style names for the REAL 6-region RV free-wall breakdown the backend
+// actually computes (basal 1-3, mid 1-3 — see rvRegionValues below). Same
+// convention/order as RV_DUMMY_SEGMENT_LABELS' first six entries.
+const RV_REAL_REGION_NAMES = [
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+];
+function buildDummyRvCycleSeries(totalFrames: number): { segment: number; label: string; strain: number }[][] {
+  const frames = Math.max(totalFrames || 9, 2);
+  return Array.from({ length: frames }, (_, f) => {
+    const wobble = Math.sin((f / Math.max(frames - 1, 1)) * Math.PI);
+    return RV_DUMMY_SEGMENT_LABELS.map((label, i) => ({
+      segment: i + 1,
+      label,
+      strain: Number((-13 - i * 1.1 - wobble * 6).toFixed(1)),
+    }));
+  });
+}
+
 function RvStrainPanel({
   usingRealRvSeries,
   usingRealRvStrain,
@@ -1795,11 +2283,8 @@ function RvStrainPanel({
   rvCurrentAverage,
   rvPeakValue,
   currentTime,
-  frameCount,
-  strainModel,
+  strainCompute,
   seriesBusy,
-  seriesError,
-  runStrainSeries,
 }: {
   usingRealRvSeries: boolean;
   usingRealRvStrain: boolean;
@@ -1808,52 +2293,95 @@ function RvStrainPanel({
   rvCurrentAverage: number;
   rvPeakValue: number;
   currentTime: number;
-  frameCount: number;
-  strainModel: "unet" | "medsam";
+  strainCompute?: StrainComputeBundle;
   seriesBusy: boolean;
-  seriesError: string | null;
-  runStrainSeries: () => void;
 }) {
+  const rvMetricType = strainCompute?.rvMetricType ?? "GCS";
+  const isGas = rvMetricType === "GAS";
+  const [rvCurveView, setRvCurveView] = useState<"global" | "region" | "cycle">("global");
+
+  // A 9-segment prototype series, illustrative for both metrics: real GCS
+  // only has the 6-region breakdown in rvRegionValues (used for "Global"
+  // below); GAS has no computation at all, so it's dummy everywhere.
+  const dummyFrameCount = rvCurveData.length || 30;
+  const dummyRvSeries = useMemo(() => buildDummyRvCycleSeries(dummyFrameCount), [dummyFrameCount]);
+  const dummyRvGlobalCurve = useMemo(
+    () => dummyRvSeries.map((frameSegs, i) => ({
+      frame: i + 1,
+      time: rvCurveData[i]?.time ?? Math.round((i / Math.max(dummyRvSeries.length - 1, 1)) * 1200),
+      strain: Number((frameSegs.reduce((sum, d) => sum + d.strain, 0) / frameSegs.length).toFixed(1)),
+    })),
+    [dummyRvSeries, rvCurveData],
+  );
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-2">
-        <StrainMetricCard
-          label={usingRealRvSeries ? "Current RV Strain" : usingRealRvStrain ? "RV Strain (ED→ES)" : "RV Strain"}
-          value={`${rvCurrentAverage.toFixed(1)}%`}
-          strainType="GCS"
-          valueNumber={rvCurrentAverage}
-        />
-        <StrainMetricCard
-          label="Peak RV Strain"
-          value={`${rvPeakValue.toFixed(1)}%`}
-          strainType="GCS"
-          valueNumber={rvPeakValue}
-        />
+      <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5">
+        <span className="mt-0.5 shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+          Prototype
+        </span>
+        <p className="text-[9.5px] leading-snug text-amber-800 dark:text-amber-300">
+          {isGas
+            ? "RV GAS has no computation in this pipeline yet — every value below is a placeholder, not a measurement."
+            : "RV GCS is still prototype and in progress — computed, but not validated against a reference range yet."}
+        </p>
       </div>
 
-      {!usingRealRvSeries && (
+      {!isGas && !usingRealRvSeries && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">
           <p className="text-[10px] leading-snug text-muted-foreground">
             {usingRealRvStrain
               ? "Only the ED→ES RV strain is stored — compute all frames for a full-cycle curve."
               : "No RV strain computed for this model yet."}
           </p>
-          <Button size="sm" variant="outline" className="mt-2 h-7 w-full text-[10px]" disabled={seriesBusy} onClick={runStrainSeries}>
-            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={frameCount} /> : `Compute all frames (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
-          </Button>
-          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
         </div>
       )}
 
-      {usingRealRvSeries && (
-        <div className="rounded-lg border border-border bg-background p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Global RV Strain Curve</h4>
-            <span className="text-[10px] text-muted-foreground">{rvCurveData.length} frames</span>
-          </div>
+      {/* Global / By Region / Full Cycle — same structure as LV. Global uses
+          the real per-frame curve for GCS; By Region and Full Cycle are an
+          illustrative 9-segment prototype for both metrics (GAS is dummy
+          everywhere, including Global). */}
+      <div className="rounded-lg border border-border bg-background p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+            {rvCurveView === "global"
+              ? (isGas ? "Prototype — Global GAS Curve" : "Global GCS Curve")
+              : rvCurveView === "region"
+              ? "Prototype — By Region (9 segments)"
+              : "Prototype — Full Cycle (9 segments)"}
+          </h4>
+          {rvCurveView === "global" && (
+            <span className="text-[10px] text-muted-foreground shrink-0">
+              {isGas ? "Dummy preview" : usingRealRvSeries ? `${rvCurveData.length} frames` : "Preview"}
+            </span>
+          )}
+        </div>
+        <div className="mb-2 grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
+          {([
+            ["global", "Global"],
+            ["region", "By Region"],
+            ["cycle", "Full Cycle"],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setRvCurveView(key)}
+              className={cn(
+                "rounded-md px-1.5 py-1 text-[10px] font-medium transition-colors",
+                rvCurveView === key
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {rvCurveView === "global" && (isGas || usingRealRvSeries) && (
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={rvCurveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
+              <LineChart data={isGas ? dummyRvGlobalCurve : rvCurveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
                 <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
                 <YAxis
@@ -1865,7 +2393,7 @@ function RvStrainPanel({
                 />
                 <Tooltip
                   cursor={{ stroke: "var(--border)" }}
-                  formatter={(value) => [`${Number(value).toFixed(1)}%`, "RV Strain"]}
+                  formatter={(value) => [`${Number(value).toFixed(1)}%`, isGas ? "RV GAS (dummy)" : "RV GCS"]}
                   labelFormatter={(label) => `${label} ms`}
                   contentStyle={{
                     borderRadius: 8,
@@ -1876,21 +2404,46 @@ function RvStrainPanel({
                   }}
                 />
                 <ReferenceLine x={currentTime} stroke="var(--primary)" strokeDasharray="4 4" ifOverflow="extendDomain" />
-                <Line type="monotone" dataKey="strain" stroke="#38bdf8" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />
+                <Line type="monotone" dataKey="strain" stroke={isGas ? "#f59e0b" : "#38bdf8"} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
-        </div>
-      )}
+        )}
+        {rvCurveView === "global" && !isGas && !usingRealRvSeries && (
+          <p className="py-4 text-center text-[10px] text-muted-foreground">No RV strain computed for this model yet.</p>
+        )}
+
+        {rvCurveView === "region" && <RegionalStrainByRegion series={dummyRvSeries} ringForSegment={ringForRvSegment} />}
+
+        {rvCurveView === "cycle" && (
+          <div className="w-full overflow-x-auto">
+            <FullCycleChart series={dummyRvSeries} strainType="GCS" width={480} height={240} ringForSegment={ringForRvSegment} />
+          </div>
+        )}
+
+        {rvCurveView !== "global" && (
+          <p className="mt-2 text-[9px] text-amber-700 dark:text-amber-400">
+            Prototype — illustrative 9-segment breakdown, not backed by a real per-region computation yet.
+          </p>
+        )}
+      </div>
 
       <div className="rounded-lg border border-border bg-background">
         <div className="border-b border-border px-3 py-2">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Region Values</h4>
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+            {rvCurveView === "global" ? "Region Values" : "Prototype — Segment Values"}
+          </h4>
         </div>
-        {rvRegionValues.length ? (
-          <SegmentValuesTable segmentValues={rvRegionValues} strainType="GCS" />
+        {rvCurveView === "global" ? (
+          isGas ? (
+            <p className="p-3 text-[10px] text-muted-foreground">Switch to RV GCS for computed (still prototype) region values.</p>
+          ) : rvRegionValues.length ? (
+            <SegmentValuesTable segmentValues={rvRegionValues} strainType="GCS" />
+          ) : (
+            <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
+          )
         ) : (
-          <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
+          <SegmentValuesTable segmentValues={dummyRvSeries[0] ?? []} strainType="GCS" />
         )}
       </div>
     </div>
@@ -1931,12 +2484,24 @@ function StrainMetricCard({
   value,
   strainType,
   valueNumber,
+  loading,
 }: {
   label: string;
   value: string;
   strainType: StrainType;
   valueNumber: number;
+  /** Recompute in progress — shows a pulsing placeholder instead of the
+   *  (now-stale) value, for both Quick and Full cycle recomputes. */
+  loading?: boolean;
 }) {
+  if (loading) {
+    return (
+      <div className="rounded-lg border border-border bg-muted/20 p-3">
+        <p className="text-[10px] text-muted-foreground">{label}</p>
+        <div className="mt-1.5 h-5 w-16 animate-pulse rounded bg-muted-foreground/20" />
+      </div>
+    );
+  }
   return (
     <div className="rounded-lg border border-border bg-muted/20 p-3">
       <p className="text-[10px] text-muted-foreground">{label}</p>

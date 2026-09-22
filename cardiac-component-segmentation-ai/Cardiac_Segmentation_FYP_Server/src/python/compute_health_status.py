@@ -32,12 +32,19 @@ Each is EMITTED only when the underlying value is present and trustworthy.
 Thresholds are approximate references; strain thresholds in particular vary
 by vendor / software (see docs §2 for citations and caveats).
 
-    EDV      : "ok" if 60 <= EDV <= 250 mL, else "warn"
-               (raw adult reference band — NOT BSA-indexed; body-size caveat
-               noted in `detail`). SUPPRESSED entirely when
-               `heart_metrics_warnings[]` is non-empty (bad affine / duplicated
-               slice / plausibility flag) — replaced by a single "warn" line
-               explaining why absolute volumes are considered unreliable.
+    EDV / EDVI : when `measurements.EDVI` is present (caller supplied a BSA to
+               compute_heart_metrics_from_rle.py), this axis grades EDVI
+               against a BSA-indexed band instead — "ok" if 60 <= EDVI <= 100
+               mL/m^2 (approximate CMR reference; see EDVI_MIN_MAX below and
+               HEALTH_STATUS_IMPLEMENTATION.md §2 for the sex-specific caveat,
+               same simplification already applied to the LVEF threshold).
+               Falls back to the raw-EDV band ("ok" if 60 <= EDV <= 250 mL,
+               NOT BSA-indexed) whenever EDVI is absent, so behaviour is
+               unchanged for every caller that hasn't supplied a BSA.
+               SUPPRESSED entirely when absolute LV volumes are unreliable
+               (Defensive behaviour (b)) — replaced by a single "warn" line
+               naming why absolute volumes (indexed or not — EDVI is derived
+               from the same EDV) are considered unreliable.
     Peak GCS : "ok" if PeakGCS <= -17 %  (more negative = better contraction)
     Peak GRS : "ok" if PeakGRS >= 25 %   (approximate soft threshold)
     (Strain peaks are only emitted when the strain module ran at the
@@ -60,20 +67,35 @@ Defensive behaviour
     (a) EF null                  -> status "Indeterminate", confidence "low";
                                     single evidence line explains EF wasn't
                                     computable. No downgrade logic runs.
-    (b) heart_metrics_warnings   -> confidence "low"; EDV evidence replaced
-        non-empty                   by a "warn" "volume evidence suppressed"
-                                    line; status is driven by EF only (EF is
-                                    a ratio, unaffected by a bad affine).
+    (b) absolute LV volumes      -> confidence "low"; EDV evidence replaced by
+        unreliable                  a "warn" "Absolute volumes" line naming
+                                    the cause, and left out of the downgrade
+                                    count. Decided by
+                                    volume_reliability.lv_volume_issues from
+                                    `volume_signals`: suspicious voxel_mm3,
+                                    LVEDV outside 30-400 mL, or a duplicated
+                                    LV-cavity slice. Warnings unrelated to LV
+                                    volume ("No RV voxels at ED", "No
+                                    myocardium ... at ED", an ignored bsa_m2)
+                                    do NOT trigger it.
     (c) PeakGRS/PeakGCS null     -> skip those evidence lines; add them to
                                     features_missing; do NOT treat as warn.
 
 Input (stdin JSON)
 ------------------
     measurements               — flat block from heartMetrics.measurements:
-        { EF, EDV, ESV, StrokeVolume, PeakGRS, PeakGCS }
-        (any subset accepted; any field may be null)
+        { EF, EDV, ESV, EDVI, StrokeVolume, PeakGRS, PeakGCS }
+        (any subset accepted; any field may be null. EDVI is null unless the
+        heart-metrics compute was given a bsa_m2 — see
+        compute_heart_metrics_from_rle.py)
     heart_metrics_warnings     — list[str] from heartMetrics.warnings
                                  (empty list if the compute was clean)
+    volume_signals             — optional; structured fields from heartMetrics:
+        { voxel_mm3, duplicate_slices }
+        What behaviour (b) is decided from. A caller that omits it keeps the
+        conservative behaviour this module had before 2026-09-11 — any
+        non-empty heart_metrics_warnings suppresses volume evidence — because
+        free text cannot say which warnings concern volumes.
 
 Output (stdout JSON) — see HEALTH_STATUS_IMPLEMENTATION.md §3 for the shape.
 """
@@ -84,6 +106,8 @@ import json
 import math
 import sys
 from typing import Any, Optional
+
+from volume_reliability import lv_volume_issues
 
 
 # ── Constants — the exact thresholds this module compares against ────────────
@@ -98,6 +122,13 @@ LVEF_MODERATE_MIN = 30.0
 # EDV raw-adult reference band (mL). NOT BSA-indexed — body-size caveat is
 # repeated in the emitted `detail` string so downstream readers see it.
 EDV_MIN_MAX = (60.0, 250.0)
+
+# EDVI (BSA-indexed) reference band, mL/m^2 — approximate CMR normal range
+# (Kawel-Boehm et al. 2020 SCMR consensus reference values; sex-averaged,
+# rounded — same "traditional simplified single threshold" trade-off already
+# made for LVEF above, pending patient sex being collected). Used INSTEAD of
+# EDV_MIN_MAX whenever measurements.EDVI is present.
+EDVI_MIN_MAX = (60.0, 100.0)
 
 # Strain-peak reference thresholds — APPROXIMATE, see docs §2 (Voigt et al.
 # 2015 EACVI/ASE strain standardization; vendor/software variation).
@@ -155,16 +186,30 @@ def _downgrade_one_step(grade: str) -> str:
 
 # ── Main rule engine ─────────────────────────────────────────────────────────
 
-def compute(measurements: dict, hm_warnings: list) -> dict:
+def compute(measurements: dict, hm_warnings: list, volume_signals: Optional[dict] = None) -> dict:
     """Apply the rule engine and return the output dict. Pure — no I/O; unit-
     tested via scripts/check_health_status.js by feeding the same JSON."""
     ef      = _num(measurements.get("EF"))
     edv     = _num(measurements.get("EDV"))
+    edvi    = _num(measurements.get("EDVI"))
     peakGCS = _num(measurements.get("PeakGCS"))
     peakGRS = _num(measurements.get("PeakGRS"))
 
     hm_warnings = list(hm_warnings) if isinstance(hm_warnings, list) else []
-    volumes_unreliable = len(hm_warnings) > 0
+    if isinstance(volume_signals, dict):
+        volume_issues = lv_volume_issues(
+            volume_signals.get("voxel_mm3"), edv, volume_signals.get("duplicate_slices"),
+        )
+    elif hm_warnings:
+        # Legacy caller without structured signals: free text cannot say which
+        # warnings concern volumes, so stay conservative.
+        volume_issues = [
+            "heart-metrics warnings are present and no structured volume signals "
+            "were supplied to show whether they affect volumes"
+        ]
+    else:
+        volume_issues = []
+    volumes_unreliable = len(volume_issues) > 0
     warnings_out: list[str] = []
     evidence: list[dict] = []
     features_used: list[str] = []
@@ -203,28 +248,55 @@ def compute(measurements: dict, hm_warnings: list) -> dict:
                 "detail": f"LVEF {ef:.1f} % — {band}.",
             })
 
-    # ── EDV supporting evidence: only when heart_metrics_warnings is empty,
-    #    otherwise the "absolute volumes may be unreliable" line replaces it.
+    # ── EDV supporting evidence: only when absolute volumes are reliable,
+    #    otherwise the "Absolute volumes" line naming the cause replaces it.
     edv_warn_counts = False   # tracks whether EDV contributes to the downgrade count
     if volumes_unreliable:
-        # Do not emit a numeric EDV verdict; the underlying number may be off
-        # by orders of magnitude (see PIPELINE_INTEGRATION.md §6). We surface
-        # the fact to the reader and to features_missing so it's visible in
-        # the UI, but we do NOT count it as a warn for downgrade purposes —
-        # EF is a ratio and remains trustworthy.
+        # Do not emit a numeric EDV verdict; the underlying number may be
+        # wrong — by orders of magnitude for a bad affine (see
+        # PIPELINE_INTEGRATION.md §6), or inflated by a duplicated slice. We
+        # surface the cause to the reader and to features_missing so it's
+        # visible in the UI, but we do NOT count it as a warn for downgrade
+        # purposes.
         evidence.append({
             "label":  "Absolute volumes",
             "level":  "warn",
-            "detail": "Volume-based evidence suppressed — the heart-metrics "
-                      "compute flagged the affine / spacing as suspicious "
-                      "(see heartMetrics.warnings). Status is graded from EF "
-                      "only; EF is a ratio and is unaffected by bad spacing.",
+            "detail": "Volume-based evidence suppressed — "
+                      + "; ".join(volume_issues)
+                      + ". Volume evidence is left out of the grade.",
         })
         features_missing.append("EDV")
         warnings_out.append(
-            "EDV evidence suppressed due to heartMetrics.warnings — "
+            "EDV evidence suppressed because absolute volumes are unreliable — "
             "confidence set to low."
         )
+    elif edvi is not None:
+        # BSA was supplied upstream (compute_heart_metrics_from_rle.py) — grade
+        # the indexed volume instead of raw EDV. This is the one place a
+        # caller-supplied BSA can change `status`: a patient whose raw EDV
+        # reads "warn" on the unindexed band may grade "ok" once indexed for a
+        # large body size, or vice versa for a small one — see the raw-EDV
+        # branch below for what would have been reported without a BSA.
+        features_used.append("EDVI")
+        lo, hi = EDVI_MIN_MAX
+        raw_note = f" (raw EDV {edv:.1f} mL)" if edv is not None else ""
+        if lo <= edvi <= hi:
+            evidence.append({
+                "label":  "End-Diastolic Volume Index (EDVI)",
+                "level":  "ok",
+                "detail": f"EDVI {edvi:.1f} mL/m²{raw_note} — within the approximate "
+                          f"BSA-indexed reference band ({lo:.0f}-{hi:.0f} mL/m²).",
+            })
+        else:
+            direction = "below" if edvi < lo else "above"
+            evidence.append({
+                "label":  "End-Diastolic Volume Index (EDVI)",
+                "level":  "warn",
+                "detail": f"EDVI {edvi:.1f} mL/m²{raw_note} — {direction} the "
+                          f"approximate BSA-indexed reference band ({lo:.0f}-{hi:.0f} "
+                          "mL/m²).",
+            })
+            edv_warn_counts = True
     elif edv is None:
         features_missing.append("EDV")
     else:
@@ -350,8 +422,9 @@ def main() -> None:
         sys.exit(1)
 
     hm_warnings = data.get("heart_metrics_warnings", []) if isinstance(data, dict) else []
+    volume_signals = data.get("volume_signals") if isinstance(data, dict) else None
 
-    result = compute(measurements, hm_warnings)
+    result = compute(measurements, hm_warnings, volume_signals)
     print(json.dumps(result))
 
 

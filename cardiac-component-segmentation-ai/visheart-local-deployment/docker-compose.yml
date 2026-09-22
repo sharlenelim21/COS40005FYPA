@@ -5,6 +5,12 @@ x-gpu-environment: &gpu-env
   YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
   MEDSAM_MODEL_NAME: medsam_vit_b.pth
   FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
+  # RV 4D reconstruction checkpoint. Optional: leave it unset (or comment it out) and RV is simply
+  # unavailable -- every LV path behaves exactly as before, and an RV request returns 503 naming
+  # the missing configuration rather than being answered with an LV mesh.
+  # An absolute path is honoured as-is, which keeps the weights out of the shared git repo.
+  # RV output is RESEARCH/REFERENCE ONLY and is not validated for clinical use.
+  FOURD_RV_MODEL_NAME: /app/app/models/fourd_rv_epoch_50.pth
   GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
   SERVER_USERNAME: visheart-gpu-inference
   ALLOWED_NODE_USERNAME: visheart-node-server
@@ -254,8 +260,15 @@ services:
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
       - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
+      # RV's own CPD segmentation (models/atlas_rv, mounted via the broad models/ mount
+      # below) + the shared CUDA CPD port both use. Needed for RV segment labeling.
+      - ../visheart-inference-gpu/app/dependencies/cpd_rv_segmentation.py:/app/app/dependencies/cpd_rv_segmentation.py:ro
+      - ../visheart-inference-gpu/app/dependencies/cpd_gpu.py:/app/app/dependencies/cpd_gpu.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
-      - ../visheart-inference-gpu/app/models/atlas:/app/app/models/atlas:ro
+      # get_P.py carries the per-chamber contour extraction (target_label). Without this mount the
+      # image's baked copy is used, which only ever reads label 2, and an RV request would be
+      # meshed from LV contours.
+      - ../visheart-inference-gpu/app/dependencies/get_P.py:/app/app/dependencies/get_P.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
@@ -266,6 +279,27 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      # Checkpoints live here and are read from the host, so a model can be dropped in without
+      # rebuilding the image -- the same workflow as unet.pth. The RV 4D checkpoint is picked up
+      # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
+      # Includes models/atlas (the AHA CPD atlas), so no separate atlas-only mount is needed.
+      - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      # Since visheart-inference-gpu/build.ps1 (or build.sh) now stages these
+      # into the image at build time, this mount is only needed for local dev
+      # against source (docker-compose up) -- it shadows the baked-in copy
+      # with whatever's on disk, so editing UNETRESNET34 doesn't need a
+      # rebuild. An image built without that script (e.g. plain `docker
+      # build .`) has no landmark checkpoint at all and this mount is
+      # required; an image pulled from Docker Hub already has one baked in.
+      # checkpoints/ is deliberately excluded from this mount: it's gitignored
+      # and typically absent on a fresh host checkout (best_model_2ch.pth /
+      # best_model_1ch.pth live outside this repo's build context -- see the
+      # Dockerfile's landmark-checkpoint COPY comment), so mounting the whole
+      # UNETRESNET34 folder shadowed the image's baked-in checkpoints with an
+      # empty directory and broke landmark inference at runtime with "Could
+      # not find 2ch landmark checkpoint" even though the image had one.
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
+      - /app/UNETRESNET34/checkpoints
     networks:
       visheart-network:
         aliases:
@@ -296,6 +330,7 @@ services:
     command: >
       bash -lc 'python -c "import nibabel, timm, pycpd" ||
       pip install --no-cache-dir "nibabel>=5.0.0" timm pycpd==2.0.0;
+      python -c "import cupy" || pip install --no-cache-dir "cupy-cuda12x[ctk]" || true;
       exec bash ./docker/scripts/start.sh'
     volumes:
       - ../visheart-inference-gpu/start_server.py:/app/start_server.py:ro
@@ -313,7 +348,15 @@ services:
       - ../visheart-inference-gpu/app/dependencies/model_init.py:/app/app/dependencies/model_init.py:ro
       - ../visheart-inference-gpu/app/dependencies/aha_segmentation_3d.py:/app/app/dependencies/aha_segmentation_3d.py:ro
       - ../visheart-inference-gpu/app/dependencies/cpd_aha_segmentation.py:/app/app/dependencies/cpd_aha_segmentation.py:ro
+      # RV's own CPD segmentation (models/atlas_rv, mounted via the broad models/ mount
+      # below) + the shared CUDA CPD port both use. Needed for RV segment labeling.
+      - ../visheart-inference-gpu/app/dependencies/cpd_rv_segmentation.py:/app/app/dependencies/cpd_rv_segmentation.py:ro
+      - ../visheart-inference-gpu/app/dependencies/cpd_gpu.py:/app/app/dependencies/cpd_gpu.py:ro
       - ../visheart-inference-gpu/app/dependencies/deep_sdf/mesh.py:/app/app/dependencies/deep_sdf/mesh.py:ro
+      # get_P.py carries the per-chamber contour extraction (target_label). Without this mount the
+      # image's baked copy is used, which only ever reads label 2, and an RV request would be
+      # meshed from LV contours.
+      - ../visheart-inference-gpu/app/dependencies/get_P.py:/app/app/dependencies/get_P.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_helpers.py:/app/app/helpers/inference_helpers.py:ro
       - ../visheart-inference-gpu/app/helpers/inference_jobs.py:/app/app/helpers/inference_jobs.py:ro
       - ../visheart-inference-gpu/app/helpers/landmark_inference_api.py:/app/app/helpers/landmark_inference_api.py:ro
@@ -324,7 +367,18 @@ services:
       - ../visheart-inference-gpu/app/routes/status_routes.py:/app/app/routes/status_routes.py:ro
       - ../visheart-inference-gpu/app/security/backend_authentication.py:/app/app/security/backend_authentication.py:ro
       - ../visheart-inference-gpu/app/utils/logging_config.py:/app/app/utils/logging_config.py:ro
+      # Checkpoints live here and are read from the host, so a model can be dropped in without
+      # rebuilding the image -- the same workflow as unet.pth. The RV 4D checkpoint is picked up
+      # from this folder via FOURD_RV_MODEL_NAME; remove that env var to disable RV entirely.
       - ../visheart-inference-gpu/app/models:/app/app/models:ro
+      # Since visheart-inference-gpu/build.ps1 (or build.sh) now stages these
+      # into the image at build time, this mount is only needed for local dev
+      # against source (docker-compose up) -- see the gpu-cpu service above
+      # for the full explanation.
+      # checkpoints/ is deliberately excluded from this mount -- see the
+      # gpu-cpu service above for why.
+      - ../../UNETRESNET34:/app/UNETRESNET34:ro
+      - /app/UNETRESNET34/checkpoints
     networks:
       visheart-network:
         aliases:

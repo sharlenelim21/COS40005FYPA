@@ -441,13 +441,38 @@ export const segmentationApi = {
    */
   triggerDiseaseSimilarity: async (
     maskId: string,
-    peaks?: { PeakGRS?: number | null; PeakGCS?: number | null },
+    body?: {
+      PeakGRS?: number | null; PeakGCS?: number | null;
+      /** Never persisted server-side — see report/page.tsx's BSA card. Passing
+       *  these switches the stored result to indexed mode; omitting them (or
+       *  calling with no body at all) computes/stores the non-indexed fallback. */
+      bsa_m2?: number | null;
+      sex?: "male" | "female" | "unspecified";
+    },
   ) => {
     try {
       const response = await api.post(
         `/segmentation/trigger-disease-similarity/${maskId}`,
-        peaks ?? {},
+        body ?? {},
       );
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /**
+   * RV health status — sex-specific reference ranges, NOT a diagnosis and not a
+   * severity grade. Reads heartMetrics off the mask (400 without it). Supply sex
+   * and BSA on every call, as for disease similarity: the stored result echoes
+   * both back, and with no sex it is "Not assessable" rather than a guess.
+   */
+  triggerRvHealthStatus: async (
+    maskId: string,
+    body: { sex: "male" | "female" | "unspecified"; bsa_m2: number | null },
+  ) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-rv-health-status/${maskId}`, body);
       return response.data;
     } catch (error) {
       throw error;
@@ -520,6 +545,11 @@ export const reconstructionApi = {
       // Backend strictly scopes the editable-mask lookup to this model;
       // omit to preserve legacy (model-agnostic) behaviour.
       segmentationModel?: 'medsam' | 'unet';
+      // Which chamber to reconstruct. 'lv' (default) is the myocardial wall and is the clinical
+      // product. 'rv' is the RV cavity and is RESEARCH/REFERENCE ONLY — it needs an RV checkpoint
+      // configured on the GPU service, and returns 503 when there is none rather than quietly
+      // meshing the request with the LV model.
+      chamber?: 'lv' | 'rv';
       parameters?: {
         num_iterations?: number;
         resolution?: number;
