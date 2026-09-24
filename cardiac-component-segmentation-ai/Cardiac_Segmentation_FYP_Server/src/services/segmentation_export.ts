@@ -52,6 +52,13 @@ const runBullseyeRleScript = (
                 resolve(null);
             }
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -194,6 +201,13 @@ export const computeHeartMetricsFromMaskDoc = async (
             }
             resolve();
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -283,6 +297,13 @@ export const computeHealthStatusFromMetrics = async (
             }
             resolve();
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -359,6 +380,13 @@ export const computeRvHealthStatusFromMetrics = async (
                 logger.warn(`${serviceLocation}: [RvHealthStatus] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
             resolve();
+        });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
         });
         child.stdin?.write(input);
         child.stdin?.end();
@@ -508,6 +536,13 @@ export const computeRegionalHealthStatusFromStrain = async (
             }
             resolve();
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -580,6 +615,13 @@ export const computeDiseaseSimilarityFromMetrics = async (
             }
             resolve();
         });
+        // Without this, an early-exiting python3 process (crash, OOM, bad input)
+        // closes its stdin before the write below finishes, and the resulting
+        // EPIPE — an EventEmitter 'error' with no listener — crashes the entire
+        // Node process instead of just failing this one background computation.
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
         child.stdin?.write(input);
         child.stdin?.end();
     });
@@ -624,12 +666,17 @@ export const computeBullseyeAndStore = async (
         if (savedLandmarkDoc) {
             const lm1Points: number[][] = [];
             const lm2Points: number[][] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
-                        if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
-                    }
+            // ED (frame 0) only — a saved doc can now hold every cardiac frame's
+            // landmarks; averaging RV insertion points across cardiac phases
+            // (not just across slices within one phase) would blend positions
+            // from a heart that's moved throughout the cycle into a physically
+            // meaningless point. Bullseye alignment has always meant "relative
+            // to ED" elsewhere in this codebase.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
+                    if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
                 }
             }
             const meanPt = (pts: number[][]): number[] | null =>

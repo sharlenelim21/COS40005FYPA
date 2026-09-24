@@ -1200,17 +1200,20 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             .lean();
 
         if (savedLandmarkDoc) {
-            // Average rv_insertion_1 / rv_insertion_2 points across every frame/slice,
-            // matching the GPU's own unconditional-mean avg_lm1/avg_lm2 aggregation
-            // (visheart-inference-gpu/app/helpers/landmark_inference_api.py lines 410-432).
+            // Average rv_insertion_1 / rv_insertion_2 points across every slice of
+            // ED (frame 0) only, matching the GPU's own per-frame avg_lm1/avg_lm2
+            // aggregation (visheart-inference-gpu/app/helpers/landmark_inference_api.py) —
+            // a saved doc can now hold every cardiac frame's landmarks, and averaging
+            // across cardiac phases (not just slices within one phase) would blend
+            // positions from a heart that's moved throughout the cycle into a
+            // physically meaningless point.
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
@@ -1503,12 +1506,14 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
         if (savedLandmarkDoc) {
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            // ED (frame 0) only — see the comment on this same pattern earlier in
+            // this file for why averaging across cardiac frames (not just slices)
+            // would be wrong now that a saved doc can hold every cardiac frame.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
@@ -1727,12 +1732,14 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         if (savedLandmarkDoc) {
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            // ED (frame 0) only — see the comment on this same pattern earlier in
+            // this file for why averaging across cardiac frames (not just slices)
+            // would be wrong now that a saved doc can hold every cardiac frame.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (pts: { x: number; y: number }[]) =>
@@ -1989,12 +1996,14 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
         if (savedLandmarkDoc) {
             const lm1Points: { x: number; y: number }[] = [];
             const lm2Points: { x: number; y: number }[] = [];
-            for (const frame of (savedLandmarkDoc as any).frames ?? []) {
-                for (const slice of frame.slices ?? []) {
-                    for (const point of slice.landmarks ?? []) {
-                        if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                        if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                    }
+            // ED (frame 0) only — see the comment on this same pattern earlier in
+            // this file for why averaging across cardiac frames (not just slices)
+            // would be wrong now that a saved doc can hold every cardiac frame.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
+                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
                 }
             }
             const mean = (pts: { x: number; y: number }[]) =>

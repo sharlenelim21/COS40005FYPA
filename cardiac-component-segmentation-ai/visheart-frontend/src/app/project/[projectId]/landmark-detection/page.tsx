@@ -132,8 +132,20 @@ export default function LandmarkDetectionPage() {
     searchParams.get("tab") === "strain" ? "strain"
     : searchParams.get("tab") === "structure" ? "structure"
     : "landmarks";
+  // Tracks whether the editable mask itself exists (independent of whether bullseye is computed).
+  // Declared here (rather than lower down with the other bullseye state) because activeModel's
+  // default below needs it.
+  const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  const modelParam = searchParams.get("model");
   const activeModel: "unet" | "medsam" =
-    searchParams.get("model") === "medsam" ? "medsam" : "unet";
+    modelParam === "medsam" ? "medsam"
+    : modelParam === "unet" ? "unet"
+    // No explicit choice in the URL: prefer UNet, but only when it's actually available —
+    // fall back to MedSAM if UNet has no mask for this project yet. Before existingSegModels
+    // has loaded (both false), this still reads as "unet", matching the old hardcoded default.
+    : existingSegModels.unet ? "unet"
+    : existingSegModels.medsam ? "medsam"
+    : "unet";
 
   const updateUrlState = useCallback(
     (next: { tab?: "landmarks" | "structure" | "strain"; model?: "unet" | "medsam" }) => {
@@ -217,8 +229,7 @@ export default function LandmarkDetectionPage() {
   } | null>(null);
   const [segFrameCount, setSegFrameCount] = useState(0);
   const [availableBullseyeModels, setAvailableBullseyeModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
-  // Tracks whether the editable mask itself exists (independent of whether bullseye is computed)
-  const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  // existingSegModels is declared earlier (with activeModel) since that computation needs it.
   const [calculatingModels, setCalculatingModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
   const [calcCountdown, setCalcCountdown] = useState(15);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -678,25 +689,49 @@ export default function LandmarkDetectionPage() {
 
       // Landmark points just changed, so the stored AHA-17 bullseye is now stale.
       // Re-trigger bullseye for every editable mask — the backend prefers the
-      // saved edits we just wrote — then re-fetch so the chart reflects the new
-      // alignment. Best-effort: a failed recompute never blocks the save.
+      // saved edits we just wrote — then poll for each mask's OWN bullseye.computed_at
+      // to actually change (not just re-appear) before refreshing the chart, instead
+      // of guessing a fixed delay. Same before/after-timestamp poll convention as
+      // useProjectResults.ts's ensureComputed. Best-effort: a failed recompute never
+      // blocks the save.
       try {
         const res = await segmentationApi.getSegmentationResults(projectId);
-        const editableMaskIds = ((res.segmentations ?? []) as { _id?: string; isMedSAMOutput: boolean }[])
-          .filter((m) => !m.isMedSAMOutput && m._id)
-          .map((m) => m._id as string);
-        await Promise.all(
-          editableMaskIds.map((id) => segmentationApi.triggerBullseye(id).catch(() => {})),
+        type EditableMask = { _id?: string; isMedSAMOutput: boolean; bullseye?: { computed_at?: string } };
+        const editableMasks = ((res.segmentations ?? []) as EditableMask[]).filter(
+          (m) => !m.isMedSAMOutput && m._id,
         );
-        // Bullseye compute is async on the server; re-fetch after a short delay
-        // to pick up the freshly-recomputed, edit-aligned result.
+        const beforeByMaskId = new Map(editableMasks.map((m) => [m._id as string, m.bullseye?.computed_at]));
+        await Promise.all(
+          editableMasks.map((m) => segmentationApi.triggerBullseye(m._id as string).catch(() => {})),
+        );
+
         setBullseyeRecomputing(true);
-        setTimeout(() => {
-          fetchBullseye(selectedBullseyeModel, false);
-          setBullseyeRecomputing(false);
-        }, 8000);
+        const POLL_INTERVAL_MS = 1500;
+        const POLL_MAX_ATTEMPTS = 20; // ~30s, matching useProjectResults.ts's ensureComputed
+        let allRecomputed = false;
+        for (let i = 0; i < POLL_MAX_ATTEMPTS && !allRecomputed; i++) {
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+          try {
+            const pollRes = await segmentationApi.getSegmentationResults(projectId);
+            const byId = new Map(
+              ((pollRes.segmentations ?? []) as EditableMask[]).map((m) => [m._id as string, m]),
+            );
+            allRecomputed = [...beforeByMaskId.entries()].every(([id, before]) => {
+              const after = byId.get(id)?.bullseye?.computed_at;
+              return !!after && after !== before;
+            });
+          } catch {
+            /* transient network error — keep polling */
+          }
+        }
+        if (!allRecomputed) {
+          console.warn("[Landmark] Bullseye recompute did not confirm within ~30s — refreshing with whatever landed.");
+        }
+        await fetchBullseye(selectedBullseyeModel, false);
+        setBullseyeRecomputing(false);
       } catch (recomputeErr) {
         console.error("[Landmark] Bullseye recompute after save failed:", recomputeErr);
+        setBullseyeRecomputing(false);
       }
     } catch (err) {
       console.error("[Landmark] Failed to save landmark edits:", err);
@@ -1367,7 +1402,7 @@ export default function LandmarkDetectionPage() {
               <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-semibold text-foreground">
-                    {structureVentricle === "LV" ? "AHA 17-Segment Bullseye" : "RV 9-Segment Bullseye"}
+                    {structureVentricle === "LV" ? "Wall Thickness" : "RV Cavity Area (FAC)"}
                   </h3>
                   {/* Model choice lives only in the sidebar's UNet/MedSAM
                       buttons now (right panel) — this main panel used to
@@ -1424,7 +1459,7 @@ export default function LandmarkDetectionPage() {
                   <div>
                     <p className="text-sm font-medium">No landmark data yet</p>
                     <p className="text-xs mt-1 opacity-70">
-                      Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the AHA 17-Segment Bullseye.
+                      Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the {structureVentricle === "LV" ? "Wall Thickness" : "RV Cavity Area (FAC)"} panel.
                     </p>
                   </div>
                 </div>
@@ -1825,9 +1860,11 @@ function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
     const sameModel = candidates.find(
       (r: any) => (r?.segmentationModel ?? "").toString().toLowerCase() === model, // eslint-disable-line @typescript-eslint/no-explicit-any
     );
-    // No same-model RV reconstruction: don't pair a UNet RV mesh with a
-    // MedSAM LV segmentation context — only fall back if there's just one.
-    return sameModel ?? (candidates.length === 1 ? candidates[0] : null);
+    // Strict per-model match only, same as LV's reconstructionsByModel?.[activeModel]
+    // lookup — no falling back to a different model's reconstruction just because it's
+    // the only one that exists. Showing MedSAM's panel with UNet's mesh when MedSAM has
+    // no reconstruction is exactly the mismatch this function's own docs warn against.
+    return sameModel ?? null;
   }, [reconstructionResults, model]);
 
   const [meshUrl, setMeshUrl] = useState<string | null>(null);
@@ -2479,7 +2516,7 @@ function AhaBullseyeChart({
     <svg
       viewBox="0 0 300 300"
       role="img"
-      aria-label="AHA 17-segment bullseye chart"
+      aria-label="Wall thickness bullseye chart"
       className="h-full w-full text-[#475569] dark:text-slate-300"
     >
       <circle cx={center} cy={center} r="112" className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />

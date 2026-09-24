@@ -235,7 +235,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         ref={canvasRef}
         className={cn("block max-w-full max-h-full", editableLandmarks && "cursor-crosshair")}
         style={{ imageRendering: "pixelated" }}
-        aria-label={`MRI frame ${currentFrame + 1} of ${totalFrames}`}
+        aria-label={`MRI slice ${currentFrame + 1} of ${totalFrames}`}
         onPointerDown={(event) => {
           const landmarkId = hitTestLandmark(event);
           if (landmarkId) {
@@ -439,7 +439,7 @@ function drawFrameLabel(
   current: number,
   total: number,
 ) {
-  const text = `Frame ${current + 1} / ${total}`;
+  const text = `Slice ${current + 1} / ${total}`;
   ctx.font = "10px/1 monospace";
   const tw = ctx.measureText(text).width;
 
