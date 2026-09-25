@@ -64,6 +64,21 @@ def _load_unet_module():
     return module
 
 
+def resolve_checkpoint_path(checkpoint_path: Optional[str] = None, models_dir: Optional[str] = None) -> str:
+    """
+    provided path > UNET_CHECKPOINT_PATH env > models/active/unet.pth > models/unet.pth.
+    models/active/unet.pth is a retrained version activated by visheart-retraining/versions.py; without it the
+    shipped original serves. versions.py never writes models/unet.pth, so removing the active file always
+    returns to the original, which is also the one baked into the image.
+    """
+    resolved = (checkpoint_path or os.getenv("UNET_CHECKPOINT_PATH", "")).strip()
+    if resolved:
+        return resolved
+    models_dir = models_dir or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
+    active = os.path.join(models_dir, "active", "unet.pth")
+    return active if os.path.isfile(active) else os.path.join(models_dir, "unet.pth")
+
+
 def run_unet_inference_from_nifti(
     nifti_path: str,
     device: str = "auto",
@@ -71,14 +86,11 @@ def run_unet_inference_from_nifti(
 ) -> Dict[str, Any]:
     """
     Execute UNET inference and return backend-compatible JSON result.
-    Resolves checkpoint path portably: provided path > UNET_CHECKPOINT_PATH env > app/models/unet.pth
+    Checkpoint: see resolve_checkpoint_path.
     """
     module = _load_unet_module()
 
-    resolved_checkpoint = (checkpoint_path or os.getenv("UNET_CHECKPOINT_PATH", "")).strip()
-    if not resolved_checkpoint:
-        resolved_checkpoint = os.path.join(os.path.dirname(__file__), "..", "models", "unet.pth")
-        resolved_checkpoint = os.path.abspath(resolved_checkpoint)
+    resolved_checkpoint = resolve_checkpoint_path(checkpoint_path)
 
     print(
         "[UNET API] Inference config: "
