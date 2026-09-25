@@ -5,6 +5,7 @@ import { Loader2, RefreshCw, ArrowLeft } from "lucide-react";
 import { useState, useCallback, useRef, useMemo, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
+import { toast } from "sonner";
 
 // Backend integration
 import { segmentationApi } from "@/lib/api";
@@ -992,12 +993,20 @@ function SegmentationResultsPageInner() {
         }
       }
 
-      await segmentationApi.saveManualSegmentation(projectId, {
+      const saved = await segmentationApi.saveManualSegmentation(projectId, {
         name: `Manual Segmentation - ${new Date().toISOString()}`,
         description: "Manually edited segmentation masks with RLE encoding",
         frames: frames,
         model: selectedModel,
       });
+      const et = saved?.editTracking;
+      if (et?.status === "computed") {
+        toast.success(et.editedSliceCount === 0
+          ? "Saved — no differences from the AI output"
+          : `Saved — ${et.editedSliceCount} slice${et.editedSliceCount === 1 ? "" : "s"} changed, ${Number(et.pixelsChanged).toLocaleString()} pixels`);
+      } else {
+        toast.success("Saved", { description: "Edit tracking was not recorded for this save" });
+      }
 
       console.log("[Segmentation] Successfully saved masks to backend");
 
@@ -1034,8 +1043,9 @@ function SegmentationResultsPageInner() {
 
     setIsSaving(true);
     try {
-      const aiMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === true);
-      const editableMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === false);
+      const sameModel = (m: ProjectTypes.BaseSegmentationMask) => inferDocModel(m) === selectedModel;
+      const aiMask = undecodedMasks.find((m: ProjectTypes.BaseSegmentationMask) => m.isMedSAMOutput === true && sameModel(m));
+      const editableMask = undecodedMasks.find((m: ProjectTypes.BaseSegmentationMask) => m.isMedSAMOutput === false && sameModel(m));
 
       if (!aiMask || !editableMask) {
         console.error("[Segmentation] Could not find AI or editable mask");
@@ -1049,11 +1059,7 @@ function SegmentationResultsPageInner() {
         frameCount: aiMask.frames?.length || 0,
       });
 
-      const revertData = {
-        frames: aiMask.frames, 
-      };
-
-      await segmentationApi.saveManualSegmentation(projectId, revertData);
+      await segmentationApi.saveManualSegmentation(projectId, { frames: aiMask.frames, model: selectedModel });
 
       console.log("[Segmentation] ✅ Successfully reverted to AI mask");
 
@@ -1066,7 +1072,7 @@ function SegmentationResultsPageInner() {
     } finally {
       setIsSaving(false);
     }
-  }, [projectId, isSaving, undecodedMasks]);
+  }, [projectId, isSaving, undecodedMasks, selectedModel]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

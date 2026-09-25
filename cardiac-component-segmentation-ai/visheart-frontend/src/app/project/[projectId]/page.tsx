@@ -9,6 +9,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 // API
 import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
+import { inferDocModel as inferMaskModel } from "@/lib/segmentation-model-utils";
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
 
 // UI Components
@@ -653,29 +654,35 @@ function ProjectPageInner() {
     setIsReverting(true);
 
     try {
-      // 1. Find AI mask and editable mask
-      const aiMask = undecodedMasks?.find(mask => mask.isMedSAMOutput === true);
-      const editableMask = undecodedMasks?.find(mask => mask.isMedSAMOutput === false);
+      // 1. Pair each model's AI mask with that model's editable mask. The request must name the model:
+      //    without it the server overwrites the first editable mask it finds, whichever model owns it.
+      //    A project whose masks carry no model at all is a legacy single-model project.
+      const masks = undecodedMasks ?? [];
+      const legacy = !masks.some((mask) => inferMaskModel(mask) !== null);
+      const models: (string | undefined)[] = legacy ? [undefined] : ["medsam", "unet"];
+      const pairs = models.flatMap((model) => {
+        const belongs = (mask: (typeof masks)[number]) => legacy || inferMaskModel(mask) === model;
+        const aiMask = masks.find((mask) => mask.isMedSAMOutput === true && belongs(mask));
+        const editableMask = masks.find((mask) => mask.isMedSAMOutput === false && belongs(mask));
+        return aiMask && editableMask ? [{ model, aiMask, editableMask }] : [];
+      });
 
-      if (!aiMask || !editableMask) {
+      if (pairs.length === 0) {
         console.error("[Project] Could not find AI or editable mask");
         alert("Could not find masks to revert. Please try again.");
         return;
       }
 
-      // 2. Copy AI mask's frames to editable mask
-      const revertData = {
-        frames: aiMask.frames, // Full frame array with slices and RLE data
-      };
-
-      console.log("[Project] Copying AI mask frames to editable mask:", {
-        aiMaskId: aiMask._id,
-        editableMaskId: editableMask._id,
-        frameCount: aiMask.frames?.length || 0,
-      });
-
-      // 3. Use existing saveManualSegmentation API
-      await segmentationApi.saveManualSegmentation(projectId, revertData);
+      // 2. Copy each AI mask's frames into the editable mask of the same model
+      for (const { model, aiMask, editableMask } of pairs) {
+        console.log("[Project] Copying AI mask frames to editable mask:", {
+          model: model ?? "legacy",
+          aiMaskId: aiMask._id,
+          editableMaskId: editableMask._id,
+          frameCount: aiMask.frames?.length || 0,
+        });
+        await segmentationApi.saveManualSegmentation(projectId, { frames: aiMask.frames, model });
+      }
 
       console.log("[Project] ✅ Successfully reverted to AI mask");
 
