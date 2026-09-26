@@ -19,7 +19,7 @@ POST /bullseye/compute-strain
 
 POST /bullseye/compute-rv-strain
     Accepts ED and ES NIfTI files + optional RV insertion points.
-    Returns regional RV cavity-radius strain (basal/mid free-wall sectors).
+    Returns GCS and GAS (separate, not combined) per RV segment (basal/mid/apical x 3).
 
 Both analyze endpoints return the same BullseyeAnalysisResult schema.
 """
@@ -454,10 +454,10 @@ async def compute_strain(
 
 
 # ── Route D: compute regional RV strain from ED + ES NIfTI uploads ───────────
-# See bullseye_analysis.mask_to_rv_regions docstring: there is no separate RV
-# free-wall myocardium label in this mask, so this measures % change in RV
-# cavity boundary radius per region (a GCS-style radius measure) rather than
-# wall thickening (GRS-style, like the LV route above).
+# 9-segment RV bullseye (basal/mid/apical x 3 sections), rays from the LV
+# centre — see bullseye_analysis.mask_to_rv_regions. There is no RV free-wall
+# myocardium label in this mask, so per segment this reports GCS (free-wall
+# chord % change) and GAS (cavity area % change) rather than wall thickening.
 
 def _compute_rv_strain_sync(
     ed_bytes: bytes,
@@ -499,46 +499,68 @@ def _compute_rv_strain_sync(
     if not np.any(mask_es == 1):
         raise ValueError("ES mask contains no RV (class 1) pixels.")
 
+    # ES reuses ED's slice→ring assignment and ray→section wedges, so each of
+    # the 9 segments compares the same anatomical slices and angles.
     res_ed = mask_to_rv_regions(mask_ed, rv_insertion_1=rv1, rv_insertion_2=rv2)
-    res_es = mask_to_rv_regions(mask_es, rv_insertion_1=rv1, rv_insertion_2=rv2)
+    res_es = mask_to_rv_regions(mask_es, rv_insertion_1=rv1, rv_insertion_2=rv2, layout=res_ed["layout"])
 
-    r_ed = np.array(res_ed["values"], dtype=float)
-    r_es = np.array(res_es["values"], dtype=float)
-    region_meta = res_ed["region_metadata"]
+    def _opt(arr: np.ndarray, i: int) -> float | None:
+        v = float(arr[i])
+        return None if np.isnan(v) else v
+
+    def _pct(ed_v: float | None, es_v: float | None) -> float | None:
+        if ed_v is None or es_v is None or ed_v <= 0:
+            return None
+        return round((es_v - ed_v) / ed_v * 100.0, 2)
+
+    def _mm(v: float | None, scale: float) -> float | None:
+        return round(v * scale, 3) if v is not None else None
 
     regions = []
-    valid_r_ed: list[float] = []
-    valid_r_es: list[float] = []
+    valid_chord: list[tuple[float, float]] = []
+    valid_area: list[tuple[float, float]] = []
 
-    for i, meta in enumerate(region_meta):
-        ed_v = float(r_ed[i]) if not np.isnan(r_ed[i]) else None
-        es_v = float(r_es[i]) if not np.isnan(r_es[i]) else None
+    for i, meta in enumerate(res_ed["region_metadata"]):
+        chord_ed, chord_es = _opt(res_ed["chord"], i), _opt(res_es["chord"], i)
+        area_ed, area_es = _opt(res_ed["area"], i), _opt(res_es["area"], i)
+        radius_ed, radius_es = _opt(res_ed["radius"], i), _opt(res_es["radius"], i)
 
-        strain: float | None = None
-        if ed_v is not None and es_v is not None and ed_v > 0:
-            strain = round((es_v - ed_v) / ed_v * 100.0, 2)
-            valid_r_ed.append(ed_v)
-            valid_r_es.append(es_v)
+        gcs = _pct(chord_ed, chord_es)
+        gas = _pct(area_ed, area_es)
+        if gcs is not None:
+            valid_chord.append((chord_ed, chord_es))
+        if gas is not None:
+            valid_area.append((area_ed, area_es))
 
         regions.append({
             "region":       meta["idx"],
             "label":        meta["label"],
-            "strain":       strain,
-            "radius_ed_mm": round(ed_v * vox_xy, 3) if ed_v is not None else None,
-            "radius_es_mm": round(es_v * vox_xy, 3) if es_v is not None else None,
+            # `strain` stays the GCS-style value (free-wall chord % change)
+            # until GCS and GAS are combined into a single RV strain.
+            "strain":       gcs,
+            "gcs":          gcs,
+            "gas":          gas,
+            "chord_ed_mm":  _mm(chord_ed, vox_xy),
+            "chord_es_mm":  _mm(chord_es, vox_xy),
+            "area_ed_mm2":  _mm(area_ed, vox_xy * vox_xy),
+            "area_es_mm2":  _mm(area_es, vox_xy * vox_xy),
+            "radius_ed_mm": _mm(radius_ed, vox_xy),
+            "radius_es_mm": _mm(radius_es, vox_xy),
         })
 
-    # Ratio-of-means, same rationale as global_grs/global_gcs above.
-    if valid_r_ed:
-        mean_r_ed = float(np.mean(valid_r_ed))
-        mean_r_es = float(np.mean(valid_r_es))
-        global_rv_strain = round((mean_r_es - mean_r_ed) / mean_r_ed * 100.0, 2) if mean_r_ed > 0 else None
-    else:
-        global_rv_strain = None
+    # Ratio of totals, same rationale as global_grs/global_gcs above.
+    def _global(pairs: list[tuple[float, float]]) -> float | None:
+        if not pairs:
+            return None
+        return _pct(sum(p[0] for p in pairs), sum(p[1] for p in pairs))
+
+    global_rv_gcs = _global(valid_chord)
 
     return {
         "regions":             regions,
-        "global_rv_strain":    global_rv_strain,
+        "global_rv_strain":    global_rv_gcs,
+        "global_rv_gcs":       global_rv_gcs,
+        "global_rv_gas":       _global(valid_area),
         "vox_xy_mm":           vox_xy,
         "alignment_source":    res_ed.get("alignment_source", "fixed-angle"),
         "alignment_angle_deg": res_ed.get("alignment_angle_deg"),
@@ -547,7 +569,7 @@ def _compute_rv_strain_sync(
 
 @router.post(
     "/compute-rv-strain",
-    summary="Compute regional RV cavity-radius strain from ED + ES segmentation NIfTIs",
+    summary="Compute 9-segment RV strain (GCS + GAS) from ED + ES segmentation NIfTIs",
     tags=["Bullseye"],
 )
 async def compute_rv_strain(
@@ -560,10 +582,11 @@ async def compute_rv_strain(
     rv_insertion_2_y: Optional[float] = Form(default=None),
 ):
     """
-    Upload segmentation masks for ED and ES frames. Returns % change in RV
-    cavity boundary radius per region (basal/mid free-wall sectors) — see
-    bullseye_analysis.mask_to_rv_regions for why this is a radius measure
-    rather than a wall-thickness measure like the LV's GRS.
+    Upload segmentation masks for ED and ES frames. Returns, per RV segment
+    (basal/mid/apical x 3 sections, Seg1 inferior → Seg3 anterior), GCS
+    (free-wall chord % change) and GAS (cavity area % change). `strain`
+    currently equals `gcs`. Section wedges are fixed at ED and reused at ES —
+    see bullseye_analysis.mask_to_rv_regions.
 
     Masks must be 3-D (H × W × N_slices) with class values:
     0=background, 1=RV, 2=myocardium, 3=LV cavity.

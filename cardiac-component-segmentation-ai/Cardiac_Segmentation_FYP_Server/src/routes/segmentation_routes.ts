@@ -2044,10 +2044,12 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                 return {
                     frameIndex: frame.frameindex,
                     global_rv_strain: typeof r.data?.global_rv_strain === "number" ? r.data.global_rv_strain : null,
+                    global_rv_gas: typeof r.data?.global_rv_gas === "number" ? r.data.global_rv_gas : null,
                     regions: (r.data?.regions ?? []).map((reg: any) => ({
                         region: reg.region,
                         label: reg.label,
                         strain: reg.strain ?? null,
+                        gas: reg.gas ?? null,
                         radius_mm: reg.radius_es_mm ?? null,
                         radius_ed_mm: reg.radius_ed_mm ?? null,
                     })),
@@ -2070,10 +2072,11 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             region: r.region,
             label: r.label,
             strain: 0,
+            gas: 0,
             radius_mm: r.radius_ed_mm ?? null,
         }));
         const series = [
-            { frameIndex: edFrameIndex, global_rv_strain: 0, regions: edRegions },
+            { frameIndex: edFrameIndex, global_rv_strain: 0, global_rv_gas: 0, regions: edRegions },
             ...computed,
         ].sort((a, b) => a.frameIndex - b.frameIndex);
 

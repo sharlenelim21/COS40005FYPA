@@ -19,9 +19,10 @@ Public API
     compute_alignment_angle(cx, cy, rv_insertion_1, rv_insertion_2, ring_type) -> float | None
     mask_to_17_segments(mask_3d, rv_insertion_1, rv_insertion_2)    -> dict
 
-    rv_cavity_boundary_radius(slice_mask, cx, cy, n_rays, start_angle_rad) -> np.ndarray (n_rays,)
-    group_rv_sectors(radii, n_regions=3)            -> np.ndarray (n_regions,)
-    mask_to_rv_regions(mask_3d, rv_insertion_1, rv_insertion_2)     -> dict
+    classify_rv_slices(mask_3d)                     -> list[str]
+    ray_cast_rv_hits(slice_mask, cx, cy, n_rays, start_angle_rad) -> (inner_pts, outer_pts)
+    rv_arc_sections(hit, cx, cy, ...)               -> np.ndarray (n_rays,) section id or -1
+    mask_to_rv_regions(mask_3d, rv_insertion_1, rv_insertion_2, layout) -> dict
 
 AHA segment / angle definitions are copied verbatim from
 UNETRESNET34/bullseye_17seg.ipynb — do not redefine here.
@@ -505,86 +506,212 @@ def group_inner_radii(inner_radii: np.ndarray, ring_type: str) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# rv_cavity_boundary_radius / group_rv_sectors  (RV regional strain)
+# RV 9-segment helpers  (RV regional strain)
 # ─────────────────────────────────────────────────────────────────────────────
-# There is no separate RV free-wall myocardium label in this mask (see module
-# docstring) — only RV cavity (class 1). So instead of measuring wall
-# thickness like the LV pipeline, these measure the RV cavity boundary
-# radius per region: the same underlying quantity LV's GCS is built on
-# (a radius/circumference measure), just applied to the RV cavity instead of
-# the LV endocardium.
+# RV bullseye = 3 rings (basal / mid / apical) x 3 sections. Rays are shot
+# from the LV centroid (not the RV's own), 360 of them; only the rays that
+# pass through the RV cavity (class 1) are kept, and that contiguous arc of
+# RV-hitting rays is split into 3 equal-ray-count sections. There is no RV
+# free-wall myocardium label in this mask, so per section we measure the RV
+# cavity itself: the free-wall boundary chord length (GCS-style) and the
+# cavity area inside the section's wedge (GAS-style).
 
-def rv_cavity_boundary_radius(
+_RV_RINGS: tuple[str, ...] = ("basal", "mid", "apical")
+_RV_SECTIONS = 3
+_MIN_RV_PIXELS = 30
+
+
+def classify_rv_slices(
+    mask_3d: np.ndarray,
+    min_rv_pixels: int = _MIN_RV_PIXELS,
+) -> list[str]:
+    """
+    Label every slice as basal / mid / apical / none for the RV bullseye.
+
+    Slices with at least `min_rv_pixels` RV (class 1) pixels are split into
+    three even thirds by index (base → apex, same slice ordering as
+    classify_slices). Unlike the LV there is no separate apex ring.
+    """
+    n_slices = mask_3d.shape[2]
+    labels: list[str] = ["none"] * n_slices
+    valid = [
+        i for i in range(n_slices)
+        if int(np.sum(mask_3d[:, :, i] == _RV_CLASS)) >= min_rv_pixels
+    ]
+    for k, sl in enumerate(valid):
+        labels[sl] = _RV_RINGS[min(k * 3 // len(valid), 2)]
+    return labels
+
+
+def lv_reference_centroids(mask_3d: np.ndarray) -> list[tuple[float, float] | None]:
+    """
+    Per-slice LV reference centre for the RV rays: LV cavity centroid, else
+    myocardium centroid, else the nearest slice's centre (RV often extends
+    past the LV at the base/apex, where the slice has no LV at all).
+    """
+    n_slices = mask_3d.shape[2]
+    own: list[tuple[float, float] | None] = []
+    for i in range(n_slices):
+        sl = mask_3d[:, :, i]
+        cx, cy = compute_centroid(sl, class_label=3)
+        if cx is None:
+            cx, cy = compute_centroid(sl, class_label=_MYO_CLASS)
+        own.append((cx, cy) if cx is not None else None)
+
+    known = [i for i, c in enumerate(own) if c is not None]
+    if not known:
+        return own
+    return [
+        c if c is not None else own[min(known, key=lambda k: abs(k - i))]
+        for i, c in enumerate(own)
+    ]
+
+
+def ray_cast_rv_hits(
     slice_mask: np.ndarray,
     cx: float,
     cy: float,
     n_rays: int = 360,
     start_angle_rad: float = 0.0,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Cast `n_rays` from the RV centroid and measure the radius to the RV
-    cavity (class 1) boundary.
+    Cast `n_rays` rays from the LV centre (cx, cy) and find where each one
+    crosses the RV cavity.
 
-    Rays whose boundary transition is into myocardium (class 2) are set to
-    np.nan — that boundary is the interventricular septum, not RV free wall,
-    so it isn't a meaningful free-wall measurement. Rays exiting into
-    background (or, rarely, directly into LV cavity) are free-wall-facing
-    and kept. Same ray geometry/screen convention as ray_cast_thickness.
+    Same ray geometry/screen convention as ray_cast_thickness (index grows
+    counter-clockwise on screen). Per ray, the first contiguous run of RV
+    pixels gives the septal-side entry point (inner) and the free-wall exit
+    point (outer).
 
     Returns
     -------
-    ndarray, shape (n_rays,) — radius in pixels, np.nan for septal-facing or
-    unresolved rays.
+    (inner_pts, outer_pts) : each ndarray, shape (n_rays, 2) of (x, y),
+    np.nan rows for rays that never touch the RV.
     """
     H, W = slice_mask.shape
     max_r = max(H, W)
 
-    rv = (slice_mask == _RV_CLASS)
+    angles = start_angle_rad - np.linspace(0.0, 2.0 * np.pi, n_rays, endpoint=False)
+    rs = np.arange(1, max_r)
+    xs = (cx + rs[None, :] * np.cos(angles)[:, None]).astype(int)
+    ys = (cy + rs[None, :] * np.sin(angles)[:, None]).astype(int)
 
-    angles     = start_angle_rad - np.linspace(0.0, 2.0 * np.pi, n_rays, endpoint=False)
-    directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+    # A ray stops at the first step that leaves the image (as in ray_cast_thickness).
+    in_bounds = np.logical_and.accumulate((xs >= 0) & (xs < W) & (ys >= 0) & (ys < H), axis=1)
+    hit = in_bounds & (slice_mask[np.clip(ys, 0, H - 1), np.clip(xs, 0, W - 1)] == _RV_CLASS)
 
-    radii = np.full(n_rays, np.nan, dtype=np.float64)
-    centre = np.array([cx, cy], dtype=float)
+    inner_pts = np.full((n_rays, 2), np.nan, dtype=np.float64)
+    outer_pts = np.full((n_rays, 2), np.nan, dtype=np.float64)
 
-    for ray_i, d in enumerate(directions):
-        for r in range(1, max_r):
-            x = int(cx + r * d[0])
-            y = int(cy + r * d[1])
-            if x < 0 or x >= W or y < 0 or y >= H:
-                break
-            if not rv[y, x]:
-                if int(slice_mask[y, x]) == _MYO_CLASS:
-                    break  # septal-facing ray — leave as nan
-                exit_point = np.array([x, y], dtype=float)
-                radii[ray_i] = float(np.linalg.norm(exit_point - centre))
-                break
+    any_hit = hit.any(axis=1)
+    first = np.argmax(hit, axis=1)
+    after_run = ~hit & (np.arange(len(rs))[None, :] >= first[:, None])
+    last = np.where(after_run.any(axis=1), np.argmax(after_run, axis=1) - 1, len(rs) - 1)
 
-    return radii
+    rows = np.flatnonzero(any_hit)
+    inner_pts[rows] = np.stack([xs[rows, first[rows]], ys[rows, first[rows]]], axis=1)
+    outer_pts[rows] = np.stack([xs[rows, last[rows]], ys[rows, last[rows]]], axis=1)
+    return inner_pts, outer_pts
 
 
-def group_rv_sectors(radii: np.ndarray, n_regions: int = 3) -> np.ndarray:
+def rv_arc_sections(
+    hit: np.ndarray,
+    cx: float,
+    cy: float,
+    start_angle_rad: float = 0.0,
+    rv_insertion_1: tuple[float, float] | None = None,
+    n_sections: int = _RV_SECTIONS,
+) -> np.ndarray:
     """
-    Average per-ray RV cavity boundary radii into `n_regions` consecutive
-    angular sectors (simple equal-width grouping — unlike group_sectors,
-    there is no standardized RV segment atlas to calibrate a roll offset
-    against, so raw CCW sector order is used as-is).
+    Assign each ray to an RV section (0..n_sections-1), or -1 if it is
+    outside the RV arc.
 
-    Parameters
-    ----------
-    radii     : ndarray, shape (n_rays,)
-    n_regions : number of equal-width sectors to average into
+    The arc is every ray from the first to the last RV-hitting ray around
+    the largest angular gap of misses — so small holes inside the RV (a
+    mask speckle, a trabeculation) don't split it. The arc is then cut into
+    `n_sections` groups of equal ray count.
 
-    Returns
-    -------
-    ndarray, shape (n_regions,)
+    Section order: 0 = inferior end, n_sections-1 = anterior end, matching
+    the frontend crescent (CombinedVentricularChart: Seg1 inferior → Seg3
+    anterior). The anterior end is the arc end nearer rv_insertion_1 (the
+    anterior RV insertion point); without landmarks we assume standard SAX
+    display, where the CCW sweep from the lateral gap reaches anterior first.
     """
-    n_rays = len(radii)
-    rays_per_sector = n_rays // n_regions
-    return np.array([
-        np.nanmean(radii[s * rays_per_sector : (s + 1) * rays_per_sector])
-        for s in range(n_regions)
-    ])
+    n = len(hit)
+    sections = np.full(n, -1, dtype=int)
+    idx_hits = np.flatnonzero(hit)
+    if idx_hits.size == 0:
+        return sections
+
+    nxt = np.roll(idx_hits, -1)
+    gaps = (nxt - idx_hits) % n
+    gaps[gaps == 0] = n  # single hit ray: the whole circle is the gap
+    k = int(np.argmax(gaps))
+    arc_start = int(nxt[k])
+    arc_len = n - int(gaps[k]) + 1
+    arc = (arc_start + np.arange(arc_len)) % n
+
+    order = np.arange(arc_len) * n_sections // arc_len  # 0 at arc_start
+
+    start_is_anterior = True
+    if rv_insertion_1 is not None:
+        step = 2.0 * np.pi / n
+        ant = np.arctan2(rv_insertion_1[1] - cy, rv_insertion_1[0] - cx)
+
+        def _dist(ray_i: int) -> float:
+            d = (start_angle_rad - ray_i * step - ant) % (2.0 * np.pi)
+            return min(d, 2.0 * np.pi - d)
+
+        start_is_anterior = _dist(int(arc[0])) <= _dist(int(arc[-1]))
+
+    sections[arc] = (n_sections - 1 - order) if start_is_anterior else order
+    return sections
+
+
+def rv_section_measures(
+    slice_mask: np.ndarray,
+    cx: float,
+    cy: float,
+    sections: np.ndarray,
+    start_angle_rad: float = 0.0,
+    n_sections: int = _RV_SECTIONS,
+) -> dict[str, np.ndarray]:
+    """
+    Per-section RV measures for one slice, given a fixed ray → section map.
+
+    chord  : summed free-wall (outer) boundary chord length between
+             consecutive rays of the same section (px) — GCS-style, same
+             idea as group_chord_sums.
+    area   : RV cavity pixels whose angle from (cx, cy) falls in the
+             section's rays (px²) — GAS-style.
+    radius : mean LV-centre → free-wall distance (px).
+    """
+    n = len(sections)
+    _, outer = ray_cast_rv_hits(slice_mask, cx, cy, n_rays=n, start_angle_rad=start_angle_rad)
+
+    chords = np.linalg.norm(np.roll(outer, -1, axis=0) - outer, axis=1)
+    same_section = (sections >= 0) & (sections == np.roll(sections, -1))
+    radii = np.linalg.norm(outer - np.array([cx, cy]), axis=1)
+
+    ys, xs = np.nonzero(slice_mask == _RV_CLASS)
+    step = 2.0 * np.pi / n
+    ray_of_px = np.round(((start_angle_rad - np.arctan2(ys - cy, xs - cx)) % (2.0 * np.pi)) / step).astype(int) % n
+    px_section = sections[ray_of_px]
+
+    chord = np.full(n_sections, np.nan)
+    area = np.full(n_sections, np.nan)
+    radius = np.full(n_sections, np.nan)
+    for s in range(n_sections):
+        in_s = sections == s
+        if not in_s.any():
+            continue
+        valid_chords = chords[same_section & (sections == s) & ~np.isnan(chords)]
+        if valid_chords.size:
+            chord[s] = float(valid_chords.sum())
+        area[s] = float(np.sum(px_section == s))
+        if not np.all(np.isnan(radii[in_s])):
+            radius[s] = float(np.nanmean(radii[in_s]))
+    return {"chord": chord, "area": area, "radius": radius}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -889,109 +1016,122 @@ def mask_to_rv_regions(
     mask_3d: np.ndarray,
     rv_insertion_1: tuple[float, float] | None = None,
     rv_insertion_2: tuple[float, float] | None = None,
-    n_regions_per_ring: int = 3,
+    layout: dict | None = None,
 ) -> dict:
     """
-    Convert a 3-D segmentation mask to a simplified regional RV cavity-radius
-    map: `n_regions_per_ring` free-wall sectors x 2 rings (basal, mid).
+    Convert a 3-D segmentation mask to the 9-segment RV bullseye:
+    3 rings (basal / mid / apical) x 3 sections (inferior → anterior).
 
-    Unlike mask_to_17_segments this does not measure wall thickness — there
-    is no separate RV free-wall myocardium label to ray-cast against (see
-    module docstring). It measures the RV cavity boundary radius per region
-    instead, mirroring the radius-based approach LV's GCS already uses.
-    Apex and RVOT/LVOT are out of scope: RV wall there is thin and there is
-    no ground-truth RV segment atlas in this codebase to validate exact
-    wedge boundaries against.
+    Pipeline:
+        1. classify_rv_slices() → RV-containing slices split into even thirds
+        2. per slice: LV centre → 360 rays → keep the rays that touch the RV
+           → rv_arc_sections() splits that arc into 3 equal-ray-count sections
+        3. rv_section_measures() per slice, averaged across the ring's slices
+
+    `layout` fixes steps 1-2 to a reference frame: pass the "layout" returned
+    by the ED call when processing ES (or any other frame) so each segment
+    compares the same slices and the same ray wedges. Only the LV centre is
+    recomputed per frame, as the LV pipeline does.
 
     Parameters
     ----------
     mask_3d : ndarray, shape (H, W, N_slices)
         Values: 0=background, 1=RV, 2=myocardium, 3=LV cavity.
-    rv_insertion_1, rv_insertion_2 : (x, y) RV insertion points, or None.
-        Same landmarks used to align the LV bullseye — when both are
-        provided, sectors are anchored to the true Septal direction instead
-        of the fixed fallback angle.
-    n_regions_per_ring : number of free-wall sectors per ring (default 3).
+    rv_insertion_1 : (x, y) anterior RV insertion point, or None — orients
+        the sections (see rv_arc_sections).
+    rv_insertion_2 : unused, kept for signature parity with mask_to_17_segments.
+    layout : {"labels", "sections"} from a previous call, or None.
 
     Returns
     -------
     dict with keys:
-        "values"              : ndarray, shape (2*n_regions_per_ring,) — mean
-                                 RV cavity boundary radius per region (pixels)
+        "chord"  / "area" / "radius" : ndarray, shape (9,) — per segment,
+                                       pixels / pixels² / pixels (see rv_section_measures)
         "region_metadata"     : list[dict] — {idx, ring, sector, label}
-        "rv_centroid"         : [cx, cy] float list, or None
-        "alignment_angle_deg" : float | None
+        "lv_centroid"         : [cx, cy] float list, or None
+        "alignment_angle_deg" : float | None — LV-style anterior start angle,
+                                used by the frontend to rotate its charts
         "alignment_source"    : "landmark" | "fixed-angle"
+        "layout"              : {"labels", "sections"} — pass back for ES
     """
-    labels = classify_slices(mask_3d)
+    start_angle = 0.0
+    centroids = lv_reference_centroids(mask_3d)
 
-    # Same fixed fallback angle as the LV pipeline's basal/mid rings, reused
-    # so the RV free-wall sectors line up with the same anatomical baseline
-    # when landmarks are unavailable.
-    fixed_start_angle = 4 * np.pi / 3  # 240°
-
-    ring_results: dict[str, np.ndarray] = {}
-    rv_centroids: list[list[float]] = []
-    final_alignment_angle: float | None = None
-
-    for ring_type in ("basal", "mid"):
-        ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring_type]
-        if not ring_slices:
-            ring_results[ring_type] = np.full(n_regions_per_ring, np.nan)
-            continue
-
-        alignment_angle: float | None = None
-        for sl_idx in ring_slices:
-            cx_ref, cy_ref = compute_centroid(mask_3d[:, :, sl_idx], class_label=_RV_CLASS)
-            if cx_ref is not None:
-                alignment_angle = compute_alignment_angle(
-                    cx_ref, cy_ref, rv_insertion_1, rv_insertion_2, ring_type
-                )
-                break
-
-        if alignment_angle is not None:
-            start_angle = alignment_angle
-            if final_alignment_angle is None:
-                final_alignment_angle = alignment_angle
-        else:
-            start_angle = fixed_start_angle
-
-        per_slice: list[np.ndarray] = []
-        for sl_idx in ring_slices:
-            sl = mask_3d[:, :, sl_idx]
-            cx, cy = compute_centroid(sl, class_label=_RV_CLASS)
-            if cx is None:
+    if layout is None:
+        labels = classify_rv_slices(mask_3d)
+        slice_sections: dict[int, np.ndarray] = {}
+        for sl_idx, lbl in enumerate(labels):
+            if lbl == "none" or centroids[sl_idx] is None:
                 continue
-            rv_centroids.append([cx, cy])
-            radii = rv_cavity_boundary_radius(sl, cx, cy, start_angle_rad=start_angle)
-            sectors = group_rv_sectors(radii, n_regions=n_regions_per_ring)
-            if not np.all(np.isnan(sectors)):
-                per_slice.append(sectors)
+            cx, cy = centroids[sl_idx]
+            _, outer = ray_cast_rv_hits(mask_3d[:, :, sl_idx], cx, cy, start_angle_rad=start_angle)
+            slice_sections[sl_idx] = rv_arc_sections(
+                ~np.isnan(outer[:, 0]), cx, cy, start_angle, rv_insertion_1
+            )
+        layout = {"labels": labels, "sections": slice_sections}
 
-        ring_results[ring_type] = (
-            np.nanmean(per_slice, axis=0) if per_slice else np.full(n_regions_per_ring, np.nan)
-        )
+    labels = layout["labels"]
+    n_seg = _RV_SECTIONS
+    ring_out: dict[str, dict[str, np.ndarray]] = {}
+    used_centroids: list[tuple[float, float]] = []
 
-    values = np.concatenate([ring_results["basal"], ring_results["mid"]])
+    for ring_type in _RV_RINGS:
+        per_slice: dict[str, list[np.ndarray]] = {"chord": [], "area": [], "radius": []}
+        for sl_idx, sections in layout["sections"].items():
+            if labels[sl_idx] != ring_type or sl_idx >= mask_3d.shape[2] or centroids[sl_idx] is None:
+                continue
+            cx, cy = centroids[sl_idx]
+            used_centroids.append((cx, cy))
+            m = rv_section_measures(mask_3d[:, :, sl_idx], cx, cy, sections, start_angle)
+            for key in per_slice:
+                per_slice[key].append(m[key])
+        ring_out[ring_type] = {
+            key: (_nanmean_rows(vals) if vals else np.full(n_seg, np.nan))
+            for key, vals in per_slice.items()
+        }
+
+    def _flatten(key: str) -> np.ndarray:
+        return np.concatenate([ring_out[r][key] for r in _RV_RINGS])
+
+    # Anterior start angle, computed exactly like the LV bullseye's basal ring
+    # so the frontend can rotate RV and LV charts consistently.
+    alignment_angle: float | None = None
+    for sl_idx, lbl in enumerate(labels):
+        if lbl != "none" and centroids[sl_idx] is not None:
+            alignment_angle = compute_alignment_angle(
+                *centroids[sl_idx], rv_insertion_1, rv_insertion_2, "basal"
+            )
+            break
 
     region_metadata = [
         {"idx": i + 1, "ring": ring, "sector": sector + 1,
-         "label": f"{ring.capitalize()} RV Free Wall {sector + 1}"}
+         "label": f"{ring.capitalize()}_Seg{sector + 1}"}
         for i, (ring, sector) in enumerate(
-            [(r, s) for r in ("basal", "mid") for s in range(n_regions_per_ring)]
+            [(r, s) for r in _RV_RINGS for s in range(n_seg)]
         )
     ]
 
-    rv_centroid: list[float] | None = (
-        [float(np.mean([c[0] for c in rv_centroids])),
-         float(np.mean([c[1] for c in rv_centroids]))]
-        if rv_centroids else None
+    lv_centroid: list[float] | None = (
+        [float(np.mean([c[0] for c in used_centroids])),
+         float(np.mean([c[1] for c in used_centroids]))]
+        if used_centroids else None
     )
 
     return {
-        "values": values,
+        "chord": _flatten("chord"),
+        "area": _flatten("area"),
+        "radius": _flatten("radius"),
         "region_metadata": region_metadata,
-        "rv_centroid": rv_centroid,
-        "alignment_angle_deg": float(np.degrees(final_alignment_angle)) if final_alignment_angle is not None else None,
-        "alignment_source": "landmark" if final_alignment_angle is not None else "fixed-angle",
+        "lv_centroid": lv_centroid,
+        "alignment_angle_deg": float(np.degrees(alignment_angle)) if alignment_angle is not None else None,
+        "alignment_source": "landmark" if alignment_angle is not None else "fixed-angle",
+        "layout": layout,
     }
+
+
+def _nanmean_rows(rows: list[np.ndarray]) -> np.ndarray:
+    """Column-wise nanmean without the all-NaN-column RuntimeWarning."""
+    arr = np.vstack(rows)
+    counts = np.sum(~np.isnan(arr), axis=0)
+    sums = np.nansum(arr, axis=0)
+    return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)

@@ -69,11 +69,10 @@ const VIEW_W = 480, VIEW_H = 470;
 const LV_BASAL_OUTER = 100, LV_BASAL_INNER = 76, LV_MID_INNER = 50, LV_APICAL_INNER = 26;
 // 3 rings (apical/mid/basal), touching the LV boundary innermost-out, same
 // apex-near-center convention the LV rings and the Structure tab's RV
-// crescent (RvCrescentDiagram) both already use. Only 2 of these 3 rings
-// have real backend data (RV strain only computes basal+mid, 6 regions) --
-// apical renders as an honest "no data" ring (see rvVal/rvCol's existing
-// null handling) rather than being left out, so the shape matches the real
-// 9-segment CPD atlas scheme instead of looking like a smaller 6-segment one.
+// crescent (RvCrescentDiagram) both already use. The backend returns all 9
+// segments (basal 0-2, mid 3-5, apical 6-8, Seg1 inferior → Seg3 anterior);
+// results stored before that only have 6, and their apical ring renders as
+// "no data" via rvVal/rvCol's null handling.
 const RV_APICAL_INNER = LV_BASAL_OUTER, RV_APICAL_OUTER = RV_APICAL_INNER + 14;
 const RV_MID_INNER = RV_APICAL_OUTER, RV_MID_OUTER = RV_MID_INNER + 18;
 const RV_BASAL_INNER = RV_MID_OUTER, RV_BASAL_OUTER = RV_BASAL_INNER + 20;
@@ -237,11 +236,8 @@ export function CombinedVentricularChart({
       {/* ── RV crescent (drawn first, sits behind/beside the LV circle) ── */}
       {showRv && rvRing(0, RV_BASAL_INNER, RV_BASAL_OUTER, "rvb")}
       {showRv && rvRing(3, RV_MID_INNER, RV_MID_OUTER, "rvm")}
-      {/* Apical ring: RV strain has no apical computation yet (backend only
-          returns 6 basal+mid regions), so rvVal/rvCol/rvLbl's existing
-          null-safe fallbacks (gray fill, "—" label) render this ring
-          honestly as "no data" -- completing the real 9-segment shape
-          instead of a smaller 6-segment one, without fabricating values. */}
+      {/* Apical ring: regions 7-9. Older 6-region results fall back to
+          rvVal/rvCol's gray "—" no-data rendering here. */}
       {showRv && rvRing(6, RV_APICAL_INNER, RV_APICAL_OUTER, "rva")}
 
       {/* ── LV rings ── */}

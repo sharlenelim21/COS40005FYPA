@@ -1390,37 +1390,57 @@ function StrainTab({
     }
   }, [projectId, realStrain, realSeries, strainModel, autoEdFrame, strainCompute, refreshResults]);
 
-  const usingRealRvSeries = !!realRvSeries?.frames?.length;
-  const usingRealRvStrain = !!realRvStrain?.regions?.length;
+  // RV GCS and GAS are two separate metrics (never combined); everything
+  // below reads whichever one the RV toggle selects. `strain` on a region is
+  // GCS; `gas` is GAS (absent on results computed before GAS existed).
+  const rvIsGas = (strainCompute?.rvMetricType ?? "GCS") === "GAS";
+  const rvRegionValue = useCallback(
+    (r: { strain: number | null; gas?: number | null }) => (rvIsGas ? r.gas : r.strain) ?? null,
+    [rvIsGas],
+  );
+  const rvFrameGlobal = useCallback(
+    (f: { global_rv_strain: number | null; global_rv_gas?: number | null }) => (rvIsGas ? f.global_rv_gas : f.global_rv_strain) ?? null,
+    [rvIsGas],
+  );
+
+  const usingRealRvSeries = !!realRvSeries?.frames?.some((f) => f.regions.some((r) => rvRegionValue(r) != null));
+  const usingRealRvStrain = !!realRvStrain?.regions?.some((r) => rvRegionValue(r) != null);
 
   /** Global RV strain curve, mirroring `curveData`'s "global" shape for LV. */
   const rvCurveData = useMemo(() => {
-    if (!realRvSeries?.frames?.length) return [];
+    if (!usingRealRvSeries || !realRvSeries) return [];
     const n = realRvSeries.frames.length;
     return realRvSeries.frames.map((f, i) => ({
       frame: f.frameIndex + 1,
       time: Math.round((i / Math.max(n - 1, 1)) * 1200),
-      strain: Number((f.global_rv_strain ?? 0).toFixed(1)),
+      strain: Number((rvFrameGlobal(f) ?? 0).toFixed(1)),
     }));
-  }, [realRvSeries]);
+  }, [realRvSeries, usingRealRvSeries, rvFrameGlobal]);
+
+  /** Real per-frame x per-segment RV series (9 segments), for the By Region
+   *  and Full Cycle charts — same shape as LV's cycle series. */
+  const rvCycleSeries = useMemo(() => {
+    if (!usingRealRvSeries || !realRvSeries) return [];
+    return realRvSeries.frames.map((f) =>
+      f.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: rvRegionValue(r) ?? 0 })),
+    );
+  }, [realRvSeries, usingRealRvSeries, rvRegionValue]);
 
   /** Per-region RV values at the frame being viewed (falls back to the peak
    *  frame, then to the single ED→ES result — same preference order as LV's
    *  `segmentValues`). */
   const rvRegionValues = useMemo(() => {
-    if (realRvSeries?.frames?.length) {
+    const toRows = (regions: { region: number; label: string; strain: number | null; gas?: number | null }[]) =>
+      regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: rvRegionValue(r) ?? 0 }));
+    if (usingRealRvSeries && realRvSeries) {
       const frame =
         realRvSeries.frames.find((f) => f.frameIndex === currentFrame) ??
         realRvSeries.frames.find((f) => f.frameIndex === realRvSeries.peakFrameIndex);
-      if (frame?.regions?.length) {
-        return frame.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
-      }
+      if (frame?.regions?.length) return toRows(frame.regions);
     }
-    if (realRvStrain?.regions?.length) {
-      return realRvStrain.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
-    }
+    if (usingRealRvStrain && realRvStrain) return toRows(realRvStrain.regions);
     return [];
-  }, [realRvSeries, realRvStrain, currentFrame]);
+  }, [realRvSeries, realRvStrain, usingRealRvSeries, usingRealRvStrain, currentFrame, rvRegionValue]);
 
   const rvCurrentAverage = rvRegionValues.length
     ? rvRegionValues.reduce((sum, r) => sum + r.strain, 0) / rvRegionValues.length
@@ -1428,14 +1448,12 @@ function StrainTab({
 
   /** Peak = most negative global RV strain across the cycle (most shrinkage). */
   const rvPeakValue = useMemo(() => {
-    if (realRvSeries?.frames?.length) {
-      const globals = realRvSeries.frames
-        .map((f) => f.global_rv_strain)
-        .filter((v): v is number => typeof v === "number");
+    if (usingRealRvSeries && realRvSeries) {
+      const globals = realRvSeries.frames.map(rvFrameGlobal).filter((v): v is number => typeof v === "number");
       if (globals.length) return Math.min(...globals);
     }
-    return typeof realRvStrain?.global_rv_strain === "number" ? realRvStrain.global_rv_strain : 0;
-  }, [realRvSeries, realRvStrain]);
+    return (realRvStrain ? rvFrameGlobal(realRvStrain) : null) ?? 0;
+  }, [realRvSeries, realRvStrain, usingRealRvSeries, rvFrameGlobal]);
   /**
    * Global curve: one point per frame. When a segment is selected the curve
    * tracks that segment; otherwise it is the mean across all 17. Uses the
@@ -1663,6 +1681,7 @@ function StrainTab({
           usingRealRvSeries={usingRealRvSeries}
           usingRealRvStrain={usingRealRvStrain}
           rvCurveData={rvCurveData}
+          rvCycleSeries={rvCycleSeries}
           rvRegionValues={rvRegionValues}
           rvCurrentAverage={rvCurrentAverage}
           rvPeakValue={rvPeakValue}
@@ -1931,15 +1950,15 @@ function QuickCombinedStrainView({
         </div>
         <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
           <p className="text-[9px] leading-snug text-amber-800 dark:text-amber-300">
-            RV metrics are still prototype and in progress — GCS is computed but not yet validated against a
-            reference range, and GAS/cavity area have no computation at all. Every value below is labeled
-            Prototype until that work is done.
+            RV metrics are still prototype — GCS (free-wall length) and GAS (cavity area) are computed as
+            separate measures but not yet validated against a reference range. Cavity area / FAC tiles are
+            still to come.
           </p>
         </div>
         {rv ? (
           <div className="grid grid-cols-2 gap-2">
             <StrainMetricCard label="Peak GCS" value={fmtPct(rv.global_rv_strain)} strainType="GCS" valueNumber={rv.global_rv_strain ?? 0} loading={sc.isComputing} />
-            <PlainMetricTile label="Peak GAS" value="—" />
+            <StrainMetricCard label="Peak GAS" value={fmtPct(rv.global_rv_gas ?? null)} strainType="GCS" valueNumber={rv.global_rv_gas ?? 0} loading={sc.isComputing} />
             <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value="—" />
             <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value="—" />
           </div>
@@ -2233,62 +2252,38 @@ function ComputeStrainCard({
   );
 }
 
-/**
- * RV side of the Strain Results panel — deliberately simpler than the LV
- * panel above it (no GRS/GCS split, no region/cycle chart views, no 3D
- * heart): RV strain is a single cavity-radius measure per region, not a
- * 17-segment wall-thickness field, so there's less structure to visualize.
- * Reuses getStrainColor(..., "GCS") for coloring since RV strain shares
- * GCS's "more negative is healthier" convention.
- */
-/** AHA-style label set for RV's prototype 9-segment breakdown — there is no
- *  real per-region time series at this granularity yet (the real pipeline
- *  only produces the 6 basal/mid free-wall regions in rvRegionValues), so
- *  this exists purely to preview the eventual layout, sharing LV's
- *  RegionalStrainByRegion/FullCycleChart components (they only care about
- *  segment numbers/labels/values, not that they're LV-specific). */
-// Same convention as CRESCENT_REGION_NAMES (landmark-detection page.tsx) and
-// RV_SEGMENT_NAMES (heartColor.ts) — the RV-deformation notebook's naming, not
-// LV's anatomical Anterior/Lateral/Inferior labels.
-const RV_DUMMY_SEGMENT_LABELS = [
+// Notebook-style names for the REAL 9-segment RV breakdown the backend
+// computes (basal/mid/apical 1-3 — see rvRegionValues above). Same convention
+// as CRESCENT_REGION_NAMES (CombinedVentricularChart) and RV_SEGMENT_NAMES
+// (heartColor.ts) — the RV-deformation notebook's naming, not LV's anatomical
+// Anterior/Lateral/Inferior labels.
+const RV_REAL_REGION_NAMES = [
   "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
   "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
   "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
 ];
 
-// Notebook-style names for the REAL 6-region RV free-wall breakdown the backend
-// actually computes (basal 1-3, mid 1-3 — see rvRegionValues below). Same
-// convention/order as RV_DUMMY_SEGMENT_LABELS' first six entries.
-const RV_REAL_REGION_NAMES = [
-  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
-  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
-];
-function buildDummyRvCycleSeries(totalFrames: number): { segment: number; label: string; strain: number }[][] {
-  const frames = Math.max(totalFrames || 9, 2);
-  return Array.from({ length: frames }, (_, f) => {
-    const wobble = Math.sin((f / Math.max(frames - 1, 1)) * Math.PI);
-    return RV_DUMMY_SEGMENT_LABELS.map((label, i) => ({
-      segment: i + 1,
-      label,
-      strain: Number((-13 - i * 1.1 - wobble * 6).toFixed(1)),
-    }));
-  });
-}
-
+/**
+ * RV side of the Strain Results panel. GCS and GAS are two separate metrics
+ * (not combined) — the parent already resolved every value to whichever one
+ * the RV toggle selects. Reuses LV's RegionalStrainByRegion/FullCycleChart
+ * (they only care about segment numbers/labels/values) and
+ * getStrainColor(..., "GCS") since both RV metrics share GCS's "more negative
+ * is healthier" convention.
+ */
 function RvStrainPanel({
   usingRealRvSeries,
   usingRealRvStrain,
   rvCurveData,
+  rvCycleSeries,
   rvRegionValues,
-  rvCurrentAverage,
-  rvPeakValue,
   currentTime,
   strainCompute,
-  seriesBusy,
 }: {
   usingRealRvSeries: boolean;
   usingRealRvStrain: boolean;
   rvCurveData: { frame: number; time: number; strain: number }[];
+  rvCycleSeries: { segment: number; label: string; strain: number }[][];
   rvRegionValues: { segment: number; label: string; strain: number }[];
   rvCurrentAverage: number;
   rvPeakValue: number;
@@ -2300,20 +2295,6 @@ function RvStrainPanel({
   const isGas = rvMetricType === "GAS";
   const [rvCurveView, setRvCurveView] = useState<"global" | "region" | "cycle">("global");
 
-  // A 9-segment prototype series, illustrative for both metrics: real GCS
-  // only has the 6-region breakdown in rvRegionValues (used for "Global"
-  // below); GAS has no computation at all, so it's dummy everywhere.
-  const dummyFrameCount = rvCurveData.length || 30;
-  const dummyRvSeries = useMemo(() => buildDummyRvCycleSeries(dummyFrameCount), [dummyFrameCount]);
-  const dummyRvGlobalCurve = useMemo(
-    () => dummyRvSeries.map((frameSegs, i) => ({
-      frame: i + 1,
-      time: rvCurveData[i]?.time ?? Math.round((i / Math.max(dummyRvSeries.length - 1, 1)) * 1200),
-      strain: Number((frameSegs.reduce((sum, d) => sum + d.strain, 0) / frameSegs.length).toFixed(1)),
-    })),
-    [dummyRvSeries, rvCurveData],
-  );
-
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5">
@@ -2322,38 +2303,34 @@ function RvStrainPanel({
         </span>
         <p className="text-[9.5px] leading-snug text-amber-800 dark:text-amber-300">
           {isGas
-            ? "RV GAS has no computation in this pipeline yet — every value below is a placeholder, not a measurement."
-            : "RV GCS is still prototype and in progress — computed, but not validated against a reference range yet."}
+            ? "RV GAS = % change in RV cavity area per segment (short-axis). Computed, but not validated against a reference range yet."
+            : "RV GCS = % change in RV free-wall length per segment (short-axis). Computed, but not validated against a reference range yet."}
         </p>
       </div>
 
-      {!isGas && !usingRealRvSeries && (
+      {!usingRealRvSeries && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">
           <p className="text-[10px] leading-snug text-muted-foreground">
             {usingRealRvStrain
               ? "Only the ED→ES RV strain is stored — compute all frames for a full-cycle curve."
-              : "No RV strain computed for this model yet."}
+              : `No RV ${rvMetricType} computed for this model yet${isGas ? " (results from before GAS was added need recomputing)" : ""}.`}
           </p>
         </div>
       )}
 
-      {/* Global / By Region / Full Cycle — same structure as LV. Global uses
-          the real per-frame curve for GCS; By Region and Full Cycle are an
-          illustrative 9-segment prototype for both metrics (GAS is dummy
-          everywhere, including Global). */}
+      {/* Global / By Region / Full Cycle — same structure as LV, all from the
+          real per-frame 9-segment series. */}
       <div className="rounded-lg border border-border bg-background p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
             {rvCurveView === "global"
-              ? (isGas ? "Prototype — Global GAS Curve" : "Global GCS Curve")
+              ? `Global ${rvMetricType} Curve`
               : rvCurveView === "region"
-              ? "Prototype — By Region (9 segments)"
-              : "Prototype — Full Cycle (9 segments)"}
+              ? `By Region (9 segments) — ${rvMetricType}`
+              : `Full Cycle (9 segments) — ${rvMetricType}`}
           </h4>
-          {rvCurveView === "global" && (
-            <span className="text-[10px] text-muted-foreground shrink-0">
-              {isGas ? "Dummy preview" : usingRealRvSeries ? `${rvCurveData.length} frames` : "Preview"}
-            </span>
+          {usingRealRvSeries && (
+            <span className="text-[10px] text-muted-foreground shrink-0">{rvCurveData.length} frames</span>
           )}
         </div>
         <div className="mb-2 grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
@@ -2378,10 +2355,12 @@ function RvStrainPanel({
           ))}
         </div>
 
-        {rvCurveView === "global" && (isGas || usingRealRvSeries) && (
+        {!usingRealRvSeries ? (
+          <p className="py-4 text-center text-[10px] text-muted-foreground">No full-cycle RV {rvMetricType} computed for this model yet.</p>
+        ) : rvCurveView === "global" ? (
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={isGas ? dummyRvGlobalCurve : rvCurveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
+              <LineChart data={rvCurveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
                 <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
                 <YAxis
@@ -2393,7 +2372,7 @@ function RvStrainPanel({
                 />
                 <Tooltip
                   cursor={{ stroke: "var(--border)" }}
-                  formatter={(value) => [`${Number(value).toFixed(1)}%`, isGas ? "RV GAS (dummy)" : "RV GCS"]}
+                  formatter={(value) => [`${Number(value).toFixed(1)}%`, `RV ${rvMetricType}`]}
                   labelFormatter={(label) => `${label} ms`}
                   contentStyle={{
                     borderRadius: 8,
@@ -2408,42 +2387,23 @@ function RvStrainPanel({
               </LineChart>
             </ResponsiveContainer>
           </div>
-        )}
-        {rvCurveView === "global" && !isGas && !usingRealRvSeries && (
-          <p className="py-4 text-center text-[10px] text-muted-foreground">No RV strain computed for this model yet.</p>
-        )}
-
-        {rvCurveView === "region" && <RegionalStrainByRegion series={dummyRvSeries} ringForSegment={ringForRvSegment} />}
-
-        {rvCurveView === "cycle" && (
+        ) : rvCurveView === "region" ? (
+          <RegionalStrainByRegion series={rvCycleSeries} ringForSegment={ringForRvSegment} />
+        ) : (
           <div className="w-full overflow-x-auto">
-            <FullCycleChart series={dummyRvSeries} strainType="GCS" width={480} height={240} ringForSegment={ringForRvSegment} />
+            <FullCycleChart series={rvCycleSeries} strainType="GCS" width={480} height={240} ringForSegment={ringForRvSegment} />
           </div>
-        )}
-
-        {rvCurveView !== "global" && (
-          <p className="mt-2 text-[9px] text-amber-700 dark:text-amber-400">
-            Prototype — illustrative 9-segment breakdown, not backed by a real per-region computation yet.
-          </p>
         )}
       </div>
 
       <div className="rounded-lg border border-border bg-background">
         <div className="border-b border-border px-3 py-2">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-            {rvCurveView === "global" ? "Region Values" : "Prototype — Segment Values"}
-          </h4>
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Region Values — {rvMetricType}</h4>
         </div>
-        {rvCurveView === "global" ? (
-          isGas ? (
-            <p className="p-3 text-[10px] text-muted-foreground">Switch to RV GCS for computed (still prototype) region values.</p>
-          ) : rvRegionValues.length ? (
-            <SegmentValuesTable segmentValues={rvRegionValues} strainType="GCS" />
-          ) : (
-            <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
-          )
+        {rvRegionValues.length ? (
+          <SegmentValuesTable segmentValues={rvRegionValues} strainType="GCS" />
         ) : (
-          <SegmentValuesTable segmentValues={dummyRvSeries[0] ?? []} strainType="GCS" />
+          <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
         )}
       </div>
     </div>

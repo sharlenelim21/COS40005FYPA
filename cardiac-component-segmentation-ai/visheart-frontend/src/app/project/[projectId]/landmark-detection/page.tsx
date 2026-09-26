@@ -2919,6 +2919,10 @@ function StrainPreviewPanel({
     const vals = (realRvSeries?.frames ?? []).map((f) => f.global_rv_strain).filter((v): v is number => typeof v === "number");
     return vals.length ? Math.min(...vals) : null;
   }, [realRvSeries]);
+  const rvPeakGas = useMemo(() => {
+    const vals = (realRvSeries?.frames ?? []).map((f) => f.global_rv_gas).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  }, [realRvSeries]);
 
   const { getReconstructionGLB, reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
@@ -2965,7 +2969,7 @@ function StrainPreviewPanel({
   // parent's 1-based selectedSegment via handleSegClick below.
   const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
   // Selection state for the RV crescent — kept separate from the LV's
-  // selectedSegment (1-17) since RV region numbers (1-6) would otherwise
+  // selectedSegment (1-17) since RV region numbers (1-9) would otherwise
   // collide visually with LV segment numbers in the same 1-based range.
   const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
   const [rvHeartTooltip, setRvHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
@@ -3024,6 +3028,7 @@ function StrainPreviewPanel({
     ? (fullCycleRvFrame ? {
         regions: fullCycleRvFrame.regions,
         global_rv_strain: fullCycleRvFrame.global_rv_strain,
+        global_rv_gas: fullCycleRvFrame.global_rv_gas,
         vox_xy_mm: 0,
         alignment_source: "stored",
         edFrameIndex: realRvSeries?.edFrameIndex,
@@ -3031,6 +3036,16 @@ function StrainPreviewPanel({
         computedFor: { mode: "full-cycle", model: strainModel, edFrameIndex: realRvSeries?.edFrameIndex ?? 0 },
       } : null)
     : (rvStrainMatchesSelection ? rvStrainResult : null);
+
+  // GCS and GAS are separate RV metrics (not combined). The bullseye reads
+  // `strain`, so for GAS swap in each region's `gas`. Results computed before
+  // the 9-segment backend have no `gas` -> null -> drawn as "no data".
+  const rvRegionsForDisplay = rvStrainForDisplay
+    ? (rvMetricType === "GAS"
+        ? rvStrainForDisplay.regions.map((r) => ({ ...r, strain: r.gas ?? null }))
+        : rvStrainForDisplay.regions)
+    : null;
+  const rvGasMissing = rvMetricType === "GAS" && !!rvRegionsForDisplay?.length && rvRegionsForDisplay.every((r) => r.strain == null);
 
   const displayData = strainForDisplay
     ? strainForDisplay.segments.map((s) => ({
@@ -3073,8 +3088,8 @@ function StrainPreviewPanel({
         <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-medium text-muted-foreground">
           LV {selectedStrainType}
         </span>
-        {/* RV is always labeled Prototype first — GCS is real but has no
-            published reference range, GAS has no computation at all. */}
+        {/* RV is always labeled Prototype — GCS and GAS are computed from the
+            RV cavity (no RV myocardium label) and have no validated reference range. */}
         <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
           Prototype — RV {rvMetricType}
         </span>
@@ -3187,7 +3202,7 @@ function StrainPreviewPanel({
                 sharedMax={sharedMax}
                 reverseColors={reverseColors}
                 alignmentAngleDeg={strainForDisplay?.alignment_angle_deg}
-                rvRegions={rvMetricType === "GCS" ? (rvStrainForDisplay?.regions ?? null) : null}
+                rvRegions={rvRegionsForDisplay}
                 selectedRvRegion={chamberFocus === "combined" ? selectedCombinedRvRegion : selectedRvRegion}
                 onRvRegionClick={(region) => (chamberFocus === "combined" ? setSelectedCombinedRvRegion : setSelectedRvRegion)((prev) => (prev === region ? null : region))}
                 onRvRegionHover={setTooltip}
@@ -3203,10 +3218,10 @@ function StrainPreviewPanel({
                 </span>
               ))}
             </div>
-            {rvMetricType === "GAS" && (
+            {rvGasMissing && (
               <div className="mt-1 flex-shrink-0 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1 text-center">
                 <p className="text-[8.5px] leading-snug text-amber-700 dark:text-amber-400">
-                  RV GAS has no computation in this pipeline yet — switch to RV GCS for computed (still prototype) values.
+                  This RV result was computed before GAS was added — recompute RV strain to see GAS.
                 </p>
               </div>
             )}
@@ -3314,7 +3329,7 @@ function StrainPreviewPanel({
                     sidebar equivalent (its sidebar shows the chart instead),
                     so it keeps its own copy here. */}
                 {isFullCycle && (
-                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} loading={isComputeBusy} />
                 )}
               </>
             ) : chamberFocus === "combined" && reconstructionMeshUrl && reconstructionLabels?.length && rvMesh.available && rvMesh.meshUrl ? (
@@ -3362,7 +3377,7 @@ function StrainPreviewPanel({
                       peakGcs={lvPeakGcs}
                       loading={isComputeBusy}
                     />
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} loading={isComputeBusy} />
                   </div>
                 )}
               </>
@@ -3390,7 +3405,7 @@ function StrainPreviewPanel({
                         loading={isComputeBusy}
                       />
                     )}
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} loading={isComputeBusy} />
                   </>
                 )}
               </div>
@@ -3494,11 +3509,11 @@ function LvFullCycleStrainTiles({
   );
 }
 
-/** Full-cycle's RV summary — CURRENT + PEAK GCS (real, unvalidated); GAS has
- *  no computation at all, shown as an explicit placeholder either way. */
+/** Full-cycle's RV summary — CURRENT + PEAK for GCS and GAS, reported as two
+ *  separate metrics (real, unvalidated). Peak = most negative across the cycle. */
 function RvFullCycleStrainTiles({
-  currentGcs, peakGcs, loading,
-}: { currentGcs: number | null; peakGcs: number | null; loading?: boolean }) {
+  currentGcs, peakGcs, currentGas, peakGas, loading,
+}: { currentGcs: number | null; peakGcs: number | null; currentGas: number | null; peakGas: number | null; loading?: boolean }) {
   const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
   return (
     <div>
@@ -3509,8 +3524,8 @@ function RvFullCycleStrainTiles({
       <div className="grid grid-cols-2 gap-1">
         <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
         <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
-        <KpiTile label="Current GAS" value="—" />
-        <KpiTile label="Peak GAS" value="—" />
+        <KpiTile label="Current GAS" value={fmt(currentGas)} loading={loading} />
+        <KpiTile label="Peak GAS" value={fmt(peakGas)} loading={loading} />
       </div>
     </div>
   );

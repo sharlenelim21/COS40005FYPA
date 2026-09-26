@@ -48,17 +48,23 @@ export interface StrainSegmentData {
 }
 
 /**
- * Regional RV strain. Unlike RealStrainSegment's grs/gcs (wall-thickness and
- * circumference), `strain` here is % change in RV cavity boundary radius —
- * there is no separate RV free-wall myocardium label to measure thickness
- * against, so this mirrors the same radius-based methodology GCS uses,
- * applied to the RV cavity instead of the LV endocardium. Basal/mid
- * free-wall regions only (no apex/RVOT/LVOT breakdown yet).
+ * Regional RV strain over the 9-segment RV bullseye (basal/mid/apical x 3
+ * sections, Seg1 inferior → Seg3 anterior; rays cast from the LV centroid,
+ * wedges fixed at ED). There is no RV free-wall myocardium label, so per
+ * segment the backend measures the RV cavity: `gcs` = free-wall chord %
+ * change, `gas` = cavity area % change. `strain` currently equals `gcs`
+ * until the two are combined. See bullseye_analysis.mask_to_rv_regions.
  */
 export interface RvStrainRegion {
   region: number;
   label: string;
   strain: number | null;
+  gcs?: number | null;
+  gas?: number | null;
+  chord_ed_mm?: number | null;
+  chord_es_mm?: number | null;
+  area_ed_mm2?: number | null;
+  area_es_mm2?: number | null;
   radius_ed_mm?: number | null;
   radius_es_mm?: number | null;
 }
@@ -66,6 +72,8 @@ export interface RvStrainRegion {
 export interface RvStrainResult {
   regions: RvStrainRegion[];
   global_rv_strain: number | null;
+  global_rv_gcs?: number | null;
+  global_rv_gas?: number | null;
   vox_xy_mm: number;
   alignment_source: string;
   alignment_angle_deg?: number | null;

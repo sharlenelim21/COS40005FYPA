@@ -278,15 +278,22 @@ export type StrainSeries = {
 };
 
 /**
- * Regional RV strain — sibling to `Strain`/`StrainSeries` above. `strain` per
- * region is % change in RV cavity boundary radius, not wall thickness (there
- * is no separate RV free-wall myocardium label) — see the backend's
- * bullseye_analysis.mask_to_rv_regions for the full rationale. No GRS/GCS
- * split: it's a single radius-based measure, closer in spirit to GCS.
+ * Regional RV strain — sibling to `Strain`/`StrainSeries` above. 9 segments
+ * (basal/mid/apical x 3); per segment `gcs` (free-wall chord % change) and
+ * `gas` (cavity area % change), with `strain` = `gcs` for now — see the
+ * backend's bullseye_analysis.mask_to_rv_regions for the full rationale.
  */
 export type RvStrain = {
-  regions: { region: number; label: string; strain: number | null; radius_ed_mm?: number | null; radius_es_mm?: number | null }[];
+  regions: {
+    region: number; label: string; strain: number | null;
+    gcs?: number | null; gas?: number | null;
+    chord_ed_mm?: number | null; chord_es_mm?: number | null;
+    area_ed_mm2?: number | null; area_es_mm2?: number | null;
+    radius_ed_mm?: number | null; radius_es_mm?: number | null;
+  }[];
   global_rv_strain: number | null;
+  global_rv_gcs?: number | null;
+  global_rv_gas?: number | null;
   edFrameIndex?: number;
   esFrameIndex?: number;
   computed_at?: string;
@@ -296,7 +303,8 @@ export type RvStrainSeries = {
   frames: {
     frameIndex: number;
     global_rv_strain: number | null;
-    regions: { region: number; label: string; strain: number | null; radius_mm?: number | null }[];
+    global_rv_gas?: number | null;
+    regions: { region: number; label: string; strain: number | null; gas?: number | null; radius_mm?: number | null }[];
   }[];
   edFrameIndex: number;
   peakFrameIndex?: number | null;

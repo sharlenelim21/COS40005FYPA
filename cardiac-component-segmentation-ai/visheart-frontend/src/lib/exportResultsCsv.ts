@@ -288,18 +288,17 @@ export function buildResultsCsv(
   lines.push("");
 
   // ── Per-region RV strain (ED→ES) ────────────────────────────────────────
-  // RV strain is % change in cavity boundary radius (not wall thickness —
-  // there's no separate RV free-wall myocardium label to ray-cast against),
-  // over 6 basal/mid free-wall regions rather than 17 AHA segments. See
-  // bullseye_analysis.mask_to_rv_regions for the full rationale.
-  lines.push(row("REGIONAL RV STRAIN — ED→ES (6 free-wall regions)"));
-  lines.push(row("Model", "Region", "Label", "RV Strain %", "Radius ED (mm)", "Radius ES (mm)"));
+  // 9-segment RV bullseye (basal/mid/apical x 3). No RV free-wall myocardium
+  // label, so GCS = free-wall chord % change and GAS = cavity area % change.
+  // See bullseye_analysis.mask_to_rv_regions for the full rationale.
+  lines.push(row("REGIONAL RV STRAIN — ED→ES (9 segments)"));
+  lines.push(row("Model", "Region", "Label", "RV GCS %", "RV GAS %", "Chord ED (mm)", "Chord ES (mm)", "Area ED (mm²)", "Area ES (mm²)"));
   for (const m of present) {
     const regions = byModel[m]!.rvStrain?.regions;
-    if (!regions?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
+    if (!regions?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 9)); continue; }
     for (const r of regions) {
-      lines.push(row(MODEL_LABEL[m], r.region, r.label, r.strain,
-        r.radius_ed_mm ?? null, r.radius_es_mm ?? null));
+      lines.push(row(MODEL_LABEL[m], r.region, r.label, r.gcs ?? r.strain, r.gas ?? null,
+        r.chord_ed_mm ?? null, r.chord_es_mm ?? null, r.area_ed_mm2 ?? null, r.area_es_mm2 ?? null));
     }
   }
   lines.push("");

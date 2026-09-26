@@ -14,7 +14,7 @@
  * measurement that wasn't computed.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
@@ -34,14 +34,15 @@ const RINGS = [
 const PATTERN_COLORS: Record<string, string> = { NOR: "#15803d", DCM: "#b45309", HCM: "#dc2626" };
 const RV_PATTERN_COLORS: Record<string, string> = { ARVC: "#dc2626", PAH: "#7c3aed", GENERAL: "#64748b" };
 
-// Notebook-style names for the real 6-region RV free-wall breakdown (basal 1-3,
-// mid 1-3) — same convention/order as CRESCENT_REGION_NAMES in
+// Notebook-style names for the 9-segment RV breakdown (basal/mid/apical 1-3)
+// — same convention/order as CRESCENT_REGION_NAMES in
 // CombinedVentricularChart.tsx and RV_REAL_REGION_NAMES in LandmarkSidebar.tsx.
-// The backend's own RvStrainRegion.label ("Basal RV Free Wall 1") doesn't match
-// the RV-deformation notebook's naming, so this overrides it for display.
+// Newer backend results already use these labels; this also covers results
+// stored with the old "Basal RV Free Wall 1" labels.
 const RV_REAL_REGION_NAMES = [
   "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
   "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+  "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
 ];
 const rvSegLabel = (region: number, fallback: string) => RV_REAL_REGION_NAMES[region - 1] ?? fallback;
 
@@ -572,12 +573,20 @@ export function InteractiveReport({
   const [strainType, setStrainType] = useState<StrainType>("GCS");
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
   const [hoverFrame, setHoverFrame] = useState<number | null>(null);
-  // RV's own metric toggle, mirroring LV's strainType above. GAS has no backend
-  // computation yet (see RvStrainPanel in LandmarkSidebar.tsx) — selecting it
-  // here shows the same "not computed yet" placeholder the sidebar does,
-  // rather than pretending rvStrain.regions (which is always the GCS-style
-  // cavity-radius measure) is GAS data.
+  // RV's own metric toggle, mirroring LV's strainType above. GCS and GAS are
+  // separate metrics (never combined); rvShown below resolves every region /
+  // global value to the selected one.
   const [rvMetricType, setRvMetricType] = useState<"GCS" | "GAS">("GCS");
+  const rvPick = useCallback(
+    (r: { strain: number | null; gas?: number | null }) => (rvMetricType === "GAS" ? r.gas ?? null : r.strain),
+    [rvMetricType],
+  );
+  const rvShown = useMemo(() => rvStrain ? {
+    ...rvStrain,
+    regions: rvStrain.regions.map((r) => ({ ...r, strain: rvPick(r) })),
+    global_rv_strain: rvMetricType === "GAS" ? rvStrain.global_rv_gas ?? null : rvStrain.global_rv_strain,
+  } : rvStrain, [rvStrain, rvMetricType, rvPick]);
+  const rvShownHasData = !!rvShown?.regions?.some((r) => r.strain != null);
 
   const key = strainType === "GRS" ? "grs" : "gcs";
 
@@ -653,16 +662,16 @@ export function InteractiveReport({
   /**
    * RV per-frame curves — the RV twin of `curves` above, built the same way so
    * the two charts read identically. One row per frame, one dataKey per RV
-   * region (r1..r6).
+   * region (r1..r9), for the selected RV metric (GCS or GAS).
    */
   const rvCurves = useMemo(() => {
-    if (!rvStrainSeries?.frames?.length) return [];
+    if (!rvStrainSeries?.frames?.some((f) => f.regions?.some((r) => rvPick(r) != null))) return [];
     return rvStrainSeries.frames.map((f) => {
       const row: Record<string, number | null> = { frame: f.frameIndex };
-      for (const r of f.regions ?? []) row[`r${r.region}`] = r.strain ?? null;
+      for (const r of f.regions ?? []) row[`r${r.region}`] = rvPick(r);
       return row;
     });
-  }, [rvStrainSeries]);
+  }, [rvStrainSeries, rvPick]);
 
   /** Region ids/labels for the RV legend and lines. Prefers the series (it has
    *  every frame) and falls back to the single ED→ES result. */
@@ -727,12 +736,15 @@ export function InteractiveReport({
   // fall back to "—", not a fake number.
   const rvPeakGcs: number | null = rvStrainSeries?.peak_global_rv_strain ?? rvStrain?.global_rv_strain ?? null;
   const hasRealRvGcs = rvPeakGcs != null;
-  // DUMMY — Global Area Strain has no computation anywhere in this pipeline
-  // yet (needs a per-frame single-slice RV cavity-area script, not built).
-  // Fixed preview number stands in until that exists, clearly labelled
-  // "preview" everywhere it's shown (Cardiac Measurements tiles + RV Health
-  // table) — unlike GCS above, this one is NOT real data.
-  const rvPeakGasPreview = 28.7;
+  // REAL — RV Global Area Strain (% change in RV cavity area, 9-segment
+  // backend), reported separately from GCS (never combined). Peak = most
+  // negative across the series, else the single ED→ES value. Still "preview"
+  // (no validated reference range). null on results computed before GAS existed.
+  const rvPeakGas: number | null = (() => {
+    const vals = (rvStrainSeries?.frames ?? []).map((f) => f.global_rv_gas).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : rvStrain?.global_rv_gas ?? null;
+  })();
+  const hasRealRvGas = rvPeakGas != null;
 
   const rvCards: { label: string; value: string; unit: string; indexed?: string; preview?: boolean }[] = [
     { label: "RV Ejection Fraction (RVEF)", value: fmt(rv?.RVEF), unit: "%" },
@@ -740,7 +752,7 @@ export function InteractiveReport({
     { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL", indexed: indexedMlM2(rv?.RVESV) },
     { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL", indexed: indexedMlM2(rv?.RV_SV) },
     { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", preview: true },
-    { label: "RV Peak Global Area Strain (RV GAS)", value: rvPeakGasPreview.toFixed(1), unit: "%", preview: true },
+    { label: "RV Peak Global Area Strain (RV GAS)", value: fmt(rvPeakGas), unit: "%", preview: true },
   ];
 
   // RV health status (graded by the backend). A stored result is shown only
@@ -1319,12 +1331,13 @@ export function InteractiveReport({
                       ? { text: "Preview — no validated RV-specific reference range", level: "warn" }
                       : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" },
                     preview: true },
-                  // Dummy number (no GAS computation exists in this pipeline yet) — flagged
-                  // `preview: true` so the value renders muted with an explicit "preview" tag,
-                  // the same visual treatment as the Cardiac Measurements tile above, instead
-                  // of looking like a real measured result next to RVEF/RVEDVI.
-                  { key: "PeakGAS_RV", name: "Peak Global Area Strain", value: rvPeakGasPreview, unit: "%", min: 0, max: 50, normalLabel: "not validated",
-                    zones: [], interp: { text: "Preview — no validated reference range", level: "warn" }, preview: true },
+                  // Real GAS (cavity-area % change, short-axis) — same `preview` treatment
+                  // as GCS above: no validated RV reference range for this measure.
+                  { key: "PeakGAS_RV", name: "Peak Global Area Strain", value: rvPeakGas, unit: "%", min: -60, max: 0, normalLabel: "not validated",
+                    zones: [], interp: hasRealRvGas
+                      ? { text: "Preview — no validated RV-specific reference range", level: "warn" }
+                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" },
+                    preview: true },
                 ];
 
                 return (
@@ -1518,13 +1531,13 @@ export function InteractiveReport({
                           Advisory
                         </span>
                       </div>
-                      {rvStrain?.regions?.length ? (
+                      {rvShown && rvShownHasData ? (
                         <>
                           <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                             Global RV {rvMetricType}
                           </p>
                           <p className="text-[19px] font-bold tabular-nums text-foreground">
-                            {fmt(rvStrain.global_rv_strain)}
+                            {fmt(rvShown.global_rv_strain)}
                             <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
                           </p>
                           <p className="mt-2 text-[11px] text-muted-foreground">
@@ -1979,12 +1992,12 @@ export function InteractiveReport({
           validated longitudinal one, taken from short-axis slices. Exploratory. */}
       <Card
         title="RV Regional Findings"
-        subtitle={`Exploratory · RV cavity-radius strain (${rvMetricType}), short-axis · advisory`}
+        subtitle={`Exploratory · RV ${rvMetricType === "GAS" ? "cavity-area" : "free-wall length"} strain (${rvMetricType}), short-axis · advisory`}
         icon={<Heart className="h-4 w-4 text-primary" />}
         sectionRef={rvCardRef}
         action={
           <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-            {rvMetricType === "GCS" && selectedRvRegion !== null && (
+            {selectedRvRegion !== null && (
               <button
                 type="button"
                 onClick={() => setSelectedRvRegion(null)}
@@ -2014,15 +2027,11 @@ export function InteractiveReport({
           </div>
         }
       >
-        {rvMetricType === "GAS" ? (
+        {!rvShown || !rvShownHasData ? (
           <p className="py-5 text-center text-sm text-muted-foreground">
-            RV GAS has no computation in this pipeline yet — switch to GCS for the computed
-            (still prototype) cavity-radius strain.
-          </p>
-        ) : !rvStrain?.regions?.length ? (
-          <p className="py-5 text-center text-sm text-muted-foreground">
-            No RV regional strain computed for this model yet — run RV strain from the
-            Landmark Detection page.
+            {rvStrain?.regions?.length && rvMetricType === "GAS"
+              ? "This RV result was computed before GAS was added — recompute RV strain from the Landmark Detection page to see GAS."
+              : "No RV regional strain computed for this model yet — run RV strain from the Landmark Detection page."}
           </p>
         ) : (
           <div className="grid grid-cols-1 gap-6 md:grid-cols-[420px_1fr]">
@@ -2045,7 +2054,7 @@ export function InteractiveReport({
                 strainType="GRS"
                 showLv={false}
                 showRv={true}
-                rvRegions={rvStrain.regions}
+                rvRegions={rvShown.regions}
                 selectedRvRegion={selectedRvRegion}
                 onRvRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
                 // Match the LV Bullseye's own divider/label treatment above
@@ -2066,17 +2075,17 @@ export function InteractiveReport({
                     Global RV {rvMetricType}
                   </span>
                   <span className="text-[19px] font-bold tabular-nums text-foreground">
-                    {fmt(rvStrain.global_rv_strain)}
+                    {fmt(rvShown.global_rv_strain)}
                     <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
                   </span>
                 </div>
-                {rvStrain.edFrameIndex != null && rvStrain.esFrameIndex != null && (
+                {rvShown.edFrameIndex != null && rvShown.esFrameIndex != null && (
                   <div>
                     <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
                       Frames
                     </span>
                     <span className="text-[13px] font-semibold tabular-nums text-foreground">
-                      ED {rvStrain.edFrameIndex} → ES {rvStrain.esFrameIndex}
+                      ED {rvShown.edFrameIndex} → ES {rvShown.esFrameIndex}
                     </span>
                   </div>
                 )}
@@ -2091,7 +2100,7 @@ export function InteractiveReport({
                     <LineChart data={rvCurves} margin={{ top: 8, right: 12, left: -12, bottom: 4 }}>
                       <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
                       <XAxis dataKey="frame" tick={{ fontSize: 11 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} label={{ value: "RV strain (%)", angle: -90, position: "insideLeft", fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} label={{ value: `RV ${rvMetricType} (%)`, angle: -90, position: "insideLeft", fontSize: 11 }} />
                       <ReferenceLine y={0} stroke="var(--border)" />
                       <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                       {[...rvRegionLabels]
@@ -2104,7 +2113,7 @@ export function InteractiveReport({
                               key={r.region}
                               dataKey={`r${r.region}`}
                               name={r.label}
-                              stroke={RING_COLOR_VAR[r.region <= 3 ? "basal" : "mid"]}
+                              stroke={RING_COLOR_VAR[r.region <= 3 ? "basal" : r.region <= 6 ? "mid" : "apical"]}
                               strokeWidth={isOn ? 3 : 1.4}
                               dot={false}
                               opacity={dimmed ? 0.12 : 1}
@@ -2127,7 +2136,7 @@ export function InteractiveReport({
               {/* Per region. Deliberately NO severity colouring: this measure
                   has no validated cutoff, so tinting it would imply one. */}
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {rvStrain.regions.map((r) => (
+                {rvShown.regions.map((r) => (
                   <button
                     key={r.region}
                     type="button"
@@ -2152,10 +2161,10 @@ export function InteractiveReport({
               </div>
 
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-                {(["basal", "mid"] as const).map((band) => (
+                {(["basal", "mid", "apical"] as const).map((band) => (
                   <span key={band} className="flex items-center gap-1.5 text-[10.5px] capitalize text-muted-foreground">
                     <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: RING_COLOR_VAR[band] }} />
-                    {band} free-wall
+                    {band}
                   </span>
                 ))}
                 <span className="text-[10.5px] text-muted-foreground/70">· click a region or curve to focus</span>
@@ -2163,11 +2172,12 @@ export function InteractiveReport({
 
               <p className="mt-3 text-[10px] leading-snug text-muted-foreground">
                 <span className="font-semibold text-foreground">Exploratory only.</span>{" "}
-                RV strain here is the percentage change in RV cavity boundary radius between
-                end-diastole and end-systole — not a wall-thickness measure like the LV&apos;s
-                GRS/GCS, and not the validated longitudinal RV measure. Negative values
-                indicate the cavity shrinking (the healthy direction). No severity threshold
-                is applied and this does not contribute to any health-status grade.
+                9 RV segments (basal / mid / apical × 3), rays cast from the LV centre. GCS is
+                the % change in RV free-wall length and GAS the % change in RV cavity area
+                between end-diastole and end-systole — two separate measures, not combined, and
+                not the validated longitudinal RV measure. Negative values mean contraction (the
+                healthy direction). No severity threshold is applied and this does not contribute
+                to any health-status grade.
               </p>
             </div>
           </div>
