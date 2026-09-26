@@ -30,6 +30,7 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
+import { KineticProgress } from "@/components/ui/kinetic-progress";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
@@ -136,6 +137,7 @@ export default function LandmarkDetectionPage() {
   // Declared here (rather than lower down with the other bullseye state) because activeModel's
   // default below needs it.
   const [existingSegModels, setExistingSegModels] = useState<{ medsam: boolean; unet: boolean }>({ medsam: false, unet: false });
+  const [segModelsLoaded, setSegModelsLoaded] = useState(false);
   const modelParam = searchParams.get("model");
   const activeModel: "unet" | "medsam" =
     modelParam === "medsam" ? "medsam"
@@ -197,6 +199,7 @@ export default function LandmarkDetectionPage() {
     confidentCount,
     handleRunDetection,
     handleRerunDetection,
+    handleAttachToJob,
     handleFileSelect,
     handleClearReplacementFile,
     handleTogglePlay,
@@ -362,6 +365,7 @@ export default function LandmarkDetectionPage() {
       setAvailableBullseyeModels({ medsam: medsamHasBullseye, unet: unetHasBullseye });
       // Whether the editable mask itself exists (regardless of bullseye state)
       setExistingSegModels({ medsam: medsamMasks.length > 0, unet: unetMasks.length > 0 });
+      setSegModelsLoaded(true);
       // Extract frame count from the non-MedSAM mask (used for "Choose frames" strain mode)
       const nonMedSAMWithFrames = editables.find((m) => (m as any).frames?.length > 0);
       if (nonMedSAMWithFrames) {
@@ -435,6 +439,7 @@ export default function LandmarkDetectionPage() {
       setBullseyeData(null);
       setFrameBullseyeSeries(null);
       setBullseyeLoading(false);
+      setSegModelsLoaded(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, selectedBullseyeModel]);
@@ -442,6 +447,59 @@ export default function LandmarkDetectionPage() {
   useEffect(() => {
     fetchBullseye();
   }, [fetchBullseye]);
+
+  const [segPending, setSegPending] = useState<boolean | null>(null);
+  const [segWaitNonce, setSegWaitNonce] = useState(0);
+  const maskCreatedAtRef = useRef<Record<"medsam" | "unet", number | null>>({ medsam: null, unet: null });
+  const fetchBullseyeRef = useRef(fetchBullseye);
+  fetchBullseyeRef.current = fetchBullseye;
+
+  const checkSegmentationPending = useCallback(async (): Promise<boolean> => {
+    let maskCreatedAt: Record<"medsam" | "unet", number | null> = { medsam: null, unet: null };
+    try {
+      const res = await segmentationApi.getSegmentationResults(projectId);
+      const editables = ((res?.segmentations ?? []) as Array<{ name?: string; isMedSAMOutput?: boolean; createdAt?: string; [key: string]: unknown }>)
+        .filter((m) => m.isMedSAMOutput === false);
+      const newest = (model: "medsam" | "unet") => {
+        const times = editables
+          .filter((m) => maskBelongsTo(m, model))
+          .map((m) => Date.parse(String(m.createdAt ?? "")))
+          .filter(Number.isFinite);
+        return times.length ? Math.max(...times) : null;
+      };
+      maskCreatedAt = { medsam: newest("medsam"), unet: newest("unet") };
+    } catch {
+    }
+    const pending = await landmarkApi.segmentationPending(projectId, maskCreatedAt);
+    maskCreatedAtRef.current = maskCreatedAt;
+    return pending;
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let waited = false;
+
+    const check = async () => {
+      const pending = await checkSegmentationPending();
+      if (cancelled) return;
+      if (pending) {
+        waited = true;
+        setSegPending(true);
+        timer = setTimeout(check, 5000);
+        return;
+      }
+      if (waited) await fetchBullseyeRef.current();
+      if (!cancelled) setSegPending(false);
+    };
+    check();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [projectId, checkSegmentationPending, segWaitNonce]);
 
   // Landmark dot visibility
   const [visibleLandmarks, setVisibleLandmarks] = useState<Set<string>>(
@@ -556,19 +614,25 @@ export default function LandmarkDetectionPage() {
     };
   }, [state.nTotal, state.nCollapsed, state.n2ch, state.n1chFallback, state.predictions]);
 
+  const landmarkSegModel: "unet" | "medsam" =
+    existingSegModels[activeModel] ? activeModel
+    : existingSegModels.unet ? "unet"
+    : existingSegModels.medsam ? "medsam"
+    : activeModel;
+
   const runDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
     setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
-    handleRunDetection(model);
-  }, [handleRunDetection]);
+    handleRunDetection(model, landmarkSegModel);
+  }, [handleRunDetection, landmarkSegModel]);
 
   const rerunDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
     setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
-    handleRerunDetection(model);
-  }, [handleRerunDetection]);
+    handleRerunDetection(model, landmarkSegModel);
+  }, [handleRerunDetection, landmarkSegModel]);
 
   useEffect(() => {
     if (loading !== "done" || !projectData || autoRunStartedRef.current) return;
@@ -576,11 +640,32 @@ export default function LandmarkDetectionPage() {
     // (in-memory cache or persisted DB job) before firing a fresh GPU run.
     // If one is found, status flips to "done" and this effect stays a no-op.
     if (hydrating) return;
+    if (!segModelsLoaded) return;
+    if (segPending !== false) return;
     if (state.status !== "idle") return;
 
     autoRunStartedRef.current = true;
-    runDetectionAndResetEdits(selectedModel);
-  }, [loading, projectData, hydrating, state.status, runDetectionAndResetEdits, selectedModel]);
+    const model = landmarkSegModel;
+    const since = maskCreatedAtRef.current[model];
+    (async () => {
+      const done = since === null ? null : await landmarkApi.findCompletedJobSince(projectId, model, since);
+      if (done) handleAttachToJob(done, model);
+      else runDetectionAndResetEdits(selectedModel);
+    })();
+  }, [loading, projectData, hydrating, segModelsLoaded, segPending, state.status, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
+
+  const runUnlessSegmentationPending = useCallback(async (run: () => void) => {
+    if (segPending === true) return;
+    if (await checkSegmentationPending()) {
+      setSegPending(true);
+      setSegWaitNonce((n) => n + 1);
+      return;
+    }
+    run();
+  }, [segPending, checkSegmentationPending]);
+
+  const segmentationBlocksRuns = segPending === true;
+  const showSegmentationWait = segmentationBlocksRuns && state.status !== "running";
 
   const imageDimensions =
     state.imageDimensions.width > 0
@@ -1275,7 +1360,9 @@ export default function LandmarkDetectionPage() {
             <Button
               size="sm"
               className="text-xs gap-1.5"
-              onClick={() => rerunDetectionAndResetEdits(selectedModel)}
+              disabled={segmentationBlocksRuns}
+              title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
+              onClick={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Re-run
@@ -1301,11 +1388,26 @@ export default function LandmarkDetectionPage() {
           <span className="flex-1">{state.error}</span>
           <button
             type="button"
-            className="text-xs underline hover:no-underline"
-            onClick={() => runDetectionAndResetEdits(selectedModel)}
+            className="text-xs underline hover:no-underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
+            disabled={segmentationBlocksRuns}
+            title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
+            onClick={() => runUnlessSegmentationPending(() => runDetectionAndResetEdits(selectedModel))}
           >
             Try again
           </button>
+        </div>
+      )}
+      {showSegmentationWait && (
+        <div
+          className="flex items-center gap-2 px-4 py-2 bg-muted border-b text-sm text-muted-foreground flex-shrink-0"
+          role="status"
+        >
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          <span>
+            {state.status === "idle"
+              ? "Segmentation is still running. Landmark detection will start once the new mask is ready."
+              : "Segmentation is still running. Landmark detection can be re-run once the new mask is ready."}
+          </span>
         </div>
       )}
       {/* Mobile layout */}
@@ -1368,7 +1470,7 @@ export default function LandmarkDetectionPage() {
             onPrevFrame={handlePrevFrame}
             onSliderChange={handleSliderChange}
             onPlaybackSpeedChange={handlePlaybackSpeedChange}
-            onRerun={() => rerunDetectionAndResetEdits(selectedModel)}
+            onRerun={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
             onReset={handleReset}
             onFileSelect={handleFileSelect}
             onClearReplacementFile={handleClearReplacementFile}
@@ -1682,8 +1784,8 @@ export default function LandmarkDetectionPage() {
               )}
               {isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-background/70 backdrop-blur-sm z-20 rounded-lg">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  <div className="text-center">
+                  <div className="text-center space-y-3">
+                    <KineticProgress tone="primary" size="h-2" className="w-56" label="Landmark detection running" />
                     <p className="text-sm font-medium">Running landmark detection…</p>
                     <p className="text-xs text-muted-foreground mt-1">
                       This may take a moment
@@ -1757,7 +1859,7 @@ export default function LandmarkDetectionPage() {
                 onPrevFrame={handlePrevFrame}
                 onSliderChange={handleSliderChange}
                 onPlaybackSpeedChange={handlePlaybackSpeedChange}
-            onRerun={() => rerunDetectionAndResetEdits(selectedModel)}
+                onRerun={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
                 onReset={handleReset}
                 onFileSelect={handleFileSelect}
                 onClearReplacementFile={handleClearReplacementFile}
@@ -3529,7 +3631,7 @@ function StatusBadge({ status }: { status: LandmarkPageState["status"] }) {
   return (
     <span className={cn("inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full", cls)}>
       {status === "running" ? (
-        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        <KineticProgress size="h-1" className="w-4" label="Landmark detection running" />
       ) : status === "done" ? (
         <CheckCircle2 className="h-2.5 w-2.5" />
       ) : (

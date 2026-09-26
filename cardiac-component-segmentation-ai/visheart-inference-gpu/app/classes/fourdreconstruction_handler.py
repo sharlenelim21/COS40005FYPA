@@ -1360,6 +1360,7 @@ class FourDReconstructionHandler:
             chamber = (kwargs.get('chamber') or 'lv').lower()
             # Which seed produced each delivered frame, keyed by frame index.
             frame_selections: Dict[int, Dict[str, Any]] = {}
+            progress_callback = kwargs.get('progress_callback')
 
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
             print("[4D Reconstruction] Reconstruction started")
@@ -1460,9 +1461,10 @@ class FourDReconstructionHandler:
                 os.makedirs(output_dir, exist_ok=True)
                 input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
                 file_extension = export_format  # "obj" or "glb"
-                
-                # Process each extracted frame
+                         
                 for i, (frame_path, original_frame_idx) in enumerate(zip(temp_frame_paths, frame_indices)):
+                    if progress_callback:
+                        progress_callback(i, len(temp_frame_paths))
                     print(f"Processing frame {i+1}/{len(temp_frame_paths)}: original frame {original_frame_idx}")
                     
                     try:
@@ -1560,6 +1562,9 @@ class FourDReconstructionHandler:
                         # Continue with other frames
                         continue
                 
+                if progress_callback:
+                    progress_callback(len(temp_frame_paths), len(temp_frame_paths))
+
                 # Primary mesh file is the ED frame
                 ed_mesh_file = None
                 for mesh_file in mesh_files:

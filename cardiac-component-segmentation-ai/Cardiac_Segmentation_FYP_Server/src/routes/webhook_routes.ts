@@ -19,6 +19,7 @@ import {
   createProjectReconstruction,
   readProject,
   projectSegmentationMaskModel,
+  jobModel,
 } from "../services/database"; // Import database function to update job status
 import {
   JobStatus,
@@ -81,6 +82,29 @@ const handleMulterError = (error: any, req: Request, res: Response, next: NextFu
   
   next();
 };
+
+router.post("/gpu-progress", async (req: Request, res: Response) => {
+  const uuid = (req.headers["x-job-id"] as string | undefined) || (typeof req.body?.uuid === "string" ? req.body.uuid : undefined);
+  const done = Number(req.body?.done);
+  const total = Number(req.body?.total);
+  if (!uuid || !Number.isFinite(done) || !Number.isFinite(total) || total <= 0 || done < 0) {
+    return res.status(400).json({ success: false, message: "Expected uuid, done >= 0 and total > 0." });
+  }
+  const progress = Math.min(100, Math.floor((done / total) * 100));
+  try {
+    const result = await jobModel.updateOne(
+      { uuid, status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] } },
+      { $max: { progress }, $set: { status: JobStatus.IN_PROGRESS } },
+    );
+    logger.info(
+      `${serviceLocation}: gpu-progress job ${uuid}: ${progress}% (${done}/${total})${result.matchedCount > 0 ? "" : " -- ignored, job not active"}`,
+    );
+    return res.status(200).json({ success: true, updated: result.matchedCount > 0 });
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error storing progress for job ${uuid}`);
+    return res.status(500).json({ success: false, message: "Failed to store progress." });
+  }
+});
 
 router.post("/landmark-callback", async (req: Request, res: Response): Promise<void> => {
   const gpuJobId =

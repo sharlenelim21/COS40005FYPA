@@ -166,24 +166,44 @@ export function useLandmarkDetection(
     let cancelled = false;
     setHydrating(true);
 
-    if (landmarkApi.hasCached(projectId)) {
-      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL)
-        .then((r) => { if (!cancelled) applyResult(r); })
-        .catch(() => { /* cache miss/error — fall through to auto-run */ })
-        .finally(() => { if (!cancelled) setHydrating(false); });
-      return () => { cancelled = true; };
-    }
+    const hydrate = async () => {
+      const active = await landmarkApi.findActiveJob(projectId);
+      if (cancelled) return;
+      if (active) {
+        stopPlayback();
+        setState((s) => ({ ...s, status: "running", error: null }));
+        setHydrating(false);
+        try {
+          const r = await landmarkApi.attachToJob(projectId, active.uuid, active.segmentationModel);
+          if (!cancelled) applyResult(r);
+        } catch (err) {
+          if (cancelled) return;
+          const msg = err instanceof LandmarkApiError ? err.message : "Landmark detection failed. Please try again.";
+          setState((s) => ({ ...s, status: "error", error: msg }));
+        }
+        return;
+      }
 
-    // No in-memory cache (e.g. page refresh): ask the backend for the last
-    // persisted job result before paying for a fresh inference run.
-    landmarkApi.fetchPersistedResult(projectId)
-      .then((r) => { if (!cancelled && r) applyResult(r); })
-      .catch(() => { /* nothing saved / error — page auto-run handles it */ })
-      .finally(() => { if (!cancelled) setHydrating(false); });
+      const cached = landmarkApi.getCached(projectId);
+      if (cached) {
+        applyResult(cached);
+        setHydrating(false);
+        return;
+      }
+
+      try {
+        const r = await landmarkApi.fetchPersistedResult(projectId);
+        if (!cancelled && r) applyResult(r);
+      } catch {
+      } finally {
+        if (!cancelled) setHydrating(false);
+      }
+    };
+    hydrate();
 
     return () => { cancelled = true; };
-  }, [projectId, applyResult]);
-  
+  }, [projectId, applyResult, stopPlayback]);
+
   const handleRunDetection = useCallback(
     async (model = DEFAULT_LANDMARK_MODEL, segmentationModel = "medsam") => {
       if (state.status === "running") return;
@@ -228,7 +248,21 @@ export function useLandmarkDetection(
     [state.status, state.replacementFile, projectId, stopPlayback, applyResult],
   );
 
-  /** Force a fresh run, bypassing cache. */
+  const handleAttachToJob = useCallback(
+    async (jobUuid: string, segmentationModel: "medsam" | "unet") => {
+      if (state.status === "running") return;
+      stopPlayback();
+      setState((s) => ({ ...s, status: "running", error: null }));
+      try {
+        applyResult(await landmarkApi.attachToJob(projectId, jobUuid, segmentationModel));
+      } catch (err) {
+        const msg = err instanceof LandmarkApiError ? err.message : "Landmark detection failed. Please try again.";
+        setState((s) => ({ ...s, status: "error", error: msg }));
+      }
+    },
+    [state.status, projectId, stopPlayback, applyResult],
+  );
+
   const handleRerunDetection = useCallback(
     (model = DEFAULT_LANDMARK_MODEL, segmentationModel = "medsam") => {
       landmarkApi.invalidateCache(projectId);
@@ -266,9 +300,8 @@ export function useLandmarkDetection(
   const handleClearReplacementFile = useCallback(() => {
     setState((s) => ({ ...s, replacementFile: null, status: "idle", error: null }));
     setReplacementFileError(null);
-    if (landmarkApi.hasCached(projectId)) {
-      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL).then(applyResult).catch(() => {});
-    }
+    const cached = landmarkApi.getCached(projectId);
+    if (cached) applyResult(cached);
   }, [projectId, applyResult]);
 
   const handlePlay = useCallback(() => {
@@ -347,6 +380,7 @@ export function useLandmarkDetection(
     confidentCount,
     handleRunDetection,
     handleRerunDetection,
+    handleAttachToJob,
     handleFileSelect,
     handleClearReplacementFile,
     handleTogglePlay,

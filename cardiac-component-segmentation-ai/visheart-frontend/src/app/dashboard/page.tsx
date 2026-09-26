@@ -8,7 +8,8 @@ import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStat
 import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstructionStatus";
 import { ShowForUser, ShowForGuest, ShowForRegisteredUser } from "@/components/RoleGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { KineticProgress, kineticStateFromJobStatus } from "@/components/ui/kinetic-progress";
 import { reconstructionApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -1027,6 +1028,13 @@ function DashboardPage() {
                               <span className="hidden sm:inline">•</span>
                               <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
                             </div>
+                            {kineticStateFromJobStatus(job.status) && (
+                              <KineticProgress
+                                size="h-1"
+                                className="mt-2 max-w-xs"
+                                state={kineticStateFromJobStatus(job.status)!}
+                              />
+                            )}
                           </div>
                         </div>
                         <Badge variant="outline" className={`${statusDisplay.color} flex-shrink-0`}>
@@ -1242,7 +1250,7 @@ function DashboardPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setProjectToDelete(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDeleteProject} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+            <AlertDialogAction onClick={confirmDeleteProject} className={buttonVariants({ variant: "destructive" })}>
               Delete Permanently
             </AlertDialogAction>
           </AlertDialogFooter>

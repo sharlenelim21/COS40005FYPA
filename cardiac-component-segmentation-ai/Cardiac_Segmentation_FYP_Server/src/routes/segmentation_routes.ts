@@ -392,6 +392,8 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     // chain therefore reports a reconstruction as "medsam"/"unet", and a caller
                     // filtering on that alone cannot tell the two job types apart.
                     modelUsed: job.model_used || null,
+                    chamber: (job as any).chamber || null,
+                    progress: typeof job.progress === "number" ? job.progress : null,
                     createdAt: (job as any).createdAt?.toISOString?.() || null,
                     updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };

@@ -69,7 +69,7 @@ interface ProjectContextType {
   threeJSPreloadProgress: { current: number; total: number } | null;
 
   // Cache invalidation
-  refreshMasks: () => Promise<void>;
+  refreshMasks: (options?: { silent?: boolean }) => Promise<void>;
   refreshJobs: () => Promise<void>;
   refreshReconstructionJobs: () => Promise<void>;
 
@@ -1042,32 +1042,18 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     }
   }, [projectData, undecodedMasks, decodedMasks]);
 
-  // 3. Optimized jobs loading - if no masks exist, check for jobs with race condition prevention
   useEffect(() => {
     const abortController = new AbortController();
 
-    // If masks are present, clear any previous job data and error about missing results
-    if (hasMasks) {
-      if (jobsError) {
-        setJobsError(null);
-      }
-      if (jobs !== null) {
-        console.log("[ProjectContext] Clearing segmentation jobs since masks are now available");
-        setJobs(null);
-      }
-      // Reset the fetch flag so jobs can be fetched again if masks are later removed
-      jobsFetchedRef.current = false;
+    if (hasMasks && jobsError) {
+      setJobsError(null);
+    }
+    
+    if (!maskFetchDone || !projectData || !projectId || jobsFetchedRef.current) {
       return;
     }
 
-    // Only fetch jobs if mask fetch is done, we don't have masks, and project data is loaded
-    // Don't block on segmentationError (e.g., 'No masks found')
-    // IMPORTANT: Only fetch if we haven't already fetched jobs (prevents redundant API calls during mask polling)
-    if (!maskFetchDone || hasMasks || !projectData || !projectId || jobsFetchedRef.current) {
-      return;
-    }
-
-    setLoading("job");
+    setLoading((prev) => (prev === "done" ? prev : "job"));
 
     // Mark that we're fetching jobs to prevent redundant calls
     jobsFetchedRef.current = true;
@@ -1479,7 +1465,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   }, [error, projectData, maskFetchDone, tarCacheReady, tarCacheError, hasReconstructions, reconstructionCacheReady, reconstructionCacheError, loading, shouldSkipReconstructionPreload]);
 
   // Cache invalidation function to refresh masks from backend
-  const refreshMasks = useCallback(async () => {
+  const refreshMasks = useCallback(async (options?: { silent?: boolean }) => {
     if (!projectId || !projectData?.dimensions) {
       console.warn("[ProjectContext] Cannot refresh masks - missing projectId or dimensions");
       return;
@@ -1489,10 +1475,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     try {
       // Clear current mask cache
-      setUndecodedMasks(null);
-      setDecodedMasks(null);
+      if (!options?.silent) {
+        setUndecodedMasks(null);
+        setDecodedMasks(null);
+        setHasMasks(false);
+      }
       setSegmentationError(null);
-      setHasMasks(false);
 
       // Fetch fresh masks from backend
       const response = await segmentationApi.getSegmentationResults(projectId);

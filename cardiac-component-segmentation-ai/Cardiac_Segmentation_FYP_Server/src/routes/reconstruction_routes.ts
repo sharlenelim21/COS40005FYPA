@@ -286,6 +286,7 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     description: job.segmentationDescription,
                     queuePosition: queuePosition,
                     message: job.message || "",
+                    progress: typeof job.progress === "number" ? job.progress : null,
                     createdAt: (job as any).createdAt?.toISOString?.() || null,
                     updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };

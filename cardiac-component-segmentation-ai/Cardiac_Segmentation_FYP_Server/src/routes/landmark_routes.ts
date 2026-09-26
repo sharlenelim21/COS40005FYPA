@@ -97,6 +97,18 @@ router.post(
         },
       );
 
+      if (result.statusCode === 409) {
+        res.status(409).json({
+          success: false,
+          message: result.message,
+          reason: result.reason,
+          jobUuid: result.uuid,
+          jobStatus: result.jobStatus,
+          startedAt: result.startedAt,
+        });
+        return;
+      }
+
       if (!result.success) {
         res.status(500).json(result);
         return;
@@ -225,8 +237,9 @@ router.get(
       const projectId = String(req.params.projectId);
       const jobs = await jobModel
         .find({ projectid: projectId, userid: req.user?._id?.toString() })
+        .select({ result: 0 })
         .sort({ createdAt: -1 })
-        .limit(10)
+        .limit(30)
         .lean();
 
       res.status(200).json({ success: true, jobs });

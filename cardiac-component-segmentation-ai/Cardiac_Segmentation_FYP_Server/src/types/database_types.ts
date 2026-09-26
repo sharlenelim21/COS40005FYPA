@@ -847,7 +847,8 @@ export interface IJob {
   chamber?: ReconstructionChamber; // 4D reconstruction jobs only: which chamber this job builds.
                                    // Absent means LV. Needed so an in-flight RV job does not block
                                    // an LV job for the same segmentation model, and vice versa.
-  model_used?: string; // Compatibility field mirrored to DB for external tools (string)
+  model_used?: string;
+  progress?: number; 
 }
 export interface IJobDocument extends IJob, Document {}
 

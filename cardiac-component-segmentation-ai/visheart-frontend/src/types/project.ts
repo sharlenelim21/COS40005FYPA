@@ -318,6 +318,7 @@ export interface UserJob {
     modelUsed?: string | null;
     /** 4D reconstruction jobs only: which chamber is being built. Absent means LV. */
     chamber?: string | null;
+    progress?: number | null;
     createdAt?: string | null;
     updatedAt?: string | null;
 }

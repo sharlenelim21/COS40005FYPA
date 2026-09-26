@@ -2236,6 +2236,7 @@ const jobSchema = new mongoose.Schema({
   // this field existed -- both read as LV, which is what they were.
   chamber: { type: String, required: false, enum: Object.values(ReconstructionChamber) },
   model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
+  progress: { type: Number, required: false, min: 0, max: 100 },
 }, { timestamps: true });
 const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 

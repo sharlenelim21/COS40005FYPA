@@ -220,7 +220,7 @@ export const findBlockingSegmentationJob = async (
         const job = await jobModel.findOne({
             projectid: projectId,
             status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
-            model_used: { $ne: "4d_reconstruction" },
+            model_used: { $nin: ["4d_reconstruction", /landmark/i] },
             createdAt: { $gte: new Date(Date.now() - (STALE_JOB_MINUTES[model] ?? 30) * 60 * 1000) },
             ...modelFilter,
         }).sort({ createdAt: -1 });

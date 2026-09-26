@@ -7,6 +7,7 @@ import {
   createJob,
   IJob,
   JobStatus,
+  jobModel,
   readProject,
   updateJob,
 } from "./database";
@@ -68,12 +69,53 @@ const buildCallbackUrl = (): string | null => {
   return `${configuredCallbackUrl.replace(/\/$/, "")}/webhook/landmark-callback`;
 };
 
+const STALE_LANDMARK_JOB_MINUTES = 30;
+
+export const findBlockingLandmarkJob = async (
+  projectId: string,
+  userId: string,
+  segModel: "medsam" | "unet",
+): Promise<{ uuid: string; status: string; startedAt?: Date } | null> => {
+  const modelFilter = segModel === "unet"
+    ? { segmentationModel: SegmentationModel.UNET }
+    : { segmentationModel: { $in: [SegmentationModel.MEDSAM, null] } };
+
+  try {
+    const job = await jobModel.findOne({
+      projectid: projectId,
+      userid: userId,
+      model_used: /landmark/i,
+      status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
+      createdAt: { $gte: new Date(Date.now() - STALE_LANDMARK_JOB_MINUTES * 60 * 1000) },
+      ...modelFilter,
+    }).sort({ createdAt: -1 }).lean();
+
+    if (!job) return null;
+    return {
+      uuid: job.uuid,
+      status: job.status,
+      startedAt: (job as unknown as { createdAt?: Date }).createdAt,
+    };
+  } catch (error: any) {
+    logger.error(`${serviceLocation}: Failed to check for in-flight landmark jobs for project ${projectId}: ${error?.message}`);
+    return null;
+  }
+};
+
 export async function startLandmarkInference(
   projectId: string,
   user: any,
   gpuAuthToken: string,
   modelConfig?: LandmarkModelConfig,
-): Promise<{ success: boolean; message: string; uuid?: string }> {
+): Promise<{
+  success: boolean;
+  message: string;
+  uuid?: string;
+  statusCode?: number;
+  reason?: "job_in_progress";
+  jobStatus?: string;
+  startedAt?: Date;
+}> {
   if (!gpuAuthToken) {
     return {
       success: false,
@@ -110,22 +152,68 @@ export async function startLandmarkInference(
     return { success: false, message: `Invalid NIfTI source URL: ${error.message}` };
   }
 
-  const niftiPresignedUrl = await generatePresignedGetUrlForInternalService(s3BucketName, s3Key);
-  if (!niftiPresignedUrl) {
-    return {
-      success: false,
-      message: "Failed to prepare NIfTI URL for landmark detection.",
-    };
+  const callbackUrl = buildCallbackUrl();
+  if (!callbackUrl) {
+    return { success: false, message: "Callback URL is missing." };
   }
 
-  // --- Seg mask NIfTI (best-effort: missing mask never blocks landmark detection) ---
-  // Uses the same generateAISegmentationForReconstruction path as 4D reconstruction —
-  // masks are stored as RLE in MongoDB, so a NIfTI must be generated from them.
   const requestedSegModel = (
     (modelConfig?.segmentationModel ?? "medsam").toLowerCase() === "unet"
       ? "unet"
       : "medsam"
   ) as "medsam" | "unet";
+
+  const blockingJob = await findBlockingLandmarkJob(projectId, user?._id?.toString(), requestedSegModel);
+  if (blockingJob) {
+    const modelLabel = requestedSegModel === "unet" ? "UNet" : "MedSAM";
+    logger.info(
+      `${serviceLocation}: Rejected duplicate ${modelLabel} landmark detection for project ${projectId}; job ${blockingJob.uuid} is still ${blockingJob.status}.`
+    );
+    return {
+      success: false,
+      statusCode: 409,
+      reason: "job_in_progress",
+      message: `Landmark detection on the ${modelLabel} mask is already running for this project.`,
+      uuid: blockingJob.uuid,
+      jobStatus: blockingJob.status,
+      startedAt: blockingJob.startedAt,
+    };
+  }
+
+  const jobUuid = uuidv4();
+  const jobData: IJob = {
+    userid: user?._id?.toString() || "unknown",
+    projectid: projectId,
+    uuid: jobUuid,
+    status: JobStatus.PENDING,
+    segmentationSource: segmentationSource.AI_INFERENCE,
+    model_used: modelConfig?.model || "unetresnet34-landmark",
+    segmentationModel:
+      requestedSegModel === "unet" ? SegmentationModel.UNET : SegmentationModel.MEDSAM,
+  };
+
+  const jobCreationResult = await createJob(jobData);
+  if (!jobCreationResult.success) {
+    return {
+      success: false,
+      message: `Failed to create landmark job: ${jobCreationResult.message || "Unknown error"}`,
+    };
+  }
+
+  const failJob = async (message: string) => {
+    await updateJob(jobUuid, { status: JobStatus.FAILED, message });
+    return { success: false, message };
+  };
+
+  let niftiPresignedUrl: string | null | undefined;
+  try {
+    niftiPresignedUrl = await generatePresignedGetUrlForInternalService(s3BucketName, s3Key);
+  } catch (error: any) {
+    return failJob(`Failed to prepare NIfTI URL for landmark detection: ${error?.message}`);
+  }
+  if (!niftiPresignedUrl) {
+    return failJob("Failed to prepare NIfTI URL for landmark detection.");
+  }
 
   let segMaskPresignedUrl: string | null = null;
   try {
@@ -152,34 +240,14 @@ export async function startLandmarkInference(
   // Landmark detection ALWAYS proceeds regardless of seg mask availability.
   // GPU handles null seg_mask_url by using the 1ch model automatically.
 
-  const gpuBaseUrls = await resolveGpuBaseUrlCandidates();
+  let gpuBaseUrls: string[];
+  try {
+    gpuBaseUrls = await resolveGpuBaseUrlCandidates();
+  } catch (error: any) {
+    return failJob(`Could not resolve the GPU API URL: ${error?.message}`);
+  }
   if (!gpuBaseUrls.length) {
-    return { success: false, message: "GPU API URL is not configured." };
-  }
-
-  const callbackUrl = buildCallbackUrl();
-  if (!callbackUrl) {
-    return { success: false, message: "Callback URL is missing." };
-  }
-
-  const jobUuid = uuidv4();
-  const jobData: IJob = {
-    userid: user?._id?.toString() || "unknown",
-    projectid: projectId,
-    uuid: jobUuid,
-    status: JobStatus.PENDING,
-    segmentationSource: segmentationSource.AI_INFERENCE,
-    model_used: modelConfig?.model || "unetresnet34-landmark",
-    segmentationModel:
-      requestedSegModel === "unet" ? SegmentationModel.UNET : SegmentationModel.MEDSAM,
-  };
-
-  const jobCreationResult = await createJob(jobData);
-  if (!jobCreationResult.success) {
-    return {
-      success: false,
-      message: `Failed to create landmark job: ${jobCreationResult.message || "Unknown error"}`,
-    };
+    return failJob("GPU API URL is not configured.");
   }
 
   let lastErrorMessage = "";

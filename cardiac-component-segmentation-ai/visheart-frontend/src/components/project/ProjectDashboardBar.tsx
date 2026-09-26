@@ -169,6 +169,7 @@ export function ProjectDashboardBar() {
 
   const statusInfo = getProjectStatus();
   const StatusIcon = statusInfo.icon;
+  const activeJobs = (jobs ?? []).filter((j) => j.status === "pending" || j.status === "in_progress");
 
   // Get mask count
   const maskCount = hasMasks ? undecodedMasks?.length || 0 : 0;
@@ -366,14 +367,14 @@ export function ProjectDashboardBar() {
                   <Activity className="h-3 w-3" />
                   <span className="text-xs font-medium">Active Jobs</span>
                 </div>
-                {jobs && jobs.length > 0 ? (
+                {activeJobs.length > 0 ? (
                   <>
                     <div className="flex items-center gap-1.5">
                       <Activity className="h-3.5 w-3.5 text-blue-600 animate-pulse" />
-                      <span className="text-sm font-semibold">{jobs.length} running</span>
+                      <span className="text-sm font-semibold">{activeJobs.length} running</span>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {jobs.filter(j => j.status === "in_progress").length} in progress
+                      {activeJobs.filter(j => j.status === "in_progress").length} in progress
                     </div>
                   </>
                 ) : (

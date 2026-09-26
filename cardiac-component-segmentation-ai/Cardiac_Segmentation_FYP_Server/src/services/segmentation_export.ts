@@ -627,15 +627,76 @@ export const computeDiseaseSimilarityFromMetrics = async (
     });
 };
 
-/**
- * Non-blocking: POSTs the NIfTI file at niftiPath to the GPU /bullseye/analyze endpoint,
- * then stores the result in MongoDB on the segmentation mask document.
- */
+export const findLandmarkAlignment = async (
+    projectId: string,
+    maskId?: string,
+): Promise<{ rv1: number[]; rv2: number[] } | null> => {
+    let rv1: number[] | null = null;
+    let rv2: number[] | null = null;
+
+    const savedLandmarkDoc = await projectLandmarkModel
+        .findOne({ projectid: projectId, isModelOutput: false })
+        .sort({ updatedAt: -1 })
+    if (savedLandmarkDoc) {
+        const lm1Points: number[][] = [];
+        const lm2Points: number[][] = [];
+        const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+        for (const slice of edFrame?.slices ?? []) {
+            for (const point of slice.landmarks ?? []) {
+                if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
+                if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
+            }
+        }
+        const meanPt = (pts: number[][]): number[] | null =>
+            pts.length
+                ? [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length]
+                : null;
+        rv1 = meanPt(lm1Points);
+        rv2 = meanPt(lm2Points);
+        if (rv1 && rv2) {
+            logger.info(`${serviceLocation}: [Bullseye] Using saved landmark edits (doc ${savedLandmarkDoc._id}) for mask ${maskId}`);
+        }
+    }
+ 
+    const landmarkJob = (rv1 && rv2) ? null : await jobModel
+        .findOne({
+            projectid: projectId,
+            model_used: /landmark/i,
+            status: JobStatus.COMPLETED,
+            result: { $exists: true, $ne: null },
+        })
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean();
+ 
+    if (landmarkJob?.result) {
+        const r = typeof landmarkJob.result === 'string'
+            ? JSON.parse(landmarkJob.result)
+            : landmarkJob.result;
+        if (r.avg_lm1 && typeof r.avg_lm1.x === 'number' && typeof r.avg_lm1.y === 'number') {
+            rv1 = [r.avg_lm1.x, r.avg_lm1.y];
+        } else if (Array.isArray(r.avg_lm1) && r.avg_lm1.length >= 2) {
+            rv1 = r.avg_lm1;
+        } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
+            rv1 = r.predictions[0].rv_insertion_1 ?? null;
+        }
+        if (r.avg_lm2 && typeof r.avg_lm2.x === 'number' && typeof r.avg_lm2.y === 'number') {
+            rv2 = [r.avg_lm2.x, r.avg_lm2.y];
+        } else if (Array.isArray(r.avg_lm2) && r.avg_lm2.length >= 2) {
+            rv2 = r.avg_lm2;
+        } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
+            rv2 = r.predictions[0].rv_insertion_2 ?? null;
+        }
+    }
+
+    return rv1 && rv2 ? { rv1, rv2 } : null;
+};
+
 export const computeBullseyeAndStore = async (
     niftiPath: string,
     maskId: string,
     projectId: string,
 ): Promise<void> => {
+    let hadAlignment = false;
     try {
         const gpuBaseUrl = await getFreshGPUServerAddress();
         const token = getCurrentToken();
@@ -652,76 +713,10 @@ export const computeBullseyeAndStore = async (
 
         logger.info(`${serviceLocation}: [Bullseye] Sending NIfTI to GPU for mask ${maskId} (project ${projectId})`);
 
-        let rv1: number[] | null = null;
-        let rv2: number[] | null = null;
-
-        // Prefer the user's SAVED landmark edits over the raw AI detection so the
-        // bullseye alignment reflects the newest corrected RV insertion points.
-        // Edits are shared across segmentation models (one editable doc per
-        // project), so this is not filtered by model. Mirrors the strain routes.
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (savedLandmarkDoc) {
-            const lm1Points: number[][] = [];
-            const lm2Points: number[][] = [];
-            // ED (frame 0) only — a saved doc can now hold every cardiac frame's
-            // landmarks; averaging RV insertion points across cardiac phases
-            // (not just across slices within one phase) would blend positions
-            // from a heart that's moved throughout the cycle into a physically
-            // meaningless point. Bullseye alignment has always meant "relative
-            // to ED" elsewhere in this codebase.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
-                    if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
-                }
-            }
-            const meanPt = (pts: number[][]): number[] | null =>
-                pts.length
-                    ? [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length]
-                    : null;
-            rv1 = meanPt(lm1Points);
-            rv2 = meanPt(lm2Points);
-            if (rv1 && rv2) {
-                logger.info(`${serviceLocation}: [Bullseye] Using saved landmark edits (doc ${savedLandmarkDoc._id}) for mask ${maskId}`);
-            }
-        }
-
-        // Fall back to the most recent completed landmark job only when no saved edits exist.
-        const landmarkJob = (rv1 && rv2) ? null : await jobModel
-            .findOne({
-                projectid: projectId,
-                model_used: /landmark/i,
-                status: JobStatus.COMPLETED,
-                result: { $exists: true, $ne: null },
-            })
-            .sort({ updatedAt: -1, createdAt: -1 })
-            .lean();
-
-        // The landmark result uses new format: { slices, avg_lm1: {x,y}, avg_lm2: {x,y} }
-        // or old format: { predictions: [{ rv_insertion_1: [x,y], rv_insertion_2: [x,y] }] }
-        if (landmarkJob?.result) {
-            const r = typeof landmarkJob.result === 'string'
-                ? JSON.parse(landmarkJob.result)
-                : landmarkJob.result;
-            if (r.avg_lm1 && typeof r.avg_lm1.x === 'number' && typeof r.avg_lm1.y === 'number') {
-                rv1 = [r.avg_lm1.x, r.avg_lm1.y];
-            } else if (Array.isArray(r.avg_lm1) && r.avg_lm1.length >= 2) {
-                rv1 = r.avg_lm1;
-            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
-                rv1 = r.predictions[0].rv_insertion_1 ?? null;
-            }
-            if (r.avg_lm2 && typeof r.avg_lm2.x === 'number' && typeof r.avg_lm2.y === 'number') {
-                rv2 = [r.avg_lm2.x, r.avg_lm2.y];
-            } else if (Array.isArray(r.avg_lm2) && r.avg_lm2.length >= 2) {
-                rv2 = r.avg_lm2;
-            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
-                rv2 = r.predictions[0].rv_insertion_2 ?? null;
-            }
-        }
+        const alignment = await findLandmarkAlignment(projectId, maskId);
+        hadAlignment = alignment !== null;
+        const rv1 = alignment?.rv1 ?? null;
+        const rv2 = alignment?.rv2 ?? null;
 
         if (rv1 && rv2) {
             logger.info(`${serviceLocation}: [Bullseye] Using landmark alignment — rv1=[${rv1}] rv2=[${rv2}] for mask ${maskId}`);
@@ -768,6 +763,10 @@ export const computeBullseyeAndStore = async (
         // Fall back to local RLE-based computation using the mask document's frame data
         try {
             const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+            if (hadAlignment && (maskDoc as any)?.bullseye) {
+                logger.warn(`${serviceLocation}: [Bullseye] Keeping stored bullseye for mask ${maskId} — local fallback is not landmark-aligned.`);
+                return;
+            }
             const frames = (maskDoc as any)?.frames ?? [];
             if (!frames.length) {
                 logger.warn(`${serviceLocation}: [Bullseye] No frame data on mask ${maskId} — cannot fall back to local computation.`);
@@ -1321,7 +1320,8 @@ export const generateAISegmentationForReconstruction = async (
         // using each mask's own RLE frame data so MedSAM and UNet produce independent results.
         const allEditableMasks = hasMasksResult.projectsegmentationmasks!.filter(
             m => m.isMedSAMOutput === false
-        );
+        ); 
+        const hasLandmarkAlignment = (await findLandmarkAlignment(projectId).catch(() => null)) !== null;
         for (const editableMaskForBullseye of allEditableMasks) {
             const bullseyeMaskId = editableMaskForBullseye._id?.toString();
             if (!bullseyeMaskId) continue;
@@ -1333,10 +1333,12 @@ export const generateAISegmentationForReconstruction = async (
             }
 
             // Use each mask's own RLE frame data (not the shared reconstruction NIfTI)
-            computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE)
-                .catch((err: any) => {
-                    logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
-                });
+            (hasLandmarkAlignment
+                ? generateNiftiAndComputeBullseye(editableMaskForBullseye, project, bullseyeMaskId)
+                : computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE)
+            ).catch((err: any) => {
+                logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
+            });
             logger.info(`${serviceLocation}: [Bullseye] Fired non-blocking bullseye analysis for mask ${bullseyeMaskId} (${editableMaskForBullseye.name})`);
 
             // Heart metrics (volumes / EF / LV mass) — parallel to bullseye. Requires the project's
