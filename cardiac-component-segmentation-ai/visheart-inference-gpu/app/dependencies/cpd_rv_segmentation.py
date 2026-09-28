@@ -66,6 +66,7 @@ import numpy as np
 import trimesh
 from pycpd import DeformableRegistration
 from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import cKDTree
 
 import cpd_gpu
@@ -74,11 +75,6 @@ logger = logging.getLogger("visheart")
 
 _ATLAS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "atlas_rv")
 _ATLAS_ZONES = ["Apical", "Basal", "Mid"]
-# Matches rv_deform.py's own convention (align_atlas(..., reference_region=sorted(atlas_raw)[0]))
-# -- the alphabetically-first file across all zones, which happens to be an apical
-# segment, consistent with LV's own "rotate the apex-adjacent region to -Z" convention.
-_ANCHOR_ZONE = "Apical"
-_ANCHOR_FILE = "Apical_Seg1.obj"
 
 # beta=1.5 inherited from the LV script via rv_deform.py. lamb(alpha)=30.0 is
 # rv_deform.py's cohort-retuned value (scripts/tune_alpha_cohort.py, 20 held-out
@@ -97,6 +93,16 @@ _DENSE_FIELD_CHUNK = 4000
 # absorb the full residual azimuthal offset via local deformation alone, which folds/
 # erases a segment rather than just landing at a different (but clean) rotation.
 _Z_ROTATION_CANDIDATES = 72
+# Fraction of each atlas zone's own points (by distance to that zone's own
+# centroid) used as geodesic seed candidates for _geodesic_apex_base_ratio.
+# 2026-09-28: tried 1.0 (the whole zone, to rule out a lopsided seed as the
+# cause of Mid bulging into Basal's territory on one side) -- measured WORSE
+# on all three level-overlap pairs (60.0/61.0/13.6% vs 54.3/56.7/0% at 0.3),
+# so a lopsided seed was NOT the cause. Reverted; root cause still open.
+_ATLAS_CORE_FRACTION = 0.3
+# Set False to revert label_with_warp to plain nearest-neighbor classification
+# with no call-site changes -- see _classify_levels_and_sectors_geodesic.
+_GEODESIC_CLASSIFICATION_ENABLED = True
 
 
 def _rotation_matrix_from_vectors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -194,6 +200,13 @@ def _angular_gap_center_deg(points_xy_z: np.ndarray) -> float:
     return float((sorted_angles[widest] + gaps[widest] / 2.0) % 360.0)
 
 
+def _circular_mean_deg(angles_deg: np.ndarray) -> float:
+    """Circular mean of a set of angles in degrees -- plain averaging is wrong
+    across the 0/360 wrap (e.g. 350 and 10 would wrongly average to 180)."""
+    rad = np.radians(angles_deg)
+    return float(np.degrees(np.arctan2(np.mean(np.sin(rad)), np.mean(np.cos(rad)))) % 360.0)
+
+
 def _septal_direction_deg(
     target_points: np.ndarray, lv_reference_points: np.ndarray,
     distance_threshold_mm: float = _SEPTAL_DISTANCE_THRESHOLD_MM,
@@ -212,9 +225,9 @@ def _septal_direction_deg(
     independently by DeepSDF) still gets a usable, if noisier, direction
     rather than silently contributing nothing.
 
-    Returns None if lv_reference_points is empty, or if the near-LV points
-    don't actually agree on a direction -- callers should treat that as "no
-    anatomical anchor available", not an error.
+    Returns None if lv_reference_points is empty, or if even the dominant
+    cluster (see below) still doesn't agree on a direction -- callers should
+    treat that as "no anatomical anchor available", not an error.
 
     2026-09-10: root-caused a real per-patient, per-frame bug via this path.
     On a handful of frames of one patient's RV (specific cardiac phases
@@ -224,20 +237,35 @@ def _septal_direction_deg(
     sides of the mesh -- e.g. septum AND part of the free wall both within
     15mm of the LV at that frame. A circular mean over a bimodal
     distribution like that doesn't land near either real cluster; it can
-    point anywhere, including squarely at the WRONG side. That bad angle
-    then wins register_cpd_warp/label_with_warp's rotation tie-break,
-    producing a CPD atlas fit that's subtly folded for that frame --
-    visible as dense per-vertex "salt and pepper" mislabeling once rendered
-    with smooth per-vertex color interpolation. Other patients (and most
-    frames of this one) never hit this because their near-LV points stay
-    genuinely single-clustered around the true septum. Guarded here with a
-    circular-concentration check (mean resultant length R -- standard
-    circular-statistics measure of how tightly a set of angles clusters,
-    1.0 = identical angle, 0.0 = uniformly spread/bimodal-and-opposed) so a
-    degenerate, spread-out "near" set is rejected rather than trusted --
-    callers already treat None as "fall back to the anchor-free heuristic",
-    which this session separately confirmed stays low-speckle (~1-2%) on
-    exactly these frames when the anchor is absent.
+    point anywhere, including squarely at the WRONG side.
+
+    2026-09-24: measured this isn't a rare edge case -- on a full 30-frame
+    real reconstruction (patient005), the plain circular-mean version above
+    returned None on 29/30 frames, i.e. the septal anchor was essentially
+    NEVER engaging in practice, and register_cpd_warp/label_with_warp were
+    silently falling back to the population-count-only heuristic on every
+    frame. That heuristic is far weaker than assumed: a direct sweep found
+    60 of 72 candidate Z-rotations (83%) achieve full 9/9 segment
+    population on that same mesh, so "populated count" barely constrains
+    the choice at all -- the fallback was picking an essentially arbitrary
+    rotation among 60 equally-valid-looking ones on nearly every frame,
+    which is why RV segmentation looked wrong/inconsistent in practice, not
+    just occasionally.
+
+    Root cause: near-LV points routinely form two genuine clusters (the true
+    septum, plus a secondary near-contact elsewhere), and a flat circular
+    mean over both is dragged toward a point between them -- lowering the
+    resultant length below the trust threshold even though one of the two
+    clusters is a clear, confident majority. Fixed by finding the dominant
+    cluster FIRST (a 10-degree-bin histogram peak, then every point within
+    30 degrees of that peak) and computing the circular mean and
+    concentration check over just that cluster, rather than over the full,
+    contaminated set. Re-measured on the same 30-frame sequence: 30/30
+    frames now return a confident angle (concentration 0.96-0.98, versus
+    the 0.5 threshold) instead of 1/30. Still returns None (same contract
+    as before) if even the dominant cluster is too small or too spread out
+    to trust, so a genuinely ambiguous frame still degrades to the
+    anchor-free heuristic rather than being handed a guess.
     """
     if lv_reference_points is None or lv_reference_points.shape[0] == 0:
         return None
@@ -250,18 +278,34 @@ def _septal_direction_deg(
         # Fall back to the closest 10% rather than an arbitrary mm cutoff
         # that happens not to fit this patient's two independently-
         # reconstructed meshes.
-        cutoff = max(1, int(np.ceil(0.10 * target_points.shape[0])))
-        near = np.argsort(distances)[:cutoff]
+        near_idx = np.argsort(distances)[: max(1, int(np.ceil(0.10 * target_points.shape[0])))]
+    else:
+        near_idx = np.where(near)[0]
 
-    near_points = target_points[near]
-    angles_rad = np.arctan2(near_points[:, 1], near_points[:, 0])
-    sin_mean = np.mean(np.sin(angles_rad))
-    cos_mean = np.mean(np.cos(angles_rad))
+    near_points = target_points[near_idx]
+    angles_deg = np.degrees(np.arctan2(near_points[:, 1], near_points[:, 0])) % 360.0
+
+    # Mode-seeking: find the single densest 10-degree bin, then take every
+    # near-LV point within 30 degrees of that bin's centre as "the" cluster.
+    # This is what makes the estimate robust to a second, unrelated cluster
+    # (e.g. a spurious near-contact elsewhere) -- a flat mean over both
+    # would land between them; this isolates the dominant one first.
+    bin_edges = np.linspace(0.0, 360.0, 37)
+    hist, _ = np.histogram(angles_deg, bins=bin_edges)
+    peak_bin = int(np.argmax(hist))
+    peak_center_deg = (bin_edges[peak_bin] + bin_edges[peak_bin + 1]) / 2.0
+
+    angular_dist_deg = np.abs((angles_deg - peak_center_deg + 180.0) % 360.0 - 180.0)
+    cluster_angles_deg = angles_deg[angular_dist_deg <= 30.0]
+    if cluster_angles_deg.shape[0] < 3:
+        return None
+
+    cluster_rad = np.radians(cluster_angles_deg)
+    sin_mean = np.mean(np.sin(cluster_rad))
+    cos_mean = np.mean(np.cos(cluster_rad))
     # Mean resultant length: sqrt(sin_mean^2 + cos_mean^2), in [0, 1]. Low
-    # values mean the near-LV points are scattered around the circle (or
-    # split into opposed clusters) rather than agreeing on one side of the
-    # mesh -- exactly the bimodal failure mode above, where the mean angle
-    # itself is not a meaningful "direction" at all.
+    # values mean even the dominant cluster is too spread out to trust as a
+    # single direction.
     resultant_length = float(np.hypot(sin_mean, cos_mean))
     if resultant_length < _SEPTAL_DIRECTION_MIN_CONCENTRATION:
         return None
@@ -313,16 +357,16 @@ def _fit_cpd(target_points: np.ndarray, source_points: np.ndarray,
 def _load_canonical_atlas() -> dict:
     """
     Build the atlas point cloud once: load the 3 Zenodo RV zone folders' FULL
-    (unsampled) vertices, centre on the combined centroid, rotate the anchor
-    segment's centroid onto -Z (same apex-toward-negative-Z convention LV's atlas
-    uses), normalise to a unit envelope, then label every dense point by which
-    of the 9 source .obj files it came from (the atlas's own ground-truth labels
-    -- no fixed-rule classifier to cross-check against here, unlike LV).
+    (unsampled) vertices, centre on the combined centroid, rotate the apex-zone
+    -to-base-zone centroid axis onto Z (apex toward -Z, same convention LV's
+    atlas uses), normalise to a unit envelope, then label every dense point by
+    which of the 9 source .obj files it came from (the atlas's own ground-truth
+    labels -- no fixed-rule classifier to cross-check against here, unlike LV).
     """
     all_points: list[np.ndarray] = []
     dense_labels_list: list[np.ndarray] = []
     segment_names: list[str] = []
-    anchor_centroid = None
+    zone_points: dict[str, list[np.ndarray]] = {zone: [] for zone in _ATLAS_ZONES}
 
     for zone in _ATLAS_ZONES:
         zone_dir = os.path.join(_ATLAS_DIR, zone)
@@ -333,11 +377,8 @@ def _load_canonical_atlas() -> dict:
             segment_names.append(os.path.basename(obj_path))
             all_points.append(vertices)
             dense_labels_list.append(np.full(len(vertices), seg_index, dtype=np.int16))
-            if zone == _ANCHOR_ZONE and os.path.basename(obj_path) == _ANCHOR_FILE:
-                anchor_centroid = vertices.mean(axis=0)
+            zone_points[zone].append(vertices)
 
-    if anchor_centroid is None:
-        raise RuntimeError(f"Atlas anchor file {_ANCHOR_FILE!r} not found under {_ATLAS_DIR}")
     if not all_points:
         raise RuntimeError(f"No atlas OBJ files found under {_ATLAS_DIR}")
 
@@ -347,11 +388,21 @@ def _load_canonical_atlas() -> dict:
     # 1. Centre on the combined centroid.
     global_centroid = dense_points.mean(axis=0)
     dense_points = dense_points - global_centroid
-    anchor_centroid = anchor_centroid - global_centroid
 
-    # 2. Rotate the anchor segment's centroid onto -Z.
-    v = anchor_centroid / np.linalg.norm(anchor_centroid)
-    rotation = _rotation_matrix_from_vectors(v, np.array([0.0, 0.0, -1.0]))
+    # 2. Rotate the apex-zone -> base-zone centroid axis onto +Z (apex ends up
+    #    at -Z). Using the WHOLE Apical/Basal zone centroids, not one arbitrary
+    #    sector file, matters: a single-sector anchor (the previous approach)
+    #    measured 15-18 degrees off the true apex/base axis here, because that
+    #    one sector sits off to one side of the apex cap rather than at its
+    #    center -- verified by PCA on the resulting point cloud (long axis
+    #    should be ~0 degrees from Z; the single-sector anchor gave ~15 degrees,
+    #    this full-zone-centroid axis gives ~3 degrees, the residual being the
+    #    free wall's genuine curvature).
+    apex_centroid = np.concatenate(zone_points["Apical"], axis=0).mean(axis=0) - global_centroid
+    base_centroid = np.concatenate(zone_points["Basal"], axis=0).mean(axis=0) - global_centroid
+    v = (base_centroid - apex_centroid)
+    v = v / np.linalg.norm(v)
+    rotation = _rotation_matrix_from_vectors(v, np.array([0.0, 0.0, 1.0]))
     dense_points = dense_points @ rotation.T
 
     # 3. Normalise to a unit envelope -- rescaled per-patient at classification
@@ -375,12 +426,48 @@ def _load_canonical_atlas() -> dict:
     # preferred_angle_deg) without recomputing it every call.
     atlas_septal_gap_center_deg = _angular_gap_center_deg(dense_points)
 
+    # Ground-truth apex/base "core" points (nearest _ATLAS_CORE_FRACTION to each
+    # zone's own centroid) and per-(level,segment) reference angles, relative to
+    # the septal gap above -- both precomputed once here so register_cpd_warp's
+    # per-patient classification can seed a geodesic level pass and anchor
+    # sector assignment WITHOUT bootstrapping from the patient's own (possibly
+    # wrong) nearest-neighbor labels. See _classify_levels_and_sectors_geodesic.
+    level_of_segment = np.array([name.split("_")[0] for name in segment_names])
+    dense_level = level_of_segment[dense_labels]
+
+    def _core_mask(zone: str) -> np.ndarray:
+        idx = np.where(dense_level == zone)[0]
+        centroid = dense_points[idx].mean(axis=0)
+        dist = np.linalg.norm(dense_points[idx] - centroid, axis=1)
+        keep = idx[np.argsort(dist)[: max(1, int(len(idx) * _ATLAS_CORE_FRACTION))]]
+        mask = np.zeros(dense_points.shape[0], dtype=bool)
+        mask[keep] = True
+        return mask
+
+    sector_ref_angle_deg: dict[str, list[float]] = {}
+    for zone in _ATLAS_ZONES:
+        zone_mask = dense_level == zone
+        local_xy = dense_points[zone_mask, :2]
+        local_center = local_xy.mean(axis=0)
+        angle_deg = np.degrees(np.arctan2(
+            local_xy[:, 1] - local_center[1], local_xy[:, 0] - local_center[0]
+        )) % 360.0
+        angle_rel_septum = (angle_deg - atlas_septal_gap_center_deg) % 360.0
+        zone_labels = dense_labels[zone_mask]
+        sector_ref_angle_deg[zone] = [
+            _circular_mean_deg(angle_rel_septum[zone_labels == segment_names.index(f"{zone}_Seg{seg + 1}.obj")])
+            for seg in range(3)
+        ]
+
     return {
         "dense_points": dense_points,
         "dense_labels": dense_labels,
         "reg_points": reg_points,
         "segment_names": segment_names,
         "septal_gap_center_deg": atlas_septal_gap_center_deg,
+        "apex_core_mask": _core_mask("Apical"),
+        "base_core_mask": _core_mask("Basal"),
+        "sector_ref_angle_deg": sector_ref_angle_deg,
     }
 
 
@@ -609,6 +696,12 @@ def register_cpd_warp(
             # cardiac cycle) doesn't need its own _get_atlas() call just for
             # this one number.
             "atlas_septal_gap_center_deg": atlas["septal_gap_center_deg"],
+            # Passed through so label_with_warp's geodesic level/sector pass
+            # doesn't need its own _get_atlas() call either -- see
+            # _classify_levels_and_sectors_geodesic.
+            "apex_core_mask": atlas["apex_core_mask"],
+            "base_core_mask": atlas["base_core_mask"],
+            "sector_ref_angle_deg": atlas["sector_ref_angle_deg"],
         }
 
     except Exception as exc:
@@ -680,6 +773,398 @@ def _smooth_labels_by_face_adjacency(
     return current.astype(np.int16)
 
 
+def _reassign_stray_islands(labels: np.ndarray, faces: np.ndarray, n_segments: int,
+                             max_iterations: int = 30) -> np.ndarray:
+    """
+    Per-vertex majority-vote smoothing only looks at each vertex's immediate
+    neighbours, so it has no way to notice that a self-consistent patch of
+    one label is a stray island completely disconnected from the rest of
+    that same segment, sitting inside a DIFFERENT segment's territory --
+    2026-09-27, checked directly on a real reconstruction: 8 of 9 segments
+    had multiple disconnected components, the smallest segment split across
+    7 fragments with only ~80% of its own vertices actually connected to
+    each other. That's what shows up as an island of one colour stranded
+    inside another.
+
+    Fixed by keeping only each segment's LARGEST connected component as
+    confirmed, then growing the confirmed regions outward one adjacency-ring
+    at a time: an unconfirmed vertex adjacent to at least one confirmed
+    neighbour takes the majority label among those confirmed neighbours and
+    becomes confirmed itself for the next round. Islands are small (single
+    digits to a couple hundred vertices, measured), so this converges in a
+    handful of rounds -- max_iterations is just a safety bound, not expected
+    to bind in practice.
+    """
+    n = labels.shape[0]
+    edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
+    rows = np.concatenate([edges[:, 0], edges[:, 1]])
+    cols = np.concatenate([edges[:, 1], edges[:, 0]])
+    adjacency = coo_matrix((np.ones(rows.shape[0]), (rows, cols)), shape=(n, n)).tocsr()
+
+    current = labels.astype(np.int64).copy()
+    confirmed = np.zeros(n, dtype=bool)
+    for seg in range(n_segments):
+        idx = np.where(current == seg)[0]
+        if idx.size == 0:
+            continue
+        remap = -np.ones(n, dtype=np.int64)
+        remap[idx] = np.arange(idx.size)
+        seg_edges = edges[(current[edges[:, 0]] == seg) & (current[edges[:, 1]] == seg)]
+        sub_rows = remap[seg_edges[:, 0]]
+        sub_cols = remap[seg_edges[:, 1]]
+        sub_graph = coo_matrix((np.ones(sub_rows.shape[0]), (sub_rows, sub_cols)), shape=(idx.size, idx.size))
+        n_comp, comp_of = connected_components(sub_graph, directed=False)
+        if n_comp <= 1:
+            confirmed[idx] = True
+            continue
+        largest = np.argmax(np.bincount(comp_of))
+        confirmed[idx[comp_of == largest]] = True
+
+    needs_fix = ~confirmed
+    for _ in range(max_iterations):
+        if not needs_fix.any():
+            break
+        one_hot = np.zeros((n, n_segments), dtype=np.float64)
+        confirmed_idx = np.where(~needs_fix)[0]
+        one_hot[confirmed_idx, current[confirmed_idx]] = 1.0
+        neighbor_counts = adjacency @ one_hot
+        pending = np.where(needs_fix)[0]
+        has_confirmed_neighbor = neighbor_counts[pending].sum(axis=1) > 0
+        resolve_now = pending[has_confirmed_neighbor]
+        if resolve_now.size == 0:
+            break
+        current[resolve_now] = np.argmax(neighbor_counts[resolve_now], axis=1)
+        needs_fix[resolve_now] = False
+
+    return current.astype(np.int16)
+
+
+# --- Geometric (geodesic) level/sector classification --------------------
+#
+# label_with_warp's nearest-neighbor lookup assumes the atlas's flat-disk
+# level/sector structure survives the CPD warp onto a real patient's free
+# wall. Measured directly (2026-09-27, patient005): it doesn't -- adjacent
+# levels' vertex positions overlap 66.9% (Apical/Mid) and 31.4% (Mid/Basal)
+# along the mesh's own best-fit long axis, and an interactive 3D inspection
+# from multiple camera angles showed the SAME classified mesh looking like a
+# clean 3-band structure from one angle but scrambled from others -- proof
+# the labels aren't organized into real 3D rings, not a display artifact.
+# Neither CPD's regularization strength (_CPD_LAMBDA, swept 30-300) nor its
+# kernel width (_CPD_BETA, swept 1.5-20) changed this at all, ruling out
+# "the deformation isn't smooth enough" as the cause. Root cause: the RV
+# free wall's apex-to-base path genuinely curves/bends, and nearest-neighbor
+# label transfer has no way to respect that.
+#
+# The functions below recompute level (apex/base position) via true mesh-
+# surface (geodesic) distance instead of a straight-axis projection, and
+# recompute sector (circumferential position) via a per-level local angle
+# anchored to the same septal direction label_with_warp already computes --
+# i.e. reparametrize the PATIENT's own geometry directly, the same way
+# build_rv_atlas.py's partition_template_real_uvc() already does for the
+# atlas's own canonical shape, rather than trusting nearest-neighbor label
+# transfer to carry that structure through the warp intact.
+
+def _largest_connected_subset(candidate_idx: np.ndarray, faces: np.ndarray, n_vertices: int) -> np.ndarray:
+    """Restricts candidate_idx to its largest connected component under the
+    mesh's own face adjacency -- same pattern _reassign_stray_islands uses,
+    applied to a seed CANDIDATE set instead of a post-hoc label so a stray
+    outlier can't drag a geodesic seed to the wrong place."""
+    if candidate_idx.size <= 1:
+        return candidate_idx
+    is_candidate = np.zeros(n_vertices, dtype=bool)
+    is_candidate[candidate_idx] = True
+    edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
+    both_candidates = is_candidate[edges[:, 0]] & is_candidate[edges[:, 1]]
+    remap = -np.ones(n_vertices, dtype=np.int64)
+    remap[candidate_idx] = np.arange(candidate_idx.size)
+    sub_edges = edges[both_candidates]
+    sub_rows, sub_cols = remap[sub_edges[:, 0]], remap[sub_edges[:, 1]]
+    sub_graph = coo_matrix(
+        (np.ones(sub_rows.shape[0]), (sub_rows, sub_cols)),
+        shape=(candidate_idx.size, candidate_idx.size),
+    )
+    n_comp, comp_of = connected_components(sub_graph, directed=False)
+    if n_comp <= 1:
+        return candidate_idx
+    largest = np.argmax(np.bincount(comp_of))
+    return candidate_idx[comp_of == largest]
+
+
+def _find_apex_base_seed_vertices(
+    pts_aligned: np.ndarray, rotated_warped_atlas: np.ndarray, faces: np.ndarray,
+    apex_core_mask: np.ndarray, base_core_mask: np.ndarray,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """
+    Apex/base seed vertices for _geodesic_apex_base_ratio, found via reverse
+    nearest-neighbor from the ATLAS's own ground-truth apex/base core points
+    (already warped and rotated into this frame) onto the PATIENT mesh --
+    not from the patient's own nearest-neighbor labels, which is exactly what
+    needs fixing here and would make the seeding circular.
+    """
+    tree = cKDTree(pts_aligned)
+
+    def _seed(core_mask: np.ndarray) -> np.ndarray | None:
+        query_points = rotated_warped_atlas[core_mask]
+        if query_points.shape[0] == 0:
+            return None
+        _, nearest_idx = tree.query(query_points)
+        candidates = np.unique(nearest_idx)
+        if candidates.size < _LEVEL_MIN_SEED_VERTICES:
+            return None
+        return _largest_connected_subset(candidates, faces, pts_aligned.shape[0])
+
+    return _seed(apex_core_mask), _seed(base_core_mask)
+
+
+def _geodesic_apex_base_ratio(
+    pts_aligned: np.ndarray, faces: np.ndarray, apex_seed_idx: np.ndarray, base_seed_idx: np.ndarray,
+) -> np.ndarray:
+    """
+    Per-vertex apex(0)<->base(1) position via true mesh-surface distance, not
+    a straight-line axis projection -- see this section's own header comment
+    for why a straight axis produced 66.9%/31.4% level overlap on a real
+    (curved) free wall. NaN where a vertex can't reach one of the two seed
+    sets (a disconnected mesh fragment); caller falls back to nearest-
+    neighbor labels there.
+
+    Virtual-hub trick: one extra graph node per seed set, zero-weight-
+    connected to every vertex in that set, turns "shortest distance to ANY
+    of these N seed vertices" into a single-source Dijkstra call instead of
+    N separate ones.
+    """
+    n = pts_aligned.shape[0]
+    edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
+    edge_len = np.linalg.norm(pts_aligned[edges[:, 0]] - pts_aligned[edges[:, 1]], axis=1)
+    rows = np.concatenate([edges[:, 0], edges[:, 1]])
+    cols = np.concatenate([edges[:, 1], edges[:, 0]])
+    vals = np.concatenate([edge_len, edge_len])
+
+    apex_hub, base_hub = n, n + 1
+    hub_rows = np.concatenate([
+        np.full(apex_seed_idx.size, apex_hub), apex_seed_idx,
+        np.full(base_seed_idx.size, base_hub), base_seed_idx,
+    ])
+    hub_cols = np.concatenate([
+        apex_seed_idx, np.full(apex_seed_idx.size, apex_hub),
+        base_seed_idx, np.full(base_seed_idx.size, base_hub),
+    ])
+    hub_vals = np.zeros(hub_rows.shape[0])
+
+    graph = coo_matrix(
+        (np.concatenate([vals, hub_vals]), (np.concatenate([rows, hub_rows]), np.concatenate([cols, hub_cols]))),
+        shape=(n + 2, n + 2),
+    ).tocsr()
+    dist = dijkstra(graph, directed=False, indices=[apex_hub, base_hub])
+    dist_from_apex, dist_from_base = dist[0, :n], dist[1, :n]
+
+    t = np.full(n, np.nan)
+    reachable = np.isfinite(dist_from_apex) & np.isfinite(dist_from_base)
+    total = dist_from_apex[reachable] + dist_from_base[reachable]
+    t[reachable] = dist_from_apex[reachable] / np.maximum(total, 1e-9)
+    return t
+
+
+def _area_weighted_level_thresholds(t: np.ndarray, faces: np.ndarray, pts_aligned: np.ndarray) -> tuple[float, float]:
+    """
+    Two cut points on t splitting the mesh into thirds by SURFACE AREA (not
+    raw vertex count, which would force exactly 1/3 of vertices into each
+    level regardless of true anatomical proportions) -- mirrors build_rv_
+    atlas.py's partition_template_real_uvc(), which cuts its own atlas the
+    same way.
+    """
+    valid = np.isfinite(t[faces]).all(axis=1)
+    face_t = t[faces[valid]].mean(axis=1)
+    v0, v1, v2 = (pts_aligned[faces[valid, k]] for k in range(3))
+    face_area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+
+    order = np.argsort(face_t)
+    cumulative = np.cumsum(face_area[order])
+    cumulative /= cumulative[-1]
+    t_lo = float(face_t[order][np.searchsorted(cumulative, 1.0 / 3.0)])
+    t_hi = float(face_t[order][np.searchsorted(cumulative, 2.0 / 3.0)])
+    return t_lo, t_hi
+
+
+def _warped_sector_ref_angle_deg(
+    rotated_warped_atlas: np.ndarray, dense_labels: np.ndarray, segment_names: list[str],
+    patient_septal_deg: float,
+) -> dict[str, list[float]]:
+    """
+    Same computation _load_canonical_atlas uses for sector_ref_angle_deg, but
+    on the atlas points AFTER CPD warping + rigid rotation into this specific
+    patient's frame, anchored to this patient's OWN septal direction instead
+    of the atlas's generic one. Matters because CPD's warp is not a rigid
+    rotation -- it can stretch the free wall unevenly across its width, so a
+    reference angle fixed once on the FLAT, unwarped atlas no longer marks
+    the same physical location once the atlas is bent to fit real (non-
+    generic) anatomy. Using the warped points keeps the reference angle and
+    the patient's own raw angle (computed the same way, in
+    _assign_sectors_by_local_angle) in the same, actually-deformed frame.
+    """
+    level_of_segment = np.array([name.split("_")[0] for name in segment_names])
+    dense_level = level_of_segment[dense_labels]
+    ref: dict[str, list[float]] = {}
+    for zone in _ATLAS_ZONES:
+        zone_mask = dense_level == zone
+        local_xy = rotated_warped_atlas[zone_mask, :2]
+        local_center = local_xy.mean(axis=0)
+        angle_deg = np.degrees(np.arctan2(
+            local_xy[:, 1] - local_center[1], local_xy[:, 0] - local_center[0]
+        )) % 360.0
+        angle_rel_septum = (angle_deg - patient_septal_deg) % 360.0
+        zone_labels = dense_labels[zone_mask]
+        ref[zone] = [
+            _circular_mean_deg(angle_rel_septum[zone_labels == segment_names.index(f"{zone}_Seg{seg + 1}.obj")])
+            for seg in range(3)
+        ]
+    return ref
+
+
+def _assign_sectors_by_local_angle(
+    pts_aligned: np.ndarray, level_name: np.ndarray, patient_septal_deg: float,
+    sector_ref_angle_deg: dict[str, list[float]],
+) -> np.ndarray:
+    """
+    Per-vertex sector (1/2/3) via the angle around ITS OWN level band's local
+    XY centroid (a level's cross-sectional centroid can sit meaningfully off
+    the mesh's global centre -- same fix build_rv_atlas.py's sector cut
+    already needed), relative to patient_septal_deg -- the same anatomical
+    anchor label_with_warp already computes for its rotation-search tie-
+    break, reused here so sector identity (which physical side is Seg1 vs
+    Seg3) stays consistent across frames and patients, not just internally
+    consistent within one mesh. Assigns each vertex to whichever of that
+    level's 3 reference angles (sector_ref_angle_deg, computed once from the
+    atlas's own canonical shape) is circularly nearest.
+    """
+    sector = np.ones(pts_aligned.shape[0], dtype=np.int64)
+    for zone in _ATLAS_ZONES:
+        mask = level_name == zone
+        if not mask.any():
+            continue
+        local_xy = pts_aligned[mask, :2]
+        local_center = local_xy.mean(axis=0)
+        angle_deg = np.degrees(np.arctan2(
+            local_xy[:, 1] - local_center[1], local_xy[:, 0] - local_center[0]
+        )) % 360.0
+        angle_rel_septum = (angle_deg - patient_septal_deg) % 360.0
+        refs = np.array(sector_ref_angle_deg[zone])
+        circular_dist = np.abs((angle_rel_septum[:, None] - refs[None, :] + 180.0) % 360.0 - 180.0)
+        sector[mask] = np.argmin(circular_dist, axis=1) + 1
+    return sector
+
+
+def _flatten_geodesic_to_plane(t: np.ndarray, pts_aligned: np.ndarray) -> np.ndarray:
+    """
+    Projects the geodesic apex/base field onto its own best-fit FLAT PLANE,
+    via least-squares regression of t against raw position. 2026-09-28:
+    confirmed by direct visual inspection that raw t itself is smooth and
+    monotonic (no bug in the geodesic distance computation) -- but on a
+    curved/bent free wall, geodesic distance's own iso-contours (its level
+    sets) are genuinely TILTED relative to the tube's overall length, not
+    flat rings. Thresholding raw t directly cuts along those tilted contours,
+    which is what surfaced as Mid bulging further up one side of the mesh
+    than the other into Basal's territory -- not a wrong t value, a curved
+    cut. Fitting a flat plane through the same t values keeps the geodesic
+    field's overall apex-to-base ordering (used to seed/orient the fit) but
+    cuts with a flat, untilted plane, which is what a visually horizontal
+    layer boundary actually needs.
+    """
+    valid = np.isfinite(t)
+    A = np.hstack([pts_aligned[valid], np.ones((int(valid.sum()), 1))])
+    coef, *_ = np.linalg.lstsq(A, t[valid], rcond=None)
+    return pts_aligned @ coef[:3] + coef[3]
+
+
+_LEVEL_MIN_SEED_VERTICES = 3
+# Tercile order t=0->1 (apex->base) resolves to, independent of _ATLAS_ZONES'
+# alphabetical (Apical/Basal/Mid) glob-load order used everywhere else.
+_LEVEL_TERCILE_ORDER = ["Apical", "Mid", "Basal"]
+
+
+def _classify_levels_and_sectors_geodesic(
+    pts_aligned: np.ndarray, faces: np.ndarray, warp_state: dict,
+    rotated_warped_atlas: np.ndarray, patient_septal_deg: float | None, fallback_labels: np.ndarray,
+) -> np.ndarray | None:
+    """
+    Orchestrates the geometric relabeling this section's header comment
+    describes. Returns None on any seeding/geodesic failure (caller keeps
+    fallback_labels -- today's nearest-neighbor result -- unchanged, never a
+    hard failure).
+    """
+    apex_seed, base_seed = _find_apex_base_seed_vertices(
+        pts_aligned, rotated_warped_atlas, faces,
+        warp_state["apex_core_mask"], warp_state["base_core_mask"],
+    )
+    if apex_seed is None or base_seed is None:
+        return None
+
+    t = _geodesic_apex_base_ratio(pts_aligned, faces, apex_seed, base_seed)
+    if not np.isfinite(t).any():
+        return None
+    t_flat = _flatten_geodesic_to_plane(t, pts_aligned)
+
+    # 2026-09-28, per Sharlene: what "Apical/Mid/Basal" should mean here is
+    # ANGULAR position around the free wall's circumference (3 wedges, anchored
+    # to the septal reference), not position along the apex-to-base axis --
+    # confirmed directly against her own reference rendering (front view =
+    # clean wedges, side view rotated 90deg = the OLD level's nested rings).
+    # So the two roles are swapped from the original design: the geodesic
+    # apex-to-base tercile below now drives SEG NUMBER (1/2/3, layered apex-
+    # to-base), and circumferential angle now drives the LEVEL NAME.
+    thresholds = warp_state.get("level_cut_thresholds")
+    if thresholds is None:
+        thresholds = _area_weighted_level_thresholds(t_flat, faces, pts_aligned)
+        warp_state["level_cut_thresholds"] = thresholds
+    t_lo, t_hi = thresholds
+    tercile_idx = np.digitize(t_flat, [t_lo, t_hi])
+    sector = tercile_idx + 1  # 1=apex-ward, 2=mid, 3=base-ward
+
+    if patient_septal_deg is not None:
+        local_xy = pts_aligned[:, :2]
+        local_center = local_xy.mean(axis=0)
+        angle_deg = np.degrees(np.arctan2(
+            local_xy[:, 1] - local_center[1], local_xy[:, 0] - local_center[0]
+        )) % 360.0
+        angle_rel_septum = (angle_deg - patient_septal_deg) % 360.0
+        wedge_idx = np.digitize(angle_rel_septum, [120.0, 240.0])
+        # 2026-09-28, per Sharlene: Basal must always be the BIGGEST wedge by
+        # area, Apical the SECOND-biggest, Mid the SMALLEST -- confirmed
+        # directly against her reference rendering. Which wedge_idx (0/1/2)
+        # ends up biggest is determined ONCE per reconstruction (cached in
+        # warp_state, same pattern as level_cut_thresholds below) and reused
+        # for every later frame -- re-ranking by area fresh each frame would
+        # let a physical patch of tissue's name flip between frames whenever
+        # two wedges' areas happen to cross as the heart deforms through the
+        # cycle, which is exactly the "crescent that moves" problem she
+        # flagged. A wedge's identity, once fixed on the ED frame, is stable
+        # for the whole cycle even as its exact area changes frame to frame.
+        wedge_to_name = warp_state.get("level_wedge_to_name")
+        if wedge_to_name is None:
+            v0, v1, v2 = (pts_aligned[faces[:, k]] for k in range(3))
+            face_area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+            face_wedge = wedge_idx[faces[:, 0]]
+            wedge_area = np.array([face_area[face_wedge == w].sum() for w in range(3)])
+            area_rank = np.argsort(-wedge_area)  # biggest first
+            wedge_to_name = np.empty(3, dtype=object)
+            wedge_to_name[area_rank] = ["Basal", "Apical", "Mid"]
+            warp_state["level_wedge_to_name"] = wedge_to_name
+        level_name = wedge_to_name[wedge_idx]
+    else:
+        # No anatomical anchor available this frame (see _septal_direction_deg's
+        # own contract) -- level can't be anchored consistently, so fall back
+        # to whatever nearest-neighbor already assigned. Seg number still uses
+        # the new geodesic result: it doesn't depend on this anchor at all.
+        fallback_level = np.array([n.split("_")[0] for n in warp_state["segment_names"]])
+        level_name = fallback_level[fallback_labels]
+
+    segment_names = warp_state["segment_names"]
+    new_labels = np.array([
+        segment_names.index(f"{lv}_Seg{sc}.obj") for lv, sc in zip(level_name, sector)
+    ], dtype=np.int16)
+    new_labels[~np.isfinite(t)] = fallback_labels[~np.isfinite(t)]
+    return new_labels
+
+
 def label_with_warp(
     mesh_points_canonical: np.ndarray, warp_state: dict, faces: np.ndarray | None = None,
     lv_reference_points: np.ndarray | None = None,
@@ -731,6 +1216,11 @@ def label_with_warp(
         pts_aligned = pts @ warp_state["axis_rotation"].T
 
         preferred_angle_deg = None
+        # Initialized here (not just inside the block below) so it's always
+        # defined for _classify_levels_and_sectors_geodesic's sector pass,
+        # which treats None as "no anatomical anchor this frame" rather than
+        # raising on an undefined name.
+        patient_septal_deg = None
         atlas_gap_deg = warp_state.get("atlas_septal_gap_center_deg")
         if (
             lv_reference_points is not None and lv_reference_points.shape[0] > 0
@@ -765,6 +1255,13 @@ def label_with_warp(
             return None
 
         if faces is not None and faces.shape[0] > 0:
+            if _GEODESIC_CLASSIFICATION_ENABLED:
+                geodesic_labels = _classify_levels_and_sectors_geodesic(
+                    pts_aligned, faces, warp_state, rotated_warped_atlas, patient_septal_deg, labels,
+                )
+                if geodesic_labels is not None:
+                    labels = geodesic_labels
+
             smoothed = _smooth_labels_by_face_adjacency(labels, faces, n_segments)
             if len(np.unique(smoothed)) == n_segments:
                 labels = smoothed
@@ -773,6 +1270,7 @@ def label_with_warp(
                     "[CPD-RV] Boundary smoothing would have dropped a segment to 0 vertices; "
                     "keeping unsmoothed labels for this frame."
                 )
+            labels = _reassign_stray_islands(labels, faces, n_segments)
 
         return labels
 
@@ -801,20 +1299,30 @@ def refine_mesh_for_smooth_boundaries(
     than guessed.
 
     Standard 1-to-4 triangle subdivision (trimesh.remesh.subdivide) inserts a
-    new vertex at every edge midpoint. Those new vertices are labeled by the
-    SAME nearest-neighbor query against the already-fitted CPD warp every
-    other vertex went through (not interpolated/averaged from their two
-    parent vertices), so a genuinely thin segment crossing a subdivided edge
-    still gets classified correctly instead of smeared into its neighbor.
-    Cheap: this reuses the warp fitted once in register_cpd_warp, so refining
-    a frame costs a subdivide + one small KDTree query, not a fresh ~20-30s
-    DeepSDF decode at a higher marching-cubes resolution.
+    new vertex at every edge midpoint. A new vertex inherits its label
+    directly when its two parent vertices already agree -- nothing ambiguous
+    to resolve there. Only when the parents disagree (a genuine boundary
+    edge) does it fall back to the same nearest-neighbor query against the
+    already-fitted CPD warp every other vertex went through. Cheap: this
+    reuses the warp fitted once in register_cpd_warp, so refining a frame
+    costs a subdivide + one small KDTree query, not a fresh ~20-30s DeepSDF
+    decode at a higher marching-cubes resolution.
 
-    trimesh.remesh.subdivide's contract (verified against the installed
-    version, not assumed): output vertices are the ORIGINAL vertices
-    unchanged, in their original order, followed by the new edge-midpoint
-    vertices -- so original labels carry over by direct index; only the
-    appended vertices need a fresh label.
+    2026-09-25: this used to always run the nearest-neighbor query and then
+    re-smooth the whole (now larger) label array -- on a real reconstruction
+    that either eroded small segments (smoothing the already-resolved
+    original vertices a second time) or, once that was blocked with a
+    protected-vertex mask, left a periodic speckle where isolated new
+    vertices couldn't out-vote their equally-new, equally-ambiguous
+    neighbors. Inheriting from agreeing parents sidesteps both: the ~90% of
+    new vertices with agreeing parents never touch the noisy vote at all,
+    and no smoothing pass runs afterward to erode anything.
+
+    Correspondence between a new vertex and its parent edge is found by
+    exact midpoint position (matched against edges_unique via cKDTree), not
+    assumed from trimesh.remesh.subdivide's vertex ordering -- verified
+    against the installed version, but a KDTree match holds regardless of
+    ordering.
 
     Returns (vertices, faces, labels) for the CALLER to re-export as the
     mesh file frontend consumers load -- this changes vertex/face count, so
@@ -829,9 +1337,20 @@ def refine_mesh_for_smooth_boundaries(
         n_segments = len(warp_state["segment_names"])
 
         for _ in range(max(0, iterations)):
+            n_before = current_vertices.shape[0]
+            prior_mesh = trimesh.Trimesh(vertices=current_vertices, faces=current_faces, process=False)
+            edges = prior_mesh.edges_unique
+
             new_vertices, new_faces = trimesh.remesh.subdivide(current_vertices, current_faces)
-            n_original = current_vertices.shape[0]
-            new_only = new_vertices[n_original:]
+            new_only = new_vertices[n_before:]
+
+            # Match each new vertex to the unique edge it's the midpoint of,
+            # by exact position rather than trusting subdivide()'s internal
+            # vertex ordering to line up with edges_unique's.
+            edge_midpoints = (current_vertices[edges[:, 0]] + current_vertices[edges[:, 1]]) / 2.0
+            _, edge_idx = cKDTree(edge_midpoints).query(new_only)
+            label_a = current_labels[edges[edge_idx, 0]]
+            label_b = current_labels[edges[edge_idx, 1]]
 
             # Same alignment every other vertex was labeled in -- see
             # register_cpd_warp/label_with_warp for why this (stored
@@ -840,19 +1359,25 @@ def refine_mesh_for_smooth_boundaries(
             aligned = (new_only - warp_state["patient_centroid"]) @ warp_state["axis_rotation"].T
             tree = cKDTree(warp_state["warped_dense_atlas"])
             _, nearest_idx = tree.query(aligned)
-            new_labels = warp_state["dense_labels"][nearest_idx].astype(np.int16)
+            nn_label = warp_state["dense_labels"][nearest_idx].astype(np.int16)
+
+            # When a midpoint's two parent vertices already agree, inherit
+            # that label directly -- there's no ambiguity to resolve, so a
+            # majority-vote smoothing pass has nothing useful to do and can
+            # only introduce noise (2026-09-25: it did -- see git history).
+            # Only a genuine boundary edge (parents disagree) needs the
+            # nearest-neighbor query to decide.
+            new_labels = np.where(label_a == label_b, label_a, nn_label)
 
             current_labels = np.concatenate([current_labels, new_labels])
             current_vertices, current_faces = new_vertices, new_faces
 
-        smoothed = _smooth_labels_by_face_adjacency(current_labels, current_faces, n_segments)
-        if len(np.unique(smoothed)) == n_segments:
-            current_labels = smoothed
-        else:
-            logger.warning(
-                "[CPD-RV] Post-subdivision smoothing would have dropped a segment; "
-                "keeping unsmoothed subdivided labels."
-            )
+        # The disagreeing-parent branch above is the same raw nearest-
+        # neighbor decision that can strand an island (see
+        # _reassign_stray_islands) -- just scoped to new boundary-adjacent
+        # vertices instead of the whole mesh. Run it again here rather than
+        # assume label_with_warp's earlier pass still holds after subdivision.
+        current_labels = _reassign_stray_islands(current_labels, current_faces, n_segments)
 
         return current_vertices, current_faces, current_labels
 

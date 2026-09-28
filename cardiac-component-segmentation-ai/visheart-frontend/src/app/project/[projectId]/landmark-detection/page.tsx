@@ -3278,16 +3278,23 @@ function StrainPreviewPanel({
                     chamber="rv"
                     className="w-full h-full"
                     onSegmentHover={setRvHeartTooltip}
-                    // Orient this standalone RV view the same way it appears
-                    // in the Combined tab (both LV and RV are in the same
-                    // raw coordinate space, so LV's own alignment is a valid
-                    // shared reference) instead of RV's own independent
-                    // apex/base rotation, which has no reason to land on the
-                    // same orientation. Falls back to RV's own alignment
-                    // automatically if the LV mesh/labels aren't loaded yet.
-                    lvAlignmentMeshUrl={reconstructionMeshUrl}
-                    lvAlignmentMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
-                    lvAlignmentLabels={reconstructionLabels}
+                    // 2026-09-27: NOT using LV's borrowed rotation here.
+                    // computeLvAlignment rotates using ONLY LV's own apex/base
+                    // labels -- it never looks at RV's anatomy. Measured
+                    // directly: LV's real long axis is Z, RV's is X (a
+                    // different axis entirely, since the two DeepSDF models
+                    // were trained independently). Applying LV's rotation to
+                    // RV can coincidentally produce a tall-looking bounding
+                    // box while leaving RV's REAL apex-to-base direction
+                    // pointing along a different screen axis -- exactly what
+                    // was reported: overall shape upright, but the
+                    // apical/mid/basal bands running left-to-right instead of
+                    // top-to-bottom. RV's own alignment below uses RV's own
+                    // apex/base labels (independently verified: it maps the
+                    // real apex->base direction to exactly (0,1,0) using this
+                    // patient's actual segment centroids), so it's the only
+                    // one that can get both the overall orientation AND the
+                    // band direction right at the same time.
                     // A bit closer than LV/Combined's shared 8 -- the RV
                     // crescent's own bounding box is narrower than LV's
                     // rounder shape at the same distance, so it read as
