@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import nibabel as nib
@@ -43,7 +44,9 @@ def normalize(image):
     return np.zeros_like(image) if high - low < 1e-8 else (image - low) / (high - low)
 
 
-def score_case(model, image_path, mask_path, batch_size=4):
+def load_case(image_path, mask_path):
+    """One whole volume as scoring sees it: every slice min-max normalised, the image resized bilinear and the label
+    nearest to 256 x 256. Returns (slices N x 1 x 256 x 256, target N x 256 x 256)."""
     image = np.asanyarray(nib.load(str(image_path)).dataobj, dtype=np.float32)
     mask = np.asanyarray(nib.load(str(mask_path)).dataobj, dtype=np.int64)
     if image.shape != mask.shape or image.ndim != 3:
@@ -54,11 +57,21 @@ def score_case(model, image_path, mask_path, batch_size=4):
     target = torch.from_numpy(np.stack([mask[:, :, i] for i in range(mask.shape[2])]).astype(np.float32)).unsqueeze(1)
     slices = F.interpolate(slices, size=(256, 256), mode="bilinear", align_corners=False)
     target = F.interpolate(target, size=(256, 256), mode="nearest").squeeze(1).to(torch.int64)
+    return slices, target
+
+
+def predict(model, slices, batch_size=4):
+    """The argmax label of every pixel, in batches, without gradients."""
     outputs = []
     with torch.no_grad():
         for start in range(0, len(slices), batch_size):
             outputs.append(torch.argmax(model(slices[start:start + batch_size]), dim=1).cpu())
-    return dice_by_class(torch.cat(outputs).numpy(), target.numpy())
+    return torch.cat(outputs).numpy()
+
+
+def score_case(model, image_path, mask_path, batch_size=4):
+    slices, target = load_case(image_path, mask_path)
+    return dice_by_class(predict(model, slices, batch_size), target.numpy())
 
 
 def list_cases(images_dir, masks_dir):
@@ -99,6 +112,29 @@ def summarize(scores):
             "cardiac_mean": float(np.mean([cardiac_mean(s) for s in scores.values()]))}
 
 
+SHARING_RETRIES, SHARING_PAUSE = 100, 0.02  # at most 2 s; measured need was 6 retries (plan WS13, Task 13.2)
+
+
+def retry_sharing(action):
+    """Run action again while Windows reports a sharing violation.
+
+    Windows refuses to replace a file that another handle has open, and refuses to open one while it is being
+    replaced (WinError 5 or 32, raised as PermissionError). Readers such as the Extend Training page, the worker and
+    the scoring watcher hold a file for milliseconds, so a short wait always gets through.
+    """
+    for attempt in range(SHARING_RETRIES):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == SHARING_RETRIES - 1:
+                raise
+            time.sleep(SHARING_PAUSE)
+
+
+def read_json(path):
+    return retry_sharing(lambda: json.loads(Path(path).read_text(encoding="utf-8")))
+
+
 def atomic_write_json(path, payload):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +142,7 @@ def atomic_write_json(path, payload):
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, indent=2)
-        os.replace(temp, path)
+        retry_sharing(lambda: os.replace(temp, path))
     finally:
         if os.path.exists(temp):
             os.unlink(temp)

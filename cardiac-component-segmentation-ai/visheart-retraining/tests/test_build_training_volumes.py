@@ -100,6 +100,18 @@ class BuildTrainingVolumes(unittest.TestCase):
         self.assertEqual(out["skipped"]["frozen_test_patient"], 1)
         self.assertFalse((self.dir / "out").exists())
 
+    def test_the_check_alone_answers_for_the_whole_volume_and_writes_nothing(self):
+        from frozen_guard import FrozenIndex
+        index = self.dir / "frozen_slices.npz"
+        FrozenIndex.from_arrays({"acdc/patient101_frame01.nii.gz": self.data[:, :, :, 0]}).save(index)
+        check = {"check_frozen": True, "source_nifti": self.payload([], [])["source_nifti"], "frozen_slices": str(index)}
+        self.assertEqual(btv.build(check),
+                         {"frozen_match": {"frame": 0, "slice": 0, "frozen": "acdc/patient101_frame01.nii.gz#z0"}})
+        rng = np.random.default_rng(9)
+        FrozenIndex.from_arrays({"other.nii.gz": rng.random((6, 4, 3)).astype(np.float32)}).save(index)
+        self.assertEqual(btv.build(check), {"frozen_match": None})
+        self.assertFalse((self.dir / "out").exists())
+
     def test_an_unrelated_frozen_index_changes_nothing(self):
         from frozen_guard import FrozenIndex
         index = self.dir / "frozen_slices.npz"

@@ -1,6 +1,7 @@
 """Train a release candidate with the adopted default recipe, in one command.
 
-The recipe was decided by a rule written before the runs (plan WS12; notebooks/replay_select_last.ipynb, run 0925-1347):
+The recipe was decided by a rule written before the runs (plan WS12; Jy's decision notebook
+replay_select_last.ipynb, run 0925-1347, kept with the evidence outside this repository):
   1. the corrections export, plus
   2. a replay set of original training slices, --replay-ratio times as many as the corrected slices (at most
      --max-replay), drawn by make_replay_set.py with the corrections' patients and every frozen test patient left out;
@@ -33,7 +34,7 @@ from frozen_guard import DEFAULT_INDEX, FrozenIndex  # noqa: E402
 from versions import DEFAULT_REGISTRY  # noqa: E402
 
 RECIPE = "corrections + replay 1:10, decoder only, last epoch"
-DECIDED_IN = "notebooks/replay_select_last.ipynb, run 0925-1347 (plan WS12)"
+DECIDED_IN = "replay_select_last.ipynb, run 0925-1347 (plan WS12; evidence kept outside the repository)"
 DATA = Path(DEFAULT_V2_ROOT) / "data"
 DEFAULT_SOURCES = [("acdc", DATA / "training-acdc" / "training"), ("mms1", DATA / "Training-mms" / "Training"),
                    ("mms2", DATA / "Training-mms2" / "Training")]

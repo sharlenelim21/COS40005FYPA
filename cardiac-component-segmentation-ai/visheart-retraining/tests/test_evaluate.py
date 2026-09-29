@@ -1,7 +1,10 @@
+import json
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import nibabel as nib
 import numpy as np
@@ -68,6 +71,17 @@ class Evaluate(unittest.TestCase):
         self.assertAlmostEqual(scores["rv"], 0.0, places=6)
         self.assertEqual(scores["myocardium"], 1.0)
 
+    def test_load_case_and_predict_are_exactly_what_scoring_uses(self):
+        slices, target = evaluate.load_case(self.images / "c1.nii.gz", self.masks / "c1_gt.nii.gz")
+        self.assertEqual((tuple(slices.shape), tuple(target.shape)), ((2, 1, 256, 256), (2, 256, 256)))
+        self.assertGreaterEqual(float(slices.min()), 0.0)
+        self.assertLessEqual(float(slices.max()), 1.0)
+        self.assertEqual(int(target[:, 64:128, 64:128].min()), 1)   # the 4 x 4 RV square, resized 16x
+        prediction = evaluate.predict(ConstantModel(1), slices, batch_size=1)
+        self.assertEqual((prediction.shape, int(prediction.min()), int(prediction.max())), ((2, 256, 256), 1, 1))
+        self.assertEqual(evaluate.dice_by_class(prediction, target.numpy()),
+                         evaluate.score_case(ConstantModel(1), self.images / "c1.nii.gz", self.masks / "c1_gt.nii.gz"))
+
     def test_report_compares_every_checkpoint_with_the_first(self):
         report = self.run_eval()
         self.assertEqual(report["summary"]["base"]["toy"]["n"], 3)
@@ -105,6 +119,26 @@ class Evaluate(unittest.TestCase):
                               str(self.masks), "--output", str(self.output), "--manifest", str(manifest)])
         self.assertEqual(code, 1)
         self.assertFalse(self.output.exists())
+
+    # files read by other threads or processes while they are rewritten (plan WS13) --------------------------
+
+    def test_atomic_write_json_waits_for_a_reader_to_close_the_file(self):
+        path = self.dir / "shared.json"
+        evaluate.atomic_write_json(path, {"value": 1})
+        reader = open(path, encoding="utf-8")        # a page or a progress watcher holding the file for a moment
+        timer = threading.Timer(0.3, reader.close)
+        timer.start()
+        try:
+            evaluate.atomic_write_json(path, {"value": 2})  # Windows refuses to replace a file that is open elsewhere
+        finally:
+            timer.cancel()
+            reader.close()
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"value": 2})
+
+    def test_read_json_retries_while_the_file_is_being_replaced(self):
+        in_use = PermissionError(13, "The process cannot access the file")
+        with mock.patch.object(Path, "read_text", side_effect=[in_use, in_use, '{"value": 3}']):
+            self.assertEqual(evaluate.read_json(self.dir / "shared.json"), {"value": 3})
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@ stdin : {"source_nifti", "case_id", "out_dir", "plane": {"height", "width"}, "mi
          "tracked_slices": editTracking.slices, "frames": the saved editable mask's frames,
          "frozen_slices": optional frozen_guard.py index; a source volume with any frozen slice exports nothing}
 stdout: {"files": [...], "skipped": {...}[, "frozen_match": {...}]}  or  {"error": "..."}
+
+With {"check_frozen": true, "source_nifti", "frozen_slices"} it only checks: {"frozen_match": {...} or null}.
 """
 import json
 import sys
@@ -71,18 +73,26 @@ def label_slice(entries, height, width):
     return labels
 
 
+def frozen_match(data, frozen_slices):
+    """The first slice of the whole volume that matches the frozen set, or None."""
+    from frozen_guard import FrozenIndex
+    return FrozenIndex.load(frozen_slices).first_match(data)
+
+
 def build(payload):
-    height, width = int(payload["plane"]["height"]), int(payload["plane"]["width"])
     source = nib.load(payload["source_nifti"])
     data = np.asanyarray(source.dataobj, dtype=np.float32)
     if data.ndim == 3:
         data = data[..., np.newaxis]
+    if payload.get("check_frozen"):
+        # The export's dry run asks only this, so the Prepare page can lock a frozen test patient's cases.
+        return {"frozen_match": frozen_match(data, payload["frozen_slices"])}
+    height, width = int(payload["plane"]["height"]), int(payload["plane"]["width"])
     if data.ndim != 4 or data.shape[:2] != (height, width):
         return {"error": f"source shape {data.shape} does not match plane ({height}, {width})"}
     if payload.get("frozen_slices"):
         # Whole patient: another frame of a frozen test patient is as much a leak as the frozen frame itself.
-        from frozen_guard import FrozenIndex
-        hit = FrozenIndex.load(payload["frozen_slices"]).first_match(data)
+        hit = frozen_match(data, payload["frozen_slices"])
         if hit:
             return {"files": [], "skipped": {"frozen_test_patient": len(payload.get("tracked_slices") or [])},
                     "frozen_match": hit}

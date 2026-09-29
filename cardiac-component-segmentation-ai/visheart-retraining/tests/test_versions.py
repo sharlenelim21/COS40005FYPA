@@ -260,6 +260,61 @@ class Versions(unittest.TestCase):
         self.assertEqual(self.cli("activate", "--label", "cand", "--yes"), 1)
         self.assertEqual(self.slot.read_bytes(), b"dropped in by hand")
 
+    # shared checks for the worker (plan WS13) ------------------------------------------------------------------
+
+    def test_switch_lines_list_the_warnings_then_what_the_switch_deletes(self):
+        self.clean("first", b"first weights")
+        self.cli("activate", "--label", "first")
+        self.add_candidate("second", b"second weights", base_sha=sha256_file(self.folder / "first.pth"))
+        self.compare("second", self.public_report("second", low=-0.02))
+        warnings, lines = versions.switch_lines(versions.Registry(self.registry), "second")
+        self.assertEqual(len(warnings), 2)                                  # acdc and mms1 are both lower
+        self.assertTrue(all("lower score" in line for line in warnings))
+        self.assertEqual(lines[:2], warnings)
+        self.assertIn("first will be deleted", lines[2])
+        _, back = versions.switch_lines(versions.Registry(self.registry), "orig")
+        self.assertEqual(len(back), 1)                                       # the original carries no warnings
+        self.assertIn("first will be deleted", back[0])
+
+    def test_switch_refusal_names_why_a_switch_cannot_happen(self):
+        self.assertEqual(versions.switch_refusal(versions.Registry(self.registry), "orig", "rollback"),
+                         "orig is already serving")
+        self.clean("cand", b"candidate weights")
+        self.assertIsNone(versions.switch_refusal(versions.Registry(self.registry), "cand"))
+        self.original.write_bytes(b"overwritten by hand")
+        self.assertIn("activate refused", versions.switch_refusal(versions.Registry(self.registry), "cand"))
+
+    def test_a_switch_records_who_confirmed_it(self):
+        self.clean("cand", b"candidate weights")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(versions.switch(versions.Registry(self.registry), "cand", True, "activate", by="dr-lee"), 0)
+        self.assertEqual(self.data()["history"][-1]["by"], "dr-lee")
+        with contextlib.redirect_stdout(io.StringIO()):
+            versions.switch(versions.Registry(self.registry), "orig", True, "rollback", by="dr-tan")
+        self.assertEqual([(h["action"], h.get("by")) for h in self.data()["history"][-2:]],
+                         [("rollback", "dr-tan"), ("delete", "dr-tan")])
+
+    def test_reject_refusal_and_reject_record_who(self):
+        self.clean("cand", b"candidate weights")
+        registry = versions.Registry(self.registry)
+        self.assertIn("only a candidate", versions.reject_refusal(registry, "orig"))
+        self.assertIsNone(versions.reject_refusal(registry, "cand"))
+        versions.reject(registry, "cand", by="dr-lee")
+        last = self.data()["history"][-1]
+        self.assertEqual((last["action"], last["label"], last["reason"], last["by"]), ("delete", "cand", "rejected", "dr-lee"))
+        self.assertFalse((self.folder / "cand.pth").exists())
+
+    def test_the_registry_is_read_again_when_windows_briefly_locks_it(self):
+        real, calls = Path.read_text, []
+
+        def locked_once(path, *args, **kwargs):  # a switch replacing registry.json while the page reads it
+            calls.append(path)
+            if len(calls) == 1:
+                raise PermissionError(13, "The process cannot access the file")
+            return real(path, *args, **kwargs)
+        with mock.patch.object(Path, "read_text", locked_once):
+            self.assertEqual(versions.Registry(self.registry).data["active"], "orig")
+
     # reject and prune ------------------------------------------------------------------------------------
 
     def test_reject_deletes_a_candidate_but_never_the_original_or_active(self):

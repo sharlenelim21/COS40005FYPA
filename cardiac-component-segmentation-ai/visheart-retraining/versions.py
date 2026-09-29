@@ -41,7 +41,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import build_model, sha256_file  # noqa: E402
-from evaluate import atomic_write_json  # noqa: E402
+from evaluate import atomic_write_json, read_json  # noqa: E402,F401 (read_json waits out a brief Windows lock)
 
 REGRESSION_MARGIN = 0.005
 LABEL_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]*"
@@ -57,10 +57,6 @@ RESTART_HINT = ("Restart the inference service, which caches the model after its
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
-
-
-def read_json(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def record(data, action, label, **detail):
@@ -136,11 +132,11 @@ class Registry:
             return f"{slot} is not the registered active version {data['active']}"
         return None
 
-    def delete(self, label, reason):
+    def delete(self, label, reason, by=None):
         """Mark first, then remove the files: a failed removal leaves a stray file, never a wrong registry."""
         entry = self.entry(label)
         entry.update({"status": "deleted", "deleted_at": now(), "deleted_because": reason})
-        record(self.data, "delete", label, reason=reason)
+        record(self.data, "delete", label, reason=reason, **({"by": by} if by else {}))
         self.save()
         weights = self.file(label)
         for path in (weights, weights.with_suffix(".json")):
@@ -294,24 +290,37 @@ def activation_warnings(registry, label):
     return list(gate["warnings"])
 
 
-def switch(registry, target, assume_yes, action):
+def switch_refusal(registry, target, action="activate"):
+    """Why a switch to target cannot happen now, or None. switch() and the worker's preview both ask this first."""
+    data, entry = registry.data, registry.entry(target)
+    if target == data["active"]:
+        return f"{target} is already serving"
+    if entry["status"] == "deleted":
+        return f"{target} was deleted and cannot serve again"
+    problem = registry.integrity_problem()
+    return f"{action} refused: {problem}" if problem else None
+
+
+def switch_lines(registry, target):
+    """(warnings, lines to confirm): the target's warnings (D3), then the trained version the switch deletes (D4)."""
+    active, original = registry.data["active"], registry.data["original"]
+    warnings = [] if target == original else activation_warnings(registry, target)
+    replaced = active if active != original else None
+    deletion = ([f"{replaced} will be deleted, because {target} replaces it (the original is always kept)"]
+                if replaced else [])
+    return warnings, warnings + deletion
+
+
+def switch(registry, target, assume_yes, action, by=None):
     data = registry.data
     active, original = data["active"], data["original"]
     entry = registry.entry(target)
-    if target == active:
-        print(f"{target} is already serving")
+    refusal = switch_refusal(registry, target, action)
+    if refusal:
+        print(refusal)
         return 1
-    if entry["status"] == "deleted":
-        print(f"{target} was deleted and cannot serve again")
-        return 1
-    problem = registry.integrity_problem()
-    if problem:
-        print(f"{action} refused: {problem}")
-        return 1
-    warnings = [] if target == original else activation_warnings(registry, target)
+    warnings, lines = switch_lines(registry, target)
     replaced = active if active != original else None
-    lines = warnings + ([f"{replaced} will be deleted, because {target} replaces it (the original is always kept)"]
-                        if replaced else [])
     if lines:
         print(f"{action} {target}:")
         if not confirm(lines, assume_yes):
@@ -325,10 +334,10 @@ def switch(registry, target, assume_yes, action):
         copy_verified(registry.file(target), slot, entry["sha256"])
         entry["status"] = "active"
     data["active"] = target
-    record(data, action, target, replaced=active, confirmed_warnings=warnings)
+    record(data, action, target, replaced=active, confirmed_warnings=warnings, **({"by": by} if by else {}))
     registry.save()
     if replaced:
-        registry.delete(replaced, f"replaced by {target}")
+        registry.delete(replaced, f"replaced by {target}", by=by)
     print(f"{target} is now serving{' (the original)' if target == original else ''}. {RESTART_HINT}")
     return 0
 
@@ -342,12 +351,23 @@ def cmd_rollback(args):
     return switch(registry, registry.data["original"], args.yes, "rollback")
 
 
+def reject_refusal(registry, label):
+    """Why label cannot be rejected, or None: only a candidate can be, never the original or the active version."""
+    data, entry = registry.data, registry.entry(label)
+    if label in (data["original"], data["active"]) or entry["status"] != "candidate":
+        return f"only a candidate can be rejected; {label} is {entry['status']}"
+    return None
+
+
+def reject(registry, label, by=None):
+    refusal = reject_refusal(registry, label)
+    if refusal:
+        raise SystemExit(refusal)
+    registry.delete(label, "rejected", by=by)
+
+
 def cmd_reject(args):
-    registry = Registry(args.registry)
-    data, entry = registry.data, registry.entry(args.label)
-    if args.label in (data["original"], data["active"]) or entry["status"] != "candidate":
-        raise SystemExit(f"only a candidate can be rejected; {args.label} is {entry['status']}")
-    registry.delete(args.label, "rejected")
+    reject(Registry(args.registry), args.label)
     print(f"deleted {args.label}")
     return 0
 
