@@ -677,17 +677,32 @@ voxel_count × voxel_mm3 / 1000` is exactly the volume that slice adds, i.e. the
 amount `LVEDV` will drop if it is excluded. On clean data
 `duplicate_slices` is `[]` and `duplicate_slices_detected` is `false`.
 
-### 12.4 It rides `warnings[]` → low-confidence health status until resolved
+### 12.4 An LV-cavity duplicate → low-confidence health status until resolved
 
-A confirmed duplicate puts a line in `heartMetrics.warnings`. The health-status
-rule engine treats *any* non-empty `heartMetrics.warnings` as
-`volumes_unreliable`: it suppresses the numeric EDV evidence line and drops
-`confidence` to `"low"` (`compute_health_status.py`, §"Defensive behaviour"
-(b)). So an un-resolved duplicate automatically makes the health status
-low-confidence — correct, because the volume is inflated — and **resolving it
-(exclude) clears the warning and lets confidence return to normal** on the next
-recompute (assuming nothing else is wrong). EF, a ratio, is unaffected
-throughout.
+A confirmed duplicate puts a line in `heartMetrics.warnings` **and** an entry in
+`heartMetrics.duplicate_slices`. The health-status rule engine reads the
+structured entry, not the warning text: an entry with `class: "lvc"` makes
+absolute LV volumes unreliable (`src/python/volume_reliability.py`), so it
+suppresses the numeric EDV evidence line and drops `confidence` to `"low"`
+(`compute_health_status.py`, §"Defensive behaviour" (b)). **Resolving it
+(exclude) removes the entry and lets confidence return to normal** on the next
+recompute (assuming nothing else is wrong).
+
+Only LV-cavity duplicates count. LVEDV is computed from LV-cavity voxels alone,
+so an `rv` or `myo` duplicate cannot inflate it; a slice copied wholesale is
+still caught because the detector emits one entry per class present on it,
+including `lvc`.
+
+Until 2026-09-11 the engine treated *any* non-empty `heartMetrics.warnings` as
+unreliable volumes. Warnings unrelated to LV volume — "No RV voxels at ED",
+"No myocardium (class 2) voxels at ED frame", an ignored `bsa_m2` — therefore
+also suppressed EDV evidence, lowered confidence, blamed the affine, and could
+change the LV status by dropping an EDV warn from the downgrade count.
+
+EF is a ratio, so a wrong voxel size does not change it. A duplicated slice is
+different: it inflates the LV volume of the frame it sits on, which can shift
+EF and even which frame is picked as ED — the reason confidence is lowered
+rather than the grade being trusted as-is.
 
 ### 12.5 Resolution model — soft-exclude vs keep (Part D)
 
