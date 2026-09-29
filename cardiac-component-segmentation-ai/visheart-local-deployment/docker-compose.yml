@@ -120,10 +120,13 @@ services:
     volumes:
       - ../Cardiac_Segmentation_FYP_Server/dist:/app/backend/dist:ro
       - ../Cardiac_Segmentation_FYP_Server/src/python:/app/backend/src/python:ro
-      - ../Cardiac_Segmentation_FYP_Server/dist/temp_jpeg:/app/backend/dist/temp_jpeg
+      # Scratch folders live in Docker volumes: a bind mount of a Windows drive writes small files about 20 times
+      # slower (300 JPEG-sized files: 1.8 s against 0.09 s, 2026-09-29), and upload writes one file per slice.
+      - temp_jpeg:/app/backend/dist/temp_jpeg
+      - temp_mesh:/app/backend/dist/temp_mesh
+      - temp_upload:/app/backend/dist/temp_upload
+      # Stays a bind mount: the UNet Extend Training worker on the host reads the exports from here.
       - ../Cardiac_Segmentation_FYP_Server/dist/temp_exports:/app/backend/dist/temp_exports
-      - ../Cardiac_Segmentation_FYP_Server/dist/temp_mesh:/app/backend/dist/temp_mesh
-      - ../Cardiac_Segmentation_FYP_Server/dist/temp_upload:/app/backend/dist/temp_upload
     networks:
       - visheart-network
     healthcheck:
@@ -385,4 +388,10 @@ volumes:
   redis_data:
     driver: local
   minio_data:
+    driver: local
+  temp_jpeg:
+    driver: local
+  temp_mesh:
+    driver: local
+  temp_upload:
     driver: local
