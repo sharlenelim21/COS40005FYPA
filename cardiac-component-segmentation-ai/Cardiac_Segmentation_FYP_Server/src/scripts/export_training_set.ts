@@ -11,13 +11,20 @@ import { projectSegmentationMaskModel, projectModel } from '../services/database
 import { extractS3KeyFromUrl, downloadFromS3 } from '../services/s3_handler';
 import { runEditTrackingScript } from '../services/edit_tracking';
 import { selectTrainingSlices, sliceKey, TRAINING_MODELS } from '../services/training_selection';
+import { describeCase, FrozenMatch, maskQuery, parseSelection, withTrainingPixelCounts } from '../services/training_export';
 
 // Run inside the app container, which already has the database and S3 settings. The container does not
 // hold visheart-retraining/, so copy build_training_volumes.py and common.py in and pass --builder.
 // UNet and MedSAM corrections both count; training_selection.ts decides which slices. When both models
 // corrected the same slice differently, the dry run writes conflicts.json: set each "use", then pass the
 // file back with --choices. A real export needs --frozen-slices (frozen_guard.py's index, copied in with the
-// builder): a project whose source volume holds any frozen test slice is left out whole.
+// builder): a project whose source volume holds any frozen test slice is left out whole. --owner <userId> keeps only
+// that user's projects, and --selection <file> ({"maskIds": [...]}) only the chosen masks (the Extend Training page,
+// plan WS13 R1). The dry run also lists "cases": each mask's own qualifying slices, before D5 picks between models.
+// A dry run given --frozen-slices and --builder also checks each project's source volume, and marks the cases of a
+// frozen test patient ("frozen"), which never count as candidates. A slice's changed pixels are the pixels whose
+// training label changed, recounted against the mask's AI result; edit tracking's own count is per class, so a
+// pixel moved between two structures would count twice.
 const argValue = (name: string, fallback?: string) => {
     const i = process.argv.indexOf(`--${name}`);
     return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : fallback;
@@ -49,10 +56,15 @@ async function main() {
     const frozenSlices = argValue('frozen-slices');
     const dryRun = hasFlag('dry-run');
     const onlyHoldout = hasFlag('only-holdout');
+    const owner = argValue('owner');
+    if (owner !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(owner)) throw new Error(`not a user id: ${owner}`);
+    const selectionPath = argValue('selection');
+    const chosenMaskIds = selectionPath ? parseSelection(await fs.readJson(selectionPath)) : null;
     const holdout = holdoutPath ? await fs.readJson(holdoutPath) : null;
     const clinical = new Set<string>(holdout?.clinical?.project_ids ?? []);
     if (onlyHoldout && clinical.size === 0) throw new Error('--only-holdout needs a manifest with a drawn clinical arm');
-    if (!dryRun && !(await fs.pathExists(builder))) throw new Error(`builder not found: ${builder} (pass --builder)`);
+    if ((!dryRun || frozenSlices) && !(await fs.pathExists(builder))) throw new Error(`builder not found: ${builder} (pass --builder)`);
+    if (dryRun && frozenSlices && !(await fs.pathExists(frozenSlices))) throw new Error(`frozen-slice index not found: ${frozenSlices}`);
     if (!dryRun && !frozenSlices) throw new Error('--frozen-slices is required: no export may reach the frozen test set');
     if (!dryRun && !(await fs.pathExists(frozenSlices!))) throw new Error(`frozen-slice index not found: ${frozenSlices}`);
     const bucket = process.env.AWS_BUCKET_NAME;
@@ -66,9 +78,16 @@ async function main() {
 
     // Connect directly: connectToDatabase() also creates the admin user and seeds the GPU host.
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/visheart');
-    const masks = await projectSegmentationMaskModel.find({
-        isMedSAMOutput: false, segmentationModel: { $in: [...TRAINING_MODELS] }, 'editTracking.status': 'computed',
-    }).lean() as any[];
+    const ownedProjectIds = owner
+        ? ((await projectModel.find({ userid: owner }).select('_id').lean()) as any[]).map(p => String(p._id))
+        : null;
+    const masks = await projectSegmentationMaskModel.find(maskQuery(TRAINING_MODELS, ownedProjectIds, chosenMaskIds))
+        .lean() as any[];
+    const aiMaskIds = [...new Set(masks.map(mask => mask.editTracking?.aiMaskId).filter(Boolean).map(String))];
+    const aiMasks = aiMaskIds.length > 0
+        ? await projectSegmentationMaskModel.find({ _id: { $in: aiMaskIds } }).lean() as any[]
+        : [];
+    const aiById = new Map(aiMasks.map(mask => [String(mask._id), mask]));
 
     const skipped: Record<string, number> = {};
     const skip = (reason: string, n = 1) => { skipped[reason] = (skipped[reason] ?? 0) + n; };
@@ -76,6 +95,7 @@ async function main() {
     const cases: any[] = [];
     const conflictReport: any[] = [];
     const frozenExcluded: any[] = [];
+    const caseRows: any[] = [];
     const byProject = new Map<string, any[]>();
     for (const mask of masks) {
         const projectId = String(mask.projectid);
@@ -83,7 +103,22 @@ async function main() {
     }
     let exportedProjects = 0;
 
-    for (const [projectId, projectMasks] of byProject) {
+    // The project's source volume, downloaded once to a temporary folder that is always removed.
+    const withSourceVolume = async <T>(project: any, use: (local: string) => Promise<T>): Promise<T> => {
+        const key = extractS3KeyFromUrl(project.originalfilepath);
+        if (!key || !bucket) throw new Error('no S3 key or bucket for the source volume');
+        const tmp = path.join(os.tmpdir(), `visheart-export-${uuidv4()}`);
+        await fs.ensureDir(tmp);
+        try {
+            const local = path.join(tmp, path.basename(new URL(project.originalfilepath).pathname));
+            await downloadFromS3(bucket, key, local);
+            return await use(local);
+        } finally {
+            await fs.remove(tmp);
+        }
+    };
+
+    for (const [projectId, savedMasks] of byProject) {
         if (onlyHoldout !== clinical.has(projectId)) { skip(onlyHoldout ? 'not_in_clinical_arm' : 'clinical_arm'); continue; }
         const project = await projectModel.findById(projectId).lean() as any;
         const dims = project?.dimensions;
@@ -91,6 +126,11 @@ async function main() {
         if (!/\.nii(\.gz)?$/i.test(String(project.originalfilename || project.filename || ''))) { skip('not_nifti'); continue; }
         if (!String(project.originalfilepath || '').startsWith('https://')) { skip('no_s3_volume'); continue; }
         const plane = { height: dims.height, width: dims.width };
+        const projectMasks = savedMasks.map(mask => {
+            const ai = aiById.get(String(mask.editTracking?.aiMaskId));
+            if (!ai) console.warn(`${projectId} (${mask.segmentationModel}): AI result not found; its saved pixel counts are used`);
+            return withTrainingPixelCounts(mask, ai, plane.height * plane.width);
+        });
 
         const choices = choicesByProject.get(projectId);
         let selection = selectTrainingSlices(projectMasks, minPixels, { choices });
@@ -115,6 +155,25 @@ async function main() {
         }
         if (selection.selected.length === 0) { skip('no_slice_qualified'); continue; }
         if (dryRun) {
+            let frozen: FrozenMatch | null = null;
+            if (frozenSlices) {
+                try {
+                    frozen = (await withSourceVolume(project, local => runBuilder(python, builder,
+                        { check_frozen: true, source_nifti: local, frozen_slices: frozenSlices }))).frozen_match ?? null;
+                } catch (err) {
+                    skip('frozen_check_failed');                    // the real export still checks it
+                    console.warn(`${projectId}: the frozen-set check failed: ${(err as Error).message}`);
+                }
+            }
+            for (const mask of projectMasks) {
+                const own = selectTrainingSlices([mask], minPixels).selected[0];
+                if (own) caseRows.push(describeCase(project, own, selection.conflicts, frozen));
+            }
+            if (frozen) {
+                skip('frozen_test_patient');
+                frozenExcluded.push({ projectId, frozen_match: frozen });
+                continue;
+            }
             for (const entry of selection.selected) {
                 candidates.push({ projectId, model: entry.model, maskId: String(entry.mask._id),
                                   editedSliceCount: entry.mask.editTracking.editedSliceCount, qualifyingSlices: entry.slices.length });
@@ -123,38 +182,34 @@ async function main() {
         }
         if (limit && exportedProjects >= limit) break;
 
-        const key = extractS3KeyFromUrl(project.originalfilepath);
-        if (!key || !bucket) { skip('download_or_build_failed'); continue; }
-        const tmp = path.join(os.tmpdir(), `visheart-export-${uuidv4()}`);
-        await fs.ensureDir(tmp);
         try {
-            const local = path.join(tmp, path.basename(new URL(project.originalfilepath).pathname));
-            await downloadFromS3(bucket, key, local);          // one download serves every model's corrections
-            let exported = false;
-            for (const entry of selection.selected) {
-                const out = await runBuilder(python, builder, {
-                    source_nifti: local, case_id: `p${projectId}_${entry.model}`, out_dir: outDir, plane, min_pixels: minPixels,
-                    tracked_slices: entry.slices, frames: entry.mask.frames, frozen_slices: frozenSlices,
-                });
-                if (out.frozen_match) {
-                    skip('frozen_test_patient');
-                    frozenExcluded.push({ projectId, model: entry.model, frozen_match: out.frozen_match });
-                    console.warn(`${projectId} (${entry.model}): left out, frame ${out.frozen_match.frame} slice ${out.frozen_match.slice} is frozen ${out.frozen_match.frozen}`);
-                    continue;
+            // One download serves every model's corrections.
+            const exported = await withSourceVolume(project, async local => {
+                let exported = false;
+                for (const entry of selection.selected) {
+                    const out = await runBuilder(python, builder, {
+                        source_nifti: local, case_id: `p${projectId}_${entry.model}`, out_dir: outDir, plane, min_pixels: minPixels,
+                        tracked_slices: entry.slices, frames: entry.mask.frames, frozen_slices: frozenSlices,
+                    });
+                    if (out.frozen_match) {
+                        skip('frozen_test_patient');
+                        frozenExcluded.push({ projectId, model: entry.model, frozen_match: out.frozen_match });
+                        console.warn(`${projectId} (${entry.model}): left out, frame ${out.frozen_match.frame} slice ${out.frozen_match.slice} is frozen ${out.frozen_match.frozen}`);
+                        continue;
+                    }
+                    if (out.error) { skip('builder_error'); console.warn(`${projectId} (${entry.model}): ${out.error}`); continue; }
+                    for (const [reason, n] of Object.entries(out.skipped as Record<string, number>)) skip(`slice_${reason}`, n);
+                    if (out.files.length === 0) { skip('no_slice_qualified'); continue; }
+                    cases.push({ projectId, model: entry.model, maskId: String(entry.mask._id), aiMaskId: entry.mask.editTracking.aiMaskId,
+                                 editTrackingComputedAt: entry.mask.editTracking.computed_at, files: out.files });
+                    exported = true;
                 }
-                if (out.error) { skip('builder_error'); console.warn(`${projectId} (${entry.model}): ${out.error}`); continue; }
-                for (const [reason, n] of Object.entries(out.skipped as Record<string, number>)) skip(`slice_${reason}`, n);
-                if (out.files.length === 0) { skip('no_slice_qualified'); continue; }
-                cases.push({ projectId, model: entry.model, maskId: String(entry.mask._id), aiMaskId: entry.mask.editTracking.aiMaskId,
-                             editTrackingComputedAt: entry.mask.editTracking.computed_at, files: out.files });
-                exported = true;
-            }
+                return exported;
+            });
             if (exported) exportedProjects++;
         } catch (err) {
             skip('download_or_build_failed');
             console.warn(`${projectId}: ${(err as Error).message}`);
-        } finally {
-            await fs.remove(tmp);
         }
     }
 
@@ -167,11 +222,13 @@ async function main() {
     const createdAt = new Date().toISOString();
     const manifest = dryRun
         ? { mode: 'dry-run', created_at: createdAt, min_pixels: minPixels, choices_file: choicesPath ?? null,
+            owner: owner ?? null, selection: chosenMaskIds,
             counts: { masks: masks.length, projects: new Set(candidates.map(c => c.projectId)).size, candidates: candidates.length,
                       conflicts: conflictReport.length, skipped },
-            candidates, conflicts: conflictReport }
+            candidates, conflicts: conflictReport, cases: caseRows, frozen_excluded: frozenExcluded }
         : { mode: onlyHoldout ? 'clinical-holdout' : 'training', created_at: createdAt, min_pixels: minPixels,
             holdout_manifest: holdoutPath ?? null, choices_file: choicesPath ?? null, frozen_slices: frozenSlices ?? null,
+            owner: owner ?? null, selection: chosenMaskIds,
             counts: { masks: masks.length, projects: exportedProjects, cases: cases.length, byModel, slices,
                       conflicts: conflictReport.length, skipped },
             cases, conflicts: conflictReport, frozen_excluded: frozenExcluded };
