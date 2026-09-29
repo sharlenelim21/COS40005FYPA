@@ -31,6 +31,9 @@ services:
     # image: sharlene21/visheart-local:1.4.0
     image: sharlene21/visheart-local:1.4.0
     container_name: visheart-local
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal; Linux Docker Engine needs this line (harmless on Desktop).
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     ports:
       - "3000:3000"  # Frontend
@@ -231,6 +234,9 @@ services:
   gpu-cpu:
     image: sharlene21/visheart-gpu:latest
     container_name: visheart-gpu-cpu
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal; Linux Docker Engine needs this line (harmless on Desktop).
+      - "host.docker.internal:host-gateway"
     profiles: ["cpu"]
     restart: unless-stopped
     ports:
@@ -306,6 +312,9 @@ services:
   gpu-nvidia:
     image: sharlene21/visheart-gpu:latest
     container_name: visheart-gpu-nvidia
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal; Linux Docker Engine needs this line (harmless on Desktop).
+      - "host.docker.internal:host-gateway"
     profiles: ["gpu"]
     restart: unless-stopped
     ports:
