@@ -399,6 +399,17 @@ def health(port, timeout=2):
         return json.loads(response.read())["data"]
 
 
+def terminate(app, exit=os._exit):
+    """A stop signal (Linux, stop-retraining-worker.sh --force): end a running job's commands first, then leave at
+    once, as taskkill /T does on Windows. The job stays "running" on disk and is reported as interrupted at the next
+    start, rather than recorded as failed by a command that was killed."""
+    app.log_event("stop signal received; ending the running job's commands, if any, and stopping")
+    context = app.runner.context
+    if context is not None:
+        context.kill()
+    exit(0)
+
+
 def stop_process(pid):
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=jobs.NO_WINDOW)
@@ -414,6 +425,9 @@ def main(argv=None):
     parser.add_argument("--wait-running", type=float, metavar="SECONDS")
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--also-listen", action="append", default=[], metavar="ADDRESS",
+                        help="another address to serve on, besides 127.0.0.1: on Linux, the Docker bridge's gateway, "
+                             "which is where containers reach the host (start-retraining-worker.sh passes it)")
     args = parser.parse_args(argv)
 
     if args.check_running or args.wait_running is not None:
@@ -455,8 +469,23 @@ def main(argv=None):
         return 1
     server.daemon_threads = True
     server.app = WorkerApp(config, simulate=args.simulate)
-    server.app.log_event(f"serving on {HOST}:{args.port} (pid {os.getpid()}, simulate={args.simulate}); "
-                         f"interrupted at start: {server.app.interrupted}")
+    addresses = [HOST]
+    for address in args.also_listen:
+        try:
+            other = ThreadingHTTPServer((address, args.port), Handler)
+        except OSError as error:
+            server.app.log_event(f"could not also listen on {address}:{args.port} ({error}); containers that reach "
+                                 "the host there will find the training service unavailable")
+            continue
+        other.daemon_threads = True
+        other.app = server.app
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        addresses.append(address)
+    if os.name != "nt":
+        import signal
+        signal.signal(signal.SIGTERM, lambda *_: terminate(server.app))
+    server.app.log_event(f"serving on {', '.join(addresses)} port {args.port} (pid {os.getpid()}, "
+                         f"simulate={args.simulate}); interrupted at start: {server.app.interrupted}")
     try:
         server.serve_forever()
     finally:

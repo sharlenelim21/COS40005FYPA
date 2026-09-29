@@ -319,5 +319,50 @@ class Worker(unittest.TestCase):
         self.assertIn("not running", out.getvalue())
 
 
+class Termination(unittest.TestCase):
+    def test_a_stop_signal_ends_a_running_jobs_commands_before_the_worker_exits(self):
+        calls = []
+        context = mock.Mock(kill=lambda: calls.append("kill job"))
+        app = mock.Mock(runner=mock.Mock(context=context), log_event=lambda line: calls.append("log"))
+        worker.terminate(app, exit=lambda code: calls.append(f"exit {code}"))
+        self.assertEqual(calls, ["log", "kill job", "exit 0"])
+        calls.clear()
+        worker.terminate(mock.Mock(runner=mock.Mock(context=None), log_event=lambda line: calls.append("log")),
+                         exit=lambda code: calls.append(f"exit {code}"))
+        self.assertEqual(calls, ["log", "exit 0"])
+
+
+
+class ExtraAddress(unittest.TestCase):
+    """On Linux, containers reach the host through the Docker bridge, not 127.0.0.1 (plan linux-and-cpu-support)."""
+
+    def test_the_worker_also_serves_a_named_address_and_logs_one_it_cannot_use(self):
+        import os
+        import subprocess
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        with tempfile.TemporaryDirectory() as root:
+            env = {**os.environ, "VISHEART_UNET_ROOT": root, "PYTHONDONTWRITEBYTECODE": "1"}
+            command = [sys.executable, str(Path(worker.__file__)), "--port", str(port), "--simulate",
+                       "--also-listen", "127.0.0.2", "--also-listen", "203.0.113.7"]
+            process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                def answers(address, host):
+                    try:
+                        connection = http.client.HTTPConnection(address, port, timeout=2)
+                        connection.request("GET", "/health", headers={"Host": host})
+                        return connection.getresponse().status == 200
+                    except OSError:
+                        return False
+                self.assertTrue(wait_until(lambda: answers("127.0.0.1", f"127.0.0.1:{port}")))
+                self.assertTrue(wait_until(lambda: answers("127.0.0.2", f"host.docker.internal:{port}")))
+                log = (Path(root) / "jobs" / "worker.log").read_text(encoding="utf-8")
+                self.assertIn("could not also listen on 203.0.113.7", log)
+            finally:
+                subprocess.run(command[:2] + ["--port", str(port), "--stop", "--force"], env=env, capture_output=True)
+                process.wait(timeout=20)
+
+
 if __name__ == "__main__":
     unittest.main()
