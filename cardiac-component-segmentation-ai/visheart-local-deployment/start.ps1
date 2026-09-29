@@ -52,6 +52,21 @@ function Test-Url {
     }
 }
 
+function Start-RetrainingWorker {
+    # UNet Extend Training runs on this computer, not in Docker. A container cannot start it, so the launcher does.
+    # Computers without the training setup skip it; the rest of VisHeart does not depend on it.
+    $worker = Join-Path $scriptDir '..\visheart-retraining\start-retraining-worker.bat'
+    if (-not (Test-Path $worker)) {
+        Write-Log 'INFO: UNet Extend Training service not found; skipping it.'
+        return
+    }
+    Write-Log 'Starting the UNet Extend Training service...'
+    & cmd.exe /c "`"$worker`"" | ForEach-Object { Write-Log "  $_" }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log 'INFO: UNet Extend Training is unavailable; the rest of VisHeart is not affected.'
+    }
+}
+
 try {
     $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
     Set-Location $scriptDir
@@ -123,6 +138,8 @@ try {
     Write-Log 'Ensuring python symlink exists in backend container...'
     $pythonFixCmd = 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python'
     & docker exec visheart-local sh -c 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python' > $null 2>&1
+
+    Start-RetrainingWorker
 
     $backendUrl = 'http://localhost:5000/'
     $frontendUrl = 'http://localhost:3000/'
