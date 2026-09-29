@@ -4,8 +4,39 @@ import os
 import sys
 from pathlib import Path
 
-DEFAULT_V2_ROOT = Path(os.environ.get(
-    "VISHEART_V2_ROOT", r"E:\Jy\Unet\2023_FRGS_HeartDigitalTwin\segmentation\v2-unet"))
+WINDOWS_UNET_ROOT = r"E:\Jy\Unet"
+# The inference service's models folder in this repository: the original unet.pth and the active slot.
+REPO_MODELS = Path(__file__).resolve().parent.parent / "visheart-inference-gpu" / "app" / "models"
+
+
+def default_unet_root(env=None, os_name=None, home=None):
+    """Where the retraining data lives: VISHEART_UNET_ROOT, else E:\\Jy\\Unet on Windows and ~/visheart-unet elsewhere."""
+    env = os.environ if env is None else env
+    if env.get("VISHEART_UNET_ROOT"):
+        return Path(env["VISHEART_UNET_ROOT"])
+    if (os_name or os.name) == "nt":
+        return Path(WINDOWS_UNET_ROOT)
+    return Path(home or Path.home()) / "visheart-unet"
+
+
+def default_v2_root(root, env=None):
+    """The v2-unet training copy: VISHEART_V2_ROOT, else inside the data root."""
+    env = os.environ if env is None else env
+    if env.get("VISHEART_V2_ROOT"):
+        return Path(env["VISHEART_V2_ROOT"])
+    return Path(root) / "2023_FRGS_HeartDigitalTwin" / "segmentation" / "v2-unet"
+
+
+def default_frozen_index(root, env=None):
+    """The frozen-set index: VISHEART_FROZEN_SLICES, else in the data root's versions folder."""
+    env = os.environ if env is None else env
+    if env.get("VISHEART_FROZEN_SLICES"):
+        return Path(env["VISHEART_FROZEN_SLICES"])
+    return Path(root) / "versions" / "frozen_slices.npz"
+
+
+UNET_ROOT = default_unet_root()
+DEFAULT_V2_ROOT = default_v2_root(UNET_ROOT)
 
 
 def import_v2(v2_root=DEFAULT_V2_ROOT):
