@@ -8,3 +8,7 @@ cardiac-component-segmentation-ai/cookie.txt
 # ranges. Only the computed REFERENCE_PROFILES output is committed.)
 cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server/data/
 /acdc/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
