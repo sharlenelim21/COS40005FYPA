@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { DATASET_NAMES, ExampleIndex, ExampleScan, retrainingApi } from "@/lib/retraining-api";
-import { differences, exampleTitle, outline } from "@/components/extend-training/logic";
+import { DATASET_NAMES, ExampleIndex, ExampleScan, ModelVersion, retrainingApi } from "@/lib/retraining-api";
+import { compareOptions, differences, exampleTitle, outline } from "@/components/extend-training/logic";
 import { CHANGE_COLOR, LABEL_PALETTE, MaskLegend, OUTLINE_COLOR, Overlay, SliceCanvas } from "@/components/extend-training/SliceCanvas";
 
 interface DecodedSlice {
@@ -40,9 +40,30 @@ async function readLabels(source: string, size: number): Promise<Uint8Array> {
   return labels;
 }
 
-/** Scans neither version was trained on, predicted by both, side by side (plan WS13 R1). */
-export function ExampleViewer({ label, against, index }: { label: string; against: string; index: ExampleIndex | null }) {
+/** What a version is to the user, for the left-hand picture's caption. */
+function roleOf(version: ModelVersion | undefined): string {
+  if (version?.is_active) return "Model in use";
+  if (version?.is_original) return "Original model";
+  return "Earlier version";
+}
+
+/**
+ * Scans neither version was trained on, predicted by both, side by side (plan WS13 R1). The left-hand version is the
+ * one this version was compared with when it was trained, or any other version that was not deleted: the worker
+ * predicts the same scans with it once, and keeps them.
+ */
+export function ExampleViewer({ label, against, index, versions }: {
+  label: string;
+  against: string;
+  index: ExampleIndex | null;
+  versions: ModelVersion[];
+}) {
+  const options = useMemo(() => compareOptions(versions, label), [versions, label]);
+  const [compareWith, setCompareWith] = useState(against);
+  const [shownWith, setShownWith] = useState(against);   // the version whose pictures are ready
+  const [preparing, setPreparing] = useState(false);
   const [n, setN] = useState<number | null>(index?.examples[0]?.n ?? null);
+  const lastScan = useRef<number | null>(null);   // switching versions keeps the slice; another scan starts mid-way
   const [scan, setScan] = useState<ExampleScan | null>(null);
   const [decoded, setDecoded] = useState<DecodedSlice[] | null>(null);
   const [slice, setSlice] = useState(0);
@@ -55,13 +76,43 @@ export function ExampleViewer({ label, against, index }: { label: string; agains
   }, [index]);
 
   useEffect(() => {
+    setCompareWith(against);
+    setShownWith(against);
+  }, [against, label]);
+
+  // Another version's pictures are made once by the worker (about half a minute), then kept.
+  useEffect(() => {
+    if (compareWith === shownWith) return;
+    if (compareWith === against) {
+      setShownWith(against);
+      return;
+    }
+    let stopped = false;
+    setPreparing(true);
+    setProblem(null);
+    void retrainingApi.compareExamples(label, compareWith).then(reply => {
+      if (stopped) return;
+      setPreparing(false);
+      if (reply.success) {
+        setShownWith(compareWith);
+      } else {
+        setProblem(reply.message);
+        setCompareWith(shownWith);   // back to the pictures that are shown
+      }
+    });
+    return () => {
+      stopped = true;
+    };
+  }, [compareWith, shownWith, against, label]);
+
+  useEffect(() => {
     setScan(null);
     setDecoded(null);
     setProblem(null);
     if (n === null) return;
     let stopped = false;
     void (async () => {
-      const reply = await retrainingApi.example(label, n);
+      const reply = await retrainingApi.example(label, n, shownWith === against ? undefined : shownWith);
       if (stopped) return;
       if (!reply.success || !reply.data) {
         setProblem(reply.message);
@@ -77,7 +128,8 @@ export function ExampleViewer({ label, against, index }: { label: string; agains
         if (stopped) return;
         setScan(data);
         setDecoded(slices);
-        setSlice(Math.floor(data.count / 2));
+        setSlice(current => (lastScan.current === n ? Math.min(current, data.count - 1) : Math.floor(data.count / 2)));
+        lastScan.current = n;
       } catch (error) {
         if (!stopped) setProblem(error instanceof Error ? error.message : "The example scan could not be shown.");
       }
@@ -85,7 +137,7 @@ export function ExampleViewer({ label, against, index }: { label: string; agains
     return () => {
       stopped = true;
     };
-  }, [label, n]);
+  }, [label, n, shownWith, against]);
 
   const current = decoded?.[slice];
   const overlays = useMemo(() => {
@@ -130,6 +182,24 @@ export function ExampleViewer({ label, against, index }: { label: string; agains
           </SelectContent>
         </Select>
         <div className="flex flex-wrap items-center gap-4 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">Compare with</span>
+            <Select value={compareWith} onValueChange={(value: string) => setCompareWith(value)} disabled={preparing}>
+              <SelectTrigger className="h-8 w-56" aria-label="Choose the version to compare with">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map(version => (
+                  <SelectItem key={version.label} value={version.label}>
+                    {version.label}
+                    <span className="ml-1 text-muted-foreground">
+                      {version.is_active ? "(in use)" : version.is_original ? "(original)" : ""}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <label className="flex items-center gap-2">
             <Switch checked={disagreement} onCheckedChange={setDisagreement} />
             Highlight disagreement
@@ -141,6 +211,13 @@ export function ExampleViewer({ label, against, index }: { label: string; agains
         </div>
       </div>
       {problem && <Alert variant="destructive"><AlertDescription>{problem}</AlertDescription></Alert>}
+      {preparing && (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Preparing the comparison with {compareWith}: its predictions on these scans are made once, which takes
+          about half a minute.
+        </p>
+      )}
       {!problem && (!scan || !overlays) && (
         <div className="flex h-64 items-center justify-center rounded-md bg-muted">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -151,11 +228,11 @@ export function ExampleViewer({ label, against, index }: { label: string; agains
           <div className="grid gap-3 md:grid-cols-2">
             <figure className="space-y-1.5">
               <figcaption className="flex items-center justify-between gap-2 text-sm">
-                <span className="font-medium">Model in use</span>
-                <span className="truncate text-xs text-muted-foreground">{against}</span>
+                <span className="font-medium">{roleOf(versions.find(version => version.label === shownWith))}</span>
+                <span className="truncate text-xs text-muted-foreground">{shownWith}</span>
               </figcaption>
               <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
-                           overlays={overlays.against} label={`${against}, slice ${slice + 1}`} />
+                           overlays={overlays.against} label={`${shownWith}, slice ${slice + 1}`} />
             </figure>
             <figure className="space-y-1.5">
               <figcaption className="flex items-center justify-between gap-2 text-sm">

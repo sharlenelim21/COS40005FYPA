@@ -134,3 +134,36 @@ test("a test scan is named by its dataset and case, in words", () => {
   assert.equal(logic.testScanName("other/x.nii.gz"), "the other scan x");
   assert.equal(logic.testScanName(""), "a test scan");
 });
+
+// v13 is in use and newest; v1 is the original and oldest; v7 was deleted.
+const history = Array.from({ length: 13 }, (_, i) => ({
+  label: `v${i + 1}`, status: i === 0 ? "original" : i === 6 ? "deleted" : "candidate",
+  is_active: i === 12, is_original: i === 0, registered_at: `2026-09-${String(i + 1).padStart(2, "0")}`,
+}));
+
+test("the history shows 10 versions, always with the one in use and the original, until asked for all", () => {
+  const alive = history.filter(v => v.status !== "deleted").reverse();         // newest first, as the table sorts
+  const many = [...alive, { label: "v14", status: "candidate", is_active: false, is_original: false, registered_at: "x" },
+                { label: "v15", status: "candidate", is_active: false, is_original: false, registered_at: "y" }];
+  const shown = logic.historyRows(many, false);
+  assert.equal(shown.rows.length, 10);
+  assert.equal(shown.hidden, 4);
+  assert.ok(shown.rows.some(v => v.label === "v13") && shown.rows.some(v => v.label === "v1"));
+  assert.deepEqual(shown.rows.map(v => v.label).slice(0, 3), ["v13", "v12", "v11"]);   // the order is kept
+  assert.equal(logic.historyRows(many, true).rows.length, 14);
+  assert.equal(logic.historyRows(alive.slice(0, 5), false).hidden, 0);
+});
+
+test("a version can be compared with any other version that was not deleted", () => {
+  const options = logic.compareOptions(history, "v12").map(v => v.label);
+  assert.deepEqual(options.slice(0, 3), ["v13", "v1", "v11"]);                 // in use, original, then newest
+  assert.ok(!options.includes("v12") && !options.includes("v7"));
+  assert.equal(options.length, 11);
+});
+
+test("a version the user deleted is described in the user's words", () => {
+  assert.deepEqual(logic.jobOutcome("v3", "v2", [{ label: "v3", status: "deleted", deleted_because: "rejected" }]), {
+    title: "v3 was deleted",
+    text: "You deleted it from the version history. The model in use is v2.",
+  });
+});

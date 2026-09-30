@@ -114,7 +114,7 @@ function DecisionBar({ version, status, onAction }: {
             Use this version
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
-          <Button variant="outline" disabled={busy} onClick={() => onAction(version.label, "reject")}>Discard this version</Button>
+          <Button variant="outline" disabled={busy} onClick={() => onAction(version.label, "reject")}>Delete this version</Button>
         </div>
       </div>
     );
@@ -234,7 +234,7 @@ function VersionReview({ label, status, onAction }: {
           <div className="space-y-3">
             <h3 className="font-medium">Inspect scans neither model was trained on</h3>
             {results
-              ? <ExampleViewer label={label} against={against} index={results.examples} />
+              ? <ExampleViewer label={label} against={against} index={results.examples} versions={status.versions} />
               : !problem && <div className="h-24 animate-pulse rounded-md bg-muted" />}
           </div>
         )}
@@ -273,7 +273,7 @@ export function ResultsTab({ status, reviewing, onReview, onAction, onChanged, o
         <CardHeader>
           <CardTitle>Version history</CardTitle>
           <CardDescription>
-            Every version on this computer. The original is always kept; a version that is replaced or discarded is deleted.
+            Every version on this computer. The original is always kept; a version is deleted when another replaces it or when you delete it.
           </CardDescription>
         </CardHeader>
         <CardContent>

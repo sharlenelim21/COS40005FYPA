@@ -218,9 +218,35 @@ export function jobOutcome(label: string, active: string, versions: VersionFate[
   }
   const version = versions.find(item => item.label === label);
   if (version?.status === "deleted") {
-    const why = version.deleted_because ? `It was ${version.deleted_because}.` : "It was deleted.";
+    // versions.py records a user's delete as "rejected"; a replaced version as "replaced by <label>".
+    const why = version.deleted_because === "rejected" ? "You deleted it from the version history."
+      : version.deleted_because ? `It was ${version.deleted_because}.` : "It was deleted.";
     return { title: `${label} was deleted`, text: `${why} The model in use is ${active}.` };
   }
   return { title: `${label} is ready for review`,
            text: "Its results are below. Nothing has changed yet: the model in use stays active until you choose." };
+}
+
+export const HISTORY_ROWS = 10;
+
+/**
+ * The version history's rows: all of them when expanded, else at most `limit`, keeping the table's order. The version
+ * in use and the original always stay, so "Back to the original model" is always one click away.
+ */
+export function historyRows<V extends VersionLike>(sorted: V[], expanded: boolean,
+                                                   limit: number = HISTORY_ROWS): { rows: V[]; hidden: number } {
+  if (expanded || sorted.length <= limit) return { rows: sorted, hidden: 0 };
+  const pinned = new Set(sorted.filter(version => version.is_active || version.is_original).map(version => version.label));
+  const others = sorted.filter(version => !pinned.has(version.label)).slice(0, Math.max(0, limit - pinned.size));
+  const keep = new Set([...pinned, ...others.map(version => version.label)]);
+  const rows = sorted.filter(version => keep.has(version.label));
+  return { rows, hidden: sorted.length - rows.length };
+}
+
+/** What a version's example scans can be compared with: every other version not deleted; in use, original, newest. */
+export function compareOptions<V extends VersionLike>(versions: V[], label: string): V[] {
+  const rank = (version: V) => (version.is_active ? 0 : version.is_original ? 1 : 2);
+  return versions
+    .filter(version => version.status !== "deleted" && version.label !== label)
+    .sort((a, b) => rank(a) - rank(b) || String(b.registered_at).localeCompare(String(a.registered_at)));
 }

@@ -86,5 +86,22 @@ class RenderExamples(unittest.TestCase):
         self.assertFalse((out / "stale.txt").exists())                        # replaced whole, never merged
 
 
+    def test_another_version_predicts_the_same_scans_into_its_own_folder(self):
+        picks = render_examples.pick_scans(self.report, "old", "new")[1:2]     # toy, a.nii.gz
+        out = self.root / "examples" / "new"
+        datasets = {"toy": (self.images, self.masks)}
+        render_examples.render(picks, datasets, {"against": ConstantModel(0), "label": ConstantModel(2)}, out,
+                               log=lambda *_: None, meta={"label": "new", "against": "old"})
+        index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+        other = out / "compare" / "older"
+        render_examples.render_comparison(index, datasets, ConstantModel(3), other, log=lambda *_: None,
+                                          meta={"label": "new", "against": "older", "sha256": "abc"})
+        self.assertEqual(int(pixels(other / "0" / "against_1.png").min()), 3)            # the other version's labels
+        self.assertEqual(sorted(path.name for path in (other / "0").iterdir()), ["against_0.png", "against_1.png",
+                                                                                 "against_2.png"])
+        self.assertEqual(json.loads((other / "index.json").read_text(encoding="utf-8"))["against"], "older")
+        self.assertEqual(int(pixels(out / "0" / "against_1.png").max()), 0)              # the first set is untouched
+
+
 if __name__ == "__main__":
     unittest.main()

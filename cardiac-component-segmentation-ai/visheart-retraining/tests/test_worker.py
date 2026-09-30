@@ -258,6 +258,50 @@ class Worker(unittest.TestCase):
             app.example("cand", 5)
         self.assertEqual(missing.exception.status, 404)
 
+    def test_the_example_scans_can_be_compared_with_another_version_that_still_exists(self):
+        self.add_candidate("cand", b"candidate weights", warn=False)
+        self.add_candidate("older", b"older weights", warn=False)
+        self.add_candidate("gone", b"gone weights", warn=False)
+        data = self.registry_data()
+        data["versions"]["gone"]["status"] = "deleted"
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+        folder = self.config.examples / "cand"
+        (folder / "0").mkdir(parents=True)
+        for name in ("image_0", "truth_0", "against_0", "label_0"):
+            (folder / "0" / f"{name}.png").write_bytes(b"\x89PNG " + name.encode("ascii"))
+        (folder / "index.json").write_text(json.dumps({"label": "cand", "against": "orig", "size": 256, "examples": [
+            {"n": 0, "dataset": "acdc", "case": "c1.nii.gz", "role": "lowest", "delta": -0.1, "scores": {},
+             "slices": 1}]}), encoding="utf-8")
+        app = self.make_app()
+        renders = []
+
+        def fake_render(config, label, against, out):
+            renders.append((label, against))
+            (out / "0").mkdir(parents=True)
+            (out / "0" / "against_0.png").write_bytes(b"\x89PNG older")
+            sha = json.loads(self.registry.read_text(encoding="utf-8"))["versions"][against]["sha256"]
+            (out / "index.json").write_text(json.dumps({"label": label, "against": against, "sha256": sha}),
+                                            encoding="utf-8")
+
+        with mock.patch.object(worker, "render_comparison", side_effect=fake_render):
+            self.assertEqual(app.compare_examples("cand", "orig")["rendered"], False)   # the one it was compared with
+            for other, status in (("cand", 400), ("gone", 409), ("nobody", 404)):
+                with self.assertRaises(jobs.JobError) as refused:
+                    app.compare_examples("cand", other)
+                self.assertEqual(refused.exception.status, status)
+            with self.assertRaises(jobs.JobError) as early:
+                app.example("cand", 0, against="older")                                 # not prepared yet
+            self.assertEqual(early.exception.status, 409)
+            self.assertEqual(app.compare_examples("cand", "older")["rendered"], True)
+            self.assertEqual(app.compare_examples("cand", "older")["rendered"], False)  # kept: done once
+        self.assertEqual(renders, [("cand", "older")])
+        import base64
+        shown = app.example("cand", 0, against="older")
+        self.assertEqual(shown["against_label"], "older")
+        self.assertEqual(base64.b64decode(shown["slices"][0]["against"].split(",")[1]), b"\x89PNG older")
+        self.assertEqual(base64.b64decode(shown["slices"][0]["label"].split(",")[1]), b"\x89PNG label_0")
+        self.assertEqual(app.example("cand", 0)["against_label"], "orig")
+
     def test_a_job_cut_off_by_a_stopped_worker_is_reported_when_it_starts_again(self):
         store = jobs.JobStore(self.config.jobs)
         job = jobs.new_job("train", "dr-lee", {"label": "unet-ui0925-120000"})

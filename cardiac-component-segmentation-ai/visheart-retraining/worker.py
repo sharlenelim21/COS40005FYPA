@@ -57,6 +57,7 @@ class WorkerApp:
             plan = lambda job: steps(config, job)  # noqa: E731
         self.runner = jobs.JobRunner(self.store, plan)
         self.check_lock = threading.Lock()
+        self.compare_lock = threading.Lock()  # one comparison is prepared at a time
         self.log_lock = threading.Lock()
         self.log_path = config.jobs / "worker.log"
 
@@ -153,7 +154,40 @@ class WorkerApp:
                                    "label": summarize(scores[label][name])["per_class_mean"]} for name in expected}
         return view
 
-    def example(self, label, n):
+    def comparison_folder(self, label, against):
+        return self.config.examples / label / "compare" / against
+
+    def comparison_ready(self, registry, label, against):
+        """Whether against's predictions on label's example scans are there, from against's registered file."""
+        index = self.comparison_folder(label, against) / "index.json"
+        return index.exists() and versions.read_json(index).get("sha256") == registry.entry(against)["sha256"]
+
+    def compare_examples(self, label, against):
+        """The Results tab's "Compare with": another version's predictions on the same example scans. They are made
+        once, about half a minute on a CPU, and kept; the version a candidate was compared with needs none."""
+        registry = self.registry()
+        self.known(registry, label)
+        self.known(registry, against)
+        index = self.examples_index(label)
+        if not index:
+            raise jobs.JobError(404, f"{label} has no example scans to compare.")
+        if against == label:
+            raise jobs.JobError(400, "Choose another version to compare with.")
+        if registry.entry(against).get("status") == "deleted":
+            raise jobs.JobError(409, f"{against} was deleted, so it cannot be compared.")
+        view = {"label": label, "against": against, "ready": True, "rendered": False}
+        if against == index.get("against") or self.comparison_ready(registry, label, against):
+            return view
+        with self.compare_lock:
+            if not self.comparison_ready(registry, label, against):   # another request may have just made it
+                self.log_event(f"preparing {against}'s predictions on {label}'s example scans")
+                render_comparison(self.config, label, against, self.comparison_folder(label, against))
+                view["rendered"] = True
+        if not self.comparison_ready(registry, label, against):
+            raise jobs.JobError(500, f"The comparison with {against} could not be prepared. See worker.log.")
+        return view
+
+    def example(self, label, n, against=None):
         registry = self.registry()
         self.known(registry, label)
         index = self.examples_index(label) or {}
@@ -161,13 +195,20 @@ class WorkerApp:
         if entry is None:
             raise jobs.JobError(404, f"No example scan {n} for {label}.")
         folder = self.config.examples / label / str(n)
+        against_folder, shown = folder, index.get("against")
+        if against and against != shown:
+            self.known(registry, against)
+            if not self.comparison_ready(registry, label, against):
+                raise jobs.JobError(409, f"The comparison with {against} is not prepared yet.")
+            against_folder, shown = self.comparison_folder(label, against) / str(n), against
 
-        def png(name):
-            return "data:image/png;base64," + base64.b64encode((folder / name).read_bytes()).decode("ascii")
+        def png(path):
+            return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
         return {**{key: value for key, value in entry.items() if key != "slices"}, "count": entry["slices"],
-                "size": index.get("size", 256),
-                "slices": [{"image": png(f"image_{k}.png"), "truth": png(f"truth_{k}.png"),
-                            "against": png(f"against_{k}.png"), "label": png(f"label_{k}.png")}
+                "size": index.get("size", 256), "against_label": shown,
+                "slices": [{"image": png(folder / f"image_{k}.png"), "truth": png(folder / f"truth_{k}.png"),
+                            "against": png(against_folder / f"against_{k}.png"),
+                            "label": png(folder / f"label_{k}.png")}
                            for k in range(entry["slices"])]}
 
     # actions ---------------------------------------------------------------------------------------------------
@@ -324,7 +365,9 @@ ROUTES = [
     ("POST", rf"/jobs/({jobs.JOB_ID_PATTERN})/cancel", lambda app, m, q, b: app.cancel(m[1], who(b))),
     ("GET", r"/versions/([^/]+)/preview", lambda app, m, q, b: app.preview(m[1], q.get("action", ["activate"])[0])),
     ("GET", r"/versions/([^/]+)/results", lambda app, m, q, b: app.results(m[1])),
-    ("GET", r"/versions/([^/]+)/examples/(\d{1,2})", lambda app, m, q, b: app.example(m[1], int(m[2]))),
+    ("GET", r"/versions/([^/]+)/examples/(\d{1,2})",
+     lambda app, m, q, b: app.example(m[1], int(m[2]), q.get("against", [None])[0])),
+    ("POST", r"/versions/([^/]+)/compare", lambda app, m, q, b: app.compare_examples(m[1], str(b.get("against") or ""))),
     ("POST", r"/versions/([^/]+)/activate", lambda app, m, q, b: app.activate(m[1], who(b), confirmation(b))),
     ("POST", r"/versions/([^/]+)/reject", lambda app, m, q, b: app.reject(m[1], who(b), confirmation(b))),
 ]
@@ -397,6 +440,21 @@ def health(port, timeout=2):
     request = urllib.request.Request(f"http://127.0.0.1:{port}/health", headers={"Host": f"127.0.0.1:{port}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read())["data"]
+
+
+def render_comparison(config, label, against, out):
+    """against's predictions on label's example scans, by render_examples.py in its own process (it loads a model)."""
+    command = [config.python, str(config.tools / "render_examples.py"), "--label", label, "--compare-with", against,
+               "--registry", str(config.registry), "--manifest", str(config.frozen_manifest), "--out", str(out)]
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1", "MPLBACKEND": "Agg"}
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                timeout=900, env=env, creationflags=jobs.NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise jobs.JobError(500, f"The comparison with {against} could not run: {error}")
+    if result.returncode != 0:
+        last = (result.stderr or result.stdout).strip().splitlines()[-1:] or ["no output"]
+        raise jobs.JobError(500, f"The comparison with {against} failed: {last[0]}")
 
 
 def terminate(app, exit=os._exit):

@@ -133,8 +133,23 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
 
   router.get('/versions/:label/examples/:n', (req, res) => {
     const { label, n } = req.params;
+    const against = req.query.against;
     if (!LABEL.test(label) || !EXAMPLE.test(n)) return badRequest(res, 'Unknown example scan.');
-    return forward(req, res, 'get', `/versions/${label}/examples/${Number(n)}`, {}, 60000);
+    if (against !== undefined && (typeof against !== 'string' || !LABEL.test(against))) {
+      return badRequest(res, 'Unknown version to compare with.');
+    }
+    const query = against ? `?against=${encodeURIComponent(against)}` : '';
+    return forward(req, res, 'get', `/versions/${label}/examples/${Number(n)}${query}`, {}, 60000);
+  });
+
+  // Another version's predictions on these example scans: made once by the worker, which takes about half a minute.
+  router.post('/versions/:label/compare', (req, res) => {
+    const { label } = req.params;
+    const against = (req.body ?? {}).against;
+    if (!LABEL.test(label) || typeof against !== 'string' || !LABEL.test(against)) {
+      return badRequest(res, 'Choose a version to compare with.');
+    }
+    return forward(req, res, 'post', `/versions/${label}/compare`, { against }, 900000);
   });
 
   return router;

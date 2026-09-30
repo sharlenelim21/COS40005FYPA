@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { DATASET_NAMES, ModelVersion, RetrainingStatus, VersionAction } from "@/lib/retraining-api";
-import { changeTone, points } from "@/components/extend-training/logic";
+import { changeTone, historyRows, HISTORY_ROWS, points } from "@/components/extend-training/logic";
 
 const CHIP = {
   up: "border-green-200 text-green-700 dark:border-green-900 dark:text-green-400",
@@ -59,6 +59,9 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
     .filter(version => version.status !== "deleted")
     .sort((a, b) => Number(b.is_active) - Number(a.is_active) || String(b.registered_at).localeCompare(String(a.registered_at)));
   const deleted = status.versions.length - shown.length;
+  // After many trainings the history grows long: the newest 10 (with the version in use and the original) by default.
+  const [expanded, setExpanded] = useState(false);
+  const { rows, hidden } = historyRows(shown, expanded);
   return (
     <div className="space-y-2">
       <div className="overflow-x-auto rounded-md border">
@@ -72,7 +75,7 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {shown.map(version => (
+            {rows.map(version => (
               <TableRow key={version.label} data-state={version.label === reviewing ? "selected" : undefined}>
                 <TableCell>
                   <button type="button" className="break-all text-left font-medium hover:underline" onClick={() => onReview(version.label)}>
@@ -115,7 +118,7 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
                           </DropdownMenuItem>
                           <DropdownMenuItem disabled={disabled} className="text-red-600 focus:text-red-600 dark:text-red-400"
                                             onSelect={() => onAction(version.label, "reject")}>
-                            Discard this version
+                            Delete this version
                           </DropdownMenuItem>
                         </>
                       )}
@@ -135,9 +138,14 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
           </TableBody>
         </Table>
       </div>
+      {(hidden > 0 || (expanded && shown.length > HISTORY_ROWS)) && (
+        <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setExpanded(!expanded)}>
+          {expanded ? `Show the newest ${HISTORY_ROWS} only` : `Show all ${shown.length} versions (${hidden} more)`}
+        </Button>
+      )}
       <p className="text-xs text-muted-foreground">
-        Not choosing is fine: a new version stays here until you use it or discard it.
-        {deleted > 0 ? ` ${deleted} earlier versions were deleted when they were replaced or discarded; the original is always kept.` : ""}
+        Not choosing is fine: a new version stays here until you use it or delete it.
+        {deleted > 0 ? ` ${deleted} earlier versions were deleted when they were replaced or you deleted them; the original is always kept.` : ""}
       </p>
     </div>
   );
