@@ -59,6 +59,15 @@ export interface RvDiseasePatternInputs {
    * major/minor determination. `null` until the GAS module exists.
    */
   gasAbnormal: TriState;
+  /**
+   * Human-readable measured RV GAS/FAC (see rvAreaMetrics.rvGasMeasuredNote),
+   * shown in the factor text when the value exists but can't be scored.
+   * RV GAS and regional RV area change ARE computed now (9-segment RV
+   * bullseye), but there is no validated abnormal cutoff for this short-axis
+   * measure, so regionalContractionAbnormal/gasAbnormal stay null (unscored)
+   * rather than using an invented threshold.
+   */
+  rvGasMeasured?: string | null;
 }
 
 export interface ScoreFactor {
@@ -152,7 +161,9 @@ function scoreArvc(inputs: RvDiseasePatternInputs): RvDiseasePatternResult {
   } else if (inputs.regionalContractionAbnormal === false) {
     factors.push({ label: "Regional RV contraction abnormality", status: "not-met", detail: "Assessed as not present." });
   } else {
-    factors.push({ label: "Regional RV contraction abnormality", status: "pending", detail: "Not yet computed by this build — needs the RV regional-FAC bullseye + classifier. The TFC criterion cannot be formally confirmed without this, regardless of the score below." });
+    factors.push({ label: "Regional RV contraction abnormality", status: "pending", detail: inputs.rvGasMeasured
+      ? `Regional RV area change is measured (9-segment bullseye; ${inputs.rvGasMeasured}), but no validated regional-abnormality cutoff exists for it, so it is not scored. The TFC criterion (visual regional akinesia/dyskinesia) cannot be formally confirmed from it.`
+      : "Not assessed — run RV strain to measure regional RV area change. Even then it is not scored (no validated cutoff), so the TFC criterion cannot be formally confirmed from it." });
   }
 
   if (inputs.gasAbnormal === true) {
@@ -161,7 +172,9 @@ function scoreArvc(inputs: RvDiseasePatternInputs): RvDiseasePatternResult {
   } else if (inputs.gasAbnormal === false) {
     factors.push({ label: "RV GAS (supplementary, not a TFC criterion)", status: "not-met", detail: "Geometric change pattern within the observed range." });
   } else {
-    factors.push({ label: "RV GAS (supplementary, not a TFC criterion)", status: "pending", detail: "Not yet computed by this build." });
+    factors.push({ label: "RV GAS (supplementary, not a TFC criterion)", status: "pending", detail: inputs.rvGasMeasured
+      ? `${inputs.rvGasMeasured} — no validated cutoff, so not scored.`
+      : "Not computed — run RV strain." });
   }
 
   return {
@@ -261,7 +274,9 @@ function scoreGeneral(inputs: RvDiseasePatternInputs, arvc: number, pah: number)
 
   if (inputs.gasAbnormal === true) { points += 30; factors.push({ label: "RV GAS", status: "met", detail: "Geometric change pattern abnormal." }); }
   else if (inputs.gasAbnormal === false) factors.push({ label: "RV GAS", status: "not-met", detail: "Within the observed range." });
-  else factors.push({ label: "RV GAS", status: "pending", detail: "Not yet computed by this build." });
+  else factors.push({ label: "RV GAS", status: "pending", detail: inputs.rvGasMeasured
+    ? `${inputs.rvGasMeasured} — no validated cutoff, so not scored.`
+    : "Not computed — run RV strain." });
 
   // Downweight General whenever a named pattern already scores clearly higher —
   // this bucket exists for the case that DOESN'T fit ARVC or PAH well, not to

@@ -35,6 +35,9 @@ export function WallThicknessCavityAreaPage({
   generatedAt,
   edWallThicknessMm,
   edFrameIndex,
+  rvFacRings,
+  rvFacGlobal,
+  rvEsFrameIndex,
 }: {
   patientLabel: string;
   pageNumber: number;
@@ -43,9 +46,16 @@ export function WallThicknessCavityAreaPage({
   /** Per-AHA-segment ED wall thickness (mm), 17 values — from the bullseye analysis. */
   edWallThicknessMm?: (number | null)[];
   edFrameIndex?: number | null;
+  /** ED→ES RV FAC per ring [basal, mid, apical] (%), from the 9-segment RV bullseye. */
+  rvFacRings: (number | null)[];
+  /** ED→ES global RV FAC (%) — ratio of totals over all 9 segments. */
+  rvFacGlobal: number | null;
+  /** ES frame of the stored ED→ES RV strain result. */
+  rvEsFrameIndex?: number | null;
 }) {
   const wtStats = stats(edWallThicknessMm);
   const hasWt = wtStats.max !== null;
+  const hasFac = rvFacGlobal !== null;
 
   return (
     <ReportPageFrame
@@ -97,11 +107,13 @@ export function WallThicknessCavityAreaPage({
 
         <div className="relative rounded-lg border border-dashed border-gray-300 bg-amber-50 p-2">
           <span className="absolute right-2 top-2 rounded-full bg-amber-100 px-2 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700">
-prototype — not yet computed
+            prototype
           </span>
           <p className="mb-1 text-[14px] font-extrabold text-gray-900">RV Cavity Area - FAC (%)</p>
           <p className="mb-2 text-[9px] text-gray-600">
-            No per-frame RV cavity-area computation exists in this pipeline yet — table shown for structure, not measured values.
+            {hasFac
+              ? `Short-axis fractional area change, ED (frame ${edFrameIndex ?? "—"}) → ES (frame ${rvEsFrameIndex ?? "—"}): (ED area − ES area) / ED area, summed over each ring's 3 RV segments. Not the echo 4-chamber FAC — no validated reference range.`
+              : "Not computed — run RV strain (ED → ES) from the Strain tab. Results computed before GAS was added need recomputing."}
           </p>
           <table className="w-full border-collapse text-[9px]">
             <thead>
@@ -111,17 +123,16 @@ prototype — not yet computed
               </tr>
             </thead>
             <tbody>
-              {["Basal", "Mid", "Apical"].map((r) => (
+              {["Basal", "Mid", "Apical"].map((r, i) => (
                 <tr key={r}>
                   <td className="border-b border-gray-300/60 px-2 py-1 text-gray-900">{r}</td>
-                  <td className="border-b border-gray-300/60 px-2 py-1 text-right font-mono italic text-amber-800">—</td>
+                  <td className="border-b border-gray-300/60 px-2 py-1 text-right font-mono italic text-amber-800">{fmt(rvFacRings[i] ?? null)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div className="mt-2 flex gap-1.5">
-            <StatSquare label="ED area" value="— mm²" />
-            <StatSquare label="ES area" value="— mm²" />
+            <StatSquare label="Global FAC" value={`${fmt(rvFacGlobal)} %`} />
           </div>
         </div>
       </div>

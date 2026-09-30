@@ -2,6 +2,7 @@
 
 import React from "react";
 import { rdYlGn } from "./StrainVisualization";
+import { STRAIN_COLOR_SCALES, lvScaleKey, strainScaleMinMax } from "@/lib/strainColorScale";
 import type { StrainSegmentData, StrainType, RvStrainRegion } from "./StrainVisualization";
 
 // Notebook-style segment names (Sharlene's rv-deformation analysis notebook
@@ -34,6 +35,16 @@ interface CombinedVentricularChartProps {
   alignmentAngleDeg?: number | null;
 
   rvRegions: RvStrainRegion[] | null;
+  /** Which RV metric rvRegions[].strain holds — picks its fixed colour scale
+   *  when rvMin/rvMax aren't given. */
+  rvMetric?: "GCS" | "GAS";
+  /** Explicit RV colour range (e.g. this patient's own min/max, like the
+   *  Wall Thickness bullseye). Omit to use the fixed scale. */
+  rvMin?: number;
+  rvMax?: number;
+  /** Draw the built-in colour bars under the chart (default true). The
+   *  landmark page turns them off and shows its own Min/Mean/Max bar instead. */
+  showColorBars?: boolean;
   selectedRvRegion?: number | null; // 1-based RV region
   onRvRegionClick?: (region: number) => void;
   onRvRegionHover?: (info: { x: number; y: number; label: string; value: number | null } | null) => void;
@@ -69,11 +80,10 @@ const VIEW_W = 480, VIEW_H = 470;
 const LV_BASAL_OUTER = 100, LV_BASAL_INNER = 76, LV_MID_INNER = 50, LV_APICAL_INNER = 26;
 // 3 rings (apical/mid/basal), touching the LV boundary innermost-out, same
 // apex-near-center convention the LV rings and the Structure tab's RV
-// crescent (RvCrescentDiagram) both already use. Only 2 of these 3 rings
-// have real backend data (RV strain only computes basal+mid, 6 regions) --
-// apical renders as an honest "no data" ring (see rvVal/rvCol's existing
-// null handling) rather than being left out, so the shape matches the real
-// 9-segment CPD atlas scheme instead of looking like a smaller 6-segment one.
+// crescent (RvCrescentDiagram) both already use. The backend returns all 9
+// segments (basal 0-2, mid 3-5, apical 6-8, Seg1 inferior → Seg3 anterior);
+// results stored before that only have 6, and their apical ring renders as
+// "no data" via rvVal/rvCol's null handling.
 const RV_APICAL_INNER = LV_BASAL_OUTER, RV_APICAL_OUTER = RV_APICAL_INNER + 14;
 const RV_MID_INNER = RV_APICAL_OUTER, RV_MID_OUTER = RV_MID_INNER + 18;
 const RV_BASAL_INNER = RV_MID_OUTER, RV_BASAL_OUTER = RV_BASAL_INNER + 20;
@@ -88,10 +98,12 @@ const RV_SPAN_START = 100, RV_SPAN_END = 260;
 export function CombinedVentricularChart({
   lvData, hasLv, strainType, selectedSegment, onSegmentClick, onSegmentHover,
   sharedMin, sharedMax, reverseColors = false, alignmentAngleDeg,
-  rvRegions, selectedRvRegion, onRvRegionClick, onRvRegionHover,
-  showLv = true, showRv = true,
-  rvWedgeStrokeColor = "rgba(0,0,0,0.18)",
-  rvLabelColor = "rgba(0,0,0,0.85)",
+  rvRegions, rvMetric = "GCS", rvMin, rvMax, selectedRvRegion, onRvRegionClick, onRvRegionHover,
+  showLv = true, showRv = true, showColorBars = true,
+  // Same wedge/label styling as the AHA bullseye (AhaBullseye.tsx) so every
+  // bullseye on the landmark page looks the same.
+  rvWedgeStrokeColor = "rgba(0,0,0,0.9)",
+  rvLabelColor = "black",
   rvLabelFontWeight = 600,
 }: CombinedVentricularChartProps) {
   // Combined (both chambers) keeps the shared layout center, which balances
@@ -110,9 +122,10 @@ export function CombinedVentricularChart({
   const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
 
   // ── LV (right side — unchanged 17-segment geometry, recentered) ──────────
-  const lvValues = lvData.map((d) => d.strain);
-  const lvColMin = sharedMin ?? (lvValues.length ? Math.min(...lvValues) : 0);
-  const lvColMax = sharedMax ?? (lvValues.length ? Math.max(...lvValues) : 1);
+  // Fixed colour scales (lib/strainColorScale.ts), not this patient's own min/max.
+  const lvFixed = strainScaleMinMax(lvScaleKey(strainType));
+  const lvColMin = sharedMin ?? lvFixed.min;
+  const lvColMax = sharedMax ?? lvFixed.max;
 
   const lvVal = (i: number) => lvData[i]?.strain ?? 0;
   const lvLbl = (i: number) => lvData[i]?.label ?? `Segment ${i + 1}`;
@@ -138,9 +151,10 @@ export function CombinedVentricularChart({
     : undefined;
 
   // ── RV (left side — crescent wrapping the septal edge of the LV circle) ──
-  const rvValues = (rvRegions ?? []).map((r) => r.strain).filter((v): v is number => v != null);
-  const rvColMin = rvValues.length ? Math.min(...rvValues) : -20;
-  const rvColMax = rvValues.length ? Math.max(...rvValues) : 0;
+  const rvScaleKey = rvMetric === "GAS" ? "RV_GAS" : "RV_GCS";
+  const rvFixed = strainScaleMinMax(rvScaleKey);
+  const rvColMin = rvMin ?? rvFixed.min;
+  const rvColMax = rvMax ?? rvFixed.max;
   const rvVal = (i: number) => rvRegions?.[i]?.strain ?? null;
   const rvLbl = (i: number) => CRESCENT_REGION_NAMES[i] ?? `RV Region ${i + 1}`;
   const rvCol = (i: number) => {
@@ -198,7 +212,7 @@ export function CombinedVentricularChart({
     });
 
   return (
-    <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`Combined LV/RV ${strainType} bullseye`}>
+    <svg viewBox={`0 0 ${VIEW_W} ${showColorBars ? VIEW_H : center.y + outerR + 36}`} className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`Combined LV/RV ${strainType} bullseye`}>
       {/* Background discs */}
       {showRv && <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />}
       {showLv && <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />}
@@ -237,11 +251,8 @@ export function CombinedVentricularChart({
       {/* ── RV crescent (drawn first, sits behind/beside the LV circle) ── */}
       {showRv && rvRing(0, RV_BASAL_INNER, RV_BASAL_OUTER, "rvb")}
       {showRv && rvRing(3, RV_MID_INNER, RV_MID_OUTER, "rvm")}
-      {/* Apical ring: RV strain has no apical computation yet (backend only
-          returns 6 basal+mid regions), so rvVal/rvCol/rvLbl's existing
-          null-safe fallbacks (gray fill, "—" label) render this ring
-          honestly as "no data" -- completing the real 9-segment shape
-          instead of a smaller 6-segment one, without fabricating values. */}
+      {/* Apical ring: regions 7-9. Older 6-region results fall back to
+          rvVal/rvCol's gray "—" no-data rendering here. */}
       {showRv && rvRing(6, RV_APICAL_INNER, RV_APICAL_OUTER, "rva")}
 
       {/* ── LV rings ── */}
@@ -250,12 +261,12 @@ export function CombinedVentricularChart({
         const seg = i + 1;
         return (
           <g key={`b${i}`}>
-            <path d={path} fill={lvCol(i)} stroke={isLvSel(seg) ? "white" : "rgba(0,0,0,0.18)"} strokeWidth={isLvSel(seg) ? 2.5 : 1}
+            <path d={path} fill={lvCol(i)} stroke={isLvSel(seg) ? "white" : "rgba(0,0,0,0.9)"} strokeWidth={isLvSel(seg) ? 2.5 : 1}
               style={{ transition: "fill 200ms ease", cursor: onSegmentClick ? "pointer" : "default" }}
               onMouseMove={lvHoverHandler(i)} onMouseLeave={onSegmentHover ? () => onSegmentHover(null) : undefined}
               onClick={onSegmentClick ? () => onSegmentClick(seg) : undefined} />
-            <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{seg}</text>
-            <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="7.5" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(i).toFixed(1)}</text>
+            <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{seg}</text>
+            <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="8" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(i).toFixed(1)}</text>
           </g>
         );
       })}
@@ -264,12 +275,12 @@ export function CombinedVentricularChart({
         const seg = i + 7;
         return (
           <g key={`m${i}`}>
-            <path d={path} fill={lvCol(i + 6)} stroke={isLvSel(seg) ? "white" : "rgba(0,0,0,0.18)"} strokeWidth={isLvSel(seg) ? 2.5 : 1}
+            <path d={path} fill={lvCol(i + 6)} stroke={isLvSel(seg) ? "white" : "rgba(0,0,0,0.9)"} strokeWidth={isLvSel(seg) ? 2.5 : 1}
               style={{ transition: "fill 200ms ease", cursor: onSegmentClick ? "pointer" : "default" }}
               onMouseMove={lvHoverHandler(i + 6)} onMouseLeave={onSegmentHover ? () => onSegmentHover(null) : undefined}
               onClick={onSegmentClick ? () => onSegmentClick(seg) : undefined} />
-            <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{seg}</text>
-            <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="7.5" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(i + 6).toFixed(1)}</text>
+            <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{seg}</text>
+            <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="8" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(i + 6).toFixed(1)}</text>
           </g>
         );
       })}
@@ -278,12 +289,12 @@ export function CombinedVentricularChart({
         const seg = i + 13;
         return (
           <g key={`a${i}`}>
-            <path d={path} fill={lvCol(i + 12)} stroke={isLvSel(seg) ? "white" : "rgba(0,0,0,0.18)"} strokeWidth={isLvSel(seg) ? 2.5 : 1}
+            <path d={path} fill={lvCol(i + 12)} stroke={isLvSel(seg) ? "white" : "rgba(0,0,0,0.9)"} strokeWidth={isLvSel(seg) ? 2.5 : 1}
               style={{ transition: "fill 200ms ease", cursor: onSegmentClick ? "pointer" : "default" }}
               onMouseMove={lvHoverHandler(i + 12)} onMouseLeave={onSegmentHover ? () => onSegmentHover(null) : undefined}
               onClick={onSegmentClick ? () => onSegmentClick(seg) : undefined} />
-            <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{seg}</text>
-            <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="7.5" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(i + 12).toFixed(1)}</text>
+            <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{seg}</text>
+            <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="8" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(i + 12).toFixed(1)}</text>
           </g>
         );
       })}
@@ -292,12 +303,12 @@ export function CombinedVentricularChart({
       {showLv && (
         <>
           <circle cx={center.x} cy={center.y} r={LV_APICAL_INNER} fill={lvCol(16)}
-            stroke={isLvSel(17) ? "white" : "rgba(0,0,0,0.18)"} strokeWidth={isLvSel(17) ? 2.5 : 1}
+            stroke={isLvSel(17) ? "white" : "rgba(0,0,0,0.9)"} strokeWidth={isLvSel(17) ? 2.5 : 1}
             style={{ transition: "fill 200ms ease", cursor: onSegmentClick ? "pointer" : "default" }}
             onMouseMove={lvHoverHandler(16)} onMouseLeave={onSegmentHover ? () => onSegmentHover(null) : undefined}
             onClick={onSegmentClick ? () => onSegmentClick(17) : undefined} />
-          <text x={center.x} y={center.y - 2} textAnchor="middle" fontSize="9" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>17</text>
-          <text x={center.x} y={center.y + 9} textAnchor="middle" fontSize="7.5" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(16).toFixed(1)}</text>
+          <text x={center.x} y={center.y - 2} textAnchor="middle" fontSize="9" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>17</text>
+          <text x={center.x} y={center.y + 9} textAnchor="middle" fontSize="8" fontWeight="600" fill="black" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>{lvVal(16).toFixed(1)}</text>
         </>
       )}
 
@@ -315,7 +326,7 @@ export function CombinedVentricularChart({
           <stop offset="0%" stopColor="#00ff00" /><stop offset="25%" stopColor="#80ff00" /><stop offset="50%" stopColor="#ffff00" /><stop offset="75%" stopColor="#ff8000" /><stop offset="100%" stopColor="#ff0000" />
         </linearGradient>
       </defs>
-      {(() => {
+      {showColorBars && (() => {
         // Aligned to `center.x`, not the raw viewBox center -- the shape
         // above isn't centered on the viewBox either (Combined balances
         // against the crescent's bulge; LV-only recenters on the LV circle),
@@ -337,7 +348,7 @@ export function CombinedVentricularChart({
               <>
                 <rect x={barX} y={rvBarY} width={barW} height="6" rx="3" fill="url(#combinedRvBar)" opacity="0.9" />
                 <text x={barX} y={rvBarY + 16} textAnchor="start" fontSize="8" fill="currentColor" opacity="0.7">{rvColMin.toFixed(1)}</text>
-                <text x={barMidX} y={rvBarY + 16} textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.7">RV strain %</text>
+                <text x={barMidX} y={rvBarY + 16} textAnchor="middle" fontSize="8" fill="currentColor" opacity="0.7">{STRAIN_COLOR_SCALES[rvScaleKey].label}</text>
                 <text x={barX + barW} y={rvBarY + 16} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.7">{rvColMax.toFixed(1)}</text>
               </>
             )}

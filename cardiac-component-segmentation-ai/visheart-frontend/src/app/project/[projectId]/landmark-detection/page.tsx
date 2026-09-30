@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -39,7 +39,6 @@ import { RV_SEGMENT_NAMES } from "@/components/landmark/heartColor";
 import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import {
-  AHA_SEGMENT_COLORS,
   LANDMARK_DEFINITIONS,
   framePredictionsToLandmarkFrames,
   landmarkFramesToEdits,
@@ -48,14 +47,12 @@ import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
 import type { FramePrediction } from "@/types/landmark";
 import { segmentationApi } from "@/lib/api";
-import { fmt } from "@/lib/format-utils";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
 import { JobStatus } from "@/types/project";
 import {
-  StrainBullseyeChart,
   getDummyStrainData,
-  ZoomPanContainer as StrainZoomPan,
+  ZoomPanContainer,
   type StrainType,
   type RealStrainResult,
   type RealStrainSegment,
@@ -63,6 +60,7 @@ import {
   type StrainComputedFor,
 } from "@/components/landmark/StrainVisualization";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
+import { AhaBullseye, BullseyeScaleBar, finiteRange, type BullseyeHover } from "@/components/landmark/AhaBullseye";
 import { landmarkApi, computeStrainFromFrames, computeRvStrainFromFrames } from "@/lib/landmarkApi";
 
 const LandmarkSliceViewer = dynamic(
@@ -236,9 +234,8 @@ export default function LandmarkDetectionPage() {
   const [structureVentricle, setStructureVentricle] = useState<"LV" | "RV">("LV");
   const [selectedStrainType, setSelectedStrainType] = useState<StrainType>("GRS");
   // RV's own metric toggle (GCS/GAS) — separate from selectedStrainType (LV's
-  // GRS/GCS) since RV has different metrics: GCS is real once computed, GAS is
-  // an entirely unimplemented placeholder, so switching to it must render as
-  // an obvious prototype state rather than fabricate colored values.
+  // GRS/GCS) since RV has different metrics: GCS (free-wall length) and GAS
+  // (cavity area) from the 9-segment RV bullseye, shown separately.
   const [selectedRvMetricType, setSelectedRvMetricType] = useState<"GCS" | "GAS">("GCS");
   // Full cycle's "Compute/Recompute all frames" busy state lives in StrainTab
   // (LandmarkSidebar.tsx) as local state, but the main panel needs to know
@@ -1783,22 +1780,6 @@ export default function LandmarkDetectionPage() {
 
 // Local sub-components
 
-function rdYlGn(t: number): string {
-  // Red (0) → Yellow (0.5) → Green (1)
-  const r = t < 0.5 ? 1 : 1 - (t - 0.5) * 2;
-  const g = t < 0.5 ? t * 2 : 1;
-  const ri = Math.round(r * 255);
-  const gi = Math.round(g * 255);
-  return `rgb(${ri},${gi},0)`;
-}
-
-function segmentColor(value: number | null | undefined, min: number | null | undefined, max: number | null | undefined): string {
-  if (value == null || min == null || max == null) return "#444444";
-  if (max === min) return AHA_SEGMENT_COLORS[0];
-  const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
-  return rdYlGn(t);
-}
-
 /**
  * Bullseye values to display.
  *
@@ -2005,9 +1986,7 @@ function AhaBullseyePanel({
   }, [reconstructionJobs, reconstructionModel]);
 
   // Fix 1: bullseye segment hover tooltip
-  const [bullseyeTooltip, setBullseyeTooltip] = useState<{
-    x: number; y: number; name: string; valueMm: number; pct: number;
-  } | null>(null);
+  const [bullseyeTooltip, setBullseyeTooltip] = useState<BullseyeHover | null>(null);
 
   // Fix 3: selected 2D segment drives 3D camera pan + blink (0-based, -1=none)
   const [selectedBullseyeSegment, setSelectedBullseyeSegment] = useState(-1);
@@ -2023,9 +2002,6 @@ function AhaBullseyePanel({
   // slice). Distinct from the partial case (stats.n_nan > 0 but mean still a
   // real number), which already renders correctly further down.
   const hasNoValidSegments = displayBullseyeData != null && displayBullseyeData.stats.mean == null;
-  const meanPct = frameMax > frameMin && displayBullseyeData?.stats.mean != null
-    ? Math.round((displayBullseyeData.stats.mean - frameMin) / (frameMax - frameMin) * 100)
-    : 50;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
@@ -2096,15 +2072,17 @@ function AhaBullseyePanel({
               className="flex-1 min-h-0 w-full"
               onResetRef={(fn) => { if (onBullseyeResetRef) onBullseyeResetRef(fn); }}
             >
-              <AhaBullseyeChart
-                bullseyeData={displayBullseyeData}
+              <AhaBullseye
+                values={frameValues ?? []}
+                names={displayBullseyeData.segment_metadata.map((m, i) => m?.name ?? `Segment ${i + 1}`)}
+                min={frameMin}
+                max={frameMax}
                 referenceAngleDeg={referenceAngleDeg}
-                currentFrame={currentFrame}
-                frameCount={frameCount}
                 onSegmentHover={setBullseyeTooltip}
                 onSegmentLeave={() => setBullseyeTooltip(null)}
                 selectedSegment={selectedBullseyeSegment}
                 onSegmentClick={(idx) => setSelectedBullseyeSegment((prev) => prev === idx ? -1 : idx)}
+                ariaLabel="Wall thickness bullseye chart"
               />
             </ZoomPanContainer>
             {bullseyeTooltip && (
@@ -2113,42 +2091,16 @@ function AhaBullseyePanel({
                 style={{ left: bullseyeTooltip.x + 14, top: bullseyeTooltip.y - 10 }}
               >
                 <div className="font-semibold">{bullseyeTooltip.name}</div>
-                <div>{bullseyeTooltip.valueMm.toFixed(1)} mm ({bullseyeTooltip.pct}%)</div>
+                <div>{bullseyeTooltip.value.toFixed(1)} mm ({bullseyeTooltip.pct}%)</div>
               </div>
             )}
-            {/* Compact stats below chart */}
-            <div className="flex-shrink-0 pt-1.5 space-y-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[9px] text-muted-foreground tabular-nums">{frameMin.toFixed(1)}</span>
-                <div
-                  className="h-1.5 flex-1 rounded-full"
-                  style={{
-                    background: "linear-gradient(to right, #d73027, #fc8d59, #fee08b, #d9ef8b, #91cf60, #1a9850)",
-                    border: "1px solid hsl(var(--border))",
-                  }}
-                />
-                <span className="text-[9px] text-muted-foreground tabular-nums">{frameMax.toFixed(1)}</span>
-              </div>
-              <div className="flex justify-between text-center text-[9px]">
-                <div>
-                  <p className="text-muted-foreground">Min</p>
-                  <p className="font-semibold tabular-nums">{frameMin.toFixed(1)} mm <span className="text-muted-foreground font-normal">(0%)</span></p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Mean</p>
-                  <p className="font-semibold tabular-nums text-primary">{(displayBullseyeData.stats.mean ?? 0).toFixed(1)} mm <span className="text-muted-foreground font-normal">({meanPct}%)</span></p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Max</p>
-                  <p className="font-semibold tabular-nums">{frameMax.toFixed(1)} mm <span className="text-muted-foreground font-normal">(100%)</span></p>
-                </div>
-              </div>
-              {displayBullseyeData.stats.n_nan > 0 && (
-                <p className="text-[9px] text-amber-600 dark:text-amber-400">
-                  ⚠ {displayBullseyeData.stats.n_nan} segment{displayBullseyeData.stats.n_nan > 1 ? "s" : ""} missing
-                </p>
-              )}
-            </div>
+            <BullseyeScaleBar
+              min={frameMin}
+              max={frameMax}
+              mean={displayBullseyeData.stats.mean ?? null}
+              unit="mm"
+              missingCount={displayBullseyeData.stats.n_nan}
+            />
           </div>
 
           {/* RIGHT: 3D heart model */}
@@ -2348,408 +2300,6 @@ function AhaHeartProjection({
   );
 }
 
-function BullseyeFrameGrid({
-  bullseyeData,
-  frameCount,
-  referenceAngleDeg,
-}: {
-  bullseyeData: BullseyeData;
-  frameCount: number;
-  referenceAngleDeg: number;
-}) {
-  return (
-    <div className="flex-1 overflow-y-auto min-h-0 bg-zinc-900/30 rounded-lg p-2">
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 pb-1">
-        {Array.from({ length: frameCount }, (_, i) => (
-          <div key={i} className="flex flex-col items-center p-2 rounded-xl bg-zinc-800/40 border border-zinc-700/30">
-            <div className="flex items-center justify-center mb-1">
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-zinc-700/80 text-zinc-100 border border-zinc-600">
-                Frame {i + 1}
-              </span>
-            </div>
-            <AhaBullseyeChart
-              bullseyeData={bullseyeData}
-              referenceAngleDeg={referenceAngleDeg}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ZoomPanContainer({
-  children,
-  className,
-  onResetRef,
-}: {
-  children: ReactNode;
-  className?: string;
-  onResetRef?: (resetFn: () => void) => void;
-}) {
-  const outerRef = useRef<HTMLDivElement>(null);
-  const innerRef = useRef<HTMLDivElement>(null);
-  const transformRef = useRef({ scale: 1, x: 0, y: 0 });
-  const dragging = useRef(false);
-  const lastPos = useRef({ x: 0, y: 0 });
-  const activePtr = useRef<number | null>(null);
-
-  const applyTransform = useCallback((t: { scale: number; x: number; y: number }) => {
-    transformRef.current = t;
-    if (innerRef.current) {
-      innerRef.current.style.transform = `translate(${t.x}px, ${t.y}px) scale(${t.scale})`;
-    }
-    if (outerRef.current) {
-      outerRef.current.style.cursor = t.scale > 1 ? "grab" : "default";
-    }
-  }, []);
-
-  useEffect(() => {
-    if (onResetRef) {
-      onResetRef(() => applyTransform({ scale: 1, x: 0, y: 0 }));
-    }
-  }, [onResetRef, applyTransform]);
-
-  useEffect(() => {
-    const el = outerRef.current;
-    if (!el) return;
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const prev = transformRef.current;
-      const factor = e.deltaY < 0 ? 1.12 : 0.9;
-      const scale = Math.min(4, Math.max(1, prev.scale * factor));
-      const ratio = scale / prev.scale;
-      applyTransform({ scale, x: prev.x * ratio, y: prev.y * ratio });
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      // Only capture pointer (and block click) when zoomed in so panning is possible.
-      // At scale=1 we let events through so SVG segment onClick fires normally.
-      if (transformRef.current.scale <= 1) return;
-      e.preventDefault();
-      activePtr.current = e.pointerId;
-      el.setPointerCapture(e.pointerId);
-      dragging.current = true;
-      lastPos.current = { x: e.clientX, y: e.clientY };
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (!dragging.current || e.pointerId !== activePtr.current) return;
-      const prev = transformRef.current;
-      if (prev.scale <= 1) return;
-      const dx = e.clientX - lastPos.current.x;
-      const dy = e.clientY - lastPos.current.y;
-      lastPos.current = { x: e.clientX, y: e.clientY };
-      applyTransform({ ...prev, x: prev.x + dx, y: prev.y + dy });
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      if (e.pointerId === activePtr.current) {
-        dragging.current = false;
-        activePtr.current = null;
-      }
-    };
-
-    el.addEventListener("wheel", onWheel, { passive: false });
-    el.addEventListener("pointerdown", onPointerDown);
-    el.addEventListener("pointermove", onPointerMove);
-    el.addEventListener("pointerup", onPointerUp);
-    el.addEventListener("pointercancel", onPointerUp);
-
-    return () => {
-      el.removeEventListener("wheel", onWheel);
-      el.removeEventListener("pointerdown", onPointerDown);
-      el.removeEventListener("pointermove", onPointerMove);
-      el.removeEventListener("pointerup", onPointerUp);
-      el.removeEventListener("pointercancel", onPointerUp);
-    };
-  }, [applyTransform]);
-
-  return (
-    <div ref={outerRef} className={`relative isolate ${className ?? ""}`} style={{ cursor: "default", overflow: "clip" }}>
-      <div
-        ref={innerRef}
-        style={{
-          transform: "translate(0px, 0px) scale(1)",
-          transformOrigin: "center center",
-          width: "100%",
-          height: "100%",
-        }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function AhaBullseyeChart({
-  bullseyeData,
-  referenceAngleDeg = 0,
-  currentFrame = 0,
-  frameCount = 1,
-  onSegmentHover,
-  onSegmentLeave,
-  selectedSegment = -1,
-  onSegmentClick,
-}: {
-  bullseyeData: BullseyeData;
-  referenceAngleDeg?: number;
-  currentFrame?: number;
-  frameCount?: number;
-  onSegmentHover?: (t: { x: number; y: number; name: string; valueMm: number; pct: number }) => void;
-  onSegmentLeave?: () => void;
-  selectedSegment?: number;
-  onSegmentClick?: (index: number) => void;
-}) {
-  const center = 150;
-  const basalOuter = 108;
-  const basalInner = 81;
-  const midInner = 54;
-  const apicalInner = 28;
-  const { segment_metadata } = bullseyeData;
-  const frameValues = getFrameBullseyeValues(bullseyeData);
-  const frameMin = Math.min(...frameValues);
-  const frameMax = Math.max(...frameValues);
-
-  return (
-    <svg
-      viewBox="0 0 300 300"
-      role="img"
-      aria-label="Wall thickness bullseye chart"
-      className="h-full w-full text-[#475569] dark:text-slate-300"
-    >
-      <circle cx={center} cy={center} r="112" className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
-
-      <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
-        Anterior
-      </text>
-      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">
-        Septal
-      </text>
-      <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">
-        Inferior
-      </text>
-      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">
-        Lateral
-      </text>
-
-      {Array.from({ length: 6 }, (_, index) => (
-        <BullseyeSegment
-          key={`basal-${index}`}
-          index={index}
-          center={center}
-          innerRadius={basalInner}
-          outerRadius={basalOuter}
-          startAngle={-120 - index * 60 + referenceAngleDeg}
-          endAngle={-60 - index * 60 + referenceAngleDeg}
-          value={frameValues[index]}
-          tooltip={segment_metadata[index]}
-          min={frameMin}
-          max={frameMax}
-          selected={selectedSegment === index}
-          onSegmentHover={onSegmentHover}
-          onSegmentLeave={onSegmentLeave}
-          onSegmentClick={onSegmentClick}
-        />
-      ))}
-      {Array.from({ length: 6 }, (_, index) => (
-        <BullseyeSegment
-          key={`mid-${index}`}
-          index={index + 6}
-          center={center}
-          innerRadius={midInner}
-          outerRadius={basalInner}
-          startAngle={-120 - index * 60 + referenceAngleDeg}
-          endAngle={-60 - index * 60 + referenceAngleDeg}
-          value={frameValues[index + 6]}
-          tooltip={segment_metadata[index + 6]}
-          min={frameMin}
-          max={frameMax}
-          selected={selectedSegment === index + 6}
-          onSegmentHover={onSegmentHover}
-          onSegmentLeave={onSegmentLeave}
-          onSegmentClick={onSegmentClick}
-        />
-      ))}
-      {Array.from({ length: 4 }, (_, index) => (
-        <BullseyeSegment
-          key={`apical-${index}`}
-          index={index + 12}
-          center={center}
-          innerRadius={apicalInner}
-          outerRadius={midInner}
-          startAngle={-135 - index * 90 + referenceAngleDeg}
-          endAngle={-45 - index * 90 + referenceAngleDeg}
-          value={frameValues[index + 12]}
-          tooltip={segment_metadata[index + 12]}
-          min={frameMin}
-          max={frameMax}
-          selected={selectedSegment === index + 12}
-          onSegmentHover={onSegmentHover}
-          onSegmentLeave={onSegmentLeave}
-          onSegmentClick={onSegmentClick}
-        />
-      ))}
-      <circle
-        cx={center}
-        cy={center}
-        r={apicalInner}
-        fill={segmentColor(frameValues[16], frameMin, frameMax)}
-        stroke={selectedSegment === 16 ? "white" : "rgba(0,0,0,0.9)"}
-        strokeWidth={selectedSegment === 16 ? 2.5 : 1}
-        style={{ transition: "fill 240ms ease", cursor: "pointer" }}
-        onMouseMove={onSegmentHover ? (e) => {
-          const val = frameValues[16];
-          const pct = frameMax > frameMin ? Math.round((val - frameMin) / (frameMax - frameMin) * 100) : 0;
-          onSegmentHover({ x: e.clientX, y: e.clientY, name: segment_metadata[16]?.name ?? "Apex", valueMm: val, pct });
-        } : undefined}
-        onMouseLeave={onSegmentLeave}
-        onClick={onSegmentClick ? () => onSegmentClick(16) : undefined}
-      />
-
-      <text
-        x={center}
-        y={center - 2}
-        textAnchor="middle"
-        dominantBaseline="auto"
-        fontSize="9"
-        fontWeight="600"
-        fill="black"
-        style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.55))" }}
-      >
-        17
-      </text>
-      <text
-        x={center}
-        y={center + 9}
-        textAnchor="middle"
-        dominantBaseline="auto"
-        fontSize="8"
-        fontWeight="600"
-        fill="black"
-        style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.55))" }}
-      >
-        {fmt(frameValues[16], 1)}
-      </text>
-    </svg>
-  );
-}
-
-function BullseyeSegment({
-  index,
-  center,
-  innerRadius,
-  outerRadius,
-  startAngle,
-  endAngle,
-  value,
-  tooltip,
-  min,
-  max,
-  selected = false,
-  onSegmentHover,
-  onSegmentLeave,
-  onSegmentClick,
-}: {
-  index: number;
-  center: number;
-  innerRadius: number;
-  outerRadius: number;
-  startAngle: number;
-  endAngle: number;
-  value: number | null;
-  tooltip: { name: string; value: number | null } | undefined;
-  min: number;
-  max: number;
-  selected?: boolean;
-  onSegmentHover?: (t: { x: number; y: number; name: string; valueMm: number; pct: number }) => void;
-  onSegmentLeave?: () => void;
-  onSegmentClick?: (index: number) => void;
-}) {
-  const midAngle = (startAngle + endAngle) / 2;
-  const labelRadius = (innerRadius + outerRadius) / 2;
-  const label = polarPoint(center, labelRadius, midAngle);
-  const fill = segmentColor(value, min, max);
-
-  const radialWidth = outerRadius - innerRadius;
-  const showValue = radialWidth >= 20;
-
-  return (
-    <g>
-      <path
-        d={annularSectorPath(center, innerRadius, outerRadius, startAngle, endAngle)}
-        fill={fill}
-        stroke={selected ? "white" : "rgba(0,0,0,0.9)"}
-        strokeWidth={selected ? 2.5 : 1}
-        style={{ transition: "fill 240ms ease", cursor: "pointer" }}
-        onMouseMove={onSegmentHover && value != null ? (e) => {
-          const pct = max > min ? Math.round((value - min) / (max - min) * 100) : 0;
-          onSegmentHover({ x: e.clientX, y: e.clientY, name: tooltip?.name ?? `Segment ${index + 1}`, valueMm: value, pct });
-        } : undefined}
-        onMouseLeave={onSegmentLeave}
-        onClick={onSegmentClick ? () => onSegmentClick(index) : undefined}
-      />
-      <text
-        x={label.x}
-        y={label.y + (showValue ? 0 : 4)}
-        textAnchor="middle"
-        dominantBaseline="auto"
-        fontSize="9"
-        fontWeight="600"
-        fill="black"
-        style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.55))" }}
-      >
-        {index + 1}
-      </text>
-      {showValue && (
-        <text
-          x={label.x}
-          y={label.y + 11}
-          textAnchor="middle"
-          dominantBaseline="auto"
-          fontSize="8"
-          fontWeight="600"
-          fill="black"
-          style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.55))" }}
-        >
-          {fmt(value, 1)}
-        </text>
-      )}
-    </g>
-  );
-}
-
-function polarPoint(center: number, radius: number, angleDegrees: number) {
-  const angle = (angleDegrees * Math.PI) / 180;
-  return {
-    x: center + radius * Math.cos(angle),
-    y: center + radius * Math.sin(angle),
-  };
-}
-
-function annularSectorPath(
-  center: number,
-  innerRadius: number,
-  outerRadius: number,
-  startAngle: number,
-  endAngle: number,
-) {
-  const outerStart = polarPoint(center, outerRadius, startAngle);
-  const outerEnd = polarPoint(center, outerRadius, endAngle);
-  const innerEnd = polarPoint(center, innerRadius, endAngle);
-  const innerStart = polarPoint(center, innerRadius, startAngle);
-  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
-
-  return [
-    `M ${outerStart.x} ${outerStart.y}`,
-    `A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
-    `L ${innerEnd.x} ${innerEnd.y}`,
-    `A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${innerStart.x} ${innerStart.y}`,
-    "Z",
-  ].join(" ");
-}
-
 // Renders the real reconstructed heart, or a prompt to run 4D reconstruction.
 // selectedSegment3d is 0-based.
 // min, max, reverseColors are passed from the parent so both panels share the same scale.
@@ -2861,9 +2411,8 @@ function StrainPreviewPanel({
   edFrameIdx: number;
   esFrameIdx: number;
   /** RV's own metric selection (GCS/GAS), chosen from the sidebar's Strain
-   *  tab. GAS has no computation at all yet, so it renders the RV side of
-   *  the bullseye as an explicit "not computed" prototype state rather than
-   *  colored — see the rvRegions={null} branch below. */
+   *  tab — two separate RV metrics (never combined); the bullseye colours
+   *  by whichever is selected (see rvRegionsForDisplay below). */
   rvMetricType: "GCS" | "GAS";
   onStrainTypeChange: (type: StrainType) => void;
   onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
@@ -2919,6 +2468,14 @@ function StrainPreviewPanel({
     const vals = (realRvSeries?.frames ?? []).map((f) => f.global_rv_strain).filter((v): v is number => typeof v === "number");
     return vals.length ? Math.min(...vals) : null;
   }, [realRvSeries]);
+  const rvPeakGas = useMemo(() => {
+    const vals = (realRvSeries?.frames ?? []).map((f) => f.global_rv_gas).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  }, [realRvSeries]);
+  const rvPeakSeptalGcs = useMemo(() => {
+    const vals = (realRvSeries?.frames ?? []).map((f) => f.global_rv_septal_gcs).filter((v): v is number => typeof v === "number");
+    return vals.length ? Math.min(...vals) : null;
+  }, [realRvSeries]);
 
   const { getReconstructionGLB, reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
@@ -2965,7 +2522,7 @@ function StrainPreviewPanel({
   // parent's 1-based selectedSegment via handleSegClick below.
   const [selectedSeg3d, setSelectedSeg3d] = useState(-1);
   // Selection state for the RV crescent — kept separate from the LV's
-  // selectedSegment (1-17) since RV region numbers (1-6) would otherwise
+  // selectedSegment (1-17) since RV region numbers (1-9) would otherwise
   // collide visually with LV segment numbers in the same 1-based range.
   const [selectedRvRegion, setSelectedRvRegion] = useState<number | null>(null);
   const [rvHeartTooltip, setRvHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
@@ -3024,6 +2581,9 @@ function StrainPreviewPanel({
     ? (fullCycleRvFrame ? {
         regions: fullCycleRvFrame.regions,
         global_rv_strain: fullCycleRvFrame.global_rv_strain,
+        global_rv_gas: fullCycleRvFrame.global_rv_gas,
+        global_rv_septal_gcs: fullCycleRvFrame.global_rv_septal_gcs,
+        septal_regions: fullCycleRvFrame.septal_regions,
         vox_xy_mm: 0,
         alignment_source: "stored",
         edFrameIndex: realRvSeries?.edFrameIndex,
@@ -3031,6 +2591,16 @@ function StrainPreviewPanel({
         computedFor: { mode: "full-cycle", model: strainModel, edFrameIndex: realRvSeries?.edFrameIndex ?? 0 },
       } : null)
     : (rvStrainMatchesSelection ? rvStrainResult : null);
+
+  // GCS and GAS are separate RV metrics (not combined). The bullseye reads
+  // `strain`, so for GAS swap in each region's `gas`. Results computed before
+  // the 9-segment backend have no `gas` -> null -> drawn as "no data".
+  const rvRegionsForDisplay = rvStrainForDisplay
+    ? (rvMetricType === "GAS"
+        ? rvStrainForDisplay.regions.map((r) => ({ ...r, strain: r.gas ?? null }))
+        : rvStrainForDisplay.regions)
+    : null;
+  const rvGasMissing = rvMetricType === "GAS" && !!rvRegionsForDisplay?.length && rvRegionsForDisplay.every((r) => r.strain == null);
 
   const displayData = strainForDisplay
     ? strainForDisplay.segments.map((s) => ({
@@ -3040,16 +2610,26 @@ function StrainPreviewPanel({
       }))
     : [];
 
-  // Shared colour scale — computed once and passed to both 2D and 3D panels so
-  // the same strain value maps to the same colour in both views.
-  const strainVals = strainForDisplay
-    ? strainForDisplay.segments
-        .map((s) => (selectedStrainType === "GRS" ? s.grs : s.gcs) ?? NaN)
-        .filter((v) => Number.isFinite(v))
+  // Colour scale — this result's own min→max, exactly like the Wall Thickness
+  // bullseye (user choice), shared by the 2D bullseye and the 3D heart so the
+  // same value is the same colour in both. GCS / RV strain are "more negative
+  // = more deformation", so their ramp is reversed (green = more).
+  const lvStrainValues: (number | null)[] = strainForDisplay
+    ? Array.from({ length: 17 }, (_, i) => {
+        const s = strainForDisplay.segments.find((seg) => seg.segment === i + 1);
+        const v = s ? (selectedStrainType === "GRS" ? s.grs : s.gcs) : null;
+        return typeof v === "number" && Number.isFinite(v) ? v : null;
+      })
     : [];
-  const sharedMin = strainVals.length ? Math.min(...strainVals) : -30;
-  const sharedMax = strainVals.length ? Math.max(...strainVals) : 80;
+  const lvRange = finiteRange(lvStrainValues);
+  const sharedMin = lvRange.min;
+  const sharedMax = lvRange.max;
   const reverseColors = selectedStrainType === "GCS";
+  const lvMissing = strainForDisplay ? lvStrainValues.filter((v) => v == null).length : 0;
+  const lvNames = Array.from({ length: 17 }, (_, i) =>
+    strainForDisplay?.segments.find((seg) => seg.segment === i + 1)?.label ?? `Segment ${i + 1}`);
+  const rvRange = finiteRange((rvRegionsForDisplay ?? []).map((r) => r.strain));
+  const rvHasValues = rvRange.mean != null;
 
   // handle segment click — toggle selection.
   // seg is 1-based (from the 2D bullseye). The 3D heart expects 0-based.
@@ -3073,8 +2653,8 @@ function StrainPreviewPanel({
         <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-medium text-muted-foreground">
           LV {selectedStrainType}
         </span>
-        {/* RV is always labeled Prototype first — GCS is real but has no
-            published reference range, GAS has no computation at all. */}
+        {/* RV is always labeled Prototype — GCS and GAS are computed from the
+            RV cavity (no RV myocardium label) and have no validated reference range. */}
         <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-400">
           Prototype — RV {rvMetricType}
         </span>
@@ -3173,7 +2753,22 @@ function StrainPreviewPanel({
                 )}
               </div>
             </div>
-            <StrainZoomPan className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
+            <ZoomPanContainer className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
+              {chamberFocus === "LV" ? (
+                <AhaBullseye
+                  values={lvStrainValues}
+                  names={lvNames}
+                  min={sharedMin}
+                  max={sharedMax}
+                  reverse={reverseColors}
+                  referenceAngleDeg={strainForDisplay?.alignment_angle_deg != null ? strainForDisplay.alignment_angle_deg - 240 : 0}
+                  selectedSegment={(selectedSegment ?? 0) - 1}
+                  onSegmentClick={(idx) => handleSegClick(idx + 1)}
+                  onSegmentHover={(t) => setTooltip({ x: t.x, y: t.y, label: t.name, value: t.value })}
+                  onSegmentLeave={() => setTooltip(null)}
+                  ariaLabel={`LV ${selectedStrainType} bullseye`}
+                />
+              ) : (
               <CombinedVentricularChart
                 lvData={displayData}
                 hasLv={!!strainForDisplay}
@@ -3187,26 +2782,45 @@ function StrainPreviewPanel({
                 sharedMax={sharedMax}
                 reverseColors={reverseColors}
                 alignmentAngleDeg={strainForDisplay?.alignment_angle_deg}
-                rvRegions={rvMetricType === "GCS" ? (rvStrainForDisplay?.regions ?? null) : null}
+                rvRegions={rvRegionsForDisplay}
+                rvMetric={rvMetricType}
+                rvMin={rvRange.min}
+                rvMax={rvRange.max}
+                showColorBars={false}
                 selectedRvRegion={chamberFocus === "combined" ? selectedCombinedRvRegion : selectedRvRegion}
                 onRvRegionClick={(region) => (chamberFocus === "combined" ? setSelectedCombinedRvRegion : setSelectedRvRegion)((prev) => (prev === region ? null : region))}
                 onRvRegionHover={setTooltip}
-                showLv={chamberFocus !== "RV"}
-                showRv={chamberFocus !== "LV"}
+                showLv={chamberFocus === "combined"}
+                showRv
               />
-            </StrainZoomPan>
-            {/* Colour legend */}
-            <div className="flex flex-wrap items-center justify-center gap-2 text-[8.5px] text-muted-foreground pt-1 flex-shrink-0">
-              {[["#15803d","Excellent"],["#22c55e","Good"],["#eab308","Fair"],["#f97316","Reduced"],["#dc2626","Poor"]].map(([c, l]) => (
-                <span key={l} className="inline-flex items-center gap-0.5">
-                  <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: c }} />{l}
-                </span>
-              ))}
-            </div>
-            {rvMetricType === "GAS" && (
+              )}
+            </ZoomPanContainer>
+            {/* Same bar + Min / Mean / Max row as the Wall Thickness bullseye. */}
+            {chamberFocus !== "RV" && strainForDisplay && (
+              <BullseyeScaleBar
+                title={chamberFocus === "combined" ? `LV ${selectedStrainType}` : undefined}
+                min={sharedMin}
+                max={sharedMax}
+                mean={lvRange.mean}
+                unit="%"
+                reverse={reverseColors}
+                missingCount={lvMissing}
+              />
+            )}
+            {chamberFocus !== "LV" && rvHasValues && (
+              <BullseyeScaleBar
+                title={`RV ${rvMetricType}`}
+                min={rvRange.min}
+                max={rvRange.max}
+                mean={rvRange.mean}
+                unit="%"
+                reverse
+              />
+            )}
+            {rvGasMissing && (
               <div className="mt-1 flex-shrink-0 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1 text-center">
                 <p className="text-[8.5px] leading-snug text-amber-700 dark:text-amber-400">
-                  RV GAS has no computation in this pipeline yet — switch to RV GCS for computed (still prototype) values.
+                  This RV result was computed before GAS was added — recompute RV strain to see GAS.
                 </p>
               </div>
             )}
@@ -3321,7 +2935,7 @@ function StrainPreviewPanel({
                     sidebar equivalent (its sidebar shows the chart instead),
                     so it keeps its own copy here. */}
                 {isFullCycle && (
-                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
                 )}
               </>
             ) : chamberFocus === "combined" && reconstructionMeshUrl && reconstructionLabels?.length && rvMesh.available && rvMesh.meshUrl ? (
@@ -3369,7 +2983,7 @@ function StrainPreviewPanel({
                       peakGcs={lvPeakGcs}
                       loading={isComputeBusy}
                     />
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
                   </div>
                 )}
               </>
@@ -3397,7 +3011,7 @@ function StrainPreviewPanel({
                         loading={isComputeBusy}
                       />
                     )}
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} loading={isComputeBusy} />
+                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
                   </>
                 )}
               </div>
@@ -3501,11 +3115,16 @@ function LvFullCycleStrainTiles({
   );
 }
 
-/** Full-cycle's RV summary — CURRENT + PEAK GCS (real, unvalidated); GAS has
- *  no computation at all, shown as an explicit placeholder either way. */
+/** Full-cycle's RV summary — CURRENT + PEAK for free-wall GCS, GAS and septal
+ *  GCS, each reported separately (real, unvalidated). Peak = most negative. */
 function RvFullCycleStrainTiles({
-  currentGcs, peakGcs, loading,
-}: { currentGcs: number | null; peakGcs: number | null; loading?: boolean }) {
+  currentGcs, peakGcs, currentGas, peakGas, currentSeptal, peakSeptal, loading,
+}: {
+  currentGcs: number | null; peakGcs: number | null;
+  currentGas: number | null; peakGas: number | null;
+  currentSeptal: number | null; peakSeptal: number | null;
+  loading?: boolean;
+}) {
   const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
   return (
     <div>
@@ -3516,8 +3135,10 @@ function RvFullCycleStrainTiles({
       <div className="grid grid-cols-2 gap-1">
         <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
         <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
-        <KpiTile label="Current GAS" value="—" />
-        <KpiTile label="Peak GAS" value="—" />
+        <KpiTile label="Current GAS" value={fmt(currentGas)} loading={loading} />
+        <KpiTile label="Peak GAS" value={fmt(peakGas)} loading={loading} />
+        <KpiTile label="Current Septal GCS" value={fmt(currentSeptal)} loading={loading} />
+        <KpiTile label="Peak Septal GCS" value={fmt(peakSeptal)} loading={loading} />
       </div>
     </div>
   );

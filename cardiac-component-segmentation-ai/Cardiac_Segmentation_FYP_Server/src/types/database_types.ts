@@ -557,22 +557,40 @@ export interface IProjectSegmentationMask {
 
   /**
    * Regional RV strain computed from an ED→ES frame pair, sibling to `strain`.
-   * There is no separate RV free-wall myocardium label in the segmentation
-   * mask (only RV cavity), so unlike `strain.segments[].grs` this is NOT a
-   * wall-thickness measure — `regions[].strain` is % change in RV cavity
-   * boundary radius per region, the same radius-based methodology `gcs`
-   * already uses for the LV. Produced by the GPU /bullseye/compute-rv-strain
-   * endpoint. See bullseye_analysis.mask_to_rv_regions for the full rationale.
+   * 9 segments (basal/mid/apical x 3 sections, rays from the LV centroid,
+   * wedges fixed at ED). There is no RV free-wall myocardium label, so per
+   * segment `gcs` = free-wall chord % change and `gas` = RV cavity area %
+   * change; `strain` currently equals `gcs`. Produced by the GPU
+   * /bullseye/compute-rv-strain endpoint. See
+   * bullseye_analysis.mask_to_rv_regions for the full rationale.
    */
   rvStrain?: {
     regions: {
       region: number;
       label: string;
       strain: number | null;
+      gcs?: number | null;
+      gas?: number | null;
+      chord_ed_mm?: number | null;
+      chord_es_mm?: number | null;
+      area_ed_mm2?: number | null;
+      area_es_mm2?: number | null;
       radius_ed_mm?: number | null;
       radius_es_mm?: number | null;
     }[];
     global_rv_strain: number | null;
+    global_rv_gcs?: number | null;
+    global_rv_gas?: number | null;
+    /** RV septal GCS — septal-side border, one segment per ring, separate from the free wall. */
+    global_rv_septal_gcs?: number | null;
+    septal_regions?: {
+      region: number;
+      ring: string;
+      label: string;
+      gcs: number | null;
+      chord_ed_mm?: number | null;
+      chord_es_mm?: number | null;
+    }[];
     vox_xy_mm: number;
     alignment_source: string;
     alignment_angle_deg?: number | null;
@@ -638,11 +656,18 @@ export interface IProjectSegmentationMask {
     frames: {
       frameIndex: number;
       global_rv_strain: number | null;
+      global_rv_gas?: number | null;
+      global_rv_septal_gcs?: number | null;
+      septal_regions?: { region: number; ring: string; label: string; gcs: number | null }[];
       regions: {
         region: number;
         label: string;
         strain: number | null;
+        gas?: number | null;
         radius_mm?: number | null;
+        /** RV cavity area in this segment at this frame / at ED (mm²). */
+        area_mm2?: number | null;
+        area_ed_mm2?: number | null;
       }[];
     }[];
     edFrameIndex: number;

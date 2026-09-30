@@ -8,7 +8,8 @@ function hex2rgb(h: string): [number, number, number] {
 }
 
 /** Neutral (not red/green-graded) interpolation — used for RV values that have no validated reference range,
- *  so the color can't imply a normal/abnormal judgement that doesn't exist. */
+ *  so the color can't imply a normal/abnormal judgement that doesn't exist. Callers pass the FIXED
+ *  scale ends (lo = least, hi = most deformation) from lib/strainColorScale.ts, not the data's min/max. */
 function neutralColor(t: number): string {
   const [r1, g1, b1] = hex2rgb("#8b96a5");
   const [r2, g2, b2] = hex2rgb("#2c5f68");
@@ -18,20 +19,16 @@ function neutralColor(t: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-export const RV_REGION_LABELS = ["Basal RV Free Wall 1", "Basal RV Free Wall 2", "Basal RV Free Wall 3", "Mid RV Free Wall 1", "Mid RV Free Wall 2", "Mid RV Free Wall 3"];
-
-/** Illustrative 9-region labels (basal/mid/apical x 3 sectors) for the RV GAS
- *  prototype placeholder — no computation backs these yet, so there is no
- *  real region convention to match; this is a plausible future layout only. */
+/** The backend's 9-segment RV bullseye labels (basal/mid/apical x 3 sections,
+ *  Seg1 inferior → Seg3 anterior) — same order as the strain regions 1-9. */
 export const RV_REGION_LABELS_9 = [
-  "Basal RV Free Wall 1", "Basal RV Free Wall 2", "Basal RV Free Wall 3",
-  "Mid RV Free Wall 1", "Mid RV Free Wall 2", "Mid RV Free Wall 3",
-  "Apical RV Free Wall 1", "Apical RV Free Wall 2", "Apical RV Free Wall 3",
+  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
+  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
+  "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
 ];
 
-/** RV polar diagram, 3 sectors per ring — 2 rings (basal/mid) for the real
- *  6-region GCS-proxy, or 3 rings (basal/mid/apical, 9 segments) for the GAS
- *  prototype placeholder, which has no real region convention yet. */
+/** RV polar diagram, 3 sectors per ring — 3 rings (basal/mid/apical) for the
+ *  9-segment RV bullseye; ringCount 2 remains only for old 6-region results. */
 export function RvRegionRing({
   values, lo, hi, muted, dashed, ringCount = 2,
 }: { values: (number | null)[]; lo: number; hi: number; muted?: boolean; dashed?: boolean; ringCount?: 2 | 3 }) {

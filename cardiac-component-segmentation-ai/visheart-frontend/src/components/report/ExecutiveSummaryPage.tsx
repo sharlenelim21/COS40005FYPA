@@ -38,7 +38,7 @@ export function ExecutiveSummaryPage({
   heightCm,
   weightKg,
   ef, edv, esv, strokeVolume, peakGrs, peakGcs, maxWallThicknessMm,
-  rvEf, rvEdv, rvEsv, rvSv, rvPeakGcs, rvPeakGasPreview,
+  rvEf, rvEdv, rvEsv, rvSv, rvPeakGcs, rvPeakGas, rvFac,
   healthStatusText,
   rvHealthStatusText,
   phenotypeHeadline,
@@ -58,10 +58,12 @@ export function ExecutiveSummaryPage({
   ef: number | null; edv: number | null; esv: number | null; strokeVolume: number | null;
   peakGrs: number | null; peakGcs: number | null; maxWallThicknessMm: number | null;
   rvEf: number | null; rvEdv: number | null; rvEsv: number | null; rvSv: number | null;
-  /** Real (radius-based cavity-boundary measure), unvalidated reference range. */
+  /** RV free-wall length strain (9-segment RV bullseye), unvalidated reference range. */
   rvPeakGcs: number | null;
-  /** No RV area-strain computation exists anywhere yet — fixed preview constant. */
-  rvPeakGasPreview: number;
+  /** RV cavity-area strain (9-segment RV bullseye), unvalidated reference range. */
+  rvPeakGas: number | null;
+  /** Short-axis MRI FAC (= −peak GAS) — not the echo 4-chamber FAC. */
+  rvFac: number | null;
   healthStatusText: string | null;
   rvHealthStatusText: string | null;
   phenotypeHeadline: string | null;
@@ -153,8 +155,8 @@ export function ExecutiveSummaryPage({
             <Tile label="ESV" value={fmt(rvEsv)} unit="mL" />
             <Tile label="EF" value={fmt(rvEf)} unit="%" />
             <Tile label="Stroke Volume" value={fmt(rvSv)} unit="mL" />
-            <Tile label="Regional FAC" value="—" unit="%" preview />
-            <Tile label="GAS / GCS-proxy" value={`${rvPeakGasPreview.toFixed(1)} / ${fmt(rvPeakGcs)}`} unit="%" preview />
+            <Tile label="FAC (short-axis)" value={fmt(rvFac)} unit="%" preview />
+            <Tile label="Peak GAS / GCS" value={`${fmt(rvPeakGas)} / ${fmt(rvPeakGcs)}`} unit="%" preview />
           </div>
         </div>
       </div>
