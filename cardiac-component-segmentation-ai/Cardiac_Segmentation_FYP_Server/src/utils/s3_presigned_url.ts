@@ -31,6 +31,12 @@ const getS3Client = (usePublicEndpoint: boolean = false): S3Client => {
             
             const s3Config: any = {
                 region: region,
+                // AWS SDK v3 defaults flexible checksums to WHEN_SUPPORTED, which appends
+                // x-amz-checksum-mode to presigned URLs and makes the response use a checksum
+                // framing that only the SDK's own HTTP client understands. Browser fetch()/XHR
+                // downloads of that URL then fail with net::ERR_FAILED despite a 200 response.
+                requestChecksumCalculation: "WHEN_REQUIRED",
+                responseChecksumValidation: "WHEN_REQUIRED",
             };
 
             const publicEndpoint = process.env.S3_PUBLIC_URL || process.env.S3_ENDPOINT;
@@ -57,6 +63,9 @@ const getS3Client = (usePublicEndpoint: boolean = false): S3Client => {
             // Credentials should be configured via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
             // or an IAM role if running on EC2/ECS, or a shared credentials file.
             // The SDK will automatically attempt to load them.
+            // See the public-endpoint client above for why these are pinned to WHEN_REQUIRED.
+            requestChecksumCalculation: "WHEN_REQUIRED",
+            responseChecksumValidation: "WHEN_REQUIRED",
         };
 
         // MinIO support: override endpoint for local development

@@ -9,6 +9,7 @@ Models are loaded at startup by model_init.landmark_model_lifespan().
 """
 
 import importlib.util
+import math
 import os
 import sys
 import logging
@@ -256,6 +257,68 @@ def _heatmap_to_coord(heatmap_ch: np.ndarray, H_orig: int, W_orig: int):
 
 
 # ---------------------------------------------------------------------------
+# RVIP anterior/inferior class check
+#
+# The model outputs two RVIP heatmap channels in a fixed training order
+# (channel 0, channel 1) with no anatomical identity attached — downstream
+# (bullseye_analysis.compute_alignment_angle) trusts "rv_insertion_1 =
+# anterior, rv_insertion_2 = inferior" purely on that training convention.
+# This computes the actual anterior/inferior identity geometrically from
+# each point's angle around the LV centroid and reorders lm1/lm2 to match,
+# so a model output in the "wrong" channel order gets corrected before it
+# is stored, rather than propagating a silently-swapped alignment.
+#
+# Geometry: angles measured anti-clockwise from the LV centroid. The point
+# at the smaller angle is anterior; the point at the larger angle is
+# inferior. See Landmark-logic-Sharlene.pdf for the derivation.
+# ---------------------------------------------------------------------------
+
+def _lv_centroid_from_mask(seg_2d: Optional[np.ndarray], lv_class: float = 3.0) -> Optional[tuple[float, float]]:
+    """Centroid (cx, cy) of the LV cavity class in a slice mask, or None if absent."""
+    if seg_2d is None:
+        return None
+    ys, xs = np.where(np.round(seg_2d) == lv_class)
+    if xs.size == 0:
+        return None
+    return float(xs.mean()), float(ys.mean())
+
+
+def _assign_rvip_classes(
+    point_a: tuple[float, float],
+    point_b: tuple[float, float],
+    centroid: tuple[float, float],
+) -> tuple[tuple[float, float], tuple[float, float], bool]:
+    """
+    Classify two RVIP points as (anterior, inferior) using their angular
+    position around the LV centroid.
+
+    The anterior RVIP always occurs at a smaller angle than the inferior
+    RVIP (anti-clockwise positive), given a non-flipped image.
+
+    Returns
+    -------
+    (anterior_point, inferior_point, swapped)
+        swapped is True when point_b (the original lm2) turned out to be
+        anterior — i.e. the model's channel order needed correcting.
+    """
+    cx, cy = centroid
+    ax, ay = point_a
+    bx, by = point_b
+
+    angle_a = math.degrees(math.atan2(ay - cy, ax - cx)) % 360.0
+    angle_b = math.degrees(math.atan2(by - cy, bx - cx)) % 360.0
+
+    if angle_b < angle_a:
+        inferior, anterior = point_a, point_b
+        swapped = True
+    else:
+        inferior, anterior = point_b, point_a
+        swapped = False
+
+    return anterior, inferior, swapped
+
+
+# ---------------------------------------------------------------------------
 # Core inference (called from inference_jobs / inference_route)
 # ---------------------------------------------------------------------------
 
@@ -356,6 +419,8 @@ def run_landmark_inference_from_nifti(
     n_collapsed = 0
     n_2ch_count = 0
     n_1ch_count = 0
+    n_class_checked = 0
+    n_class_swapped = 0
 
     H_orig, W_orig = img.shape[0], img.shape[1]
 
@@ -388,11 +453,31 @@ def run_landmark_inference_from_nifti(
         hm_lm2 = heatmap[1]
         lm1_x, lm1_y, hm1_max = _heatmap_to_coord(hm_lm1, H_orig, W_orig)
         lm2_x, lm2_y, hm2_max = _heatmap_to_coord(hm_lm2, H_orig, W_orig)
+
+        # --- RVIP anterior/inferior class check ---
+        # Model channel order (lm1/lm2) has no confirmed anatomical identity;
+        # verify it geometrically against the LV centroid and reorder so
+        # lm1 = anterior, lm2 = inferior, matching what compute_alignment_angle
+        # downstream assumes. Only possible when an LV cavity mask exists for
+        # this slice (2ch mode) — otherwise the raw model order is kept as-is.
+        lv_centroid = _lv_centroid_from_mask(seg_2d)
+        class_swapped = False
+        if lv_centroid is not None:
+            anterior_pt, inferior_pt, class_swapped = _assign_rvip_classes(
+                (lm1_x, lm1_y), (lm2_x, lm2_y), lv_centroid
+            )
+            lm1_x, lm1_y = anterior_pt
+            lm2_x, lm2_y = inferior_pt
+            n_class_checked += 1
+            if class_swapped:
+                n_class_swapped += 1
+
         logger.info(
             f"[Landmark] slice {i} [{model_used}] "
             f"lm1=({lm1_x:.1f},{lm1_y:.1f}) max={hm1_max:.4f}  "
             f"lm2=({lm2_x:.1f},{lm2_y:.1f}) max={hm2_max:.4f}  "
             f"dist={sqrt((lm1_x-lm2_x)**2+(lm1_y-lm2_y)**2):.1f}"
+            + (f"  class_swapped={class_swapped} centroid={lv_centroid}" if lv_centroid is not None else "  class_check=skipped(no LV mask)")
         )
 
         # Distance and collapse flag — NEVER overwrite original coords
@@ -430,6 +515,11 @@ def run_landmark_inference_from_nifti(
             "hm1_max": float(hm1_max),
             "hm2_max": float(hm2_max),
             "lm_dist": float(dist),
+            "class_check": {
+                "checked": lv_centroid is not None,
+                "swapped": class_swapped,
+                "centroid": {"x": lv_centroid[0], "y": lv_centroid[1]} if lv_centroid is not None else None,
+            },
         })
 
     # --- Aggregate ---
@@ -440,7 +530,9 @@ def run_landmark_inference_from_nifti(
 
     logger.info(
         f"[Landmark] Done: {n_slices} slices, "
-        f"{n_2ch_count} 2ch, {n_1ch_count} 1ch_fallback, {n_collapsed} collapsed"
+        f"{n_2ch_count} 2ch, {n_1ch_count} 1ch_fallback, {n_collapsed} collapsed, "
+        f"{n_class_checked} class_checked ({n_class_swapped} swapped), "
+        f"{n_slices - n_class_checked} class_check_skipped(no LV mask)"
     )
 
     return {
@@ -451,4 +543,6 @@ def run_landmark_inference_from_nifti(
         "n_collapsed": n_collapsed,
         "n_2ch": n_2ch_count,
         "n_1ch_fallback": n_1ch_count,
+        "n_class_checked": n_class_checked,
+        "n_class_swapped": n_class_swapped,
     }

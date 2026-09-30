@@ -1081,6 +1081,67 @@ _LEVEL_MIN_SEED_VERTICES = 3
 _LEVEL_TERCILE_ORDER = ["Apical", "Mid", "Basal"]
 
 
+def _enforce_single_component_per_class(
+    class_idx: np.ndarray, pts_aligned: np.ndarray, faces: np.ndarray, n_classes: int,
+) -> np.ndarray:
+    """
+    Collapses each class down to its single LARGEST connected patch (by face
+    count) and reassigns every smaller stray island to whichever kept patch
+    its centroid is nearest to -- guarantees a clean, non-overlapping,
+    non-fragmented partition (e.g. exactly 3 contiguous level bands) instead
+    of letting several disconnected same-class patches coexist.
+
+    2026-09-30, per Sharlene: a flat linear threshold (the width-projection
+    level cut) can cross the same class boundary more than once on a
+    genuinely bent/curved free wall, producing small disconnected islands of
+    the "wrong" class stranded inside a neighbor's territory -- this is a
+    real geometric consequence of cutting a curved surface with a flat
+    plane, not a labeling bug, and this cleanup pass is the fix: "I want
+    clear three layers shown, not overlaps."
+    """
+    face_class = class_idx[faces[:, 0]]
+    face_centroids = pts_aligned[faces].mean(axis=1)
+
+    mesh_t = trimesh.Trimesh(vertices=pts_aligned, faces=faces, process=False)
+    face_adj = mesh_t.face_adjacency
+    same = face_class[face_adj[:, 0]] == face_class[face_adj[:, 1]]
+    fa = face_adj[same]
+    n_faces = len(faces)
+    data = np.ones(len(fa))
+    adj_matrix = coo_matrix((data, (fa[:, 0], fa[:, 1])), shape=(n_faces, n_faces))
+    n_comp, comp_of_face = connected_components(adj_matrix, directed=False)
+
+    keep_component = np.full(n_classes, -1, dtype=np.int64)
+    kept_face_mask = np.zeros(n_faces, dtype=bool)
+    for c in range(n_classes):
+        comps_here = comp_of_face[face_class == c]
+        if comps_here.size == 0:
+            continue
+        sizes = np.bincount(comps_here)
+        best_comp = int(np.argmax(sizes))
+        keep_component[c] = best_comp
+        kept_face_mask |= (comp_of_face == best_comp) & (face_class == c)
+
+    orphan_mask = ~kept_face_mask
+    if orphan_mask.any() and kept_face_mask.any():
+        kept_tree = cKDTree(face_centroids[kept_face_mask])
+        kept_class = face_class[kept_face_mask]
+        _, nearest = kept_tree.query(face_centroids[orphan_mask])
+        new_face_class = face_class.copy()
+        new_face_class[orphan_mask] = kept_class[nearest]
+    else:
+        new_face_class = face_class
+
+    # carry the (now-clean) face classes back to per-vertex classes: each
+    # vertex takes the class of any one of its incident faces (majority not
+    # needed -- boundary vertices get resolved the same way the existing
+    # _smooth_labels_by_face_adjacency pass already handles afterward)
+    new_class_idx = class_idx.copy()
+    for f_idx, cls in enumerate(new_face_class):
+        new_class_idx[faces[f_idx]] = cls
+    return new_class_idx
+
+
 def _classify_levels_and_sectors_geodesic(
     pts_aligned: np.ndarray, faces: np.ndarray, warp_state: dict,
     rotated_warped_atlas: np.ndarray, patient_septal_deg: float | None, fallback_labels: np.ndarray,
@@ -1103,56 +1164,48 @@ def _classify_levels_and_sectors_geodesic(
         return None
     t_flat = _flatten_geodesic_to_plane(t, pts_aligned)
 
-    # 2026-09-28, per Sharlene: what "Apical/Mid/Basal" should mean here is
-    # ANGULAR position around the free wall's circumference (3 wedges, anchored
-    # to the septal reference), not position along the apex-to-base axis --
-    # confirmed directly against her own reference rendering (front view =
-    # clean wedges, side view rotated 90deg = the OLD level's nested rings).
-    # So the two roles are swapped from the original design: the geodesic
-    # apex-to-base tercile below now drives SEG NUMBER (1/2/3, layered apex-
-    # to-base), and circumferential angle now drives the LEVEL NAME.
-    thresholds = warp_state.get("level_cut_thresholds")
-    if thresholds is None:
-        thresholds = _area_weighted_level_thresholds(t_flat, faces, pts_aligned)
-        warp_state["level_cut_thresholds"] = thresholds
-    t_lo, t_hi = thresholds
+    # 2026-09-30, per Sharlene (PREVIEW -- trying a ~90-100deg level tilt:
+    # "the apical basal and mid should be like that but the seg1 seg2 seg3
+    # is another 90 degree"): "Apical/Mid/Basal" (level) is a LENGTHWISE
+    # strip (boundary plane roughly CONTAINS the apex-base axis, ~90deg tilt
+    # from a flat ring), cut perpendicular to the septal reference direction.
+    # "Seg1/Seg2/Seg3" (sector) is the apex-to-base HEIGHT tercile -- a
+    # further ~90deg rotation from the level cut, i.e. back toward a flat
+    # ring, which is what "another 90 degree" describes geometrically.
+    sector_thresholds = warp_state.get("sector_cut_thresholds")
+    if sector_thresholds is None:
+        sector_thresholds = _area_weighted_level_thresholds(t_flat, faces, pts_aligned)
+        warp_state["sector_cut_thresholds"] = sector_thresholds
+    t_lo, t_hi = sector_thresholds
     tercile_idx = np.digitize(t_flat, [t_lo, t_hi])
     sector = tercile_idx + 1  # 1=apex-ward, 2=mid, 3=base-ward
 
     if patient_septal_deg is not None:
+        septal_rad = np.radians(patient_septal_deg)
+        width_dir = np.array([-np.sin(septal_rad), np.cos(septal_rad)])
         local_xy = pts_aligned[:, :2]
         local_center = local_xy.mean(axis=0)
-        angle_deg = np.degrees(np.arctan2(
-            local_xy[:, 1] - local_center[1], local_xy[:, 0] - local_center[0]
-        )) % 360.0
-        angle_rel_septum = (angle_deg - patient_septal_deg) % 360.0
-        wedge_idx = np.digitize(angle_rel_septum, [120.0, 240.0])
-        # 2026-09-28, per Sharlene: Basal must always be the BIGGEST wedge by
-        # area, Apical the SECOND-biggest, Mid the SMALLEST -- confirmed
-        # directly against her reference rendering. Which wedge_idx (0/1/2)
-        # ends up biggest is determined ONCE per reconstruction (cached in
-        # warp_state, same pattern as level_cut_thresholds below) and reused
-        # for every later frame -- re-ranking by area fresh each frame would
-        # let a physical patch of tissue's name flip between frames whenever
-        # two wedges' areas happen to cross as the heart deforms through the
-        # cycle, which is exactly the "crescent that moves" problem she
-        # flagged. A wedge's identity, once fixed on the ED frame, is stable
-        # for the whole cycle even as its exact area changes frame to frame.
-        wedge_to_name = warp_state.get("level_wedge_to_name")
-        if wedge_to_name is None:
+        width_proj = (local_xy - local_center) @ width_dir
+
+        width_thresholds = warp_state.get("level_width_thresholds")
+        if width_thresholds is None:
             v0, v1, v2 = (pts_aligned[faces[:, k]] for k in range(3))
             face_area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
-            face_wedge = wedge_idx[faces[:, 0]]
-            wedge_area = np.array([face_area[face_wedge == w].sum() for w in range(3)])
-            area_rank = np.argsort(-wedge_area)  # biggest first
-            wedge_to_name = np.empty(3, dtype=object)
-            wedge_to_name[area_rank] = ["Basal", "Apical", "Mid"]
-            warp_state["level_wedge_to_name"] = wedge_to_name
-        level_name = wedge_to_name[wedge_idx]
+            face_width = width_proj[faces[:, 0]]
+            order = np.argsort(face_width)
+            cumulative = np.cumsum(face_area[order])
+            cumulative /= cumulative[-1]
+            w_lo = float(face_width[order][np.searchsorted(cumulative, 1.0 / 3.0)])
+            w_hi = float(face_width[order][np.searchsorted(cumulative, 2.0 / 3.0)])
+            width_thresholds = (w_lo, w_hi)
+            warp_state["level_width_thresholds"] = width_thresholds
+        w_lo, w_hi = width_thresholds
+        wedge_idx = np.digitize(width_proj, [w_lo, w_hi])
+        level_name = np.array(["Basal", "Mid", "Apical"])[wedge_idx]
     else:
         # No anatomical anchor available this frame (see _septal_direction_deg's
         # own contract) -- level can't be anchored consistently, so fall back
-        # to whatever nearest-neighbor already assigned. Seg number still uses
+        # to whatever nearest-neighbor already assigned. Sector still uses
         # the new geodesic result: it doesn't depend on this anchor at all.
         fallback_level = np.array([n.split("_")[0] for n in warp_state["segment_names"]])
         level_name = fallback_level[fallback_labels]
@@ -1161,6 +1214,14 @@ def _classify_levels_and_sectors_geodesic(
     new_labels = np.array([
         segment_names.index(f"{lv}_Seg{sc}.obj") for lv, sc in zip(level_name, sector)
     ], dtype=np.int16)
+    # collapse each of the 9 FINAL named segments down to its single largest
+    # connected patch -- level and sector can each be individually clean and
+    # still produce a fragmented intersection where their two independent
+    # cuts cross each other on the curved free wall, so the enforcement has
+    # to run on the combined 9-class result, not the two cuts separately
+    new_labels = _enforce_single_component_per_class(
+        new_labels, pts_aligned, faces, len(segment_names),
+    ).astype(np.int16)
     new_labels[~np.isfinite(t)] = fallback_labels[~np.isfinite(t)]
     return new_labels
 
@@ -1287,7 +1348,7 @@ _BOUNDARY_SUBDIVISION_ITERATIONS = 1
 
 
 def refine_mesh_for_smooth_boundaries(
-    vertices: np.ndarray, faces: np.ndarray, labels: np.ndarray, warp_state: dict,
+    vertices: np.ndarray, faces: np.ndarray, labels: np.ndarray, n_segments: int = 9,
     iterations: int = _BOUNDARY_SUBDIVISION_ITERATIONS,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -1302,11 +1363,17 @@ def refine_mesh_for_smooth_boundaries(
     new vertex at every edge midpoint. A new vertex inherits its label
     directly when its two parent vertices already agree -- nothing ambiguous
     to resolve there. Only when the parents disagree (a genuine boundary
-    edge) does it fall back to the same nearest-neighbor query against the
-    already-fitted CPD warp every other vertex went through. Cheap: this
-    reuses the warp fitted once in register_cpd_warp, so refining a frame
-    costs a subdivide + one small KDTree query, not a fresh ~20-30s DeepSDF
-    decode at a higher marching-cubes resolution.
+    edge) does it fall back to a nearest-neighbor query against the mesh's
+    OWN already-labeled vertices (pre-subdivision) -- cheap (a subdivide plus
+    one small KDTree query, not a fresh ~20-30s DeepSDF decode at a higher
+    marching-cubes resolution), and self-contained: no atlas or CPD warp
+    involved. 2026-09-30: this used to query the CPD-warped Zenodo atlas
+    instead; removed along with the rest of the atlas-CPD labeling path --
+    see cpd_rv_segmentation.py's module docstring and
+    label_cpd9_from_raw_slices for why. A disagreeing boundary edge's own
+    nearest ORIGINAL mesh vertex is at least as good a tie-break as an
+    atlas lookup, since it's already been correctly classified by
+    label_cpd9_from_raw_slices.
 
     2026-09-25: this used to always run the nearest-neighbor query and then
     re-smooth the whole (now larger) label array -- on a real reconstruction
@@ -1334,7 +1401,6 @@ def refine_mesh_for_smooth_boundaries(
     """
     try:
         current_vertices, current_faces, current_labels = vertices, faces, labels
-        n_segments = len(warp_state["segment_names"])
 
         for _ in range(max(0, iterations)):
             n_before = current_vertices.shape[0]
@@ -1352,14 +1418,12 @@ def refine_mesh_for_smooth_boundaries(
             label_a = current_labels[edges[edge_idx, 0]]
             label_b = current_labels[edges[edge_idx, 1]]
 
-            # Same alignment every other vertex was labeled in -- see
-            # register_cpd_warp/label_with_warp for why this (stored
-            # patient_centroid + axis_rotation) is the correct, already-
-            # established frame to query the warped atlas against.
-            aligned = (new_only - warp_state["patient_centroid"]) @ warp_state["axis_rotation"].T
-            tree = cKDTree(warp_state["warped_dense_atlas"])
-            _, nearest_idx = tree.query(aligned)
-            nn_label = warp_state["dense_labels"][nearest_idx].astype(np.int16)
+            # Disagreeing-parent tie-break: nearest neighbor against the
+            # mesh's OWN pre-subdivision vertices (already correctly
+            # labeled by label_cpd9_from_raw_slices) -- no atlas involved.
+            tree = cKDTree(current_vertices)
+            _, nearest_idx = tree.query(new_only)
+            nn_label = current_labels[nearest_idx].astype(np.int16)
 
             # When a midpoint's two parent vertices already agree, inherit
             # that label directly -- there's no ambiguity to resolve, so a
@@ -1409,3 +1473,165 @@ def classify_vertices_to_rv9_cpd(mesh_points_canonical: np.ndarray) -> np.ndarra
         return None
 
     return labels
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-30, per Sharlene: 9 C-PD RV segments computed directly per short-axis
+# slice from the patient's OWN raw segmentation (3 longitudinal levels by
+# slice rank, 3 rotational sectors per slice via the local RV->LV direction),
+# not via a global 3D plane cut on the CPD-warped atlas or the reconstructed
+# mesh. This sidesteps the whole failure mode this module's earlier
+# atlas-CPD approach kept hitting on this pipeline's genuinely curved,
+# DeepSDF-reconstructed RV meshes (diagonal/jagged boundaries, fragmented
+# islands): a flat cut -- whichever axis it's taken along -- doesn't respect
+# a bent surface, but a per-slice local reference does, because each
+# short-axis slice IS locally flat by construction (that's what "short-axis"
+# means). Matches the apicobasal + rotational coordinate idea in Bazhutina
+# et al. (CinC 2023) / Bayer et al. (2018 Universal Ventricular Coordinates),
+# computed on the patient's real slices rather than a deformed generic atlas.
+_RV_LABEL = 1
+_LV_CAVITY_LABEL = 3
+_CPD9_MIN_RV_PIXELS = 15
+_CPD9_LEVEL_NAMES = ["Apical", "Basal", "Mid"]
+_cpd9_apex_at_start_cache: dict[str, bool] = {}
+
+
+def _cpd9_load_frame_labelmap(nifti_path: str, frame_idx: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Loads one frame's (Z,Y,X) integer label volume plus its voxel-to-world
+    affine (4x4, LPS convention matching get_P.get_contour's own transform),
+    from a 4D (T,Z,Y,X) or 3D (Z,Y,X) raw segmentation NIfTI.
+    """
+    import SimpleITK as sitk
+    from get_P import normalize_nifti_dimensions, extract_spatial_metadata
+
+    img = sitk.ReadImage(nifti_path)
+    arr = sitk.GetArrayFromImage(img)
+    if arr.ndim == 4:
+        arr = arr[frame_idx]
+    arr = normalize_nifti_dimensions(arr)
+
+    origin, spacing, direction = extract_spatial_metadata(img)
+    space_directions = spacing * direction
+    lps2world = np.eye(4)
+    lps2world[0:3, 0:3] = space_directions
+    lps2world[0:3, 3] = origin
+    return arr, lps2world
+
+
+def _cpd9_slice_info(arr: np.ndarray) -> list[dict | None]:
+    """Per-slice RV/LV centroids and cleaned RV mask (largest component only)."""
+    from scipy import ndimage
+
+    info: list[dict | None] = []
+    for z in range(arr.shape[0]):
+        rv_mask = arr[z] == _RV_LABEL
+        if rv_mask.sum() < _CPD9_MIN_RV_PIXELS:
+            info.append(None)
+            continue
+        labeled, n_comp = ndimage.label(rv_mask)
+        if n_comp > 1:
+            sizes = ndimage.sum(rv_mask, labeled, range(1, n_comp + 1))
+            rv_mask = labeled == (int(np.argmax(sizes)) + 1)
+        if rv_mask.sum() < _CPD9_MIN_RV_PIXELS:
+            info.append(None)
+            continue
+        rv_ij = np.argwhere(rv_mask)
+        lv_mask = arr[z] == _LV_CAVITY_LABEL
+        lv_centroid_ij = np.argwhere(lv_mask).mean(axis=0) if lv_mask.sum() >= _CPD9_MIN_RV_PIXELS else None
+        info.append({
+            "z": z, "rv_mask": rv_mask, "rv_area": int(rv_mask.sum()),
+            "rv_centroid_ij": rv_ij.mean(axis=0), "lv_centroid_ij": lv_centroid_ij,
+        })
+    return info
+
+
+def label_cpd9_from_raw_slices(
+    nifti_path: str, frame_idx: int, mesh_vertices: np.ndarray,
+) -> np.ndarray | None:
+    """
+    Returns one label in [1, 9] per mesh vertex (region_id = level*3 + sector + 1,
+    matching _CPD9_LEVEL_NAMES order), or None if this frame's raw segmentation
+    doesn't have enough valid RV slices to classify. Apex/base slice-order is
+    resolved ONCE per nifti_path (from that file's own frame 0 / ED RV-area
+    profile: the smaller-area end is apical) and cached, so which end is
+    "apical" can't flip frame-to-frame due to per-frame area noise.
+    """
+    try:
+        arr, lps2world = _cpd9_load_frame_labelmap(nifti_path, frame_idx)
+        info = _cpd9_slice_info(arr)
+        valid = [s for s in info if s is not None]
+        if len(valid) < 3:
+            logger.warning(f"[CPD9] Only {len(valid)} valid RV slices in frame {frame_idx}; need >=3.")
+            return None
+        valid_sorted = sorted(valid, key=lambda s: s["z"])
+
+        apex_at_start = _cpd9_apex_at_start_cache.get(nifti_path)
+        if apex_at_start is None:
+            ed_arr, _ = _cpd9_load_frame_labelmap(nifti_path, 0)
+            ed_valid = sorted((s for s in _cpd9_slice_info(ed_arr) if s is not None), key=lambda s: s["z"])
+            areas = np.array([s["rv_area"] for s in ed_valid])
+            n_end = min(3, len(areas))
+            apex_at_start = bool(areas[:n_end].mean() < areas[-n_end:].mean())
+            _cpd9_apex_at_start_cache[nifti_path] = apex_at_start
+        if not apex_at_start:
+            valid_sorted = valid_sorted[::-1]
+
+        n_valid = len(valid_sorted)
+        ref_dirs: dict[int, np.ndarray] = {}
+        for rank, s in enumerate(valid_sorted):
+            u = rank / max(n_valid - 1, 1)
+            # level numbers must match _CPD9_LEVEL_NAMES' order (Apical, Basal,
+            # Mid -- the frontend's RV_SEGMENT_NAMES/RV_SEGMENT_PALETTE index
+            # order, inherited from the old atlas's alphabetically-sorted
+            # segment_names), not rank order -- so the base-ward third gets 1
+            # and the middle third gets 2, not the other way round.
+            s["level"] = 0 if u < 1 / 3 else (2 if u < 2 / 3 else 1)
+            if s["lv_centroid_ij"] is not None:
+                d = s["lv_centroid_ij"] - s["rv_centroid_ij"]
+                n = np.linalg.norm(d)
+                if n > 1e-6:
+                    ref_dirs[rank] = d / n
+        if not ref_dirs:
+            logger.warning(f"[CPD9] No slice in frame {frame_idx} has both RV and LV; no septal reference.")
+            return None
+        known_ranks = np.array(sorted(ref_dirs.keys()))
+        for rank in range(n_valid):
+            if rank not in ref_dirs:
+                ref_dirs[rank] = ref_dirs[int(known_ranks[np.argmin(np.abs(known_ranks - rank))])]
+
+        points, region_id = [], []
+        for rank, s in enumerate(valid_sorted):
+            rv_ij = np.argwhere(s["rv_mask"])
+            d = ref_dirs[rank]
+            d_perp = np.array([-d[1], d[0]])
+            rel = rv_ij - s["rv_centroid_ij"]
+            theta = np.mod(np.arctan2(rel @ d_perp, rel @ d), 2 * np.pi)
+            sector = np.clip(np.floor(theta / (2 * np.pi / 3)).astype(int), 0, 2)
+            region_id.append(s["level"] * 3 + sector + 1)
+
+            cols, rows = rv_ij[:, 1].astype(float), rv_ij[:, 0].astype(float)
+            homog = np.column_stack([cols, rows, np.full(len(rv_ij), s["z"], dtype=float), np.ones(len(rv_ij))])
+            points.append((lps2world @ homog.T).T[:, :3])
+
+        points = np.concatenate(points, axis=0)
+        region_id = np.concatenate(region_id, axis=0)
+
+        tree = cKDTree(points)
+        _, nearest = tree.query(np.asarray(mesh_vertices, dtype=np.float64))
+        mesh_region_id = region_id[nearest].astype(np.int16)
+
+        if len(np.unique(mesh_region_id)) < 9:
+            logger.warning(f"[CPD9] Frame {frame_idx}: only {len(np.unique(mesh_region_id))}/9 regions populated.")
+        return mesh_region_id
+
+    except Exception as exc:
+        logger.warning(f"[CPD9] Frame {frame_idx} classification failed ({exc}).")
+        return None
+
+
+def cpd9_region_id_to_name(region_id: int) -> str:
+    """1-9 -> e.g. 'Apical_Seg1', matching _CPD9_LEVEL_NAMES / segment_names convention."""
+    level = _CPD9_LEVEL_NAMES[(region_id - 1) // 3]
+    sector = (region_id - 1) % 3 + 1
+    return f"{level}_Seg{sector}"
