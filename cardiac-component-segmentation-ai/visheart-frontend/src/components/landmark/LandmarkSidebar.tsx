@@ -812,7 +812,7 @@ function LandmarksTab({
               >
                 <Trash2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 text-xs text-muted-foreground">
-                  {def.label} removed from Slice {currentFrame + 1}
+                  {def.fullLabel ?? def.label} removed from Slice {currentFrame + 1}
                 </span>
                 <button
                   type="button"
@@ -856,7 +856,7 @@ function LandmarksTab({
               />
               {/* Label */}
               <span className="flex-1 text-xs font-medium truncate">
-                {def.label}
+                {def.fullLabel ?? def.label}
               </span>
               {/* Coords */}
               {hasCoord ? (
@@ -905,8 +905,8 @@ function LandmarksTab({
                     }
                   }}
                   className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                  title={`Delete ${def.label} from this slice`}
-                  aria-label={`Delete ${def.label} from this slice`}
+                  title={`Delete ${def.fullLabel ?? def.label} from this slice`}
+                  aria-label={`Delete ${def.fullLabel ?? def.label} from this slice`}
                 >
                   <Trash2 className="h-3 w-3" />
                 </span>

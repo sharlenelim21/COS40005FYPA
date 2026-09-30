@@ -237,6 +237,58 @@ button[type="submit"]:hover {
   }
 }
 
+@keyframes vh-kinetic-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+@keyframes vh-kinetic-breathe {
+  0%, 100% { width: 38%; opacity: 0.85; }
+  50%      { width: 72%; opacity: 1; }
+}
+@keyframes vh-kinetic-stripes {
+  0%   { background-position: 0 0; }
+  100% { background-position: 24px 0; }
+}
+.vh-kinetic-track {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9999px;
+}
+.vh-kinetic-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  animation: vh-kinetic-breathe 2.4s ease-in-out infinite;
+}
+.vh-kinetic-sweep {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+  animation: vh-kinetic-sweep 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.vh-kinetic-queued {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    rgb(0 0 0 / 0.08) 6px 12px
+  );
+  background-size: 24px 100%;
+  animation: vh-kinetic-stripes 1.6s linear infinite;
+}
+.dark .vh-kinetic-queued {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    rgb(255 255 255 / 0.1) 6px 12px
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  .vh-kinetic-fill { animation: none; width: 60%; }
+  .vh-kinetic-sweep { animation: none; opacity: 0; }
+  .vh-kinetic-queued { animation: none; }
+}
+
 /* Custom font definition */
 /* Load RetroFloral font from local file */
 @font-face {

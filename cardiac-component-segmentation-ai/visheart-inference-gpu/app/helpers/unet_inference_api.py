@@ -1,7 +1,8 @@
 import importlib.util
+import inspect
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 _cached_unet_module = None
@@ -68,6 +69,7 @@ def run_unet_inference_from_nifti(
     nifti_path: str,
     device: str = "auto",
     checkpoint_path: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     """
     Execute UNET inference and return backend-compatible JSON result.
@@ -96,10 +98,14 @@ def run_unet_inference_from_nifti(
 
     start_time = time.perf_counter()
     print(f"[UNET API] Inference start: model=unet, device={device}")
+    kwargs: Dict[str, Any] = {}
+    if progress_callback is not None and "progress_callback" in inspect.signature(module.run_model2_inference).parameters:
+        kwargs["progress_callback"] = progress_callback
     result = module.run_model2_inference(
         nifti_path=nifti_path,
         checkpoint_path=resolved_checkpoint,
         device=device,
+        **kwargs,
     )
     elapsed_ms = int((time.perf_counter() - start_time) * 1000)
     print(f"[UNET API] Inference end: model=unet, device={device}, elapsed_ms={elapsed_ms}")

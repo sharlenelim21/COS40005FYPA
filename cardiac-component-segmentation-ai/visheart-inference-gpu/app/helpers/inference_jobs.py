@@ -2,14 +2,14 @@
 import asyncio
 import httpx
 import aiohttp
-import os, traceback, time, json, tempfile
+import os, traceback, time, json, tempfile, threading
 import re
 import logging
 from enum import Enum
 from functools import wraps
 from uuid import UUID
 from pydantic import HttpUrl, Field
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 #import torch
 import numpy as np
 import base64
@@ -174,6 +174,55 @@ except ValueError:
     print(f"[{serviceLocation}] WARNING: Invalid GPU_SEMAPHORE_COUNT '{GPU_SEMAPHORE_COUNT}', setting to 1.")
     gpu_semaphore_count_int = 1
 gpu_semaphore = asyncio.Semaphore(gpu_semaphore_count_int)
+
+PROGRESS_MIN_INTERVAL_S = float(os.getenv("PROGRESS_MIN_INTERVAL_S", "2"))
+
+
+class ProgressReporter:
+
+    def __init__(self, callback_url: HttpUrl, uuid: UUID, min_interval: float = PROGRESS_MIN_INTERVAL_S):
+        self._url = urljoin(str(callback_url), "gpu-progress")
+        self._uuid = str(uuid)
+        self._min_interval = min_interval
+        self._loop = asyncio.get_running_loop()
+        self._lock = threading.Lock()
+        self._last_pct = -1
+        self._last_time = 0.0
+        self._tasks: set = set()
+
+    def report(self, done: int, total: int) -> None:
+        if total <= 0:
+            return
+        pct = max(0, min(100, int(done * 100 / total)))
+        now = time.monotonic()
+        with self._lock:
+            if pct <= self._last_pct:
+                return
+            if pct < 100 and now - self._last_time < self._min_interval:
+                return
+            self._last_pct = pct
+            self._last_time = now
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._loop:
+            task = self._loop.create_task(self._post(done, total))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+        else:
+            asyncio.run_coroutine_threadsafe(self._post(done, total), self._loop)
+
+    async def _post(self, done: int, total: int) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    self._url,
+                    json={"uuid": self._uuid, "done": done, "total": total},
+                    headers={"User-Agent": "VisHeart-GPU-Service/1.0", "X-Job-ID": self._uuid},
+                )
+        except Exception as e:
+            logger.debug(f"[{serviceLocation}] Progress post failed for job {self._uuid}: {e}")
 
 
 async def send_callback_with_files(
@@ -495,10 +544,12 @@ async def _process_medsam_job(
                 total_detections = sum(len(dets) for dets in filtered_images_map.values())
                 print(f"[{serviceLocation}] Found {total_detections} relevant detections across {num_filtered_images} images")
                 processed_count = 0
+                progress = ProgressReporter(callback_url, uuid)
                 for image_path, filtered_dets in filtered_images_map.items():
                     if not filtered_dets:
                         continue
                     filename = os.path.basename(image_path)
+                    progress.report(processed_count, num_filtered_images)
                     processed_count += 1
                     print(f"[{serviceLocation}] Processing image {processed_count}/{num_filtered_images}: {filename}")
                     max_retries = 2
@@ -538,6 +589,7 @@ async def _process_medsam_job(
                             print(f"[{serviceLocation}] Error calculating 'myo' mask for {filename}: {subtraction_error}")
                     mask_files = encode_and_name_masks(filename, masks, medsam_handler)
                     all_results[filename] = {"boxes": filtered_dets, "masks": mask_files}
+                progress.report(num_filtered_images, num_filtered_images)
             elif file_path and os.path.isfile(file_path):
                 if not file_path.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
                     error_detail = "Downloaded file is not a supported image format"
@@ -668,11 +720,13 @@ async def _process_unet_job(
                 await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
                 return
 
+            progress = ProgressReporter(callback_url, uuid)
             inference_output = await asyncio.to_thread(
                 run_unet_inference_from_nifti,
                 file_path,
                 device,
                 checkpoint_path,
+                progress.report,
             )
             if isinstance(inference_output, dict):
                 mask_payload = inference_output.get("mask")
@@ -1121,7 +1175,8 @@ async def _process_fourd_reconstruction_job(
                         chamber=request.chamber,
                         # Reproducibility and best-of-N candidate selection
                         seed=request.seed,
-                        num_candidates=request.num_candidates
+                        num_candidates=request.num_candidates,
+                        progress_callback=ProgressReporter(request.callback_url, request.uuid).report,
                     )
                     
                     if reconstruction_result["success"]:

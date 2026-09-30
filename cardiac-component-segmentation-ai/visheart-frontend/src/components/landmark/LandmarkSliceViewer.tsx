@@ -25,6 +25,7 @@ interface LandmarkSliceViewerProps {
   editableLandmarks?: boolean;
   highlightedLandmarkId?: string | null;
   onLandmarkMove?: (id: string, coord: [number, number]) => void;
+  onLandmarkMoveEnd?: () => void;
   className?: string;
 }
 
@@ -49,6 +50,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
   editableLandmarks = false,
   highlightedLandmarkId,
   onLandmarkMove,
+  onLandmarkMoveEnd,
   className,
 }: LandmarkSliceViewerProps) {
   const effectiveMaskDimensions = maskDimensions ?? imageDimensions;
@@ -104,7 +106,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
         const coord = getLandmarkCoord(prediction, def.id);
         if (!coord) continue;
         const [cx, cy] = toCanvas(coord, cw, ch);
-        // Collapsed slice: show dots but suppress "RV Insertion" text labels
+        // Collapsed slice: show dots but suppress the Anterior/Inferior text labels
         drawDot(ctx, cx, cy, def, isCollapsed ? false : showLabels, highlightedLandmarkId === def.id);
       }
       // Collapsed slice: draw the "Mean" label at the mean position on top
@@ -254,6 +256,7 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
             !getLandmarkCoord(prediction, highlightedLandmarkId)
           ) {
             onLandmarkMove?.(highlightedLandmarkId, canvasToImageCoord(event));
+            onLandmarkMoveEnd?.();
           }
         }}
         onPointerMove={(event) => {
@@ -266,9 +269,12 @@ export const LandmarkSliceViewer = React.memo(function LandmarkSliceViewer({
           if (hasActiveDrag && event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
+          if (hasActiveDrag) onLandmarkMoveEnd?.();
         }}
         onPointerCancel={() => {
+          const hasActiveDrag = !!draggingLandmarkRef.current;
           draggingLandmarkRef.current = null;
+          if (hasActiveDrag) onLandmarkMoveEnd?.();
         }}
       />
     </div>

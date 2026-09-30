@@ -23,7 +23,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import nibabel as nib
 import numpy as np
@@ -223,6 +223,7 @@ def run_model2_inference(
     nifti_path: str,
     checkpoint_path: str,
     device: str = "cpu",
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     """DEVELOPER NOTE: Main Inference Pipeline
     
@@ -291,6 +292,7 @@ def run_model2_inference(
     frames: List[Dict[str, Any]] = []
     num_frames = volume.shape[3]
     num_slices = volume.shape[2]
+    total_slices = num_frames * num_slices
 
     # Process all frames and slices in the cardiac volume
     with torch.no_grad():
@@ -349,6 +351,8 @@ def run_model2_inference(
                         "segmentationmasks": segmentation_masks,
                     }
                 )
+                if progress_callback is not None:
+                    progress_callback(frame_index * num_slices + slice_index + 1, total_slices)
 
             frames.append(frame_entry)
 

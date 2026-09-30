@@ -24,6 +24,8 @@ const ENDPOINT = process.env.NEXT_PUBLIC_LANDMARK_ENDPOINT ?? "/landmark-detecti
 const DEFAULT_MODEL = "unetresnet34-landmark";
 const POLL_INTERVAL_MS = 3_000;
 const MAX_POLL_ATTEMPTS = 100;
+const SEG_STALE_MINUTES: Record<"medsam" | "unet", number> = { medsam: 30, unet: 90 };
+const MASK_WRITE_GRACE_MS = 60_000;
 
 const predictionCache = new Map<string, LandmarkInferenceResponse>();
 
@@ -86,24 +88,12 @@ export const landmarkApi = {
     }
 
     try {
-      const startResponse = await api.post<{
-        success: boolean;
-        message: string;
-        uuid?: string;
-      }>(`${ENDPOINT}/start/${projectId}`, {
+      const jobUuid = await landmarkApi.startDetection(
+        projectId,
+        segmentationModel === "unet" ? "unet" : "medsam",
         model,
-        deviceType: "auto",
-        segmentationModel,
-      });
-
-      if (!startResponse.data.success || !startResponse.data.uuid) {
-        throw new LandmarkApiError(
-          "inference_failed",
-          startResponse.data.message || "Failed to start landmark detection.",
-        );
-      }
-
-      const result = await pollLandmarkResult(projectId, startResponse.data.uuid);
+      );
+      const result = await pollLandmarkResult(projectId, jobUuid);
       if (!result?.predictions?.length) {
         throw new LandmarkApiError(
           "empty_predictions",
@@ -188,6 +178,183 @@ export const landmarkApi = {
     return false;
   },
 
+  getCached: (projectId: string): LandmarkInferenceResponse | null => {
+    for (const [key, value] of predictionCache.entries()) {
+      if (key === projectId || key.startsWith(`${projectId}::`)) return value;
+    }
+    return null;
+  },
+
+  startDetection: async (
+    projectId: string,
+    segmentationModel: "medsam" | "unet",
+    model = DEFAULT_MODEL,
+  ): Promise<string> => {
+    let response;
+    try {
+      response = await api.post<{ success: boolean; message: string; uuid?: string }>(
+        `${ENDPOINT}/start/${projectId}`,
+        { model, deviceType: "auto", segmentationModel },
+      );
+    } catch (err) {
+      const conflict = (err as AxiosError<{ jobUuid?: string }>).response;
+      if (conflict?.status === 409 && conflict.data?.jobUuid) return conflict.data.jobUuid;
+      throw err;
+    }
+    if (!response.data.success || !response.data.uuid) {
+      throw new LandmarkApiError(
+        "inference_failed",
+        response.data.message || "Failed to start landmark detection.",
+      );
+    }
+    return response.data.uuid;
+  },
+
+  probeJob: async (
+    projectId: string,
+    jobUuid: string,
+    segmentationModel: "medsam" | "unet",
+  ): Promise<{ status: "active" | "completed" | "failed" | "missing"; message?: string }> => {
+    const response = await api.get<{
+      success: boolean;
+      result: LandmarkInferenceResponse | null;
+      job?: { status?: string; message?: string } | null;
+    }>(`${ENDPOINT}/results/${projectId}`, { params: { jobUuid } });
+    const result = response.data.result;
+    if (result?.predictions?.length) {
+      predictionCache.set(`${projectId}::${DEFAULT_MODEL}::${segmentationModel}`, result);
+      return { status: "completed" };
+    }
+    const status = (response.data.job?.status ?? "").toLowerCase();
+    if (!response.data.job) return { status: "missing" };
+    if (status === "failed") return { status: "failed", message: response.data.job.message };
+    if (status === "completed") {
+      return { status: "failed", message: "Landmark job completed but its result could not be read." };
+    }
+    return { status: "active" };
+  },
+
+  findActiveJob: async (
+    projectId: string,
+  ): Promise<{ uuid: string; segmentationModel: "medsam" | "unet"; createdAt: number | null } | null> => {
+    if (USE_STUB) return null;
+    try {
+      const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
+        `${ENDPOINT}/jobs/${projectId}`,
+      );
+      const cutoff = Date.now() - 30 * 60 * 1000;
+      const job = (response.data?.jobs ?? []).find((j) => {
+        if (!/landmark/i.test(String(j.model_used ?? ""))) return false;
+        const status = String(j.status ?? "").toLowerCase();
+        if (status !== "pending" && status !== "in_progress") return false;
+        const created = Date.parse(String(j.createdAt ?? ""));
+        return !Number.isFinite(created) || created >= cutoff;
+      });
+      if (!job?.uuid) return null;
+      const seg = String(job.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
+      const created = Date.parse(String(job.createdAt ?? ""));
+      return { uuid: String(job.uuid), segmentationModel: seg, createdAt: Number.isFinite(created) ? created : null };
+    } catch {
+      return null;
+    }
+  },
+
+  findCompletedJobSince: async (
+    projectId: string,
+    segmentationModel: "medsam" | "unet",
+    since: number,
+  ): Promise<string | null> => {
+    if (USE_STUB) return null;
+    try {
+      const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
+        `${ENDPOINT}/jobs/${projectId}`,
+      );
+      const job = (response.data?.jobs ?? []).find((j) => {
+        if (!/landmark/i.test(String(j.model_used ?? ""))) return false;
+        if (String(j.status ?? "").toLowerCase() !== "completed") return false;
+        const seg = String(j.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
+        if (seg !== segmentationModel) return false;
+        const created = Date.parse(String(j.createdAt ?? ""));
+        return Number.isFinite(created) && created >= since;
+      });
+      return job?.uuid ? String(job.uuid) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  segmentationPending: async (
+    projectId: string,
+    maskCreatedAt: Record<"medsam" | "unet", number | null>,
+  ): Promise<boolean> => {
+    if (USE_STUB) return false;
+    try {
+      const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
+        `${ENDPOINT}/jobs/${projectId}`,
+      );
+      const now = Date.now();
+      const seen = new Set<string>();
+      for (const j of response.data?.jobs ?? []) {
+        const used = String(j.model_used ?? "");
+        if (/landmark|4d_reconstruction/i.test(used)) continue;
+        const model = String(j.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
+        if (seen.has(model)) continue;
+        seen.add(model);
+
+        const status = String(j.status ?? "").toLowerCase();
+        const created = Date.parse(String(j.createdAt ?? ""));
+        if (!Number.isFinite(created)) continue;
+        if (status === "pending" || status === "in_progress") {
+          if (created >= now - SEG_STALE_MINUTES[model] * 60 * 1000) return true;
+        } else if (status === "completed") {
+          const mask = maskCreatedAt[model];
+          if (mask !== null && mask >= created) continue;
+          const finished = Date.parse(String(j.updatedAt ?? ""));
+          if (!Number.isFinite(finished) || finished >= now - MASK_WRITE_GRACE_MS) return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  },
+
+  jobSummary: async (
+    projectId: string,
+  ): Promise<{ active: "running" | "queued" | null; hasCompleted: boolean } | null> => {
+    if (USE_STUB) return { active: null, hasCompleted: landmarkApi.hasCached(projectId) };
+    try {
+      const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
+        `${ENDPOINT}/jobs/${projectId}`,
+      );
+      const cutoff = Date.now() - 30 * 60 * 1000;
+      const landmarkJobs = (response.data?.jobs ?? []).filter((j) => /landmark/i.test(String(j.model_used ?? "")));
+      let active: "running" | "queued" | null = null;
+      for (const j of landmarkJobs) {
+        const status = String(j.status ?? "").toLowerCase();
+        if (status !== "pending" && status !== "in_progress") continue;
+        const created = Date.parse(String(j.createdAt ?? ""));
+        if (Number.isFinite(created) && created < cutoff) continue;
+        if (status === "in_progress") active = "running";
+        else active ??= "queued";
+      }
+      const hasCompleted = landmarkJobs.some((j) => String(j.status ?? "").toLowerCase() === "completed");
+      return { active, hasCompleted };
+    } catch {
+      return null;
+    }
+  },
+
+  attachToJob: async (
+    projectId: string,
+    jobUuid: string,
+    segmentationModel: "medsam" | "unet",
+  ): Promise<LandmarkInferenceResponse> => {
+    const result = await pollLandmarkResult(projectId, jobUuid);
+    predictionCache.set(`${projectId}::${DEFAULT_MODEL}::${segmentationModel}`, result);
+    return result;
+  },
+
   computeStrain: async (projectId: string, formData: FormData): Promise<RealStrainResult> => {
     const response = await api.post<RealStrainResult>(
       `${ENDPOINT}/compute-strain/${projectId}`,
@@ -236,10 +403,6 @@ export async function computeStrainFromFrames(
   return response.data;
 }
 
-/**
- * Regional RV strain from an ED→ES frame pair — sibling to computeStrainFromFrames.
- * See RvStrainResult for why this is a cavity-radius measure, not wall thickness.
- */
 export async function computeRvStrainFromFrames(
   projectId: string,
   edFrameIndex: number,
@@ -253,12 +416,6 @@ export async function computeRvStrainFromFrames(
   return response.data;
 }
 
-/**
- * Compute strain for EVERY frame against the fixed ED reference, giving a
- * full-cycle series (the ED→ES call above returns a single measurement).
- * Costs one GPU call per frame, so it is slower — `frameStep` subsamples.
- * The result is persisted on the mask as `strainSeries`.
- */
 export async function computeStrainSeries(
   projectId: string,
   edFrameIndex: number,
@@ -283,10 +440,6 @@ export async function computeStrainSeries(
   return response.data;
 }
 
-/**
- * RV analog of computeStrainSeries — full-cycle regional RV strain, every
- * frame measured against the fixed ED reference. Persisted as `rvStrainSeries`.
- */
 export async function computeRvStrainSeries(
   projectId: string,
   edFrameIndex: number,
