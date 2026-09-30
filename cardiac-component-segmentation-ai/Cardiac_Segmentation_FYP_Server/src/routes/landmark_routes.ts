@@ -11,12 +11,13 @@ import {
   readProjectLandmark,
   createProjectLandmark,
   updateProjectLandmark,
-  projectLandmarkModel,
   projectSegmentationMaskModel,
 } from "../services/database";
 import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
+import { resolveRvInsertionPoints } from "../services/rv_insertion_points";
+import { normalizeLandmarkFrames, normalizeLandmarkJobResult } from "../utils/landmark_order";
 
 const memUpload = multer({ storage: multer.memoryStorage() });
 
@@ -25,7 +26,7 @@ const serviceLocation = "LandmarkRoutes";
 
 const parseCompletedLandmarkJobResult = (job: any) => {
   try {
-    const r = typeof job.result === "string" ? JSON.parse(job.result) : job.result;
+    const r = normalizeLandmarkJobResult(typeof job.result === "string" ? JSON.parse(job.result) : job.result);
     if (!r) return null;
 
     // Old format already has predictions[]
@@ -280,63 +281,11 @@ router.post(
     }
 
     try {
-      const extractCoord = (lm: any): { x: number; y: number } | null => {
-        if (!lm) return null;
-        if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-        if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-        return null;
-      };
-
-      let lm1: { x: number; y: number } | null = null;
-      let lm2: { x: number; y: number } | null = null;
-
       // Prefer the user's SAVED landmark edits over the raw AI detection, so
-      // computed strain reflects the newest corrected RV insertion points. Edits
-      // are shared across segmentation models (one editable doc per project), so
-      // this is not filtered by model. Mirrors compute-strain-from-frames.
-      const savedLandmarkDoc = await projectLandmarkModel
-        .findOne({ projectid: projectId, isModelOutput: false })
-        .sort({ updatedAt: -1 })
-        .lean();
-
-      if (savedLandmarkDoc) {
-        const lm1Points: { x: number; y: number }[] = [];
-        const lm2Points: { x: number; y: number }[] = [];
-        // ED (frame 0) only — a saved doc can now hold every cardiac frame's
-        // landmarks, and averaging RV insertion points ACROSS cardiac phases
-        // (not just across slices within one phase) would blend positions from
-        // a heart that's moved throughout the cycle into a physically
-        // meaningless point. Alignment/strain has always meant "relative to
-        // ED" elsewhere in this codebase; this keeps that the same.
-        const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-        for (const slice of edFrame?.slices ?? []) {
-          for (const point of slice.landmarks ?? []) {
-            if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-            if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-          }
-        }
-        const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
-          points.length
-            ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
-            : null;
-        lm1 = mean(lm1Points);
-        lm2 = mean(lm2Points);
-        if (lm1 && lm2) {
-          logger.info(`${serviceLocation}: compute-strain using saved landmark edits (doc ${savedLandmarkDoc._id}) for project ${projectId}.`);
-        }
-      }
-
-      // Fall back to the raw AI landmark job only when no saved edits exist.
-      if (!lm1 || !lm2) {
-        const landmarkJob = await jobModel
-          .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-          .sort({ updatedAt: -1 })
-          .lean();
-        const lmResult = landmarkJob?.result
-          ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-          : null;
-        lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-        lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+      // computed strain reflects the newest corrected RV insertion points.
+      const { lm1, lm2, savedDocId, usedSavedEdits } = await resolveRvInsertionPoints(projectId);
+      if (usedSavedEdits) {
+        logger.info(`${serviceLocation}: compute-strain using saved landmark edits (doc ${savedDocId}) for project ${projectId}.`);
       }
 
       const gpuBaseUrl = await getFreshGPUServerAddress();
@@ -491,6 +440,7 @@ router.put(
       res.status(400).json({ success: false, message: "'frames' must be a non-empty array." });
       return;
     }
+    const orderedFrames = normalizeLandmarkFrames(framesFromBody);
 
     try {
       const landmarksResult = await readProjectLandmark(projectId);
@@ -519,7 +469,7 @@ router.put(
           isModelOutput: false,
           segmentationModel: segmentationModel as any,
           landmarkModel,
-          frames: framesFromBody,
+          frames: orderedFrames,
         });
 
         if (!created.success || !created.projectlandmark) {
@@ -537,7 +487,7 @@ router.put(
         return;
       }
 
-      const mergedFrames = mergeLandmarkFramesData(editableDoc.frames, framesFromBody);
+      const mergedFrames = mergeLandmarkFramesData(editableDoc.frames, orderedFrames);
       const updated = await updateProjectLandmark(editableDoc._id.toString(), {
         isSaved: true,
         name: name ?? editableDoc.name,
@@ -588,10 +538,13 @@ router.get(
       const landmarksResult = await readProjectLandmark(projectId);
       const candidateDocs = (landmarksResult.projectlandmarks ?? []).filter(doc => !doc.isModelOutput);
       const editableDoc = candidateDocs[0];
+      const editableJson: any = typeof (editableDoc as any)?.toJSON === "function"
+        ? (editableDoc as any).toJSON()
+        : editableDoc ?? null;
 
       res.status(200).json({
         success: true,
-        result: editableDoc ?? null,
+        result: editableJson ? { ...editableJson, frames: normalizeLandmarkFrames(editableJson.frames ?? []) } : null,
       });
     } catch (error: any) {
       logger.error(`${serviceLocation}: Error loading landmark edits`, {

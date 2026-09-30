@@ -12,6 +12,7 @@ import path from "path";
 import crypto from "crypto";
 import multer from "multer";
 import logger from "../services/logger"; // Import Winston Logger
+import { normalizeLandmarkJobResult } from "../utils/landmark_order";
 import {
   updateJob,
   readJob,
@@ -131,7 +132,7 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const result = req.body?.result;
+    const result = normalizeLandmarkJobResult(req.body?.result);
     // Accept both response formats:
     //   Old format: { predictions: [...], total_frames, model_used, image_dimensions }
     //   New format: { slices: [...], avg_lm1, avg_lm2, n_total, n_collapsed, n_2ch, n_1ch_fallback }

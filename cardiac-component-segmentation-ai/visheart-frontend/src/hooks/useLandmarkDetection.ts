@@ -7,6 +7,7 @@ import type {
   FramePrediction,
   LandmarkInferenceResponse,
 } from "@/types/landmark";
+import { normalizeLandmarkResponse } from "@/types/landmark";
 
 const DEFAULT_PLAYBACK_FPS = 2;
 const DEFAULT_LANDMARK_MODEL = "unetresnet34-landmark";
@@ -127,7 +128,8 @@ export function useLandmarkDetection(
   }, []);
 
   const applyResult = useCallback(
-    (result: LandmarkInferenceResponse) => {
+    (rawResult: LandmarkInferenceResponse) => {
+      const result = normalizeLandmarkResponse(rawResult);
       setState((s) => ({
         ...s,
         status: "done",

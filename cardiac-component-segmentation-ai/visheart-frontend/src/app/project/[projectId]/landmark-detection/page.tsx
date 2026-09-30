@@ -44,6 +44,7 @@ import {
   LANDMARK_DEFINITIONS,
   framePredictionsToLandmarkFrames,
   landmarkFramesToEdits,
+  normalizeRvInsertionOrder,
 } from "@/types/landmark";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
@@ -718,6 +719,25 @@ export default function LandmarkDetectionPage() {
     });
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
+
+  const handleLandmarkMoveEnd = useCallback(() => {
+    if (!currentPrediction) return;
+    setLandmarkEdits((prev) => {
+      const existing = prev[currentLandmarkEditKey];
+      if (!existing) return prev;
+      const merged = { ...currentPrediction, ...existing } as FramePrediction;
+      const [anterior] = normalizeRvInsertionOrder(merged.rv_insertion_1, merged.rv_insertion_2);
+      if (anterior === merged.rv_insertion_1) return prev;
+      return {
+        ...prev,
+        [currentLandmarkEditKey]: {
+          ...existing,
+          rv_insertion_1: merged.rv_insertion_2,
+          rv_insertion_2: merged.rv_insertion_1,
+        },
+      };
+    });
+  }, [currentLandmarkEditKey, currentPrediction]);
 
   /** Deletes immediately (no undo-countdown window) — it's an edit like a move,
    *  so it dirties the save button right away instead of waiting 5s to commit. */
@@ -1427,6 +1447,7 @@ export default function LandmarkDetectionPage() {
             editableLandmarks={editableLandmarks}
             highlightedLandmarkId={highlightedLandmarkId}
             onLandmarkMove={handleLandmarkMove}
+            onLandmarkMoveEnd={handleLandmarkMoveEnd}
           />
         </div>
 
@@ -1809,6 +1830,7 @@ export default function LandmarkDetectionPage() {
                   editableLandmarks={editableLandmarks}
                   highlightedLandmarkId={highlightedLandmarkId}
                   onLandmarkMove={handleLandmarkMove}
+                  onLandmarkMoveEnd={handleLandmarkMoveEnd}
                 />
               </div>
 

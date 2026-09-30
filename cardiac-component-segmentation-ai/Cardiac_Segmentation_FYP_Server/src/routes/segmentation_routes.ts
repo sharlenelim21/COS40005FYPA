@@ -11,8 +11,7 @@ import {
     jobModel,
     userModel,
     JobStatus,
-    projectSegmentationMaskModel,
-    projectLandmarkModel
+    projectSegmentationMaskModel
 } from "../services/database";
 import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
 import LogError from "../utils/error_logger";
@@ -25,6 +24,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { extractS3KeyFromUrl, downloadFromS3, uploadMaskToS3 } from "../services/s3_handler";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client"; // Import fresh GPU server address function
+import { resolveRvInsertionPoints } from "../services/rv_insertion_points";
 
 const router = Router();
 const serviceLocation = "SegmentationRoutes";
@@ -1179,64 +1179,9 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
         // raw GPU job result if the user has never saved landmark edits for
         // this model. This mirrors segmentation masks preferring the
         // editable doc over the raw AI output.
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-
-        // Landmark edits are shared across segmentation models (one editable doc
-        // per project) — a corrected RV insertion point is an anatomical image
-        // location, not a per-model value. So we do NOT filter by segmentationModel
-        // here; that would miss the user's edits whenever the active strain model
-        // differs from the model that was active when the doc was last saved.
-        // (The segmentation MASK input above IS still per-model — only the
-        // landmark alignment points are shared.)
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-
-        if (savedLandmarkDoc) {
-            // Average rv_insertion_1 / rv_insertion_2 points across every slice of
-            // ED (frame 0) only, matching the GPU's own per-frame avg_lm1/avg_lm2
-            // aggregation (visheart-inference-gpu/app/helpers/landmark_inference_api.py) —
-            // a saved doc can now hold every cardiac frame's landmarks, and averaging
-            // across cardiac phases (not just slices within one phase) would blend
-            // positions from a heart that's moved throughout the cycle into a
-            // physically meaningless point.
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
-                points.length
-                    ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
-                    : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-            logger.info(`${serviceLocation}: compute-strain-from-frames using saved landmark edits (doc ${savedLandmarkDoc._id}) for project ${projectId}.`);
-        }
-
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+        const { lm1, lm2, savedDocId } = await resolveRvInsertionPoints(projectId);
+        if (savedDocId) {
+            logger.info(`${serviceLocation}: compute-strain-from-frames using saved landmark edits (doc ${savedDocId}) for project ${projectId}.`);
         }
 
         // 6. POST both NIfTI files to GPU
@@ -1490,53 +1435,7 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
 
         // 5. Look up RV insertion landmarks (same lookup as LV strain — shared,
         // model-independent alignment points)
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-
-        if (savedLandmarkDoc) {
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            // ED (frame 0) only — see the comment on this same pattern earlier in
-            // this file for why averaging across cardiac frames (not just slices)
-            // would be wrong now that a saved doc can hold every cardiac frame.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
-                points.length
-                    ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
-                    : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-        }
-
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
-        }
+        const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
 
         // 6. POST both NIfTI files to GPU
         const FormDataNode = require("form-data");
@@ -1719,47 +1618,7 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         // Landmark alignment — identical resolution order to the ED→ES route:
         // saved user edits first (shared across models, since a corrected RV
         // insertion point is an anatomical location), then the raw GPU job.
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (savedLandmarkDoc) {
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            // ED (frame 0) only — see the comment on this same pattern earlier in
-            // this file for why averaging across cardiac frames (not just slices)
-            // would be wrong now that a saved doc can hold every cardiac frame.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (pts: { x: number; y: number }[]) =>
-                pts.length ? { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length } : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-        }
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
-        }
+        const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
 
         // ED is the fixed reference for every comparison — build it once.
         const edPath = await buildNIfTI(edFrame, "ed");
@@ -1983,47 +1842,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             return niftiPath;
         };
 
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (savedLandmarkDoc) {
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            // ED (frame 0) only — see the comment on this same pattern earlier in
-            // this file for why averaging across cardiac frames (not just slices)
-            // would be wrong now that a saved doc can hold every cardiac frame.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (pts: { x: number; y: number }[]) =>
-                pts.length ? { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length } : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-        }
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
-        }
+        const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
 
         const edPath = await buildNIfTI(edFrame, "ed");
         const FormDataNode = require("form-data");

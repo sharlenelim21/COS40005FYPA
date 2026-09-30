@@ -3,7 +3,7 @@
 
 import mongoose from 'mongoose';
 import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
-import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask, jobModel, JobStatus, projectLandmarkModel } from "./database";
+import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask } from "./database";
 import { generatePresignedGetUrl, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
 import axios from 'axios';
@@ -14,6 +14,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
+import { findSavedLandmarkDoc, findLatestLandmarkJobResult, meanSavedRvInsertionPoints } from "./rv_insertion_points";
 
 const serviceLocation = 'SegmentationExport';
 
@@ -634,44 +635,19 @@ export const findLandmarkAlignment = async (
     let rv1: number[] | null = null;
     let rv2: number[] | null = null;
 
-    const savedLandmarkDoc = await projectLandmarkModel
-        .findOne({ projectid: projectId, isModelOutput: false })
-        .sort({ updatedAt: -1 })
+    const savedLandmarkDoc = await findSavedLandmarkDoc(projectId);
     if (savedLandmarkDoc) {
-        const lm1Points: number[][] = [];
-        const lm2Points: number[][] = [];
-        const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-        for (const slice of edFrame?.slices ?? []) {
-            for (const point of slice.landmarks ?? []) {
-                if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
-                if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
-            }
-        }
-        const meanPt = (pts: number[][]): number[] | null =>
-            pts.length
-                ? [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length]
-                : null;
-        rv1 = meanPt(lm1Points);
-        rv2 = meanPt(lm2Points);
+        const { lm1, lm2 } = meanSavedRvInsertionPoints(savedLandmarkDoc);
+        rv1 = lm1 ? [lm1.x, lm1.y] : null;
+        rv2 = lm2 ? [lm2.x, lm2.y] : null;
         if (rv1 && rv2) {
             logger.info(`${serviceLocation}: [Bullseye] Using saved landmark edits (doc ${savedLandmarkDoc._id}) for mask ${maskId}`);
         }
     }
- 
-    const landmarkJob = (rv1 && rv2) ? null : await jobModel
-        .findOne({
-            projectid: projectId,
-            model_used: /landmark/i,
-            status: JobStatus.COMPLETED,
-            result: { $exists: true, $ne: null },
-        })
-        .sort({ updatedAt: -1, createdAt: -1 })
-        .lean();
- 
-    if (landmarkJob?.result) {
-        const r = typeof landmarkJob.result === 'string'
-            ? JSON.parse(landmarkJob.result)
-            : landmarkJob.result;
+
+    const r = (rv1 && rv2) ? null : await findLatestLandmarkJobResult(projectId, { updatedAt: -1, createdAt: -1 });
+
+    if (r) {
         if (r.avg_lm1 && typeof r.avg_lm1.x === 'number' && typeof r.avg_lm1.y === 'number') {
             rv1 = [r.avg_lm1.x, r.avg_lm1.y];
         } else if (Array.isArray(r.avg_lm1) && r.avg_lm1.length >= 2) {
