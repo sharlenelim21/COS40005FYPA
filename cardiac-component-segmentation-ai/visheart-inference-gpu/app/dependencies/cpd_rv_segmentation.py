@@ -67,7 +67,7 @@ import trimesh
 from pycpd import DeformableRegistration
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components, dijkstra
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree, ConvexHull
 
 import cpd_gpu
 
@@ -1601,13 +1601,78 @@ def label_cpd9_from_raw_slices(
                 ref_dirs[rank] = ref_dirs[int(known_ranks[np.argmin(np.abs(known_ranks - rank))])]
 
         points, region_id = [], []
+        prev_axis = None  # undirected p1-p2 line direction, carried slice-to-slice below
         for rank, s in enumerate(valid_sorted):
             rv_ij = np.argwhere(s["rv_mask"])
-            d = ref_dirs[rank]
-            d_perp = np.array([-d[1], d[0]])
-            rel = rv_ij - s["rv_centroid_ij"]
-            theta = np.mod(np.arctan2(rel @ d_perp, rel @ d), 2 * np.pi)
-            sector = np.clip(np.floor(theta / (2 * np.pi / 3)).astype(int), 0, 2)
+            c = s["rv_centroid_ij"]
+            d = ref_dirs[rank]  # septal direction -- orientation only now, see below
+
+            # Sector: 2026-09-30, per Sharlene's client -- 3 bands along the RV
+            # cross-section's OWN longest chord, not 3 fixed-angle wedges from
+            # the centroid. On a crescent cross-section the two most-distant
+            # boundary points ("p1"/"p2") land close to the anterior/posterior
+            # septal hinge points, so the p1-p2 line runs along the free
+            # wall's own arc -- roughly PERPENDICULAR to the septal direction
+            # `d` (the septum sits across from the belly of the crescent, not
+            # along its tip-to-tip axis), confirmed against this patient's own
+            # data. This is a better geometric proxy for Bazhutina et al.'s
+            # (CinC 2023) actual free-wall convention (septum excluded, split
+            # between the two RV insertion points) than a fixed-angle wedge
+            # ever was, and it adapts to each slice's own proportions instead
+            # of assuming a circular cross-section (this patient's old 120deg
+            # scheme measured Seg2 at roughly half of Seg1/Seg3's vertex
+            # count, precisely because the RV isn't circularly symmetric).
+            #
+            # p1, p2: the two most-distant points are always a pair of convex
+            # hull vertices, so the hull (tens of points) is searched instead
+            # of every pixel pair.
+            #
+            # When two candidate pairs are nearly tied for "most distant",
+            # picking only the single winner independently per slice let the
+            # axis direction flip by a large angle between adjacent slices
+            # even though the RV shape barely changed -- confirmed visually:
+            # it produced a jagged, interlocking segment boundary once
+            # stacked into 3D, instead of the clean cut a smoothly-turning
+            # axis gives. So among every candidate pair within 10% of the
+            # true max distance, the one closest in DIRECTION to the previous
+            # slice's own axis is kept (first slice has no previous axis, so
+            # it just takes the outright best pair).
+            hull_pts = rv_ij[ConvexHull(rv_ij).vertices]
+            diffs = hull_pts[:, None, :] - hull_pts[None, :, :]
+            dist2 = np.einsum("ijk,ijk->ij", diffs, diffs)
+            cand_i, cand_j = np.where(dist2 >= 0.9 * dist2.max())
+            if prev_axis is not None and len(cand_i) > 1:
+                cand_axes = hull_pts[cand_j].astype(float) - hull_pts[cand_i].astype(float)
+                cand_norms = np.linalg.norm(cand_axes, axis=1, keepdims=True)
+                cand_axes = cand_axes / cand_norms
+                best_k = np.argmax(np.abs(cand_axes @ prev_axis))
+            else:
+                best_k = np.argmax(dist2[cand_i, cand_j])
+            i1, i2 = cand_i[best_k], cand_j[best_k]
+            p1, p2 = hull_pts[i1].astype(float), hull_pts[i2].astype(float)
+
+            # q1 = midpoint(p1, c), q2 = midpoint(c, p2); the two cuts,
+            # perpendicular to the p1-p2 axis, pass through q1 and q2 -- so in
+            # the coordinate that matters (position along that axis, relative
+            # to the centroid), the cuts sit at half of each side's own
+            # p-to-centroid distance.
+            axis = p2 - p1
+            axis = axis / np.linalg.norm(axis)
+            prev_axis = axis
+            proj_all = (rv_ij - c) @ axis
+            cut_lo, cut_hi = sorted([((p1 + c) / 2.0 - c) @ axis, ((c + p2) / 2.0 - c) @ axis])
+
+            # Orientation only (not the axis itself): which physical side --
+            # p1's or p2's -- is "Seg1" vs "Seg3" is decided by the septal
+            # direction's handedness, purely so segment identity stays
+            # consistent slice-to-slice and frame-to-frame, the same role `d`
+            # played in the old 120-degree scheme (theta=0 at the septum).
+            cross_p1 = d[0] * (p1 - c)[1] - d[1] * (p1 - c)[0]
+            p1_seg, p2_seg = (0, 2) if cross_p1 > 0 else (2, 0)
+
+            sector = np.full(len(rv_ij), 1, dtype=np.int64)  # default: middle band = Seg2
+            sector[proj_all < cut_lo] = p1_seg
+            sector[proj_all >= cut_hi] = p2_seg
             region_id.append(s["level"] * 3 + sector + 1)
 
             cols, rows = rv_ij[:, 1].astype(float), rv_ij[:, 0].astype(float)
