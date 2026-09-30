@@ -234,7 +234,8 @@ function VersionReview({ label, status, onAction }: {
           <div className="space-y-3">
             <h3 className="font-medium">Inspect scans neither model was trained on</h3>
             {results
-              ? <ExampleViewer label={label} against={against} index={results.examples} versions={status.versions} />
+              ? <ExampleViewer label={label} against={against} active={status.active} index={results.examples}
+                               versions={status.versions} />
               : !problem && <div className="h-24 animate-pulse rounded-md bg-muted" />}
           </div>
         )}

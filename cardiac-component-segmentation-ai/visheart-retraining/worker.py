@@ -163,20 +163,18 @@ class WorkerApp:
         return index.exists() and versions.read_json(index).get("sha256") == registry.entry(against)["sha256"]
 
     def compare_examples(self, label, against):
-        """The Results tab's "Compare with": another version's predictions on the same example scans. They are made
-        once, about half a minute on a CPU, and kept; the version a candidate was compared with needs none."""
+        """Another version's predictions on label's example scans, for the Results tab's viewer. They are made once,
+        about half a minute on a CPU, and kept; label's own and the version it was compared with come from training."""
         registry = self.registry()
         self.known(registry, label)
         self.known(registry, against)
         index = self.examples_index(label)
         if not index:
             raise jobs.JobError(404, f"{label} has no example scans to compare.")
-        if against == label:
-            raise jobs.JobError(400, "Choose another version to compare with.")
         if registry.entry(against).get("status") == "deleted":
             raise jobs.JobError(409, f"{against} was deleted, so it cannot be compared.")
         view = {"label": label, "against": against, "ready": True, "rendered": False}
-        if against == index.get("against") or self.comparison_ready(registry, label, against):
+        if against in (label, index.get("against")) or self.comparison_ready(registry, label, against):
             return view
         with self.compare_lock:
             if not self.comparison_ready(registry, label, against):   # another request may have just made it
@@ -187,28 +185,43 @@ class WorkerApp:
             raise jobs.JobError(500, f"The comparison with {against} could not be prepared. See worker.log.")
         return view
 
-    def example(self, label, n, against=None):
+    def predictions(self, registry, label, index, version, n):
+        """Where version's predictions on example scan n of label are, as (folder, file prefix): made in training for
+        label and the version it was compared with, otherwise by compare_examples."""
+        folder = self.config.examples / label / str(n)
+        if version == label:
+            return folder, "label"
+        if version == index.get("against"):
+            return folder, "against"
+        self.known(registry, version)
+        if not self.comparison_ready(registry, label, version):
+            raise jobs.JobError(409, f"{version}'s predictions on these scans are not prepared yet.")
+        return self.comparison_folder(label, version) / str(n), "against"
+
+    def example(self, label, n, left=None, right=None):
+        """One example scan with two versions' predictions side by side. By default as trained: the version label was
+        compared with on the left, label on the right; the page puts the model in use on the left. Never one version
+        on both sides."""
         registry = self.registry()
         self.known(registry, label)
         index = self.examples_index(label) or {}
         entry = next((item for item in index.get("examples", []) if item["n"] == n), None)
         if entry is None:
             raise jobs.JobError(404, f"No example scan {n} for {label}.")
+        left, right = left or index.get("against"), right or label
+        if left == right:
+            raise jobs.JobError(400, "Choose two different versions to compare.")
+        (left_folder, left_name), (right_folder, right_name) = (
+            self.predictions(registry, label, index, version, n) for version in (left, right))
         folder = self.config.examples / label / str(n)
-        against_folder, shown = folder, index.get("against")
-        if against and against != shown:
-            self.known(registry, against)
-            if not self.comparison_ready(registry, label, against):
-                raise jobs.JobError(409, f"The comparison with {against} is not prepared yet.")
-            against_folder, shown = self.comparison_folder(label, against) / str(n), against
 
         def png(path):
             return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
         return {**{key: value for key, value in entry.items() if key != "slices"}, "count": entry["slices"],
-                "size": index.get("size", 256), "against_label": shown,
+                "size": index.get("size", 256), "left_label": left, "right_label": right,
                 "slices": [{"image": png(folder / f"image_{k}.png"), "truth": png(folder / f"truth_{k}.png"),
-                            "against": png(against_folder / f"against_{k}.png"),
-                            "label": png(folder / f"label_{k}.png")}
+                            "left": png(left_folder / f"{left_name}_{k}.png"),
+                            "right": png(right_folder / f"{right_name}_{k}.png")}
                            for k in range(entry["slices"])]}
 
     # actions ---------------------------------------------------------------------------------------------------
@@ -366,7 +379,7 @@ ROUTES = [
     ("GET", r"/versions/([^/]+)/preview", lambda app, m, q, b: app.preview(m[1], q.get("action", ["activate"])[0])),
     ("GET", r"/versions/([^/]+)/results", lambda app, m, q, b: app.results(m[1])),
     ("GET", r"/versions/([^/]+)/examples/(\d{1,2})",
-     lambda app, m, q, b: app.example(m[1], int(m[2]), q.get("against", [None])[0])),
+     lambda app, m, q, b: app.example(m[1], int(m[2]), q.get("left", [None])[0], q.get("right", [None])[0])),
     ("POST", r"/versions/([^/]+)/compare", lambda app, m, q, b: app.compare_examples(m[1], str(b.get("against") or ""))),
     ("POST", r"/versions/([^/]+)/activate", lambda app, m, q, b: app.activate(m[1], who(b), confirmation(b))),
     ("POST", r"/versions/([^/]+)/reject", lambda app, m, q, b: app.reject(m[1], who(b), confirmation(b))),

@@ -243,10 +243,24 @@ export function historyRows<V extends VersionLike>(sorted: V[], expanded: boolea
   return { rows, hidden: sorted.length - rows.length };
 }
 
-/** What a version's example scans can be compared with: every other version not deleted; in use, original, newest. */
-export function compareOptions<V extends VersionLike>(versions: V[], label: string): V[] {
+/** Every version not deleted except `except`: in use, original, then newest. */
+export function compareOptions<V extends VersionLike>(versions: V[], except: string): V[] {
   const rank = (version: V) => (version.is_active ? 0 : version.is_original ? 1 : 2);
   return versions
-    .filter(version => version.status !== "deleted" && version.label !== label)
+    .filter(version => version.status !== "deleted" && version.label !== except)
     .sort((a, b) => rank(a) - rank(b) || String(b.registered_at).localeCompare(String(a.registered_at)));
+}
+
+/**
+ * The example viewer's two sides. The model in use, the one new segmentations get, is always on the left. The right is
+ * any other version not deleted, so the two are never the same: it starts on the version under review, or, when that
+ * is the one in use, on the version it was compared with, else the original.
+ */
+export function exampleSides<V extends VersionLike>(versions: V[], active: string, label: string,
+                                                    trainedAgainst: string | null): { options: V[]; initial: string | null } {
+  const options = compareOptions(versions, active)
+    .sort((a, b) => Number(b.label === label) - Number(a.label === label));   // stable: the rest keep their order
+  const offered = (name: string | null) => name !== null && options.some(version => version.label === name);
+  const initial = offered(label) ? label : offered(trainedAgainst) ? trainedAgainst : options[0]?.label ?? null;
+  return { options, initial };
 }

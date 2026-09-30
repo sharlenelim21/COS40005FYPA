@@ -161,6 +161,24 @@ test("a version can be compared with any other version that was not deleted", ()
   assert.equal(options.length, 11);
 });
 
+test("the example viewer keeps the model in use on the left and never offers it on the right", () => {
+  // Reviewing v12 while v13 is in use: v13 is fixed on the left, and v12 starts on the right.
+  const reviewing = logic.exampleSides(history, "v13", "v12", "v11");
+  const offered = reviewing.options.map(v => v.label);
+  assert.equal(reviewing.initial, "v12");
+  assert.deepEqual(offered.slice(0, 3), ["v12", "v1", "v11"]);                 // this version, original, newest
+  assert.ok(!offered.includes("v13") && !offered.includes("v7"));              // not the one in use, not deleted
+  assert.equal(offered.length, 11);
+  // Reviewing the version in use: the right starts on the one it was compared with, if that was not deleted.
+  assert.equal(logic.exampleSides(history, "v13", "v13", "v11").initial, "v11");
+  assert.equal(logic.exampleSides(history, "v13", "v13", "v7").initial, "v1");  // v7 was deleted: the original
+  assert.ok(!logic.exampleSides(history, "v13", "v13", "v7").options.some(v => v.label === "v13"));
+  // Back on the original: it is on the left, so the reviewed version is on the right.
+  const original = history.map(v => ({ ...v, is_active: v.label === "v1" }));
+  assert.equal(logic.exampleSides(original, "v1", "v12", "v1").initial, "v12");
+  assert.equal(logic.exampleSides([history[0]], "v1", "v1", null).initial, null);   // nothing else to compare
+});
+
 test("a version the user deleted is described in the user's words", () => {
   assert.deepEqual(logic.jobOutcome("v3", "v2", [{ label: "v3", status: "deleted", deleted_because: "rejected" }]), {
     title: "v3 was deleted",

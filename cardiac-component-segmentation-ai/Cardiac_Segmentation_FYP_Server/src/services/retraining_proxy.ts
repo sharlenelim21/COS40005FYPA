@@ -131,14 +131,18 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
     return forward(req, res, 'get', `/versions/${label}/results`, {}, 60000);
   });
 
+  // One example scan with two versions' predictions: the page puts the model in use on the left.
   router.get('/versions/:label/examples/:n', (req, res) => {
     const { label, n } = req.params;
-    const against = req.query.against;
     if (!LABEL.test(label) || !EXAMPLE.test(n)) return badRequest(res, 'Unknown example scan.');
-    if (against !== undefined && (typeof against !== 'string' || !LABEL.test(against))) {
-      return badRequest(res, 'Unknown version to compare with.');
+    const sides = new URLSearchParams();
+    for (const side of ['left', 'right']) {
+      const version = req.query[side];
+      if (version === undefined) continue;
+      if (typeof version !== 'string' || !LABEL.test(version)) return badRequest(res, 'Unknown version to compare.');
+      sides.set(side, version);
     }
-    const query = against ? `?against=${encodeURIComponent(against)}` : '';
+    const query = sides.toString() ? `?${sides.toString()}` : '';
     return forward(req, res, 'get', `/versions/${label}/examples/${Number(n)}${query}`, {}, 60000);
   });
 

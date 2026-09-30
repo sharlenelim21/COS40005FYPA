@@ -164,9 +164,10 @@ export interface ExampleIndex {
 export interface ExampleScan extends Omit<ExampleEntry, "slices"> {
   count: number;
   size: number;
-  /** The version whose predictions are in `against`: the one compared at training time, or the chosen one. */
-  against_label: string | null;
-  slices: { image: string; truth: string; against: string; label: string }[];
+  /** The versions whose predictions are in `left` and `right`; never the same one. */
+  left_label: string;
+  right_label: string;
+  slices: { image: string; truth: string; left: string; right: string }[];
 }
 
 export interface Comparison {
@@ -230,9 +231,9 @@ export const retrainingApi = {
     call<{ rejected: string }>(api.post(`${versionPath(label)}/reject`, { confirm }, anyStatus)),
   results: (label: string) =>
     call<VersionResults>(api.get(`${versionPath(label)}/results`, { ...anyStatus, timeout: 70000 })),
-  example: (label: string, n: number, against?: string) =>
-    call<ExampleScan>(api.get(`${versionPath(label)}/examples/${n}`,
-                              { ...anyStatus, timeout: 70000, params: against ? { against } : undefined })),
+  /** One of label's example scans, with the predictions of `left` and `right` (by default as trained). */
+  example: (label: string, n: number, sides: { left?: string; right?: string } = {}) =>
+    call<ExampleScan>(api.get(`${versionPath(label)}/examples/${n}`, { ...anyStatus, timeout: 70000, params: sides })),
   /** Another version's predictions on these example scans: made once, about half a minute, then kept. */
   compareExamples: (label: string, against: string) =>
     call<Comparison>(api.post(`${versionPath(label)}/compare`, { against }, { ...anyStatus, timeout: 910000 })),
