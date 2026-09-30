@@ -14,12 +14,14 @@
  * measurement that wasn't computed.
  */
 
+import { FIXED_SCALE_NOTE, STRAIN_COLOR_SCALES, lvScaleKey, strainScaleFraction } from "@/lib/strainColorScale";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { rvGasMeasuredNote, rvPeakGas as rvPeakGasOf, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
 import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
@@ -99,9 +101,10 @@ function lerpHex(a: string, b: string, t: number): string {
  */
 function strainColor(v: number | null, type: StrainType): string {
   if (v === null || Number.isNaN(v)) return "#e5e7eb";
-  // Normalise to 0..1 against a typical healthy peak (GRS ~40 %, GCS ~-20 %).
-  const frac = type === "GCS" ? Math.abs(v) / 20 : v / 40;
-  const t = Math.max(0, Math.min(1, frac));
+  // Position on the shared FIXED strain scale (lib/strainColorScale.ts) — the
+  // same ranges every other strain chart uses, so a value's place on the
+  // red→green ramp is identical on every page and for every patient.
+  const t = strainScaleFraction(v, lvScaleKey(type));
   const scaled = t * (STRAIN_GRADIENT.length - 1);
   const i = Math.min(Math.floor(scaled), STRAIN_GRADIENT.length - 2);
   return lerpHex(STRAIN_GRADIENT[i], STRAIN_GRADIENT[i + 1], scaled - i);
@@ -740,10 +743,7 @@ export function InteractiveReport({
   // backend), reported separately from GCS (never combined). Peak = most
   // negative across the series, else the single ED→ES value. Still "preview"
   // (no validated reference range). null on results computed before GAS existed.
-  const rvPeakGas: number | null = (() => {
-    const vals = (rvStrainSeries?.frames ?? []).map((f) => f.global_rv_gas).filter((v): v is number => typeof v === "number");
-    return vals.length ? Math.min(...vals) : rvStrain?.global_rv_gas ?? null;
-  })();
+  const rvPeakGas: number | null = rvPeakGasOf(rvStrain, rvStrainSeries);
   const hasRealRvGas = rvPeakGas != null;
 
   const rvCards: { label: string; value: string; unit: string; indexed?: string; preview?: boolean }[] = [
@@ -753,6 +753,7 @@ export function InteractiveReport({
     { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL", indexed: indexedMlM2(rv?.RV_SV) },
     { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", preview: true },
     { label: "RV Peak Global Area Strain (RV GAS)", value: fmt(rvPeakGas), unit: "%", preview: true },
+    { label: "RV Peak Septal GCS (septal-side border)", value: fmt(rvPeakSeptalGcs(rvStrain, rvStrainSeries)), unit: "%", preview: true },
   ];
 
   // RV health status (graded by the backend). A stored result is shown only
@@ -801,15 +802,14 @@ export function InteractiveReport({
   const rvedvi = bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null;
   const rvesvi = bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null;
   const rvSvi = bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null;
-  // Placeholders: neither the RV regional-contraction classifier nor the GAS
-  // geometric module exist in this pipeline yet (see rvDiseasePattern.ts).
-  // `null` = "not yet assessed", deliberately not defaulted to true/false.
-  const rvRegionalAbnormalPlaceholder: boolean | null = null;
-  const rvGasAbnormalPlaceholder: boolean | null = null;
+  // RV GAS / regional area change are measured (9-segment RV bullseye) but
+  // have no validated abnormal cutoff, so they stay unscored (`null`) — the
+  // measured value is shown in the factor text instead (see rvDiseasePattern.ts).
   const rvDiseasePatterns = computeRvDiseasePatterns({
     rvedvi, rvesvi, rvef: rv?.RVEF ?? null, svi: rvSvi, sex: patientSex,
-    regionalContractionAbnormal: rvRegionalAbnormalPlaceholder,
-    gasAbnormal: rvGasAbnormalPlaceholder,
+    regionalContractionAbnormal: null,
+    gasAbnormal: null,
+    rvGasMeasured: rvGasMeasuredNote(rvStrain, rvStrainSeries),
   });
 
   // Qualitative confidence tier — same three bands the badge used to encode as
@@ -1247,7 +1247,7 @@ export function InteractiveReport({
                   if they were the normal range; those cutoffs overlap normal in
                   men and apply only with a regional wall-motion abnormality, so
                   they stay in the RV patterns card and on the reference page.
-                  Peak GCS/GAS are PREVIEW placeholders with NO colour zones —
+                  Peak GCS/GAS are real but PREVIEW-tagged, with NO colour zones —
                   no paper validates a normal range for either in this pipeline
                   yet. Advisory only — never affects the LV grade. */}
               {hasRv && (() => {
@@ -1408,10 +1408,9 @@ export function InteractiveReport({
                       verdict depends on sex. Indexing needs height and weight above. The ARVC criteria in the
                       RV patterns card below overlap this normal range in men (RVEDVI ≥ 110 mL/m² lies inside
                       47–116) and apply only with a regional RV wall-motion abnormality. Peak GCS and Peak GAS
-                      are both marked preview — GCS uses this pipeline's existing RV cavity-radius strain
-                      measure (real once RV strain has been run for this model), but neither strain has a
-                      clinically validated RV-specific reference range yet, and GAS itself has no computation
-                      in this pipeline at all.
+                      are both marked preview — both come from the 9-segment RV bullseye (real once RV strain
+                      has been run for this model), but neither has a clinically validated RV-specific
+                      reference range yet.
                       RV SV {fmt(rv?.RV_SV)} mL. Advisory only — RV findings never affect the LV grade above.
                     </p>
                     {rvCurrent && rvCurrent.warnings.length > 0 && (
@@ -1877,17 +1876,18 @@ export function InteractiveReport({
                   onSegmentClick={setSelectedSeg}
                   onSegmentHover={setHoverSeg}
                 />
-                {/* Continuous scale, matching the landmark-detection bullseye. */}
+                {/* Fixed scale (same ranges as every other strain chart). */}
                 <div className="mx-auto mt-2 max-w-[240px]">
                   <div
                     className="h-2 w-full rounded-full border border-border"
                     style={{ background: `linear-gradient(to right, ${STRAIN_GRADIENT.join(", ")})` }}
                   />
                   <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground">
-                    <span>Weaker</span>
-                    <span>Contraction</span>
-                    <span>Stronger</span>
+                    <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].worst}%</span>
+                    <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].label}</span>
+                    <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].best}%</span>
                   </div>
+                  <p className="mt-1 text-center text-[9.5px] leading-snug text-muted-foreground">{FIXED_SCALE_NOTE}</p>
                 </div>
               </div>
 
@@ -2055,6 +2055,7 @@ export function InteractiveReport({
                 showLv={false}
                 showRv={true}
                 rvRegions={rvShown.regions}
+                rvMetric={rvMetricType}
                 selectedRvRegion={selectedRvRegion}
                 onRvRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
                 // Match the LV Bullseye's own divider/label treatment above
@@ -2170,11 +2171,33 @@ export function InteractiveReport({
                 <span className="text-[10.5px] text-muted-foreground/70">· click a region or curve to focus</span>
               </div>
 
+              {/* RV septal GCS — septal-side border, one segment per ring,
+                  reported separately from the free-wall regions above. */}
+              {rvMetricType === "GCS" && rvStrain?.septal_regions?.length ? (
+                <div className="mt-3">
+                  <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Septal GCS (separate from free wall) · global {fmt(rvStrain.global_rv_septal_gcs ?? null)}%
+                  </span>
+                  <div className="mt-1.5 grid grid-cols-3 gap-2">
+                    {rvStrain.septal_regions.map((r) => (
+                      <div key={r.region} className="rounded-lg border border-border px-2.5 py-2">
+                        <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">{r.label}</span>
+                        <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
+                          {fmt(r.gcs)}
+                          <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               <p className="mt-3 text-[10px] leading-snug text-muted-foreground">
                 <span className="font-semibold text-foreground">Exploratory only.</span>{" "}
-                9 RV segments (basal / mid / apical × 3), rays cast from the LV centre. GCS is
+                9 RV free-wall segments (basal / mid / apical × 3), rays cast from the LV centre. GCS is
                 the % change in RV free-wall length and GAS the % change in RV cavity area
-                between end-diastole and end-systole — two separate measures, not combined, and
+                between end-diastole and end-systole; septal GCS is the same length measure on the
+                RV septal-side border, one segment per ring. Separate measures, not combined, and
                 not the validated longitudinal RV measure. Negative values mean contraction (the
                 healthy direction). No severity threshold is applied and this does not contribute
                 to any health-status grade.

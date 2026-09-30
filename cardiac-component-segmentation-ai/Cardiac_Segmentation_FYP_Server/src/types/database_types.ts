@@ -581,6 +581,16 @@ export interface IProjectSegmentationMask {
     global_rv_strain: number | null;
     global_rv_gcs?: number | null;
     global_rv_gas?: number | null;
+    /** RV septal GCS — septal-side border, one segment per ring, separate from the free wall. */
+    global_rv_septal_gcs?: number | null;
+    septal_regions?: {
+      region: number;
+      ring: string;
+      label: string;
+      gcs: number | null;
+      chord_ed_mm?: number | null;
+      chord_es_mm?: number | null;
+    }[];
     vox_xy_mm: number;
     alignment_source: string;
     alignment_angle_deg?: number | null;
@@ -647,12 +657,17 @@ export interface IProjectSegmentationMask {
       frameIndex: number;
       global_rv_strain: number | null;
       global_rv_gas?: number | null;
+      global_rv_septal_gcs?: number | null;
+      septal_regions?: { region: number; ring: string; label: string; gcs: number | null }[];
       regions: {
         region: number;
         label: string;
         strain: number | null;
         gas?: number | null;
         radius_mm?: number | null;
+        /** RV cavity area in this segment at this frame / at ED (mm²). */
+        area_mm2?: number | null;
+        area_ed_mm2?: number | null;
       }[];
     }[];
     edFrameIndex: number;

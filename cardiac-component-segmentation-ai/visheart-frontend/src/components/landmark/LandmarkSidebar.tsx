@@ -82,9 +82,8 @@ export interface StrainComputeBundle {
    *  one. Drives the Quick-scope "peak value only" view in the Strain tab. */
   quickLvResult: RealStrainResult | null;
   quickRvResult: RvStrainResult | null;
-  /** RV's own metric toggle (GCS/GAS) — GAS has no computation in the
-   *  pipeline at all, so selecting it must render as an explicit prototype
-   *  state, never fabricated values. */
+  /** RV's own metric toggle (GCS/GAS) — two separate RV metrics from the
+   *  9-segment RV bullseye (never combined). */
   rvMetricType: "GCS" | "GAS";
   onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
   /** Reports Full cycle's busy state up to the page, so the main panel can
@@ -1442,6 +1441,20 @@ function StrainTab({
     return [];
   }, [realRvSeries, realRvStrain, usingRealRvSeries, usingRealRvStrain, currentFrame, rvRegionValue]);
 
+  /** RV septal GCS per ring at the frame being viewed (same frame preference
+   *  as rvRegionValues) — separate from the free-wall regions, GCS only. */
+  const rvSeptalValues = useMemo(() => {
+    const toRows = (septal?: { region: number; label: string; gcs: number | null }[]) =>
+      (septal ?? []).map((r) => ({ segment: r.region, label: r.label, strain: r.gcs ?? 0, missing: r.gcs == null }));
+    if (realRvSeries?.frames?.length) {
+      const frame =
+        realRvSeries.frames.find((f) => f.frameIndex === currentFrame) ??
+        realRvSeries.frames.find((f) => f.frameIndex === realRvSeries.peakFrameIndex);
+      if (frame?.septal_regions?.length) return toRows(frame.septal_regions).filter((r) => !r.missing);
+    }
+    return toRows(realRvStrain?.septal_regions).filter((r) => !r.missing);
+  }, [realRvSeries, realRvStrain, currentFrame]);
+
   const rvCurrentAverage = rvRegionValues.length
     ? rvRegionValues.reduce((sum, r) => sum + r.strain, 0) / rvRegionValues.length
     : 0;
@@ -1683,6 +1696,7 @@ function StrainTab({
           rvCurveData={rvCurveData}
           rvCycleSeries={rvCycleSeries}
           rvRegionValues={rvRegionValues}
+          rvSeptalValues={rvSeptalValues}
           rvCurrentAverage={rvCurrentAverage}
           rvPeakValue={rvPeakValue}
           currentTime={currentTime}
@@ -1959,6 +1973,7 @@ function QuickCombinedStrainView({
           <div className="grid grid-cols-2 gap-2">
             <StrainMetricCard label="Peak GCS" value={fmtPct(rv.global_rv_strain)} strainType="GCS" valueNumber={rv.global_rv_strain ?? 0} loading={sc.isComputing} />
             <StrainMetricCard label="Peak GAS" value={fmtPct(rv.global_rv_gas ?? null)} strainType="GCS" valueNumber={rv.global_rv_gas ?? 0} loading={sc.isComputing} />
+            <StrainMetricCard label="Peak Septal GCS" value={fmtPct(rv.global_rv_septal_gcs ?? null)} strainType="GCS" valueNumber={rv.global_rv_septal_gcs ?? 0} loading={sc.isComputing} />
             <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value="—" />
             <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value="—" />
           </div>
@@ -2277,6 +2292,7 @@ function RvStrainPanel({
   rvCurveData,
   rvCycleSeries,
   rvRegionValues,
+  rvSeptalValues,
   currentTime,
   strainCompute,
 }: {
@@ -2285,6 +2301,7 @@ function RvStrainPanel({
   rvCurveData: { frame: number; time: number; strain: number }[];
   rvCycleSeries: { segment: number; label: string; strain: number }[][];
   rvRegionValues: { segment: number; label: string; strain: number }[];
+  rvSeptalValues: { segment: number; label: string; strain: number }[];
   rvCurrentAverage: number;
   rvPeakValue: number;
   currentTime: number;
@@ -2406,6 +2423,21 @@ function RvStrainPanel({
           <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
         )}
       </div>
+
+      {/* RV septal GCS — septal-side border, one segment per ring, reported
+          separately from the free-wall segments above (GCS only). */}
+      {!isGas && (
+        <div className="rounded-lg border border-border bg-background">
+          <div className="border-b border-border px-3 py-2">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Septal GCS — per ring</h4>
+          </div>
+          {rvSeptalValues.length ? (
+            <SegmentValuesTable segmentValues={rvSeptalValues} strainType="GCS" />
+          ) : (
+            <p className="p-3 text-[10px] text-muted-foreground">No RV septal GCS yet — recompute RV strain.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,11 +2,9 @@
  * exportResultsCsv — build a CSV of a project's stored analysis results and
  * trigger a download. Covers both segmentation models (UNet, MedSAM) so the
  * file is a complete record. Pulls stored values wherever they exist; missing
- * values are written as empty cells. The handful of prototype/placeholder
- * quantities the printed report also shows (RV GAS, RV disease-pattern
- * factors with no real classifier yet) are included too, so a CSV reader
- * doesn't need to cross-reference the PDF to know they exist — but every one
- * of them is labelled PROTOTYPE inline, never presented as a measured value.
+ * values are written as empty cells. RV GAS/FAC are real (9-segment RV
+ * bullseye) but have no validated reference range, so they are labelled
+ * PROTOTYPE inline, same as on the printed report.
  *
  * The CSV is sectioned (a blank line + a section header between blocks) rather
  * than one flat table, because the data is genuinely heterogeneous: scalar
@@ -17,13 +15,7 @@
 
 import type { MaskDoc, Model } from "@/hooks/useProjectResults";
 import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
-
-// No RV area-strain (GAS) computation exists anywhere in the pipeline yet —
-// same fixed placeholder the printed report shows (see report/page.tsx and
-// InteractiveReport.tsx), so the CSV states the same caveat instead of
-// silently omitting the metric a reader of the PDF would expect to also see
-// noted here.
-const RV_PEAK_GAS_PREVIEW = 28.7;
+import { rvGasMeasuredNote, rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 
 /** BSA/sex entered on the report screen — never persisted server-side, so
  *  this is the only way the export can know them. Optional: omit entirely
@@ -118,7 +110,10 @@ export function buildResultsCsv(
     // cavity-radius measure, not GRS/GCS — see rvStrain), so pull its global
     // value straight from the series peak, falling back to the single ED→ES
     // result. Not a "Peak" label to avoid implying it's GRS/GCS-comparable.
-    ["Global RV Strain", "%", (d) => d.rvStrainSeries?.peak_global_rv_strain ?? d.rvStrain?.global_rv_strain],
+    ["Global RV Strain (GCS, free wall) — PROTOTYPE, no validated range", "%", (d) => d.rvStrainSeries?.peak_global_rv_strain ?? d.rvStrain?.global_rv_strain],
+    ["RV Peak Septal GCS (septal-side border) — PROTOTYPE, no validated range", "%", (d) => rvPeakSeptalGcs(d.rvStrain, d.rvStrainSeries)],
+    ["RV Peak Global Area Strain (GAS) — PROTOTYPE, no validated range", "%", (d) => rvPeakGas(d.rvStrain, d.rvStrainSeries)],
+    ["RV FAC (short-axis MRI, = −GAS) — PROTOTYPE, not echo FAC", "%", (d) => rvPeakFac(d.rvStrain, d.rvStrainSeries)],
   ];
   for (const [label, unit, get] of measRows) {
     lines.push(row(label, unit, ...present.map((m) => {
@@ -126,11 +121,6 @@ export function buildResultsCsv(
       return typeof v === "number" ? v : null;
     })));
   }
-  // Prototype — no per-frame RV area-strain computation exists in this
-  // pipeline yet; same fixed placeholder the printed report shows, never a
-  // measured value. Always a flat row (not per-model) since it isn't derived
-  // from either mask document.
-  lines.push(row("RV Peak Global Area Strain (GAS) — PROTOTYPE, not computed", "%", ...present.map(() => RV_PEAK_GAS_PREVIEW)));
   lines.push("");
 
   // ── BSA-indexed volumes ─────────────────────────────────────────────────
@@ -238,15 +228,15 @@ export function buildResultsCsv(
     const patterns = computeRvDiseasePatterns({
       rvedvi, rvesvi, rvef: d.heartMetrics?.RVEF ?? null, svi,
       sex: sex ?? "unspecified",
-      // Neither the RV regional-contraction classifier nor the GAS geometric
-      // module exist in this pipeline yet — same placeholders the on-screen
-      // card and printed report use.
+      // Measured, but no validated cutoff — left unscored (null), same as the
+      // on-screen card and printed report; the measured value goes in the text.
       regionalContractionAbnormal: null,
       gasAbnormal: null,
+      rvGasMeasured: rvGasMeasuredNote(d.rvStrain, d.rvStrainSeries),
     });
     for (const p of patterns) {
       const factors = p.factors
-        .map((f) => `${f.detail}${f.status === "pending" ? " (PROTOTYPE — not assessed)" : ""}`)
+        .map((f) => `${f.detail}${f.status === "pending" ? " (PROTOTYPE — not scored)" : ""}`)
         .join(" | ");
       lines.push(row(MODEL_LABEL[m], p.label, p.score, factors));
     }
@@ -299,6 +289,19 @@ export function buildResultsCsv(
     for (const r of regions) {
       lines.push(row(MODEL_LABEL[m], r.region, r.label, r.gcs ?? r.strain, r.gas ?? null,
         r.chord_ed_mm ?? null, r.chord_es_mm ?? null, r.area_ed_mm2 ?? null, r.area_es_mm2 ?? null));
+    }
+  }
+  lines.push("");
+
+  // ── RV septal GCS (ED→ES) — septal-side border, one segment per ring,
+  // reported separately from the free-wall segments above.
+  lines.push(row("RV SEPTAL GCS — ED→ES (one septal segment per ring, separate from free wall)"));
+  lines.push(row("Model", "Ring", "Label", "RV Septal GCS %", "Chord ED (mm)", "Chord ES (mm)"));
+  for (const m of present) {
+    const septal = byModel[m]!.rvStrain?.septal_regions;
+    if (!septal?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
+    for (const r of septal) {
+      lines.push(row(MODEL_LABEL[m], r.ring, r.label, r.gcs, r.chord_ed_mm ?? null, r.chord_es_mm ?? null));
     }
   }
   lines.push("");

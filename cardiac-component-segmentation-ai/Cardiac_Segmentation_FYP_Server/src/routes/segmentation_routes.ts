@@ -1140,7 +1140,7 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile,   { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 logger.info(`${serviceLocation}: compute-strain-from-frames [${label}] seg JSON frames=${singleFrameMaskDoc.frames.length} frameindex=${singleFrameDoc.frameindex} dimsFrames=1`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
@@ -1456,7 +1456,7 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile,   { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
             } else {
@@ -1694,7 +1694,7 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
             } else {
@@ -1961,7 +1961,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
             } else {
@@ -2045,6 +2045,13 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                     frameIndex: frame.frameindex,
                     global_rv_strain: typeof r.data?.global_rv_strain === "number" ? r.data.global_rv_strain : null,
                     global_rv_gas: typeof r.data?.global_rv_gas === "number" ? r.data.global_rv_gas : null,
+                    global_rv_septal_gcs: typeof r.data?.global_rv_septal_gcs === "number" ? r.data.global_rv_septal_gcs : null,
+                    septal_regions: (r.data?.septal_regions ?? []).map((sr: any) => ({
+                        region: sr.region,
+                        ring: sr.ring,
+                        label: sr.label,
+                        gcs: sr.gcs ?? null,
+                    })),
                     regions: (r.data?.regions ?? []).map((reg: any) => ({
                         region: reg.region,
                         label: reg.label,
@@ -2052,6 +2059,8 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                         gas: reg.gas ?? null,
                         radius_mm: reg.radius_es_mm ?? null,
                         radius_ed_mm: reg.radius_ed_mm ?? null,
+                        area_mm2: reg.area_es_mm2 ?? null,
+                        area_ed_mm2: reg.area_ed_mm2 ?? null,
                     })),
                 };
             } catch (frameErr: any) {
@@ -2074,9 +2083,14 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             strain: 0,
             gas: 0,
             radius_mm: r.radius_ed_mm ?? null,
+            area_mm2: r.area_ed_mm2 ?? null,
+            area_ed_mm2: r.area_ed_mm2 ?? null,
         }));
         const series = [
-            { frameIndex: edFrameIndex, global_rv_strain: 0, global_rv_gas: 0, regions: edRegions },
+            {
+                frameIndex: edFrameIndex, global_rv_strain: 0, global_rv_gas: 0, global_rv_septal_gcs: 0, regions: edRegions,
+                septal_regions: (computed[0]?.septal_regions ?? []).map((sr: any) => ({ ...sr, gcs: 0 })),
+            },
             ...computed,
         ].sort((a, b) => a.frameIndex - b.frameIndex);
 

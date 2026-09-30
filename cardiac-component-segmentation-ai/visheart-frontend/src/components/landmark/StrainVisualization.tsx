@@ -1,5 +1,6 @@
 "use client";
 
+import { lvScaleKey, strainScaleFraction, strainScaleMinMax } from "@/lib/strainColorScale";
 import React, { useRef, useEffect, useCallback } from "react";
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -69,11 +70,18 @@ export interface RvStrainRegion {
   radius_es_mm?: number | null;
 }
 
+/** RV septal segment — septal-side border of the RV cavity, one per ring,
+ *  reported separately from the free-wall regions (cf. Tokodi et al. 2021). */
+export type RvSeptalRegion = { region: number; ring: string; label: string; gcs: number | null; chord_ed_mm?: number | null; chord_es_mm?: number | null };
+
 export interface RvStrainResult {
   regions: RvStrainRegion[];
   global_rv_strain: number | null;
   global_rv_gcs?: number | null;
   global_rv_gas?: number | null;
+  /** RV septal GCS (septal-side border), separate from the free-wall GCS above. */
+  global_rv_septal_gcs?: number | null;
+  septal_regions?: RvSeptalRegion[];
   vox_xy_mm: number;
   alignment_source: string;
   alignment_angle_deg?: number | null;
@@ -129,29 +137,10 @@ export function rdYlGn(t: number): string {
   return `#${toHex(r)}${toHex(g)}00`;
 }
 
+/** Text/swatch colour for a strain value on the shared FIXED scale
+ *  (lib/strainColorScale.ts) — same colour as the bullseye for that value. */
 export function getStrainColor(strain: number, strainType: StrainType): string {
-  if (strainType === "GRS") {
-    if (strain < 16) return "#dc2626";
-    if (strain < 24) return "#f97316";
-    if (strain < 30) return "#eab308";
-    if (strain < 38) return "#22c55e";
-    return "#15803d";
-  }
-  // GCS — negative is normal
-  if (strain > -13) return "#dc2626";
-  if (strain > -17) return "#f97316";
-  if (strain > -20) return "#eab308";
-  if (strain > -24) return "#22c55e";
-  return "#15803d";
-}
-
-// Returns a value 0–1 representing position on a colour scale for the whole dataset
-function strainNorm(strain: number, min: number, max: number, strainType: StrainType): number {
-  if (max === min) return 0.5;
-  // For GRS higher is better, for GCS more negative is better — normalise so "good" → high
-  return strainType === "GRS"
-    ? (strain - min) / (max - min)
-    : (max - strain) / (max - min);
+  return rdYlGn(strainScaleFraction(strain, lvScaleKey(strainType)));
 }
 
 // ── geometry helpers ──────────────────────────────────────────────────────────
@@ -276,16 +265,20 @@ interface ChartProps {
 
 export function StrainBullseyeChart({
   data, strainType, selectedSegment, onSegmentClick, onSegmentHover,
-  forcedMin, forcedMax, sharedMin, sharedMax, reverseColors = false,
+  forcedMin, forcedMax, sharedMin, sharedMax, reverseColors,
   alignmentAngleDeg,
 }: ChartProps) {
   const center = 150;
   const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
   const basalOuter = 108, basalInner = 81, midInner = 54, apicalInner = 28;
 
-  const values = data.map((d) => d.strain);
-  const colMin = sharedMin ?? forcedMin ?? Math.min(...values);
-  const colMax = sharedMax ?? forcedMax ?? Math.max(...values);
+  // No explicit range → the shared FIXED strain scale (never this patient's
+  // own min/max). Explicit ranges (e.g. wall thickness in mm) are unchanged.
+  const fixed = strainScaleMinMax(lvScaleKey(strainType));
+  const hasExplicitRange = sharedMin != null || forcedMin != null;
+  const colMin = sharedMin ?? forcedMin ?? fixed.min;
+  const colMax = sharedMax ?? forcedMax ?? fixed.max;
+  const reverse = reverseColors ?? (hasExplicitRange ? false : fixed.reverse);
 
   const val = (i: number) => data[i]?.strain ?? 0;
   const lbl = (i: number) => data[i]?.label ?? `Segment ${i + 1}`;
@@ -293,7 +286,7 @@ export function StrainBullseyeChart({
   const col = (i: number) => {
     const v = val(i);
     const t = colMin === colMax ? 0.5 : Math.max(0, Math.min(1, (v - colMin) / (colMax - colMin)));
-    return rdYlGn(reverseColors ? 1 - t : t);
+    return rdYlGn(reverse ? 1 - t : t);
   };
   const isSel = (seg1based: number) => selectedSegment === seg1based;
 
@@ -405,7 +398,7 @@ export function StrainBullseyeChart({
       {/* ── Colour scale bar ── */}
       <defs>
         <linearGradient id="strainBar" x1="0" x2="1" y1="0" y2="0">
-          {reverseColors ? (
+          {reverse ? (
             <>
               <stop offset="0%"   stopColor="#00ff00" />
               <stop offset="25%"  stopColor="#80ff00" />
@@ -432,254 +425,3 @@ export function StrainBullseyeChart({
     </svg>
   );
 }
-
-// ── StrainHeartProjection — anatomical 3D-style colour-synced SVG heart ──────
-
-interface HeartProps {
-  data: StrainSegmentData[];
-  strainType: StrainType;
-  selectedSegment?: number | null;
-  onSegmentClick?: (seg: number) => void;
-  frame?: number;
-  totalFrames?: number;
-}
-
-export function StrainHeartProjection({ data, strainType, selectedSegment, onSegmentClick, frame = 0, totalFrames = 1 }: HeartProps) {
-  const col = (i: number) => getStrainColor(data[i]?.strain ?? 0, strainType);
-  const isSel = (seg: number) => selectedSegment === seg;
-
-  // Heart-shaped outline with coloured zones matching AHA regions
-  // Uses an anterior view SAX approximation: concentric ellipses with colour bands
-  const cx = 130, cy = 155;
-  const phase = totalFrames > 1 ? frame / (totalFrames - 1) : 0;
-  const breathe = Math.sin(phase * Math.PI);
-
-  // Outer wall dimensions animate with cardiac cycle
-  const outerRx = 95 + breathe * 4;
-  const outerRy = 110 + breathe * 5;
-  const innerRx = 42 - breathe * 6;
-  const innerRy = 48 - breathe * 7;
-
-  // Segment wedge boundaries (8 outer, 6 mid, 4 inner — simplified to 3 rings + apex)
-  // We draw colour-coded arcs matching the 2D bullseye segments
-  // Outer ring = basal (6 sectors), mid ring, apical (4), apex center
-  const rings = [
-    { segs: 6, dataOffset: 0,  innerFx: 0.55, outerFx: 1.0,  innerFy: 0.54, outerFy: 1.0  },
-    { segs: 6, dataOffset: 6,  innerFx: 0.35, outerFx: 0.55, innerFy: 0.34, outerFy: 0.54 },
-    { segs: 4, dataOffset: 12, innerFx: 0.18, outerFx: 0.35, innerFy: 0.17, outerFy: 0.34 },
-  ];
-
-  return (
-    <svg viewBox="0 0 260 310" className="h-full w-full" role="img" aria-label={`${strainType} heart projection`}>
-      {/* Background */}
-      <ellipse cx={cx} cy={cy} rx={outerRx + 6} ry={outerRy + 8} className="fill-slate-100 dark:fill-zinc-800" />
-
-      {/* Coloured rings */}
-      {rings.map((ring, ri) => {
-        const iRx = outerRx * ring.innerFx, iRy = outerRy * ring.innerFy;
-        const oRx = outerRx * ring.outerFx, oRy = outerRy * ring.outerFy;
-        const n = ring.segs;
-        return Array.from({ length: n }, (_, si) => {
-          const seg1based = ring.dataOffset + si + 1;
-          const angleStep = 360 / n;
-          // CCW from top: same -120 - i*60 convention
-          const startDeg = ring.segs === 4
-            ? -135 - si * 90
-            : -120 - si * 60;
-          const endDeg = ring.segs === 4
-            ? -45 - si * 90
-            : -60 - si * 60;
-          const fill = col(ring.dataOffset + si);
-          const selected = isSel(seg1based);
-
-          const toEllipticPoint = (rx: number, ry: number, deg: number) => {
-            const a = (deg * Math.PI) / 180;
-            return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) };
-          };
-          const os = toEllipticPoint(oRx, oRy, startDeg);
-          const oe = toEllipticPoint(oRx, oRy, endDeg);
-          const ie = toEllipticPoint(iRx, iRy, endDeg);
-          const is_ = toEllipticPoint(iRx, iRy, startDeg);
-          const large = Math.abs(endDeg - startDeg) > 180 ? 1 : 0;
-          const path = [
-            `M ${os.x} ${os.y}`,
-            `A ${oRx} ${oRy} 0 ${large} 1 ${oe.x} ${oe.y}`,
-            `L ${ie.x} ${ie.y}`,
-            `A ${iRx} ${iRy} 0 ${large} 0 ${is_.x} ${is_.y}`,
-            "Z",
-          ].join(" ");
-
-          // Label at midpoint
-          const midDeg = (startDeg + endDeg) / 2;
-          const lRx = (oRx + iRx) / 2, lRy = (oRy + iRy) / 2;
-          const lp = toEllipticPoint(lRx, lRy, midDeg);
-
-          return (
-            <g key={`hr${ri}-${si}`}>
-              <path
-                d={path} fill={fill}
-                stroke={selected ? "white" : "rgba(0,0,0,0.2)"}
-                strokeWidth={selected ? 2.5 : 0.8}
-                style={{ transition: "fill 200ms ease", filter: selected ? "drop-shadow(0 0 4px rgba(255,255,255,0.8))" : undefined, cursor: onSegmentClick ? "pointer" : "default" }}
-                onClick={onSegmentClick ? () => onSegmentClick(seg1based) : undefined}
-              />
-              {ri < 2 && (
-                <text x={lp.x} y={lp.y + 4} textAnchor="middle" fontSize="8" fontWeight="600"
-                  fill="rgba(0,0,0,0.75)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.7))" }}>
-                  {seg1based}
-                </text>
-              )}
-            </g>
-          );
-        });
-      })}
-
-      {/* Apex centre */}
-      {(() => {
-        const apRx = outerRx * 0.18, apRy = outerRy * 0.17;
-        return (
-          <g>
-            <ellipse cx={cx} cy={cy} rx={apRx} ry={apRy}
-              fill={col(16)}
-              stroke={isSel(17) ? "white" : "rgba(0,0,0,0.2)"}
-              strokeWidth={isSel(17) ? 2.5 : 0.8}
-              style={{ transition: "fill 200ms ease", cursor: onSegmentClick ? "pointer" : "default" }}
-              onClick={onSegmentClick ? () => onSegmentClick(17) : undefined}
-            />
-            <text x={cx} y={cy + 4} textAnchor="middle" fontSize="8" fontWeight="600"
-              fill="rgba(0,0,0,0.75)" style={{ pointerEvents: "none" }}>17</text>
-          </g>
-        );
-      })()}
-
-      {/* LV cavity ring */}
-      <ellipse cx={cx} cy={cy} rx={outerRx * 0.12} ry={outerRy * 0.11}
-        className="fill-slate-900/60 dark:fill-zinc-950/80" />
-
-      {/* Outer border */}
-      <ellipse cx={cx} cy={cy} rx={outerRx} ry={outerRy}
-        fill="none" stroke="rgba(0,0,0,0.25)" strokeWidth="1.5" />
-
-      {/* Apex pointer */}
-      <text x={cx} y={cy + outerRy + 16} textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor" opacity="0.6">Apex</text>
-      <text x={cx} y={cy - outerRy - 8} textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor" opacity="0.6">Base</text>
-
-      {/* Frame indicator */}
-      {totalFrames > 1 && (
-        <text x="248" y="16" textAnchor="end" fontSize="8" fill="currentColor" opacity="0.5">
-          {frame + 1}/{totalFrames}
-        </text>
-      )}
-
-      {/* Legend: selected segment callout */}
-      {selectedSegment && selectedSegment >= 1 && selectedSegment <= 17 && (() => {
-        const sv = data[selectedSegment - 1];
-        if (!sv) return null;
-        return (
-          <g>
-            <rect x="4" y="280" width="252" height="22" rx="4"
-              className="fill-background/90 dark:fill-zinc-900/90" stroke="rgba(0,0,0,0.1)" strokeWidth="1" />
-            <text x="12" y="295" fontSize="9" fontWeight="600" fill="currentColor" opacity="0.9">
-              {sv.label}: {sv.strain > 0 ? "+" : ""}{sv.strain.toFixed(1)}%
-            </text>
-          </g>
-        );
-      })()}
-    </svg>
-  );
-}
-
-// ── StrainBullseye — legacy full-panel component (kept for backwards compat) ──
-
-interface StrainVisualizationProps {
-  segmentData?: StrainSegmentData[];
-  realStrainData?: RealStrainResult | null;
-  selectedStrainType?: StrainType;
-  frame?: number;
-  totalFrames?: number;
-  compact?: boolean;
-  selectedSegment?: number | null;
-  onSelectSegment?: (segment: number) => void;
-}
-
-export const StrainBullseye: React.FC<StrainVisualizationProps> = ({
-  segmentData, realStrainData, selectedStrainType = "GCS",
-  frame = 0, totalFrames = 10, compact = false, selectedSegment, onSelectSegment,
-}) => {
-  const data: StrainSegmentData[] = realStrainData
-    ? realStrainData.segments.map((s) => ({
-        segment: s.segment, label: s.label,
-        strain: selectedStrainType === "GRS" ? (s.grs ?? 0) : (s.gcs ?? 0),
-      }))
-    : (segmentData ?? getDummyStrainData(selectedStrainType, frame, totalFrames));
-
-  const resetRef = useRef<(() => void) | null>(null);
-  const [tooltip, setTooltip] = React.useState<{ x: number; y: number; label: string; value: number } | null>(null);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col p-2 gap-1">
-      <div className="flex items-center justify-between flex-shrink-0">
-        <p className="text-[8px] text-muted-foreground/60">Scroll to zoom · drag to pan</p>
-        <button type="button" onClick={() => resetRef.current?.()}
-          className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors">
-          Reset View
-        </button>
-      </div>
-      <ZoomPanContainer className="min-h-0 flex-1 w-full" onResetRef={(fn) => { resetRef.current = fn; }}>
-        <StrainBullseyeChart
-          data={data} strainType={selectedStrainType}
-          selectedSegment={selectedSegment}
-          onSegmentClick={onSelectSegment}
-          onSegmentHover={setTooltip}
-          alignmentAngleDeg={realStrainData?.alignment_angle_deg}
-        />
-      </ZoomPanContainer>
-      {tooltip && (
-        <div className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
-          style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}>
-          <div className="font-semibold">{tooltip.label}</div>
-          <div>{tooltip.value > 0 ? "+" : ""}{tooltip.value.toFixed(1)}%</div>
-        </div>
-      )}
-      <div className="flex flex-wrap items-center justify-center gap-2 text-[10px] text-muted-foreground flex-shrink-0 mt-1">
-        {[["#15803d","Excellent"],["#22c55e","Good"],["#eab308","Fair"],["#f97316","Reduced"],["#dc2626","Poor"]].map(([color, label]) => (
-          <span key={label} className="inline-flex items-center gap-1">
-            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: color }} />
-            {label}
-          </span>
-        ))}
-      </div>
-      {!compact && (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <div className="bg-muted/30 p-2">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wide">Per-Segment {selectedStrainType} Values</h3>
-          </div>
-          <div className="max-h-48 overflow-y-auto">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 border-b border-border bg-background">
-                <tr>
-                  <th className="px-3 py-2 text-left">#</th>
-                  <th className="px-3 py-2 text-left">Segment</th>
-                  <th className="px-3 py-2 text-right">{selectedStrainType} (%)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {data.map((item) => (
-                  <tr key={item.segment} className="hover:bg-muted/40">
-                    <td className="px-3 py-2 text-muted-foreground">{item.segment}</td>
-                    <td className="px-3 py-2">{item.label}</td>
-                    <td className="px-3 py-2 text-right font-mono" style={{ color: getStrainColor(item.strain, selectedStrainType) }}>
-                      {item.strain > 0 ? "+" : ""}{item.strain.toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default StrainBullseye;

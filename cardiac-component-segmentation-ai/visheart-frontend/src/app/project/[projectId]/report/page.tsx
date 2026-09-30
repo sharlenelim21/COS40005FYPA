@@ -23,6 +23,7 @@ import type { RvDiseasePatternInputs, Sex } from "@/lib/rvDiseasePattern";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
 import { downloadResultsCsv } from "@/lib/exportResultsCsv";
+import { rvEdEsFac, rvFacSeries, rvGasMeasuredNote, rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle } from "lucide-react";
 
 // The printed report follows the approved mockup's 9-section structure, but
@@ -30,11 +31,6 @@ import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle } from "lucide-rea
 // strain, RV cavity volume, MRI overlay) now render as many physical A4
 // sheets as their per-frame data needs — see each page's own `*PageCount`
 // helper — so the running page numbering below is computed, not hardcoded.
-
-// No RV area-strain (GAS) computation exists anywhere in the pipeline yet —
-// same fixed preview constant InteractiveReport.tsx uses on screen, so the
-// print and screen views never disagree about what the placeholder says.
-const RV_PEAK_GAS_PREVIEW = 28.7;
 
 // Source Sans 3 — designed for documents/UI at small sizes, noticeably more
 // legible than the app's unstyled system-font fallback once printed. Scoped
@@ -160,8 +156,12 @@ export default function ReportPage() {
     ? `${projectData.voxelsize.x.toFixed(2)} × ${projectData.voxelsize.y.toFixed(2)} × ${(projectData.voxelsize.z ?? 0).toFixed(2)} mm`
     : "—";
 
-  // ── RV strain reads (real, radius-based cavity-boundary measure) ───────────
+  // ── RV strain reads (9-segment RV bullseye; GCS and GAS kept separate) ────
   const rvPeakGcs = rvStrainSeries?.peak_global_rv_strain ?? rvStrain?.global_rv_strain ?? null;
+  const rvPeakGasValue = rvPeakGas(rvStrain, rvStrainSeries);
+  const rvPeakFacValue = rvPeakFac(rvStrain, rvStrainSeries);
+  const rvEdEsFacValues = rvEdEsFac(rvStrain);
+  const rvFacFrames = rvFacSeries(rvStrainSeries);
 
   // ── Wall thickness ED frame / ED→ES/mid frames (page 3) ─────────────────────
   const edFrame = doc?.heartMetrics?.ed_frame ?? null;
@@ -188,10 +188,13 @@ export default function ReportPage() {
   };
   const lvGrsFrames = sortedLvFrames.map((f) => ({ frameIndex: f.frameIndex, values: toSegmentValues(f.segments, "grs") }));
   const lvGcsFrames = sortedLvFrames.map((f) => ({ frameIndex: f.frameIndex, values: toSegmentValues(f.segments, "gcs") }));
-  const rvGcsFrames = sortedRvFrames.map((f) => {
-    const byRegion = new Map(f.regions.map((r) => [r.region, r.strain]));
-    return { frameIndex: f.frameIndex, values: Array.from({ length: 6 }, (_, i) => byRegion.get(i + 1) ?? null) };
-  });
+  const rvRegionFrames = (pick: (r: { strain: number | null; gas?: number | null }) => number | null | undefined) =>
+    sortedRvFrames.map((f) => {
+      const byRegion = new Map(f.regions.map((r) => [r.region, pick(r) ?? null]));
+      return { frameIndex: f.frameIndex, values: Array.from({ length: 9 }, (_, i) => byRegion.get(i + 1) ?? null) };
+    });
+  const rvGcsFrames = rvRegionFrames((r) => r.strain);
+  const rvGasFrames = rvRegionFrames((r) => r.gas);
 
   // ── Full-cycle values, joined by ACTUAL frame index (page 4) ────────────────
   // LV and RV strain can be computed over different frame subsets, so this is
@@ -208,6 +211,8 @@ export default function ReportPage() {
     lvGrs: lvByFrameIndex.get(frameIndex)?.global_grs ?? null,
     lvGcs: lvByFrameIndex.get(frameIndex)?.global_gcs ?? null,
     rvGcs: rvByFrameIndex.get(frameIndex)?.global_rv_strain ?? null,
+    rvGas: rvByFrameIndex.get(frameIndex)?.global_rv_gas ?? null,
+    rvSeptalGcs: rvByFrameIndex.get(frameIndex)?.global_rv_septal_gcs ?? null,
   }));
 
   // ── RV disease-pattern inputs (page 7) ──────────────────────────────────────
@@ -221,8 +226,10 @@ export default function ReportPage() {
     rvef: rv?.RVEF ?? null,
     svi: bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null,
     sex: patientSex,
+    // Measured but no validated cutoff — unscored; value shown in the text.
     regionalContractionAbnormal: null,
     gasAbnormal: null,
+    rvGasMeasured: rvGasMeasuredNote(rvStrain, rvStrainSeries),
   };
 
   // A stored RV health status result is shown only when it was graded for the
@@ -257,7 +264,7 @@ export default function ReportPage() {
   // own per-frame data needs (see each page's `*PageCount` helper) instead of
   // a fixed literal, since frame counts vary per project (and per how many
   // frames the user chose to compute strain for).
-  const wtCyclePages = wallThicknessCyclePageCount(wtFrames.length);
+  const wtCyclePages = wallThicknessCyclePageCount(wtFrames.length, rvFacFrames.length);
   const strainPages = strainAnalysisPageCount(strainRows.length);
   const lvRegionalPages = lvRegionalStrainPageCount(Math.max(lvGrsFrames.length, lvGcsFrames.length));
   const rvRegionalPages = rvRegionalStrainPageCount(rvGcsFrames.length);
@@ -403,7 +410,8 @@ export default function ReportPage() {
               rvEsv={rv?.RVESV ?? null}
               rvSv={rv?.RV_SV ?? null}
               rvPeakGcs={rvPeakGcs}
-              rvPeakGasPreview={RV_PEAK_GAS_PREVIEW}
+              rvPeakGas={rvPeakGasValue}
+              rvFac={rvPeakFacValue}
               healthStatusText={healthStatus?.status ?? null}
               rvHealthStatusText={rvHealthCurrent?.status ?? null}
               phenotypeHeadline={similarity?.phenotype_headline ?? null}
@@ -427,6 +435,7 @@ export default function ReportPage() {
               rvEsv={rv?.RVESV ?? null}
               rvEf={rv?.RVEF ?? null}
               rvSv={rv?.RV_SV ?? null}
+              rvFac={rvPeakFacValue}
               rvHealthStatus={rvHealthCurrent}
             />
             <WallThicknessCavityAreaPage
@@ -436,6 +445,9 @@ export default function ReportPage() {
               generatedAt={generatedAt}
               edWallThicknessMm={doc?.bullseye?.segment_values}
               edFrameIndex={edFrame}
+              rvFacRings={rvEdEsFacValues.rings}
+              rvFacGlobal={rvEdEsFacValues.global}
+              rvEsFrameIndex={rvStrain?.esFrameIndex ?? null}
             />
             <WallThicknessCyclePage
               patientLabel={patientLabel}
@@ -443,6 +455,7 @@ export default function ReportPage() {
               totalPages={totalPages}
               generatedAt={generatedAt}
               frames={wtFrames}
+              rvFacFrames={rvFacFrames}
               edFrameIndex={edFrame}
               esFrameIndex={esFrame}
             />
@@ -454,7 +467,8 @@ export default function ReportPage() {
               lvPeakGrs={measurements?.PeakGRS ?? null}
               lvPeakGcs={measurements?.PeakGCS ?? null}
               rvPeakGcs={rvPeakGcs}
-              rvPeakGasPreview={RV_PEAK_GAS_PREVIEW}
+              rvPeakGas={rvPeakGasValue}
+              rvPeakSeptalGcs={rvPeakSeptalGcs(rvStrain, rvStrainSeries)}
               rows={strainRows}
             />
             <LvRegionalStrainPage
@@ -473,6 +487,7 @@ export default function ReportPage() {
               totalPages={totalPages}
               generatedAt={generatedAt}
               gcsFrames={rvGcsFrames}
+              gasFrames={rvGasFrames}
               edFrameIndex={edFrame}
               esFrameIndex={esFrame}
             />

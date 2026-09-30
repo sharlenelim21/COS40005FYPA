@@ -24,7 +24,7 @@ function DataTable({ rows }: { rows: { label: string; value: string; unit: strin
           <tr key={r.label} className={r.preview ? "bg-amber-50" : undefined}>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-gray-900">
               {r.label}
-              {r.preview && <span className="ml-1.5 text-[8px] font-bold uppercase tracking-wide text-amber-600">coming soon — prototype</span>}
+              {r.preview && <span className="ml-1.5 text-[8px] font-bold uppercase tracking-wide text-amber-600">prototype</span>}
             </td>
             <td className={`border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono ${r.preview ? "text-gray-600" : "text-gray-900"}`}>{r.value}</td>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">{r.unit}</td>
@@ -42,7 +42,7 @@ export function HeartMetricsPage({
   generatedAt,
   bsaM2, heightCm, weightKg,
   edv, esv, ef, strokeVolume, lvMassG, maxWallThicknessMm,
-  rvEdv, rvEsv, rvEf, rvSv,
+  rvEdv, rvEsv, rvEf, rvSv, rvFac,
   rvHealthStatus,
 }: {
   patientLabel: string;
@@ -53,6 +53,8 @@ export function HeartMetricsPage({
   edv: number | null; esv: number | null; ef: number | null; strokeVolume: number | null;
   lvMassG: number | null; maxWallThicknessMm: number | null;
   rvEdv: number | null; rvEsv: number | null; rvEf: number | null; rvSv: number | null;
+  /** Short-axis MRI FAC (= −peak RV GAS, 9-segment RV bullseye) — not the echo 4-chamber FAC. */
+  rvFac: number | null;
   /** Null when nothing has been graded yet for the sex/BSA currently on this
    *  page (see report/page.tsx's matching rule) — rendered as "not graded"
    *  rather than omitted, so the report's structure stays identical whether
@@ -81,7 +83,7 @@ export function HeartMetricsPage({
     { label: "RVEDVI", value: fmt(idx(rvEdv)), unit: "mL/m²" },
     { label: "RVESVI", value: fmt(idx(rvEsv)), unit: "mL/m²" },
     { label: "RV SVI", value: fmt(idx(rvSv)), unit: "mL/m²" },
-    { label: "RV FAC", value: "—", unit: "%", preview: true },
+    { label: "RV FAC (short-axis MRI)", value: fmt(rvFac), unit: "%", preview: true },
   ];
 
   return (
@@ -164,9 +166,9 @@ export function HeartMetricsPage({
       </div>
 
       <p className="mt-3 text-[8.5px] leading-snug text-gray-600">
-        RV FAC has no computation anywhere in the current pipeline (no area-per-frame calculation exists) — coming
-        soon, currently a prototype — shown rather than omitted, so the report&apos;s structure stays identical for
-        both chambers.
+        RV FAC here is the short-axis MRI fractional area change (= −peak RV GAS from the 9-segment RV bullseye),
+        not the echocardiographic 4-chamber FAC, so the echo cutoff (≈35%) does not apply. Prototype — no validated
+        reference range.
       </p>
     </ReportPageFrame>
   );

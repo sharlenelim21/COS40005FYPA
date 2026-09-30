@@ -19,7 +19,8 @@ POST /bullseye/compute-strain
 
 POST /bullseye/compute-rv-strain
     Accepts ED and ES NIfTI files + optional RV insertion points.
-    Returns GCS and GAS (separate, not combined) per RV segment (basal/mid/apical x 3).
+    Returns GCS and GAS (separate, not combined) per RV free-wall segment
+    (basal/mid/apical x 3), plus RV septal GCS per ring (septal_regions).
 
 Both analyze endpoints return the same BullseyeAnalysisResult schema.
 """
@@ -556,10 +557,30 @@ def _compute_rv_strain_sync(
 
     global_rv_gcs = _global(valid_chord)
 
+    # RV septal GCS — one septal segment per ring, kept separate from the
+    # free-wall `regions` above (free-wall GCS stays the main RV value).
+    septal_regions = []
+    valid_septal: list[tuple[float, float]] = []
+    for i, meta in enumerate(res_ed["septal_metadata"]):
+        s_ed, s_es = _opt(res_ed["septal_chord"], i), _opt(res_es["septal_chord"], i)
+        s_gcs = _pct(s_ed, s_es)
+        if s_gcs is not None:
+            valid_septal.append((s_ed, s_es))
+        septal_regions.append({
+            "region":      meta["idx"],
+            "ring":        meta["ring"],
+            "label":       meta["label"],
+            "gcs":         s_gcs,
+            "chord_ed_mm": _mm(s_ed, vox_xy),
+            "chord_es_mm": _mm(s_es, vox_xy),
+        })
+
     return {
         "regions":             regions,
+        "septal_regions":      septal_regions,
         "global_rv_strain":    global_rv_gcs,
         "global_rv_gcs":       global_rv_gcs,
+        "global_rv_septal_gcs": _global(valid_septal),
         "global_rv_gas":       _global(valid_area),
         "vox_xy_mm":           vox_xy,
         "alignment_source":    res_ed.get("alignment_source", "fixed-angle"),

@@ -72,6 +72,21 @@ def create_nifti_with_stored_affine(segmentations_json_path, output_nifti_path,
             raise ValueError(
                 f"Invalid affine matrix shape: {affine.shape}. Expected (4, 4).")
 
+        # Optional: re-apply the real voxel spacing. Some source files (e.g.
+        # ACDC *_4d.nii.gz) carry an affine with unit (±1) axes while the true
+        # spacing only lives in pixdim, so the stored affineMatrix has no
+        # spacing and the NIfTI built from it reports 1 mm pixels. When the
+        # caller passes dimensions["voxelsize"] (the project's stored pixdim),
+        # keep the affine's axis directions but scale each axis to that spacing.
+        # Opt-in so callers that rely on the stored affine as-is are unchanged.
+        voxelsize = dimensions.get('voxelsize') or {}
+        spacing = [voxelsize.get(k) for k in ('x', 'y', 'z')]
+        if all(isinstance(v, (int, float)) and v > 0 for v in spacing):
+            for axis, size in enumerate(spacing):
+                norm = np.linalg.norm(affine[:3, axis])
+                if norm > 0:
+                    affine[:3, axis] = affine[:3, axis] / norm * float(size)
+
         # Extract dimensions
         img_width = dimensions.get('width', 0)
         img_height = dimensions.get('height', 0)

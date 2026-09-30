@@ -1,5 +1,6 @@
 "use client";
 
+import { strainScaleMinMax } from "@/lib/strainColorScale";
 import React from "react";
 import { rdYlGn, polarPoint, annularSectorPath } from "./StrainVisualization";
 import type { RvStrainRegion } from "./StrainVisualization";
@@ -37,9 +38,8 @@ export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegion
   const sectorDeg = 360 / nSectors;
   const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
 
-  const values = regions.map((r) => r.strain).filter((v): v is number => v != null);
-  const colMin = values.length ? Math.min(...values) : -20;
-  const colMax = values.length ? Math.max(...values) : 0;
+  // Fixed RV GCS colour scale (lib/strainColorScale.ts), not this patient's min/max.
+  const { min: colMin, max: colMax } = strainScaleMinMax("RV_GCS");
 
   const val = (i: number) => regions[i]?.strain ?? null;
   const lbl = (i: number) => regions[i]?.label ?? `Region ${i + 1}`;

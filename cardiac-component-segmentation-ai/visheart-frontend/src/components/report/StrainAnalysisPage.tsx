@@ -50,7 +50,7 @@ function LineChart({
   );
 }
 
-export type StrainAnalysisRow = { frameIndex: number; lvGrs: number | null; lvGcs: number | null; rvGcs: number | null };
+export type StrainAnalysisRow = { frameIndex: number; lvGrs: number | null; lvGcs: number | null; rvGcs: number | null; rvGas: number | null; rvSeptalGcs: number | null };
 
 export function StrainAnalysisPage({
   patientLabel,
@@ -60,7 +60,8 @@ export function StrainAnalysisPage({
   lvPeakGrs,
   lvPeakGcs,
   rvPeakGcs,
-  rvPeakGasPreview,
+  rvPeakGas,
+  rvPeakSeptalGcs,
   rows,
 }: {
   patientLabel: string;
@@ -69,10 +70,12 @@ export function StrainAnalysisPage({
   generatedAt: string;
   lvPeakGrs: number | null;
   lvPeakGcs: number | null;
-  /** Real (radius-based cavity-boundary measure), unvalidated reference range. */
+  /** RV free-wall length strain (9-segment RV bullseye), unvalidated reference range. */
   rvPeakGcs: number | null;
-  /** No RV area-strain computation exists anywhere yet — fixed preview constant. */
-  rvPeakGasPreview: number;
+  /** RV cavity-area strain (9-segment RV bullseye), unvalidated reference range. */
+  rvPeakGas: number | null;
+  /** RV septal-side border length strain, one segment per ring — separate from the free wall. */
+  rvPeakSeptalGcs: number | null;
   /** One row per ACTUAL computed frame index, already joined across the LV
    *  and RV series (which may cover different frame subsets) — never assumed
    *  to be a dense 0..N-1 range. Sorted by frameIndex. */
@@ -82,8 +85,10 @@ export function StrainAnalysisPage({
   const lvGcsByFrame = rows.map((r) => r.lvGcs);
   const rvGcsByFrame = rows.map((r) => r.rvGcs);
   const hasLvSeries = rows.some((r) => r.lvGrs !== null || r.lvGcs !== null);
-  const hasRvSeries = rows.some((r) => r.rvGcs !== null);
-  const rvGasFlatLine = rows.map(() => 0);
+  const rvGasByFrame = rows.map((r) => r.rvGas);
+  const hasRvSeries = rows.some((r) => r.rvGcs !== null || r.rvGas !== null);
+  const rvValues = rows.flatMap((r) => [r.rvGcs, r.rvGas]).filter((v): v is number => v !== null);
+  const rvLo = Math.min(-45, Math.floor((rvValues.length ? Math.min(...rvValues) : 0) / 5) * 5 - 5);
   const rowChunks = chunk(rows, FRAMES_PER_TABLE_PAGE);
 
   return (
@@ -118,13 +123,20 @@ export function StrainAnalysisPage({
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-gray-900">RV</td>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">n/a</td>
             <td className="border-b border-gray-300/60 bg-amber-50 px-2.5 py-1.5 text-right font-mono italic text-amber-800">{fmt(rvPeakGcs)}%¹</td>
-            <td className="border-b border-gray-300/60 bg-amber-50 px-2.5 py-1.5 text-right font-mono italic text-amber-800">{rvPeakGasPreview.toFixed(1)}%¹</td>
+            <td className="border-b border-gray-300/60 bg-amber-50 px-2.5 py-1.5 text-right font-mono italic text-amber-800">{fmt(rvPeakGas)}%¹</td>
+          </tr>
+          <tr>
+            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-gray-900">RV septum</td>
+            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">n/a</td>
+            <td className="border-b border-gray-300/60 bg-amber-50 px-2.5 py-1.5 text-right font-mono italic text-amber-800">{fmt(rvPeakSeptalGcs)}%¹</td>
+            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">n/a</td>
           </tr>
         </tbody>
       </table>
       <p className="mb-3 text-[8.5px] leading-snug text-gray-600">
-        ¹ Prototype — RV GCS and RV GAS have no published reference range and are not yet clinically validated,
-        so both are shown as placeholders rather than reported values.
+        ¹ Prototype — RV GCS (% change in free-wall length), RV GAS (% change in cavity area) and RV septal GCS
+        (% change in the RV septal-side border length, one segment per ring) are measured from the RV bullseye and
+        reported separately, but have no published reference range and are not clinically validated.
       </p>
 
       <h3 className="mb-1.5 text-[14px] font-extrabold text-gray-900">Full-Cycle Strain</h3>
@@ -154,12 +166,12 @@ export function StrainAnalysisPage({
           </p>
           <div className="mb-1 flex gap-3 text-[9px] text-gray-600">
             <span className="flex items-center gap-1"><span className="h-0.5 w-3 border-b-2 border-dotted border-[#a6852f]" />RV GCS¹</span>
-            <span className="flex items-center gap-1 italic"><span className="h-0.5 w-3 bg-gray-400" />RV GAS²</span>
+            <span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-[#7c3aed]" />RV GAS¹</span>
           </div>
           {hasRvSeries ? (
-            <LineChart lo={-45} hi={10} curves={[
+            <LineChart lo={rvLo} hi={10} curves={[
               { points: rvGcsByFrame ?? [], color: "#a6852f", dashed: true },
-              { points: rvGasFlatLine, color: "#9aa4b1", dashed: true },
+              { points: rvGasByFrame, color: "#7c3aed" },
             ]} />
           ) : (
             <p className="py-10 text-center text-[9.5px] text-gray-600">Not computed — run RV strain from the Strain tab.</p>
@@ -167,8 +179,7 @@ export function StrainAnalysisPage({
         </div>
       </div>
       <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
-        ¹ Prototype — real per-frame data, but no published reference range, so not clinically validated. ²
-        Prototype — no per-frame GAS computation exists; the flat line is a placeholder, not a measurement.
+        ¹ Prototype — real per-frame data, but no published reference range, so not clinically validated.
       </p>
     </ReportPageFrame>
 
@@ -190,7 +201,8 @@ export function StrainAnalysisPage({
               <th className="border-b border-gray-300 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">LV GRS</th>
               <th className="border-b border-gray-300 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">LV GCS</th>
               <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GCS¹ · Prototype</th>
-              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GAS² · Prototype</th>
+              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GAS¹ · Prototype</th>
+              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV Septal GCS¹</th>
             </tr>
           </thead>
           <tbody>
@@ -200,16 +212,16 @@ export function StrainAnalysisPage({
                 <td className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(r.lvGrs)}</td>
                 <td className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(r.lvGcs)}</td>
                 <td className="border-b border-gray-300/60 bg-amber-50 px-2 py-0.5 text-right font-mono italic text-amber-800">{fmt(r.rvGcs)}</td>
-                <td className="border-b border-gray-300/60 bg-amber-50 px-2 py-0.5 text-right font-mono italic text-amber-800">0.0</td>
+                <td className="border-b border-gray-300/60 bg-amber-50 px-2 py-0.5 text-right font-mono italic text-amber-800">{fmt(r.rvGas)}</td>
+                <td className="border-b border-gray-300/60 bg-amber-50 px-2 py-0.5 text-right font-mono italic text-amber-800">{fmt(r.rvSeptalGcs)}</td>
               </tr>
             ))}
           </tbody>
         </table>
         {ci === rowChunks.length - 1 && (
           <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
-            ¹ Prototype — real per-frame data, but no published reference range, so not clinically validated.
-            ² Prototype — no per-frame GAS computation exists; every row is the same placeholder constant, not a
-            measurement.
+            ¹ Prototype — real per-frame data (9-segment RV bullseye), but no published reference range, so not
+            clinically validated.
           </p>
         )}
       </ReportPageFrame>

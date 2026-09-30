@@ -519,6 +519,13 @@ def group_inner_radii(inner_radii: np.ndarray, ring_type: str) -> np.ndarray:
 _RV_RINGS: tuple[str, ...] = ("basal", "mid", "apical")
 _RV_SECTIONS = 3
 _MIN_RV_PIXELS = 30
+_RV_RAY_STEP_PX = 0.25        # sub-pixel sampling along each RV ray
+_RV_SMOOTH_HALF_WINDOW = 3    # boundary-radius smoothing over ±3 rays (±3°)
+# GCS chord-sum robustness (see _robust_arc_length):
+_RV_ARC_TRIM_FRAC = 0.05      # leave this fraction of the arc's rays out at EACH end ...
+_RV_ARC_TRIM_MIN_RAYS = 5     # ... but at least this many rays per end
+_RV_LONG_CHORD_FACTOR = 3.0   # chord > factor × section median chord = bridging chord
+_RV_MIN_VALID_CHORD_FRAC = 0.5  # fewer valid chords than this → length unreliable (NaN)
 
 
 def classify_rv_slices(
@@ -592,7 +599,7 @@ def ray_cast_rv_hits(
     max_r = max(H, W)
 
     angles = start_angle_rad - np.linspace(0.0, 2.0 * np.pi, n_rays, endpoint=False)
-    rs = np.arange(1, max_r)
+    rs = np.arange(_RV_RAY_STEP_PX, max_r, _RV_RAY_STEP_PX)
     xs = (cx + rs[None, :] * np.cos(angles)[:, None]).astype(int)
     ys = (cy + rs[None, :] * np.sin(angles)[:, None]).astype(int)
 
@@ -608,10 +615,41 @@ def ray_cast_rv_hits(
     after_run = ~hit & (np.arange(len(rs))[None, :] >= first[:, None])
     last = np.where(after_run.any(axis=1), np.argmax(after_run, axis=1) - 1, len(rs) - 1)
 
+    # With 1°-spaced rays, neighbouring boundary points are only ~0.5-1 px
+    # apart, while the mask's own edge is a 1-px staircase. Taken raw, each
+    # point jumps in/out by up to a pixel and the chord sum measures that
+    # jagged edge — inflating lengths by 20-50% and biasing strain toward 0.
+    # So: sample the ray at sub-pixel steps, then smooth each boundary's
+    # radius over neighbouring rays (±_RV_SMOOTH_HALF_WINDOW) before placing
+    # the points on their ray. Which rays hit the RV is unchanged.
+    r_in = np.full(n_rays, np.nan)
+    r_out = np.full(n_rays, np.nan)
     rows = np.flatnonzero(any_hit)
-    inner_pts[rows] = np.stack([xs[rows, first[rows]], ys[rows, first[rows]]], axis=1)
-    outer_pts[rows] = np.stack([xs[rows, last[rows]], ys[rows, last[rows]]], axis=1)
+    r_in[rows] = rs[first[rows]]
+    r_out[rows] = rs[last[rows]]
+    r_in, r_out = _smooth_circular(r_in), _smooth_circular(r_out)
+
+    cos_a, sin_a = np.cos(angles), np.sin(angles)
+    inner_pts[rows] = np.stack([cx + r_in * cos_a, cy + r_in * sin_a], axis=1)[rows]
+    outer_pts[rows] = np.stack([cx + r_out * cos_a, cy + r_out * sin_a], axis=1)[rows]
     return inner_pts, outer_pts
+
+
+def _smooth_circular(values: np.ndarray, half_window: int = None) -> np.ndarray:
+    """NaN-aware circular moving average over ±half_window neighbours.
+    NaN entries stay NaN and never contribute to their neighbours."""
+    if half_window is None:
+        half_window = _RV_SMOOTH_HALF_WINDOW
+    valid = ~np.isnan(values)
+    filled = np.where(valid, values, 0.0)
+    total = np.zeros_like(filled)
+    count = np.zeros_like(filled)
+    for k in range(-half_window, half_window + 1):
+        total += np.roll(filled, k)
+        count += np.roll(valid, k)
+    out = np.where(count > 0, total / np.maximum(count, 1), np.nan)
+    out[~valid] = np.nan
+    return out
 
 
 def rv_arc_sections(
@@ -668,6 +706,55 @@ def rv_arc_sections(
     return sections
 
 
+def _arc_end_trim(sections: np.ndarray) -> np.ndarray:
+    """
+    Boolean mask of the rays to EXCLUDE from GCS chord sums: the first/last
+    few rays of the RV arc. Near the insertion points the rays from the LV
+    centre run almost along the wall, so the boundary position there is
+    ill-conditioned, and the tips slide between frames — with the ray layout
+    fixed at ED, tip rays often miss the RV at ES, which would read as fake
+    shortening. The trim is decided on the (ED-fixed) layout, so the same
+    rays are excluded in every frame.
+    """
+    n = len(sections)
+    in_arc = sections >= 0
+    arc_len = int(in_arc.sum())
+    trim = np.zeros(n, dtype=bool)
+    if arc_len == 0 or arc_len == n:
+        return trim
+    k = max(_RV_ARC_TRIM_MIN_RAYS, int(round(_RV_ARC_TRIM_FRAC * arc_len)))
+    if 2 * k >= arc_len:
+        return trim
+    start = int(np.flatnonzero(in_arc & ~np.roll(in_arc, 1))[0])  # arc is one contiguous block
+    pos = (np.arange(n) - start) % n
+    trim[in_arc & ((pos < k) | (pos >= arc_len - k))] = True
+    return trim
+
+
+def _robust_arc_length(points: np.ndarray, eligible: np.ndarray) -> float:
+    """
+    Open-arc chord-sum length over consecutive `eligible` rays.
+
+    Chords next to a ray that missed the boundary (NaN), and "bridging"
+    chords longer than _RV_LONG_CHORD_FACTOR × the median chord, are not
+    dropped (that would read as shortening) but replaced by the median
+    chord — so every chord position counts in every frame. NaN if fewer than
+    _RV_MIN_VALID_CHORD_FRAC of the positions have a valid chord.
+    """
+    pos = eligible & np.roll(eligible, -1)
+    n_pos = int(pos.sum())
+    if n_pos == 0:
+        return np.nan
+    chords = np.linalg.norm(np.roll(points, -1, axis=0) - points, axis=1)[pos]
+    valid = chords[~np.isnan(chords)]
+    if valid.size < max(2, _RV_MIN_VALID_CHORD_FRAC * n_pos):
+        return np.nan
+    good = valid[valid <= _RV_LONG_CHORD_FACTOR * np.median(valid)]
+    if good.size == 0:
+        return np.nan
+    return float(good.sum() + (n_pos - good.size) * np.median(good))
+
+
 def rv_section_measures(
     slice_mask: np.ndarray,
     cx: float,
@@ -679,18 +766,24 @@ def rv_section_measures(
     """
     Per-section RV measures for one slice, given a fixed ray → section map.
 
-    chord  : summed free-wall (outer) boundary chord length between
-             consecutive rays of the same section (px) — GCS-style, same
-             idea as group_chord_sums.
+    chord  : free-wall (outer) boundary length per section (px) — open-arc
+             chord sum over consecutive rays of the section (GCS-style, same
+             idea as group_chord_sums), excluding the arc-end rays
+             (_arc_end_trim) and robust to dropouts / bridging chords
+             (_robust_arc_length).
     area   : RV cavity pixels whose angle from (cx, cy) falls in the
-             section's rays (px²) — GAS-style.
+             section's rays (px²) — GAS-style, full wedge (no trim).
     radius : mean LV-centre → free-wall distance (px).
+    septal_chord : SEPTAL-side (inner, RV entry point) boundary length over
+             the whole RV arc (px), same trimming/robustness — one value per
+             slice, kept separate from the free wall (Tokodi et al. 2021
+             report RV septal and free-wall segments separately).
     """
     n = len(sections)
-    _, outer = ray_cast_rv_hits(slice_mask, cx, cy, n_rays=n, start_angle_rad=start_angle_rad)
+    inner, outer = ray_cast_rv_hits(slice_mask, cx, cy, n_rays=n, start_angle_rad=start_angle_rad)
+    usable = (sections >= 0) & ~_arc_end_trim(sections)
 
-    chords = np.linalg.norm(np.roll(outer, -1, axis=0) - outer, axis=1)
-    same_section = (sections >= 0) & (sections == np.roll(sections, -1))
+    septal_chord = _robust_arc_length(inner, usable)
     radii = np.linalg.norm(outer - np.array([cx, cy]), axis=1)
 
     ys, xs = np.nonzero(slice_mask == _RV_CLASS)
@@ -705,13 +798,11 @@ def rv_section_measures(
         in_s = sections == s
         if not in_s.any():
             continue
-        valid_chords = chords[same_section & (sections == s) & ~np.isnan(chords)]
-        if valid_chords.size:
-            chord[s] = float(valid_chords.sum())
+        chord[s] = _robust_arc_length(outer, usable & in_s)
         area[s] = float(np.sum(px_section == s))
         if not np.all(np.isnan(radii[in_s])):
             radius[s] = float(np.nanmean(radii[in_s]))
-    return {"chord": chord, "area": area, "radius": radius}
+    return {"chord": chord, "area": area, "radius": radius, "septal_chord": np.array([septal_chord])}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1020,7 +1111,9 @@ def mask_to_rv_regions(
 ) -> dict:
     """
     Convert a 3-D segmentation mask to the 9-segment RV bullseye:
-    3 rings (basal / mid / apical) x 3 sections (inferior → anterior).
+    3 rings (basal / mid / apical) x 3 free-wall sections (inferior → anterior),
+    plus one RV septal segment per ring (septal-side border, measured
+    separately from the free wall).
 
     Pipeline:
         1. classify_rv_slices() → RV-containing slices split into even thirds
@@ -1045,9 +1138,13 @@ def mask_to_rv_regions(
     Returns
     -------
     dict with keys:
-        "chord"  / "area" / "radius" : ndarray, shape (9,) — per segment,
+        "chord"  / "area" / "radius" : ndarray, shape (9,) — per free-wall segment,
                                        pixels / pixels² / pixels (see rv_section_measures)
+        "septal_chord"        : ndarray, shape (3,) — RV septal-side chord length
+                                per ring [basal, mid, apical] (pixels); one septal
+                                segment per ring, separate from the free wall
         "region_metadata"     : list[dict] — {idx, ring, sector, label}
+        "septal_metadata"     : list[dict] — {idx, ring, label}
         "lv_centroid"         : [cx, cy] float list, or None
         "alignment_angle_deg" : float | None — LV-style anterior start angle,
                                 used by the frontend to rotate its charts
@@ -1076,7 +1173,7 @@ def mask_to_rv_regions(
     used_centroids: list[tuple[float, float]] = []
 
     for ring_type in _RV_RINGS:
-        per_slice: dict[str, list[np.ndarray]] = {"chord": [], "area": [], "radius": []}
+        per_slice: dict[str, list[np.ndarray]] = {"chord": [], "area": [], "radius": [], "septal_chord": []}
         for sl_idx, sections in layout["sections"].items():
             if labels[sl_idx] != ring_type or sl_idx >= mask_3d.shape[2] or centroids[sl_idx] is None:
                 continue
@@ -1086,7 +1183,7 @@ def mask_to_rv_regions(
             for key in per_slice:
                 per_slice[key].append(m[key])
         ring_out[ring_type] = {
-            key: (_nanmean_rows(vals) if vals else np.full(n_seg, np.nan))
+            key: (_nanmean_rows(vals) if vals else np.full(1 if key == "septal_chord" else n_seg, np.nan))
             for key, vals in per_slice.items()
         }
 
@@ -1111,6 +1208,11 @@ def mask_to_rv_regions(
         )
     ]
 
+    septal_metadata = [
+        {"idx": i + 1, "ring": ring, "label": f"{ring.capitalize()}_Septal"}
+        for i, ring in enumerate(_RV_RINGS)
+    ]
+
     lv_centroid: list[float] | None = (
         [float(np.mean([c[0] for c in used_centroids])),
          float(np.mean([c[1] for c in used_centroids]))]
@@ -1121,7 +1223,9 @@ def mask_to_rv_regions(
         "chord": _flatten("chord"),
         "area": _flatten("area"),
         "radius": _flatten("radius"),
+        "septal_chord": _flatten("septal_chord"),
         "region_metadata": region_metadata,
+        "septal_metadata": septal_metadata,
         "lv_centroid": lv_centroid,
         "alignment_angle_deg": float(np.degrees(alignment_angle)) if alignment_angle is not None else None,
         "alignment_source": "landmark" if alignment_angle is not None else "fixed-angle",
