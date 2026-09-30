@@ -162,120 +162,6 @@ def _classify_rv_mesh(
     return labels.tolist()
 
 
-def _classify_rv_mesh_motion_tracked(
-    frame_mesh_file: str, motion_sidecar_paths: List[str],
-    ed_vertices: np.ndarray, ed_labels: np.ndarray, ed_tree,
-    T: np.ndarray, offset: np.ndarray, scale: float,
-) -> Optional[List[int]]:
-    """
-    2026-09-30, per Sharlene: carries the ED frame's own (already classified)
-    labels onto a LATER frame's mesh via this reconstruction's own DeepSDF
-    motion field, instead of independently re-running
-    label_cpd9_from_raw_slices on that frame's raw slices. Validated in
-    rv-deformation/notebooks/rv_deformation_pipeline.ipynb's "Step 4b" against
-    a real patient (2026-09-29): 30/30 frames tracked, 9/9 segments populated
-    on every frame, zero tracking failures -- this is a straight port of that
-    same validated math, not a new approach.
-
-    Why this exists: everything in `_classify_rv_mesh` recomputes each frame's
-    labels from that frame's own raw geometry independently -- correct
-    per-frame, but a physical patch of tissue can in principle land in a
-    different segment on a different frame if its geometry happens to cross a
-    level/sector threshold. `create_mesh_4dsdf` already writes a per-frame
-    motion field beside each mesh (`_motion_sidecars`); it's a *backward* warp
-    -- for any point in this frame's own canonical decode space, it gives that
-    same physical point's position back in the ED frame's canonical space
-    (see networks/decoder.py's `Decoder.Deformation`, whose variable is
-    literally named `coords_ED`). Reading it lets a physical patch of tissue
-    keep the SAME label all the way through the cardiac cycle.
-
-    T/offset/scale are the SAME values already extracted once from the ED
-    frame and threaded through this whole reconstruction (see
-    `_extract_affine_matrix_sync`'s call site) -- not recomputed here.
-
-    Returns None on ANY failure (no motion file, corrupt/mismatched motion
-    data, anything) rather than raising, so the caller can fall back to
-    `_classify_rv_mesh`'s independent per-frame recompute -- this must never
-    be able to turn an otherwise-successful reconstruction into a failed one.
-    """
-    motion_path = next((p for p in motion_sidecar_paths if p.endswith(".nii.gz")), None)
-    if motion_path is None:
-        return None
-
-    try:
-        mesh = trimesh.load(frame_mesh_file, process=False, force='mesh')
-        verts = np.asarray(mesh.vertices, dtype=np.float64)
-        faces = np.asarray(mesh.faces, dtype=np.int64) if hasattr(mesh, "faces") else None
-
-        motion_img = sitk.ReadImage(motion_path)
-        motion_arr = sitk.GetArrayFromImage(motion_img)
-
-        Ti = np.identity(4)
-        Ti[0:3, 0:3] = np.linalg.inv(T[0:3, 0:3])
-        Ti[0:3, 3] = -np.dot(np.linalg.inv(T[0:3, 0:3]), T[0:3, 3])
-
-        def world_to_canonical(pts: np.ndarray) -> np.ndarray:
-            v1 = transformation(T, pts.T)  # already returns (N, 3), see its own docstring
-            return (v1 + offset) * scale
-
-        def canonical_to_world(pts: np.ndarray) -> np.ndarray:
-            v1 = pts / scale - offset
-            homog = np.column_stack([v1, np.ones(len(v1))])
-            return (Ti @ homog.T).T[:, :3]
-
-        # Trilinear interpolation of the motion field at each of this frame's
-        # own vertex positions (in its own canonical decode space) -- ported
-        # as-is from the validated notebook cell, including the per-point
-        # loop: SimpleITK's TransformPhysicalPointToContinuousIndex handles
-        # the image's own origin/spacing correctly per point, and re-deriving
-        # a vectorized equivalent risks silently swapping the motion field's
-        # (x,y,z) channel/axis order, which would misclassify silently rather
-        # than fail loudly.
-        p0 = world_to_canonical(verts)
-        motion_at_p0 = np.zeros_like(p0)
-        for i, pt in enumerate(p0):
-            ix, iy, iz = motion_img.TransformPhysicalPointToContinuousIndex(pt.tolist())
-            x0, y0, z0 = int(np.floor(ix)), int(np.floor(iy)), int(np.floor(iz))
-            if 0 <= x0 < motion_arr.shape[2] - 1 and 0 <= y0 < motion_arr.shape[1] - 1 and 0 <= z0 < motion_arr.shape[0] - 1:
-                fx, fy, fz = ix - x0, iy - y0, iz - z0
-                c000 = motion_arr[z0, y0, x0]; c100 = motion_arr[z0, y0, x0 + 1]
-                c010 = motion_arr[z0, y0 + 1, x0]; c110 = motion_arr[z0, y0 + 1, x0 + 1]
-                c001 = motion_arr[z0 + 1, y0, x0]; c101 = motion_arr[z0 + 1, y0, x0 + 1]
-                c011 = motion_arr[z0 + 1, y0 + 1, x0]; c111 = motion_arr[z0 + 1, y0 + 1, x0 + 1]
-                c00 = c000 * (1 - fx) + c100 * fx; c10 = c010 * (1 - fx) + c110 * fx
-                c01 = c001 * (1 - fx) + c101 * fx; c11 = c011 * (1 - fx) + c111 * fx
-                c0 = c00 * (1 - fy) + c10 * fy; c1 = c01 * (1 - fy) + c11 * fy
-                motion_at_p0[i] = c0 * (1 - fz) + c1 * fz
-
-        tracked_world_ed = canonical_to_world(p0 + motion_at_p0)
-        _, nn_idx = ed_tree.query(tracked_world_ed)
-        raw_labels = ed_labels[nn_idx].astype(np.int16)
-
-        if faces is None or faces.shape[0] == 0:
-            return raw_labels.tolist()
-
-        # Motion-tracked transfer is noisier than a fresh per-slice
-        # classification (interpolation + nearest-neighbor through a learned
-        # deformation field, vs. exact per-slice geometry), so the validated
-        # notebook recipe adds a face-adjacency smoothing pass before the
-        # existing boundary-subdivision refinement -- unlike
-        # `_classify_rv_mesh` above, which only needs the refinement step.
-        smoothed = cpd_rv_segmentation._smooth_labels_by_face_adjacency(raw_labels, faces, n_segments=9)
-        refined_vertices, refined_faces, refined_labels = cpd_rv_segmentation.refine_mesh_for_smooth_boundaries(
-            verts, faces, smoothed, n_segments=9,
-        )
-        if refined_vertices.shape[0] != verts.shape[0]:
-            trimesh.Trimesh(vertices=refined_vertices, faces=refined_faces, process=False).export(frame_mesh_file)
-            return refined_labels.tolist()
-        return smoothed.tolist()
-
-    except Exception as exc:
-        logging.warning(
-            f"[CPD-RV] Motion-tracking failed for {frame_mesh_file!r}, falling back to per-frame recompute: {exc}"
-        )
-        return None
-
-
 class FourDReconstructionHandler:
     def __init__(self, model_path: str, specs_config: Optional[dict] = None):
         """
@@ -1578,14 +1464,6 @@ class FourDReconstructionHandler:
                 # RV no longer uses a CPD-warped atlas at all (see _classify_rv_mesh's
                 # docstring) -- label_cpd9_from_raw_slices needs no cross-frame warp
                 # state to reuse, so there is no RV equivalent of cpd_warp_state above.
-                # It DOES have its own, different cross-frame reuse: once the ED
-                # frame is classified, every later RV frame tries to carry those
-                # labels forward via the DeepSDF motion field (see
-                # _classify_rv_mesh_motion_tracked) instead of reclassifying from
-                # scratch. These three stay None until the ED frame succeeds.
-                ed_rv_vertices: Optional[np.ndarray] = None
-                ed_rv_labels: Optional[np.ndarray] = None
-                ed_rv_tree = None
 
                 os.makedirs(output_dir, exist_ok=True)
                 input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
@@ -1655,33 +1533,18 @@ class FourDReconstructionHandler:
                             # (frame_point_cloud) just came from -- see
                             # _classify_rv_mesh's docstring for why no extra
                             # transform is needed to match RV's classification
-                            # space.
+                            # space. Independent per-frame recompute -- DeepSDF's
+                            # own per-frame motion field was briefly used to carry
+                            # ED's labels forward instead, but reverted 2026-09-30
+                            # per Sharlene to keep DeepSDF's role limited to the
+                            # 4D/temporal MESH reconstruction itself, not label
+                            # tracking (see git history for the motion-tracked
+                            # version, _classify_rv_mesh_motion_tracked).
                             frame_lv_reference_points = self._extract_contour_from_nifti_sync(frame_path, "lv")
-                            frame_aha_labels = None
-                            if not is_ed_frame and ed_rv_tree is not None:
-                                # Try to carry the ED frame's labels forward via
-                                # the DeepSDF motion field first -- only the ED
-                                # frame is ever independently reclassified from
-                                # its own raw slices below.
-                                frame_aha_labels = _classify_rv_mesh_motion_tracked(
-                                    frame_mesh_file, self._motion_sidecars(frame_mesh_file),
-                                    ed_rv_vertices, ed_rv_labels, ed_rv_tree,
-                                    T, offset, scale,
-                                )
-                            if frame_aha_labels is None:
-                                # ED frame, or motion-tracking unavailable/failed
-                                # for this frame -- independent per-frame recompute,
-                                # same as before this feature existed.
-                                frame_aha_labels = _classify_rv_mesh(
-                                    frame_mesh_file, lv_reference_points=frame_lv_reference_points,
-                                    nifti_path=frame_path, frame_idx=0,
-                                )
-                                if is_ed_frame and frame_aha_labels is not None:
-                                    from scipy.spatial import cKDTree
-                                    ed_mesh_for_tracking = trimesh.load(frame_mesh_file, process=False, force='mesh')
-                                    ed_rv_vertices = np.asarray(ed_mesh_for_tracking.vertices, dtype=np.float64)
-                                    ed_rv_labels = np.asarray(frame_aha_labels, dtype=np.int16)
-                                    ed_rv_tree = cKDTree(ed_rv_vertices)
+                            frame_aha_labels = _classify_rv_mesh(
+                                frame_mesh_file, lv_reference_points=frame_lv_reference_points,
+                                nifti_path=frame_path, frame_idx=0,
+                            )
                         print(f"Completed optimization for frame {original_frame_idx}")
                         frame_selections[original_frame_idx] = frame_selection
                         mesh_files.append(frame_mesh_file)
