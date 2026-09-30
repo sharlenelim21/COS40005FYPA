@@ -12,6 +12,16 @@ export interface SelectableCase {
   frozen?: unknown;
 }
 
+const TEST_SET_NAMES: Record<string, string> = { acdc: "ACDC", mms1: "M&Ms-1", mms2: "M&Ms-2" };
+
+/** A frozen-set match ("acdc/patient108_frame01.nii.gz#z0") in words: "the ACDC scan patient108_frame01". */
+export function testScanName(frozen: string): string {
+  const [dataset, file] = frozen.split("/");
+  if (!dataset || !file) return "a test scan";
+  const scan = file.replace(/#z\d+$/, "").replace(/\.nii(\.gz)?$/, "");
+  return `the ${TEST_SET_NAMES[dataset] ?? dataset} scan ${scan}`;
+}
+
 /** The cases that can train: a frozen test patient's are listed, locked, and never chosen. */
 export function trainableCases<C extends SelectableCase>(cases: C[]): C[] {
   return cases.filter(item => !item.frozen);

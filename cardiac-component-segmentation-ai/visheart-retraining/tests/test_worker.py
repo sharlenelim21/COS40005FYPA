@@ -207,7 +207,7 @@ class Worker(unittest.TestCase):
             with self.assertRaises(jobs.JobError) as refused:
                 app.start_training("dr-lee", owner, selection)
             self.assertEqual(refused.exception.status, status)
-        self.assertIn("test set", str(refused.exception))
+        self.assertIn("is a test scan", str(refused.exception))
         job = app.start_training("dr-lee", "u1", ["m2", "m2"])
         self.assertEqual((job["params"]["owner"], job["params"]["selection"]), ("u1", ["m2"]))
         self.assertEqual(job["params"]["cases"], [{"maskId": "m2", "projectId": "p2", "projectName": "Patient 007",

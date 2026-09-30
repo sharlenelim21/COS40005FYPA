@@ -126,3 +126,11 @@ test("the finished training says what happened to its version since", () => {
     text: "It was replaced by v2. The model in use is v2.",
   });
 });
+
+test("a test scan is named by its dataset and case, in words", () => {
+  assert.equal(logic.testScanName("acdc/patient108_frame01.nii.gz#z0"), "the ACDC scan patient108_frame01");
+  assert.equal(logic.testScanName("mms1/A1D0Q7_12.nii.gz"), "the M&Ms-1 scan A1D0Q7_12");
+  assert.equal(logic.testScanName("mms2/045_SA_ED.nii#z3"), "the M&Ms-2 scan 045_SA_ED");
+  assert.equal(logic.testScanName("other/x.nii.gz"), "the other scan x");
+  assert.equal(logic.testScanName(""), "a test scan");
+});

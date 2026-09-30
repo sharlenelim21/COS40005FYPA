@@ -197,8 +197,8 @@ class WorkerApp:
             raise jobs.JobError(409, "Some chosen cases are not in your latest check. Check again, then choose.")
         locked = [known[mask_id]["projectName"] for mask_id in selection if known[mask_id].get("frozen")]
         if locked:
-            raise jobs.JobError(409, f"{', '.join(dict.fromkeys(locked))} is a scan of the locked test set, "
-                                     "which is never used for training. Clear it, then start again.")
+            raise jobs.JobError(409, f"{', '.join(dict.fromkeys(locked))} is a test scan: every new version is "
+                                     "tested on it, so it is not used for training. Clear it, then start again.")
         picked = list(dict.fromkeys(selection))
         return {"owner": owner, "selection": picked,
                 "cases": [{"maskId": mask_id, "projectId": known[mask_id]["projectId"],
