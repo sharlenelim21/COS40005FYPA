@@ -75,3 +75,16 @@ export const RV_SEGMENT_NAMES: readonly string[] = [
   "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
   "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
 ];
+
+// Maps between the RV bullseye's region numbering (CombinedVentricularChart /
+// CRESCENT_REGION_NAMES: 1-9, Basal-first -- Basal_Seg1-3, Mid_Seg1-3,
+// Apical_Seg1-3) and the 3D model's RV segment numbering (this file's
+// RV_SEGMENT_NAMES: 0-8, Apical-first -- Apical_Seg1-3, Basal_Seg1-3,
+// Mid_Seg1-3). These are NOT a simple index/±1 shift like LV's bullseye<->3D
+// mapping is -- the two schemes order apical/basal/mid differently, so a
+// name-based lookup is needed to keep bullseye<->3D click-sync pointing at
+// the same physical segment.
+// RV_REGION_TO_SEGMENT3D[region - 1] = the matching RV_SEGMENT_NAMES index.
+export const RV_REGION_TO_SEGMENT3D: readonly number[] = [3, 4, 5, 6, 7, 8, 0, 1, 2];
+// RV_SEGMENT3D_TO_REGION[segmentIndex0To8] = the matching bullseye region (1-9).
+export const RV_SEGMENT3D_TO_REGION: readonly number[] = [7, 8, 9, 1, 2, 3, 4, 5, 6];

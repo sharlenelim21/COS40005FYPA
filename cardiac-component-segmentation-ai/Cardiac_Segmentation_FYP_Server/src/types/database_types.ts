@@ -300,6 +300,20 @@ export interface IProjectSegmentationMask {
     computed_at: string;
   };
   /**
+   * Per-cardiac-cycle-frame RV cavity area, per 9-segment RV bullseye region
+   * — RV analogue of `frameBullseye` above, same "pure RLE, no GPU, no
+   * landmark data" auto-run design (see computeFrameRvAreaSeries). `area` is
+   * in raw pixel units (no voxel spacing passed to the script) — only
+   * ratios of it (e.g. frontend FAC = (area_ED - area_frame) / area_ED) are
+   * meaningful, not the absolute number. Lets the Structure/Strain tabs' RV
+   * FAC animate across the cycle without a manual "Compute all frames"
+   * (which remains the landmark-aligned GCS/GAS pipeline).
+   */
+  rvFrameAreas?: {
+    frames: { frameIndex: number; regions: { region: number; area: number | null }[] }[];
+    computed_at: string;
+  };
+  /**
    * Cardiac clinical metrics derived from this mask's RLE frames plus the
    * project's stored 4x4 affine. Produced by compute_heart_metrics_from_rle.py
    * and stored parallel to `bullseye`. Fields may be null when the input is

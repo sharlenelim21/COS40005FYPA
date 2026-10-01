@@ -32,8 +32,63 @@ const parseCompletedLandmarkJobResult = (job: any) => {
     // Old format already has predictions[]
     if (Array.isArray(r.predictions) && r.predictions.length > 0) return r;
 
-    // New format: slices[] → translate to predictions[] the frontend understands.
+    const sliceToPrediction = (s: any, frame_id: number) => ({
+      frame_id,
+      slice_id: s.slice,
+      rv_insertion_1: [s.lm1?.x ?? 0, s.lm1?.y ?? 0],
+      rv_insertion_2: [s.lm2?.x ?? 0, s.lm2?.y ?? 0],
+      // Carry through quality fields so the frontend can show confidence dots
+      flag:        s.flag,
+      confidence:  s.confidence,
+      model_used:  s.model_used,
+      display_mean: s.display_mean ?? null,
+      hm1_max:     s.hm1_max,
+      hm2_max:     s.hm2_max,
+      lm_dist:     s.lm_dist,
+    });
+
+    // Current format: frames[] → translate to predictions[] the frontend
+    // understands, one entry per (cardiac frame, spatial slice) pair.
     //
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+    // Each frame entry's own s.slice is the SPATIAL slice index (0, 1, 2 …)
+    // within that cardiac frame. The tar image cache keys are
+    // {projectId}_f{frame}_s{slice}, so:
+    //   frame_id = f.frameindex  (the cardiac frame the GPU ran this on)
+    //   slice_id = s.slice       (spatial position in that frame's stack)
+    // This lets getMRIImage(frame, slice) resolve correctly for every
+    // cardiac frame, not just frame 0, and the mask overlay lookup matches
+    // editable_frame_{frame}_slice_{slice}_*.
+    if (Array.isArray(r.frames) && r.frames.length > 0) {
+      const predictions = r.frames.flatMap((f: any) =>
+        (f.slices ?? []).map((s: any) => sliceToPrediction(s, f.frameindex ?? 0))
+      );
+      const edFrame = r.frames.find((f: any) => f.frameindex === 0) ?? r.frames[0];
+      return {
+        predictions,
+        total_frames: edFrame?.n_total ?? (edFrame?.slices?.length ?? predictions.length),
+        model_used:   "UNetResNet34 Landmark",
+        image_dimensions: r.image_dimensions ?? { width: 0, height: 0 },
+        // Top-level summary fields stay ED's, for any caller that only
+        // cares about one frame's alignment points/quality counts.
+        avg_lm1:       r.avg_lm1 ?? edFrame?.avg_lm1,
+        avg_lm2:       r.avg_lm2 ?? edFrame?.avg_lm2,
+        n_total:       edFrame?.n_total,
+        n_collapsed:   edFrame?.n_collapsed,
+        n_2ch:         edFrame?.n_2ch,
+        n_1ch_fallback: edFrame?.n_1ch_fallback,
+        n_frames:      r.n_frames ?? r.frames.length,
+      };
+    }
+
+    // Legacy single-frame format (slices[] with no frame wrapper) — kept for
+    // any job result stored before this change.
+    if (Array.isArray(r.slices) && r.slices.length > 0) {
+      const predictions = r.slices.map((s: any) => sliceToPrediction(s, 0));
+=======
+>>>>>>> Stashed changes
     // The GPU processes the NIfTI's spatial slices (shape[2]) for every cardiac frame.
     // Each entry carries s.frame (cardiac phase) and s.slice (SPATIAL slice index). Results from
     // before per-frame detection have no s.frame and were ED-only, so they read as frame 0.
@@ -57,14 +112,12 @@ const parseCompletedLandmarkJobResult = (job: any) => {
         hm2_max:     s.hm2_max,
         lm_dist:     s.lm_dist,
       }));
+>>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
       return {
         predictions,
         total_frames: r.n_total ?? predictions.length,
         model_used:   "UNetResNet34 Landmark",
-        // image_dimensions from GPU response if present, else leave 0 so
-        // the frontend falls back to projectData.dimensions (correct for this project).
         image_dimensions: r.image_dimensions ?? { width: 0, height: 0 },
-        // Pass through the new top-level summary fields
         avg_lm1:       r.avg_lm1,
         avg_lm2:       r.avg_lm2,
         n_total:       r.n_total,

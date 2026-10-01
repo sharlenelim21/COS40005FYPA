@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -2003,6 +2003,12 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
         // for why this is deliberately kept separate from strain (GRS/GCS).
         computeFrameWallThicknessSeries(maskId, frames, W, H).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-bullseye frame-series async error for mask ${maskId}: ${err?.message}`);
+        });
+
+        // Per-frame RV cavity area — RLE-only, no GPU, no landmark data, same
+        // reasoning as the LV frame series above. See computeFrameRvAreaSeries.
+        computeFrameRvAreaSeries(maskId, frames, W, H).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-bullseye RV frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 
     } catch (error: unknown) {

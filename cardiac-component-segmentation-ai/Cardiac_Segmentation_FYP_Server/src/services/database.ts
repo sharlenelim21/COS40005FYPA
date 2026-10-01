@@ -778,6 +778,7 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
   bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
   frameBullseye: { type: Schema.Types.Mixed, required: false }, // Per-frame wall thickness, RLE-only — see IProjectSegmentationMask.frameBullseye
+  rvFrameAreas: { type: Schema.Types.Mixed, required: false }, // Per-frame RV cavity area per segment, RLE-only — see IProjectSegmentationMask.rvFrameAreas
   heartMetrics: { type: Schema.Types.Mixed, required: false }, // Chamber volumes / EF / LV mass — see IProjectSegmentationMask.heartMetrics
   healthStatus: { type: Schema.Types.Mixed, required: false }, // Rule-based LV systolic-function health-status assessment (Task 2)
   regionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // Layer 2 — advisory per-AHA-segment assessment from regional strain. Mixed for the same reason as healthStatus/bullseye: a typed sub-schema would strip unknown keys.

@@ -32,6 +32,9 @@ export interface LandmarkInferenceResponse {
   n_collapsed?: number;
   n_2ch?: number;
   n_1ch_fallback?: number;
+  // Distinct cardiac-frame count — present once the backend returns the
+  // multi-frame GPU response; absent on older persisted single-frame results.
+  n_frames?: number;
 }
 
 export interface LandmarkDefinition {

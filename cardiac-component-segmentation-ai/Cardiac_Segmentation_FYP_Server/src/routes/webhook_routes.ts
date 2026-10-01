@@ -133,12 +133,14 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
     }
 
     const result = normalizeLandmarkJobResult(req.body?.result);
-    // Accept both response formats:
-    //   Old format: { predictions: [...], total_frames, model_used, image_dimensions }
-    //   New format: { slices: [...], avg_lm1, avg_lm2, n_total, n_collapsed, n_2ch, n_1ch_fallback }
+    // Accept all response formats:
+    //   Old format:          { predictions: [...], total_frames, model_used, image_dimensions }
+    //   Legacy single-frame: { slices: [...], avg_lm1, avg_lm2, n_total, n_collapsed, n_2ch, n_1ch_fallback }
+    //   Current multi-frame: { frames: [{frameindex, slices: [...], avg_lm1, avg_lm2, ...}], n_frames, avg_lm1, avg_lm2 }
     const hasOldFormat = Array.isArray(result?.predictions) && result.predictions.length > 0;
-    const hasNewFormat = Array.isArray(result?.slices) && result.slices.length > 0;
-    if (!hasOldFormat && !hasNewFormat) {
+    const hasLegacySingleFrameFormat = Array.isArray(result?.slices) && result.slices.length > 0;
+    const hasMultiFrameFormat = Array.isArray(result?.frames) && result.frames.length > 0;
+    if (!hasOldFormat && !hasLegacySingleFrameFormat && !hasMultiFrameFormat) {
       await updateJob(gpuJobId, {
         status: JobStatus.FAILED,
         message: "Landmark callback did not include predictions.",

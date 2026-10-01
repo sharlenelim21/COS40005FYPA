@@ -144,11 +144,15 @@ export function ReconstructionConfigDialog({
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
   const [numIterations, setNumIterations] = useState(gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU);
-  // 32 was the old default and is too coarse: at N=32 the marching-cubes facets are ~17x larger
-  // by area than at N=128, which flat-shades into what looks like holes in a closed surface.
-  // 64 costs ~0.3s more per frame to decode and gives ~4x the vertices. Raise it further (96-128)
-  // for figures or anything measured off the surface.
-  const [resolution, setResolution] = useState(64);
+  // 32 was the original default and is too coarse: at N=32 the marching-cubes facets are ~17x
+  // larger by area than at N=128, which flat-shades into what looks like holes in a closed
+  // surface. 64 (the default from 2026-09 onward) still under-renders a small RV segment as a
+  // thin, easily-occluded sliver on a crescent-shaped cross-section -- confirmed directly
+  // (2026-10-01): a segment with a healthy, correctly-computed vertex share (7.4% of the mesh)
+  // was barely visible at N=64 but clearly visible at the notebook's own N=128 equivalent on the
+  // same patient. 128 is now the default; this stays opt-in/advanced (not forced), so a user who
+  // wants the old fast-but-coarse behavior can still dial it back down.
+  const [resolution, setResolution] = useState(128);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Derive a stable Set for membership checks.
@@ -576,7 +580,7 @@ export function ReconstructionConfigDialog({
                 />
                 <p className="text-xs text-muted-foreground">
                   Mesh generation resolution (32-256). Higher values create more detailed
-                  meshes but increase processing time and file size. Default: 32
+                  meshes but increase processing time and file size. Default: 128
                 </p>
               </div>
 

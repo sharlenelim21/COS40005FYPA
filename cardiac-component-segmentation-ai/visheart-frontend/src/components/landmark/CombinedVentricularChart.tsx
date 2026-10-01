@@ -37,7 +37,7 @@ interface CombinedVentricularChartProps {
   rvRegions: RvStrainRegion[] | null;
   /** Which RV metric rvRegions[].strain holds — picks its fixed colour scale
    *  when rvMin/rvMax aren't given. */
-  rvMetric?: "GCS" | "GAS";
+  rvMetric?: "GCS" | "GAS" | "FAC";
   /** Explicit RV colour range (e.g. this patient's own min/max, like the
    *  Wall Thickness bullseye). Omit to use the fixed scale. */
   rvMin?: number;
@@ -84,9 +84,9 @@ const LV_BASAL_OUTER = 100, LV_BASAL_INNER = 76, LV_MID_INNER = 50, LV_APICAL_IN
 // segments (basal 0-2, mid 3-5, apical 6-8, Seg1 inferior → Seg3 anterior);
 // results stored before that only have 6, and their apical ring renders as
 // "no data" via rvVal/rvCol's null handling.
-const RV_APICAL_INNER = LV_BASAL_OUTER, RV_APICAL_OUTER = RV_APICAL_INNER + 14;
-const RV_MID_INNER = RV_APICAL_OUTER, RV_MID_OUTER = RV_MID_INNER + 18;
-const RV_BASAL_INNER = RV_MID_OUTER, RV_BASAL_OUTER = RV_BASAL_INNER + 20;
+const RV_APICAL_INNER = LV_BASAL_OUTER, RV_APICAL_OUTER = RV_APICAL_INNER + 18;
+const RV_MID_INNER = RV_APICAL_OUTER, RV_MID_OUTER = RV_MID_INNER + 22;
+const RV_BASAL_INNER = RV_MID_OUTER, RV_BASAL_OUTER = RV_BASAL_INNER + 24;
 const CENTER = { x: (VIEW_W - (LV_BASAL_OUTER + 4) + RV_BASAL_OUTER) / 2, y: 190 };
 // Widened from a 120deg sliver to a fuller 160deg horseshoe wrapping more of
 // the LV circle's near side, closer to how published combined LV+RV
@@ -151,7 +151,7 @@ export function CombinedVentricularChart({
     : undefined;
 
   // ── RV (left side — crescent wrapping the septal edge of the LV circle) ──
-  const rvScaleKey = rvMetric === "GAS" ? "RV_GAS" : "RV_GCS";
+  const rvScaleKey = rvMetric === "GAS" ? "RV_GAS" : rvMetric === "FAC" ? "RV_FAC" : "RV_GCS";
   const rvFixed = strainScaleMinMax(rvScaleKey);
   const rvColMin = rvMin ?? rvFixed.min;
   const rvColMax = rvMax ?? rvFixed.max;
@@ -161,7 +161,10 @@ export function CombinedVentricularChart({
     const v = rvVal(i);
     if (v == null) return "#cbd5e1";
     const t = rvColMin === rvColMax ? 0.5 : Math.max(0, Math.min(1, (v - rvColMin) / (rvColMax - rvColMin)));
-    return rdYlGn(1 - t); // negative (shrinking) is healthy — same convention as GCS
+    // GCS/GAS: negative (shrinking) is healthy, so green sits at the low end
+    // (reverse). FAC = -GAS, so its healthy end is positive instead — same
+    // "best" direction as strainScaleMinMax's `reverse` flag already encodes.
+    return rdYlGn(rvFixed.reverse ? 1 - t : t);
   };
   const isRvSel = (region1based: number) => selectedRvRegion === region1based;
 

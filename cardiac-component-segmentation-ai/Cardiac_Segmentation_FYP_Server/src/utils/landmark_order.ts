@@ -12,20 +12,55 @@ export function normalizeRvInsertionOrder<T extends YPoint>(
 
 const mean = (values: number[]): number => values.reduce((s, v) => s + v, 0) / values.length;
 
+/** Shared by the top-level r.slices case (single-frame GPU responses, kept
+ *  for backward compatibility) and the per-frame r.frames[].slices case
+ *  (current multi-frame GPU response) — same y-coordinate swap check and
+ *  avg_lm1/avg_lm2 recompute, just applied to whichever slice array is
+ *  passed in. */
+function normalizeSlicesAndAvg(slices: any[]): { slices: any[]; avg_lm1?: any; avg_lm2?: any; swapped: boolean } {
+    let anySwapped = false;
+    const out = slices.map((s: any) => {
+        const [lm1] = normalizeRvInsertionOrder(s?.lm1, s?.lm2);
+        if (lm1 === s?.lm1) return s;
+        anySwapped = true;
+        return { ...s, lm1: s.lm2, lm2: s.lm1, hm1_max: s.hm2_max, hm2_max: s.hm1_max };
+    });
+    if (!anySwapped) return { slices: out, swapped: false };
+
+    const both = out.filter((s: any) => s?.lm1 && s?.lm2);
+    const avg_lm1 = both.length ? { x: mean(both.map((s: any) => s.lm1.x)), y: mean(both.map((s: any) => s.lm1.y)) } : undefined;
+    const avg_lm2 = both.length ? { x: mean(both.map((s: any) => s.lm2.x)), y: mean(both.map((s: any) => s.lm2.y)) } : undefined;
+    return { slices: out, avg_lm1, avg_lm2, swapped: true };
+}
+
 export function normalizeLandmarkJobResult<T>(result: T): T {
     const r = result as any;
     if (!r || typeof r !== "object") return result;
 
-    if (Array.isArray(r.slices)) {
+    // Current multi-frame GPU response: one entry per cardiac frame, each
+    // with its own slices[]/avg_lm1/avg_lm2 — normalize every frame's
+    // slices independently, then refresh the top-level avg_lm1/avg_lm2
+    // (frame 0 / ED's) the same way the single-frame branch below does.
+    if (Array.isArray(r.frames) && r.frames.length > 0 && Array.isArray(r.frames[0]?.slices)) {
         let anySwapped = false;
-        const slices = r.slices.map((s: any) => {
-            const [lm1] = normalizeRvInsertionOrder(s?.lm1, s?.lm2);
-            if (lm1 === s?.lm1) return s;
+        const frames = r.frames.map((f: any) => {
+            const { slices, avg_lm1, avg_lm2, swapped } = normalizeSlicesAndAvg(f.slices ?? []);
+            if (!swapped) return f;
             anySwapped = true;
-            return { ...s, lm1: s.lm2, lm2: s.lm1, hm1_max: s.hm2_max, hm2_max: s.hm1_max };
+            return { ...f, slices, avg_lm1: avg_lm1 ?? f.avg_lm1, avg_lm2: avg_lm2 ?? f.avg_lm2 };
         });
         if (!anySwapped) return result;
 
+<<<<<<< HEAD
+        const edFrame = frames[0];
+        return { ...r, frames, avg_lm1: edFrame?.avg_lm1 ?? r.avg_lm1, avg_lm2: edFrame?.avg_lm2 ?? r.avg_lm2 };
+    }
+
+    if (Array.isArray(r.slices)) {
+        const { slices, avg_lm1, avg_lm2, swapped } = normalizeSlicesAndAvg(r.slices);
+        if (!swapped) return result;
+        return { ...r, slices, avg_lm1: avg_lm1 ?? r.avg_lm1, avg_lm2: avg_lm2 ?? r.avg_lm2 };
+=======
         const out: any = { ...r, slices };
         // avg_lm1/avg_lm2 are the ED (frame 0) mean: averaging across cardiac phases would blend
         // positions of a heart that moves through the cycle. Results without per-slice frames are ED-only.
@@ -35,6 +70,7 @@ export function normalizeLandmarkJobResult<T>(result: T): T {
             out.avg_lm2 = { x: mean(both.map((s: any) => s.lm2.x)), y: mean(both.map((s: any) => s.lm2.y)) };
         }
         return out;
+>>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
     }
 
     if (Array.isArray(r.predictions)) {

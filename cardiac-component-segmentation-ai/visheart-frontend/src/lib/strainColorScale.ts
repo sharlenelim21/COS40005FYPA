@@ -15,7 +15,7 @@
  * still the real value).
  */
 
-export type StrainScaleKey = "LV_GRS" | "LV_GCS" | "RV_GCS" | "RV_GAS";
+export type StrainScaleKey = "LV_GRS" | "LV_GCS" | "RV_GCS" | "RV_GAS" | "RV_FAC";
 
 type Scale = {
   /** Value drawn fully red (least deformation). */
@@ -34,6 +34,9 @@ export const STRAIN_COLOR_SCALES: Record<StrainScaleKey, Scale> = {
   RV_GCS: { worst: 0, best: -30, label: "RV GCS %" },
   // RV cavity-area strain — area changes ~2x faster than length.
   RV_GAS: { worst: 0, best: -50, label: "RV GAS %" },
+  // RV cavity-area FAC = -GAS (rvAreaMetrics.ts) — same measurement, opposite
+  // sign convention, so best is positive here instead of negative.
+  RV_FAC: { worst: 0, best: 50, label: "RV FAC %" },
 };
 
 /** 0 = worst end (red) … 1 = best end (green), clamped. */

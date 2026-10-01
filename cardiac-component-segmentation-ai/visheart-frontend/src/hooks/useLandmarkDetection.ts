@@ -72,6 +72,20 @@ export function useLandmarkDetection(
     });
   }, [projectDimensions?.width, projectDimensions?.height]);
 
+  // Full multi-frame prediction set from the backend (every cardiac frame's
+  // every slice) — state.predictions only ever holds the CURRENTLY SELECTED
+  // cardiac frame's slices (same shape/indexing landmark editing already
+  // assumed before multi-frame support existed: predictions[sliceIndex]).
+  // Keeping the two separate means every slice-indexing/edit-key/tar-cache
+  // lookup built around state.predictions keeps working unchanged — only
+  // which frame's slice array is loaded into it needs to change when the
+  // user picks a different cardiac frame. Saving uses allFramesPredictions
+  // (via the page), since a save must include every frame, not just
+  // whichever one is currently being viewed/edited.
+  const [allFramesPredictions, setAllFramesPredictions] = useState<FramePrediction[]>([]);
+  const [currentCardiacFrame, setCurrentCardiacFrame] = useState(0);
+  const [cardiacFrameCount, setCardiacFrameCount] = useState(1);
+
   const [replacementFileError, setReplacementFileError] = useState<string | null>(null);
   // True while the mount effect is checking for an already-computed result
   // (in-memory cache or persisted DB job). The page's auto-run effect waits for
@@ -132,6 +146,31 @@ export function useLandmarkDetection(
   const applyResult = useCallback(
     (rawResult: LandmarkInferenceResponse) => {
       const result = normalizeLandmarkResponse(rawResult);
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+
+      setAllFramesPredictions(result.predictions);
+      // Distinct cardiac-frame count from the actual data — robust whether
+      // or not the backend's n_frames summary field is present (older
+      // persisted results won't have it).
+      const frameIds = Array.from(new Set(result.predictions.map((p) => p.frame_id))).sort((a, b) => a - b);
+      const frameCount = result.n_frames ?? Math.max(frameIds.length, 1);
+      setCardiacFrameCount(frameCount);
+      setCurrentCardiacFrame(0);
+
+      const edFrameId = frameIds.includes(0) ? 0 : (frameIds[0] ?? 0);
+      const edSlices = result.predictions
+        .filter((p) => p.frame_id === edFrameId)
+        .sort((a, b) => (a.slice_id ?? 0) - (b.slice_id ?? 0));
+
+      setState((s) => ({
+        ...s,
+        status: "done",
+        predictions: edSlices,
+        totalFrames: edSlices.length || result.total_frames,
+=======
+>>>>>>> Stashed changes
       const frameIds = Array.from(new Set(result.predictions.map((p) => p.frame_id))).sort((a, b) => a - b);
       const firstFrame = frameIds[0] ?? 0;
       setState((s) => ({
@@ -142,6 +181,10 @@ export function useLandmarkDetection(
         landmarkFrame: firstFrame,
         // Slices in the selected frame -- not the raw prediction count, which spans every frame.
         totalFrames: result.predictions.filter((p) => p.frame_id === firstFrame).length,
+<<<<<<< Updated upstream
+=======
+>>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
+>>>>>>> Stashed changes
         // Only update dimensions when the result carries real values.
         // New GPU format omits image_dimensions (returns {width:0,height:0});
         // keep existing project dimensions so the canvas scales correctly.
@@ -162,6 +205,31 @@ export function useLandmarkDetection(
       }));
     },
     [],
+  );
+
+  /** Switch which cardiac frame's slices are loaded into state.predictions.
+   *  Keeps the current slice index as-is (scrubbing cardiac frame while
+   *  staying on the same slice), same convention the Structure/Strain tabs'
+   *  frame scrubber already uses (frame and slice/segment selection are
+   *  independent axes there too). */
+  const handleCardiacFrameChange = useCallback(
+    (frame: number) => {
+      stopPlayback();
+      const clamped = Math.max(0, Math.min(frame, cardiacFrameCount - 1));
+      setCurrentCardiacFrame(clamped);
+      setState((s) => {
+        const slices = allFramesPredictions
+          .filter((p) => p.frame_id === clamped)
+          .sort((a, b) => (a.slice_id ?? 0) - (b.slice_id ?? 0));
+        return {
+          ...s,
+          predictions: slices,
+          totalFrames: slices.length || s.totalFrames,
+          currentFrame: Math.min(s.currentFrame, Math.max(slices.length - 1, 0)),
+        };
+      });
+    },
+    [allFramesPredictions, cardiacFrameCount, stopPlayback],
   );
 
   useEffect(() => {
@@ -417,6 +485,10 @@ export function useLandmarkDetection(
     replacementFileError,
     currentPrediction,
     confidentCount,
+    allFramesPredictions,
+    currentCardiacFrame,
+    cardiacFrameCount,
+    handleCardiacFrameChange,
     handleRunDetection,
     handleRerunDetection,
     handleAttachToJob,

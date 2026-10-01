@@ -145,6 +145,8 @@ export interface LandmarkSidebarProps {
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
   isPerFrame?: boolean;
+  rvFacStats?: { global: number | null; rings: (number | null)[] } | null;
+  isRvPerFrame?: boolean;
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
@@ -160,6 +162,13 @@ export interface LandmarkSidebarProps {
   /** Switches the cardiac frame whose slices the Landmarks tab shows and edits. */
   onLandmarkFrameChange?: (frameId: number) => void;
   onPlaybackSpeedChange: (fps: number) => void;
+  /** Which CARDIAC frame's slices the Landmarks tab is currently showing/
+   *  editing — distinct from the slice PlaybackBar above (onSliderChange),
+   *  same "frame vs slice are independent axes" split the Structure/Strain
+   *  tabs' own frame scrubber already uses. */
+  currentCardiacFrame?: number;
+  cardiacFrameCount?: number;
+  onCardiacFrameChange?: (frame: number) => void;
   onRerun: () => void;
   onReset: () => void;
   onFileSelect: (file: File | null) => void;
@@ -197,6 +206,8 @@ export function LandmarkSidebar({
   onStructureVentricleChange,
   structureStats,
   isPerFrame,
+  rvFacStats,
+  isRvPerFrame,
   hasUnsavedLandmarkEdits,
   isSavingLandmarks,
   onSaveLandmarks,
@@ -211,6 +222,9 @@ export function LandmarkSidebar({
   onSliderChange,
   onLandmarkFrameChange,
   onPlaybackSpeedChange,
+  currentCardiacFrame = 0,
+  cardiacFrameCount = 1,
+  onCardiacFrameChange,
   onRerun,
   onReset,
   onFileSelect,
@@ -253,6 +267,7 @@ export function LandmarkSidebar({
   const handleTabChange = useCallback(
     (key: TabKey) => {
       setStrainPlaying(false);
+      setLandmarkFramePlaying(false);
       if (state.isPlaying) onTogglePlay();
       setLocalTab(key);
       onTabChange?.(key);
@@ -278,6 +293,20 @@ export function LandmarkSidebar({
 
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
   const isRunning = state.status === "running";
+
+  // Landmarks tab's cardiac-frame playback — same local play-loop pattern as
+  // strainPlaying/strainFrame above, but reports into onCardiacFrameChange
+  // (which lives in useLandmarkDetection, since it must swap which frame's
+  // slices state.predictions holds) instead of a purely-local index.
+  const [landmarkFramePlaying, setLandmarkFramePlaying] = useState(false);
+  useEffect(() => {
+    if (!landmarkFramePlaying || cardiacFrameCount < 2) return;
+    const id = setInterval(
+      () => onCardiacFrameChange?.((currentCardiacFrame + 1) % cardiacFrameCount),
+      1000 / Math.max(state.playbackFps || 2, 0.5),
+    );
+    return () => clearInterval(id);
+  }, [landmarkFramePlaying, cardiacFrameCount, currentCardiacFrame, onCardiacFrameChange, state.playbackFps]);
 
   return (
     <div className="flex flex-col h-full bg-[var(--sidebar)] rounded-r-xl border border-[var(--sidebar-border)] shadow-sm overflow-hidden">
@@ -306,6 +335,26 @@ export function LandmarkSidebar({
       </div>
 
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+      {hasPredictions && activeTab === "landmarks" && cardiacFrameCount > 1 && (
+        <PlaybackBar
+          axisLabel="Frame"
+          currentFrame={currentCardiacFrame}
+          totalFrames={cardiacFrameCount}
+          isPlaying={landmarkFramePlaying}
+          playbackFps={state.playbackFps}
+          confidentCount={confidentCount ?? 0}
+          onTogglePlay={() => setLandmarkFramePlaying((p) => !p)}
+          onNextFrame={() => onCardiacFrameChange?.(Math.min(currentCardiacFrame + 1, cardiacFrameCount - 1))}
+          onPrevFrame={() => onCardiacFrameChange?.(Math.max(currentCardiacFrame - 1, 0))}
+          onSliderChange={(f) => onCardiacFrameChange?.(f)}
+          onPlaybackSpeedChange={onPlaybackSpeedChange}
+        />
+      )}
+=======
+>>>>>>> Stashed changes
       {hasPredictions && activeTab === "landmarks" && (state.frameIds.length > 1 || strainFrameCount > 1) && (
         <LandmarkFrameSwitcher
           frameIds={state.frameIds}
@@ -316,6 +365,10 @@ export function LandmarkSidebar({
         />
       )}
 
+<<<<<<< Updated upstream
+=======
+>>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
+>>>>>>> Stashed changes
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
           axisLabel="Slice"
@@ -404,6 +457,8 @@ export function LandmarkSidebar({
             onStructureVentricleChange={onStructureVentricleChange}
             structureStats={structureStats}
             isPerFrame={isPerFrame}
+            rvFacStats={rvFacStats}
+            isRvPerFrame={isRvPerFrame}
           />
         )}
         {activeTab === "strain" && (
@@ -1235,6 +1290,8 @@ function StructureTab({
   onStructureVentricleChange,
   structureStats,
   isPerFrame,
+  rvFacStats,
+  isRvPerFrame,
 }: {
   hasPredictions: boolean;
   activeModel: "unet" | "medsam";
@@ -1246,6 +1303,12 @@ function StructureTab({
    *  per-frame strain series exists); false when it's the single ED-frame
    *  snapshot repeated across playback. */
   isPerFrame?: boolean;
+  /** RV cavity-area FAC (%), global + per-ring [basal, mid, apical], from
+   *  rvAreaMetrics.ts (derived from the stored 9-segment RV strain result). */
+  rvFacStats?: { global: number | null; rings: (number | null)[] } | null;
+  /** True when rvFacStats tracks the currently playing frame (a real
+   *  per-frame RV strain series exists); false for the single ED->ES snapshot. */
+  isRvPerFrame?: boolean;
 }) {
   if (!hasPredictions) {
     return (
@@ -1301,13 +1364,34 @@ function StructureTab({
       </div>
 
       {!isLv ? (
-        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
-          <LayoutGrid className="mx-auto h-7 w-7 opacity-25" />
-          <p className="mt-2 text-xs text-muted-foreground">
-            RV cavity-area (FAC) numbers aren&apos;t computed by the backend yet — see the main panel for the
-            real RV mesh shape with prototype (placeholder) colors.
-          </p>
-        </div>
+        rvFacStats && rvFacStats.global != null ? (
+          <>
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-medium text-foreground">Cavity Area (FAC)</h4>
+              {isRvPerFrame && (
+                <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                  Live per-frame
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              <StructureStatTile label="Global" value={`${rvFacStats.global.toFixed(1)} %`} />
+              <StructureStatTile label="Basal" value={rvFacStats.rings[0] != null ? `${rvFacStats.rings[0].toFixed(1)} %` : "—"} />
+              <StructureStatTile label="Mid" value={rvFacStats.rings[1] != null ? `${rvFacStats.rings[1].toFixed(1)} %` : "—"} />
+              <StructureStatTile label="Apical" value={rvFacStats.rings[2] != null ? `${rvFacStats.rings[2].toFixed(1)} %` : "—"} />
+            </div>
+            <p className="text-[9px] text-muted-foreground leading-relaxed">
+              Short-axis MRI FAC (= −GAS), 9-segment RV bullseye — not the echo 4-chamber FAC, no validated reference range.
+            </p>
+          </>
+        ) : (
+          <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
+            <LayoutGrid className="mx-auto h-7 w-7 opacity-25" />
+            <p className="mt-2 text-xs text-muted-foreground">
+              No RV cavity-area (FAC) computed yet — run RV strain to populate this panel.
+            </p>
+          </div>
+        )
       ) : structureStats && structureStats.mean != null ? (
         <>
           <div className="flex items-center justify-between">
@@ -2032,22 +2116,25 @@ function QuickCombinedStrainView({
       {chamberFocus !== "LV" && (
       <div className="rounded-lg border border-border bg-background p-3 space-y-2">
         <div className="flex items-center gap-1.5">
-          <span className="shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-            Prototype
-          </span>
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">RV Global Strain</h4>
         </div>
         <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
           <p className="text-[9px] leading-snug text-amber-800 dark:text-amber-300">
-            RV metrics are still prototype — GCS (free-wall length) and GAS (cavity area) are computed as
-            separate measures but not yet validated against a reference range. Cavity area / FAC tiles are
-            still to come.
+            GCS (free-wall length) and GAS/FAC (cavity area) are computed as separate measures but not yet
+            validated against a reference range.
           </p>
         </div>
         {rv ? (
           <div className="grid grid-cols-2 gap-2">
             <StrainMetricCard label="Peak GCS" value={fmtPct(rv.global_rv_strain)} strainType="GCS" valueNumber={rv.global_rv_strain ?? 0} loading={sc.isComputing} />
             <StrainMetricCard label="Peak GAS" value={fmtPct(rv.global_rv_gas ?? null)} strainType="GCS" valueNumber={rv.global_rv_gas ?? 0} loading={sc.isComputing} />
+            <StrainMetricCard
+              label="Peak FAC"
+              value={fmtPct(rv.global_rv_gas != null ? -rv.global_rv_gas : null)}
+              strainType="GCS"
+              valueNumber={rv.global_rv_gas != null ? -rv.global_rv_gas : 0}
+              loading={sc.isComputing}
+            />
             <StrainMetricCard label="Peak Septal GCS" value={fmtPct(rv.global_rv_septal_gcs ?? null)} strainType="GCS" valueNumber={rv.global_rv_septal_gcs ?? 0} loading={sc.isComputing} />
             <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value="—" />
             <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value="—" />
@@ -2390,9 +2477,6 @@ function RvStrainPanel({
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5">
-        <span className="mt-0.5 shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-          Prototype
-        </span>
         <p className="text-[9.5px] leading-snug text-amber-800 dark:text-amber-300">
           {isGas
             ? "RV GAS = % change in RV cavity area per segment (short-axis). Computed, but not validated against a reference range yet."

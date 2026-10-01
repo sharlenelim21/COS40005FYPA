@@ -66,6 +66,89 @@ const runBullseyeRleScript = (
 };
 
 /**
+ * Same shape as runBullseyeRleScript, but for the RV area script (different
+ * input/output contract: no `frames`-level width/height difference, just a
+ * different scriptPath and result shape -- kept separate rather than
+ * parameterizing runBullseyeRleScript's script name, since the two scripts'
+ * outputs (`segment_values`/`stats` vs `regions`) are read differently by
+ * their respective callers.
+ */
+const runRvBullseyeRleScript = (
+    frames: any[],
+    width: number,
+    height: number,
+    logTag: string,
+): Promise<any | null> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_rv_bullseye_from_rle.py');
+    const input = JSON.stringify({ frames, width, height });
+
+    return new Promise<any | null>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [RvBullseye] Python script failed for ${logTag}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [RvBullseye] stderr: ${stderr.substring(0, 500)}`);
+                return resolve(null);
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [RvBullseye] Script reported error for ${logTag}: ${result.error}`);
+                    return resolve(null);
+                }
+                resolve(result);
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [RvBullseye] Failed to parse Python output for ${logTag}: ${parseErr?.message}`);
+                resolve(null);
+            }
+        });
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: [RvBullseye] stdin write failed (python process likely exited early): ${err.message}`);
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
+ * Per-frame RV cavity-area-per-segment, decoupled entirely from the GPU
+ * landmark/strain pipeline — RV analogue of computeFrameWallThicknessSeries.
+ * Area at a single frame is a property of that frame's own mask (no ED-vs-ES
+ * comparison needed here, same reasoning as the LV version), so this loops
+ * the RV-only RLE script once per cardiac-cycle frame. Cheap enough to
+ * auto-run right after segmentation, so the Structure/Strain tabs' RV FAC
+ * can animate per-frame without waiting on a manual "Compute all frames"
+ * (which stays landmark-aligned GCS/GAS-only). Stores the result under
+ * `rvFrameAreas` on the mask document.
+ */
+export const computeFrameRvAreaSeries = async (
+    maskId: string,
+    frames: any[],
+    width: number,
+    height: number,
+): Promise<void> => {
+    const frameIndices = Array.from(new Set(frames.map((f: any) => f.frameindex))).sort((a, b) => a - b);
+    if (frameIndices.length <= 1) return; // nothing to animate with only one frame
+
+    const results: { frameIndex: number; regions: { region: number; area: number | null }[] }[] = [];
+    for (const frameIndex of frameIndices) {
+        const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
+        const result = await runRvBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`);
+        if (result) {
+            results.push({ frameIndex, regions: result.regions });
+        }
+    }
+    if (!results.length) {
+        logger.warn(`${serviceLocation}: [FrameRvArea] No frames produced a result for mask ${maskId} — not storing.`);
+        return;
+    }
+    const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(maskId) },
+        { $set: { rvFrameAreas: { frames: results, computed_at: new Date().toISOString() }, updatedAt: new Date() } },
+    );
+    logger.info(`${serviceLocation}: [FrameRvArea] Stored ${results.length}/${frameIndices.length} frame(s) for mask ${maskId} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
+};
+
+/**
  * Compute AHA 17-segment bullseye analysis directly from the mask's RLE frame data
  * using the local Python script. No GPU or NIfTI file required.
  * Stores the result in MongoDB on the segmentation mask document.

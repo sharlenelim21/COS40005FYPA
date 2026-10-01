@@ -62,15 +62,15 @@ export function rvEdEsFac(rvStrain?: RvStrain | null): { rings: (number | null)[
   return { rings: ringFacs(pairs), global: facOf(pairs) };
 }
 
-/** Per-frame FAC per ring (each frame vs ED), from the full-cycle series.
+/** Per-frame FAC per ring + global (each frame vs ED), from the full-cycle series.
  *  Series computed before per-frame areas were stored give nulls. */
-export function rvFacSeries(rvStrainSeries?: RvStrainSeries | null): { frameIndex: number; rings: (number | null)[] }[] {
+export function rvFacSeries(rvStrainSeries?: RvStrainSeries | null): { frameIndex: number; rings: (number | null)[]; global: number | null }[] {
   return [...(rvStrainSeries?.frames ?? [])]
     .sort((a, b) => a.frameIndex - b.frameIndex)
-    .map((f) => ({
-      frameIndex: f.frameIndex,
-      rings: ringFacs(f.regions.map((r) => ({ region: r.region, ed: r.area_ed_mm2, es: r.area_mm2 }))),
-    }));
+    .map((f) => {
+      const pairs: AreaPair[] = f.regions.map((r) => ({ region: r.region, ed: r.area_ed_mm2, es: r.area_mm2 }));
+      return { frameIndex: f.frameIndex, rings: ringFacs(pairs), global: facOf(pairs) };
+    });
 }
 
 /** Peak (most negative) RV septal GCS — septal-side border, separate from

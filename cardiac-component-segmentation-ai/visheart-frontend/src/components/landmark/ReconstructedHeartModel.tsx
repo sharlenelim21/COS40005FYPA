@@ -203,12 +203,24 @@ export function ReconstructedHeartModel({
     const byLabel = new Map<number, number[]>();
     for (let i = 0; i < posAttr.count; i++) {
       const segment = labels[i] ?? 0;
+      // "strain" (value-heatmap) mode indexes `values` by the mesh's own
+      // segment-label convention: LV labels are 1-indexed (1-17), so
+      // segment-1; RV labels are 0-indexed (Apical_Seg1 = 0, see
+      // heartColor.ts's RV_SEGMENT_NAMES), so segment itself, no shift.
       const color =
         colorMode === "debug-segment"
           ? debugSegmentColor(segment)
           : colorMode === "rv-segment"
           ? rvSegmentColor(segment)
+<<<<<<< Updated upstream
           : valueToColor(values?.[segment - 1], min, max, reverseColors);
+=======
+<<<<<<< HEAD
+          : valueToColor(values?.[chamber === "rv" ? segment : segment - 1] ?? min, min, max, reverseColors);
+=======
+          : valueToColor(values?.[segment - 1], min, max, reverseColors);
+>>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
+>>>>>>> Stashed changes
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
@@ -351,7 +363,9 @@ export function ReconstructedHeartModel({
       const sel = selectedSegmentRef.current ?? -1;
 
       if (sel !== lastPulsedSegment) {
-        const prevIndices = lastPulsedSegment >= 1 ? segmentVertexIndices.get(lastPulsedSegment) : undefined;
+        // >= 0, not >= 1: RV segments are 0-indexed (Apical_Seg1 = 0), so a
+        // real RV selection can legitimately be 0 -- only -1 means "none".
+        const prevIndices = lastPulsedSegment >= 0 ? segmentVertexIndices.get(lastPulsedSegment) : undefined;
         if (prevIndices) {
           for (const vi of prevIndices) {
             colorAttr.setXYZ(vi, baseColors[vi * 3], baseColors[vi * 3 + 1], baseColors[vi * 3 + 2]);
@@ -361,7 +375,7 @@ export function ReconstructedHeartModel({
         lastPulsedSegment = sel;
       }
 
-      if (sel >= 1) {
+      if (sel >= 0) {
         const indices = segmentVertexIndices.get(sel);
         if (indices) {
           const t = ((Math.sin(clock.getElapsedTime() * 6) + 1) / 2) * 0.9;
@@ -394,7 +408,7 @@ export function ReconstructedHeartModel({
 
       if (sel !== lastFocusedSegment) {
         lastFocusedSegment = sel;
-        const indices = sel >= 1 ? segmentVertexIndices.get(sel) : undefined;
+        const indices = sel >= 0 ? segmentVertexIndices.get(sel) : undefined;
         const posAttr = mesh.geometry.getAttribute("position");
         if (indices && indices.length && posAttr) {
           let sumX = 0, sumZ = 0;
@@ -419,7 +433,7 @@ export function ReconstructedHeartModel({
     const animate = () => {
       animationId = requestAnimationFrame(animate);
       const focusing = updateFocusRotation();
-      if (!isDragging && !isPausedRef.current && !focusing && (selectedSegmentRef.current ?? -1) < 1) {
+      if (!isDragging && !isPausedRef.current && !focusing && (selectedSegmentRef.current ?? -1) < 0) {
         pivot.rotation.y += 0.006;
       }
       updateSelectionHighlight();

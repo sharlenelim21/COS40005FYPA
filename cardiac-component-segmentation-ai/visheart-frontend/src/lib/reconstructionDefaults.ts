@@ -16,7 +16,11 @@ export function defaultReconstructionConfig(
     exportFormat: "glb",
     edFrame: 1,
     numIterations: gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU,
-    resolution: 64,
+    // 128 (raised from 64, 2026-10-01): at 64, a segment with a healthy, correctly-computed
+    // vertex share can still render as a thin, easily-occluded sliver on a crescent-shaped RV
+    // cross-section -- confirmed directly on a real patient. Stays user-adjustable (opt-in,
+    // see ReconstructionConfigDialog's advanced panel), this only raises the starting point.
+    resolution: 128,
     segmentationModel,
     chamber,
   };
