@@ -101,7 +101,8 @@ export function normalizeLandmarkResponse(result: LandmarkInferenceResponse): La
   if (!anySwapped) return result;
 
   const out: LandmarkInferenceResponse = { ...result, predictions };
-  const both = predictions.filter((p) => p.rv_insertion_1 && p.rv_insertion_2);
+  // ED (frame 0) only -- the mean must not blend positions across cardiac phases.
+  const both = predictions.filter((p) => p.rv_insertion_1 && p.rv_insertion_2 && p.frame_id === 0);
   if (result.avg_lm1 && result.avg_lm2 && both.length) {
     const mean = (vals: number[]) => vals.reduce((s, v) => s + v, 0) / vals.length;
     out.avg_lm1 = { x: mean(both.map((p) => p.rv_insertion_1[0])), y: mean(both.map((p) => p.rv_insertion_1[1])) };
@@ -121,7 +122,12 @@ export interface LandmarkPageState {
   predictions: FramePrediction[];
   totalFrames: number;
   imageDimensions: { width: number; height: number };
+  /** Slice position within the selected cardiac frame's predictions. */
   currentFrame: number;
+  /** Cardiac-phase frame whose slices the landmark viewer is showing (0-indexed frame_id). */
+  landmarkFrame: number;
+  /** Every cardiac frame the detection returned landmarks for, ascending. */
+  frameIds: number[];
   isPlaying: boolean;
   playbackFps: number;
   error: string | null;
@@ -261,6 +267,13 @@ export function landmarkFramesToEdits(
           if (!savedKeys.has(pointKey) && getLandmarkCoord(raw, pointKey)) {
             (entry as Record<string, unknown>)[pointKey] = undefined;
           }
+        }
+        // A saved slice only reaches this point if it carries no collapsed_to_mean point, so the
+        // user has edited it. When both points were deleted nothing is left to carry the promoted
+        // "normal" flag, and the slice would fall back to the raw prediction's collapsed_to_mean
+        // flag on reload -- drawing the mean point again for landmarks that were deleted and saved.
+        if (raw.flag === "collapsed_to_mean" && !("flag" in entry)) {
+          entry.flag = "normal";
         }
       }
       if (Object.keys(entry).length > 0) {

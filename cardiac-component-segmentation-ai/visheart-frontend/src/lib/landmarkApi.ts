@@ -321,8 +321,8 @@ export const landmarkApi = {
 
   jobSummary: async (
     projectId: string,
-  ): Promise<{ active: "running" | "queued" | null; hasCompleted: boolean } | null> => {
-    if (USE_STUB) return { active: null, hasCompleted: landmarkApi.hasCached(projectId) };
+  ): Promise<{ active: "running" | "queued" | null; hasCompleted: boolean; progress: number | null } | null> => {
+    if (USE_STUB) return { active: null, hasCompleted: landmarkApi.hasCached(projectId), progress: null };
     try {
       const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
         `${ENDPOINT}/jobs/${projectId}`,
@@ -330,16 +330,19 @@ export const landmarkApi = {
       const cutoff = Date.now() - 30 * 60 * 1000;
       const landmarkJobs = (response.data?.jobs ?? []).filter((j) => /landmark/i.test(String(j.model_used ?? "")));
       let active: "running" | "queued" | null = null;
+      let progress: number | null = null;
       for (const j of landmarkJobs) {
         const status = String(j.status ?? "").toLowerCase();
         if (status !== "pending" && status !== "in_progress") continue;
         const created = Date.parse(String(j.createdAt ?? ""));
         if (Number.isFinite(created) && created < cutoff) continue;
-        if (status === "in_progress") active = "running";
-        else active ??= "queued";
+        if (status === "in_progress") {
+          active = "running";
+          if (typeof j.progress === "number") progress = j.progress;
+        } else active ??= "queued";
       }
       const hasCompleted = landmarkJobs.some((j) => String(j.status ?? "").toLowerCase() === "completed");
-      return { active, hasCompleted };
+      return { active, hasCompleted, progress };
     } catch {
       return null;
     }

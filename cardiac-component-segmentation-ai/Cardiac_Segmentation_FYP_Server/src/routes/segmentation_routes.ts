@@ -1898,7 +1898,10 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             for (const r of results) if (r) computed.push(r);
         }
 
-        const edRegions = (computed[0]?.regions ?? []).map((r: any) => ({
+        // ED's own areas are the same in every comparison, so any computed frame that returned
+        // regions can supply them -- not just whichever happened to finish first.
+        const edSource = computed.find((c: any) => Array.isArray(c?.regions) && c.regions.length > 0) ?? computed[0];
+        const edRegions = (edSource?.regions ?? []).map((r: any) => ({
             region: r.region,
             label: r.label,
             strain: 0,
@@ -1910,7 +1913,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
         const series = [
             {
                 frameIndex: edFrameIndex, global_rv_strain: 0, global_rv_gas: 0, global_rv_septal_gcs: 0, regions: edRegions,
-                septal_regions: (computed[0]?.septal_regions ?? []).map((sr: any) => ({ ...sr, gcs: 0 })),
+                septal_regions: (edSource?.septal_regions ?? []).map((sr: any) => ({ ...sr, gcs: 0 })),
             },
             ...computed,
         ].sort((a, b) => a.frameIndex - b.frameIndex);

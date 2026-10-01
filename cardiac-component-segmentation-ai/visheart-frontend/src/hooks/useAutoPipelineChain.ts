@@ -78,6 +78,26 @@ const isTerminal = (s: StepStatus) => s === "done" || s === "failed" || s === "s
 const modelLabel = (m: Model) => (m === "medsam" ? "MedSAM" : "UNet");
 const comboLabel = (m: Model, c: Chamber) => `${modelLabel(m)} · ${c.toUpperCase()}`;
 
+/**
+ * Every step in the order it must run: for each model its segmentation, then its LV and RV
+ * reconstructions, and finally landmark detection. A step may start only once every step before
+ * it has finished, so the GPU is only ever asked to do one thing at a time.
+ */
+function orderedSteps(state: PipelineState): Array<SegStep | ReconStep | LandmarkStep> {
+  const out: Array<SegStep | ReconStep | LandmarkStep> = [];
+  for (const model of SEG_MODEL_ORDER) {
+    const seg = state.seg.find((s) => s.model === model);
+    if (!seg) continue;
+    out.push(seg);
+    for (const chamber of ["lv", "rv"] as Chamber[]) {
+      const recon = state.recon.find((r) => r.model === model && r.chamber === chamber);
+      if (recon) out.push(recon);
+    }
+  }
+  if (state.landmark) out.push(state.landmark);
+  return out;
+}
+
 function fromJobStatus(raw: unknown): StepStatus | null {
   const s = String(raw ?? "").toLowerCase();
   if (s === "pending") return "queued";
@@ -124,6 +144,25 @@ function editableMaskCreatedAt(segmentations: unknown, model: Model): number | n
 type ErrorResponse = { status?: number; data?: { message?: string; reason?: string; jobUuid?: string; jobStatus?: string } };
 const responseOf = (error: unknown) => (error as { response?: ErrorResponse })?.response;
 
+async function startSegStep(pid: string, step: SegStep) {
+  try {
+    const res = await segmentationApi.startSegmentation(pid, step.model, "auto");
+    step.status = "queued";
+    step.jobUuid = res?.uuid;
+  } catch (error: unknown) {
+    const response = responseOf(error);
+    if (response?.status === 409) {
+      step.status = fromJobStatus(response.data?.jobStatus) ?? "queued";
+      step.jobUuid = response.data?.jobUuid;
+      step.note = "already running";
+    } else {
+      step.status = "failed";
+      step.note = response?.data?.message || "Could not start segmentation.";
+      toast.error(`Could not start ${modelLabel(step.model)} segmentation`, { description: step.note });
+    }
+  }
+}
+
 export function useAutoPipelineChain(inputs: PipelineInputs) {
   const { projectId } = inputs;
   const [pipeline, setPipelineState] = useState<PipelineState | null>(null);
@@ -151,9 +190,6 @@ export function useAutoPipelineChain(inputs: PipelineInputs) {
     try {
       const raw = sessionStorage.getItem(storageKey(projectId));
       const parsed = raw ? (JSON.parse(raw) as PipelineState) : null;
-      for (const step of parsed?.seg ?? []) {
-        if (step.status === "pending") step.status = "queued";
-      }
       pipelineRef.current = parsed;
       setPipelineState(parsed);
     } catch {
@@ -250,62 +286,70 @@ export function useAutoPipelineChain(inputs: PipelineInputs) {
         }
       }
 
-      for (const r of next.recon) {
-        if (r.status !== "pending") continue;
-        const seg = next.seg.find((s) => s.model === r.model);
-        if (!seg || seg.status === "failed") {
-          r.status = "skipped";
-          r.note = "segmentation failed";
-          changed = true;
-        }
-      }
+      const sequence = orderedSteps(next);
+      for (let i = 0; i < sequence.length; i++) {
+        const step = sequence[i];
+        if (step.status !== "pending") continue;
+        if (!sequence.slice(0, i).every((prev) => isTerminal(prev.status))) break;
+        if (step === next.landmark) break;
 
-      for (const r of next.recon) {
-        if (r.status !== "pending") continue;
-        const seg = next.seg.find((s) => s.model === r.model);
-        if (seg?.status !== "done") continue;
-        changed = true;
-        if (inp.existing[r.chamber].has(r.model)) {
-          r.status = "skipped";
-          r.note = "already exists";
-          continue;
-        }
-        if (inp.building[r.chamber].has(r.model)) {
-          r.status = "queued";
-          r.note = "already building";
-          continue;
-        }
-        try {
-          const res = await reconstructionApi.startReconstruction(
-            pid,
-            buildReconstructionRequest(
-              defaultReconstructionConfig(r.model, r.chamber, inp.gpuAvailable),
-              inp.projectName || "Project",
-            ),
-          );
-          r.status = "queued";
-          r.jobUuid = res?.uuid;
-        } catch (error: unknown) {
-          const response = responseOf(error);
-          if (response?.status === 409 && response.data?.reason === "job_in_progress") {
-            r.status = "queued";
-            r.note = "already building";
-          } else if (response?.status === 409) {
+        if ("chamber" in step) {
+          const r = step;
+          const seg = next.seg.find((x) => x.model === r.model);
+          changed = true;
+          if (seg?.status !== "done") {
+            r.status = "skipped";
+            r.note = "segmentation failed";
+            continue;
+          }
+          if (inp.existing[r.chamber].has(r.model)) {
             r.status = "skipped";
             r.note = "already exists";
-          } else if (response) {
-            r.status = "failed";
-            r.note = response.data?.message || "could not start";
-            toast.error(`Could not start ${comboLabel(r.model, r.chamber)} reconstruction`, { description: r.note });
-          } else {
-            r.status = "pending";
+            continue;
           }
+          if (inp.building[r.chamber].has(r.model)) {
+            r.status = "queued";
+            r.note = "already building";
+            continue;
+          }
+          try {
+            const res = await reconstructionApi.startReconstruction(
+              pid,
+              buildReconstructionRequest(
+                defaultReconstructionConfig(r.model, r.chamber, inp.gpuAvailable),
+                inp.projectName || "Project",
+              ),
+            );
+            r.status = "queued";
+            r.jobUuid = res?.uuid;
+          } catch (error: unknown) {
+            const response = responseOf(error);
+            if (response?.status === 409 && response.data?.reason === "job_in_progress") {
+              r.status = "queued";
+              r.note = "already building";
+            } else if (response?.status === 409) {
+              r.status = "skipped";
+              r.note = "already exists";
+            } else if (response) {
+              r.status = "failed";
+              r.note = response.data?.message || "could not start";
+              toast.error(`Could not start ${comboLabel(r.model, r.chamber)} reconstruction`, { description: r.note });
+            } else {
+              r.status = "pending";
+              changed = false;
+            }
+          }
+          refreshRecons = true;
+          continue;
         }
-        refreshRecons = true;
+
+        const segStep = step as SegStep;
+        await startSegStep(pid, segStep);
+        changed = true;
       }
 
       const lm = next.landmark;
-      if (lm?.status === "pending" && !next.recon.some((r) => r.status === "pending")) {
+      if (lm?.status === "pending" && next.seg.every((x) => isTerminal(x.status)) && next.recon.every((x) => isTerminal(x.status))) {
         const preferred = next.seg.find((s) => s.model === (lm.model ?? "unet")) ?? next.seg[0];
         const fallback = next.seg.find((s) => s !== preferred && s.status === "done");
         const source = preferred?.status === "done" ? preferred : preferred?.status === "failed" ? fallback : undefined;
@@ -456,30 +500,9 @@ export function useAutoPipelineChain(inputs: PipelineInputs) {
           : null,
       };
       setPipeline(initial);
-
-      const seg = initial.seg.map((s) => ({ ...s }));
-      for (const step of seg) {
-        try {
-          const res = await segmentationApi.startSegmentation(pid, step.model, "auto");
-          step.status = "queued";
-          step.jobUuid = res?.uuid;
-        } catch (error: unknown) {
-          const response = responseOf(error);
-          if (response?.status === 409) {
-            step.status = fromJobStatus(response.data?.jobStatus) ?? "queued";
-            step.jobUuid = response.data?.jobUuid;
-            step.note = "already running";
-          } else {
-            step.status = "failed";
-            step.note = response?.data?.message || "Could not start segmentation.";
-            toast.error(`Could not start ${modelLabel(step.model)} segmentation`, { description: step.note });
-          }
-        }
-      }
-      if (pipelineRef.current === initial) setPipeline({ ...initial, seg });
-      await inputsRef.current.refreshJobs();
+      await tick();
     },
-    [setPipeline],
+    [setPipeline, tick],
   );
 
   const segActive = !!pipeline?.seg.some((s) => isActiveStep(s.status));

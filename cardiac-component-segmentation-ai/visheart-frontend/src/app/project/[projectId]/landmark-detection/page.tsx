@@ -30,7 +30,7 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
-import { KineticProgress } from "@/components/ui/kinetic-progress";
+import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
@@ -193,6 +193,8 @@ export default function LandmarkDetectionPage() {
   const {
     state,
     hydrating,
+    allPredictions,
+    handleLandmarkFrameChange,
     replacementFileError,
     currentPrediction,
     confidentCount,
@@ -548,8 +550,8 @@ export default function LandmarkDetectionPage() {
       return;
     }
 
-    const validPreds = state.predictions.filter(
-      (p) => p.rv_insertion_1 && p.rv_insertion_2,
+    const validPreds = allPredictions.filter(
+      (p) => p.frame_id === 0 && p.rv_insertion_1 && p.rv_insertion_2,
     );
     if (validPreds.length === 0) return;
 
@@ -577,7 +579,7 @@ export default function LandmarkDetectionPage() {
       filtered.reduce((s, a) => s + Math.cos(a), 0),
     );
     setAhaAlignmentAngle(finalRad * (180 / Math.PI));
-  }, [state.predictions, state.avgLm1, state.avgLm2]);
+  }, [allPredictions, state.avgLm1, state.avgLm2]);
 
   const handleResetAlignment = useCallback(() => {
     setAhaAlignmentAngle(null);
@@ -590,6 +592,26 @@ export default function LandmarkDetectionPage() {
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
   const autoRunStartedRef = useRef(false);
 
+  // Real progress of the running detection job, as reported by the GPU per slice.
+  const [detectionProgress, setDetectionProgress] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isRunning || !projectId) {
+      setDetectionProgress(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      const summary = await landmarkApi.jobSummary(projectId);
+      if (!cancelled && summary) setDetectionProgress(summary.progress);
+    };
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isRunning, projectId]);
+
   // Prefer the GPU response's own top-level summary (state.nTotal etc.),
   // but those are optional on FramePrediction/LandmarkInferenceResponse and
   // absent on older stored detection runs -- e.g. patient005_4d's stored
@@ -600,9 +622,8 @@ export default function LandmarkDetectionPage() {
   // counting them client-side means the summary always has something to
   // show whenever real predictions exist, regardless of backend version.
   const landmarkSummaryStats = useMemo(() => {
-    if (state.nTotal != null) {
-      return { nTotal: state.nTotal, nCollapsed: state.nCollapsed, n2ch: state.n2ch, n1chFallback: state.n1chFallback };
-    }
+    // Counted from the selected frame's slices so the summary follows the frame toggle. The GPU's
+    // own top-level totals span every frame, which would not match what the strip shows.
     const preds = state.predictions;
     return {
       nTotal: preds.length,
@@ -610,7 +631,7 @@ export default function LandmarkDetectionPage() {
       n2ch: preds.filter((p) => p.model_used === "2ch").length,
       n1chFallback: preds.filter((p) => p.model_used === "1ch_fallback").length,
     };
-  }, [state.nTotal, state.nCollapsed, state.n2ch, state.n1chFallback, state.predictions]);
+  }, [state.predictions]);
 
   const landmarkSegModel: "unet" | "medsam" =
     existingSegModels[activeModel] ? activeModel
@@ -778,10 +799,10 @@ export default function LandmarkDetectionPage() {
   }, [currentLandmarkEditKey]);
 
   const handleSaveLandmarks = useCallback(async () => {
-    if (isSavingLandmarks || state.predictions.length === 0) return;
+    if (isSavingLandmarks || allPredictions.length === 0) return;
     setIsSavingLandmarks(true);
     try {
-      const frames = framePredictionsToLandmarkFrames(state.predictions, landmarkEdits);
+      const frames = framePredictionsToLandmarkFrames(allPredictions, landmarkEdits);
       await landmarkApi.saveLandmarks(projectId, {
         frames,
         segmentationModel: selectedBullseyeModel,
@@ -840,7 +861,7 @@ export default function LandmarkDetectionPage() {
     } finally {
       setIsSavingLandmarks(false);
     }
-  }, [isSavingLandmarks, state.predictions, landmarkEdits, projectId, selectedBullseyeModel, fetchBullseye]);
+  }, [isSavingLandmarks, allPredictions, landmarkEdits, projectId, selectedBullseyeModel, fetchBullseye]);
 
   // Reload saved landmark edits on mount and after every successful (re-)run —
   // local landmarkEdits state was just cleared by run/rerunDetectionAndResetEdits,
@@ -859,7 +880,7 @@ export default function LandmarkDetectionPage() {
     let cancelled = false;
     landmarkApi.loadSavedLandmarks(projectId).then((doc) => {
       if (cancelled || !doc) return;
-      const edits = landmarkFramesToEdits(doc, state.predictions);
+      const edits = landmarkFramesToEdits(doc, allPredictions);
       setLandmarkEdits(edits);
       setSavedLandmarkEdits(edits);
     }).catch(() => {
@@ -1487,6 +1508,7 @@ export default function LandmarkDetectionPage() {
             onNextFrame={handleNextFrame}
             onPrevFrame={handlePrevFrame}
             onSliderChange={handleSliderChange}
+            onLandmarkFrameChange={handleLandmarkFrameChange}
             onPlaybackSpeedChange={handlePlaybackSpeedChange}
             onRerun={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
             onReset={handleReset}
@@ -1803,7 +1825,11 @@ export default function LandmarkDetectionPage() {
               {isRunning && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-background/70 backdrop-blur-sm z-20 rounded-lg">
                   <div className="text-center space-y-3">
-                    <KineticProgress tone="primary" size="h-2" className="w-56" label="Landmark detection running" />
+                    {hasProgressReading(detectionProgress) ? (
+                      <ProgressMeter className="w-56" value={detectionProgress} />
+                    ) : (
+                      <KineticProgress tone="primary" size="h-2" className="w-56" label="Landmark detection running" />
+                    )}
                     <p className="text-sm font-medium">Running landmark detection…</p>
                     <p className="text-xs text-muted-foreground mt-1">
                       This may take a moment
@@ -1877,6 +1903,7 @@ export default function LandmarkDetectionPage() {
                 onNextFrame={handleNextFrame}
                 onPrevFrame={handlePrevFrame}
                 onSliderChange={handleSliderChange}
+                onLandmarkFrameChange={handleLandmarkFrameChange}
                 onPlaybackSpeedChange={handlePlaybackSpeedChange}
                 onRerun={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
                 onReset={handleReset}

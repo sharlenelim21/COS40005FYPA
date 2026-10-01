@@ -34,16 +34,17 @@ const parseCompletedLandmarkJobResult = (job: any) => {
 
     // New format: slices[] → translate to predictions[] the frontend understands.
     //
-    // The GPU processes NIfTI shape[2] spatial slices from cardiac frame 0.
-    // Each entry s.slice is the SPATIAL slice index (0, 1, 2 …).
+    // The GPU processes the NIfTI's spatial slices (shape[2]) for every cardiac frame.
+    // Each entry carries s.frame (cardiac phase) and s.slice (SPATIAL slice index). Results from
+    // before per-frame detection have no s.frame and were ED-only, so they read as frame 0.
     // The tar image cache keys are {projectId}_f{frame}_s{slice}, so:
-    //   frame_id = 0     (always cardiac frame 0 — what the GPU ran on)
+    //   frame_id = s.frame ?? 0
     //   slice_id = s.slice  (spatial position in the stack)
-    // This lets getMRIImage(0, 0), getMRIImage(0, 1), getMRIImage(0, 2) resolve
-    // correctly and the mask overlay lookup also matches editable_frame_0_slice_N_*.
+    // This lets getMRIImage(frame, slice) resolve correctly and the mask overlay lookup also
+    // matches editable_frame_F_slice_N_*.
     if (Array.isArray(r.slices) && r.slices.length > 0) {
       const predictions = r.slices.map((s: any) => ({
-        frame_id: 0,
+        frame_id: typeof s.frame === "number" ? s.frame : 0,
         slice_id: s.slice,
         rv_insertion_1: [s.lm1?.x ?? 0, s.lm1?.y ?? 0],
         rv_insertion_2: [s.lm2?.x ?? 0, s.lm2?.y ?? 0],
@@ -167,7 +168,7 @@ router.get(
           res.status(200).json({
             success: true,
             result: null,
-            job: { uuid: job.uuid, status: job.status, message: job.message },
+            job: { uuid: job.uuid, status: job.status, message: job.message, progress: typeof job.progress === "number" ? job.progress : null },
           });
           return;
         }

@@ -27,7 +27,7 @@ function facOf(pairs: AreaPair[]): number | null {
   let sumEs = 0;
   let n = 0;
   for (const p of pairs) {
-    if (typeof p.ed === "number" && typeof p.es === "number") {
+    if (typeof p.ed === "number" && Number.isFinite(p.ed) && typeof p.es === "number" && Number.isFinite(p.es)) {
       sumEd += p.ed;
       sumEs += p.es;
       n++;

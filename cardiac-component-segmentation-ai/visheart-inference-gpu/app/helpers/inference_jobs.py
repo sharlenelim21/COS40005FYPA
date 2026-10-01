@@ -858,6 +858,10 @@ async def _process_landmark_job(
                 seg_mask_path,
                 device,
                 checkpoint_path,
+                None,
+                None,
+                None,
+                ProgressReporter(callback_url, uuid).report,
             )
 
             # New response format: direct dict with "slices", "avg_lm1", etc.

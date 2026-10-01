@@ -16,7 +16,7 @@ import logging
 import traceback
 from math import sqrt
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import nibabel as nib
 import numpy as np
@@ -330,6 +330,7 @@ def run_landmark_inference_from_nifti(
     model_2ch: Optional[nn.Module] = None,
     model_1ch: Optional[nn.Module] = None,
     torch_device: Optional[torch.device] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     """
     Run landmark detection on a NIfTI MRI volume.
@@ -380,35 +381,38 @@ def run_landmark_inference_from_nifti(
                 model_1ch = model_2ch
 
     # --- Load MRI volume ---
-    # Reverted back to ED (frame 0) only. Bullseye/strain alignment is
-    # anchored to ED everywhere else in this codebase (the CPD warp fit, the
-    # 4D reconstruction's star topology, the ED-vs-ES strain comparison all
-    # use one fixed reference) — running landmark detection across every
-    # cardiac frame cost ~n_frames times the inference time for coordinates
-    # that would mostly never feed anything downstream, since only ED's
-    # points are ever used for alignment.
+    # Landmarks are detected on every cardiac frame so each frame's slices can be reviewed and
+    # edited on their own. Bullseye/strain alignment is still anchored to ED (frame 0) -- the
+    # avg_lm1/avg_lm2 returned below are averaged over frame 0 only, never blended across phases.
+    # Set LANDMARK_ALL_FRAMES=0 to detect on ED only (cost scales with the number of frames).
     nii = nib.load(nifti_path)
-    img = nii.get_fdata().astype(np.float32)
-    if img.ndim == 4:
-        img = img[:, :, :, 0]  # take first cardiac frame
-    if img.ndim != 3:
-        raise ValueError(f"Unsupported NIfTI shape: {img.shape}")
+    img_full = nii.get_fdata().astype(np.float32)
+    if img_full.ndim == 3:
+        img_full = img_full[..., np.newaxis]
+    if img_full.ndim != 4:
+        raise ValueError(f"Unsupported NIfTI shape: {img_full.shape}")
+
+    all_frames = os.getenv("LANDMARK_ALL_FRAMES", "1").strip() != "0"
+    frame_ids = list(range(img_full.shape[3])) if all_frames else [0]
+    img = img_full[:, :, :, 0]  # ED volume: shape reference and normalisation statistics
 
     n_slices = img.shape[2]
-    logger.info(f"[Landmark] MRI shape {img.shape}, processing {n_slices} slices on {torch_device}")
+    logger.info(
+        f"[Landmark] MRI shape {img_full.shape}, processing {n_slices} slices x {len(frame_ids)} frame(s) on {torch_device}"
+    )
 
     # --- Load seg volume once ---
-    seg_vol: Optional[np.ndarray] = None
+    seg_full: Optional[np.ndarray] = None
     if seg_mask_path is not None:
         try:
             seg_nii = nib.load(seg_mask_path)
-            seg_vol = seg_nii.get_fdata().astype(np.float32)
-            if seg_vol.ndim == 4:
-                seg_vol = seg_vol[:, :, :, 0]
-            logger.info(f"[Landmark] Seg mask shape {seg_vol.shape}")
+            seg_full = seg_nii.get_fdata().astype(np.float32)
+            if seg_full.ndim == 3:
+                seg_full = seg_full[..., np.newaxis]
+            logger.info(f"[Landmark] Seg mask shape {seg_full.shape}")
         except Exception as exc:
             logger.warning(f"[Landmark] Could not load seg mask: {exc} — 1ch fallback for all slices")
-            seg_vol = None
+            seg_full = None
 
     # --- Per-volume normalisation stats (matches training _PatientNormCache) ---
     vol_mu, vol_std = _zscore_volume(img)
@@ -424,103 +428,113 @@ def run_landmark_inference_from_nifti(
 
     H_orig, W_orig = img.shape[0], img.shape[1]
 
-    for i in range(n_slices):
-        img_2d = img[:, :, i]
+    total_steps = n_slices * len(frame_ids)
+    for f_pos, f in enumerate(frame_ids):
+        for i in range(n_slices):
+            if progress_callback is not None:
+                progress_callback(f_pos * n_slices + i, total_steps)
+            img_2d = img_full[:, :, i, f]
 
-        seg_2d: Optional[np.ndarray] = None
-        if seg_vol is not None and i < seg_vol.shape[2]:
-            seg_2d = np.round(seg_vol[:, :, i]).astype(np.float32)
+            # The mask is only usable when it has this frame; otherwise this slice falls back to 1ch.
+            seg_2d: Optional[np.ndarray] = None
+            if seg_full is not None and i < seg_full.shape[2] and f < seg_full.shape[3]:
+                seg_2d = np.round(seg_full[:, :, i, f]).astype(np.float32)
 
-        if is_seg_valid(seg_2d):
-            tensor = preprocess_2ch(img_2d, seg_2d, vol_mu, vol_std)
-            model_to_use = model_2ch
-            model_used = "2ch"
-        else:
-            tensor = preprocess_1ch(img_2d, vol_mu, vol_std)
-            model_to_use = model_1ch
-            model_used = "1ch_fallback"
+            if is_seg_valid(seg_2d):
+                tensor = preprocess_2ch(img_2d, seg_2d, vol_mu, vol_std)
+                model_to_use = model_2ch
+                model_used = "2ch"
+            else:
+                tensor = preprocess_1ch(img_2d, vol_mu, vol_std)
+                model_to_use = model_1ch
+                model_used = "1ch_fallback"
 
-        if i == 0:
+            if i == 0:
+                logger.info(
+                    f"[Landmark] DEBUG slice 0 tensor: shape={list(tensor.shape)} "
+                    f"min={tensor.min():.3f} max={tensor.max():.3f} mean={tensor.mean():.3f} "
+                    f"vol_mu={vol_mu:.3f} vol_std={vol_std:.3f}"
+                )
+
+            heatmap = _tta_predict(model_to_use, tensor, torch_device)
+
+            hm_lm1 = heatmap[0]
+            hm_lm2 = heatmap[1]
+            lm1_x, lm1_y, hm1_max = _heatmap_to_coord(hm_lm1, H_orig, W_orig)
+            lm2_x, lm2_y, hm2_max = _heatmap_to_coord(hm_lm2, H_orig, W_orig)
+
+            # --- RVIP anterior/inferior class check ---
+            # Model channel order (lm1/lm2) has no confirmed anatomical identity;
+            # verify it geometrically against the LV centroid and reorder so
+            # lm1 = anterior, lm2 = inferior, matching what compute_alignment_angle
+            # downstream assumes. Only possible when an LV cavity mask exists for
+            # this slice (2ch mode) — otherwise the raw model order is kept as-is.
+            lv_centroid = _lv_centroid_from_mask(seg_2d)
+            class_swapped = False
+            if lv_centroid is not None:
+                anterior_pt, inferior_pt, class_swapped = _assign_rvip_classes(
+                    (lm1_x, lm1_y), (lm2_x, lm2_y), lv_centroid
+                )
+                lm1_x, lm1_y = anterior_pt
+                lm2_x, lm2_y = inferior_pt
+                n_class_checked += 1
+                if class_swapped:
+                    n_class_swapped += 1
+
             logger.info(
-                f"[Landmark] DEBUG slice 0 tensor: shape={list(tensor.shape)} "
-                f"min={tensor.min():.3f} max={tensor.max():.3f} mean={tensor.mean():.3f} "
-                f"vol_mu={vol_mu:.3f} vol_std={vol_std:.3f}"
+                f"[Landmark] frame {f} slice {i} [{model_used}] "
+                f"lm1=({lm1_x:.1f},{lm1_y:.1f}) max={hm1_max:.4f}  "
+                f"lm2=({lm2_x:.1f},{lm2_y:.1f}) max={hm2_max:.4f}  "
+                f"dist={sqrt((lm1_x-lm2_x)**2+(lm1_y-lm2_y)**2):.1f}"
+                + (f"  class_swapped={class_swapped} centroid={lv_centroid}" if lv_centroid is not None else "  class_check=skipped(no LV mask)")
             )
 
-        heatmap = _tta_predict(model_to_use, tensor, torch_device)
+            # Distance and collapse flag — NEVER overwrite original coords
+            dist = sqrt((lm1_x - lm2_x) ** 2 + (lm1_y - lm2_y) ** 2)
+            if dist < 10.0:
+                mean_x = (lm1_x + lm2_x) / 2.0
+                mean_y = (lm1_y + lm2_y) / 2.0
+                flag = "collapsed_to_mean"
+                display_mean = {"x": float(mean_x), "y": float(mean_y)}
+                n_collapsed += 1
+            else:
+                flag = "normal"
+                display_mean = None
 
-        hm_lm1 = heatmap[0]
-        hm_lm2 = heatmap[1]
-        lm1_x, lm1_y, hm1_max = _heatmap_to_coord(hm_lm1, H_orig, W_orig)
-        lm2_x, lm2_y, hm2_max = _heatmap_to_coord(hm_lm2, H_orig, W_orig)
+            confidence = "high" if hm1_max > 0.6 and hm2_max > 0.6 else "low"
 
-        # --- RVIP anterior/inferior class check ---
-        # Model channel order (lm1/lm2) has no confirmed anatomical identity;
-        # verify it geometrically against the LV centroid and reorder so
-        # lm1 = anterior, lm2 = inferior, matching what compute_alignment_angle
-        # downstream assumes. Only possible when an LV cavity mask exists for
-        # this slice (2ch mode) — otherwise the raw model order is kept as-is.
-        lv_centroid = _lv_centroid_from_mask(seg_2d)
-        class_swapped = False
-        if lv_centroid is not None:
-            anterior_pt, inferior_pt, class_swapped = _assign_rvip_classes(
-                (lm1_x, lm1_y), (lm2_x, lm2_y), lv_centroid
-            )
-            lm1_x, lm1_y = anterior_pt
-            lm2_x, lm2_y = inferior_pt
-            n_class_checked += 1
-            if class_swapped:
-                n_class_swapped += 1
+            if model_used == "2ch":
+                n_2ch_count += 1
+            else:
+                n_1ch_count += 1
 
-        logger.info(
-            f"[Landmark] slice {i} [{model_used}] "
-            f"lm1=({lm1_x:.1f},{lm1_y:.1f}) max={hm1_max:.4f}  "
-            f"lm2=({lm2_x:.1f},{lm2_y:.1f}) max={hm2_max:.4f}  "
-            f"dist={sqrt((lm1_x-lm2_x)**2+(lm1_y-lm2_y)**2):.1f}"
-            + (f"  class_swapped={class_swapped} centroid={lv_centroid}" if lv_centroid is not None else "  class_check=skipped(no LV mask)")
-        )
+            if f == 0:
+                lm1_xs.append(float(lm1_x))
+                lm1_ys.append(float(lm1_y))
+                lm2_xs.append(float(lm2_x))
+                lm2_ys.append(float(lm2_y))
 
-        # Distance and collapse flag — NEVER overwrite original coords
-        dist = sqrt((lm1_x - lm2_x) ** 2 + (lm1_y - lm2_y) ** 2)
-        if dist < 10.0:
-            mean_x = (lm1_x + lm2_x) / 2.0
-            mean_y = (lm1_y + lm2_y) / 2.0
-            flag = "collapsed_to_mean"
-            display_mean = {"x": float(mean_x), "y": float(mean_y)}
-            n_collapsed += 1
-        else:
-            flag = "normal"
-            display_mean = None
+            slices_out.append({
+                "frame": f,
+                "slice": i,
+                "lm1": {"x": float(lm1_x), "y": float(lm1_y)},
+                "lm2": {"x": float(lm2_x), "y": float(lm2_y)},
+                "display_mean": display_mean,
+                "flag": flag,
+                "confidence": confidence,
+                "model_used": model_used,
+                "hm1_max": float(hm1_max),
+                "hm2_max": float(hm2_max),
+                "lm_dist": float(dist),
+                "class_check": {
+                    "checked": lv_centroid is not None,
+                    "swapped": class_swapped,
+                    "centroid": {"x": lv_centroid[0], "y": lv_centroid[1]} if lv_centroid is not None else None,
+                },
+            })
 
-        confidence = "high" if hm1_max > 0.6 and hm2_max > 0.6 else "low"
-
-        if model_used == "2ch":
-            n_2ch_count += 1
-        else:
-            n_1ch_count += 1
-
-        lm1_xs.append(float(lm1_x))
-        lm1_ys.append(float(lm1_y))
-        lm2_xs.append(float(lm2_x))
-        lm2_ys.append(float(lm2_y))
-
-        slices_out.append({
-            "slice": i,
-            "lm1": {"x": float(lm1_x), "y": float(lm1_y)},
-            "lm2": {"x": float(lm2_x), "y": float(lm2_y)},
-            "display_mean": display_mean,
-            "flag": flag,
-            "confidence": confidence,
-            "model_used": model_used,
-            "hm1_max": float(hm1_max),
-            "hm2_max": float(hm2_max),
-            "lm_dist": float(dist),
-            "class_check": {
-                "checked": lv_centroid is not None,
-                "swapped": class_swapped,
-                "centroid": {"x": lv_centroid[0], "y": lv_centroid[1]} if lv_centroid is not None else None,
-            },
-        })
+    if progress_callback is not None:
+        progress_callback(total_steps, total_steps)
 
     # --- Aggregate ---
     avg_lm1_x = float(np.mean(lm1_xs)) if lm1_xs else 0.0
@@ -529,17 +543,18 @@ def run_landmark_inference_from_nifti(
     avg_lm2_y = float(np.mean(lm2_ys)) if lm2_ys else 0.0
 
     logger.info(
-        f"[Landmark] Done: {n_slices} slices, "
+        f"[Landmark] Done: {n_slices} slices x {len(frame_ids)} frame(s), "
         f"{n_2ch_count} 2ch, {n_1ch_count} 1ch_fallback, {n_collapsed} collapsed, "
         f"{n_class_checked} class_checked ({n_class_swapped} swapped), "
-        f"{n_slices - n_class_checked} class_check_skipped(no LV mask)"
+        f"{n_slices * len(frame_ids) - n_class_checked} class_check_skipped(no LV mask)"
     )
 
     return {
         "slices": slices_out,
         "avg_lm1": {"x": avg_lm1_x, "y": avg_lm1_y},
         "avg_lm2": {"x": avg_lm2_x, "y": avg_lm2_y},
-        "n_total": n_slices,
+        "n_total": n_slices * len(frame_ids),
+        "n_frames": len(frame_ids),
         "n_collapsed": n_collapsed,
         "n_2ch": n_2ch_count,
         "n_1ch_fallback": n_1ch_count,

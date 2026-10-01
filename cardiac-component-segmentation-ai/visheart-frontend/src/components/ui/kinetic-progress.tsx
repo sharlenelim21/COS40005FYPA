@@ -115,3 +115,26 @@ export function ProgressMeter({
     </div>
   )
 }
+
+/**
+ * A job's progress bar. Shows the real percentage once the GPU has reported one, and falls back to
+ * the indeterminate bar while a job is queued or has not reported anything yet.
+ */
+export function JobProgress({
+  progress,
+  status,
+  className,
+  label,
+}: {
+  progress?: number | null
+  status: string | null | undefined
+  className?: string
+  label?: string
+}) {
+  const state = kineticStateFromJobStatus(status)
+  if (!state) return null
+  if (state === "running" && hasProgressReading(progress)) {
+    return <ProgressMeter className={className} value={progress} title={label} />
+  }
+  return <KineticProgress size="h-1" className={className} state={state} label={label} />
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Crosshair, Layers, Box, Loader2 } from "lucide-react";
 
 import {
@@ -52,12 +52,17 @@ export function StartPipelineDialog({
   const [combos, setCombos] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
 
+  // Seed the selection once per opening. Depending on `defaultModel` here re-seeded it whenever GPU
+  // availability resolved while the dialog was open, silently swapping the user's pick (e.g. UNet
+  // only) back to the default model and starting a run they never chose.
+  const defaultModelRef = useRef(defaultModel);
+  defaultModelRef.current = defaultModel;
   useEffect(() => {
     if (!open) return;
-    setSegModels(new Set([defaultModel]));
+    setSegModels(new Set([defaultModelRef.current]));
     setCombos(new Set());
     setSubmitting(false);
-  }, [open, defaultModel]);
+  }, [open]);
 
   const modelDisabled = (m: Model) => m === "medsam" && !gpuAvailable;
 
@@ -112,7 +117,7 @@ export function StartPipelineDialog({
         <DialogHeader>
           <DialogTitle>{isRerun ? "Re-run Segmentation" : "Start Segmentation"}</DialogTitle>
           <DialogDescription>
-            Choose what to run. Jobs queue on the GPU one after another.
+            Choose what to run. Steps run one at a time: segmentation, then LV and RV reconstruction, then landmark detection.
             {isRerun && " Re-running a model replaces its current masks, including any saved edits."}
           </DialogDescription>
         </DialogHeader>

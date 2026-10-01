@@ -157,6 +157,8 @@ export interface LandmarkSidebarProps {
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (frame: number) => void;
+  /** Switches the cardiac frame whose slices the Landmarks tab shows and edits. */
+  onLandmarkFrameChange?: (frameId: number) => void;
   onPlaybackSpeedChange: (fps: number) => void;
   onRerun: () => void;
   onReset: () => void;
@@ -207,6 +209,7 @@ export function LandmarkSidebar({
   onNextFrame,
   onPrevFrame,
   onSliderChange,
+  onLandmarkFrameChange,
   onPlaybackSpeedChange,
   onRerun,
   onReset,
@@ -302,6 +305,14 @@ export function LandmarkSidebar({
         ))}
       </div>
 
+
+      {hasPredictions && activeTab === "landmarks" && state.frameIds.length > 1 && (
+        <LandmarkFrameSwitcher
+          frameIds={state.frameIds}
+          currentFrameId={state.landmarkFrame}
+          onChange={(id) => onLandmarkFrameChange?.(id)}
+        />
+      )}
 
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
@@ -410,6 +421,52 @@ export function LandmarkSidebar({
         )}
       </div>
 
+    </div>
+  );
+}
+
+// Cardiac-frame switcher for the Landmarks tab. Each frame has its own slices, confidence
+// indicators and edits, so choosing a frame swaps everything below it to that frame.
+function LandmarkFrameSwitcher({
+  frameIds,
+  currentFrameId,
+  onChange,
+}: {
+  frameIds: number[];
+  currentFrameId: number;
+  onChange: (frameId: number) => void;
+}) {
+  return (
+    <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-1.5 flex-shrink-0">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Cardiac frame
+        </span>
+        <span className="text-[10px] text-muted-foreground tabular-nums">
+          {frameIds.indexOf(currentFrameId) + 1}/{frameIds.length}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-1" role="tablist" aria-label="Cardiac frame">
+        {frameIds.map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={id === currentFrameId}
+            onClick={() => onChange(id)}
+            title={`Frame ${id + 1}`}
+            className={cn(
+              "min-w-7 rounded-md border px-2 py-1 text-[11px] font-medium tabular-nums transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              id === currentFrameId
+                ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                : "border-border bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+          >
+            {id + 1}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { valueToColor, rvSegmentColor } from "./heartColor";
+import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { findFirstMesh, loadMesh, computeLvAlignment } from "./lvAlignment";
+import { createSegmentBoundaryLines } from "./segmentBoundaryLines";
 
 /**
  * Combined LV+RV 3D view for the Strain tab's "Combined" chamber focus.
@@ -117,6 +119,8 @@ export function CombinedHeartModel({
 
   const lvStateRef = useRef<MeshSelectionState | null>(null);
   const rvStateRef = useRef<MeshSelectionState | null>(null);
+  // Outline materials need the canvas size (in pixels) to draw their fixed-width lines.
+  const lineMaterialsRef = useRef<LineMaterial[]>([]);
   const selectedLvSegmentRef = useRef(selectedLvSegment);
   const selectedRvSegmentRef = useRef(selectedRvSegment);
   const onLvSegmentClickRef = useRef(onLvSegmentClick);
@@ -168,6 +172,7 @@ export function CombinedHeartModel({
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
+      for (const material of lineMaterialsRef.current) material.resolution.set(width, height);
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(container);
@@ -332,6 +337,14 @@ export function CombinedHeartModel({
           return value !== undefined ? valueToColor(value, lvMin, lvMax, lvReverseColors) : new THREE.Color(0.6, 0.2, 0.2);
         };
         const lvState = buildSelectionState(lvMesh, lvSegmentLabels, alignment, lvColorOf);
+        const outlineSize = {
+          width: containerRef.current?.clientWidth ?? 1,
+          height: containerRef.current?.clientHeight ?? 1,
+        };
+        const outlines: THREE.Object3D[] = [];
+        const lvLines = createSegmentBoundaryLines(lvMesh, lvSegmentLabels, outlineSize);
+        lvMesh.add(lvLines);
+        outlines.push(lvLines);
 
         let rvObject: THREE.Object3D | null = null;
         let rvState: MeshSelectionState | null = null;
@@ -340,6 +353,9 @@ export function CombinedHeartModel({
           const rvMesh = findFirstMesh(rvObject);
           if (rvMesh) {
             rvState = buildSelectionState(rvMesh, rvSegmentLabels, alignment, (seg) => rvSegmentColor(seg));
+            const rvLines = createSegmentBoundaryLines(rvMesh, rvSegmentLabels, outlineSize);
+            rvMesh.add(rvLines);
+            outlines.push(rvLines);
           }
         }
 
@@ -361,6 +377,7 @@ export function CombinedHeartModel({
         if (rvObject) group.add(rvObject);
         pivot.add(group);
         loadedRef.current = group;
+        lineMaterialsRef.current = outlines.map((o) => (o as unknown as { material: LineMaterial }).material);
         lvStateRef.current = lvState;
         rvStateRef.current = rvState;
       } catch (err) {

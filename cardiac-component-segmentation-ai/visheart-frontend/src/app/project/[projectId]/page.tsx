@@ -56,7 +56,7 @@ import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
 import { useAuth } from "@/context/auth-context";
 import { AffineMatrixDisplay } from "@/components/ui/AffineMatrixDisplay";
 import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
-import { KineticButtonFill, KineticProgress, ProgressMeter, hasProgressReading, kineticStateFromJobStatus } from "@/components/ui/kinetic-progress";
+import { JobProgress, KineticButtonFill, KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
 import { buildReconstructionRequest } from "@/lib/reconstructionDefaults";
 import { useAutoPipelineChain, type PipelineSelection } from "@/hooks/useAutoPipelineChain";
 import { StartPipelineDialog } from "@/components/project/StartPipelineDialog";
@@ -541,7 +541,7 @@ function ProjectPageInner() {
     refreshActiveReconstructionJobs,
   });
   const [showPipelineDialog, setShowPipelineDialog] = useState(false);
-  const [landmarkSummary, setLandmarkSummary] = useState<{ active: "running" | "queued" | null; hasCompleted: boolean } | null>(null);
+  const [landmarkSummary, setLandmarkSummary] = useState<{ active: "running" | "queued" | null; hasCompleted: boolean; progress: number | null } | null>(null);
   const refreshLandmarkSummary = useCallback(async () => {
     if (!projectId || isGuest) return;
     const summary = await landmarkApi.jobSummary(projectId);
@@ -823,10 +823,14 @@ function ProjectPageInner() {
         // The effect will handle clearing isStartingReconstruction when the job appears
       }
       
-      console.log("[Project] ✅ Job polling complete - effect will clear loading state when job detected");
-      
-      // Keep showing loading state until the job appears
-      // The loading state will be cleared by the effect when hasActiveReconstructionJobs becomes true
+      console.log("[Project] ✅ Job polling complete - clearing starting state");
+
+      // The in-flight state is owned by `reconRunning` (backed by the active-job hook) from here on.
+      // Clearing it only when the context's job list showed an active job left the button stuck on
+      // "Starting Reconstruction..." forever: that list is emptied as soon as any reconstruction
+      // exists, so the effect above never fired once a build had completed.
+      await refreshActiveReconstructionJobs();
+      setIsStartingReconstruction(false);
     } catch (error: unknown) {
       const response = (error as { response?: { status?: number; data?: { message?: string; reason?: string } } })?.response;
 
@@ -843,6 +847,7 @@ function ProjectPageInner() {
           setShowReconstructionDialog(false);
           goToReconstructionViewer(config.segmentationModel, undefined, requestedChamber);
           await refreshReconstructionJobs();
+          setIsStartingReconstruction(false);
           return;
         }
         console.info("[Project] Reconstruction already exists or is running:", response?.data?.message);
@@ -930,7 +935,7 @@ function ProjectPageInner() {
         </Tooltip>
       ) : landmarkRunning ? (
         <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
-          <KineticButtonFill state={landmarkProgressState} label="Landmark detection running" />
+          <KineticButtonFill state={landmarkProgressState} value={landmarkSummary?.progress} label="Landmark detection running" />
           <div className="relative flex items-center gap-3 w-full">
             <Crosshair className="h-5 w-5 text-blue-600" />
             <div className="text-left flex-1">
@@ -940,6 +945,9 @@ function ProjectPageInner() {
                   ? "Landmark detection queued — waiting for the GPU"
                   : "Landmark detection running — available when it finishes"}
               </p>
+              {hasProgressReading(landmarkSummary?.progress) && landmarkProgressState === "running" && (
+                <ProgressMeter className="mt-2" value={landmarkSummary!.progress!} title="Landmark detection" />
+              )}
             </div>
           </div>
         </Button>
@@ -1918,9 +1926,7 @@ function ProjectPageInner() {
                             <div className="flex-1 min-w-0">
                               <p className="font-medium truncate">{jobDisplayName(job)}</p>
                               <p className="text-muted-foreground truncate">{job.jobId}</p>
-                              {kineticStateFromJobStatus(job.status) && (
-                                <KineticProgress size="h-1" className="mt-1" state={kineticStateFromJobStatus(job.status)!} />
-                              )}
+                              <JobProgress className="mt-1" status={job.status} progress={job.progress} />
                             </div>
                             <Badge 
                               variant={

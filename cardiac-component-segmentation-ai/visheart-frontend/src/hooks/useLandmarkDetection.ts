@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { landmarkApi, LandmarkApiError } from "@/lib/landmarkApi";
 import type {
   LandmarkPageState,
@@ -18,6 +18,8 @@ const INITIAL_STATE: LandmarkPageState = {
   totalFrames: 0,
   imageDimensions: { width: 256, height: 256 },
   currentFrame: 0,
+  landmarkFrame: 0,
+  frameIds: [],
   isPlaying: false,
   playbackFps: DEFAULT_PLAYBACK_FPS,
   error: null,
@@ -130,11 +132,16 @@ export function useLandmarkDetection(
   const applyResult = useCallback(
     (rawResult: LandmarkInferenceResponse) => {
       const result = normalizeLandmarkResponse(rawResult);
+      const frameIds = Array.from(new Set(result.predictions.map((p) => p.frame_id))).sort((a, b) => a - b);
+      const firstFrame = frameIds[0] ?? 0;
       setState((s) => ({
         ...s,
         status: "done",
         predictions: result.predictions,
-        totalFrames: result.total_frames,
+        frameIds,
+        landmarkFrame: firstFrame,
+        // Slices in the selected frame -- not the raw prediction count, which spans every frame.
+        totalFrames: result.predictions.filter((p) => p.frame_id === firstFrame).length,
         // Only update dimensions when the result carries real values.
         // New GPU format omits image_dimensions (returns {width:0,height:0});
         // keep existing project dimensions so the canvas scales correctly.
@@ -367,15 +374,45 @@ export function useLandmarkDetection(
     setReplacementFileError(null);
   }, [projectId, stopPlayback]);
 
-  const currentPrediction: FramePrediction | null =
-    state.predictions[state.currentFrame] ?? null;
+  // `state.predictions` holds every cardiac frame's slices. The viewer and sidebar only ever want
+  // the selected frame's slices (indexed by slice position), so they receive a view narrowed to it;
+  // `allPredictions` is the full set for saving/loading edits across frames.
+  const slicePredictions = useMemo(
+    () => state.predictions.filter((p) => p.frame_id === state.landmarkFrame),
+    [state.predictions, state.landmarkFrame],
+  );
+  const viewState = useMemo<LandmarkPageState>(
+    () => ({ ...state, predictions: slicePredictions, totalFrames: slicePredictions.length }),
+    [state, slicePredictions],
+  );
 
-  const confidentCount = state.predictions.filter(
+  const handleLandmarkFrameChange = useCallback(
+    (frameId: number) => {
+      stopPlayback();
+      setState((s) => {
+        if (s.landmarkFrame === frameId || !s.frameIds.includes(frameId)) return s;
+        const count = s.predictions.filter((p) => p.frame_id === frameId).length;
+        return {
+          ...s,
+          landmarkFrame: frameId,
+          totalFrames: count,
+          currentFrame: Math.max(0, Math.min(s.currentFrame, count - 1)),
+        };
+      });
+    },
+    [stopPlayback],
+  );
+
+  const currentPrediction: FramePrediction | null = slicePredictions[state.currentFrame] ?? null;
+
+  const confidentCount = slicePredictions.filter(
     (p) => p.flag === "normal" && p.confidence === "high",
   ).length;
 
   return {
-    state,
+    state: viewState,
+    allPredictions: state.predictions,
+    handleLandmarkFrameChange,
     hydrating,
     replacementFileError,
     currentPrediction,

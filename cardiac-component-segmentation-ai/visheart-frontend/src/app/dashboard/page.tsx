@@ -9,7 +9,7 @@ import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstruction
 import { ShowForUser, ShowForGuest, ShowForRegisteredUser } from "@/components/RoleGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { KineticProgress, kineticStateFromJobStatus } from "@/components/ui/kinetic-progress";
+import { JobProgress } from "@/components/ui/kinetic-progress";
 import { reconstructionApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -1028,13 +1028,7 @@ function DashboardPage() {
                               <span className="hidden sm:inline">•</span>
                               <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
                             </div>
-                            {kineticStateFromJobStatus(job.status) && (
-                              <KineticProgress
-                                size="h-1"
-                                className="mt-2 max-w-xs"
-                                state={kineticStateFromJobStatus(job.status)!}
-                              />
-                            )}
+                            <JobProgress className="mt-2 max-w-xs" status={job.status} progress={(job as { progress?: number | null }).progress} />
                           </div>
                         </div>
                         <Badge variant="outline" className={`${statusDisplay.color} flex-shrink-0`}>

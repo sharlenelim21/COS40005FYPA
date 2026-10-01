@@ -27,7 +27,9 @@ export function normalizeLandmarkJobResult<T>(result: T): T {
         if (!anySwapped) return result;
 
         const out: any = { ...r, slices };
-        const both = slices.filter((s: any) => s?.lm1 && s?.lm2);
+        // avg_lm1/avg_lm2 are the ED (frame 0) mean: averaging across cardiac phases would blend
+        // positions of a heart that moves through the cycle. Results without per-slice frames are ED-only.
+        const both = slices.filter((s: any) => s?.lm1 && s?.lm2 && (s.frame ?? 0) === 0);
         if (both.length) {
             out.avg_lm1 = { x: mean(both.map((s: any) => s.lm1.x)), y: mean(both.map((s: any) => s.lm1.y)) };
             out.avg_lm2 = { x: mean(both.map((s: any) => s.lm2.x)), y: mean(both.map((s: any) => s.lm2.y)) };
