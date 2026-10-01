@@ -285,6 +285,7 @@ export function StrainBullseyeChart({
   // Use rdYlGn normalised against the shared range — same function as 3D heart
   const col = (i: number) => {
     const v = val(i);
+    if (v === 0) return "#444444"; // no measurement at this frame -- same grey as AhaBullseye / the 3D model
     const t = colMin === colMax ? 0.5 : Math.max(0, Math.min(1, (v - colMin) / (colMax - colMin)));
     return rdYlGn(reverse ? 1 - t : t);
   };

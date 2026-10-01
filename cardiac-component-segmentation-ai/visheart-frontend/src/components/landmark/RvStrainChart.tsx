@@ -46,7 +46,7 @@ export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegion
   // Negative strain (shrinking RV cavity) is healthy — same reversed ramp as GCS.
   const col = (i: number) => {
     const v = val(i);
-    if (v == null) return "#94a3b8"; // slate — no data for this region
+    if (v == null || v === 0) return "#94a3b8"; // slate — no data (or no change measured) for this region
     const t = colMin === colMax ? 0.5 : Math.max(0, Math.min(1, (v - colMin) / (colMax - colMin)));
     return rdYlGn(1 - t);
   };

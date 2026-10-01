@@ -20,7 +20,8 @@ export type BullseyeHover = { x: number; y: number; name: string; value: number;
 
 /** Segment fill for a value on the view's own min→max scale. */
 export function bullseyeColor(value: number | null | undefined, min: number, max: number, reverse = false): string {
-  if (value == null || !Number.isFinite(value)) return "#444444";
+  // Missing or exactly 0 (no measurement at this frame) -> grey, same as the 3D model.
+  if (value == null || !Number.isFinite(value) || value === 0) return "#444444";
   const t = max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5;
   return rdYlGn(reverse ? 1 - t : t);
 }
