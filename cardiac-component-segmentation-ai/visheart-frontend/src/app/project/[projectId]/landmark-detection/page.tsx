@@ -2000,15 +2000,20 @@ function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
   }, [reconstructionResults, model]);
 
   const [meshUrl, setMeshUrl] = useState<string | null>(null);
+  const [meshFrame, setMeshFrame] = useState<number | null>(null);
   useEffect(() => {
     setMeshUrl(null);
+    setMeshFrame(null);
   }, [rvReconstruction?.reconstructionId]);
   useEffect(() => {
     let cancelled = false;
     if (!rvReconstruction?.reconstructionId) return;
     (async () => {
       const url = await getReconstructionGLB(currentFrame, model, rvReconstruction.reconstructionId);
-      if (!cancelled) setMeshUrl(url);
+      if (!cancelled) {
+        setMeshUrl(url);
+        setMeshFrame(currentFrame);
+      }
     })();
     return () => {
       cancelled = true;
@@ -2016,10 +2021,11 @@ function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
   }, [rvReconstruction, model, currentFrame, getReconstructionGLB]);
 
   const segmentLabels = useMemo(() => {
-    const perFrame = rvReconstruction?.frameAhaVertexLabels?.[String(currentFrame)];
+    // Same as the LV panels: labels must belong to the mesh that is loaded, not the requested frame.
+    const perFrame = rvReconstruction?.frameAhaVertexLabels?.[String(meshFrame ?? currentFrame)];
     if (Array.isArray(perFrame)) return perFrame;
     return Array.isArray(rvReconstruction?.ahaVertexLabels) ? rvReconstruction.ahaVertexLabels : null;
-  }, [rvReconstruction, currentFrame]);
+  }, [rvReconstruction, currentFrame, meshFrame]);
 
   return {
     available: !!rvReconstruction && !!segmentLabels?.length,
@@ -2095,12 +2101,14 @@ function AhaBullseyePanel({
   const { getReconstructionGLB, reconstructionsByModel, reconstructionJobs } = useProject();
   const activeReconstruction = reconstructionModel ? reconstructionsByModel?.[reconstructionModel] ?? null : null;
   const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
+  const [reconstructionMeshFrame, setReconstructionMeshFrame] = useState<number | null>(null);
   // Reset ONLY when switching to a genuinely different reconstruction/model - not on
   // every frame change, otherwise fast playback (many frame changes per second) spends
   // most of its time with the mesh nulled out while each fetch is still in flight,
   // which is exactly what caused the flicker/disappearing model during playback.
   useEffect(() => {
     setReconstructionMeshUrl(null);
+    setReconstructionMeshFrame(null);
   }, [activeReconstruction?.reconstructionId, reconstructionModel]);
 
   useEffect(() => {
@@ -2112,7 +2120,11 @@ function AhaBullseyePanel({
       const url = await getReconstructionGLB(currentFrame, reconstructionModel, activeReconstruction.reconstructionId);
       // Swap in directly, without nulling first - keeps the previous frame's mesh
       // visible until the new one is ready, so rapid playback doesn't flash empty.
-      if (!cancelled) setReconstructionMeshUrl(url);
+      // The frame is recorded with the url so labels always match the mesh on screen.
+      if (!cancelled) {
+        setReconstructionMeshUrl(url);
+        setReconstructionMeshFrame(currentFrame);
+      }
     })();
     return () => { cancelled = true; };
   }, [activeReconstruction, reconstructionModel, getReconstructionGLB, currentFrame]);
@@ -2122,10 +2134,14 @@ function AhaBullseyePanel({
   // are NOT interchangeable across frames - falls back to the ED-only labels (older
   // reconstructions, or frames the GPU skipped as apex/base slices with no contour).
   const reconstructionLabels = useMemo(() => {
-    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(currentFrame)];
+    // Labels follow the frame of the mesh that is actually loaded, not the requested frame:
+    // while the next frame's mesh is still fetching, the previous mesh is on screen and its
+    // vertex layout differs, so the new frame's labels would colour it wrongly (the glitch).
+    const labelFrame = reconstructionMeshFrame ?? currentFrame;
+    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(labelFrame)];
     if (Array.isArray(perFrame)) return perFrame;
     return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
-  }, [activeReconstruction, currentFrame]);
+  }, [activeReconstruction, currentFrame, reconstructionMeshFrame]);
 
   const isReconstructionPending = useMemo(() => {
     if (!reconstructionModel) return false;
@@ -2637,11 +2653,13 @@ function StrainPreviewPanel({
   const rvMesh = useRvPrototypeMesh(strainModel, currentFrame);
 
   const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
+  const [reconstructionMeshFrame, setReconstructionMeshFrame] = useState<number | null>(null);
   // Reset ONLY when switching to a genuinely different reconstruction/model - not on
   // every frame change, otherwise fast playback spends most of its time with the mesh
   // nulled out while each fetch is still in flight (the flicker/disappearing bug).
   useEffect(() => {
     setReconstructionMeshUrl(null);
+    setReconstructionMeshFrame(null);
   }, [activeReconstruction?.reconstructionId, strainModel]);
 
   useEffect(() => {
@@ -2653,7 +2671,11 @@ function StrainPreviewPanel({
       const url = await getReconstructionGLB(currentFrame, strainModel, activeReconstruction.reconstructionId);
       // Swap in directly, without nulling first - keeps the previous frame's mesh
       // visible until the new one is ready, so rapid playback doesn't flash empty.
-      if (!cancelled) setReconstructionMeshUrl(url);
+      // The frame is recorded with the url so labels always match the mesh on screen.
+      if (!cancelled) {
+        setReconstructionMeshUrl(url);
+        setReconstructionMeshFrame(currentFrame);
+      }
     })();
     return () => { cancelled = true; };
   }, [activeReconstruction, strainModel, getReconstructionGLB, currentFrame]);
@@ -2662,10 +2684,14 @@ function StrainPreviewPanel({
   // each frame's own mesh has its own vertex layout, so labels can't be reused
   // across frames. Falls back to ED-only labels for older reconstructions.
   const reconstructionLabels = useMemo(() => {
-    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(currentFrame)];
+    // Labels follow the frame of the mesh that is actually loaded, not the requested frame:
+    // while the next frame's mesh is still fetching, the previous mesh is on screen and its
+    // vertex layout differs, so the new frame's labels would colour it wrongly (the glitch).
+    const labelFrame = reconstructionMeshFrame ?? currentFrame;
+    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(labelFrame)];
     if (Array.isArray(perFrame)) return perFrame;
     return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
-  }, [activeReconstruction, currentFrame]);
+  }, [activeReconstruction, currentFrame, reconstructionMeshFrame]);
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number | null } | null>(null);
   const bullseyeResetRef = useRef<(() => void) | null>(null);

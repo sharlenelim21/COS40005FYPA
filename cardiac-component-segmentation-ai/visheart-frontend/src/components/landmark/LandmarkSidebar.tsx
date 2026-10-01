@@ -306,11 +306,13 @@ export function LandmarkSidebar({
       </div>
 
 
-      {hasPredictions && activeTab === "landmarks" && state.frameIds.length > 1 && (
+      {hasPredictions && activeTab === "landmarks" && (state.frameIds.length > 1 || strainFrameCount > 1) && (
         <LandmarkFrameSwitcher
           frameIds={state.frameIds}
           currentFrameId={state.landmarkFrame}
           onChange={(id) => onLandmarkFrameChange?.(id)}
+          projectFrameCount={strainFrameCount}
+          onRerun={onRerun}
         />
       )}
 
@@ -431,11 +433,18 @@ function LandmarkFrameSwitcher({
   frameIds,
   currentFrameId,
   onChange,
+  projectFrameCount,
+  onRerun,
 }: {
   frameIds: number[];
   currentFrameId: number;
   onChange: (frameId: number) => void;
+  projectFrameCount: number;
+  onRerun: () => void;
 }) {
+  // A result saved before per-frame detection only covers frame 1, so the study's other frames
+  // have nothing to switch to until detection is run again.
+  const incomplete = projectFrameCount > frameIds.length;
   return (
     <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-1.5 flex-shrink-0">
       <div className="flex items-center justify-between">
@@ -467,6 +476,15 @@ function LandmarkFrameSwitcher({
           </button>
         ))}
       </div>
+      {incomplete && (
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          This result only has landmarks for {frameIds.length} of {projectFrameCount} frames.{" "}
+          <button type="button" onClick={onRerun} className="font-medium text-primary underline underline-offset-2">
+            Re-run detection
+          </button>{" "}
+          to detect and edit every frame.
+        </p>
+      )}
     </div>
   );
 }
