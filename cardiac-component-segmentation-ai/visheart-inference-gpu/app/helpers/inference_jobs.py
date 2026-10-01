@@ -864,13 +864,12 @@ async def _process_landmark_job(
                 ProgressReporter(callback_url, uuid).report,
             )
 
-            # Current response format: {"frames": [...], "n_frames", "avg_lm1", "avg_lm2"}
+            # Current response format: {"slices": [...], "n_frames", "avg_lm1", "avg_lm2"}
+            # — flat list, every entry tagged with its own "frame"/"slice"
             # (run_landmark_inference_from_nifti now runs every cardiac frame).
-            # Legacy single-frame format: direct dict with "slices", "avg_lm1", etc.
             # Legacy format (from old inference.py): {"success": True, "landmarks": {...}}
             if isinstance(inference_output, dict):
-                if "frames" in inference_output or "slices" in inference_output:
-                    # Current/legacy format — return the whole dict as result
+                if "slices" in inference_output:
                     result = inference_output
                     success = True
                 elif inference_output.get("success"):

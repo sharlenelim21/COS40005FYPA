@@ -212,15 +212,7 @@ export function ReconstructedHeartModel({
           ? debugSegmentColor(segment)
           : colorMode === "rv-segment"
           ? rvSegmentColor(segment)
-<<<<<<< Updated upstream
-          : valueToColor(values?.[segment - 1], min, max, reverseColors);
-=======
-<<<<<<< HEAD
-          : valueToColor(values?.[chamber === "rv" ? segment : segment - 1] ?? min, min, max, reverseColors);
-=======
-          : valueToColor(values?.[segment - 1], min, max, reverseColors);
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
+          : valueToColor(values?.[chamber === "rv" ? segment : segment - 1], min, max, reverseColors);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;

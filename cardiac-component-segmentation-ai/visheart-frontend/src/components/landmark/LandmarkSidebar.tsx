@@ -162,13 +162,6 @@ export interface LandmarkSidebarProps {
   /** Switches the cardiac frame whose slices the Landmarks tab shows and edits. */
   onLandmarkFrameChange?: (frameId: number) => void;
   onPlaybackSpeedChange: (fps: number) => void;
-  /** Which CARDIAC frame's slices the Landmarks tab is currently showing/
-   *  editing — distinct from the slice PlaybackBar above (onSliderChange),
-   *  same "frame vs slice are independent axes" split the Structure/Strain
-   *  tabs' own frame scrubber already uses. */
-  currentCardiacFrame?: number;
-  cardiacFrameCount?: number;
-  onCardiacFrameChange?: (frame: number) => void;
   onRerun: () => void;
   onReset: () => void;
   onFileSelect: (file: File | null) => void;
@@ -222,9 +215,6 @@ export function LandmarkSidebar({
   onSliderChange,
   onLandmarkFrameChange,
   onPlaybackSpeedChange,
-  currentCardiacFrame = 0,
-  cardiacFrameCount = 1,
-  onCardiacFrameChange,
   onRerun,
   onReset,
   onFileSelect,
@@ -267,7 +257,6 @@ export function LandmarkSidebar({
   const handleTabChange = useCallback(
     (key: TabKey) => {
       setStrainPlaying(false);
-      setLandmarkFramePlaying(false);
       if (state.isPlaying) onTogglePlay();
       setLocalTab(key);
       onTabChange?.(key);
@@ -293,20 +282,6 @@ export function LandmarkSidebar({
 
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
   const isRunning = state.status === "running";
-
-  // Landmarks tab's cardiac-frame playback — same local play-loop pattern as
-  // strainPlaying/strainFrame above, but reports into onCardiacFrameChange
-  // (which lives in useLandmarkDetection, since it must swap which frame's
-  // slices state.predictions holds) instead of a purely-local index.
-  const [landmarkFramePlaying, setLandmarkFramePlaying] = useState(false);
-  useEffect(() => {
-    if (!landmarkFramePlaying || cardiacFrameCount < 2) return;
-    const id = setInterval(
-      () => onCardiacFrameChange?.((currentCardiacFrame + 1) % cardiacFrameCount),
-      1000 / Math.max(state.playbackFps || 2, 0.5),
-    );
-    return () => clearInterval(id);
-  }, [landmarkFramePlaying, cardiacFrameCount, currentCardiacFrame, onCardiacFrameChange, state.playbackFps]);
 
   return (
     <div className="flex flex-col h-full bg-[var(--sidebar)] rounded-r-xl border border-[var(--sidebar-border)] shadow-sm overflow-hidden">
@@ -335,26 +310,6 @@ export function LandmarkSidebar({
       </div>
 
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< HEAD
-      {hasPredictions && activeTab === "landmarks" && cardiacFrameCount > 1 && (
-        <PlaybackBar
-          axisLabel="Frame"
-          currentFrame={currentCardiacFrame}
-          totalFrames={cardiacFrameCount}
-          isPlaying={landmarkFramePlaying}
-          playbackFps={state.playbackFps}
-          confidentCount={confidentCount ?? 0}
-          onTogglePlay={() => setLandmarkFramePlaying((p) => !p)}
-          onNextFrame={() => onCardiacFrameChange?.(Math.min(currentCardiacFrame + 1, cardiacFrameCount - 1))}
-          onPrevFrame={() => onCardiacFrameChange?.(Math.max(currentCardiacFrame - 1, 0))}
-          onSliderChange={(f) => onCardiacFrameChange?.(f)}
-          onPlaybackSpeedChange={onPlaybackSpeedChange}
-        />
-      )}
-=======
->>>>>>> Stashed changes
       {hasPredictions && activeTab === "landmarks" && (state.frameIds.length > 1 || strainFrameCount > 1) && (
         <LandmarkFrameSwitcher
           frameIds={state.frameIds}
@@ -365,10 +320,6 @@ export function LandmarkSidebar({
         />
       )}
 
-<<<<<<< Updated upstream
-=======
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
           axisLabel="Slice"

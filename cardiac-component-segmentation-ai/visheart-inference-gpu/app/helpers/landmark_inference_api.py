@@ -322,15 +322,6 @@ def _assign_rvip_classes(
 # Core inference (called from inference_jobs / inference_route)
 # ---------------------------------------------------------------------------
 
-<<<<<<< HEAD
-def _run_landmark_inference_for_frame(
-    img: np.ndarray,
-    seg_vol: Optional[np.ndarray],
-    model_2ch: nn.Module,
-    model_1ch: nn.Module,
-    torch_device: torch.device,
-    frame_idx: int,
-=======
 def run_landmark_inference_from_nifti(
     nifti_path: str,
     seg_mask_path: Optional[str] = None,
@@ -340,22 +331,36 @@ def run_landmark_inference_from_nifti(
     model_1ch: Optional[nn.Module] = None,
     torch_device: Optional[torch.device] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-<<<<<<< Updated upstream
-=======
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
 ) -> Dict[str, Any]:
     """
-    Run per-slice landmark inference on a single cardiac frame's 3-D volume
-    (img: H x W x n_slices). Identical logic to what used to be the body of
-    run_landmark_inference_from_nifti before it gained a frame loop — the
-    RVIP class-check is per-slice and has no cross-frame state, so this is a
-    straight extraction, not a behaviour change for any one frame.
+    Run landmark detection on every cardiac frame of a 4-D NIfTI MRI volume.
+
+    Runs across all cardiac frames (not just ED) so the frontend can show and
+    edit landmarks for the whole cardiac cycle. Bullseye/strain alignment
+    downstream is still anchored to ED (frame 0) -- avg_lm1/avg_lm2 are
+    averaged over frame 0 only, never blended across phases. Set
+    LANDMARK_ALL_FRAMES=0 to detect on ED only (cost scales with the number
+    of frames otherwise).
+
+    Parameters
+    ----------
+    nifti_path       : path to the MRI NIfTI file (already downloaded)
+    seg_mask_path    : optional path to the segmentation mask NIfTI file
+    device           : "auto" | "cuda" | "cpu"  (ignored when models injected)
+    checkpoint_path  : legacy single-checkpoint path (1ch fallback only)
+    model_2ch        : pre-loaded 2-channel model (injected from lifespan)
+    model_1ch        : pre-loaded 1-channel model (injected from lifespan)
+    torch_device     : device the pre-loaded models live on
+    progress_callback: optional (done, total) callback, invoked after every
+                       slice so the caller can report job progress.
+
+    Returns
+    -------
+    dict with keys: slices (flat list, each entry tagged with "frame" and
+                    "slice"), avg_lm1, avg_lm2 (frame 0's), n_total,
+                    n_frames, n_collapsed, n_2ch, n_1ch_fallback,
+                    n_class_checked, n_class_swapped.
     """
-<<<<<<< HEAD
-    n_slices = img.shape[2]
-    H_orig, W_orig = img.shape[0], img.shape[1]
-=======
     # --- Resolve device ---
     if torch_device is None:
         if _LOADED_DEVICE is not None:
@@ -387,10 +392,6 @@ def run_landmark_inference_from_nifti(
                 model_1ch = model_2ch
 
     # --- Load MRI volume ---
-    # Landmarks are detected on every cardiac frame so each frame's slices can be reviewed and
-    # edited on their own. Bullseye/strain alignment is still anchored to ED (frame 0) -- the
-    # avg_lm1/avg_lm2 returned below are averaged over frame 0 only, never blended across phases.
-    # Set LANDMARK_ALL_FRAMES=0 to detect on ED only (cost scales with the number of frames).
     nii = nib.load(nifti_path)
     img_full = nii.get_fdata().astype(np.float32)
     if img_full.ndim == 3:
@@ -403,6 +404,7 @@ def run_landmark_inference_from_nifti(
     img = img_full[:, :, :, 0]  # ED volume: shape reference and normalisation statistics
 
     n_slices = img.shape[2]
+    H_orig, W_orig = img.shape[0], img.shape[1]
     logger.info(
         f"[Landmark] MRI shape {img_full.shape}, processing {n_slices} slices x {len(frame_ids)} frame(s) on {torch_device}"
     )
@@ -419,10 +421,6 @@ def run_landmark_inference_from_nifti(
         except Exception as exc:
             logger.warning(f"[Landmark] Could not load seg mask: {exc} — 1ch fallback for all slices")
             seg_full = None
-<<<<<<< Updated upstream
-=======
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
 
     # --- Per-volume normalisation stats (matches training _PatientNormCache) ---
     vol_mu, vol_std = _zscore_volume(img)
@@ -435,9 +433,6 @@ def run_landmark_inference_from_nifti(
     n_class_checked = 0
     n_class_swapped = 0
 
-<<<<<<< Updated upstream
-    H_orig, W_orig = img.shape[0], img.shape[1]
-
     total_steps = n_slices * len(frame_ids)
     for f_pos, f in enumerate(frame_ids):
         for i in range(n_slices):
@@ -450,27 +445,6 @@ def run_landmark_inference_from_nifti(
             if seg_full is not None and i < seg_full.shape[2] and f < seg_full.shape[3]:
                 seg_2d = np.round(seg_full[:, :, i, f]).astype(np.float32)
 
-=======
-<<<<<<< HEAD
-    for i in range(n_slices):
-        img_2d = img[:, :, i]
-=======
-    H_orig, W_orig = img.shape[0], img.shape[1]
-
-    total_steps = n_slices * len(frame_ids)
-    for f_pos, f in enumerate(frame_ids):
-        for i in range(n_slices):
-            if progress_callback is not None:
-                progress_callback(f_pos * n_slices + i, total_steps)
-            img_2d = img_full[:, :, i, f]
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
-
-            # The mask is only usable when it has this frame; otherwise this slice falls back to 1ch.
-            seg_2d: Optional[np.ndarray] = None
-            if seg_full is not None and i < seg_full.shape[2] and f < seg_full.shape[3]:
-                seg_2d = np.round(seg_full[:, :, i, f]).astype(np.float32)
-
->>>>>>> Stashed changes
             if is_seg_valid(seg_2d):
                 tensor = preprocess_2ch(img_2d, seg_2d, vol_mu, vol_std)
                 model_to_use = model_2ch
@@ -480,9 +454,9 @@ def run_landmark_inference_from_nifti(
                 model_to_use = model_1ch
                 model_used = "1ch_fallback"
 
-            if i == 0:
+            if f == 0 and i == 0:
                 logger.info(
-                    f"[Landmark] DEBUG slice 0 tensor: shape={list(tensor.shape)} "
+                    f"[Landmark] DEBUG frame 0 slice 0 tensor: shape={list(tensor.shape)} "
                     f"min={tensor.min():.3f} max={tensor.max():.3f} mean={tensor.mean():.3f} "
                     f"vol_mu={vol_mu:.3f} vol_std={vol_std:.3f}"
                 )
@@ -513,23 +487,11 @@ def run_landmark_inference_from_nifti(
                     n_class_swapped += 1
 
             logger.info(
-<<<<<<< Updated upstream
-=======
-<<<<<<< HEAD
-                f"[Landmark] DEBUG frame {frame_idx} slice 0 tensor: shape={list(tensor.shape)} "
-                f"min={tensor.min():.3f} max={tensor.max():.3f} mean={tensor.mean():.3f} "
-                f"vol_mu={vol_mu:.3f} vol_std={vol_std:.3f}"
-=======
->>>>>>> Stashed changes
                 f"[Landmark] frame {f} slice {i} [{model_used}] "
                 f"lm1=({lm1_x:.1f},{lm1_y:.1f}) max={hm1_max:.4f}  "
                 f"lm2=({lm2_x:.1f},{lm2_y:.1f}) max={hm2_max:.4f}  "
                 f"dist={sqrt((lm1_x-lm2_x)**2+(lm1_y-lm2_y)**2):.1f}"
                 + (f"  class_swapped={class_swapped} centroid={lv_centroid}" if lv_centroid is not None else "  class_check=skipped(no LV mask)")
-<<<<<<< Updated upstream
-=======
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
             )
 
             # Distance and collapse flag — NEVER overwrite original coords
@@ -551,27 +513,11 @@ def run_landmark_inference_from_nifti(
             else:
                 n_1ch_count += 1
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< HEAD
-        logger.info(
-            f"[Landmark] frame {frame_idx} slice {i} [{model_used}] "
-            f"lm1=({lm1_x:.1f},{lm1_y:.1f}) max={hm1_max:.4f}  "
-            f"lm2=({lm2_x:.1f},{lm2_y:.1f}) max={hm2_max:.4f}  "
-            f"dist={sqrt((lm1_x-lm2_x)**2+(lm1_y-lm2_y)**2):.1f}"
-            + (f"  class_swapped={class_swapped} centroid={lv_centroid}" if lv_centroid is not None else "  class_check=skipped(no LV mask)")
-        )
-=======
->>>>>>> Stashed changes
             if f == 0:
                 lm1_xs.append(float(lm1_x))
                 lm1_ys.append(float(lm1_y))
                 lm2_xs.append(float(lm2_x))
                 lm2_ys.append(float(lm2_y))
-<<<<<<< Updated upstream
-=======
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
 
             slices_out.append({
                 "frame": f,
@@ -595,29 +541,20 @@ def run_landmark_inference_from_nifti(
     if progress_callback is not None:
         progress_callback(total_steps, total_steps)
 
-    # --- Aggregate ---
+    # --- Aggregate (ED / frame 0 only — see docstring) ---
     avg_lm1_x = float(np.mean(lm1_xs)) if lm1_xs else 0.0
     avg_lm1_y = float(np.mean(lm1_ys)) if lm1_ys else 0.0
     avg_lm2_x = float(np.mean(lm2_xs)) if lm2_xs else 0.0
     avg_lm2_y = float(np.mean(lm2_ys)) if lm2_ys else 0.0
 
     logger.info(
-<<<<<<< Updated upstream
         f"[Landmark] Done: {n_slices} slices x {len(frame_ids)} frame(s), "
-=======
-<<<<<<< HEAD
-        f"[Landmark] frame {frame_idx} done: {n_slices} slices, "
-=======
-        f"[Landmark] Done: {n_slices} slices x {len(frame_ids)} frame(s), "
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
         f"{n_2ch_count} 2ch, {n_1ch_count} 1ch_fallback, {n_collapsed} collapsed, "
         f"{n_class_checked} class_checked ({n_class_swapped} swapped), "
         f"{n_slices * len(frame_ids) - n_class_checked} class_check_skipped(no LV mask)"
     )
 
     return {
-        "frameindex": frame_idx,
         "slices": slices_out,
         "avg_lm1": {"x": avg_lm1_x, "y": avg_lm1_y},
         "avg_lm2": {"x": avg_lm2_x, "y": avg_lm2_y},
@@ -628,124 +565,4 @@ def run_landmark_inference_from_nifti(
         "n_1ch_fallback": n_1ch_count,
         "n_class_checked": n_class_checked,
         "n_class_swapped": n_class_swapped,
-    }
-
-
-def run_landmark_inference_from_nifti(
-    nifti_path: str,
-    seg_mask_path: Optional[str] = None,
-    device: str = "auto",
-    checkpoint_path: Optional[str] = None,
-    model_2ch: Optional[nn.Module] = None,
-    model_1ch: Optional[nn.Module] = None,
-    torch_device: Optional[torch.device] = None,
-) -> Dict[str, Any]:
-    """
-    Run landmark detection on every cardiac frame of a 4-D NIfTI MRI volume.
-
-    Runs across all cardiac frames (not just ED) so the frontend can show and
-    edit landmarks for the whole cardiac cycle. Bullseye/strain alignment
-    downstream still only ever reads frame 0's (ED's) avg_lm1/avg_lm2 — this
-    just makes every other frame's points available too, it doesn't change
-    what alignment consumes.
-
-    Parameters
-    ----------
-    nifti_path      : path to the MRI NIfTI file (already downloaded)
-    seg_mask_path   : optional path to the segmentation mask NIfTI file
-    device          : "auto" | "cuda" | "cpu"  (ignored when models injected)
-    checkpoint_path : legacy single-checkpoint path (1ch fallback only)
-    model_2ch       : pre-loaded 2-channel model (injected from lifespan)
-    model_1ch       : pre-loaded 1-channel model (injected from lifespan)
-    torch_device    : device the pre-loaded models live on
-
-    Returns
-    -------
-    dict with keys: frames (one entry per cardiac frame, each shaped like a
-                    single-frame result — see _run_landmark_inference_for_frame),
-                    n_frames, avg_lm1, avg_lm2 (frame 0's, for callers that
-                    only ever cared about ED — e.g. the webhook's alignment
-                    recompute — without needing to know about the frames list).
-    """
-    # --- Resolve device ---
-    if torch_device is None:
-        if _LOADED_DEVICE is not None:
-            torch_device = _LOADED_DEVICE
-        elif device == "cpu":
-            torch_device = torch.device("cpu")
-        else:
-            torch_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # --- Use pre-loaded models from lifespan if available, else load from disk ---
-    if model_2ch is None:
-        if _LOADED_MODEL_2CH is not None:
-            model_2ch = _LOADED_MODEL_2CH
-        else:
-            ckpt_2ch = _resolve_checkpoint_2ch()
-            logger.info(f"[Landmark] Loading 2ch model from {ckpt_2ch} (on-demand)")
-            model_2ch = load_landmark_model(ckpt_2ch, in_channels=2, device=torch_device)
-
-    if model_1ch is None:
-        if _LOADED_MODEL_1CH is not None:
-            model_1ch = _LOADED_MODEL_1CH
-        else:
-            ckpt_1ch = _resolve_checkpoint_1ch()
-            if ckpt_1ch is not None:
-                logger.info(f"[Landmark] Loading 1ch model from {ckpt_1ch} (on-demand)")
-                model_1ch = load_landmark_model(ckpt_1ch, in_channels=1, device=torch_device)
-            else:
-                logger.warning("[Landmark] 1ch checkpoint not found — using 2ch model as fallback")
-                model_1ch = model_2ch
-
-    # --- Load MRI volume (all cardiac frames) ---
-    nii = nib.load(nifti_path)
-    img = nii.get_fdata().astype(np.float32)
-    if img.ndim == 3:
-        img = img[:, :, :, np.newaxis]  # single-frame volume -> treat as 1 frame
-    if img.ndim != 4:
-        raise ValueError(f"Unsupported NIfTI shape: {img.shape}")
-
-    n_frames = img.shape[3]
-    logger.info(f"[Landmark] MRI shape {img.shape}, processing {n_frames} cardiac frame(s) on {torch_device}")
-
-    # --- Load seg volume once (all frames, if the seg mask is itself 4D) ---
-    seg_vol_4d: Optional[np.ndarray] = None
-    if seg_mask_path is not None:
-        try:
-            seg_nii = nib.load(seg_mask_path)
-            seg_vol_4d = seg_nii.get_fdata().astype(np.float32)
-            if seg_vol_4d.ndim == 3:
-                seg_vol_4d = seg_vol_4d[:, :, :, np.newaxis]
-            logger.info(f"[Landmark] Seg mask shape {seg_vol_4d.shape}")
-        except Exception as exc:
-            logger.warning(f"[Landmark] Could not load seg mask: {exc} — 1ch fallback for all frames/slices")
-            seg_vol_4d = None
-
-    frames_out: List[Dict[str, Any]] = []
-    for frame_idx in range(n_frames):
-        img_frame = img[:, :, :, frame_idx]
-        seg_frame: Optional[np.ndarray] = None
-        if seg_vol_4d is not None:
-            # Most projects only ever have a segmentation mask for one frame
-            # (ED) — reuse it for every cardiac frame rather than requiring a
-            # full 4D seg mask, same as how a missing mask already triggers
-            # the existing per-slice 1ch fallback (is_seg_valid).
-            seg_frame_idx = frame_idx if frame_idx < seg_vol_4d.shape[3] else 0
-            seg_frame = seg_vol_4d[:, :, :, seg_frame_idx]
-        frames_out.append(
-            _run_landmark_inference_for_frame(img_frame, seg_frame, model_2ch, model_1ch, torch_device, frame_idx)
-        )
-
-    ed_frame = frames_out[0]
-    logger.info(f"[Landmark] All {n_frames} frame(s) done.")
-
-    return {
-        "frames": frames_out,
-        "n_frames": n_frames,
-        # Flat top-level ED convenience fields, for callers (e.g. the backend
-        # webhook's bullseye-alignment recompute) that only ever need ED's
-        # average points and shouldn't need to know the response is now
-        # multi-frame.
-        "avg_lm1": ed_frame["avg_lm1"],
-        "avg_lm2": ed_frame["avg_lm2"],
     }

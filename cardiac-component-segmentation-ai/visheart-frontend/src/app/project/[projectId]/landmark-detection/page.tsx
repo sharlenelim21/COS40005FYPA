@@ -201,10 +201,6 @@ export default function LandmarkDetectionPage() {
     replacementFileError,
     currentPrediction,
     confidentCount,
-    allFramesPredictions,
-    currentCardiacFrame,
-    cardiacFrameCount,
-    handleCardiacFrameChange,
     handleRunDetection,
     handleRerunDetection,
     handleAttachToJob,
@@ -826,28 +822,14 @@ export default function LandmarkDetectionPage() {
   }, [currentLandmarkEditKey]);
 
   const handleSaveLandmarks = useCallback(async () => {
-<<<<<<< Updated upstream
     if (isSavingLandmarks || allPredictions.length === 0) return;
-    setIsSavingLandmarks(true);
-    try {
-      const frames = framePredictionsToLandmarkFrames(allPredictions, landmarkEdits);
-=======
-<<<<<<< HEAD
-    if (isSavingLandmarks || allFramesPredictions.length === 0) return;
     setIsSavingLandmarks(true);
     try {
       // Every cardiac frame's predictions, not just whichever one is
-      // currently being viewed/edited — state.predictions only ever holds
-      // the current frame's slices (see useLandmarkDetection.ts), so saving
-      // from that alone would silently drop every other frame's landmarks.
-      const frames = framePredictionsToLandmarkFrames(allFramesPredictions, landmarkEdits);
-=======
-    if (isSavingLandmarks || allPredictions.length === 0) return;
-    setIsSavingLandmarks(true);
-    try {
+      // currently being viewed/edited — the hook's `state.predictions` view
+      // only ever holds the current frame's slices, so saving from that
+      // alone would silently drop every other frame's landmarks.
       const frames = framePredictionsToLandmarkFrames(allPredictions, landmarkEdits);
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
       await landmarkApi.saveLandmarks(projectId, {
         frames,
         segmentationModel: selectedBullseyeModel,
@@ -906,15 +888,7 @@ export default function LandmarkDetectionPage() {
     } finally {
       setIsSavingLandmarks(false);
     }
-<<<<<<< Updated upstream
   }, [isSavingLandmarks, allPredictions, landmarkEdits, projectId, selectedBullseyeModel, fetchBullseye]);
-=======
-<<<<<<< HEAD
-  }, [isSavingLandmarks, allFramesPredictions, landmarkEdits, projectId, selectedBullseyeModel, fetchBullseye]);
-=======
-  }, [isSavingLandmarks, allPredictions, landmarkEdits, projectId, selectedBullseyeModel, fetchBullseye]);
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
 
   // Reload saved landmark edits on mount and after every successful (re-)run —
   // local landmarkEdits state was just cleared by run/rerunDetectionAndResetEdits,
@@ -933,26 +907,19 @@ export default function LandmarkDetectionPage() {
     let cancelled = false;
     landmarkApi.loadSavedLandmarks(projectId).then((doc) => {
       if (cancelled || !doc) return;
-<<<<<<< Updated upstream
-      const edits = landmarkFramesToEdits(doc, allPredictions);
-=======
-<<<<<<< HEAD
       // Reconcile against every frame's predictions, not just whichever one
-      // is currently loaded into state.predictions — otherwise saved edits
-      // for any frame other than the current one would never be picked up
-      // into landmarkEdits until the user happened to revisit that frame.
-      const edits = landmarkFramesToEdits(doc, allFramesPredictions);
-=======
+      // is currently loaded into the hook's `state.predictions` view —
+      // otherwise saved edits for any frame other than the current one would
+      // never be picked up into landmarkEdits until the user happened to
+      // revisit that frame.
       const edits = landmarkFramesToEdits(doc, allPredictions);
->>>>>>> 93eef31cb1ce4ac8f9f7bea54c1e6df715b70773
->>>>>>> Stashed changes
       setLandmarkEdits(edits);
       setSavedLandmarkEdits(edits);
     }).catch(() => {
       // No saved doc yet, or load failed — leave landmarkEdits as-is (empty from the reset).
     });
     return () => { cancelled = true; };
-  }, [state.status, projectId, allFramesPredictions]);
+  }, [state.status, projectId, allPredictions]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1609,11 +1576,11 @@ export default function LandmarkDetectionPage() {
       <div className="lg:hidden flex-1 overflow-y-auto p-3 space-y-3">
         {hasPredictions && (
           <FrameSliceControls
-            currentFrame={currentCardiacFrame}
+            currentFrame={Math.max(0, state.frameIds.indexOf(state.landmarkFrame))}
             currentSlice={state.currentFrame}
-            totalFrames={cardiacFrameCount}
+            totalFrames={state.frameIds.length || 1}
             totalSlices={state.totalFrames}
-            onFrameChange={handleCardiacFrameChange}
+            onFrameChange={(idx) => handleLandmarkFrameChange(state.frameIds[idx] ?? idx)}
             onSliceChange={handleSliderChange}
           />
         )}
@@ -1679,9 +1646,6 @@ export default function LandmarkDetectionPage() {
             onSliderChange={handleSliderChange}
             onLandmarkFrameChange={handleLandmarkFrameChange}
             onPlaybackSpeedChange={handlePlaybackSpeedChange}
-            currentCardiacFrame={currentCardiacFrame}
-            cardiacFrameCount={cardiacFrameCount}
-            onCardiacFrameChange={handleCardiacFrameChange}
             onRerun={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
             onReset={handleReset}
             onFileSelect={handleFileSelect}
@@ -2022,11 +1986,11 @@ export default function LandmarkDetectionPage() {
 
               {hasPredictions && (
                 <FrameSliceControls
-                  currentFrame={currentCardiacFrame}
+                  currentFrame={Math.max(0, state.frameIds.indexOf(state.landmarkFrame))}
                   currentSlice={state.currentFrame}
-                  totalFrames={cardiacFrameCount}
+                  totalFrames={state.frameIds.length || 1}
                   totalSlices={state.totalFrames}
-                  onFrameChange={handleCardiacFrameChange}
+                  onFrameChange={(idx) => handleLandmarkFrameChange(state.frameIds[idx] ?? idx)}
                   onSliceChange={handleSliderChange}
                 />
               )}
@@ -2100,9 +2064,6 @@ export default function LandmarkDetectionPage() {
                 onSliderChange={handleSliderChange}
                 onLandmarkFrameChange={handleLandmarkFrameChange}
                 onPlaybackSpeedChange={handlePlaybackSpeedChange}
-                currentCardiacFrame={currentCardiacFrame}
-                cardiacFrameCount={cardiacFrameCount}
-                onCardiacFrameChange={handleCardiacFrameChange}
                 onRerun={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
                 onReset={handleReset}
                 onFileSelect={handleFileSelect}
