@@ -232,6 +232,36 @@ export type RegionalHealthStatus = {
   computed_at: string;
 };
 
+/** RV analog of RegionalHealthStatus — advisory per-region (9-region RV free
+ *  wall) assessment. Unlike LV, the borrowed cutoff is not RV-validated at
+ *  any level; see `disclaimer` for the exact wording shown to users. */
+export type RvRegionalHealthStatus = {
+  status: "ok" | "unavailable";
+  overall_grade_unchanged: true;
+  source: "rvStrain" | "rvStrainSeries" | null;
+  segments: {
+    idx: number;
+    region: "basal" | "mid" | "apical";
+    label?: string;
+    gcs: number;
+    gas: number | null;
+    level: "normal" | "mild" | "moderate" | "severe";
+    abs_level: "normal" | "mild" | "moderate" | "severe";
+    rel_gap: number;
+    rel_flag: boolean;
+  }[];
+  reduced_count: number;
+  affected_idx: number[];
+  skipped_idx: number[];
+  summary: string;
+  patient_mean_gcs: number | null;
+  relative_rule_applied?: boolean;
+  disclaimer: string;
+  method: string;
+  warnings: string[];
+  computed_at: string;
+};
+
 /** Single ED→ES strain result (global peaks + 17 AHA segments). */
 export type Strain = {
   segments: {
@@ -333,6 +363,7 @@ export type MaskDoc = {
   diseaseSimilarity?: DiseaseSimilarity;
   healthStatus?: HealthStatus;
   regionalHealthStatus?: RegionalHealthStatus;
+  rvRegionalHealthStatus?: RvRegionalHealthStatus;
   rvHealthStatus?: RvHealthStatus;
   strain?: Strain;
   strainSeries?: StrainSeries;
@@ -662,6 +693,21 @@ export function useProjectResults(
             )) ?? current;
         }
 
+        // 5. RV Regional (Layer 2 analog) — advisory. Backend already auto-fires
+        //    this right after an RV strain compute, so this is purely a backfill
+        //    for masks whose RV strain was computed before this field existed.
+        //    Only attempted when RV strain is actually present — unlike LV's
+        //    step 4, there is no point grading "no RV strain yet" on every load.
+        if ((current.rvStrain || current.rvStrainSeries) && (force || !current.rvRegionalHealthStatus)) {
+          const before = current.rvRegionalHealthStatus?.computed_at;
+          await segmentationApi.triggerRvRegionalHealthStatus(maskId);
+          current =
+            (await pollUntil((x) =>
+              !!x.rvRegionalHealthStatus &&
+              (!force || x.rvRegionalHealthStatus?.computed_at !== before),
+            )) ?? current;
+        }
+
         setComputeState("idle");
       } catch (e: unknown) {
         const err = e as { response?: { data?: { message?: string } }; message?: string };
@@ -893,6 +939,8 @@ export function useProjectResults(
     healthStatus: doc?.healthStatus,
     /** Layer 2 — advisory regional assessment; never changes healthStatus. */
     regionalHealthStatus: doc?.regionalHealthStatus,
+    /** RV analog of regionalHealthStatus; never changes rvHealthStatus/healthStatus. */
+    rvRegionalHealthStatus: doc?.rvRegionalHealthStatus,
     /** RV health status — sex-specific reference ranges; echoes the sex/BSA it used. */
     rvHealthStatus: doc?.rvHealthStatus,
     similarity: doc?.diseaseSimilarity,

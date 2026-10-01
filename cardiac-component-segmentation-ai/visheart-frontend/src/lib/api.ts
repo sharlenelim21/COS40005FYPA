@@ -436,6 +436,20 @@ export const segmentationApi = {
   },
 
   /**
+   * RV analog of triggerRegionalHealthStatus — reads this mask's stored
+   * per-region RV strain; never changes rvHealthStatus/healthStatus. Same
+   * "unavailable, not 400" behavior when inputs are missing.
+   */
+  triggerRvRegionalHealthStatus: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-rv-regional-health-status/${maskId}`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /**
    * Disease-pattern similarity (NOT a diagnosis). Also depends on
    * heartMetrics.measurements (400 without it). Strain peaks are read from the
    * stored strain result server-side; `peaks` optionally overrides them.

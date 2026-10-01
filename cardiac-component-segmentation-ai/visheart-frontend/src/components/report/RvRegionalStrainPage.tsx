@@ -52,7 +52,7 @@ export function RvRegionalStrainPage({
         pageNumber={pageNumber}
         totalPages={totalPages}
         generatedAt={generatedAt}
-        metricLabel="RV Regional GCS · Prototype"
+        metricLabel="RV Regional GCS"
         columnLabels={RV_REGION_LABELS_9}
         frames={gcsFrames}
         edFrameIndex={edFrameIndex}
@@ -60,7 +60,7 @@ export function RvRegionalStrainPage({
         emptyMessage="Not computed — run RV strain from the Strain tab to populate RV Regional GCS."
         renderBullseye={(values) => <RvRegionRing values={values} lo={gcsRange.lo} hi={gcsRange.hi} ringCount={3} />}
         tablePrototypeNote="RV Regional GCS (% change in RV free-wall length) has no published reference range and has not been clinically validated — values below are real but exploratory."
-        bullseyeIntroNote="9-segment RV bullseye (basal / mid / apical × 3 sections, Seg1 inferior → Seg3 anterior), rays cast from the LV centre, segment layout fixed at end-diastole. RV Regional GCS (% change in free-wall length) and RV Regional GAS (% change in cavity area) are reported as two separate measures, not combined. Both are prototypes with no published reference range, so neither is clinically validated."
+        bullseyeIntroNote="9-segment RV bullseye (basal / mid / apical × 3 sections, Seg1 inferior → Seg3 anterior), rays cast from the LV centre, segment layout fixed at end-diastole. RV Regional GCS (% change in free-wall length) and RV Regional GAS (% change in cavity area) are reported as two separate measures, not combined. Neither has a published reference range yet, so neither is clinically validated."
         theme="amber"
       />
 
@@ -69,7 +69,7 @@ export function RvRegionalStrainPage({
         pageNumber={pageNumber + gcsPages}
         totalPages={totalPages}
         generatedAt={generatedAt}
-        metricLabel="RV Regional GAS · Prototype"
+        metricLabel="RV Regional GAS"
         columnLabels={RV_REGION_LABELS_9}
         frames={gasFrames}
         edFrameIndex={edFrameIndex}

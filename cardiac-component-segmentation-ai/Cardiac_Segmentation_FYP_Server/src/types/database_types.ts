@@ -460,6 +460,50 @@ export interface IProjectSegmentationMask {
     computed_at: string;
   };
   /**
+   * RV analog of `regionalHealthStatus` — advisory per-region (9-region RV
+   * free wall) assessment, produced by compute_rv_regional_health_status.py
+   * from this mask's stored `rvStrain.regions[]` (or the peak frame of
+   * `rvStrainSeries`). Sits beside `rvHealthStatus`/`healthStatus` and never
+   * alters either: `overall_grade_unchanged` is always true.
+   *
+   * Unlike the LV version, the borrowed EACVI/ASE -17/-12/-7 GCS cutoff is
+   * NOT validated for RV at any level (global or regional) — it is reused
+   * here purely as a conservative, consistently applied anchor. See the
+   * `disclaimer` field for the exact wording shown to users.
+   *
+   * `status` is "unavailable" (never "healthy") when RV regional strain is
+   * absent or its ED/ES frames don't align with heartMetrics.ed_frame/
+   * es_frame — this layer is read-only w.r.t. RV strain and never
+   * recomputes it.
+   */
+  rvRegionalHealthStatus?: {
+    status: "ok" | "unavailable";
+    overall_grade_unchanged: true;
+    source: "rvStrain" | "rvStrainSeries" | null;
+    segments: {
+      idx: number;                                   // 1..9
+      region: "basal" | "mid" | "apical";
+      label?: string;
+      gcs: number;                                   // %, more negative = better
+      gas: number | null;                            // %, cavity-area change (context only)
+      level: "normal" | "mild" | "moderate" | "severe";   // hybrid result
+      abs_level: "normal" | "mild" | "moderate" | "severe"; // absolute band only
+      rel_gap: number;                               // gcs - patient mean
+      rel_flag: boolean;                             // relative rule fired
+    }[];
+    reduced_count: number;
+    affected_idx: number[];
+    skipped_idx: number[];        // regions with NaN/missing GCS
+    summary: string;
+    patient_mean_gcs: number | null;
+    relative_rule_applied?: boolean;
+    thresholds: Record<string, number>;
+    disclaimer: string;
+    method: string;
+    warnings: string[];
+    computed_at: string;
+  };
+  /**
    * RV health status — sex-specific reference-range comparison (SCMR 2025),
    * NOT a diagnosis and not a severity grade. Produced by
    * compute_rv_health_status.py from heartMetrics RVEF/RVEDV/RVESV plus the sex

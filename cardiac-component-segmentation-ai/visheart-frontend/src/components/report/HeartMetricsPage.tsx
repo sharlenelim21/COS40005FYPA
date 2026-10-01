@@ -83,7 +83,7 @@ export function HeartMetricsPage({
     { label: "RVEDVI", value: fmt(idx(rvEdv)), unit: "mL/m²" },
     { label: "RVESVI", value: fmt(idx(rvEsv)), unit: "mL/m²" },
     { label: "RV SVI", value: fmt(idx(rvSv)), unit: "mL/m²" },
-    { label: "RV FAC (short-axis MRI)", value: fmt(rvFac), unit: "%", preview: true },
+    { label: "RV FAC (short-axis MRI)", value: fmt(rvFac), unit: "%" },
   ];
 
   return (
@@ -167,8 +167,8 @@ export function HeartMetricsPage({
 
       <p className="mt-3 text-[8.5px] leading-snug text-gray-600">
         RV FAC here is the short-axis MRI fractional area change (= −peak RV GAS from the 9-segment RV bullseye),
-        not the echocardiographic 4-chamber FAC, so the echo cutoff (≈35%) does not apply. Prototype — no validated
-        reference range.
+        not the echocardiographic 4-chamber FAC, so the echo cutoff (≈35%) does not apply — no validated
+        reference range exists for this measurement yet.
       </p>
     </ReportPageFrame>
   );

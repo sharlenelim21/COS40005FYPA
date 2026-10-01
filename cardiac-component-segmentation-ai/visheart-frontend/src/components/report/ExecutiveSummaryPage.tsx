@@ -155,8 +155,8 @@ export function ExecutiveSummaryPage({
             <Tile label="ESV" value={fmt(rvEsv)} unit="mL" />
             <Tile label="EF" value={fmt(rvEf)} unit="%" />
             <Tile label="Stroke Volume" value={fmt(rvSv)} unit="mL" />
-            <Tile label="FAC (short-axis)" value={fmt(rvFac)} unit="%" preview />
-            <Tile label="Peak GAS / GCS" value={`${fmt(rvPeakGas)} / ${fmt(rvPeakGcs)}`} unit="%" preview />
+            <Tile label="FAC (short-axis)" value={fmt(rvFac)} unit="%" />
+            <Tile label="Peak GAS / GCS" value={`${fmt(rvPeakGas)} / ${fmt(rvPeakGcs)}`} unit="%" />
           </div>
         </div>
       </div>

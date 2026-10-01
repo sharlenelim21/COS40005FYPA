@@ -23,7 +23,7 @@ import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw 
 import { Input } from "@/components/ui/input";
 import { rvGasMeasuredNote, rvPeakGas as rvPeakGasOf, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
-import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
+import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvRegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
@@ -507,7 +507,7 @@ function EmptyState({ computing, error }: { computing?: boolean; error?: string 
 
 export function InteractiveReport({
   patientLabel, scanSummary, generatedAt,
-  measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus,
+  measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus, rvRegionalHealthStatus,
   computing, computeError, rv, lvVolumes, rvStrain, rvStrainSeries,
   bsaM2, heightCm, weightKg, onHeightCmChange, onWeightKgChange,
   onRecomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError,
@@ -569,6 +569,8 @@ export function InteractiveReport({
   strainSeries?: StrainSeries;
   /** Layer 2 — advisory, shown beneath the Layer-1 evidence. Never alters the grade. */
   regionalHealthStatus?: RegionalHealthStatus;
+  /** RV analog of regionalHealthStatus — advisory, borrowed-cutoff, never graded as validated. */
+  rvRegionalHealthStatus?: RvRegionalHealthStatus;
   /** True while the analysis triggers are running — see useProjectResults. */
   computing?: boolean;
   computeError?: string | null;
@@ -687,12 +689,46 @@ export function InteractiveReport({
   /** Same precedence rule as the LV chart. */
   const rvEmphasis = selectedRvRegion;
 
+  /** RV twin of hoverFrame/defaultFrame/activeFrame/bullseyeValues above —
+   *  scrubbing the RV chart live-recolors the RV bullseye the same way
+   *  hovering the LV chart does for the LV one. */
+  const [hoverRvFrame, setHoverRvFrame] = useState<number | null>(null);
+  const rvDefaultFrame = rvStrainSeries?.peakFrameIndex ?? rvStrainSeries?.frames?.at(-1)?.frameIndex ?? null;
+  const rvActiveFrame = hoverRvFrame ?? rvDefaultFrame;
+  const rvActiveSeriesFrame = useMemo(
+    () => rvStrainSeries?.frames?.find((f) => f.frameIndex === rvActiveFrame) ?? null,
+    [rvStrainSeries, rvActiveFrame],
+  );
+  const rvBullseyeValues = useMemo(() => {
+    const src = rvActiveSeriesFrame?.regions ?? rvStrain?.regions ?? [];
+    return src.map((r) => ({ ...r, strain: rvPick(r) }));
+  }, [rvActiveSeriesFrame, rvStrain, rvPick]);
+  /** Global RV value tracks the hovered frame when a series is loaded,
+   *  otherwise falls back to the static ED→ES result — same fallback order
+   *  rvShown itself already uses. */
+  const rvActiveGlobal = rvActiveSeriesFrame
+    ? (rvMetricType === "GAS" ? rvActiveSeriesFrame.global_rv_gas ?? null : rvActiveSeriesFrame.global_rv_strain)
+    : (rvShown?.global_rv_strain ?? null);
+
   const regionalOk = regionalHealthStatus?.status === "ok";
   const hasFindings = regionalOk && (regionalHealthStatus?.reduced_count ?? 0) > 0;
   const findingIds = hasFindings
     ? (showAllSegments
         ? (regionalHealthStatus?.segments ?? []).map((s) => s.idx).sort((a, b) => a - b)
         : (regionalHealthStatus?.affected_idx ?? []).slice().sort((a, b) => a - b))
+    : [];
+
+  /** RV twin of levelOf/hasFindings/findingIds above — same hybrid classification,
+   *  just keyed by RV region (1-9) instead of AHA segment (1-17). */
+  const rvLevelOf = (region: number) =>
+    rvRegionalHealthStatus?.segments?.find((s) => s.idx === region)?.level ?? "normal";
+  const rvRegionalOk = rvRegionalHealthStatus?.status === "ok";
+  const hasRvFindings = rvRegionalOk && (rvRegionalHealthStatus?.reduced_count ?? 0) > 0;
+  const [showAllRvSegments, setShowAllRvSegments] = useState(false);
+  const rvFindingIds = hasRvFindings
+    ? (showAllRvSegments
+        ? (rvRegionalHealthStatus?.segments ?? []).map((s) => s.idx).sort((a, b) => a - b)
+        : (rvRegionalHealthStatus?.affected_idx ?? []).slice().sort((a, b) => a - b))
     : [];
 
   // BSA-indexed sub-values (mL/m²) — pure client-side division, shown as a
@@ -741,8 +777,9 @@ export function InteractiveReport({
   const hasRealRvGcs = rvPeakGcs != null;
   // REAL — RV Global Area Strain (% change in RV cavity area, 9-segment
   // backend), reported separately from GCS (never combined). Peak = most
-  // negative across the series, else the single ED→ES value. Still "preview"
-  // (no validated reference range). null on results computed before GAS existed.
+  // negative across the series, else the single ED→ES value. No validated
+  // reference range exists for it (methodology caveat, not a readiness flag).
+  // null on results computed before GAS existed.
   const rvPeakGas: number | null = rvPeakGasOf(rvStrain, rvStrainSeries);
   const hasRealRvGas = rvPeakGas != null;
 
@@ -751,9 +788,9 @@ export function InteractiveReport({
     { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL", indexed: indexedMlM2(rv?.RVEDV) },
     { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL", indexed: indexedMlM2(rv?.RVESV) },
     { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL", indexed: indexedMlM2(rv?.RV_SV) },
-    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", preview: true },
-    { label: "RV Peak Global Area Strain (RV GAS)", value: fmt(rvPeakGas), unit: "%", preview: true },
-    { label: "RV Peak Septal GCS (septal-side border)", value: fmt(rvPeakSeptalGcs(rvStrain, rvStrainSeries)), unit: "%", preview: true },
+    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%" },
+    { label: "RV Peak Global Area Strain (RV GAS)", value: fmt(rvPeakGas), unit: "%" },
+    { label: "RV Peak Septal GCS (septal-side border)", value: fmt(rvPeakSeptalGcs(rvStrain, rvStrainSeries)), unit: "%" },
   ];
 
   // RV health status (graded by the backend). A stored result is shown only
@@ -1321,23 +1358,20 @@ export function InteractiveReport({
                   { key: "RVESVI", name: "RV ESV Index (RVESVI)", value: rvesvi, unit: "mL/m²", min: 0, max: 80,
                     normalLabel: esviBar.label, zones: esviBar.zones,
                     interp: verdict("RV End-Systolic Volume Index", true) },
-                  // Flagged `preview: true` for the same reason as GAS below: no paper
-                  // validates a normal range for this RV strain measure yet, so even
-                  // though the number itself is real (once computed), it gets the same
-                  // muted/"preview" tag rather than sitting next to RVEF/RVEDVI looking
-                  // like a clinically-referenced result.
+                  // Real value, same row styling as RVEF/RVEDVI -- the "no validated
+                  // reference range" caveat is carried in the interp text instead of a
+                  // separate preview/prototype flag, same reason as GAS below.
                   { key: "PeakGCS_RV", name: "Peak Global Circumferential Strain", value: rvPeakGcs, unit: "%", min: -30, max: 0, normalLabel: "not validated",
                     zones: [], interp: hasRealRvGcs
-                      ? { text: "Preview — no validated RV-specific reference range", level: "warn" }
-                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" },
-                    preview: true },
-                  // Real GAS (cavity-area % change, short-axis) — same `preview` treatment
-                  // as GCS above: no validated RV reference range for this measure.
+                      ? { text: "No validated RV-specific reference range", level: "warn" }
+                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" } },
+                  // Real GAS (cavity-area % change, short-axis) — no validated RV
+                  // reference range exists for this measure (methodology caveat,
+                  // not a data-readiness flag — the value itself is real).
                   { key: "PeakGAS_RV", name: "Peak Global Area Strain", value: rvPeakGas, unit: "%", min: -60, max: 0, normalLabel: "not validated",
                     zones: [], interp: hasRealRvGas
-                      ? { text: "Preview — no validated RV-specific reference range", level: "warn" }
-                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" },
-                    preview: true },
+                      ? { text: "No validated RV-specific reference range", level: "warn" }
+                      : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" } },
                 ];
 
                 return (
@@ -1408,9 +1442,8 @@ export function InteractiveReport({
                       verdict depends on sex. Indexing needs height and weight above. The ARVC criteria in the
                       RV patterns card below overlap this normal range in men (RVEDVI ≥ 110 mL/m² lies inside
                       47–116) and apply only with a regional RV wall-motion abnormality. Peak GCS and Peak GAS
-                      are both marked preview — both come from the 9-segment RV bullseye (real once RV strain
-                      has been run for this model), but neither has a clinically validated RV-specific
-                      reference range yet.
+                      both come from the 9-segment RV bullseye, but neither has a clinically validated
+                      RV-specific reference range yet.
                       RV SV {fmt(rv?.RV_SV)} mL. Advisory only — RV findings never affect the LV grade above.
                     </p>
                     {rvCurrent && rvCurrent.warnings.length > 0 && (
@@ -1448,14 +1481,13 @@ export function InteractiveReport({
                 ))}
 
               {/* ── Regional Findings (Layer 2) — LV | RV side by side ───────
-                  LV's half is the interactive entry point into the strain
-                  card: each affected segment is a button that selects it and
-                  scrolls to the charts. Still advisory — the grade badge
-                  above is Layer 1 only. RV's half is a compact pointer to the
-                  full "RV Regional Findings" card below (not a duplicate of
-                  it) — RV strain has no validated severity bands to tile the
-                  same way LV's segments are, so showing "Severe/Moderate"
-                  wedges for RV here would be an unsupported clinical claim. */}
+                  Both halves are now the same interactive pattern: each
+                  affected segment/region is a button that selects it and
+                  scrolls to its chart card. Still advisory in both cases —
+                  the grade badge above is Layer 1 (LVEF) only, and RV's
+                  thresholds are borrowed from the LV's global reference
+                  (not RV-validated at any level) — see each card's
+                  disclaimer tooltip. */}
               {(regionalHealthStatus || hasRv) && (
                 <div className="mt-3 grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-2">
                   {regionalHealthStatus && (
@@ -1523,14 +1555,71 @@ export function InteractiveReport({
                   )}
 
                   {hasRv && (
-                    <div className={regionalHealthStatus ? "border-t border-border pt-3 sm:border-t-0 sm:border-l sm:pl-4 sm:pt-0" : undefined}>
+                    <div
+                      className={regionalHealthStatus ? "border-t border-border pt-3 sm:border-t-0 sm:border-l sm:pl-4 sm:pt-0" : undefined}
+                      title={rvRegionalHealthStatus?.disclaimer}
+                    >
                       <div className="flex items-center gap-2">
                         <h3 className="text-xs font-bold text-foreground">RV Regional Findings</h3>
                         <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
                           Advisory
                         </span>
                       </div>
-                      {rvShown && rvShownHasData ? (
+
+                      {hasRvFindings ? (
+                        <>
+                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {showAllRvSegments ? "All Regions" : "Affected Regions"}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {rvFindingIds.map((idx) => {
+                              const lvl = rvLevelOf(idx);
+                              const isSel = selectedRvRegion === idx;
+                              const quiet = lvl === "normal";
+                              return (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedRvRegion((cur) => (cur === idx ? null : idx));
+                                    rvCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                                  }}
+                                  title={`RV region ${idx} — ${LEVEL_WORD[lvl] ?? lvl}`}
+                                  className={`min-w-[46px] rounded-lg border px-2 py-1.5 text-center transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                                    isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
+                                  } ${quiet ? "bg-muted/40" : "bg-card"}`}
+                                >
+                                  <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
+                                    {idx}
+                                  </span>
+                                  <span className={`mt-1 block text-[9px] font-semibold leading-none ${
+                                    lvl === "severe" ? "text-red-700 dark:text-red-400"
+                                    : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
+                                    : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
+                                    : "text-muted-foreground"}`}>
+                                    {LEVEL_WORD[lvl] ?? lvl}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-2 text-[11px] text-muted-foreground">{rvRegionalHealthStatus?.summary}</p>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setShowAllRvSegments((v) => !v); }}
+                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                          >
+                            {showAllRvSegments ? "← Show affected only" : "View all regions →"}
+                          </button>
+                        </>
+                      ) : rvRegionalHealthStatus ? (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {rvRegionalOk
+                            ? rvRegionalHealthStatus.summary
+                            : "Regional assessment unavailable for this model."}
+                        </p>
+                      ) : rvShown && rvShownHasData ? (
                         <>
                           <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                             Global RV {rvMetricType}
@@ -1539,22 +1628,19 @@ export function InteractiveReport({
                             {fmt(rvShown.global_rv_strain)}
                             <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
                           </p>
-                          <p className="mt-2 text-[11px] text-muted-foreground">
-                            No validated severity grading exists for RV strain — see the full breakdown below for per-region values.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); rvCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}
-                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
-                          >
-                            View full RV Regional Findings ↓
-                          </button>
                         </>
                       ) : (
                         <p className="mt-2 text-[11px] text-muted-foreground">
                           No RV regional strain computed for this model yet.
                         </p>
                       )}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); rvCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}
+                        className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        View full RV Regional Findings ↓
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1981,15 +2067,15 @@ export function InteractiveReport({
         )}
       </Card>
 
-      {/* ── RV Regional Findings — DISPLAY ONLY ─────────────────────────────
-          Renders `rvStrain` if the backend ever writes it. Nothing here
-          computes strain: the producing module (compute_rv_strain_from_rle.py)
-          is backend-owned and does not exist yet, so today this always shows
-          the pending state.
-
-          It feeds NO grade, and by construction never will — the measure is a
-          geometric contour-length proxy, circumferential rather than the
-          validated longitudinal one, taken from short-axis slices. Exploratory. */}
+      {/* ── RV Regional Findings — advisory grading + full breakdown ────────
+          Renders `rvStrain`/`rvStrainSeries` plus the hybrid level from
+          `rvRegionalHealthStatus` (compute_rv_regional_health_status.py), the
+          RV analog of the LV's `regionalHealthStatus`. Unlike the LV version,
+          the absolute-band cutoff it borrows is NOT validated for RV at any
+          level — global or regional — so every level shown here is read
+          through the "Advisory" badge and the card's disclaimer tooltip, not
+          as a clinical grade. Chart + per-region table below remain the raw
+          GCS/GAS short-axis proxy values regardless of grading. */}
       <Card
         title="RV Regional Findings"
         subtitle={`Exploratory · RV ${rvMetricType === "GAS" ? "cavity-area" : "free-wall length"} strain (${rvMetricType}), short-axis · advisory`}
@@ -2048,13 +2134,20 @@ export function InteractiveReport({
                 in CombinedVentricularChart.tsx) and use the same rdYlGn
                 color scale, so only size needed correcting here. */}
             <div onClick={(e) => e.stopPropagation()}>
+              <div className="mb-1 text-center">
+                <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+                  {hoverRvFrame == null
+                    ? (rvDefaultFrame != null ? `Peak · Frame ${rvDefaultFrame}` : "ED→ES")
+                    : `Frame ${rvActiveFrame}`}
+                </span>
+              </div>
               <CombinedVentricularChart
                 lvData={[]}
                 hasLv={false}
                 strainType="GRS"
                 showLv={false}
                 showRv={true}
-                rvRegions={rvShown.regions}
+                rvRegions={rvBullseyeValues}
                 rvMetric={rvMetricType}
                 selectedRvRegion={selectedRvRegion}
                 onRvRegionClick={(r) => setSelectedRvRegion((cur) => (cur === r ? null : r))}
@@ -2073,10 +2166,10 @@ export function InteractiveReport({
               <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                 <div>
                   <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Global RV {rvMetricType}
+                    {rvActiveSeriesFrame ? `Frame ${rvActiveFrame} RV ${rvMetricType}` : `Global RV ${rvMetricType}`}
                   </span>
                   <span className="text-[19px] font-bold tabular-nums text-foreground">
-                    {fmt(rvShown.global_rv_strain)}
+                    {fmt(rvActiveGlobal)}
                     <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
                   </span>
                 </div>
@@ -2098,7 +2191,14 @@ export function InteractiveReport({
               {hasRvCurves ? (
                 <div className="mt-3">
                   <ResponsiveContainer width="100%" height={220}>
-                    <LineChart data={rvCurves} margin={{ top: 8, right: 12, left: -12, bottom: 4 }}>
+                    <LineChart
+                      data={rvCurves}
+                      margin={{ top: 8, right: 12, left: -12, bottom: 4 }}
+                      onMouseMove={(e: { activeLabel?: string | number }) => {
+                        if (e?.activeLabel !== undefined) setHoverRvFrame(Number(e.activeLabel));
+                      }}
+                      onMouseLeave={() => setHoverRvFrame(null)}
+                    >
                       <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
                       <XAxis dataKey="frame" tick={{ fontSize: 11 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 11 }} />
                       <YAxis tick={{ fontSize: 11 }} label={{ value: `RV ${rvMetricType} (%)`, angle: -90, position: "insideLeft", fontSize: 11 }} />

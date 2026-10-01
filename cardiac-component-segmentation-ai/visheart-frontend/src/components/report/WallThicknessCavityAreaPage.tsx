@@ -106,9 +106,6 @@ export function WallThicknessCavityAreaPage({
         </div>
 
         <div className="relative rounded-lg border border-dashed border-gray-300 bg-amber-50 p-2">
-          <span className="absolute right-2 top-2 rounded-full bg-amber-100 px-2 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700">
-            prototype
-          </span>
           <p className="mb-1 text-[14px] font-extrabold text-gray-900">RV Cavity Area - FAC (%)</p>
           <p className="mb-2 text-[9px] text-gray-600">
             {hasFac

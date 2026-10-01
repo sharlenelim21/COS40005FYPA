@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -1479,6 +1479,14 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
                 { new: true },
             ).lean();
             logger.info(`${serviceLocation}: Stored rvStrain on mask ${maskDoc._id} — global_rv_strain=${gpuRes.data?.global_rv_strain} edFrame=${edFrameIndex} esFrame=${esFrameIndex}`);
+
+            // RV analog of Layer 2 — advisory regional (per-RV-region) status.
+            // Fired after RV strain lands because per-region RV strain IS its
+            // input. Fire-and-forget: it must never affect this response.
+            computeRvRegionalHealthStatusFromStrain(maskDoc._id.toString()).catch((rhErr: any) => {
+                logger.warn(`${serviceLocation}: Auto RV regional-health-status after RV strain failed for mask ${maskDoc._id}: ${rhErr?.message}`);
+            });
+            logger.info(`${serviceLocation}: Auto-fired RV regional health status for mask ${maskDoc._id} after RV strain compute.`);
         } catch (persistErr: any) {
             logger.warn(`${serviceLocation}: Failed to persist rvStrain on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
@@ -2351,6 +2359,40 @@ router.post("/trigger-regional-health-status/:maskId", isAuth, async (req: Reque
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering regional health status for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// RV analog of trigger-regional-health-status — reads this mask's stored
+// per-region RV strain and writes `rvRegionalHealthStatus`. Mirrors the LV
+// route 1:1, same "unavailable, not 400" behavior when heart metrics/RV
+// strain are absent.
+// POST /segmentation/trigger-rv-regional-health-status/:maskId
+router.post("/trigger-rv-regional-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        res.json({ success: true, message: "RV regional health-status computation started." });
+
+        computeRvRegionalHealthStatusFromStrain(maskId).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-rv-regional-health-status async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering RV regional health status for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }

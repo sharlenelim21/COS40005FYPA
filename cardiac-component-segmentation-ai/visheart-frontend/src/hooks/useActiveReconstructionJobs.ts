@@ -74,5 +74,46 @@ export function useActiveReconstructionJobs(projectId?: string) {
 
   const anyBuilding = building.lv.size > 0 || building.rv.size > 0;
 
-  return { building, anyBuilding, refresh, jobs };
+  /**
+   * Real tracked progress per chamber (0-100), averaged across that chamber's
+   * live in-flight jobs — same live/stale filtering as `building` above, and
+   * the same averaging `summarizeProgress` uses on the project page, so the
+   * standalone 4D viewer's "Building..." panel can show a real percentage
+   * instead of only a boolean. `null` when nothing is building in that
+   * chamber, or none of its jobs have reported a progress reading yet.
+   */
+  const buildingProgress = useMemo(() => {
+    const out: Record<Chamber, number | null> = { lv: null, rv: null };
+    if (!Array.isArray(jobs) || !projectId) return out;
+
+    const sums: Record<Chamber, { total: number; count: number }> = {
+      lv: { total: 0, count: 0 },
+      rv: { total: 0, count: 0 },
+    };
+
+    for (const job of jobs) {
+      if (String(job.projectId ?? "") !== String(projectId)) continue;
+
+      const status = String(job.status ?? "").toLowerCase();
+      if (status !== "pending" && status !== "in_progress") continue;
+
+      const lastTouched = Date.parse(String(job.updatedAt ?? job.createdAt ?? ""));
+      if (Number.isFinite(lastTouched) && Date.now() - lastTouched > 15 * 60 * 1000) continue;
+
+      const chamber = normalizeReconstructionChamber(job.chamber);
+      const progress = job.progress;
+      sums[chamber].count += 1;
+      sums[chamber].total += typeof progress === "number" && Number.isFinite(progress) && progress > 0 ? progress : 0;
+    }
+
+    for (const chamber of ["lv", "rv"] as const) {
+      const { total, count } = sums[chamber];
+      if (count === 0) continue;
+      const value = Math.round(total / count);
+      out[chamber] = value > 0 ? value : null;
+    }
+    return out;
+  }, [jobs, projectId]);
+
+  return { building, buildingProgress, anyBuilding, refresh, jobs };
 }

@@ -3,8 +3,8 @@
  * trigger a download. Covers both segmentation models (UNet, MedSAM) so the
  * file is a complete record. Pulls stored values wherever they exist; missing
  * values are written as empty cells. RV GAS/FAC are real (9-segment RV
- * bullseye) but have no validated reference range, so they are labelled
- * PROTOTYPE inline, same as on the printed report.
+ * bullseye) but have no validated reference range, so that caveat is noted
+ * inline in the column header, same as on the printed report.
  *
  * The CSV is sectioned (a blank line + a section header between blocks) rather
  * than one flat table, because the data is genuinely heterogeneous: scalar
@@ -110,10 +110,10 @@ export function buildResultsCsv(
     // cavity-radius measure, not GRS/GCS — see rvStrain), so pull its global
     // value straight from the series peak, falling back to the single ED→ES
     // result. Not a "Peak" label to avoid implying it's GRS/GCS-comparable.
-    ["Global RV Strain (GCS, free wall) — PROTOTYPE, no validated range", "%", (d) => d.rvStrainSeries?.peak_global_rv_strain ?? d.rvStrain?.global_rv_strain],
-    ["RV Peak Septal GCS (septal-side border) — PROTOTYPE, no validated range", "%", (d) => rvPeakSeptalGcs(d.rvStrain, d.rvStrainSeries)],
-    ["RV Peak Global Area Strain (GAS) — PROTOTYPE, no validated range", "%", (d) => rvPeakGas(d.rvStrain, d.rvStrainSeries)],
-    ["RV FAC (short-axis MRI, = −GAS) — PROTOTYPE, not echo FAC", "%", (d) => rvPeakFac(d.rvStrain, d.rvStrainSeries)],
+    ["Global RV Strain (GCS, free wall) — no validated range", "%", (d) => d.rvStrainSeries?.peak_global_rv_strain ?? d.rvStrain?.global_rv_strain],
+    ["RV Peak Septal GCS (septal-side border) — no validated range", "%", (d) => rvPeakSeptalGcs(d.rvStrain, d.rvStrainSeries)],
+    ["RV Peak Global Area Strain (GAS) — no validated range", "%", (d) => rvPeakGas(d.rvStrain, d.rvStrainSeries)],
+    ["RV FAC (short-axis MRI, = −GAS) — not echo FAC", "%", (d) => rvPeakFac(d.rvStrain, d.rvStrainSeries)],
   ];
   for (const [label, unit, get] of measRows) {
     lines.push(row(label, unit, ...present.map((m) => {

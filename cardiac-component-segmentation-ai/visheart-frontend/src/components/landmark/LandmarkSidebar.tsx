@@ -310,14 +310,20 @@ export function LandmarkSidebar({
       </div>
 
 
-      {hasPredictions && activeTab === "landmarks" && (state.frameIds.length > 1 || strainFrameCount > 1) && (
-        <LandmarkFrameSwitcher
-          frameIds={state.frameIds}
-          currentFrameId={state.landmarkFrame}
-          onChange={(id) => onLandmarkFrameChange?.(id)}
-          projectFrameCount={strainFrameCount}
-          onRerun={onRerun}
-        />
+      {/* Frame selection itself now lives in the top-of-viewer FrameSliceControls
+          (page.tsx) -- this just keeps the one thing that had no equivalent
+          there: warning when a saved result predates per-frame detection and
+          only covers some of the study's frames. */}
+      {hasPredictions && activeTab === "landmarks" && strainFrameCount > state.frameIds.length && (
+        <div className="px-4 py-2 border-b border-[var(--sidebar-border)] flex-shrink-0">
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            This result only has landmarks for {state.frameIds.length} of {strainFrameCount} frames.{" "}
+            <button type="button" onClick={onRerun} className="font-medium text-primary underline underline-offset-2">
+              Re-run detection
+            </button>{" "}
+            to detect and edit every frame.
+          </p>
+        </div>
       )}
 
       {hasPredictions && activeTab === "landmarks" && (
@@ -435,67 +441,7 @@ export function LandmarkSidebar({
 
 // Cardiac-frame switcher for the Landmarks tab. Each frame has its own slices, confidence
 // indicators and edits, so choosing a frame swaps everything below it to that frame.
-function LandmarkFrameSwitcher({
-  frameIds,
-  currentFrameId,
-  onChange,
-  projectFrameCount,
-  onRerun,
-}: {
-  frameIds: number[];
-  currentFrameId: number;
-  onChange: (frameId: number) => void;
-  projectFrameCount: number;
-  onRerun: () => void;
-}) {
-  // A result saved before per-frame detection only covers frame 1, so the study's other frames
-  // have nothing to switch to until detection is run again.
-  const incomplete = projectFrameCount > frameIds.length;
-  return (
-    <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-1.5 flex-shrink-0">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Cardiac frame
-        </span>
-        <span className="text-[10px] text-muted-foreground tabular-nums">
-          {frameIds.indexOf(currentFrameId) + 1}/{frameIds.length}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-1" role="tablist" aria-label="Cardiac frame">
-        {frameIds.map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={id === currentFrameId}
-            onClick={() => onChange(id)}
-            title={`Frame ${id + 1}`}
-            className={cn(
-              "min-w-7 rounded-md border px-2 py-1 text-[11px] font-medium tabular-nums transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              id === currentFrameId
-                ? "border-primary bg-primary text-primary-foreground shadow-sm"
-                : "border-border bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-            )}
-          >
-            {id + 1}
-          </button>
-        ))}
-      </div>
-      {incomplete && (
-        <p className="text-[10px] leading-snug text-muted-foreground">
-          This result only has landmarks for {frameIds.length} of {projectFrameCount} frames.{" "}
-          <button type="button" onClick={onRerun} className="font-medium text-primary underline underline-offset-2">
-            Re-run detection
-          </button>{" "}
-          to detect and edit every frame.
-        </p>
-      )}
-    </div>
-  );
-}
-
-// Playback bar 
+// Playback bar
 function PlaybackBar({
   currentFrame,
   totalFrames,
@@ -1481,10 +1427,20 @@ function StrainTab({
         computeStrainSeries(projectId, edIndex, strainModel),
         computeRvStrainSeries(projectId, edIndex, strainModel),
       ]);
+      const errMessage = (outcome: PromiseRejectedResult) =>
+        (outcome.reason as any)?.response?.data?.error ?? (outcome.reason as any)?.message ?? "Strain series failed.";
       if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
-        const err: any = lvOutcome.reason;
-        setSeriesError(err?.response?.data?.error ?? err?.message ?? "Strain series failed.");
+        setSeriesError(errMessage(lvOutcome));
         return;
+      }
+      // A failure in only ONE of the two must still be reported -- previously
+      // this branch was silent whenever LV succeeded, so an RV-only failure
+      // left the RV full-cycle panel permanently empty with no visible error
+      // (the user would just see stale/no data and no indication why).
+      if (lvOutcome.status === "rejected") {
+        setSeriesError(`LV strain series failed: ${errMessage(lvOutcome)}`);
+      } else if (rvOutcome.status === "rejected") {
+        setSeriesError(`RV strain series failed: ${errMessage(rvOutcome)}`);
       }
       // Stored on the mask — re-read it so every consumer (this tab, the
       // main panel's bullseye/3D heart) picks up the new series. A full

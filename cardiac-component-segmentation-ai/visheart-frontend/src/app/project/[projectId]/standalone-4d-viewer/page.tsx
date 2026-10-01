@@ -21,6 +21,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
+import { JobProgress } from "@/components/ui/kinetic-progress";
 import {
   ArrowLeft,
   Play,
@@ -71,7 +72,7 @@ export default function Standalone4DViewerPage() {
   // Shared with the project page: both need to know what is building, and both were independently
   // burned by reading it from ProjectContext, which clears its job list once a reconstruction
   // exists. See the hook for the full explanation.
-  const { building: buildingReconstructions, refresh: refreshReconstructionJobs } =
+  const { building: buildingReconstructions, buildingProgress, refresh: refreshReconstructionJobs } =
     useActiveReconstructionJobs(projectId);
   const { processingUnit } = useGpuStatus();
 
@@ -145,6 +146,7 @@ export default function Standalone4DViewerPage() {
   const buildingLv = (buildingReconstructions.lv.size > 0 || pendingHint === "lv") && !lvReconstruction;
   const buildingRv = (buildingReconstructions.rv.size > 0 || pendingHint === "rv") && !rvReconstruction;
   const pendingChamber = buildingRv ? "rv" : buildingLv ? "lv" : null;
+  const pendingChamberProgress = pendingChamber ? buildingProgress[pendingChamber] : null;
 
   // True while a chamber that is being built has not landed yet. Drives both the polling loop and
   // the "Building..." row in the sidebar.
@@ -252,6 +254,7 @@ export default function Standalone4DViewerPage() {
       visible: showLv,
       setVisible: setShowLv,
       building: buildingLv,
+      progress: buildingProgress.lv,
     },
     {
       key: "rv" as const,
@@ -261,6 +264,7 @@ export default function Standalone4DViewerPage() {
       visible: showRv,
       setVisible: setShowRv,
       building: buildingRv,
+      progress: buildingProgress.rv,
     },
   ];
 
@@ -683,38 +687,41 @@ export default function Standalone4DViewerPage() {
                     Chambers
                   </p>
 
-                  {CHAMBER_ROWS.map(({ key, label, color, recon, visible, setVisible, building }) => (
-                    <div key={key} className="flex items-center justify-between gap-3">
-                      <div className={`flex items-center gap-2 ${recon ? "" : "opacity-50"}`}>
-                        <span
-                          className="inline-block h-3 w-3 rounded-full border"
-                          style={{ backgroundColor: recon ? color : "transparent" }}
-                        />
-                        <span className="text-sm font-medium">{label}</span>
-                        {!recon && (
-                          <Badge variant="outline" className="text-[10px]">
-                            {building ? "Building" : "Not built"}
-                          </Badge>
-                        )}
-                      </div>
+                  {CHAMBER_ROWS.map(({ key, label, color, recon, visible, setVisible, building, progress }) => (
+                    <div key={key} className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className={`flex items-center gap-2 ${recon ? "" : "opacity-50"}`}>
+                          <span
+                            className="inline-block h-3 w-3 rounded-full border"
+                            style={{ backgroundColor: recon ? color : "transparent" }}
+                          />
+                          <span className="text-sm font-medium">{label}</span>
+                          {!recon && (
+                            <Badge variant="outline" className="text-[10px]">
+                              {building ? "Building" : "Not built"}
+                            </Badge>
+                          )}
+                        </div>
 
-                      {recon ? (
-                        <Switch
-                          checked={visible}
-                          onCheckedChange={setVisible}
-                          aria-label={`Show ${label}`}
-                        />
-                      ) : building ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs"
-                          onClick={() => router.push(buildChamberHref(key))}
-                        >
-                          Build {key.toUpperCase()}
-                        </Button>
+                        {recon ? (
+                          <Switch
+                            checked={visible}
+                            onCheckedChange={setVisible}
+                            aria-label={`Show ${label}`}
+                          />
+                        ) : !building ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => router.push(buildChamberHref(key))}
+                          >
+                            Build {key.toUpperCase()}
+                          </Button>
+                        ) : null}
+                      </div>
+                      {!recon && building && (
+                        <JobProgress progress={progress} status="in_progress" label={`${key.toUpperCase()} reconstruction`} />
                       )}
                     </div>
                   ))}
@@ -722,11 +729,12 @@ export default function Standalone4DViewerPage() {
                   {/* Says the job is running and that this page will update itself. Without it a
                       reconstruction that takes minutes looks like nothing happened. */}
                   {pendingChamberMissing && (
-                    <div className="rounded-md border bg-muted/40 p-3 space-y-1">
+                    <div className="rounded-md border bg-muted/40 p-3 space-y-2">
                       <p className="text-xs font-medium flex items-center gap-2">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         Building {pendingChamber?.toUpperCase()} reconstruction…
                       </p>
+                      <JobProgress progress={pendingChamberProgress} status="in_progress" />
                       <p className="text-[11px] leading-relaxed text-muted-foreground">
                         This runs on the {processingUnit.gpuAvailable ? "GPU" : "CPU"} and takes
                         about {Math.round(pollBudgetMs / 60000)} minutes for a full sequence

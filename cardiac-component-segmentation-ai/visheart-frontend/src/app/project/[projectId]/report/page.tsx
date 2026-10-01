@@ -48,7 +48,7 @@ export default function ReportPage() {
   // show progress instead of a permanent "not computed" dead end.
   const {
     model, measurements, healthStatus, similarity, strain, strainSeries,
-    computing, computeError, newerMaskAvailable, regionalHealthStatus, rv, lvVolumes, rvStrain,
+    computing, computeError, newerMaskAvailable, regionalHealthStatus, rvRegionalHealthStatus, rv, lvVolumes, rvStrain,
     rvStrainSeries, recomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError, doc, byModel,
     rvHealthStatus, recomputeRvHealthStatus, recomputingRvHealthStatus, recomputeRvHealthStatusError,
   } = useProjectResults(projectId, "recent");
@@ -347,6 +347,7 @@ export default function ReportPage() {
           strain={strain}
           strainSeries={strainSeries}
           regionalHealthStatus={regionalHealthStatus}
+          rvRegionalHealthStatus={rvRegionalHealthStatus}
           rv={rv}
           lvVolumes={lvVolumes}
           rvStrain={rvStrain}

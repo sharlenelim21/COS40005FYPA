@@ -138,7 +138,7 @@ export function FrameSeriesPages({
         >
           {ci === 0 && tablePrototypeNote && (
             <div className="mb-2 rounded-md border border-dashed border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[9px] text-amber-800">
-              <span className="font-bold uppercase tracking-wide">Prototype — </span>{tablePrototypeNote}
+              {tablePrototypeNote}
             </div>
           )}
           <div className="overflow-x-auto">

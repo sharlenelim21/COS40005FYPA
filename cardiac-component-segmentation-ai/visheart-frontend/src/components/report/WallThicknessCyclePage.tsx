@@ -185,7 +185,6 @@ export function WallThicknessCyclePage({
         >
           {ci === 0 && (
             <div className="mb-2 rounded-md border border-dashed border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[9px] text-amber-800">
-              <span className="font-bold uppercase tracking-wide">Prototype — </span>
               {hasRvFac
                 ? "FAC = (ED area − frame area) / ED area × 100, summed over each ring's 3 segments of the 9-segment RV bullseye (= −GAS). Short-axis MRI, not the echo 4-chamber FAC — no validated reference range."
                 : "This RV strain series was computed before per-frame RV areas were stored — recompute the RV strain series to populate FAC."}

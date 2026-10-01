@@ -134,7 +134,7 @@ export function StrainAnalysisPage({
         </tbody>
       </table>
       <p className="mb-3 text-[8.5px] leading-snug text-gray-600">
-        ¹ Prototype — RV GCS (% change in free-wall length), RV GAS (% change in cavity area) and RV septal GCS
+        ¹ RV GCS (% change in free-wall length), RV GAS (% change in cavity area) and RV septal GCS
         (% change in the RV septal-side border length, one segment per ring) are measured from the RV bullseye and
         reported separately, but have no published reference range and are not clinically validated.
       </p>
@@ -179,7 +179,7 @@ export function StrainAnalysisPage({
         </div>
       </div>
       <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
-        ¹ Prototype — real per-frame data, but no published reference range, so not clinically validated.
+        ¹ Real per-frame data, but no published reference range, so not clinically validated.
       </p>
     </ReportPageFrame>
 
@@ -200,8 +200,8 @@ export function StrainAnalysisPage({
               <th className="border-b border-gray-300 px-2 py-1 text-left font-bold uppercase tracking-wide text-teal-800">Frame</th>
               <th className="border-b border-gray-300 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">LV GRS</th>
               <th className="border-b border-gray-300 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">LV GCS</th>
-              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GCS¹ · Prototype</th>
-              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GAS¹ · Prototype</th>
+              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GCS¹</th>
+              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GAS¹</th>
               <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV Septal GCS¹</th>
             </tr>
           </thead>
@@ -220,7 +220,7 @@ export function StrainAnalysisPage({
         </table>
         {ci === rowChunks.length - 1 && (
           <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
-            ¹ Prototype — real per-frame data (9-segment RV bullseye), but no published reference range, so not
+            ¹ Real per-frame data (9-segment RV bullseye), but no published reference range, so not
             clinically validated.
           </p>
         )}

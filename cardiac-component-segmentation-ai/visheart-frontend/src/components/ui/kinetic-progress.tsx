@@ -1,8 +1,24 @@
 import * as React from "react"
+import { Heart } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
 export type KineticState = "running" | "queued"
+
+/**
+ * The shared "cute heart logo floaty thing" decoration — lives here, not at
+ * each call site, so every progress indicator in the app (landmark,
+ * segmentation, 4D reconstruction, ...) gets it automatically just by using
+ * JobProgress/KineticProgress/ProgressMeter.
+ */
+function FloatyHeart({ className }: { className?: string }) {
+  return (
+    <Heart
+      aria-hidden
+      className={cn("vh-heart-floaty h-3 w-3 shrink-0 fill-current text-pink-500", className)}
+    />
+  )
+}
 
 const TONES = {
   blue:    { track: "bg-blue-500/15",  fill: "bg-blue-500" },
@@ -97,7 +113,10 @@ export function ProgressMeter({
     <div className={cn("w-full space-y-1", className)}>
       <div className="flex items-baseline justify-between gap-2 text-xs font-bold">
         {title && <span className="min-w-0 truncate">{title}</span>}
-        <span className="ml-auto tabular-nums">{pct}%</span>
+        <span className="ml-auto flex items-center gap-1 tabular-nums">
+          {pct < 100 && <FloatyHeart />}
+          {pct}%
+        </span>
       </div>
       <div
         role="progressbar"
@@ -136,5 +155,10 @@ export function JobProgress({
   if (state === "running" && hasProgressReading(progress)) {
     return <ProgressMeter className={className} value={progress} title={label} />
   }
-  return <KineticProgress size="h-1" className={className} state={state} label={label} />
+  return (
+    <div className={cn("flex items-center gap-1.5", className)}>
+      <KineticProgress size="h-1" className="flex-1" state={state} label={label} />
+      {state === "running" && <FloatyHeart />}
+    </div>
+  )
 }

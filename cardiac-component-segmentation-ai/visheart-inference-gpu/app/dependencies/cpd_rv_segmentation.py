@@ -1673,6 +1673,24 @@ def label_cpd9_from_raw_slices(
             sector = np.full(len(rv_ij), 1, dtype=np.int64)  # default: middle band = Seg2
             sector[proj_all < cut_lo] = p1_seg
             sector[proj_all >= cut_hi] = p2_seg
+
+            # Guard against an empty middle band. [cut_lo, cut_hi) is a purely
+            # geometric interval (half of each side's own p-to-centroid
+            # distance) -- on a crescent-shaped slice the centroid often sits
+            # outside the RV mask itself, so NO pixel's projection may actually
+            # fall inside that interval, leaving this slice's "Seg2" band with
+            # zero pixels. When every slice at a given level hits this, the
+            # mesh ends up with 0/9 points for that (level, Seg2) region and
+            # the warning below fires -- reported live as "Mid_Seg2 missing"
+            # (2026-10). Force the single pixel closest to the band's own
+            # midpoint into the middle sector so every slice contributes at
+            # least one point to its level's middle band, without touching the
+            # cut geometry or the free-wall convention it encodes.
+            if not np.any(sector == 1):
+                cut_mid = (cut_lo + cut_hi) / 2.0
+                nearest_px = np.argmin(np.abs(proj_all - cut_mid))
+                sector[nearest_px] = 1
+
             region_id.append(s["level"] * 3 + sector + 1)
 
             cols, rows = rv_ij[:, 1].astype(float), rv_ij[:, 0].astype(float)

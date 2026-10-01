@@ -39,6 +39,14 @@ interface CombinedHeartModelProps {
   rvMeshUrl?: string | null;
   rvMeshFormat?: "obj" | "glb";
   rvSegmentLabels?: number[] | null;
+  /** Per-segment RV values (0-8, CPD atlas numbering — same indexing as
+   *  rvSegmentLabels), for value-heatmap coloring. Omit to fall back to
+   *  rvSegmentColor identity colors (e.g. before any RV strain/FAC has been
+   *  computed for this project). */
+  rvValues?: (number | null)[];
+  rvMin?: number;
+  rvMax?: number;
+  rvReverseColors?: boolean;
   className?: string;
   /** Starting camera distance (world units, along +Z) -- see
    * ReconstructedHeartModel's identical prop. */
@@ -107,7 +115,7 @@ function buildSelectionState(
 
 export function CombinedHeartModel({
   lvMeshUrl, lvMeshFormat = "glb", lvSegmentLabels, lvValues, lvMin = -10, lvMax = 45, lvReverseColors = false,
-  rvMeshUrl, rvMeshFormat = "glb", rvSegmentLabels,
+  rvMeshUrl, rvMeshFormat = "glb", rvSegmentLabels, rvValues, rvMin = -10, rvMax = 45, rvReverseColors = false,
   className,
   initialCameraDistance = 11,
   selectedLvSegment = -1,
@@ -356,7 +364,16 @@ export function CombinedHeartModel({
           rvObject = await loadMesh(rvMeshUrl, rvMeshFormat);
           const rvMesh = findFirstMesh(rvObject);
           if (rvMesh) {
-            rvState = buildSelectionState(rvMesh, rvSegmentLabels, alignment, (seg) => rvSegmentColor(seg));
+            // Value-heatmap coloring when real per-segment RV values are
+            // available (same fallback convention ReconstructedHeartModel's
+            // RV-only view uses) -- identity colors only before any RV
+            // strain/FAC has been computed for this project.
+            const rvColorOf = (seg: number) => {
+              if (!rvValues) return rvSegmentColor(seg);
+              const value = rvValues[seg];
+              return valueToColor(value, rvMin, rvMax, rvReverseColors);
+            };
+            rvState = buildSelectionState(rvMesh, rvSegmentLabels, alignment, rvColorOf);
             const rvLines = createSegmentBoundaryLines(rvMesh, rvSegmentLabels, outlineSize);
             rvMesh.add(rvLines);
             outlines.push(rvLines);
@@ -390,7 +407,7 @@ export function CombinedHeartModel({
     })();
 
     return () => { cancelled = true; };
-  }, [lvMeshUrl, lvMeshFormat, lvSegmentLabels, lvValues, lvMin, lvMax, lvReverseColors, rvMeshUrl, rvMeshFormat, rvSegmentLabels]);
+  }, [lvMeshUrl, lvMeshFormat, lvSegmentLabels, lvValues, lvMin, lvMax, lvReverseColors, rvMeshUrl, rvMeshFormat, rvSegmentLabels, rvValues, rvMin, rvMax, rvReverseColors]);
 
   return (
     <div ref={containerRef} className={`relative ${className ?? ""}`} aria-label="Combined LV+RV 3D heart model">

@@ -159,7 +159,11 @@ export function CombinedVentricularChart({
   const rvLbl = (i: number) => CRESCENT_REGION_NAMES[i] ?? `RV Region ${i + 1}`;
   const rvCol = (i: number) => {
     const v = rvVal(i);
-    if (v == null) return "#cbd5e1";
+    // Exact 0 means no measurement for that segment at this frame (same
+    // convention as heartColor.ts's valueToColor for LV) -- without this a
+    // genuinely-missing/degenerate-data segment reads as "worst" (solid red)
+    // instead of "no data" (grey).
+    if (v == null || v === 0) return "#cbd5e1";
     const t = rvColMin === rvColMax ? 0.5 : Math.max(0, Math.min(1, (v - rvColMin) / (rvColMax - rvColMin)));
     // GCS/GAS: negative (shrinking) is healthy, so green sits at the low end
     // (reverse). FAC = -GAS, so its healthy end is positive instead — same

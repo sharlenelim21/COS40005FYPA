@@ -633,6 +633,146 @@ export const computeRegionalHealthStatusFromStrain = async (
 };
 
 /**
+ * RV analog of computeRegionalHealthStatusFromStrain. **Advisory only.**
+ *
+ * Reads this mask's stored per-region RV strain and classifies each of the 9
+ * RV free-wall regions, storing the result under `rvRegionalHealthStatus`
+ * beside `rvHealthStatus`/`healthStatus`. Strictly additive: never reads,
+ * writes, or re-grades any other field.
+ *
+ * Source selection + the alignment gate mirror the LV version exactly, just
+ * against `rvStrain`/`rvStrainSeries` instead of `strain`/`strainSeries`:
+ *
+ *   1. `rvStrain.regions[]` — the two-point ED→ES result — preferred, but
+ *      only when its edFrameIndex/esFrameIndex match heartMetrics.ed_frame/
+ *      es_frame (RV shares the same cardiac-cycle ED/ES as LV).
+ *   2. Otherwise the peak frame of `rvStrainSeries`, and only when that
+ *      series was referenced to the same ED frame heart metrics detected.
+ *      (The RV series has no `esFrameIndex`; `peakFrameIndex` is its analog.)
+ *   3. Otherwise → status "unavailable" with the reason.
+ *
+ * This function is READ-ONLY with respect to RV strain — it never triggers a
+ * recompute. Never rejects, always resolves, so callers can fire-and-forget.
+ */
+export const computeRvRegionalHealthStatusFromStrain = async (
+    maskId: string,
+): Promise<void> => {
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_rv_regional_health_status.py');
+
+    const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+    if (!maskDoc) {
+        logger.warn(`${serviceLocation}: [RvRegionalHealth] Mask ${maskId} not found — skipping compute.`);
+        return;
+    }
+
+    const hm: any = (maskDoc as any).heartMetrics;
+    const rvStrain: any = (maskDoc as any).rvStrain;
+    const series: any = (maskDoc as any).rvStrainSeries;
+
+    let regions: any[] | null = null;
+    let source: "rvStrain" | "rvStrainSeries" | null = null;
+    let unavailableReason: string | null = null;
+
+    const edFrame = typeof hm?.ed_frame === "number" ? hm.ed_frame : null;
+    const esFrame = typeof hm?.es_frame === "number" ? hm.es_frame : null;
+
+    const rejected: string[] = [];
+
+    if (edFrame === null || esFrame === null) {
+        unavailableReason =
+            "heart metrics have not been computed for this mask, so the RV strain " +
+            "frames cannot be confirmed to be end-diastole and end-systole.";
+    } else {
+        // 1. Two-point ED→ES RV strain — preferred.
+        if (Array.isArray(rvStrain?.regions) && rvStrain.regions.length > 0) {
+            if (rvStrain.edFrameIndex === edFrame && rvStrain.esFrameIndex === esFrame) {
+                regions = rvStrain.regions;
+                source = "rvStrain";
+            } else {
+                rejected.push(
+                    `stored RV strain was computed on frames ${rvStrain.edFrameIndex}→${rvStrain.esFrameIndex}, ` +
+                    `but heart metrics detected ED/ES at ${edFrame}→${esFrame}`,
+                );
+            }
+        }
+
+        // 2. Peak frame of the per-frame RV series — same alignment rule on ED.
+        if (!regions && Array.isArray(series?.frames) && series.frames.length > 0) {
+            if (series.edFrameIndex === edFrame) {
+                const peakIdx = typeof series.peakFrameIndex === "number" ? series.peakFrameIndex : null;
+                const frame = peakIdx !== null
+                    ? series.frames.find((f: any) => f.frameIndex === peakIdx)
+                    : null;
+                if (frame && Array.isArray(frame.regions) && frame.regions.length > 0) {
+                    regions = frame.regions;
+                    source = "rvStrainSeries";
+                } else {
+                    rejected.push("the RV strain series has no usable peak frame");
+                }
+            } else {
+                rejected.push(
+                    `the RV strain series is referenced to frame ${series.edFrameIndex}, but heart metrics ` +
+                    `detected end-diastole at frame ${edFrame}`,
+                );
+            }
+        }
+
+        if (!regions) {
+            unavailableReason = rejected.length
+                ? `${rejected.join("; ")}. Recompute RV strain at the auto-detected ED/ES frames to enable the regional assessment.`
+                : "no regional RV strain has been computed for this mask yet.";
+        }
+    }
+
+    const input = JSON.stringify(
+        unavailableReason
+            ? { regions: [], source, unavailable_reason: unavailableReason }
+            : { regions, source },
+    );
+
+    return new Promise<void>((resolve) => {
+        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+            if (error) {
+                logger.warn(`${serviceLocation}: [RvRegionalHealth] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [RvRegionalHealth] stderr: ${stderr.substring(0, 500)}`);
+                return resolve();
+            }
+            try {
+                const result = JSON.parse(stdout.trim());
+                if (result.error) {
+                    logger.warn(`${serviceLocation}: [RvRegionalHealth] Script reported error for mask ${maskId}: ${result.error}`);
+                    return resolve();
+                }
+                result.computed_at = new Date().toISOString();
+                const writeResult = await projectSegmentationMaskModel.collection.updateOne(
+                    { _id: new mongoose.Types.ObjectId(maskId) },
+                    { $set: { rvRegionalHealthStatus: result, updatedAt: new Date() } },
+                );
+                logger.info(
+                    `${serviceLocation}: [RvRegionalHealth] Stored RV regional status for mask ${maskId} — ` +
+                    `status=${result.status} source=${result.source} reduced=${result.reduced_count} ` +
+                    `skipped=${result.skipped_idx?.length ?? 0} summary="${result.summary}" | ` +
+                    `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
+                );
+                if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+                    for (const w of result.warnings) {
+                        logger.warn(`${serviceLocation}: [RvRegionalHealth] mask ${maskId} — ${w}`);
+                    }
+                }
+            } catch (parseErr: any) {
+                logger.warn(`${serviceLocation}: [RvRegionalHealth] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+            }
+            resolve();
+        });
+        child.stdin?.on('error', (err) => {
+            logger.warn(`${serviceLocation}: stdin write failed (python process likely exited early): ${err.message}`);
+        });
+        child.stdin?.write(input);
+        child.stdin?.end();
+    });
+};
+
+/**
  * Disease Pattern Similarity Assessment — NOT a diagnosis.
  *
  * Compares a patient's cardiac measurements against literature-derived NOR/HCM/DCM

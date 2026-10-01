@@ -3047,7 +3047,19 @@ function StrainPreviewPanel({
             <div className="rounded-full border-2 border-dashed border-muted-foreground/30 p-5 mb-2">
               <Heart className="w-8 h-8 text-muted-foreground/50" />
             </div>
-            {(realStrainData || rvStrainResult) ? (
+            {isFullCycle && (realSeries?.frames?.length || realRvSeries?.frames?.length) ? (
+              <>
+                <p className="font-semibold text-sm text-foreground">
+                  No result for frame {currentFrame + 1}
+                </p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  A full-cycle series exists for this model, but it doesn&apos;t include
+                  frame {currentFrame + 1} — scrub to a different frame, or recompute
+                  (Full cycle → Compute all frames) if the study&apos;s frame count changed
+                  since this series was last run.
+                </p>
+              </>
+            ) : (realStrainData || rvStrainResult) ? (
               <>
                 <p className="font-semibold text-sm text-foreground">
                   No result for this selection yet
@@ -3307,21 +3319,24 @@ function StrainPreviewPanel({
                     rvMeshUrl={rvMesh.meshUrl}
                     rvMeshFormat={rvMesh.meshFormat}
                     rvSegmentLabels={rvMesh.segmentLabels}
+                    rvValues={rvHasValues ? rv3dValues : undefined}
+                    rvMin={rvRange.min ?? undefined}
+                    rvMax={rvRange.max ?? undefined}
+                    rvReverseColors
                     className="w-full h-full"
                     initialCameraDistance={8}
-                    // Only LV is wired here, per what was asked -- the RV
-                    // bullseye's region numbering (1-9, Basal-first, from
-                    // the strain backend's own region list) and the 3D
-                    // model's RV segment numbering (0-8, Apical-first, the
-                    // CPD atlas's own order) aren't the same scheme, so
-                    // cross-linking them would need a real mapping between
-                    // the two first, not just an index shift.
                     selectedLvSegment={selectedCombinedSegment ?? -1}
                     onLvSegmentClick={(seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))}
+                    selectedRvSegment={selectedCombinedRvRegion != null ? RV_REGION_TO_SEGMENT3D[selectedCombinedRvRegion - 1] : -1}
+                    onRvSegmentClick={(segment) => {
+                      const region = RV_SEGMENT3D_TO_REGION[segment];
+                      setSelectedCombinedRvRegion((prev) => (prev === region ? null : region));
+                    }}
                   />
                 </div>
                 <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
-                  Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by segment identity (prototype)
+                  Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by {rvMetricType}
+                  {!rvHasValues && " (segment identity — no RV strain computed yet)"}
                 </p>
                 {/* Quick ED->ES already shows this in the sidebar's
                     QuickCombinedStrainView -- only Full cycle needs its own
