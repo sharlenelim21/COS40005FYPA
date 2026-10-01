@@ -563,8 +563,13 @@ function ProjectPageInner() {
     activeSegJobs.some((j) => j.status === ProjectTypes.JobStatus.IN_PROGRESS) || (pipeline.segActive && !pipeline.segQueued)
       ? "running"
       : "queued";
+  // A (model, chamber) that already has a finished reconstruction is not "building", whatever a
+  // leftover job record says -- otherwise the button stays on "Building 4D model" after it is done.
+  const stillBuilding = (chamber: "lv" | "rv") =>
+    [...buildingReconstructions[chamber]].some((m) => !existingByChamber[chamber].has(m));
   const reconRunning =
-    hasActiveReconstructionJobs || buildingReconstructions.lv.size > 0 || buildingReconstructions.rv.size > 0 || pipeline.reconActive;
+    pipeline.reconActive || stillBuilding("lv") || stillBuilding("rv") ||
+    (hasActiveReconstructionJobs && !hasReconstructions);
   const landmarkRunning = pipeline.landmarkActive || !!landmarkSummary?.active;
   const landmarkProgressState: "running" | "queued" = landmarkSummary?.active === "queued" && !pipeline.landmarkActive ? "queued" : "running";
   const modelName = (m: unknown) => (String(m ?? "").toLowerCase() === "unet" ? "UNet" : "MedSAM");

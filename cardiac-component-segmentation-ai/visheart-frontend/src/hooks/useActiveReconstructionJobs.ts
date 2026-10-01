@@ -51,6 +51,12 @@ export function useActiveReconstructionJobs(projectId?: string) {
       const status = String(job.status ?? "").toLowerCase();
       if (status !== "pending" && status !== "in_progress") continue;
 
+      // A job nobody has touched for 30 minutes is dead (crashed worker, lost callback), not
+      // building. Without this cutoff one orphaned record kept every "Create 4D" button on
+      // "Building..." forever, even after the reconstruction itself had finished.
+      const lastTouched = Date.parse(String(job.updatedAt ?? job.createdAt ?? ""));
+      if (Number.isFinite(lastTouched) && Date.now() - lastTouched > 30 * 60 * 1000) continue;
+
       const chamber = normalizeReconstructionChamber(job.chamber);
       const model = String(job.segmentationModel ?? "").toLowerCase();
       if (model === "medsam" || model === "unet") {
