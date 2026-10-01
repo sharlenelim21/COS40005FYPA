@@ -26,6 +26,8 @@ export interface ReconStep {
   status: StepStatus;
   jobUuid?: string;
   note?: string;
+  /** Polls in a row where the job could not be found in the user's job list. */
+  missTicks?: number;
 }
 
 export interface LandmarkStep {
@@ -405,6 +407,15 @@ export function useAutoPipelineChain(inputs: PipelineInputs) {
         const jobs: Array<Record<string, unknown>> = Array.isArray(response?.jobs) ? response.jobs : [];
         for (const r of next.recon) {
           if (r.status !== "queued" && r.status !== "running") continue;
+          // The reconstruction this step was waiting for now exists, so it is finished -- whatever
+          // the job list says. Without this a step whose job record cannot be matched stays
+          // "queued" forever, which keeps the Create 4D button on "Building".
+          if (inp.existing[r.chamber].has(r.model)) {
+            r.status = "done";
+            changed = true;
+            refreshRecons = true;
+            continue;
+          }
           const job = r.jobUuid
             ? jobs.find((j) => String(j.jobId ?? "") === r.jobUuid)
             : jobs.find(
@@ -413,7 +424,18 @@ export function useAutoPipelineChain(inputs: PipelineInputs) {
                   String(j.segmentationModel ?? "").toLowerCase() === r.model &&
                   normalizeReconstructionChamber(j.chamber) === r.chamber,
               );
-          if (!job) continue;
+          if (!job) {
+            // Give up after a while rather than polling a job that is not there indefinitely.
+            r.missTicks = (r.missTicks ?? 0) + 1;
+            if (r.missTicks > 12) {
+              r.status = "failed";
+              r.note = "Reconstruction job was not found.";
+              toast.error(`${comboLabel(r.model, r.chamber)} reconstruction job not found`);
+            }
+            changed = true;
+            continue;
+          }
+          delete r.missTicks;
           if (!r.jobUuid) {
             r.jobUuid = String(job.jobId ?? "");
             changed = true;
