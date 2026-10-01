@@ -6,8 +6,9 @@ export function rdYlGn(t: number): THREE.Color {
   return new THREE.Color(r, g, 0);
 }
 
-export function valueToColor(value: number, min: number, max: number, reverse = false): THREE.Color {
-  if (!Number.isFinite(value) || max === min) return new THREE.Color(0.267, 0.267, 0.267);
+/** "No data" grey -- identical to the bullseye's #444444 so a missing segment matches in 2D and 3D. */
+export function valueToColor(value: number | null | undefined, min: number, max: number, reverse = false): THREE.Color {
+  if (value == null || !Number.isFinite(value) || max === min) return new THREE.Color(0.267, 0.267, 0.267);
   let t = Math.max(0, Math.min(1, (value - min) / (max - min)));
   if (reverse) t = 1 - t;
   return rdYlGn(t);

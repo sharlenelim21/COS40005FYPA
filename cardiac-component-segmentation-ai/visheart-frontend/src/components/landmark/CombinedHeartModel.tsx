@@ -32,7 +32,7 @@ interface CombinedHeartModelProps {
   lvMeshUrl?: string | null;
   lvMeshFormat?: "obj" | "glb";
   lvSegmentLabels?: number[] | null;
-  lvValues?: number[];
+  lvValues?: (number | null)[];
   lvMin?: number;
   lvMax?: number;
   lvReverseColors?: boolean;
@@ -93,7 +93,11 @@ function buildSelectionState(
     else { sumBySegment.get(seg)!.add(v); countBySegment.set(seg, (countBySegment.get(seg) ?? 0) + 1); }
   }
   mesh.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  mesh.material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  mesh.material = new THREE.MeshBasicMaterial({
+    vertexColors: true, side: THREE.DoubleSide,
+    // Pushes the surface back so the white segment outlines drawn on it stay visible.
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
 
   const centroidBySegment = new Map<number, THREE.Vector3>();
   for (const [seg, sum] of sumBySegment) centroidBySegment.set(seg, sum.divideScalar(countBySegment.get(seg) ?? 1));
@@ -334,7 +338,7 @@ export function CombinedHeartModel({
 
         const lvColorOf = (seg: number) => {
           const value = lvValues?.[seg - 1];
-          return value !== undefined ? valueToColor(value, lvMin, lvMax, lvReverseColors) : new THREE.Color(0.6, 0.2, 0.2);
+          return valueToColor(value, lvMin, lvMax, lvReverseColors);
         };
         const lvState = buildSelectionState(lvMesh, lvSegmentLabels, alignment, lvColorOf);
         const outlineSize = {

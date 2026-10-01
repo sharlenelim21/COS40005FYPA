@@ -17,7 +17,7 @@ interface ReconstructedHeartModelProps {
   meshFormat: "obj" | "glb";
   segmentLabels: number[];
   colorMode: "debug-segment" | "strain" | "rv-segment";
-  values?: number[];
+  values?: (number | null)[];
   min?: number;
   max?: number;
   reverseColors?: boolean;
@@ -208,7 +208,7 @@ export function ReconstructedHeartModel({
           ? debugSegmentColor(segment)
           : colorMode === "rv-segment"
           ? rvSegmentColor(segment)
-          : valueToColor(values?.[segment - 1] ?? min, min, max, reverseColors);
+          : valueToColor(values?.[segment - 1], min, max, reverseColors);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;

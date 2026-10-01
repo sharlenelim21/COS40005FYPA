@@ -2162,8 +2162,10 @@ function AhaBullseyePanel({
   const frameValues = displayBullseyeData
     ? getFrameBullseyeValues(displayBullseyeData)
     : null;
-  const frameMin = frameValues ? Math.min(...frameValues) : 0;
-  const frameMax = frameValues ? Math.max(...frameValues) : 0;
+  // Finite values only: a missing segment (null/NaN) must not drag the colour range down to 0.
+  const finiteFrameValues = (frameValues ?? []).filter((v) => typeof v === "number" && Number.isFinite(v));
+  const frameMin = finiteFrameValues.length ? Math.min(...finiteFrameValues) : 0;
+  const frameMax = finiteFrameValues.length ? Math.max(...finiteFrameValues) : 0;
   // Total invalidity: every segment came back null (e.g. a segmentation model
   // found no myocardium above classify_slices()'s pixel threshold for any
   // slice). Distinct from the partial case (stats.n_nan > 0 but mean still a
@@ -2409,8 +2411,9 @@ function AhaHeartProjection({
 }) {
   const frameValues = getFrameBullseyeValues(bullseyeData);
   // Use per-frame min/max so the 3D colour scale is identical to the 2D bullseye chart
-  const frameMin = Math.min(...frameValues);
-  const frameMax = Math.max(...frameValues);
+  const finiteFrameValues = frameValues.filter((v) => typeof v === "number" && Number.isFinite(v));
+  const frameMin = finiteFrameValues.length ? Math.min(...finiteFrameValues) : 0;
+  const frameMax = finiteFrameValues.length ? Math.max(...finiteFrameValues) : 0;
   const [heartTooltip, setHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
 
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
@@ -2496,8 +2499,8 @@ function StrainHeartModel({
   // Build 17-element values array (0-indexed matching HEART_SEGMENTS order)
   const values = Array.from({ length: 17 }, (_, i) => {
     const seg = segments[i];
-    if (!seg) return 0;
-    return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0;
+    if (!seg) return null;
+    return (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? null;
   });
   const [heartTooltip, setHeartTooltip] = useState<{ x: number; y: number; segment: number } | null>(null);
   if (reconstructionMeshUrl && reconstructionMeshFormat && reconstructionLabels?.length) {
@@ -2526,7 +2529,7 @@ function StrainHeartModel({
             <div className="font-semibold">
               {segments[heartTooltip.segment - 1]?.label ?? `Segment ${heartTooltip.segment}`}
             </div>
-            <div>{(values[heartTooltip.segment - 1] ?? 0).toFixed(1)}%</div>
+            <div>{values[heartTooltip.segment - 1] != null ? `${values[heartTooltip.segment - 1]!.toFixed(1)}%` : "—"}</div>
           </div>
         )}
       </div>
@@ -3124,7 +3127,7 @@ function StrainPreviewPanel({
                     lvSegmentLabels={reconstructionLabels}
                     lvValues={strainForDisplay ? Array.from({ length: 17 }, (_, i) => {
                       const seg = strainForDisplay.segments[i];
-                      return seg ? (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? 0 : 0;
+                      return seg ? (selectedStrainType === "GRS" ? seg.grs : seg.gcs) ?? null : null;
                     }) : undefined}
                     lvMin={sharedMin}
                     lvMax={sharedMax}
