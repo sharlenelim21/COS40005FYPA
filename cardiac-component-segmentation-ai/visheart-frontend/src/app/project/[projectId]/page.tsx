@@ -567,6 +567,14 @@ function ProjectPageInner() {
   // leftover job record says -- otherwise the button stays on "Building 4D model" after it is done.
   const stillBuilding = (chamber: "lv" | "rv") =>
     [...buildingReconstructions[chamber]].some((m) => !existingByChamber[chamber].has(m));
+  // Which builds are keeping the button busy, so a stuck state says what it is waiting on.
+  const busyBuildLabel = (["lv", "rv"] as const)
+    .flatMap((chamber) =>
+      [...buildingReconstructions[chamber]]
+        .filter((m) => !existingByChamber[chamber].has(m))
+        .map((m) => `${m === "unet" ? "UNet" : "MedSAM"} ${chamber.toUpperCase()}`),
+    )
+    .join(", ");
   const reconRunning =
     pipeline.reconActive || stillBuilding("lv") || stillBuilding("rv") ||
     (hasActiveReconstructionJobs && !hasReconstructions);
@@ -1007,7 +1015,11 @@ function ProjectPageInner() {
             <div className="text-left flex-1 min-w-0">
               <p className="font-semibold">Create 4D Reconstruction</p>
               <p className="text-xs text-muted-foreground">
-                {reconProgress ? "Available when it finishes" : "Building 4D model — this may take several minutes"}
+                {reconProgress
+                  ? "Available when it finishes"
+                  : busyBuildLabel
+                  ? `Building ${busyBuildLabel} — this may take several minutes`
+                  : "Building 4D model — this may take several minutes"}
               </p>
               {reconProgress && <ProgressMeter className="mt-2" value={reconProgress.value} title={reconProgress.label} />}
             </div>
