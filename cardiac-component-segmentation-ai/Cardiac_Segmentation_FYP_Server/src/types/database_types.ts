@@ -573,6 +573,24 @@ export interface IProjectSegmentationMask {
     warnings: string[];
     computed_at: string;
   };
+  /** Slices that differ from this model's preserved AI output — compute_edit_tracking.py. */
+  editTracking?: {
+    status: "computed" | "no_baseline" | "failed";
+    method?: "rle-interval-xor";
+    aiMaskId?: string;
+    model?: string;
+    slices?: { frameindex: number; sliceindex: number; editedClasses: string[]; pixelsChanged: number; byClass: Record<string, number> }[];
+    editedSliceCount?: number;
+    pixelsChanged?: number;
+    manualPixels?: number;
+    slicesCompared?: number;
+    warnings?: string[];
+    suspect?: "cross-model-revert";
+    backfilled?: boolean;
+    editedBy?: string;
+    editedAt: string;
+    computed_at: string;
+  };
   /**
    * Regional strain (GRS/GCS per AHA segment) computed from an ED→ES frame pair.
    * Produced by the GPU /bullseye/compute-strain endpoint and stored parallel to

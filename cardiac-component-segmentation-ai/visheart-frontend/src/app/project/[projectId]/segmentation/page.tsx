@@ -5,6 +5,7 @@ import { Loader2, RefreshCw, ArrowLeft } from "lucide-react";
 import { useState, useCallback, useRef, useMemo, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
+import { toast } from "sonner";
 
 // Backend integration
 import { segmentationApi } from "@/lib/api";
@@ -50,6 +51,11 @@ function SegmentationResultsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromViewer = searchParams.get("from") === "4d";
+  // A link from UNet Extend Training's Prepare tab names the exact mask to open (plan WS13 R1).
+  const fromExtendTraining = searchParams.get("from") === "extend-training";
+  const linkedModel = searchParams.get("model");
+  const linkedFrame = searchParams.get("frame");
+  const linkedSlice = searchParams.get("slice");
   const { processingUnit, isLoading: gpuStatusLoading } = useGpuStatus();
   const isGpuMode = processingUnit.gpuAvailable;
   const { user } = useAuth();
@@ -155,6 +161,28 @@ function SegmentationResultsPageInner() {
   const [runSegmentationError, setRunSegmentationError] = useState<string | null>(null);
   const [runSegmentationSuccess, setRunSegmentationSuccess] = useState<string | null>(null);
   const modelSessionKey = `selectedModel_${projectId}`;
+
+  // The linked model counts as the user's own choice, so the automatic pick below (explicit choice first) opens it.
+  useEffect(() => {
+    if (linkedModel !== "unet" && linkedModel !== "medsam") return;
+    try {
+      sessionStorage.setItem(modelSessionKey, linkedModel);
+    } catch {
+      // the automatic pick still runs
+    }
+  }, [linkedModel, modelSessionKey]);
+
+  // ...and the linked frame and slice, once the project's size is known. Only once, so the user can move on.
+  const linkedPositionApplied = useRef(false);
+  useEffect(() => {
+    const dimensions = projectData?.dimensions;
+    if (linkedPositionApplied.current || !dimensions) return;
+    linkedPositionApplied.current = true;
+    const frame = Number.parseInt(linkedFrame ?? "", 10);
+    const slice = Number.parseInt(linkedSlice ?? "", 10);
+    if (Number.isInteger(frame) && frame >= 0 && frame < (dimensions.frames || 1)) setCurrentFrame(frame);
+    if (Number.isInteger(slice) && slice >= 0 && slice < (dimensions.slices || 1)) setCurrentSlice(slice);
+  }, [projectData?.dimensions, linkedFrame, linkedSlice]);
 
   // Default to MedSAM on first render. The auto-pick effect below will
   // override this once `undecodedMasks` arrives (latest project mask wins),
@@ -992,12 +1020,20 @@ function SegmentationResultsPageInner() {
         }
       }
 
-      await segmentationApi.saveManualSegmentation(projectId, {
+      const saved = await segmentationApi.saveManualSegmentation(projectId, {
         name: `Manual Segmentation - ${new Date().toISOString()}`,
         description: "Manually edited segmentation masks with RLE encoding",
         frames: frames,
         model: selectedModel,
       });
+      const et = saved?.editTracking;
+      if (et?.status === "computed") {
+        toast.success(et.editedSliceCount === 0
+          ? "Saved — no differences from the AI output"
+          : `Saved — ${et.editedSliceCount} slice${et.editedSliceCount === 1 ? "" : "s"} changed, ${Number(et.pixelsChanged).toLocaleString()} pixels`);
+      } else {
+        toast.success("Saved", { description: "Edit tracking was not recorded for this save" });
+      }
 
       console.log("[Segmentation] Successfully saved masks to backend");
 
@@ -1034,8 +1070,9 @@ function SegmentationResultsPageInner() {
 
     setIsSaving(true);
     try {
-      const aiMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === true);
-      const editableMask = undecodedMasks.find((mask: ProjectTypes.BaseSegmentationMask) => mask.isMedSAMOutput === false);
+      const sameModel = (m: ProjectTypes.BaseSegmentationMask) => inferDocModel(m) === selectedModel;
+      const aiMask = undecodedMasks.find((m: ProjectTypes.BaseSegmentationMask) => m.isMedSAMOutput === true && sameModel(m));
+      const editableMask = undecodedMasks.find((m: ProjectTypes.BaseSegmentationMask) => m.isMedSAMOutput === false && sameModel(m));
 
       if (!aiMask || !editableMask) {
         console.error("[Segmentation] Could not find AI or editable mask");
@@ -1049,11 +1086,7 @@ function SegmentationResultsPageInner() {
         frameCount: aiMask.frames?.length || 0,
       });
 
-      const revertData = {
-        frames: aiMask.frames, 
-      };
-
-      await segmentationApi.saveManualSegmentation(projectId, revertData);
+      await segmentationApi.saveManualSegmentation(projectId, { frames: aiMask.frames, model: selectedModel });
 
       console.log("[Segmentation] ✅ Successfully reverted to AI mask");
 
@@ -1066,7 +1099,7 @@ function SegmentationResultsPageInner() {
     } finally {
       setIsSaving(false);
     }
-  }, [projectId, isSaving, undecodedMasks]);
+  }, [projectId, isSaving, undecodedMasks, selectedModel]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1119,8 +1152,8 @@ function SegmentationResultsPageInner() {
 
   return (
     <div className="h-full w-full bg-background flex flex-col">
-      {/* Back to Project Button */}
-      <div className="px-4 pt-3 pb-2">
+      {/* Back to Project Button, and back to UNet Extend Training when the editor was opened from there */}
+      <div className="flex flex-wrap gap-2 px-4 pt-3 pb-2">
         <Button
           variant="outline"
           size="sm"
@@ -1152,6 +1185,17 @@ function SegmentationResultsPageInner() {
           <ArrowLeft className="h-4 w-4" />
           <span>Back to Project</span>
         </Button>
+        {fromExtendTraining && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => router.push("/extend-training?tab=prepare")}
+            className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>Back to UNet Extend Training</span>
+          </Button>
+        )}
       </div>
 
 

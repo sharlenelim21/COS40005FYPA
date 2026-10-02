@@ -596,6 +596,15 @@ function DashboardPage() {
                 </Button>
               </Link>
 
+              <ShowForRegisteredUser fallback={null}>
+                <Link href="/extend-training">
+                  <Button variant="outline" className="w-full justify-start">
+                    <Brain className="mr-2 h-4 w-4" />
+                    UNet Extend Training
+                  </Button>
+                </Link>
+              </ShowForRegisteredUser>
+
               {/* <ShowForUser fallback={null}>
                 {user?.role === "admin" && (
                   <Link href="/admin">

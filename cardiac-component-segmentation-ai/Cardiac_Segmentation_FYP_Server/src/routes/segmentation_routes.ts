@@ -3,6 +3,7 @@ import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
+import { computeAndStoreEditTracking } from "../services/edit_tracking";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
@@ -703,10 +704,26 @@ router.put("/save-manual-segmentation/:projectId",
                 logger.warn(`${serviceLocation}: Could not find project ${projectId} to check/update save status after updating manual segmentation.`);
             }
 
+            // Record which slices now differ from this model's preserved AI output. Never fails the save.
+            // Frames come from the saved document, not the pre-update editableMask; the RLE plane uses
+            // project.dimensions, the same values the NIfTI export passes.
+            let editTracking = null;
+            const savedMask = segmentationDbUpdateResult.projectsegmentationmask as any;
+            const dims = projectResult.success ? projectResult.projects?.[0]?.dimensions : undefined;
+            if (dims?.height && dims?.width) {
+                editTracking = await computeAndStoreEditTracking(
+                    typeof savedMask.toObject === "function" ? savedMask.toObject() : savedMask,
+                    masksResult.projectsegmentationmasks as any[],
+                    { height: dims.height, width: dims.width },
+                    userId.toString(),
+                );
+            }
+
             return res.status(200).json({
                 success: true,
                 message: "Manual segmentation updated and saved successfully.",
-                segmentation: segmentationDbUpdateResult.projectsegmentationmask
+                segmentation: segmentationDbUpdateResult.projectsegmentationmask,
+                editTracking,
             });
 
         } catch (error: unknown) {
