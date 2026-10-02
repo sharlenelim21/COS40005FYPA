@@ -1,7 +1,10 @@
 <#
 Sets up UNet Extend Training on this computer from a pack made by pack_training_data.py (see SETUP-ANOTHER-PC.md).
 
-  powershell -ExecutionPolicy Bypass -File setup-training-pc.ps1 -DataRoot D:\visheart-training-pack
+  powershell -ExecutionPolicy Bypass -File setup-training-pc.ps1 [-DataRoot D:\visheart-training-pack]
+
+-DataRoot defaults to visheart-training-data in this repository, where start.bat looks for a pack: on a computer
+without the setup, start.bat runs this script with -Auto, which asks before replacing a different unet.pth.
 
 Each step is skipped when it is already done, so it is safe to run again:
   1. a Python environment beside this script (.venv) with requirements.txt;
@@ -12,14 +15,16 @@ Each step is skipped when it is already done, so it is safe to run again:
   6. the training service restarted and asked for its status.
 #>
 param(
-    [Parameter(Mandatory = $true)][string]$DataRoot,
+    [string]$DataRoot,
     [string]$Python,
-    [switch]$ReplaceOriginalModel
+    [switch]$ReplaceOriginalModel,
+    [switch]$Auto
 )
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $models = [IO.Path]::GetFullPath((Join-Path $here '..\visheart-inference-gpu\app\models'))
+if (-not $DataRoot) { $DataRoot = Join-Path $here '..\visheart-training-data' }
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 $venv = Join-Path $here '.venv'
 $venvPython = Join-Path $venv 'Scripts\python.exe'
@@ -58,7 +63,7 @@ if (-not (Test-Path $venvPython)) {
         $version = Get-PythonVersion $candidate.exe $candidate.args
         if ($version -ge 311) { $base = $candidate; break }
     }
-    if (-not $base) { Fail 'Python 3.11 or newer was not found. Install Python 3.13 from python.org (tick "Add python.exe to PATH"), then run this again.' }
+    if (-not $base) { Fail 'Python 3.11 or newer was not found. Install Python 3.13 once (from python.org, ticking "Add python.exe to PATH", or with: winget install -e --id Python.Python.3.13), then start again.' }
     Write-Host "   Creating $venv"
     & $base.exe @($base.args) -m venv $venv
     if ($LASTEXITCODE -ne 0) { Fail 'The Python environment could not be created.' }
@@ -96,6 +101,14 @@ if ($inPlace) {
     if ($have -eq $want) {
         Done 'Already the registered original.'
     } else {
+        if ($have -and -not $ReplaceOriginalModel -and $Auto) {
+            # start.bat: ask, and answer no by itself after a minute. The question is a whole line, so it shows at
+            # once through start.bat's log; choice reads the keyboard, not the redirected output.
+            Write-Host "   $target is a different model from the one the training data was built on."
+            Write-Host '   Replace it with the pack''s model? The current file is kept beside it as a backup. [Y/N, No after 60 s]'
+            & choice.exe /C YN /N /T 60 /D N
+            $ReplaceOriginalModel = ($LASTEXITCODE -eq 1)
+        }
         if ($have -and -not $ReplaceOriginalModel) {
             Fail "$target is a different model from the one the training data was built on. Run this again with -ReplaceOriginalModel to use the pack's model; the current file is kept beside it as a backup."
         }
@@ -142,6 +155,8 @@ try {
 }
 $kept = @($status.versions | Where-Object { $_.status -ne 'deleted' }).Count
 Done "Running. Model in use: $($status.active); $kept versions kept."
-Write-Host ''
-Write-Host 'Set up. Restart VisHeart (stop.bat, then start.bat in visheart-local-deployment) so the segmentation service'
-Write-Host 'loads the original model, then open UNet Extend Training from the dashboard.'
+if (-not $Auto) {
+    Write-Host ''
+    Write-Host 'Set up. Restart VisHeart (stop.bat, then start.bat) so the segmentation service loads the original model,'
+    Write-Host 'then open UNet Extend Training from the dashboard.'
+}

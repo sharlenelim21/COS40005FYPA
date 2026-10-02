@@ -22,26 +22,34 @@ tar -a -cf visheart-training-pack.zip -C F:\visheart-training-pack .
 tar -xf visheart-training-pack.zip -C D:\visheart-training-pack
 ```
 
-## 2. On the other computer
+## 2. On the other computer (once)
 
-1. Install Python 3.13 from python.org, and tick "Add python.exe to PATH".
-2. Pull this branch, and put the pack at a path made of plain letters and digits, for example
-   `D:\visheart-training-pack`.
-3. In `visheart-retraining`, run:
+1. Install Python 3.13: from python.org, ticking "Add python.exe to PATH", or `winget install -e --id Python.Python.3.13`.
+2. Pull this branch, and copy the pack into the project folder as `visheart-training-data`, beside `start.bat`:
 
-   ```bat
-   powershell -ExecutionPolicy Bypass -File setup-training-pc.ps1 -DataRoot D:\visheart-training-pack
+   ```
+   cardiac-component-segmentation-ai\
+     start.bat
+     visheart-training-data\     <- the pack (PACKED.json, versions, ...); git ignores it
    ```
 
-   It sets up a Python environment (`.venv`, about 1 GB to download the first time) and checks the pack file by file.
-   It then puts the original model in `visheart-inference-gpu\app\models`, and rewrites the pack's paths for this
-   computer with `relocate.py`, which changes nothing unless every file checks out. Finally it writes
-   `retraining.local.bat` and starts the service. It is safe to run again.
+3. Run `start.bat` as usual. On this first start it finds the pack and sets training up by itself, which takes about
+   10 minutes. The website is already usable meanwhile.
+   - It installs a Python environment (`.venv`, about 1 GB to download) and checks the pack file by file.
+   - It puts the original model in `visheart-inference-gpu\app\models`, and rewrites the pack's paths for this
+     computer with `relocate.py`, which changes nothing unless every file checks out.
+   - If this computer's `unet.pth` is a different model, it asks before replacing it, and keeps the old file as a
+     backup. With no answer, it leaves the file alone after a minute and training stays off.
 
-   If this computer's `unet.pth` is a different model, the script stops and says so. Run it again with
-   `-ReplaceOriginalModel` to use the pack's model; the old file is kept beside it as a backup.
-4. Restart VisHeart: `stop.bat`, then `start.bat` in `visheart-local-deployment`. From now on `start.bat` starts the
-   training service too, and `stop.bat` stops it.
+   Every later `start.bat` starts the training service at once, and `stop.bat` stops it.
+
+To keep the pack somewhere else, set it up by hand instead, from `visheart-retraining`:
+
+```bat
+powershell -ExecutionPolicy Bypass -File setup-training-pc.ps1 -DataRoot D:\visheart-training-pack
+```
+
+Add `-ReplaceOriginalModel` to replace a different `unet.pth` without asking. It is safe to run again.
 
 ## Before a demo
 
@@ -55,6 +63,8 @@ tar -xf visheart-training-pack.zip -C D:\visheart-training-pack
 
 | What `start.bat` printed | What to do |
 |---|---|
-| "not set up on this computer" | Run `setup-training-pc.ps1` (step 2.3). |
+| "copy the training data pack to ...\visheart-training-data" | The pack is not there yet (step 2.2). |
+| "STOPPED: Python 3.11 or newer was not found" | Install Python (step 2.1), then run `start.bat` again. |
+| "STOPPED: ... is a different model" | Run `start.bat` again and answer Y, or run the setup by hand with `-ReplaceOriginalModel`. |
 | "did not start. See ...\jobs\worker.log" | The last lines of that log name the problem. |
 | Nothing about the training service | `start.bat` did not find `visheart-retraining`. Pull the branch again. |

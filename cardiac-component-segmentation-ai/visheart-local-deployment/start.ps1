@@ -54,15 +54,35 @@ function Test-Url {
 
 function Start-RetrainingWorker {
     # UNet Extend Training runs on this computer, not in Docker. A container cannot start it, so the launcher does.
-    # Computers without the training setup skip it; the rest of VisHeart does not depend on it.
-    $worker = Join-Path $scriptDir '..\visheart-retraining\start-retraining-worker.bat'
+    # Computers without the training setup skip it; the rest of VisHeart does not depend on it. A computer that has the
+    # training data pack in visheart-training-data but no setup yet is set up on its first start (about 10 minutes).
+    $retraining = Join-Path $scriptDir '..\visheart-retraining'
+    $worker = Join-Path $retraining 'start-retraining-worker.bat'
     if (-not (Test-Path $worker)) {
         Write-Log 'INFO: UNet Extend Training service not found; skipping it.'
         return
     }
     Write-Log 'Starting the UNet Extend Training service...'
     & cmd.exe /c "`"$worker`"" | ForEach-Object { Write-Log "  $_" }
-    if ($LASTEXITCODE -ne 0) {
+    $code = $LASTEXITCODE
+    $pack = [IO.Path]::GetFullPath((Join-Path $scriptDir '..\visheart-training-data'))
+    if ($code -eq 2 -and (Test-Path (Join-Path $pack 'PACKED.json'))) {
+        Write-Log 'Setting up UNet Extend Training from visheart-training-data (first start only, about 10 minutes)...'
+        $model = Join-Path $scriptDir '..\visheart-inference-gpu\app\models\unet.pth'
+        $before = if (Test-Path $model) { (Get-FileHash $model -Algorithm SHA256).Hash } else { '' }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $retraining 'setup-training-pc.ps1') -DataRoot $pack -Auto |
+            ForEach-Object { Write-Log "  $_" }
+        $code = $LASTEXITCODE
+        $after = if (Test-Path $model) { (Get-FileHash $model -Algorithm SHA256).Hash } else { '' }
+        if ($after -ne $before -and $inferenceContainer) {
+            # The segmentation service started before the original model was put in place; it loads it on restart.
+            Write-Log "Restarting $inferenceContainer so it loads the original model..."
+            & docker restart $inferenceContainer | Out-Null
+        }
+    } elseif ($code -eq 2) {
+        Write-Log "INFO: To use UNet Extend Training here, copy the training data pack to $pack (see visheart-retraining\SETUP-ANOTHER-PC.md)."
+    }
+    if ($code -ne 0) {
         Write-Log 'INFO: UNet Extend Training is unavailable; the rest of VisHeart is not affected.'
     }
 }
