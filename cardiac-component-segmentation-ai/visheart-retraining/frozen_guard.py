@@ -25,7 +25,10 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 
-DEFAULT_INDEX = Path(os.environ.get("VISHEART_FROZEN_SLICES", r"E:\Jy\Unet\versions\frozen_slices.npz"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import UNET_ROOT, default_frozen_index  # noqa: E402
+
+DEFAULT_INDEX = default_frozen_index(UNET_ROOT)
 THUMB = 32
 NEAR_TOLERANCE = 0.01
 

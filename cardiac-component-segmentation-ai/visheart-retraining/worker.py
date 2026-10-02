@@ -57,6 +57,7 @@ class WorkerApp:
             plan = lambda job: steps(config, job)  # noqa: E731
         self.runner = jobs.JobRunner(self.store, plan)
         self.check_lock = threading.Lock()
+        self.compare_lock = threading.Lock()  # one comparison is prepared at a time
         self.log_lock = threading.Lock()
         self.log_path = config.jobs / "worker.log"
 
@@ -153,21 +154,74 @@ class WorkerApp:
                                    "label": summarize(scores[label][name])["per_class_mean"]} for name in expected}
         return view
 
-    def example(self, label, n):
+    def comparison_folder(self, label, against):
+        return self.config.examples / label / "compare" / against
+
+    def comparison_ready(self, registry, label, against):
+        """Whether against's predictions on label's example scans are there, from against's registered file."""
+        index = self.comparison_folder(label, against) / "index.json"
+        return index.exists() and versions.read_json(index).get("sha256") == registry.entry(against)["sha256"]
+
+    def compare_examples(self, label, against):
+        """Another version's predictions on label's example scans, for the Results tab's viewer. They are made once,
+        about half a minute on a CPU, and kept; label's own and the version it was compared with come from training."""
+        registry = self.registry()
+        self.known(registry, label)
+        self.known(registry, against)
+        index = self.examples_index(label)
+        if not index:
+            raise jobs.JobError(404, f"{label} has no example scans to compare.")
+        if registry.entry(against).get("status") == "deleted":
+            raise jobs.JobError(409, f"{against} was deleted, so it cannot be compared.")
+        view = {"label": label, "against": against, "ready": True, "rendered": False}
+        if against in (label, index.get("against")) or self.comparison_ready(registry, label, against):
+            return view
+        with self.compare_lock:
+            if not self.comparison_ready(registry, label, against):   # another request may have just made it
+                self.log_event(f"preparing {against}'s predictions on {label}'s example scans")
+                render_comparison(self.config, label, against, self.comparison_folder(label, against))
+                view["rendered"] = True
+        if not self.comparison_ready(registry, label, against):
+            raise jobs.JobError(500, f"The comparison with {against} could not be prepared. See worker.log.")
+        return view
+
+    def predictions(self, registry, label, index, version, n):
+        """Where version's predictions on example scan n of label are, as (folder, file prefix): made in training for
+        label and the version it was compared with, otherwise by compare_examples."""
+        folder = self.config.examples / label / str(n)
+        if version == label:
+            return folder, "label"
+        if version == index.get("against"):
+            return folder, "against"
+        self.known(registry, version)
+        if not self.comparison_ready(registry, label, version):
+            raise jobs.JobError(409, f"{version}'s predictions on these scans are not prepared yet.")
+        return self.comparison_folder(label, version) / str(n), "against"
+
+    def example(self, label, n, left=None, right=None):
+        """One example scan with two versions' predictions side by side. By default as trained: the version label was
+        compared with on the left, label on the right; the page puts the model in use on the left. Never one version
+        on both sides."""
         registry = self.registry()
         self.known(registry, label)
         index = self.examples_index(label) or {}
         entry = next((item for item in index.get("examples", []) if item["n"] == n), None)
         if entry is None:
             raise jobs.JobError(404, f"No example scan {n} for {label}.")
+        left, right = left or index.get("against"), right or label
+        if left == right:
+            raise jobs.JobError(400, "Choose two different versions to compare.")
+        (left_folder, left_name), (right_folder, right_name) = (
+            self.predictions(registry, label, index, version, n) for version in (left, right))
         folder = self.config.examples / label / str(n)
 
-        def png(name):
-            return "data:image/png;base64," + base64.b64encode((folder / name).read_bytes()).decode("ascii")
+        def png(path):
+            return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
         return {**{key: value for key, value in entry.items() if key != "slices"}, "count": entry["slices"],
-                "size": index.get("size", 256),
-                "slices": [{"image": png(f"image_{k}.png"), "truth": png(f"truth_{k}.png"),
-                            "against": png(f"against_{k}.png"), "label": png(f"label_{k}.png")}
+                "size": index.get("size", 256), "left_label": left, "right_label": right,
+                "slices": [{"image": png(folder / f"image_{k}.png"), "truth": png(folder / f"truth_{k}.png"),
+                            "left": png(left_folder / f"{left_name}_{k}.png"),
+                            "right": png(right_folder / f"{right_name}_{k}.png")}
                            for k in range(entry["slices"])]}
 
     # actions ---------------------------------------------------------------------------------------------------
@@ -197,8 +251,8 @@ class WorkerApp:
             raise jobs.JobError(409, "Some chosen cases are not in your latest check. Check again, then choose.")
         locked = [known[mask_id]["projectName"] for mask_id in selection if known[mask_id].get("frozen")]
         if locked:
-            raise jobs.JobError(409, f"{', '.join(dict.fromkeys(locked))} is a scan of the locked test set, "
-                                     "which is never used for training. Clear it, then start again.")
+            raise jobs.JobError(409, f"{', '.join(dict.fromkeys(locked))} is a test scan: every new version is "
+                                     "tested on it, so it is not used for training. Clear it, then start again.")
         picked = list(dict.fromkeys(selection))
         return {"owner": owner, "selection": picked,
                 "cases": [{"maskId": mask_id, "projectId": known[mask_id]["projectId"],
@@ -324,7 +378,9 @@ ROUTES = [
     ("POST", rf"/jobs/({jobs.JOB_ID_PATTERN})/cancel", lambda app, m, q, b: app.cancel(m[1], who(b))),
     ("GET", r"/versions/([^/]+)/preview", lambda app, m, q, b: app.preview(m[1], q.get("action", ["activate"])[0])),
     ("GET", r"/versions/([^/]+)/results", lambda app, m, q, b: app.results(m[1])),
-    ("GET", r"/versions/([^/]+)/examples/(\d{1,2})", lambda app, m, q, b: app.example(m[1], int(m[2]))),
+    ("GET", r"/versions/([^/]+)/examples/(\d{1,2})",
+     lambda app, m, q, b: app.example(m[1], int(m[2]), q.get("left", [None])[0], q.get("right", [None])[0])),
+    ("POST", r"/versions/([^/]+)/compare", lambda app, m, q, b: app.compare_examples(m[1], str(b.get("against") or ""))),
     ("POST", r"/versions/([^/]+)/activate", lambda app, m, q, b: app.activate(m[1], who(b), confirmation(b))),
     ("POST", r"/versions/([^/]+)/reject", lambda app, m, q, b: app.reject(m[1], who(b), confirmation(b))),
 ]
@@ -399,6 +455,32 @@ def health(port, timeout=2):
         return json.loads(response.read())["data"]
 
 
+def render_comparison(config, label, against, out):
+    """against's predictions on label's example scans, by render_examples.py in its own process (it loads a model)."""
+    command = [config.python, str(config.tools / "render_examples.py"), "--label", label, "--compare-with", against,
+               "--registry", str(config.registry), "--manifest", str(config.frozen_manifest), "--out", str(out)]
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1", "MPLBACKEND": "Agg"}
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                timeout=900, env=env, creationflags=jobs.NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise jobs.JobError(500, f"The comparison with {against} could not run: {error}")
+    if result.returncode != 0:
+        last = (result.stderr or result.stdout).strip().splitlines()[-1:] or ["no output"]
+        raise jobs.JobError(500, f"The comparison with {against} failed: {last[0]}")
+
+
+def terminate(app, exit=os._exit):
+    """A stop signal (Linux, stop-retraining-worker.sh --force): end a running job's commands first, then leave at
+    once, as taskkill /T does on Windows. The job stays "running" on disk and is reported as interrupted at the next
+    start, rather than recorded as failed by a command that was killed."""
+    app.log_event("stop signal received; ending the running job's commands, if any, and stopping")
+    context = app.runner.context
+    if context is not None:
+        context.kill()
+    exit(0)
+
+
 def stop_process(pid):
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=jobs.NO_WINDOW)
@@ -414,6 +496,9 @@ def main(argv=None):
     parser.add_argument("--wait-running", type=float, metavar="SECONDS")
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--also-listen", action="append", default=[], metavar="ADDRESS",
+                        help="another address to serve on, besides 127.0.0.1: on Linux, the Docker bridge's gateway, "
+                             "which is where containers reach the host (start-retraining-worker.sh passes it)")
     args = parser.parse_args(argv)
 
     if args.check_running or args.wait_running is not None:
@@ -455,8 +540,23 @@ def main(argv=None):
         return 1
     server.daemon_threads = True
     server.app = WorkerApp(config, simulate=args.simulate)
-    server.app.log_event(f"serving on {HOST}:{args.port} (pid {os.getpid()}, simulate={args.simulate}); "
-                         f"interrupted at start: {server.app.interrupted}")
+    addresses = [HOST]
+    for address in args.also_listen:
+        try:
+            other = ThreadingHTTPServer((address, args.port), Handler)
+        except OSError as error:
+            server.app.log_event(f"could not also listen on {address}:{args.port} ({error}); containers that reach "
+                                 "the host there will find the training service unavailable")
+            continue
+        other.daemon_threads = True
+        other.app = server.app
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        addresses.append(address)
+    if os.name != "nt":
+        import signal
+        signal.signal(signal.SIGTERM, lambda *_: terminate(server.app))
+    server.app.log_event(f"serving on {', '.join(addresses)} port {args.port} (pid {os.getpid()}, "
+                         f"simulate={args.simulate}); interrupted at start: {server.app.interrupted}")
     try:
         server.serve_forever()
     finally:

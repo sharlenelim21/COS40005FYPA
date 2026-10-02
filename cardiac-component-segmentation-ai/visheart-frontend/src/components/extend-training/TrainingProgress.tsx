@@ -196,7 +196,7 @@ export function TrainingProgress({ job, status, onChanged }: {
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel this training?</AlertDialogTitle>
             <AlertDialogDescription>
-              The work done so far is discarded and nothing is added to the versions list. The model in use does not
+              The work done so far is lost and nothing is added to the versions list. The model in use does not
               change. You can start a new training afterwards.
             </AlertDialogDescription>
           </AlertDialogHeader>

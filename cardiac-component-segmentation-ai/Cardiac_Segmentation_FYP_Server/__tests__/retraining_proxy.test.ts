@@ -169,6 +169,27 @@ describe('Extend Training proxy (plan WS13)', () => {
     expect(worker.seen.map(s => s.url)).toEqual(['/versions/unet-ui0925-120000/results', '/versions/unet-ui0925-120000/examples/3']);
   });
 
+  it('prepares a comparison with another version, and asks for both sides of its example scans, with valid names only', async () => {
+    worker = await startFakeWorker(ok);
+    const app = appWith(worker.url);
+    await request(app).post('/retraining/versions/unet-ui0925-120000/compare').send({ against: 'unet-2026-05-01' });
+    await request(app).get('/retraining/versions/unet-ui0925-120000/examples/2?left=unet-ui0925-120000&right=unet-2026-05-01');
+    await request(app).get('/retraining/versions/unet-ui0925-120000/examples/2?right=unet-2026-05-01');
+    expect(worker.seen.map(s => s.url)).toEqual([
+      '/versions/unet-ui0925-120000/compare',
+      '/versions/unet-ui0925-120000/examples/2?left=unet-ui0925-120000&right=unet-2026-05-01',
+      '/versions/unet-ui0925-120000/examples/2?right=unet-2026-05-01',
+    ]);
+    expect(worker.seen[0].body).toMatchObject({ against: 'unet-2026-05-01', requestedById: 'u-user' });
+    for (const bad of [{ against: '../registry' }, { against: '' }, {}]) {
+      expect((await request(app).post('/retraining/versions/unet-ui0925-120000/compare').send(bad)).status).toBe(400);
+    }
+    for (const query of ['left=..%2Fx', 'right=..%2Fx', 'left=a&left=b']) {
+      expect((await request(app).get(`/retraining/versions/unet-ui0925-120000/examples/2?${query}`)).status).toBe(400);
+    }
+    expect(worker.seen).toHaveLength(3);
+  });
+
   it('is wired with isAuthAndNotGuest and mounted at /retraining', () => {
     const routes = fs.readFileSync(path.join(__dirname, '../src/routes/retraining_routes.ts'), 'utf8');
     expect(routes).toMatch(/createRetrainingRouter\(\{\s*guard:\s*isAuthAndNotGuest\s*\}\)/);

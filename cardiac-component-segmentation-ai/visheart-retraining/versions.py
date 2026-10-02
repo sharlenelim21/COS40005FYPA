@@ -40,16 +40,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import build_model, sha256_file  # noqa: E402
+from common import REPO_MODELS, UNET_ROOT, build_model, sha256_file  # noqa: E402
 from evaluate import atomic_write_json, read_json  # noqa: E402,F401 (read_json waits out a brief Windows lock)
 
 REGRESSION_MARGIN = 0.005
 LABEL_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]*"
-DEFAULT_REGISTRY = r"E:\Jy\Unet\versions\registry.json"
-DEFAULT_MANIFEST = r"E:\Jy\Unet\versions\frozen_holdout.json"
-_MODELS = r"E:\Jy\COS40005FYPA\cardiac-component-segmentation-ai\visheart-inference-gpu\app\models"
-DEFAULT_ORIGINAL = _MODELS + r"\unet.pth"
-DEFAULT_ACTIVE_SLOT = _MODELS + r"\active\unet.pth"
+DEFAULT_REGISTRY = str(UNET_ROOT / "versions" / "registry.json")
+DEFAULT_MANIFEST = str(UNET_ROOT / "versions" / "frozen_holdout.json")
+DEFAULT_ORIGINAL = str(REPO_MODELS / "unet.pth")
+DEFAULT_ACTIVE_SLOT = str(REPO_MODELS / "active" / "unet.pth")
 RESTART_HINT = ("Restart the inference service, which caches the model after its first request: from "
                 "cardiac-component-segmentation-ai\\visheart-local-deployment, run "
                 "docker compose restart gpu-cpu (or gpu-nvidia on a CUDA host).")

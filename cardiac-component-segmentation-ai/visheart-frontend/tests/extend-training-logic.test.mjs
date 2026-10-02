@@ -126,3 +126,62 @@ test("the finished training says what happened to its version since", () => {
     text: "It was replaced by v2. The model in use is v2.",
   });
 });
+
+test("a test scan is named by its dataset and case, in words", () => {
+  assert.equal(logic.testScanName("acdc/patient108_frame01.nii.gz#z0"), "the ACDC scan patient108_frame01");
+  assert.equal(logic.testScanName("mms1/A1D0Q7_12.nii.gz"), "the M&Ms-1 scan A1D0Q7_12");
+  assert.equal(logic.testScanName("mms2/045_SA_ED.nii#z3"), "the M&Ms-2 scan 045_SA_ED");
+  assert.equal(logic.testScanName("other/x.nii.gz"), "the other scan x");
+  assert.equal(logic.testScanName(""), "a test scan");
+});
+
+// v13 is in use and newest; v1 is the original and oldest; v7 was deleted.
+const history = Array.from({ length: 13 }, (_, i) => ({
+  label: `v${i + 1}`, status: i === 0 ? "original" : i === 6 ? "deleted" : "candidate",
+  is_active: i === 12, is_original: i === 0, registered_at: `2026-09-${String(i + 1).padStart(2, "0")}`,
+}));
+
+test("the history shows 10 versions, always with the one in use and the original, until asked for all", () => {
+  const alive = history.filter(v => v.status !== "deleted").reverse();         // newest first, as the table sorts
+  const many = [...alive, { label: "v14", status: "candidate", is_active: false, is_original: false, registered_at: "x" },
+                { label: "v15", status: "candidate", is_active: false, is_original: false, registered_at: "y" }];
+  const shown = logic.historyRows(many, false);
+  assert.equal(shown.rows.length, 10);
+  assert.equal(shown.hidden, 4);
+  assert.ok(shown.rows.some(v => v.label === "v13") && shown.rows.some(v => v.label === "v1"));
+  assert.deepEqual(shown.rows.map(v => v.label).slice(0, 3), ["v13", "v12", "v11"]);   // the order is kept
+  assert.equal(logic.historyRows(many, true).rows.length, 14);
+  assert.equal(logic.historyRows(alive.slice(0, 5), false).hidden, 0);
+});
+
+test("a version can be compared with any other version that was not deleted", () => {
+  const options = logic.compareOptions(history, "v12").map(v => v.label);
+  assert.deepEqual(options.slice(0, 3), ["v13", "v1", "v11"]);                 // in use, original, then newest
+  assert.ok(!options.includes("v12") && !options.includes("v7"));
+  assert.equal(options.length, 11);
+});
+
+test("the example viewer keeps the model in use on the left and never offers it on the right", () => {
+  // Reviewing v12 while v13 is in use: v13 is fixed on the left, and v12 starts on the right.
+  const reviewing = logic.exampleSides(history, "v13", "v12", "v11");
+  const offered = reviewing.options.map(v => v.label);
+  assert.equal(reviewing.initial, "v12");
+  assert.deepEqual(offered.slice(0, 3), ["v12", "v1", "v11"]);                 // this version, original, newest
+  assert.ok(!offered.includes("v13") && !offered.includes("v7"));              // not the one in use, not deleted
+  assert.equal(offered.length, 11);
+  // Reviewing the version in use: the right starts on the one it was compared with, if that was not deleted.
+  assert.equal(logic.exampleSides(history, "v13", "v13", "v11").initial, "v11");
+  assert.equal(logic.exampleSides(history, "v13", "v13", "v7").initial, "v1");  // v7 was deleted: the original
+  assert.ok(!logic.exampleSides(history, "v13", "v13", "v7").options.some(v => v.label === "v13"));
+  // Back on the original: it is on the left, so the reviewed version is on the right.
+  const original = history.map(v => ({ ...v, is_active: v.label === "v1" }));
+  assert.equal(logic.exampleSides(original, "v1", "v12", "v1").initial, "v12");
+  assert.equal(logic.exampleSides([history[0]], "v1", "v1", null).initial, null);   // nothing else to compare
+});
+
+test("a version the user deleted is described in the user's words", () => {
+  assert.deepEqual(logic.jobOutcome("v3", "v2", [{ label: "v3", status: "deleted", deleted_because: "rejected" }]), {
+    title: "v3 was deleted",
+    text: "You deleted it from the version history. The model in use is v2.",
+  });
+});

@@ -10,7 +10,10 @@ import json
 import sys
 from pathlib import Path
 
-DEFAULT_DIAGNOSTIC = r"E:\Jy\Unet\diagnostics\heldout_unet_orientation_full.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import UNET_ROOT  # noqa: E402
+
+DEFAULT_DIAGNOSTIC = str(UNET_ROOT / "diagnostics" / "heldout_unet_orientation_full.json")
 
 
 def main(argv=None):

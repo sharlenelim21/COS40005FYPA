@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CorrectionCase, isActiveJob, MODEL_NAMES, RetrainingStatus } from "@/lib/retraining-api";
 import { LABEL_COLORS } from "@/types/segmentation";
-import { editorHref, matchesQuery, selectionSummary, trainableCases } from "@/components/extend-training/logic";
+import { editorHref, matchesQuery, selectionSummary, testScanName, trainableCases } from "@/components/extend-training/logic";
 import { CasePreview, markEdited } from "@/components/extend-training/CasePreview";
 
 /** Edit tracking's classes as short tags, in the editor's colours; the full name shows on hover. */
@@ -79,25 +79,22 @@ function DuplicateWarning({ item }: { item: CorrectionCase }) {
   );
 }
 
-/** The project is a scan of the frozen test set, which scores every new version: it can never train. */
-export function frozenScan(item: CorrectionCase): string | null {
-  return item.frozen ? item.frozen.frozen.replace(/\.nii(\.gz)?(#z\d+)?$/, "") : null;
-}
-
+/** The project is a scan of the frozen test set, which every new version is tested on: it can never train. */
 function LockedTestScan({ item }: { item: CorrectionCase }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground"
-                aria-label="Locked test scan: it can never be used for training">
+                aria-label="Test scan: not used for training">
           <Lock className="h-4 w-4" />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-64">
-        Locked test scan: it can never be used for training.
+      <TooltipContent side="top" className="max-w-72">
+        Test scan — not used for training
         <span className="mt-1 block opacity-80">
-          This project is {frozenScan(item)}, one of the scans every new version is scored on. You can still preview
-          and edit it.
+          This is {testScanName(item.frozen?.frozen ?? "")}, one of the scans used to test every new version. If the
+          model trained on it, it would already know the answers, and the test would not be fair. You can still
+          preview and edit it.
         </span>
       </TooltipContent>
     </Tooltip>
@@ -184,7 +181,7 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
             {locked > 0 && (
               <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <Lock className="h-3.5 w-3.5" />
-                {locked} {locked === 1 ? "case is a locked test scan" : "cases are locked test scans"}, never used for training
+                {locked} {locked === 1 ? "case is a test scan and is" : "cases are test scans and are"} not used for training
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -280,7 +277,7 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
                       <TableCell>
                         <Checkbox checked={!item.frozen && selected.has(item.maskId)} disabled={running || !!item.frozen}
                                   onCheckedChange={value => toggle(item.maskId, value === true)}
-                                  aria-label={item.frozen ? `${item.projectName} (${model}) is a locked test scan`
+                                  aria-label={item.frozen ? `${item.projectName} (${model}) is a test scan and is not used for training`
                                     : `Train on ${item.projectName} (${model})`} />
                       </TableCell>
                       <TableCell>

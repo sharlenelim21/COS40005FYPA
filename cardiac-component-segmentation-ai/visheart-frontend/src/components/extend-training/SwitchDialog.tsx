@@ -24,13 +24,13 @@ type Action = SwitchPreview["action"];
 const TITLES: Record<Action, (label: string) => string> = {
   activate: label => `Use ${label}?`,
   rollback: () => "Go back to the original model?",
-  reject: label => `Discard ${label}?`,
+  reject: label => `Delete ${label}?`,
 };
-const BUTTONS: Record<Action, string> = { activate: "Use this version", rollback: "Go back to the original", reject: "Discard it" };
+const BUTTONS: Record<Action, string> = { activate: "Use this version", rollback: "Go back to the original", reject: "Delete it" };
 const DONE: Record<Action, (label: string) => string> = {
   activate: label => `${label} is now in use.`,
   rollback: () => "The original model is in use again.",
-  reject: label => `${label} was discarded.`,
+  reject: label => `${label} was deleted.`,
 };
 
 export function SwitchDialog({ target, onClose, onDone }: {
