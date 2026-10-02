@@ -84,6 +84,35 @@ def render(picks, datasets, models, out, batch_size=4, log=print, meta=None):
     return entries
 
 
+def render_comparison(index, datasets, model, out, batch_size=4, log=print, meta=None):
+    """Another version's predictions on the scans an index already shows, as against_<k>.png in out/<n>/, for the
+    Results tab's "Compare with" choice. The image, the expert mask and the new version's labels stay in the index's
+    own folders; out is written beside itself and swapped in whole, like render()."""
+    out = Path(out)
+    partial = out.with_name(out.name + ".partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir(parents=True)
+    for entry in index["examples"]:
+        images, masks = datasets[entry["dataset"]]
+        slices, _ = load_case(Path(images) / entry["case"],
+                              Path(masks) / entry["case"].replace(".nii.gz", "_gt.nii.gz"))
+        labels = predict(model, slices, batch_size)
+        folder = partial / str(entry["n"])
+        folder.mkdir()
+        for k in range(slices.shape[0]):
+            save_png(folder / f"against_{k}.png", labels[k])
+        log(json.dumps({"example": entry["n"] + 1, "of": len(index["examples"])}))
+    atomic_write_json(partial / "index.json", {**(meta or {}), "created_at": now()})
+    if out.exists():
+        shutil.rmtree(out)
+    partial.rename(out)
+
+
+def compare_folder(examples, label, against):
+    """Where another version's predictions on label's example scans are kept."""
+    return Path(examples) / label / "compare" / against
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", required=True)
@@ -93,10 +122,30 @@ def main(argv=None):
     parser.add_argument("--manifest", default=versions.DEFAULT_MANIFEST)
     parser.add_argument("--out", help="default: <unet root>/examples/<label>")
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--compare-with", metavar="LABEL",
+                        help="predict label's existing example scans with this version instead, into "
+                             "<examples>/<label>/compare/<LABEL>")
     args = parser.parse_args(argv)
     config = pipeline.default_config()
     registry = versions.Registry(args.registry)
     entry = registry.entry(args.label)
+    if args.compare_with:
+        other = registry.entry(args.compare_with)
+        if other.get("status") == "deleted":
+            print(f"{args.compare_with} was deleted.")
+            return 1
+        index_path = config.examples / args.label / "index.json"
+        if not index_path.exists():
+            print(f"{args.label} has no example scans to compare.")
+            return 1
+        manifest = versions.read_json(args.manifest)
+        datasets = {name: (arm["images"], arm["masks"]) for name, arm in manifest["public"].items()}
+        out = Path(args.out) if args.out else compare_folder(config.examples, args.label, args.compare_with)
+        render_comparison(versions.read_json(index_path), datasets,
+                          build_model(checkpoint=registry.file(args.compare_with)).eval(), out, args.batch_size,
+                          meta={"label": args.label, "against": args.compare_with, "sha256": other["sha256"]})
+        print(f"{args.compare_with}'s predictions of {args.label}'s example scans written to {out}")
+        return 0
     against = args.against or (entry.get("gate") or {}).get("against") or registry.data["original"]
     wanted = {args.label: entry["sha256"], against: registry.entry(against)["sha256"]}
     expected = pipeline.frozen_expected(args.manifest)

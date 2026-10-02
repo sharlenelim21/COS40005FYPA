@@ -1,0 +1,11 @@
+# The UNet Extend Training service (worker.py), its pipeline and the v2-unet code it imports.
+# Pinned to the versions the service was built and tested with (Python 3.13). PyTorch is the CPU build:
+# training and scoring run on the CPU, like the inference container's UNet.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.11.0
+torchvision==0.26.0
+timm==1.0.26
+monai==1.5.2
+nibabel==5.4.2
+numpy==2.4.4
+pillow==12.2.0

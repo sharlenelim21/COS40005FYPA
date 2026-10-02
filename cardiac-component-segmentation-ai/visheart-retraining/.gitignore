@@ -1,1 +1,4 @@
 __pycache__/
+# This computer's training setup, written by setup-training-pc.ps1
+.venv/
+retraining.local.bat

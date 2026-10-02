@@ -1,0 +1,2 @@
+# The Linux launcher runs under bash: keep it at LF even where core.autocrlf would convert it.
+*.sh text eol=lf

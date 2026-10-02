@@ -207,7 +207,7 @@ class Worker(unittest.TestCase):
             with self.assertRaises(jobs.JobError) as refused:
                 app.start_training("dr-lee", owner, selection)
             self.assertEqual(refused.exception.status, status)
-        self.assertIn("test set", str(refused.exception))
+        self.assertIn("is a test scan", str(refused.exception))
         job = app.start_training("dr-lee", "u1", ["m2", "m2"])
         self.assertEqual((job["params"]["owner"], job["params"]["selection"]), ("u1", ["m2"]))
         self.assertEqual(job["params"]["cases"], [{"maskId": "m2", "projectId": "p2", "projectName": "Patient 007",
@@ -253,10 +253,68 @@ class Worker(unittest.TestCase):
         example = app.example("cand", 0)
         self.assertEqual((example["case"], example["count"], example["size"], len(example["slices"])),
                          ("c1.nii.gz", 1, 256, 1))
-        self.assertTrue(example["slices"][0]["label"].startswith("data:image/png;base64,"))
+        self.assertTrue(example["slices"][0]["right"].startswith("data:image/png;base64,"))
         with self.assertRaises(jobs.JobError) as missing:
             app.example("cand", 5)
         self.assertEqual(missing.exception.status, 404)
+
+    def test_the_example_scans_can_be_compared_with_another_version_that_still_exists(self):
+        self.add_candidate("cand", b"candidate weights", warn=False)
+        self.add_candidate("older", b"older weights", warn=False)
+        self.add_candidate("gone", b"gone weights", warn=False)
+        data = self.registry_data()
+        data["versions"]["gone"]["status"] = "deleted"
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+        folder = self.config.examples / "cand"
+        (folder / "0").mkdir(parents=True)
+        for name in ("image_0", "truth_0", "against_0", "label_0"):
+            (folder / "0" / f"{name}.png").write_bytes(b"\x89PNG " + name.encode("ascii"))
+        (folder / "index.json").write_text(json.dumps({"label": "cand", "against": "orig", "size": 256, "examples": [
+            {"n": 0, "dataset": "acdc", "case": "c1.nii.gz", "role": "lowest", "delta": -0.1, "scores": {},
+             "slices": 1}]}), encoding="utf-8")
+        app = self.make_app()
+        renders = []
+
+        def fake_render(config, label, against, out):
+            renders.append((label, against))
+            (out / "0").mkdir(parents=True)
+            (out / "0" / "against_0.png").write_bytes(b"\x89PNG older")
+            sha = json.loads(self.registry.read_text(encoding="utf-8"))["versions"][against]["sha256"]
+            (out / "index.json").write_text(json.dumps({"label": label, "against": against, "sha256": sha}),
+                                            encoding="utf-8")
+
+        with mock.patch.object(worker, "render_comparison", side_effect=fake_render):
+            self.assertEqual(app.compare_examples("cand", "orig")["rendered"], False)   # the one it was compared with
+            self.assertEqual(app.compare_examples("cand", "cand")["rendered"], False)   # its own: made in training
+            for other, status in (("gone", 409), ("nobody", 404)):
+                with self.assertRaises(jobs.JobError) as refused:
+                    app.compare_examples("cand", other)
+                self.assertEqual(refused.exception.status, status)
+            with self.assertRaises(jobs.JobError) as early:
+                app.example("cand", 0, left="older")                                    # not prepared yet
+            self.assertEqual(early.exception.status, 409)
+            self.assertEqual(app.compare_examples("cand", "older")["rendered"], True)
+            self.assertEqual(app.compare_examples("cand", "older")["rendered"], False)  # kept: done once
+        self.assertEqual(renders, [("cand", "older")])
+        import base64
+
+        def shows(scan, side):
+            return base64.b64decode(scan["slices"][0][side].split(",")[1])
+        default = app.example("cand", 0)                     # as trained: the version it was compared with, and itself
+        self.assertEqual((default["left_label"], default["right_label"]), ("orig", "cand"))
+        self.assertEqual((shows(default, "left"), shows(default, "right")), (b"\x89PNG against_0", b"\x89PNG label_0"))
+        # The model in use on the left, any other version on the right: either side can be any prepared version.
+        for left, right, pictures in (("older", "cand", (b"\x89PNG older", b"\x89PNG label_0")),
+                                      ("cand", "older", (b"\x89PNG label_0", b"\x89PNG older")),
+                                      ("orig", "older", (b"\x89PNG against_0", b"\x89PNG older"))):
+            shown = app.example("cand", 0, left=left, right=right)
+            self.assertEqual((shown["left_label"], shown["right_label"]), (left, right))
+            self.assertEqual((shows(shown, "left"), shows(shown, "right")), pictures)
+            self.assertEqual(base64.b64decode(shown["slices"][0]["truth"].split(",")[1]), b"\x89PNG truth_0")
+        for left, right, status in (("older", "older", 400), ("cand", None, 400), ("nobody", "cand", 404)):
+            with self.assertRaises(jobs.JobError) as refused:
+                app.example("cand", 0, left=left, right=right)    # never the same version on both sides
+            self.assertEqual(refused.exception.status, status)
 
     def test_a_job_cut_off_by_a_stopped_worker_is_reported_when_it_starts_again(self):
         store = jobs.JobStore(self.config.jobs)
@@ -292,6 +350,21 @@ class Worker(unittest.TestCase):
         connection.close()
         return response.status, data
 
+    def test_the_example_route_passes_both_sides(self):
+        self.add_candidate("cand", b"candidate weights", warn=False)
+        folder = self.config.examples / "cand"
+        (folder / "0").mkdir(parents=True)
+        for name in ("image_0", "truth_0", "against_0", "label_0"):
+            (folder / "0" / f"{name}.png").write_bytes(b"\x89PNG " + name.encode("ascii"))
+        (folder / "index.json").write_text(json.dumps({"label": "cand", "against": "orig", "size": 256, "examples": [
+            {"n": 0, "dataset": "acdc", "case": "c1.nii.gz", "role": "lowest", "delta": -0.1, "scores": {},
+             "slices": 1}]}), encoding="utf-8")
+        port = self.serve(self.make_app())
+        status, reply = self.request(port, "GET", "/versions/cand/examples/0?left=cand&right=orig")
+        self.assertEqual((status, reply["data"]["left_label"], reply["data"]["right_label"]), (200, "cand", "orig"))
+        status, reply = self.request(port, "GET", "/versions/cand/examples/0?left=orig&right=orig")
+        self.assertEqual(status, 400)
+
     def test_the_service_answers_only_requests_addressed_to_this_computer(self):
         port = self.serve(self.make_app())
         self.assertEqual(self.request(port, "GET", "/status")[0], 200)
@@ -317,6 +390,51 @@ class Worker(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(worker.main(["--check-running", "--port", str(free)]), 1)
         self.assertIn("not running", out.getvalue())
+
+
+class Termination(unittest.TestCase):
+    def test_a_stop_signal_ends_a_running_jobs_commands_before_the_worker_exits(self):
+        calls = []
+        context = mock.Mock(kill=lambda: calls.append("kill job"))
+        app = mock.Mock(runner=mock.Mock(context=context), log_event=lambda line: calls.append("log"))
+        worker.terminate(app, exit=lambda code: calls.append(f"exit {code}"))
+        self.assertEqual(calls, ["log", "kill job", "exit 0"])
+        calls.clear()
+        worker.terminate(mock.Mock(runner=mock.Mock(context=None), log_event=lambda line: calls.append("log")),
+                         exit=lambda code: calls.append(f"exit {code}"))
+        self.assertEqual(calls, ["log", "exit 0"])
+
+
+
+class ExtraAddress(unittest.TestCase):
+    """On Linux, containers reach the host through the Docker bridge, not 127.0.0.1 (plan linux-and-cpu-support)."""
+
+    def test_the_worker_also_serves_a_named_address_and_logs_one_it_cannot_use(self):
+        import os
+        import subprocess
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        with tempfile.TemporaryDirectory() as root:
+            env = {**os.environ, "VISHEART_UNET_ROOT": root, "PYTHONDONTWRITEBYTECODE": "1"}
+            command = [sys.executable, str(Path(worker.__file__)), "--port", str(port), "--simulate",
+                       "--also-listen", "127.0.0.2", "--also-listen", "203.0.113.7"]
+            process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                def answers(address, host):
+                    try:
+                        connection = http.client.HTTPConnection(address, port, timeout=2)
+                        connection.request("GET", "/health", headers={"Host": host})
+                        return connection.getresponse().status == 200
+                    except OSError:
+                        return False
+                self.assertTrue(wait_until(lambda: answers("127.0.0.1", f"127.0.0.1:{port}")))
+                self.assertTrue(wait_until(lambda: answers("127.0.0.2", f"host.docker.internal:{port}")))
+                log = (Path(root) / "jobs" / "worker.log").read_text(encoding="utf-8")
+                self.assertIn("could not also listen on 203.0.113.7", log)
+            finally:
+                subprocess.run(command[:2] + ["--port", str(port), "--stop", "--force"], env=env, capture_output=True)
+                process.wait(timeout=20)
 
 
 if __name__ == "__main__":

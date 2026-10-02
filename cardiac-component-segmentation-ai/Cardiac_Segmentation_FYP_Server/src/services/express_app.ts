@@ -15,6 +15,7 @@ import supportRoutes from '../routes/support_routes';
 import adminToolsRoute from '../routes/admin_tools';
 import sampleNiftiRoute from '../routes/sample_nifti';
 import retrainingRoute from '../routes/retraining_routes';
+import { compressJson } from '../middleware/compress_json';
 import cpuMetricsRoute from '../routes/cpu_metrics';
 import ecrMetricsRoute from '../routes/ecr_metrics';
 import s3MetricsRoute from '../routes/s3_metrics';
@@ -34,6 +35,7 @@ const serviceLocation = "ExpressApp"; // For logging context
 /* Middleware */
 // Apply essential middleware like parsing JSON bodies
 app.use(express.json({ limit: '10mb' })); // Increase limit for large JSON payloads (for webhook callback)
+app.use(compressJson()); // gzip large JSON replies, such as a 4D project's segmentation results
 
 // Setup Redis session store
 const redisStore = new RedisStore({

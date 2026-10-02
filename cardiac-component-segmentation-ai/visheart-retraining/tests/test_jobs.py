@@ -84,6 +84,23 @@ class Jobs(unittest.TestCase):
         self.assertEqual(saved["steps"][0]["state"], "cancelled")
         self.assertIn("dr-tan", saved["error"])
 
+    def test_cancel_ends_the_commands_whole_process_tree(self):
+        # The command starts a grandchild that beats a heartbeat file; a cancel must stop the grandchild too.
+        beat = Path(self.tmp.name) / "heartbeat"
+        grandchild = "\n".join(["import time, pathlib", "while True:",
+                                f"    pathlib.Path({str(beat)!r}).write_text(str(time.time()))", "    time.sleep(0.1)"])
+        script = (f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {grandchild!r}]); "
+                  "print('started', flush=True); time.sleep(60)")
+        runner = self.make_runner([jobs.Step("tree", "Tree", lambda ctx: ctx.run_command([PY, "-c", script]))])
+        job = runner.start("train", "dr-lee", {})
+        self.assertTrue(wait_until(lambda: beat.exists() and "started" in "\n".join(self.store.tail(job["id"]))))
+        runner.cancel(job["id"], "dr-tan")
+        self.assertTrue(self.finished(job["id"]))
+        time.sleep(0.5)
+        last = beat.read_text()
+        time.sleep(1.0)
+        self.assertEqual(beat.read_text(), last, "the grandchild is still running after the cancel")
+
     def test_a_failing_command_fails_the_job_with_its_readable_reason(self):
         failing = [PY, "-c", "import sys; sys.exit(3)"]
         steps = [jobs.Step("bad", "Bad", lambda ctx: ctx.run_command(failing, failure="The export failed."))]

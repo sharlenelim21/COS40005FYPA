@@ -1,0 +1,2 @@
+# The Linux scripts run under bash: keep them at LF even where core.autocrlf would convert them.
+*.sh text eol=lf

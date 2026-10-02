@@ -13,7 +13,6 @@ With an owner and a selection (R1), the dry run and the export keep only that us
 """
 import datetime as dt
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -24,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import versions  # noqa: E402
-from common import sha256_file  # noqa: E402
+from common import UNET_ROOT, sha256_file  # noqa: E402
 from evaluate import atomic_write_json  # noqa: E402
 from frozen_guard import DEFAULT_INDEX  # noqa: E402
 from jobs import NO_WINDOW, Step, StepFailed, now  # noqa: E402
@@ -80,7 +79,7 @@ def default_config():
     python = Path(sys.executable)
     if python.name.lower() == "pythonw.exe" and python.with_name("python.exe").exists():
         python = python.with_name("python.exe")  # the tools print their progress; pythonw has no output of its own
-    return Config(tools=tools, python=str(python), unet_root=Path(os.environ.get("VISHEART_UNET_ROOT", r"E:\Jy\Unet")),
+    return Config(tools=tools, python=str(python), unet_root=UNET_ROOT,
                   registry=Path(versions.DEFAULT_REGISTRY), frozen_manifest=Path(versions.DEFAULT_MANIFEST),
                   frozen_index=Path(DEFAULT_INDEX), server_dir=tools.parent / "Cardiac_Segmentation_FYP_Server")
 

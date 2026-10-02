@@ -22,6 +22,24 @@ ACTIVE_STATES = ("queued", "running")
 JOB_ID_PATTERN = r"job-\d{8}-\d{6}-[0-9a-f]{4}"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)          # no console flashes when the worker runs under pythonw
 NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)  # so a cancel can end the whole process tree
+# Elsewhere a command leads its own session, so its process group holds everything it starts (see kill_tree).
+OWN_SESSION = {} if os.name == "nt" else {"start_new_session": True}
+
+
+def kill_tree(pid):
+    """End a command and everything it started: taskkill /T on Windows, the command's process group elsewhere.
+
+    Killing only the command would leave its children running, still holding its output pipe open, so the job would
+    never see the end of its output.
+    """
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+        return
+    import signal
+    try:
+        os.killpg(pid, signal.SIGKILL)  # the command's session leader: its group id is its pid
+    except ProcessLookupError:
+        pass
 
 
 def now():
@@ -154,7 +172,7 @@ class JobContext:
                "MPLBACKEND": "Agg"}
         process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                                   creationflags=NO_WINDOW | NEW_GROUP)
+                                   creationflags=NO_WINDOW | NEW_GROUP, **OWN_SESSION)
         self.process = process
         try:
             for line in process.stdout:
@@ -173,11 +191,7 @@ class JobContext:
     def kill(self):
         process = self.process
         if process is not None and process.poll() is None:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True,
-                               creationflags=NO_WINDOW)
-            else:
-                process.kill()
+            kill_tree(process.pid)
 
 
 class JobRunner:

@@ -217,7 +217,7 @@ export function CasePreview({ item, selected, locked, onSelectedChange, onClose 
                   </label>
                   {item.frozen && (
                     <p className="text-xs text-muted-foreground">
-                      A locked test scan: every new version is scored on it, so it can never be used for training.
+                      This is a test scan: every new version is tested on it, so it is not used for training.
                     </p>
                   )}
                   <div className="grid grid-cols-2 gap-2">
