@@ -2251,34 +2251,11 @@ export function InteractiveReport({
                 <span className="text-[10.5px] text-muted-foreground/70">· click a region or curve to focus</span>
               </div>
 
-              {/* RV septal GCS — septal-side border, one segment per ring,
-                  reported separately from the free-wall regions above. */}
-              {rvMetricType === "GCS" && rvStrain?.septal_regions?.length ? (
-                <div className="mt-3">
-                  <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Septal GCS (separate from free wall) · global {fmt(rvStrain.global_rv_septal_gcs ?? null)}%
-                  </span>
-                  <div className="mt-1.5 grid grid-cols-3 gap-2">
-                    {rvStrain.septal_regions.map((r) => (
-                      <div key={r.region} className="rounded-lg border border-border px-2.5 py-2">
-                        <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">{r.label}</span>
-                        <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
-                          {fmt(r.gcs)}
-                          <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
               <p className="mt-3 text-[10px] leading-snug text-muted-foreground">
                 <span className="font-semibold text-foreground">Exploratory only.</span>{" "}
                 9 RV free-wall segments (basal / mid / apical × 3), rays cast from the LV centre. GCS is
                 the % change in RV free-wall length and GAS the % change in RV cavity area
-                between end-diastole and end-systole; septal GCS is the same length measure on the
-                RV septal-side border, one segment per ring. Separate measures, not combined, and
-                not the validated longitudinal RV measure. Negative values mean contraction (the
+                between end-diastole and end-systole. Negative values mean contraction (the
                 healthy direction). No severity threshold is applied and this does not contribute
                 to any health-status grade.
               </p>

@@ -1,23 +1,15 @@
 "use client";
 
 import React from "react";
+import { rdYlGn } from "@/components/landmark/StrainVisualization";
 
-function hex2rgb(h: string): [number, number, number] {
-  const c = h.replace("#", "");
-  return [parseInt(c.slice(0, 2), 16), parseInt(c.slice(2, 4), 16), parseInt(c.slice(4, 6), 16)];
-}
-
-/** Neutral (not red/green-graded) interpolation — used for RV values that have no validated reference range,
- *  so the color can't imply a normal/abnormal judgement that doesn't exist. Callers pass the FIXED
- *  scale ends (lo = least, hi = most deformation) from lib/strainColorScale.ts, not the data's min/max. */
-function neutralColor(t: number): string {
-  const [r1, g1, b1] = hex2rgb("#8b96a5");
-  const [r2, g2, b2] = hex2rgb("#2c5f68");
-  const r = Math.round(r1 + (r2 - r1) * t);
-  const g = Math.round(g1 + (g2 - g1) * t);
-  const b = Math.round(b1 + (b2 - b1) * t);
-  return `rgb(${r},${g},${b})`;
-}
+// Same red->yellow->green scale the real in-app RV bullseye uses
+// (CombinedVentricularChart's rvCol / the live Strain tab), not a separate
+// muted grey-to-teal look — the print version reading as washed-out/"dummy"
+// next to the real one was reported live (2026-10). Callers pass the FIXED
+// scale ends (lo = worst, hi = best) from lib/strainColorScale.ts, not the
+// data's own min/max, exactly like rvCol does — this is advisory, not a
+// validated grade, but it should still look like the same measurement.
 
 /** The backend's 9-segment RV bullseye labels (basal/mid/apical x 3 sections,
  *  Seg1 inferior → Seg3 anterior) — same order as the strain regions 1-9. */
@@ -43,7 +35,7 @@ export function RvRegionRing({
   const colorFor = (v: number | null) => {
     if (muted || v === null) return "#f3f4f6";
     const t = hi === lo ? 0.5 : Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
-    return neutralColor(t);
+    return rdYlGn(t);
   };
   const start = -Math.PI / 2;
 
