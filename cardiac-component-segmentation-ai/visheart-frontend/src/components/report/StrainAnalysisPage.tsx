@@ -122,13 +122,13 @@ export function StrainAnalysisPage({
           <tr>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-gray-900">RV</td>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">n/a</td>
-            <td className="border-b border-gray-300/60 bg-amber-50 px-2.5 py-1.5 text-right font-mono italic text-amber-800">{fmt(rvPeakGcs)}%¹</td>
-            <td className="border-b border-gray-300/60 bg-amber-50 px-2.5 py-1.5 text-right font-mono italic text-amber-800">{fmt(rvPeakGas)}%¹</td>
+            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-900">{fmt(rvPeakGcs)}%¹</td>
+            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-900">{fmt(rvPeakGas)}%¹</td>
           </tr>
           <tr>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-gray-900">RV septum</td>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">n/a</td>
-            <td className="border-b border-gray-300/60 bg-amber-50 px-2.5 py-1.5 text-right font-mono italic text-amber-800">{fmt(rvPeakSeptalGcs)}%¹</td>
+            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-900">{fmt(rvPeakSeptalGcs)}%¹</td>
             <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">n/a</td>
           </tr>
         </tbody>
@@ -159,18 +159,18 @@ export function StrainAnalysisPage({
             <p className="py-10 text-center text-[9.5px] text-gray-600">Not computed — run the per-frame strain series.</p>
           )}
         </div>
-        <div className="rounded-lg border border-dashed border-gray-300 bg-amber-500/5 p-2">
+        <div className="rounded-lg border border-gray-300 p-2">
           <p className="mb-1 flex items-center gap-1.5 text-[10.5px] font-bold text-gray-900">
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            <span className="h-1.5 w-1.5 rounded-full bg-teal-600" />
             RV — GCS / GAS
           </p>
           <div className="mb-1 flex gap-3 text-[9px] text-gray-600">
-            <span className="flex items-center gap-1"><span className="h-0.5 w-3 border-b-2 border-dotted border-[#a6852f]" />RV GCS¹</span>
+            <span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-[#2c5f68]" />RV GCS¹</span>
             <span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-[#7c3aed]" />RV GAS¹</span>
           </div>
           {hasRvSeries ? (
             <LineChart lo={rvLo} hi={10} curves={[
-              { points: rvGcsByFrame ?? [], color: "#a6852f", dashed: true },
+              { points: rvGcsByFrame ?? [], color: "#2c5f68" },
               { points: rvGasByFrame, color: "#7c3aed" },
             ]} />
           ) : (
@@ -200,9 +200,9 @@ export function StrainAnalysisPage({
               <th className="border-b border-gray-300 px-2 py-1 text-left font-bold uppercase tracking-wide text-teal-800">Frame</th>
               <th className="border-b border-gray-300 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">LV GRS</th>
               <th className="border-b border-gray-300 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">LV GCS</th>
-              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GCS¹</th>
-              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV GAS¹</th>
-              <th className="border-b border-gray-300 bg-amber-100 px-2 py-1 text-right font-bold uppercase tracking-wide text-amber-800">RV Septal GCS¹</th>
+              <th className="border-b border-gray-300 bg-teal-50 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">RV GCS¹</th>
+              <th className="border-b border-gray-300 bg-teal-50 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">RV GAS¹</th>
+              <th className="border-b border-gray-300 bg-teal-50 px-2 py-1 text-right font-bold uppercase tracking-wide text-teal-800">RV Septal GCS¹</th>
             </tr>
           </thead>
           <tbody>
@@ -211,9 +211,9 @@ export function StrainAnalysisPage({
                 <td className="border-b border-gray-300/60 px-2 py-0.5 font-semibold text-gray-900">{r.frameIndex}</td>
                 <td className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(r.lvGrs)}</td>
                 <td className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(r.lvGcs)}</td>
-                <td className="border-b border-gray-300/60 bg-amber-50 px-2 py-0.5 text-right font-mono italic text-amber-800">{fmt(r.rvGcs)}</td>
-                <td className="border-b border-gray-300/60 bg-amber-50 px-2 py-0.5 text-right font-mono italic text-amber-800">{fmt(r.rvGas)}</td>
-                <td className="border-b border-gray-300/60 bg-amber-50 px-2 py-0.5 text-right font-mono italic text-amber-800">{fmt(r.rvSeptalGcs)}</td>
+                <td className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(r.rvGcs)}</td>
+                <td className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(r.rvGas)}</td>
+                <td className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(r.rvSeptalGcs)}</td>
               </tr>
             ))}
           </tbody>

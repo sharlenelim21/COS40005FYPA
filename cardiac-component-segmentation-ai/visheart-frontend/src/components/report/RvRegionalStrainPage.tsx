@@ -61,7 +61,7 @@ export function RvRegionalStrainPage({
         renderBullseye={(values) => <RvRegionRing values={values} lo={gcsRange.lo} hi={gcsRange.hi} ringCount={3} />}
         tablePrototypeNote="RV Regional GCS (% change in RV free-wall length) has no published reference range and has not been clinically validated — values below are real but exploratory."
         bullseyeIntroNote="9-segment RV bullseye (basal / mid / apical × 3 sections, Seg1 inferior → Seg3 anterior), rays cast from the LV centre, segment layout fixed at end-diastole. RV Regional GCS (% change in free-wall length) and RV Regional GAS (% change in cavity area) are reported as two separate measures, not combined. Neither has a published reference range yet, so neither is clinically validated."
-        theme="amber"
+        theme="teal"
       />
 
       <FrameSeriesPages
@@ -79,7 +79,7 @@ export function RvRegionalStrainPage({
         tablePrototypeNote={hasGas
           ? "RV Regional GAS (% change in RV cavity area, short-axis) has no published reference range and has not been clinically validated — values below are real but exploratory. Regional FAC = −GAS."
           : "This RV strain series was computed before GAS was stored — recompute the RV strain series to populate these values."}
-        theme="amber"
+        theme="teal"
       />
     </>
   );

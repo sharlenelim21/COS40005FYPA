@@ -2,8 +2,19 @@
 
 import React from "react";
 import { StrainBullseyeChart, SEGMENT_LABELS, type StrainSegmentData } from "@/components/landmark/StrainVisualization";
+import { RvRegionRing } from "./RvRegionRing";
+import { STRAIN_COLOR_SCALES } from "@/lib/strainColorScale";
 import { ReportPageFrame } from "./ReportPageFrame";
 import { fmt } from "./print-utils";
+
+const RV_FAC_RANGE = { lo: STRAIN_COLOR_SCALES.RV_FAC.worst, hi: STRAIN_COLOR_SCALES.RV_FAC.best };
+
+/** Broadcast each ring's single FAC value across its 3 sections — FAC is
+ *  only tracked per-RING (not per-section like GCS/GAS), so this is the same
+ *  value drawn 3x within a ring rather than 3 independent measurements. */
+function rvFacToNineWide(rings: (number | null)[]): (number | null)[] {
+  return [0, 1, 2].flatMap((ring) => [rings[ring] ?? null, rings[ring] ?? null, rings[ring] ?? null]);
+}
 
 function toSeries(values: (number | null)[] | undefined): StrainSegmentData[] {
   return (values ?? []).map((v, i) => ({ segment: i + 1, label: SEGMENT_LABELS[i] ?? `Segment ${i + 1}`, strain: v ?? 0 }));
@@ -105,32 +116,45 @@ export function WallThicknessCavityAreaPage({
           )}
         </div>
 
-        <div className="relative rounded-lg border border-dashed border-gray-300 bg-amber-50 p-2">
+        <div className="relative rounded-lg border border-gray-300 p-2">
           <p className="mb-1 text-[14px] font-extrabold text-gray-900">RV Cavity Area - FAC (%)</p>
-          <p className="mb-2 text-[9px] text-gray-600">
-            {hasFac
-              ? `Short-axis fractional area change, ED (frame ${edFrameIndex ?? "—"}) → ES (frame ${rvEsFrameIndex ?? "—"}): (ED area − ES area) / ED area, summed over each ring's 3 RV segments. Not the echo 4-chamber FAC — no validated reference range.`
-              : "Not computed — run RV strain (ED → ES) from the Strain tab. Results computed before GAS was added need recomputing."}
-          </p>
-          <table className="w-full border-collapse text-[9px]">
-            <thead>
-              <tr className="bg-amber-100">
-                <th className="border-b border-gray-300 px-2 py-1 text-left font-bold text-amber-800">Region</th>
-                <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-amber-800">FAC</th>
-              </tr>
-            </thead>
-            <tbody>
-              {["Basal", "Mid", "Apical"].map((r, i) => (
-                <tr key={r}>
-                  <td className="border-b border-gray-300/60 px-2 py-1 text-gray-900">{r}</td>
-                  <td className="border-b border-gray-300/60 px-2 py-1 text-right font-mono italic text-amber-800">{fmt(rvFacRings[i] ?? null)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="mt-2 flex gap-1.5">
-            <StatSquare label="Global FAC" value={`${fmt(rvFacGlobal)} %`} />
-          </div>
+          {hasFac ? (
+            <>
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                ED (frame {edFrameIndex ?? "—"}) → ES (frame {rvEsFrameIndex ?? "—"})
+              </p>
+              <div className="mx-auto h-[220px] w-[220px]">
+                <RvRegionRing values={rvFacToNineWide(rvFacRings)} lo={RV_FAC_RANGE.lo} hi={RV_FAC_RANGE.hi} ringCount={3} />
+              </div>
+              <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
+                (ED area − ES area) / ED area, drawn per ring across its 3 RV-bullseye sections. Not the
+                echo 4-chamber FAC — no validated reference range.
+              </p>
+              <table className="mt-2 w-full border-collapse text-[9px]">
+                <thead>
+                  <tr className="bg-teal-50">
+                    <th className="border-b border-gray-300 px-2 py-1 text-left font-bold text-teal-800">Region</th>
+                    <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-teal-800">FAC</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {["Basal", "Mid", "Apical"].map((r, i) => (
+                    <tr key={r}>
+                      <td className="border-b border-gray-300/60 px-2 py-1 text-gray-900">{r}</td>
+                      <td className="border-b border-gray-300/60 px-2 py-1 text-right font-mono text-gray-900">{fmt(rvFacRings[i] ?? null)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-2 flex gap-1.5">
+                <StatSquare label="Global FAC" value={`${fmt(rvFacGlobal)} %`} />
+              </div>
+            </>
+          ) : (
+            <p className="py-8 text-center text-[10px] text-gray-600">
+              Not computed — run RV strain (ED → ES) from the Strain tab. Results computed before GAS was added need recomputing.
+            </p>
+          )}
         </div>
       </div>
     </ReportPageFrame>

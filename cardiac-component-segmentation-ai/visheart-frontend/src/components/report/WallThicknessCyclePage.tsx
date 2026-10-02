@@ -2,6 +2,8 @@
 
 import React from "react";
 import { StrainBullseyeChart, SEGMENT_LABELS, type StrainSegmentData } from "@/components/landmark/StrainVisualization";
+import { RvRegionRing } from "./RvRegionRing";
+import { STRAIN_COLOR_SCALES } from "@/lib/strainColorScale";
 import { ReportPageFrame } from "./ReportPageFrame";
 import { chunk, fmt } from "./print-utils";
 
@@ -13,6 +15,14 @@ import { chunk, fmt } from "./print-utils";
 // experiment and is print-safe.
 const FRAMES_PER_BULLSEYE_PAGE = 12;
 const FRAMES_PER_TABLE_PAGE = 45;
+const RV_FAC_RANGE = { lo: STRAIN_COLOR_SCALES.RV_FAC.worst, hi: STRAIN_COLOR_SCALES.RV_FAC.best };
+
+/** Broadcast each ring's single FAC value across its 3 sections — FAC is
+ *  only tracked per-RING (not per-section like GCS/GAS), so this is the same
+ *  value drawn 3x within a ring rather than 3 independent measurements. */
+function rvFacToNineWide(rings: (number | null)[]): (number | null)[] {
+  return [0, 1, 2].flatMap((ring) => [rings[ring] ?? null, rings[ring] ?? null, rings[ring] ?? null]);
+}
 
 export type WtFrame = { frameIndex: number; segments: { segment: number; wt_mm?: number | null }[] };
 /** Per-frame RV FAC vs ED, per ring [basal, mid, apical] — see rvAreaMetrics.rvFacSeries. */
@@ -35,7 +45,9 @@ export function wallThicknessCyclePageCount(lvFrameCount: number, rvFrameCount: 
   const lvPages = lvFrameCount
     ? Math.ceil(lvFrameCount / FRAMES_PER_BULLSEYE_PAGE) + Math.ceil(lvFrameCount / FRAMES_PER_TABLE_PAGE)
     : 1;
-  const rvPages = Math.max(1, Math.ceil(rvFrameCount / FRAMES_PER_TABLE_PAGE));
+  const rvPages = rvFrameCount
+    ? Math.ceil(rvFrameCount / FRAMES_PER_BULLSEYE_PAGE) + Math.ceil(rvFrameCount / FRAMES_PER_TABLE_PAGE)
+    : 1;
   return lvPages + rvPages;
 }
 
@@ -64,6 +76,7 @@ export function WallThicknessCyclePage({
   const { min, max } = frameStats(frames);
   let page = pageNumber;
 
+  const rvBullseyeChunks = chunk(rvFacFrames, FRAMES_PER_BULLSEYE_PAGE);
   const rvChunks = chunk(rvFacFrames, FRAMES_PER_TABLE_PAGE);
   const hasRvFac = rvFacFrames.some((f) => f.rings.some((v) => v !== null));
 
@@ -172,49 +185,81 @@ export function WallThicknessCyclePage({
             Not computed — run the RV strain series (all frames) to populate RV FAC across the cycle.
           </p>
         </ReportPageFrame>
-      ) : rvChunks.map((frameChunk, ci, all) => (
-        <ReportPageFrame
-          key={`rv${ci}`}
-          pageNumber={page++}
-          totalPages={totalPages}
-          patientLabel={patientLabel}
-          statusLabel="Complete"
-          title={`RV Cavity Area (FAC) — Across the Cycle${all.length > 1 ? ` (${ci + 1} of ${all.length})` : ""}`}
-          subtitle="Short-axis RV fractional area change vs end-diastole, every computed frame"
-          generatedAt={generatedAt}
-        >
-          {ci === 0 && (
-            <div className="mb-2 rounded-md border border-dashed border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[9px] text-amber-800">
-              {hasRvFac
-                ? "FAC = (ED area − frame area) / ED area × 100, summed over each ring's 3 segments of the 9-segment RV bullseye (= −GAS). Short-axis MRI, not the echo 4-chamber FAC — no validated reference range."
-                : "This RV strain series was computed before per-frame RV areas were stored — recompute the RV strain series to populate FAC."}
-            </div>
-          )}
-          <table className="w-full border-collapse text-[9px]">
-            <thead>
-              <tr className="bg-amber-100">
-                <th className="border-b border-gray-300 px-2 py-1 text-left font-bold text-amber-800">Frame</th>
-                <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-amber-800">Basal FAC</th>
-                <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-amber-800">Mid FAC</th>
-                <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-amber-800">Apical FAC</th>
-              </tr>
-            </thead>
-            <tbody>
-              {frameChunk.map((f) => {
-                const isMarked = f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex;
-                return (
-                  <tr key={f.frameIndex} className={isMarked ? "bg-amber-50" : undefined}>
-                    <td className="border-b border-gray-300/60 px-2 py-0.5 font-semibold text-gray-900">{frameLabelFor(f.frameIndex)}</td>
-                    {[0, 1, 2].map((ring) => (
-                      <td key={ring} className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono italic text-amber-800">{fmt(f.rings[ring] ?? null)}</td>
-                    ))}
+      ) : (
+        <>
+          {rvBullseyeChunks.map((frameChunk, ci) => (
+            <ReportPageFrame
+              key={`rvb${ci}`}
+              pageNumber={page++}
+              totalPages={totalPages}
+              patientLabel={patientLabel}
+              statusLabel="Complete"
+              title={`RV Cavity Area (FAC) — Across the Cycle${rvBullseyeChunks.length > 1 ? ` (${ci + 1} of ${rvBullseyeChunks.length})` : ""}`}
+              subtitle="Short-axis RV fractional area change vs end-diastole, every computed frame"
+              generatedAt={generatedAt}
+            >
+              {ci === 0 && (
+                <p className="mb-2 text-[9.5px] leading-snug text-gray-600">
+                  FAC = (ED area − frame area) / ED area × 100, drawn per ring across its 3 RV-bullseye
+                  sections (= −GAS). Short-axis MRI, not the echo 4-chamber FAC — no validated reference range.
+                </p>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                {frameChunk.map((f) => (
+                  <div key={f.frameIndex} className={`rounded-md border-2 p-1 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? "border-teal-500" : "border-gray-300"}`}>
+                    <div className="mx-auto h-[180px] w-[180px]">
+                      <RvRegionRing values={rvFacToNineWide(f.rings)} lo={RV_FAC_RANGE.lo} hi={RV_FAC_RANGE.hi} ringCount={3} />
+                    </div>
+                    <p className="text-center text-[8px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
+                  </div>
+                ))}
+              </div>
+            </ReportPageFrame>
+          ))}
+
+          {rvChunks.map((frameChunk, ci, all) => (
+            <ReportPageFrame
+              key={`rv${ci}`}
+              pageNumber={page++}
+              totalPages={totalPages}
+              patientLabel={patientLabel}
+              statusLabel="Complete"
+              title={`RV Cavity Area (FAC) — All Values${all.length > 1 ? ` (${ci + 1} of ${all.length})` : ""}`}
+              subtitle="Short-axis RV fractional area change vs end-diastole, every computed frame"
+              generatedAt={generatedAt}
+            >
+              {ci === 0 && !hasRvFac && (
+                <div className="mb-2 rounded-md border border-dashed border-gray-300 bg-gray-50 px-2.5 py-1.5 text-[9px] text-gray-600">
+                  This RV strain series was computed before per-frame RV areas were stored — recompute the RV strain series to populate FAC.
+                </div>
+              )}
+              <table className="w-full border-collapse text-[9px]">
+                <thead>
+                  <tr className="bg-teal-50">
+                    <th className="border-b border-gray-300 px-2 py-1 text-left font-bold text-teal-800">Frame</th>
+                    <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-teal-800">Basal FAC</th>
+                    <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-teal-800">Mid FAC</th>
+                    <th className="border-b border-gray-300 px-2 py-1 text-right font-bold text-teal-800">Apical FAC</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </ReportPageFrame>
-      ))}
+                </thead>
+                <tbody>
+                  {frameChunk.map((f) => {
+                    const isMarked = f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex;
+                    return (
+                      <tr key={f.frameIndex} className={isMarked ? "bg-teal-50/50" : undefined}>
+                        <td className="border-b border-gray-300/60 px-2 py-0.5 font-semibold text-gray-900">{frameLabelFor(f.frameIndex)}</td>
+                        {[0, 1, 2].map((ring) => (
+                          <td key={ring} className="border-b border-gray-300/60 px-2 py-0.5 text-right font-mono text-gray-900">{fmt(f.rings[ring] ?? null)}</td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </ReportPageFrame>
+          ))}
+        </>
+      )}
     </>
   );
 }

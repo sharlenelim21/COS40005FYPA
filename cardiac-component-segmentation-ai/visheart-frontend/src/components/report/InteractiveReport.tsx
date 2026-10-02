@@ -2234,33 +2234,13 @@ export function InteractiveReport({
                 </p>
               )}
 
-              {/* Per region. Deliberately NO severity colouring: this measure
-                  has no validated cutoff, so tinting it would imply one. */}
-              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {rvShown.regions.map((r) => (
-                  <button
-                    key={r.region}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedRvRegion((cur) => (cur === r.region ? null : r.region));
-                    }}
-                    className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${
-                      selectedRvRegion === r.region
-                        ? "border-primary ring-2 ring-primary/30"
-                        : "border-border hover:bg-muted/50"}`}
-                  >
-                    <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {rvSegLabel(r.region, r.label)}
-                    </span>
-                    <span className="mt-1 block text-[15px] font-bold tabular-nums text-foreground">
-                      {fmt(r.strain)}
-                      <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">%</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-
+              {/* Per-region values now live ONLY in the bullseye + curve above
+                  (hover/click either to read a region's number) — this used
+                  to also repeat every region as a value tile here, which was
+                  redundant with the interactive chart and took up a lot of
+                  vertical space for no new information (removed per request,
+                  2026-10). Still no severity colouring: this measure has no
+                  validated cutoff, so tinting it would imply one. */}
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
                 {(["basal", "mid", "apical"] as const).map((band) => (
                   <span key={band} className="flex items-center gap-1.5 text-[10.5px] capitalize text-muted-foreground">

@@ -20,6 +20,32 @@ function FloatyHeart({ className }: { className?: string }) {
   )
 }
 
+/**
+ * A heart-shaped badge that floats ABOVE the bar, horizontally tracking the
+ * current percentage (like a tooltip that rides the fill edge), with the
+ * number inside it and a small caret pointing down at the bar — the look
+ * asked for directly (reference: a round badge above each bar, pinned to
+ * where its fill ends, with a caret connecting it to the track).
+ */
+function HeartProgressBadge({ pct }: { pct: number }) {
+  // Clamp so the badge never hangs off either end of the (narrower) track.
+  const left = Math.min(94, Math.max(6, pct))
+  return (
+    <div
+      className="absolute bottom-full flex -translate-x-1/2 flex-col items-center pb-1"
+      style={{ left: `${left}%` }}
+    >
+      <div className="relative flex h-6 w-6 items-center justify-center">
+        <Heart aria-hidden className="vh-heart-floaty absolute inset-0 h-full w-full fill-pink-500 text-pink-500 drop-shadow-sm" />
+        <span className="relative z-10 mt-[-2px] text-[8px] font-extrabold leading-none text-white">
+          {pct}%
+        </span>
+      </div>
+      <div className="h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-pink-500" />
+    </div>
+  )
+}
+
 const TONES = {
   blue:    { track: "bg-blue-500/15",  fill: "bg-blue-500" },
   primary: { track: "bg-primary/15",   fill: "bg-primary" },
@@ -87,10 +113,16 @@ export function KineticButtonFill({
   if (hasProgressReading(value)) {
     return <span aria-hidden className="pointer-events-none absolute inset-0 bg-blue-500/10" />
   }
+  // A SINGLE bottom-aligned indeterminate bar, not two independently
+  // animated ones stacked on top of each other — stacking a full-height
+  // "breathing" bar under a bottom h-1 "breathing" bar let the two fall out
+  // of phase and read as a jagged/sawtooth edge once a job had been running
+  // a while (reported live as a "glitch", 2026-10). One bar can't desync
+  // with itself.
   return (
-    <span aria-hidden={label ? undefined : true} className="pointer-events-none absolute inset-0">
-      <KineticProgress state={state} size="h-full" className="opacity-25" style={{ position: "absolute", inset: 0, borderRadius: 0 }} />
+    <span aria-hidden={label ? undefined : true} className="pointer-events-none absolute inset-0 overflow-hidden">
       <KineticProgress
+        tone="blue"
         state={state}
         size="h-1"
         label={label}
@@ -110,26 +142,30 @@ export function ProgressMeter({
 }) {
   const pct = Math.round(Math.max(0, Math.min(100, value)))
   return (
-    <div className={cn("w-full space-y-1", className)}>
-      <div className="flex items-baseline justify-between gap-2 text-xs font-bold">
-        {title && <span className="min-w-0 truncate">{title}</span>}
-        <span className="ml-auto flex items-center gap-1 tabular-nums">
-          {pct < 100 && <FloatyHeart />}
-          {pct}%
-        </span>
-      </div>
-      <div
-        role="progressbar"
-        aria-label={title ? `${title} progress` : "Progress"}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct}
-        className="h-1.25 w-full overflow-hidden rounded-full bg-foreground/10"
-      >
+    <div className={cn("w-full", className)}>
+      {title && (
+        <div className="mb-1 flex items-baseline justify-between gap-2 text-xs font-bold">
+          <span className="min-w-0 truncate">{title}</span>
+        </div>
+      )}
+      {/* Extra top padding reserves room for the floating heart badge, which
+          rides above the fill's own edge rather than sitting in a fixed
+          corner — it visually tracks progress the way a tooltip would. */}
+      <div className="relative pt-7">
+        <HeartProgressBadge pct={pct} />
         <div
-          className="h-full rounded-full bg-blue-700 transition-[width] duration-500 ease-out motion-reduce:transition-none"
-          style={{ width: `${pct}%` }}
-        />
+          role="progressbar"
+          aria-label={title ? `${title} progress` : "Progress"}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/10"
+        >
+          <div
+            className="h-full rounded-full bg-blue-700 transition-[width] duration-500 ease-out motion-reduce:transition-none"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
       </div>
     </div>
   )

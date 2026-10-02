@@ -426,6 +426,44 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 const masksCache = new Map<string, MaskDoc[]>();
 
+/**
+ * Cross-instance refresh pub/sub, keyed by projectId. The page mounts this
+ * hook several SEPARATE times for the same project (e.g. the landmark page's
+ * bullseye panel, its Strain-tab full-cycle panel, and the sidebar each hold
+ * their own instance) — each has its own `masks` state, so calling one
+ * instance's `refresh()` after a compute only updated THAT instance. Every
+ * other instance kept showing its pre-compute snapshot until something else
+ * happened to remount it (a full page reload, or switching model), which
+ * read as "I ran Compute all frames, it finished, but still shows no
+ * result" (reported live, 2026-10) even though the data was already in
+ * Mongo. `notifyMasksRefreshed` below is called after every EXPLICIT
+ * `refresh()` (never after internal polling, which would cause every open
+ * instance to refetch on every poll tick) so every sibling instance for the
+ * same project also refetches and re-renders with the new data.
+ */
+const masksRefreshListeners = new Map<string, Set<() => void>>();
+
+function subscribeMasksRefresh(projectId: string, listener: () => void): () => void {
+  let set = masksRefreshListeners.get(projectId);
+  if (!set) {
+    set = new Set();
+    masksRefreshListeners.set(projectId, set);
+  }
+  set.add(listener);
+  return () => {
+    set!.delete(listener);
+    if (set!.size === 0) masksRefreshListeners.delete(projectId);
+  };
+}
+
+function notifyMasksRefreshed(projectId: string, exclude: () => void) {
+  const set = masksRefreshListeners.get(projectId);
+  if (!set) return;
+  for (const listener of set) {
+    if (listener !== exclude) listener();
+  }
+}
+
 export function useProjectResults(
   projectId: string | undefined,
   autoSelect: AutoSelect = "prefer-unet",
@@ -466,6 +504,7 @@ export function useProjectResults(
     const res = await segmentationApi.getSegmentationResults(projectId);
     // Editable masks carry the computed fields; raw MedSAM output does not.
     const editable = ((res.segmentations ?? []) as MaskDoc[]).filter((m) => !m.isMedSAMOutput);
+    masksCache.set(projectId, editable);
     setMasks(editable);
     return editable;
   }, [projectId]);
@@ -491,6 +530,26 @@ export function useProjectResults(
     })();
     return () => { cancelled = true; };
   }, [projectId, loadMasks]);
+
+  // Join this instance to the cross-instance refresh pub/sub (see
+  // notifyMasksRefreshed above) so an explicit refresh() from ANY other
+  // mounted instance for this same project also refetches here.
+  useEffect(() => {
+    if (!projectId) return;
+    const unsubscribe = subscribeMasksRefresh(projectId, () => { loadMasks(); });
+    return unsubscribe;
+  }, [projectId, loadMasks]);
+
+  /** Explicit, user-facing refresh — unlike `loadMasks` used internally by
+   *  the poller, this also wakes up every other mounted instance for this
+   *  project (see notifyMasksRefreshed). Notifying every listener including
+   *  this instance's own is harmless (loadMasks is idempotent/cheap), so
+   *  there's no need to track/exclude "self" here. */
+  const refresh = useCallback(async (): Promise<MaskDoc[] | null> => {
+    const result = await loadMasks();
+    if (projectId) notifyMasksRefreshed(projectId, () => {});
+    return result;
+  }, [loadMasks, projectId]);
 
   // Group by model, preferring whichever doc actually has computed data.
   const byModel = useMemo(() => {
@@ -882,7 +941,7 @@ export function useProjectResults(
      *  what's displayed comes from an earlier run. */
     newerMaskAvailable,
     /** Re-read the masks without triggering any compute. */
-    refresh: loadMasks,
+    refresh,
     model,
     setModel,
     chooseModel,

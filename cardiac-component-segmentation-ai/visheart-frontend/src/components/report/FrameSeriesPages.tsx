@@ -137,7 +137,9 @@ export function FrameSeriesPages({
           generatedAt={generatedAt}
         >
           {ci === 0 && tablePrototypeNote && (
-            <div className="mb-2 rounded-md border border-dashed border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[9px] text-amber-800">
+            <div className={`mb-2 rounded-md border border-dashed px-2.5 py-1.5 text-[9px] ${
+              theme === "amber" ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-gray-50 text-gray-600"
+            }`}>
               {tablePrototypeNote}
             </div>
           )}

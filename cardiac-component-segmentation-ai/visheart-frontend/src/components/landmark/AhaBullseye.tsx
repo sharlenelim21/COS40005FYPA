@@ -178,30 +178,25 @@ export function BullseyeScaleBar({
 }) {
   const meanPct = mean != null && max > min ? Math.round(((mean - min) / (max - min)) * 100) : 50;
   const u = unit === "%" ? "%" : ` ${unit}`;
+  // Compact single-line Min/Mean/Max (was a 2-line label+value stack per
+  // stat) -- when two of these stack (LV + RV in Combined view) the taller
+  // version ate enough vertical space to visibly shrink the bullseye above
+  // it, reported live as "the bullseyes look too small" (2026-10).
   return (
-    <div className="flex-shrink-0 pt-1.5 space-y-1">
-      {title && <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>}
+    <div className="flex-shrink-0 pt-1 space-y-0.5">
+      {title && <p className="text-[8.5px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>}
       <div className="flex items-center gap-1.5">
-        <span className="text-[9px] text-muted-foreground tabular-nums">{min.toFixed(1)}</span>
-        <div className="h-1.5 flex-1 rounded-full" style={{ background: bullseyeGradientCss(reverse), border: "1px solid hsl(var(--border))" }} />
-        <span className="text-[9px] text-muted-foreground tabular-nums">{max.toFixed(1)}</span>
+        <span className="text-[8px] text-muted-foreground tabular-nums">{min.toFixed(1)}</span>
+        <div className="h-1 flex-1 rounded-full" style={{ background: bullseyeGradientCss(reverse), border: "1px solid hsl(var(--border))" }} />
+        <span className="text-[8px] text-muted-foreground tabular-nums">{max.toFixed(1)}</span>
       </div>
-      <div className="flex justify-between text-center text-[9px]">
-        <div>
-          <p className="text-muted-foreground">Min</p>
-          <p className="font-semibold tabular-nums">{min.toFixed(1)}{u} <span className="text-muted-foreground font-normal">(0%)</span></p>
-        </div>
-        <div>
-          <p className="text-muted-foreground">Mean</p>
-          <p className="font-semibold tabular-nums text-primary">{(mean ?? 0).toFixed(1)}{u} <span className="text-muted-foreground font-normal">({meanPct}%)</span></p>
-        </div>
-        <div>
-          <p className="text-muted-foreground">Max</p>
-          <p className="font-semibold tabular-nums">{max.toFixed(1)}{u} <span className="text-muted-foreground font-normal">(100%)</span></p>
-        </div>
+      <div className="flex justify-between gap-1 text-[8px] leading-tight">
+        <span className="text-muted-foreground">Min <span className="font-semibold tabular-nums text-foreground">{min.toFixed(1)}{u}</span></span>
+        <span className="text-muted-foreground">Mean <span className="font-semibold tabular-nums text-primary">{(mean ?? 0).toFixed(1)}{u}</span> <span className="opacity-70">({meanPct}%)</span></span>
+        <span className="text-muted-foreground">Max <span className="font-semibold tabular-nums text-foreground">{max.toFixed(1)}{u}</span></span>
       </div>
       {missingCount > 0 && (
-        <p className="text-[9px] text-amber-600 dark:text-amber-400">
+        <p className="text-[8px] text-amber-600 dark:text-amber-400">
           ⚠ {missingCount} segment{missingCount > 1 ? "s" : ""} missing
         </p>
       )}

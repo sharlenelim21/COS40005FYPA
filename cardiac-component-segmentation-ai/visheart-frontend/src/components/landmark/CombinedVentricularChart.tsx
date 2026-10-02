@@ -104,7 +104,7 @@ export function CombinedVentricularChart({
   // bullseye on the landmark page looks the same.
   rvWedgeStrokeColor = "rgba(0,0,0,0.9)",
   rvLabelColor = "black",
-  rvLabelFontWeight = 600,
+  rvLabelFontWeight = 700,
 }: CombinedVentricularChartProps) {
   // Combined (both chambers) keeps the shared layout center, which balances
   // against the crescent's leftward bulge. LV-only has no crescent to
@@ -132,6 +132,11 @@ export function CombinedVentricularChart({
   const lvCol = (i: number) => {
     if (!hasLv) return "#cbd5e1";
     const v = lvVal(i);
+    // Exact 0 means no measurement for that segment at this frame -- same
+    // "0/null is grey, not worst" convention as rvCol below and
+    // heartColor.ts's valueToColor. Without this a genuinely-missing LV
+    // segment read as solid red instead of grey (reported live, 2026-10).
+    if (v === 0) return "#cbd5e1";
     const t = lvColMin === lvColMax ? 0.5 : Math.max(0, Math.min(1, (v - lvColMin) / (lvColMax - lvColMin)));
     return rdYlGn(reverseColors ? 1 - t : t);
   };
@@ -208,10 +213,10 @@ export function CombinedVentricularChart({
             onMouseLeave={onRvRegionHover ? () => onRvRegionHover(null) : undefined}
             onClick={onRvRegionClick ? () => onRvRegionClick(region) : undefined}
           />
-          <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="8" fontWeight={rvLabelFontWeight} fill={rvLabelColor} style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
+          <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9.5" fontWeight={rvLabelFontWeight} fill={rvLabelColor} style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
             R{region}
           </text>
-          <text x={lp.x} y={lp.y + 9} textAnchor="middle" fontSize="7" fontWeight={rvLabelFontWeight} fill={rvLabelColor} style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
+          <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="8.5" fontWeight={rvLabelFontWeight} fill={rvLabelColor} style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
             {v != null ? v.toFixed(0) : "—"}
           </text>
         </g>
