@@ -290,7 +290,24 @@ async def send_callback_with_files(
                 "X-File-Count": str(len(mesh_files)),
             }
             
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            # A short client timeout here measures the WRONG thing: this request only completes
+            # once the backend has read every mesh file off the wire AND finished its own
+            # synchronous work before replying -- building the reconstruction TAR and uploading it
+            # to S3 (see processReconstructionCallback / createReconstructionTar in
+            # reconstruction_handler.ts, which runs to completion before the HTTP response is
+            # sent). Both the upload itself and that server-side work scale with mesh size, which
+            # scales with marching-cubes resolution (default raised 64 -> 128 on 2026-10-01) and
+            # with frame count. A fixed 60s budget was fine for small single-frame meshes at the
+            # old default; at 128 with several frames bundled into one multipart POST it is a race
+            # the client increasingly loses, and a lost race here falls through to the `except`
+            # below -- which drops the mesh files entirely and sends a files-less "completed"
+            # callback. Node then sees zero mesh files and marks the job FAILED, which is exactly
+            # the "reaches 100%, then fails" symptom this is here to fix. 10 minutes covers a large
+            # multi-frame upload plus the backend's TAR+S3 work with real margin; 30s to establish
+            # the connection is unrelated to mesh size and stays tight to still catch a genuinely
+            # unreachable host quickly.
+            callback_timeout = httpx.Timeout(600.0, connect=30.0)
+            async with httpx.AsyncClient(timeout=callback_timeout) as client:
                 start_time = time.time()
                 print(f"[{serviceLocation}] Sending multipart callback to {callback_url}")
                 

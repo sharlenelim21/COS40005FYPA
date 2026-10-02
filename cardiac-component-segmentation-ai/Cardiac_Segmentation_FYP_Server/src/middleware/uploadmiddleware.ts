@@ -164,7 +164,13 @@ export const gpuObjUploadFilter = multer({
     },
   }),
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50 MB limit per individual file (increased from previous)
+    // 150 MB (raised from 50 MB, 2026-10-02): marching-cubes surface triangle count scales with
+    // resolution^2, and the mesh resolution default was raised 64 -> 128 on 2026-10-01, so a
+    // single frame's GLB can be several times larger than it used to be. 50MB silently rejecting
+    // a real mesh with a MulterError looked, from the GPU's side, identical to any other failed
+    // callback -- the job reports success internally but the reconstruction still ends up marked
+    // FAILED with no mesh files, same symptom as the httpx client timeout fixed alongside this.
+    fileSize: 150 * 1024 * 1024,
     files: 50, // Maximum 50 files per reconstruction (support multi-frame)
     parts: 100, // Maximum form parts
     fieldSize: 10 * 1024 * 1024 // 10MB for individual form fields
