@@ -16,27 +16,21 @@ import type { RvStrainRegion } from "./StrainVisualization";
  * `strain` here is a cavity-radius % change instead. Negative (shrinking
  * radius) is the healthy direction, same convention as GCS.
  */
-// Same backend ray-cast start-angle fallback as StrainBullseyeChart — see
-// BACKEND_FIXED_FALLBACK_DEG there. mask_to_rv_regions uses the same
-// compute_alignment_angle/240deg basal fallback as the LV pipeline.
-const BACKEND_FIXED_FALLBACK_DEG = 240;
+// Like the LV bullseye charts, this chart is never rotated by the backend's
+// alignment_angle_deg — see StrainBullseyeChart.
 
 interface RvStrainChartProps {
   regions: RvStrainRegion[];
   selectedRegion?: number | null; // 1-based
   onRegionClick?: (region: number) => void;
   onRegionHover?: (info: { x: number; y: number; label: string; value: number | null } | null) => void;
-  /** Landmark-derived anterior start angle from the backend (RvStrainResult's
-   *  alignment_angle_deg). Null/undefined = fixed-angle layout. */
-  alignmentAngleDeg?: number | null;
 }
 
-export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegionHover, alignmentAngleDeg }: RvStrainChartProps) {
+export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegionHover }: RvStrainChartProps) {
   const center = 150;
   const basalOuter = 108, basalInner = 78, midInner = 48, apicalInner = 20;
   const nSectors = 3;
   const sectorDeg = 360 / nSectors;
-  const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
 
   // Fixed RV GCS colour scale (lib/strainColorScale.ts), not this patient's min/max.
   const { min: colMin, max: colMax } = strainScaleMinMax("RV_GCS");
@@ -53,7 +47,7 @@ export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegion
   const isSel = (region1based: number) => selectedRegion === region1based;
 
   const segPath = (i: number, innerR: number, outerR: number) => {
-    const start = -90 - sectorDeg / 2 - i * sectorDeg + referenceAngleDeg;
+    const start = -90 - sectorDeg / 2 - i * sectorDeg;
     const end = start + sectorDeg;
     const mid = (start + end) / 2;
     const lr = (innerR + outerR) / 2;

@@ -5,17 +5,29 @@ Compute AHA 17-segment wall-thickness from a segmentation mask document stored
 in MongoDB (RLE / segmentationmaskcontents format).
 
 Input (stdin): JSON object with fields:
-    frames   — list of frame objects (same schema as IProjectSegmentationMask.frames)
-    width    — image width in pixels
-    height   — image height in pixels
+    frames          — list of frame objects (same schema as IProjectSegmentationMask.frames)
+    width           — image width in pixels
+    height          — image height in pixels
+    rv_insertion_1  — optional [x, y] of the ANTERIOR RV insertion point (pixels).
+                      With it the segments are aligned to the landmark exactly as
+                      the GPU does. Without it the point is estimated from the RV
+                      in the mask (same method as the GPU); only if the mask has
+                      no RV are the fixed fallback angles used.
 
 Output (stdout): JSON object matching BullseyeAnalysisResult:
-    segment_values   — list[float], length 17
+    segment_values   — list[float], length 17 (pixels), standard AHA numbering
     segment_metadata — list[{idx, name, ring, value}]
     stats            — {min, max, mean, n_nan}
     input_shape      — [H, W, N_slices]
     slice_labels     — list[str]
     request_id       — null
+    alignment_angle_deg / alignment_source — as in the GPU result
+        ("landmark" | "rv-mask" | "fixed-angle")
+    alignment_point  — [x, y] the start angle was measured from, or null
+
+Segment order and alignment follow the GPU's bullseye_analysis.py (which
+follows the client's alignment notebook): rays sweep with increasing angle
+from the start angle and the first 60° block is segment 1.
 
 Class mapping (same as GPU bullseye_analysis.py):
     0 = background
@@ -56,15 +68,21 @@ AHA_SEGMENTS = [
     {"idx": 11, "name": "Mid Inferolateral",   "ring": 1, "t1": 300, "t2": 360},
     {"idx": 12, "name": "Mid Anterolateral",   "ring": 1, "t1":   0, "t2":  60},
     {"idx": 13, "name": "Apical Anterior",     "ring": 2, "t1":  45, "t2": 135},
-    {"idx": 14, "name": "Apical Lateral",      "ring": 2, "t1": 135, "t2": 225},
+    {"idx": 14, "name": "Apical Septal",       "ring": 2, "t1": 135, "t2": 225},
     {"idx": 15, "name": "Apical Inferior",     "ring": 2, "t1": 225, "t2": 315},
-    {"idx": 16, "name": "Apical Septal",       "ring": 2, "t1": -45, "t2":  45},
+    {"idx": 16, "name": "Apical Lateral",      "ring": 2, "t1": -45, "t2":  45},
     {"idx": 17, "name": "Apex",                "ring": 3, "t1":   0, "t2": 360},
 ]
 RING_NAMES = ["Basal", "Mid-cavity", "Apical", "Apex"]
 
 _MYO_CLASS = 2
+_RV_CLASS = 1
+_LV_CAVITY_CLASS = 3
 _MIN_MYO_PIXELS = 50
+_MIN_RV_PIXELS = 30
+# Share of each slice's RV pixels (those with the lowest angle seen from the LV
+# centre) taken as the RV's anterior tip — same value as the GPU code.
+_RV_EDGE_PERCENTILE = 2.0
 
 CLASS_MAP = {
     "myo": 2, "MYO": 2,
@@ -167,11 +185,71 @@ def compute_centroid(slice_mask: np.ndarray) -> tuple[Optional[float], Optional[
     return cx, cy
 
 
-def ray_cast_thickness(slice_mask: np.ndarray, cx: float, cy: float, n_rays: int = 360) -> np.ndarray:
+# Ray start angles when no RV insertion landmark is available (degrees, image
+# convention: 0 = right, 90 = down, 180 = left, 270 = up). Same values as the
+# GPU's bullseye_analysis.mask_to_17_segments: segment 1 / 7 covers 240–300°
+# and segment 13 covers 225–315°, i.e. both are centred at the top of the image.
+_FALLBACK_START_DEG = {"basal": 240.0, "mid": 240.0, "apical": 225.0, "apex": 0.0}
+
+
+def compute_alignment_angle_deg(cx: float, cy: float, rv_insertion_1, ring_type: str) -> Optional[float]:
+    """
+    Ray start angle (degrees) from the anterior RV insertion point — same rule
+    as the GPU's bullseye_analysis.compute_alignment_angle (client notebook):
+    angle(centre → rv_insertion_1) − 60°, or − 75° for the apical ring.
+    Returns None when no landmark is given.
+    """
+    if rv_insertion_1 is None:
+        return None
+    angle_deg = math.degrees(math.atan2(rv_insertion_1[1] - cy, rv_insertion_1[0] - cx))
+    return angle_deg - (75.0 if ring_type == "apical" else 60.0)
+
+
+def estimate_anterior_rv_insertion(mask_3d: np.ndarray):
+    """
+    Estimate the anterior RV insertion point from the mask alone, for projects
+    with no landmark — a port of the GPU's
+    bullseye_analysis.estimate_anterior_rv_insertion (same steps, same numbers).
+
+    Per slice with both an LV cavity and an RV: look at the RV pixels from the
+    LV-cavity centre, take the 2 % with the lowest angle (the end of the RV
+    from which increasing angle sweeps into the RV) and average their (x, y).
+    The per-slice points are then averaged into one point.
+
+    Returns (x, y), or None if no slice has both an LV cavity and an RV.
+    """
+    points = []
+    for sl_idx in range(mask_3d.shape[2]):
+        sl = mask_3d[:, :, sl_idx]
+        lys, lxs = np.nonzero(sl == _LV_CAVITY_CLASS)
+        if lxs.size == 0:
+            continue
+        cx, cy = float(lxs.mean()), float(lys.mean())
+        ys, xs = np.nonzero(sl == _RV_CLASS)
+        if xs.size < _MIN_RV_PIXELS:
+            continue
+        rv_dir = math.atan2(float(ys.mean()) - cy, float(xs.mean()) - cx)
+        rel = (np.arctan2(ys - cy, xs - cx) - rv_dir + math.pi) % (2.0 * math.pi) - math.pi
+        edge = rel <= np.percentile(rel, _RV_EDGE_PERCENTILE)
+        points.append((float(xs[edge].mean()), float(ys[edge].mean())))
+    if not points:
+        return None
+    return (
+        float(np.mean([p[0] for p in points])),
+        float(np.mean([p[1] for p in points])),
+    )
+
+
+def ray_cast_thickness(
+    slice_mask: np.ndarray, cx: float, cy: float, n_rays: int = 360, start_angle_rad: float = 0.0,
+) -> np.ndarray:
+    """Wall thickness per ray. Rays start at `start_angle_rad` and sweep with
+    INCREASING angle (clockwise on screen), as in the GPU code and the client
+    notebook: angles = start + linspace(0, 2π)."""
     H, W = slice_mask.shape
     max_r = max(H, W)
     myo = (slice_mask == _MYO_CLASS).astype(np.uint8)
-    angles = np.linspace(0.0, 2.0 * math.pi, n_rays, endpoint=False)
+    angles = start_angle_rad + np.linspace(0.0, 2.0 * math.pi, n_rays, endpoint=False)
     directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
     thicknesses = np.full(n_rays, np.nan, dtype=np.float64)
     cx_i = int(np.clip(int(cx), 0, W - 1))
@@ -202,39 +280,67 @@ def ray_cast_thickness(slice_mask: np.ndarray, cx: float, cy: float, n_rays: int
 
 
 def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
-    n_rays = len(thicknesses)
-    ray_angles = np.linspace(0.0, 360.0, n_rays, endpoint=False)
+    """Mean thickness per AHA sector. The rays are already in casting order,
+    so each sector is the next equal block of rays and the first block is
+    segment 1 / 7 / 13 — same as the GPU's bullseye_analysis.group_sectors."""
     if ring_type == "apex":
         return np.array([np.nanmean(thicknesses)])
     if ring_type in ("basal", "mid"):
         n_sectors = 6
-        raw = ((ray_angles - 60.0) % 360.0) / 60.0
     elif ring_type == "apical":
         n_sectors = 4
-        raw = ((ray_angles - 45.0) % 360.0) / 90.0
     else:
         raise ValueError(f"Unknown ring_type: {ring_type!r}")
-    sector_indices = np.clip(raw.astype(int), 0, n_sectors - 1)
+    rays_per_sector = len(thicknesses) // n_sectors
     result = np.full(n_sectors, np.nan, dtype=np.float64)
     for s in range(n_sectors):
-        mask_s = sector_indices == s
-        if mask_s.any():
-            vals = thicknesses[mask_s]
-            if not np.all(np.isnan(vals)):
-                result[s] = float(np.nanmean(vals))
+        vals = thicknesses[s * rays_per_sector : (s + 1) * rays_per_sector]
+        if vals.size and not np.all(np.isnan(vals)):
+            result[s] = float(np.nanmean(vals))
     return result
 
 
-def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
+def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None) -> dict:
+    """
+    17 AHA wall-thickness values (pixels), standard AHA numbering.
+
+    rv_insertion_1 : (x, y) of the ANTERIOR RV insertion point, or None.
+        With it, the ray start angle of each ring follows the landmark (same
+        rule as the GPU). Without it, the point is estimated from the RV in
+        the mask; only if that is impossible are the fixed angles used.
+    """
     labels = classify_slices(mask_3d)
+
+    alignment_source = "landmark"
+    if rv_insertion_1 is None:
+        rv_insertion_1 = estimate_anterior_rv_insertion(mask_3d)
+        alignment_source = "rv-mask" if rv_insertion_1 is not None else "fixed-angle"
     ring_configs = {"basal": 6, "mid": 6, "apical": 4, "apex": 1}
     ring_results = {}
     lv_centroids: list[list[float]] = []
+    final_alignment_deg: Optional[float] = None
     for ring_type, n_sectors in ring_configs.items():
         ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring_type]
         if not ring_slices:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
             continue
+
+        # Start angle of this ring: from the landmark (measured from the first
+        # slice of the ring that has a centroid), else the fixed fallback.
+        start_deg: Optional[float] = None
+        if ring_type != "apex":
+            for sl_idx in ring_slices:
+                cx_ref, cy_ref = compute_centroid(mask_3d[:, :, sl_idx])
+                if cx_ref is not None:
+                    start_deg = compute_alignment_angle_deg(cx_ref, cy_ref, rv_insertion_1, ring_type)
+                    break
+        if start_deg is not None:
+            if final_alignment_deg is None:
+                final_alignment_deg = start_deg
+        else:
+            start_deg = _FALLBACK_START_DEG[ring_type]
+        start_rad = math.radians(start_deg)
+
         per_slice = []
         for sl_idx in ring_slices:
             sl = mask_3d[:, :, sl_idx]
@@ -243,7 +349,7 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
                 continue
             if ring_type in ("basal", "mid"):
                 lv_centroids.append([cx, cy])
-            thick = ray_cast_thickness(sl, cx, cy)
+            thick = ray_cast_thickness(sl, cx, cy, start_angle_rad=start_rad)
             sectors = group_sectors(thick, ring_type)
             if not np.all(np.isnan(sectors)):
                 per_slice.append(sectors)
@@ -262,7 +368,16 @@ def mask_to_17_segments(mask_3d: np.ndarray) -> dict:
          float(np.mean([c[1] for c in lv_centroids]))]
         if lv_centroids else None
     )
-    return {"values": values, "lv_centroid": lv_centroid}
+    return {
+        "values": values,
+        "lv_centroid": lv_centroid,
+        "alignment_angle_deg": final_alignment_deg,
+        "alignment_source": alignment_source if final_alignment_deg is not None else "fixed-angle",
+        "alignment_point": (
+            [float(rv_insertion_1[0]), float(rv_insertion_1[1])]
+            if rv_insertion_1 is not None and final_alignment_deg is not None else None
+        ),
+    }
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -277,13 +392,22 @@ def main():
         print(json.dumps({"error": f"Invalid input JSON: {e}"}), file=sys.stdout)
         sys.exit(1)
 
+    # Optional anterior RV insertion point [x, y] (pixel coords).
+    rv1 = data.get("rv_insertion_1")
+    rv_insertion_1 = None
+    if isinstance(rv1, (list, tuple)) and len(rv1) >= 2:
+        try:
+            rv_insertion_1 = (float(rv1[0]), float(rv1[1]))
+        except (TypeError, ValueError):
+            rv_insertion_1 = None
+
     mask_3d = build_mask_3d(frames, H, W)
 
     if not np.any(mask_3d == _MYO_CLASS):
         print(json.dumps({"error": "No myocardium (class 2) pixels found in mask data."}), file=sys.stdout)
         sys.exit(1)
 
-    analysis = mask_to_17_segments(mask_3d)
+    analysis = mask_to_17_segments(mask_3d, rv_insertion_1)
     values = analysis["values"]
     lv_centroid = analysis["lv_centroid"]
     slice_labels = classify_slices(mask_3d)
@@ -327,6 +451,9 @@ def main():
         "input_shape":      list(mask_3d.shape),
         "slice_labels":     slice_labels,
         "lv_centroid":      lv_centroid,
+        "alignment_angle_deg": analysis["alignment_angle_deg"],
+        "alignment_source":    analysis["alignment_source"],
+        "alignment_point":     analysis["alignment_point"],
     }
 
     print(json.dumps(result))

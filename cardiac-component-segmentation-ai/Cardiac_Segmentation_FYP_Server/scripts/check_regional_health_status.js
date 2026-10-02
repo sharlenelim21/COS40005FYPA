@@ -39,11 +39,11 @@ const HEALTH_SCRIPT = path.resolve(
 
 // ── AHA segment names (idx → label), matching bullseye_analysis.py ──────────
 const AHA_NAMES = [
-    'Basal Anterior', 'Basal Anterolateral', 'Basal Inferolateral', 'Basal Inferior',
-    'Basal Inferoseptal', 'Basal Anteroseptal',
-    'Mid Anterior', 'Mid Anterolateral', 'Mid Inferolateral', 'Mid Inferior',
-    'Mid Inferoseptal', 'Mid Anteroseptal',
-    'Apical Anterior', 'Apical Lateral', 'Apical Inferior', 'Apical Septal',
+    'Basal Anterior', 'Basal Anteroseptal', 'Basal Inferoseptal', 'Basal Inferior',
+    'Basal Inferolateral', 'Basal Anterolateral',
+    'Mid Anterior', 'Mid Anteroseptal', 'Mid Inferoseptal', 'Mid Inferior',
+    'Mid Inferolateral', 'Mid Anterolateral',
+    'Apical Anterior', 'Apical Septal', 'Apical Inferior', 'Apical Lateral',
     'Apex',
 ];
 

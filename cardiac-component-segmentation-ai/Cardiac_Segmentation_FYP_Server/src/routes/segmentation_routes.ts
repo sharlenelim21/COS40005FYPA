@@ -2177,7 +2177,9 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
         // Per-frame wall thickness — RLE-only, no GPU, safe to always auto-run
         // alongside the single-snapshot bullseye above. See its own docstring
         // for why this is deliberately kept separate from strain (GRS/GCS).
-        computeFrameWallThicknessSeries(maskId, frames, W, H).catch((err: any) => {
+        // The project id lets it align the segments to the RV insertion
+        // landmark, the same way the GPU bullseye and the strain routes do.
+        computeFrameWallThicknessSeries(maskId, frames, W, H, maskDoc.projectid?.toString()).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-bullseye frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 

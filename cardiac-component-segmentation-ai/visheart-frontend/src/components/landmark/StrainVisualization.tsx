@@ -93,7 +93,8 @@ export interface RvStrainResult {
 
 // ── dummy data ────────────────────────────────────────────────────────────────
 
-// AHA order: Ant, AntLat, InfLat, Inf, InfSep, AntSep (basal then mid), then 4 apical, apex
+// Standard AHA order: Ant, AntSep, InfSep, Inf, InfLat, AntLat (basal then mid),
+// then apical Ant, Septal, Inf, Lateral, then apex
 const BASE_GCS = [-17.1, -18.3, -16.8, -17.7, -19.4, -18.5, -20.2, -19.1, -18.2, -19.7, -20.8, -20.1, -21.0, -19.5, -20.4, -19.8, -18.9];
 const BASE_GRS = [26.4, 28.2, 24.9, 25.8, 30.1, 29.4, 31.2, 30.5, 27.8, 28.6, 32.4, 31.6, 34.1, 32.7, 33.4, 31.9, 29.8];
 
@@ -102,7 +103,7 @@ export const SEGMENT_LABELS = [
   "Basal Inferior", "Basal Inferolateral", "Basal Anterolateral",
   "Mid Anterior", "Mid Anteroseptal", "Mid Inferoseptal",
   "Mid Inferior", "Mid Inferolateral", "Mid Anterolateral",
-  "Apical Anterior", "Apical Lateral", "Apical Inferior", "Apical Septal",
+  "Apical Anterior", "Apical Septal", "Apical Inferior", "Apical Lateral",
   "Apex",
 ];
 
@@ -239,13 +240,10 @@ export function ZoomPanContainer({
 
 // ── StrainBullseyeChart — the pure SVG chart (no chrome) ──────────────────────
 
-// Backend ray-cast start-angle fallback used when no landmark is available
-// (bullseye_analysis.py's start_angle_by_ring["basal"/"mid"] = 4*pi/3 = 240deg).
-// The frontend's fixed wedge layout below (-120 - i*60) already assumes this
-// exact fallback, so alignment_angle_deg must be rebased against it before
-// being added as a rotation — see AhaBullseyeChart's referenceAngleDeg for
-// the same pattern applied to the AHA thickness bullseye.
-const BACKEND_FIXED_FALLBACK_DEG = 240;
+// The chart is NEVER rotated: segment 1 (Anterior) is always drawn at the top.
+// The backend already uses the RV insertion landmark to decide which part of
+// the wall each segment number is, so rotating the drawing by its
+// alignment_angle_deg as well would apply the alignment twice.
 
 interface ChartProps {
   data: StrainSegmentData[];
@@ -258,18 +256,13 @@ interface ChartProps {
   sharedMin?: number;
   sharedMax?: number;
   reverseColors?: boolean;
-  /** Landmark-derived anterior start angle from the backend (RealStrainResult /
-   *  RvStrainResult's alignment_angle_deg). Null/undefined = fixed-angle layout. */
-  alignmentAngleDeg?: number | null;
 }
 
 export function StrainBullseyeChart({
   data, strainType, selectedSegment, onSegmentClick, onSegmentHover,
   forcedMin, forcedMax, sharedMin, sharedMax, reverseColors,
-  alignmentAngleDeg,
 }: ChartProps) {
   const center = 150;
-  const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
   const basalOuter = 108, basalInner = 81, midInner = 54, apicalInner = 28;
 
   // No explicit range → the shared FIXED strain scale (never this patient's
@@ -293,11 +286,10 @@ export function StrainBullseyeChart({
   // AHA CCW convention — identical to AhaBullseyeChart:
   //   basal/mid: startAngle = -120 - index*60, endAngle = -60 - index*60
   //   apical:    startAngle = -135 - index*90, endAngle = -45 - index*90
-  // referenceAngleDeg rotates the whole layout to match the landmark-derived
-  // alignment_angle_deg, same as AhaBullseyeChart's referenceAngleDeg prop.
+  // No rotation: segment 1 / 7 / 13 is always centred at the top.
   const segPath = (i: number, innerR: number, outerR: number, ring: "bm" | "ap") => {
-    const start = (ring === "bm" ? -120 - i * 60 : -135 - i * 90) + referenceAngleDeg;
-    const end   = (ring === "bm" ?  -60 - i * 60 :  -45 - i * 90) + referenceAngleDeg;
+    const start = ring === "bm" ? -120 - i * 60 : -135 - i * 90;
+    const end   = ring === "bm" ?  -60 - i * 60 :  -45 - i * 90;
     const mid   = (start + end) / 2;
     const lr    = (innerR + outerR) / 2;
     const lp    = polarPoint(center, lr, mid);
@@ -314,9 +306,9 @@ export function StrainBullseyeChart({
 
       {/* Direction labels */}
       <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Anterior</text>
-      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
+      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
       <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Inferior</text>
-      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
+      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
 
       {/* Basal ring — segments 1–6 */}
       {Array.from({ length: 6 }, (_, i) => {

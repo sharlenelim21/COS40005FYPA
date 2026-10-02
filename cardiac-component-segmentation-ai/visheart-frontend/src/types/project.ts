@@ -223,12 +223,10 @@ export interface BullseyeData {
     stats: BullseyeStats;
     computed_at: string;
     lv_centroid?: [number, number];
-    /** Anterior start angle in degrees, landmark-derived (bullseye_analysis.py's
-     *  own alignment logic — Stefani's fix). Same field/convention as
-     *  RealStrainResult's alignment_angle_deg: subtract the backend's
-     *  start_angle_by_ring["basal"] fallback (240deg) before using it as a
-     *  chart rotation offset — see CombinedVentricularChart/RvStrainChart's
-     *  own referenceAngleDeg for the identical conversion. */
+    /** Ray start angle in degrees the backend derived from the RV insertion
+     *  landmark (bullseye_analysis.py). For information only — the backend
+     *  has already used it to assign the segment values, so the charts must
+     *  NOT rotate by it. */
     alignment_angle_deg?: number | null;
 }
 

@@ -29,9 +29,13 @@ const runBullseyeRleScript = (
     width: number,
     height: number,
     logTag: string,
+    // Anterior RV insertion point [x, y], or null. With it the script aligns
+    // the segments to the landmark exactly as the GPU does; without it the
+    // script estimates the point from the RV in the mask.
+    rvInsertion1: number[] | null = null,
 ): Promise<any | null> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
-    const input = JSON.stringify({ frames, width, height });
+    const input = JSON.stringify({ frames, width, height, rv_insertion_1: rvInsertion1 });
 
     return new Promise<any | null>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
@@ -65,17 +69,106 @@ const runBullseyeRleScript = (
 };
 
 /**
+ * The project's two RV insertion points ([x, y] each, or null), used to align
+ * the LV bullseye. rv1 is the ANTERIOR insertion point.
+ *
+ * Prefers the user's SAVED landmark edits over the raw AI detection so the
+ * alignment reflects the newest corrected points. Edits are shared across
+ * segmentation models (one editable doc per project), so this is not filtered
+ * by model. Falls back to the most recent completed landmark job only when no
+ * saved edits exist. Never throws.
+ */
+export const resolveRvInsertionPoints = async (
+    projectId: string,
+): Promise<{ rv1: number[] | null; rv2: number[] | null; source: "saved-edits" | "landmark-job" | null }> => {
+    let rv1: number[] | null = null;
+    let rv2: number[] | null = null;
+    try {
+        const savedLandmarkDoc = await projectLandmarkModel
+            .findOne({ projectid: projectId, isModelOutput: false })
+            .sort({ updatedAt: -1 })
+            .lean();
+        if (savedLandmarkDoc) {
+            const lm1Points: number[][] = [];
+            const lm2Points: number[][] = [];
+            // ED (frame 0) only — a saved doc can now hold every cardiac frame's
+            // landmarks; averaging RV insertion points across cardiac phases
+            // (not just across slices within one phase) would blend positions
+            // from a heart that's moved throughout the cycle into a physically
+            // meaningless point. Bullseye alignment has always meant "relative
+            // to ED" elsewhere in this codebase.
+            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
+            for (const slice of edFrame?.slices ?? []) {
+                for (const point of slice.landmarks ?? []) {
+                    if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
+                    if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
+                }
+            }
+            const meanPt = (pts: number[][]): number[] | null =>
+                pts.length
+                    ? [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length]
+                    : null;
+            rv1 = meanPt(lm1Points);
+            rv2 = meanPt(lm2Points);
+            if (rv1 && rv2) return { rv1, rv2, source: "saved-edits" };
+        }
+
+        // Fall back to the most recent completed landmark job only when no saved edits exist.
+        const landmarkJob = await jobModel
+            .findOne({
+                projectid: projectId,
+                model_used: /landmark/i,
+                status: JobStatus.COMPLETED,
+                result: { $exists: true, $ne: null },
+            })
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .lean();
+
+        // The landmark result uses new format: { slices, avg_lm1: {x,y}, avg_lm2: {x,y} }
+        // or old format: { predictions: [{ rv_insertion_1: [x,y], rv_insertion_2: [x,y] }] }
+        if (landmarkJob?.result) {
+            const r = typeof landmarkJob.result === 'string'
+                ? JSON.parse(landmarkJob.result)
+                : landmarkJob.result;
+            if (r.avg_lm1 && typeof r.avg_lm1.x === 'number' && typeof r.avg_lm1.y === 'number') {
+                rv1 = [r.avg_lm1.x, r.avg_lm1.y];
+            } else if (Array.isArray(r.avg_lm1) && r.avg_lm1.length >= 2) {
+                rv1 = r.avg_lm1;
+            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
+                rv1 = r.predictions[0].rv_insertion_1 ?? null;
+            }
+            if (r.avg_lm2 && typeof r.avg_lm2.x === 'number' && typeof r.avg_lm2.y === 'number') {
+                rv2 = [r.avg_lm2.x, r.avg_lm2.y];
+            } else if (Array.isArray(r.avg_lm2) && r.avg_lm2.length >= 2) {
+                rv2 = r.avg_lm2;
+            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
+                rv2 = r.predictions[0].rv_insertion_2 ?? null;
+            }
+        }
+        return { rv1, rv2, source: rv1 && rv2 ? "landmark-job" : null };
+    } catch (err: any) {
+        logger.warn(`${serviceLocation}: [Bullseye] Could not resolve RV insertion points for project ${projectId}: ${err?.message}`);
+        return { rv1: null, rv2: null, source: null };
+    }
+};
+
+/**
  * Compute AHA 17-segment bullseye analysis directly from the mask's RLE frame data
  * using the local Python script. No GPU or NIfTI file required.
  * Stores the result in MongoDB on the segmentation mask document.
+ *
+ * Pass `projectId` so the segments are aligned to the project's RV insertion
+ * landmark (same rule as the GPU); without it the fixed fallback angles are used.
  */
 export const computeBullseyeFromMaskDoc = async (
     maskId: string,
     frames: any[],
     width: number,
     height: number,
+    projectId?: string,
 ): Promise<void> => {
-    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`);
+    const rv1 = projectId ? (await resolveRvInsertionPoints(projectId)).rv1 : null;
+    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1);
     if (!result) return;
     result.computed_at = new Date().toISOString();
     const writeResult = await projectSegmentationMaskModel.collection.updateOne(
@@ -94,20 +187,34 @@ export const computeBullseyeFromMaskDoc = async (
  * segmentation, so the Structure tab's bullseye/3D heart can animate without
  * waiting on a manual "Compute all frames" (which stays GRS/GCS-only).
  * Stores the result under `frameBullseye` on the mask document.
+ *
+ * Pass `projectId` so every frame is aligned to the project's RV insertion
+ * landmark (the same ED point for all frames, as the strain routes do);
+ * without it the fixed fallback angles are used.
  */
 export const computeFrameWallThicknessSeries = async (
     maskId: string,
     frames: any[],
     width: number,
     height: number,
+    projectId?: string,
 ): Promise<void> => {
     const frameIndices = Array.from(new Set(frames.map((f: any) => f.frameindex))).sort((a, b) => a - b);
     if (frameIndices.length <= 1) return; // nothing to animate with only one frame
 
+    // The point every frame's segments are aligned to. With a landmark it is
+    // the project's ED point. Without one, the script estimates it from the RV
+    // in the mask; we keep the estimate from the FIRST frame (ED) and reuse it
+    // for all later frames, so the segment borders do not move between frames.
+    let alignPoint: number[] | null = projectId ? (await resolveRvInsertionPoints(projectId)).rv1 : null;
+
     const results: { frameIndex: number; segment_values: (number | null)[]; stats: any }[] = [];
     for (const frameIndex of frameIndices) {
         const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`);
+        const result = await runBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint);
+        if (!alignPoint && result?.alignment_source === "rv-mask" && Array.isArray(result.alignment_point)) {
+            alignPoint = result.alignment_point;
+        }
         if (result) {
             results.push({ frameIndex, segment_values: result.segment_values, stats: result.stats });
         }
@@ -652,75 +759,11 @@ export const computeBullseyeAndStore = async (
 
         logger.info(`${serviceLocation}: [Bullseye] Sending NIfTI to GPU for mask ${maskId} (project ${projectId})`);
 
-        let rv1: number[] | null = null;
-        let rv2: number[] | null = null;
-
-        // Prefer the user's SAVED landmark edits over the raw AI detection so the
-        // bullseye alignment reflects the newest corrected RV insertion points.
-        // Edits are shared across segmentation models (one editable doc per
-        // project), so this is not filtered by model. Mirrors the strain routes.
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (savedLandmarkDoc) {
-            const lm1Points: number[][] = [];
-            const lm2Points: number[][] = [];
-            // ED (frame 0) only — a saved doc can now hold every cardiac frame's
-            // landmarks; averaging RV insertion points across cardiac phases
-            // (not just across slices within one phase) would blend positions
-            // from a heart that's moved throughout the cycle into a physically
-            // meaningless point. Bullseye alignment has always meant "relative
-            // to ED" elsewhere in this codebase.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push([point.x, point.y]);
-                    if (point.key === "rv_insertion_2") lm2Points.push([point.x, point.y]);
-                }
-            }
-            const meanPt = (pts: number[][]): number[] | null =>
-                pts.length
-                    ? [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length]
-                    : null;
-            rv1 = meanPt(lm1Points);
-            rv2 = meanPt(lm2Points);
-            if (rv1 && rv2) {
-                logger.info(`${serviceLocation}: [Bullseye] Using saved landmark edits (doc ${savedLandmarkDoc._id}) for mask ${maskId}`);
-            }
-        }
-
-        // Fall back to the most recent completed landmark job only when no saved edits exist.
-        const landmarkJob = (rv1 && rv2) ? null : await jobModel
-            .findOne({
-                projectid: projectId,
-                model_used: /landmark/i,
-                status: JobStatus.COMPLETED,
-                result: { $exists: true, $ne: null },
-            })
-            .sort({ updatedAt: -1, createdAt: -1 })
-            .lean();
-
-        // The landmark result uses new format: { slices, avg_lm1: {x,y}, avg_lm2: {x,y} }
-        // or old format: { predictions: [{ rv_insertion_1: [x,y], rv_insertion_2: [x,y] }] }
-        if (landmarkJob?.result) {
-            const r = typeof landmarkJob.result === 'string'
-                ? JSON.parse(landmarkJob.result)
-                : landmarkJob.result;
-            if (r.avg_lm1 && typeof r.avg_lm1.x === 'number' && typeof r.avg_lm1.y === 'number') {
-                rv1 = [r.avg_lm1.x, r.avg_lm1.y];
-            } else if (Array.isArray(r.avg_lm1) && r.avg_lm1.length >= 2) {
-                rv1 = r.avg_lm1;
-            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
-                rv1 = r.predictions[0].rv_insertion_1 ?? null;
-            }
-            if (r.avg_lm2 && typeof r.avg_lm2.x === 'number' && typeof r.avg_lm2.y === 'number') {
-                rv2 = [r.avg_lm2.x, r.avg_lm2.y];
-            } else if (Array.isArray(r.avg_lm2) && r.avg_lm2.length >= 2) {
-                rv2 = r.avg_lm2;
-            } else if (Array.isArray(r.predictions) && r.predictions.length > 0) {
-                rv2 = r.predictions[0].rv_insertion_2 ?? null;
-            }
+        // Saved landmark edits first, then the latest completed landmark job —
+        // see resolveRvInsertionPoints (shared with the RLE fallback paths).
+        const { rv1, rv2, source: landmarkSource } = await resolveRvInsertionPoints(projectId);
+        if (landmarkSource === "saved-edits") {
+            logger.info(`${serviceLocation}: [Bullseye] Using saved landmark edits for mask ${maskId}`);
         }
 
         if (rv1 && rv2) {
@@ -781,7 +824,7 @@ export const computeBullseyeAndStore = async (
                 logger.warn(`${serviceLocation}: [Bullseye] No dimensions for project ${projectId} — cannot fall back to local computation.`);
                 return;
             }
-            await computeBullseyeFromMaskDoc(maskId, frames, W, H);
+            await computeBullseyeFromMaskDoc(maskId, frames, W, H, projectId);
         } catch (fallbackErr: any) {
             logger.warn(`${serviceLocation}: [Bullseye] Local fallback also failed for mask ${maskId}: ${fallbackErr?.message}`);
         }
@@ -856,7 +899,7 @@ export const generateNiftiAndComputeBullseye = async (
             logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI not produced for mask ${maskId} — falling back to subprocess RLE path`);
             const frames = (maskDoc as any).frames ?? [];
             if (frames.length) {
-                await computeBullseyeFromMaskDoc(maskId, frames, W, H);
+                await computeBullseyeFromMaskDoc(maskId, frames, W, H, projectId);
             }
             return;
         }
@@ -1333,7 +1376,7 @@ export const generateAISegmentationForReconstruction = async (
             }
 
             // Use each mask's own RLE frame data (not the shared reconstruction NIfTI)
-            computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE)
+            computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE, projectId)
                 .catch((err: any) => {
                     logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
                 });
