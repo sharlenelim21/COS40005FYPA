@@ -3,7 +3,6 @@
 import React from "react";
 import { StrainBullseyeChart, SEGMENT_LABELS, type StrainSegmentData } from "@/components/landmark/StrainVisualization";
 import { RvRegionRing } from "./RvRegionRing";
-import { STRAIN_COLOR_SCALES } from "@/lib/strainColorScale";
 import { ReportPageFrame } from "./ReportPageFrame";
 import { chunk, fmt } from "./print-utils";
 
@@ -15,7 +14,6 @@ import { chunk, fmt } from "./print-utils";
 // experiment and is print-safe.
 const FRAMES_PER_BULLSEYE_PAGE = 12;
 const FRAMES_PER_TABLE_PAGE = 45;
-const RV_FAC_RANGE = { lo: STRAIN_COLOR_SCALES.RV_FAC.worst, hi: STRAIN_COLOR_SCALES.RV_FAC.best };
 
 /** Broadcast each ring's single FAC value across its 3 sections — FAC is
  *  only tracked per-RING (not per-section like GCS/GAS), so this is the same
@@ -208,7 +206,7 @@ export function WallThicknessCyclePage({
                 {frameChunk.map((f) => (
                   <div key={f.frameIndex} className={`rounded-md border-2 p-1 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? "border-teal-500" : "border-gray-300"}`}>
                     <div className="mx-auto h-[180px] w-[180px]">
-                      <RvRegionRing values={rvFacToNineWide(f.rings)} lo={RV_FAC_RANGE.lo} hi={RV_FAC_RANGE.hi} ringCount={3} />
+                      <RvRegionRing values={rvFacToNineWide(f.rings)} metric="FAC" />
                     </div>
                     <p className="text-center text-[8px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
                   </div>

@@ -21,27 +21,32 @@ function FloatyHeart({ className }: { className?: string }) {
 }
 
 /**
- * A heart-shaped badge that floats ABOVE the bar, horizontally tracking the
- * current percentage (like a tooltip that rides the fill edge), with the
- * number inside it and a small caret pointing down at the bar — the look
- * asked for directly (reference: a round badge above each bar, pinned to
- * where its fill ends, with a caret connecting it to the track).
+ * A small pill that floats ABOVE the bar, horizontally tracking the current
+ * percentage (like a tooltip riding the fill edge): a floaty heart icon next
+ * to the percentage in plain bold text, on a solid card backing, with a
+ * caret pointing down at the bar.
+ *
+ * Was the percentage squeezed as tiny white text INSIDE the heart silhouette
+ * itself — unreadable at that size, and taller (33px) than the space
+ * reserved for it (28px), so its top sliver — exactly where the number
+ * sat — got clipped by whatever card/list container it was in (reported
+ * live, both bugs, 2026-10). Text beside the icon instead of inside it fixes
+ * legibility directly; ProgressMeter below now also reserves more height
+ * than this pill can ever need, with margin.
  */
 function HeartProgressBadge({ pct }: { pct: number }) {
   // Clamp so the badge never hangs off either end of the (narrower) track.
-  const left = Math.min(94, Math.max(6, pct))
+  const left = Math.min(92, Math.max(8, pct))
   return (
     <div
-      className="absolute bottom-full flex -translate-x-1/2 flex-col items-center pb-1"
+      className="absolute bottom-full flex -translate-x-1/2 flex-col items-center"
       style={{ left: `${left}%` }}
     >
-      <div className="relative flex h-6 w-6 items-center justify-center">
-        <Heart aria-hidden className="vh-heart-floaty absolute inset-0 h-full w-full fill-pink-500 text-pink-500 drop-shadow-sm" />
-        <span className="relative z-10 mt-[-2px] text-[8px] font-extrabold leading-none text-white">
-          {pct}%
-        </span>
+      <div className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-card px-1.5 py-0.5 shadow-sm">
+        <Heart aria-hidden className="vh-heart-floaty h-3 w-3 shrink-0 fill-pink-500 text-pink-500" />
+        <span className="text-[10px] font-bold leading-none tabular-nums text-foreground">{pct}%</span>
       </div>
-      <div className="h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-pink-500" />
+      <div className="h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-border" />
     </div>
   )
 }
@@ -148,21 +153,29 @@ export function ProgressMeter({
           <span className="min-w-0 truncate">{title}</span>
         </div>
       )}
-      {/* Extra top padding reserves room for the floating heart badge, which
-          rides above the fill's own edge rather than sitting in a fixed
-          corner — it visually tracks progress the way a tooltip would. */}
-      <div className="relative pt-7">
-        <HeartProgressBadge pct={pct} />
+      {/* The badge is absolutely positioned against the INNER (track-only)
+          div below, so "bottom-full" puts it flush above the bar itself —
+          not above whatever padding happens to be reserved for it. The
+          OUTER div's pt-9 (36px) only reserves blank flow space so the
+          badge (now rendered there, via absolute positioning escaping its
+          own parent's box) has room to sit without overlapping the title
+          above it or getting clipped by a tightly-sized ancestor card/row.
+          Earlier this was one div doing both jobs, which put the badge
+          flush against the TOP of the reserved padding — right under the
+          title — instead of right above the bar, reported live as "too
+          high up" (2026-10). */}
+      <div className="pt-9">
         <div
           role="progressbar"
           aria-label={title ? `${title} progress` : "Progress"}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={pct}
-          className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/10"
+          className="relative h-1.5 w-full overflow-visible rounded-full bg-foreground/10"
         >
+          <HeartProgressBadge pct={pct} />
           <div
-            className="h-full rounded-full bg-blue-700 transition-[width] duration-500 ease-out motion-reduce:transition-none"
+            className="h-full overflow-hidden rounded-full bg-blue-700 transition-[width] duration-500 ease-out motion-reduce:transition-none"
             style={{ width: `${pct}%` }}
           />
         </div>

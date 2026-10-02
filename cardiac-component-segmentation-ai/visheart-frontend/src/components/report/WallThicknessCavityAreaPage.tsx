@@ -3,11 +3,8 @@
 import React from "react";
 import { StrainBullseyeChart, SEGMENT_LABELS, type StrainSegmentData } from "@/components/landmark/StrainVisualization";
 import { RvRegionRing } from "./RvRegionRing";
-import { STRAIN_COLOR_SCALES } from "@/lib/strainColorScale";
 import { ReportPageFrame } from "./ReportPageFrame";
 import { fmt } from "./print-utils";
-
-const RV_FAC_RANGE = { lo: STRAIN_COLOR_SCALES.RV_FAC.worst, hi: STRAIN_COLOR_SCALES.RV_FAC.best };
 
 /** Broadcast each ring's single FAC value across its 3 sections — FAC is
  *  only tracked per-RING (not per-section like GCS/GAS), so this is the same
@@ -124,7 +121,7 @@ export function WallThicknessCavityAreaPage({
                 ED (frame {edFrameIndex ?? "—"}) → ES (frame {rvEsFrameIndex ?? "—"})
               </p>
               <div className="mx-auto h-[220px] w-[220px]">
-                <RvRegionRing values={rvFacToNineWide(rvFacRings)} lo={RV_FAC_RANGE.lo} hi={RV_FAC_RANGE.hi} ringCount={3} />
+                <RvRegionRing values={rvFacToNineWide(rvFacRings)} metric="FAC" />
               </div>
               <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
                 (ED area − ES area) / ED area, drawn per ring across its 3 RV-bullseye sections. Not the

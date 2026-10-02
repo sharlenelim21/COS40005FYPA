@@ -31,6 +31,8 @@
  * 4. Clean up with clearProjectCache()
  */
 
+import { loadUntar } from "./load-untar";
+
 // Type definitions for js-untar
 interface UntarFile {
   name: string;
@@ -490,19 +492,16 @@ export class TarImageCache {
       // Convert blob to array buffer for js-untar
       const arrayBuffer = await tarBlob.arrayBuffer();
 
-      // Dynamic import of js-untar v2.0.0
-      console.log(`[TarImageCache] Attempting to import js-untar...`);
-      const untarModule = await import('js-untar');
-      console.log(`[TarImageCache] js-untar module:`, untarModule);
-
-      // js-untar v2.0.0 exports untar as the default export
-      const untar = untarModule.default || untarModule.untar || untarModule;
-      console.log(`[TarImageCache] untar function:`, typeof untar);
-
-      if (typeof untar !== 'function') {
-        throw new Error(`js-untar did not export a function. Got: ${typeof untar}. Available exports: ${Object.keys(untarModule).join(', ')}`);
-      }
-
+      // js-untar is browser-only (touches `window` at module scope), so it
+      // has to stay a runtime import rather than a static one — this file
+      // is pulled in (transitively, via ProjectContext.tsx) by a
+      // server-rendered page, and a static import crashed SSR with
+      // "window is not defined" the moment the module loaded (tried and
+      // reverted live, 2026-10). loadUntar() retries the chunk fetch a
+      // few times so an ordinary network hiccup there doesn't fail the
+      // whole extraction outright.
+      console.log(`[TarImageCache] Loading js-untar...`);
+      const untar = await loadUntar();
       console.log(`[TarImageCache] Calling untar with ${arrayBuffer.byteLength} bytes...`);
       const files = await untar(arrayBuffer);
       console.log(`[TarImageCache] Extracted ${files.length} files from tar`);
