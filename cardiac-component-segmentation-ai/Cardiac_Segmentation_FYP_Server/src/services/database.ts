@@ -2003,8 +2003,17 @@ const createProjectReconstruction = async (
     logger.info(`${serviceLocation}: Project reconstruction ${result._id} created successfully for project ${recon.projectid}.`);
     return { success: true, operation, projectreconstruction: result };
   } catch (error: unknown) {
+    // Was `message: "Error creating project reconstruction."` with no detail -- every real cause
+    // (the pre-save hook's own thrown Errors for a missing project/mask, a Mongoose
+    // ValidationError, a duplicate-key error on the (projectid, name) unique index, etc.) was
+    // discarded here and replaced with this one canned string. That made a genuinely diagnosable
+    // failure (e.g. "Referenced segmentation mask does not exist...", which happens when a
+    // reconstruction's mask is superseded/deleted by a re-run while the GPU is still working on
+    // the mesh) indistinguishable from any other failure in the job's own stored message -- the
+    // one place a user or developer could actually see it without reading server logs.
+    const detail = error instanceof Error ? error.message : String(error);
     LogError(error as Error, serviceLocation, `Error creating project reconstruction, ${error}`);
-    return { success: false, operation, message: "Error creating project reconstruction." };
+    return { success: false, operation, message: `Error creating project reconstruction: ${detail}` };
   }
 };
 
