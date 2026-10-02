@@ -42,7 +42,16 @@ services:
       PORT: 5000
       
       # MongoDB Configuration
-      MONGODB_URI: mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin
+      # replicaSet=rs0: reconstruction_handler.ts uses mongoose session
+      # transactions (withTransaction) to atomically create a reconstruction
+      # record after its S3 upload; MongoDB only allows multi-document
+      # transactions on a replica set, and a plain standalone instance
+      # rejects every one with "Transaction numbers are only allowed on a
+      # replica set member or mongos" — which silently failed, rolled back,
+      # and deleted the just-uploaded S3 TAR on every reconstruction
+      # (reported live, 2026-10). The mongodb service below now runs as a
+      # single-node replica set (rs0) to actually support this.
+      MONGODB_URI: mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin&replicaSet=rs0
       
       # Redis Configuration
       REDIS_HOST: redis
@@ -140,6 +149,14 @@ services:
     image: mongo:7.0
     container_name: visheart-mongodb
     restart: unless-stopped
+    # --replSet rs0: required for the backend's session transactions (see
+    # the MONGODB_URI comment above). Mongo 7 requires --keyFile for
+    # internal replica-set auth as soon as --replSet + auth are both on,
+    # even for a single-node set with no other members to authenticate to
+    # — the keyfile itself already exists at this path inside the
+    # mongodb_config volume (generated once, chmod 400, owned by the
+    # image's mongodb user).
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/data/configdb/mongo-keyfile"]
     ports:
       - "27017:27017"
     environment:
@@ -152,10 +169,15 @@ services:
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD-SHELL", "mongosh -u \"admin\" -p \"P@ssw0rd123!\" --authenticationDatabase admin --quiet --eval \"quit(db.adminCommand('ping').ok ? 0 : 2)\""]
+      # Self-initiates the replica set on first boot (rs.initiate() errors
+      # harmlessly on every later check once it's already initiated — that
+      # error is swallowed so the check still falls through to the ping),
+      # so nothing else needs a separate one-shot init step. Reports
+      # healthy only once the single node has actually become PRIMARY.
+      test: ["CMD-SHELL", "mongosh -u \"admin\" -p \"P@ssw0rd123!\" --authenticationDatabase admin --quiet --eval \"try { rs.status() } catch(e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }; quit(db.hello().isWritablePrimary ? 0 : 1)\""]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 30s
 
 
