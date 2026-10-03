@@ -342,7 +342,12 @@ async def send_callback(
     success: bool,
     result: dict | None,
     error_detail: str | None,
-    segmentation_model: str = "medsam",
+    # None (not "medsam"): this was a hardcoded default, and only the MedSAM/UNet segmentation
+    # call sites ever actually pass a real value. Every other caller -- including 4D
+    # reconstruction, which has no single "segmentation model" of its own to report here -- was
+    # silently inheriting "medsam" and printing it as if it meant something, which is what made a
+    # UNet-sourced reconstruction's own logs read "model=medsam" and looked like a real mix-up.
+    segmentation_model: str | None = None,
 ):
     """Sends the processing result back to the client's callback URL with enhanced error logging."""
     callback_payload = {
@@ -371,7 +376,7 @@ async def send_callback(
             }
         callback_summary = (
             f"[{serviceLocation}] Callback payload summary for job {uuid}: "
-            f"status={callback_payload['status']}, model={segmentation_model}, "
+            f"status={callback_payload['status']}, model={segmentation_model or 'n/a'}, "
             f"success={success}, error={error_detail}, result_summary={result_summary}"
         )
         logger.info(callback_summary)
