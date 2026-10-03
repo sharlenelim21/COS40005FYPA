@@ -720,7 +720,12 @@ export default function Standalone4DViewerPage() {
                           </Button>
                         ) : null}
                       </div>
-                      {!recon && building && (
+                      {/* Suppressed for the chamber the "Building..." card below is already covering --
+                          both read the same buildingProgress value, so showing it here too just
+                          duplicated the same number twice on screen for that one chamber. A second
+                          chamber building at the same time (not the card's current pendingChamber)
+                          still gets its own bar here, since the card only ever shows one. */}
+                      {!recon && building && key !== pendingChamber && (
                         <JobProgress progress={progress} status="in_progress" label={`${key.toUpperCase()} reconstruction`} />
                       )}
                     </div>
