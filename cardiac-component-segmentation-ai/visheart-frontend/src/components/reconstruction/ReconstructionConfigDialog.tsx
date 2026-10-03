@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -221,6 +221,22 @@ export function ReconstructionConfigDialog({
   const noCreatableModels = (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
     (model) => !availableSet.has(model) || blockedSet.has(model),
   );
+  // Same "nothing left to build" check as noCreatableModels, but for a GIVEN chamber rather than
+  // whichever one is currently selected -- so the chamber cards below can show the same
+  // already-built state the model cards already do, instead of letting you switch to a chamber
+  // where every model is already occupied with no indication anything is wrong until Start
+  // silently disables itself.
+  const chamberFullyOccupied = useCallback(
+    (ch: ReconstructionChamber) => {
+      const blocked = new Set<ReconstructionSegmentationModel>(
+        (ch === "rv" ? blockedRvModels : blockedModels) ?? [],
+      );
+      return (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
+        (model) => !availableSet.has(model) || blocked.has(model),
+      );
+    },
+    [availableSet, blockedModels, blockedRvModels],
+  );
   const selectedIsBuilding = buildingSet.has(selectedModel);
   const startDisabled =
     isLoading || noModelsAvailable || noCreatableModels || !availableSet.has(selectedModel)
@@ -400,23 +416,39 @@ export function ReconstructionConfigDialog({
                 },
               ]).map((option) => {
                 const isSelected = chamber === option.value;
+                // A chamber with every model already reconstructed has nothing left to build --
+                // switching to it just to find that out at the Start button is the bug being
+                // fixed here, so it's disabled up front, same treatment the model cards already
+                // get when they're individually occupied.
+                const isOccupied = chamberFullyOccupied(option.value);
+                const isDisabled = isLoading || isOccupied;
                 return (
                   <div
                     key={option.value}
                     role="button"
-                    tabIndex={isLoading ? -1 : 0}
-                    onClick={() => !isLoading && setChamber(option.value)}
+                    tabIndex={isDisabled ? -1 : 0}
+                    aria-disabled={isDisabled}
+                    onClick={() => !isDisabled && setChamber(option.value)}
                     onKeyDown={(event) => {
-                      if (isLoading) return;
+                      if (isDisabled) return;
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         setChamber(option.value);
                       }
                     }}
+                    title={
+                      isOccupied
+                        ? `A 4D reconstruction already exists for every segmentation model in this chamber. Delete an existing result to build another one here.`
+                        : undefined
+                    }
                     className={cn(
                       "rounded-lg border p-3 transition-colors",
-                      isLoading ? "cursor-not-allowed opacity-60" : "cursor-pointer",
-                      isSelected
+                      isLoading
+                        ? "cursor-not-allowed opacity-60"
+                        : isOccupied
+                        ? "cursor-not-allowed opacity-50 bg-muted/30"
+                        : "cursor-pointer",
+                      isSelected && !isOccupied
                         ? option.value === "rv"
                           ? "border-amber-500 bg-amber-500/10"
                           : "border-primary bg-primary/5"
@@ -426,6 +458,9 @@ export function ReconstructionConfigDialog({
                     <p className="text-sm font-medium flex items-center gap-1.5">
                       {option.value === "rv" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
                       {option.title}
+                      {isOccupied && (
+                        <span className="ml-auto text-[10px] font-normal text-muted-foreground">Already built</span>
+                      )}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">{option.blurb}</p>
                   </div>
