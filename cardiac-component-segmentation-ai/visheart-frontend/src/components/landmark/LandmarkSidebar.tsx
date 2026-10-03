@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { useProject } from "@/context/ProjectContext";
 import { computeStrainSeries, computeRvStrainSeries } from "@/lib/landmarkApi";
+import { segmentationApi } from "@/lib/api";
+import { JobProgress } from "@/components/ui/kinetic-progress";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -43,6 +45,7 @@ import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
 import { getDummyStrainData, getStrainColor, type StrainType, type RealStrainResult, type RvStrainResult } from "@/components/landmark/StrainVisualization";
 import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries, ringForRvSegment } from "@/components/landmark/RegionalStrainCharts";
 import { DualFrameRangePicker } from "@/components/landmark/DualFrameRangePicker";
+import { rvTotalArea } from "@/lib/rvAreaMetrics";
 
 /**
  * Everything the sidebar's "Compute strain" card (Strain tab) needs to render
@@ -90,6 +93,10 @@ export interface StrainComputeBundle {
    *  show a loading state too while "Compute/Recompute all frames" runs
    *  (StrainTab's own seriesBusy is local and the page can't see it otherwise). */
   onFullCycleBusyChange: (busy: boolean) => void;
+  /** Same idea as onFullCycleBusyChange, but the real 0-100 reading (see
+   *  seriesProgress above) — lets the main panel's own "Computing all
+   *  frames…" overlay show a real percentage too, not just a spinner. */
+  onFullCycleProgressChange?: (progress: number | null) => void;
 }
 
 const NAV_ITEMS = [
@@ -1118,12 +1125,17 @@ function ReplacementFileRow({
 }
 
 /**
- * Busy label for the compute buttons. The backend runs the whole series in one
- * request (one GPU pass per frame), so there's no per-frame progress to stream —
- * we show a spinner + the frame count so the wait is understood, not a bare
- * "Computing…". `verb` is "Computing" or "Recomputing".
+ * Busy label for the compute buttons. The backend now creates a Job record for
+ * this compute and reports real progress against it (see compute-strain-series's
+ * jobId param) — when the caller has a live reading, show the same real progress
+ * bar every other job type uses instead of a bare spinner. `verb` is "Computing"
+ * or "Recomputing". Falls back to the old indeterminate spinner for the brief
+ * window before the first poll reports a reading.
  */
-function ComputeBusyLabel({ verb, frames }: { verb: string; frames: number }) {
+function ComputeBusyLabel({ verb, frames, progress }: { verb: string; frames: number; progress?: number | null }) {
+  if (typeof progress === "number" && progress > 0) {
+    return <JobProgress progress={progress} status="in_progress" label={`${verb} ${frames} frames`} className="w-full" />;
+  }
   return (
     <span className="inline-flex items-center gap-1.5">
       <Loader2 className="h-3 w-3 animate-spin" />
@@ -1405,6 +1417,14 @@ function StrainTab({
   // automatic. ED comes from the stored ED→ES result when available.
   const [seriesBusy, setSeriesBusy] = useState(false);
   const [seriesError, setSeriesError] = useState<string | null>(null);
+  // Real 0-100 progress, averaged across whichever of LV/RV are still
+  // in flight — read from the Job records the backend now creates for these
+  // computes (see compute-strain-series's jobId param), polled the same way
+  // every other job type's progress bar already is. null until the first
+  // poll reports a real reading, so the UI can fall back to an indeterminate
+  // spinner for that brief gap instead of claiming "0%". Was a bare "Computing
+  // N frames..." spinner with no percentage at all (reported live, 2026-10).
+  const [seriesProgress, setSeriesProgress] = useState<number | null>(null);
   const runStrainSeries = useCallback(async () => {
     if (!projectId) return;
     // ED must be the true end-diastole (largest LV cavity) — it is the reference
@@ -1420,12 +1440,35 @@ function StrainTab({
     setSeriesBusy(true);
     strainCompute?.onFullCycleBusyChange(true);
     setSeriesError(null);
+    setSeriesProgress(null);
+
+    const lvJobId = crypto.randomUUID();
+    const rvJobId = crypto.randomUUID();
+    const pollTimer = setInterval(async () => {
+      try {
+        const { jobs } = await segmentationApi.getUserJobs();
+        const byId = new Map<string, any>((jobs ?? []).map((j: any) => [j.jobId, j]));
+        const lvJob: any = byId.get(lvJobId);
+        const rvJob: any = byId.get(rvJobId);
+        const readings = [lvJob?.progress, rvJob?.progress].filter(
+          (p): p is number => typeof p === "number" && p > 0,
+        );
+        if (readings.length) {
+          const avg = Math.round(readings.reduce((a, b) => a + b, 0) / readings.length);
+          setSeriesProgress(avg);
+          strainCompute?.onFullCycleProgressChange?.(avg);
+        }
+      } catch {
+        // Keep the previous reading — a dropped poll is not evidence of anything.
+      }
+    }, 2000);
+
     try {
       // Fire LV and RV series together — one button, both computed. Independent
       // GPU calls, so a failure in one shouldn't lose the other.
       const [lvOutcome, rvOutcome] = await Promise.allSettled([
-        computeStrainSeries(projectId, edIndex, strainModel),
-        computeRvStrainSeries(projectId, edIndex, strainModel),
+        computeStrainSeries(projectId, edIndex, strainModel, 1, lvJobId),
+        computeRvStrainSeries(projectId, edIndex, strainModel, 1, rvJobId),
       ]);
       const errMessage = (outcome: PromiseRejectedResult) =>
         (outcome.reason as any)?.response?.data?.error ?? (outcome.reason as any)?.message ?? "Strain series failed.";
@@ -1450,8 +1493,11 @@ function StrainTab({
       // only re-fetches the masks themselves.
       await refreshResults();
     } finally {
+      clearInterval(pollTimer);
       setSeriesBusy(false);
+      setSeriesProgress(null);
       strainCompute?.onFullCycleBusyChange(false);
+      strainCompute?.onFullCycleProgressChange?.(null);
     }
   }, [projectId, realStrain, realSeries, strainModel, autoEdFrame, strainCompute, refreshResults]);
 
@@ -1702,6 +1748,7 @@ function StrainTab({
             strainCompute={strainCompute}
             seriesBusy={seriesBusy}
             seriesError={seriesError}
+            seriesProgress={seriesProgress}
             onRunFullCycle={runStrainSeries}
           />
         )}
@@ -1739,6 +1786,7 @@ function StrainTab({
           strainCompute={strainCompute}
           seriesBusy={seriesBusy}
           seriesError={seriesError}
+          seriesProgress={seriesProgress}
           onRunFullCycle={runStrainSeries}
         />
       )}
@@ -1788,7 +1836,7 @@ function StrainTab({
             onClick={runStrainSeries}
           >
             {seriesBusy
-              ? <ComputeBusyLabel verb="Recomputing" frames={frameCount} />
+              ? <ComputeBusyLabel verb="Recomputing" frames={frameCount} progress={seriesProgress} />
               : `Recompute all frames with current landmarks (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
@@ -1982,6 +2030,8 @@ function QuickCombinedStrainView({
 
   const fmtPct = (v: number | null | undefined) => (v == null ? "N/A" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
   const fmtMm = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(2)} mm`);
+  const fmtMm2 = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)} mm²`);
+  const rvArea = rvTotalArea(rv);
 
   return (
     <div className="space-y-3">
@@ -2043,8 +2093,8 @@ function QuickCombinedStrainView({
               loading={sc.isComputing}
             />
             <StrainMetricCard label="Peak Septal GCS" value={fmtPct(rv.global_rv_septal_gcs ?? null)} strainType="GCS" valueNumber={rv.global_rv_septal_gcs ?? 0} loading={sc.isComputing} />
-            <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value="—" />
-            <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value="—" />
+            <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value={fmtMm2(rvArea.ed)} loading={sc.isComputing} />
+            <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value={fmtMm2(rvArea.es)} loading={sc.isComputing} />
           </div>
         ) : (
           <p className="text-[10px] text-muted-foreground">Not computed for the current ED/ES pair yet — use Compute ED → ES above.</p>
@@ -2086,11 +2136,13 @@ function ComputeStrainCard({
   strainCompute: sc,
   seriesBusy,
   seriesError,
+  seriesProgress,
   onRunFullCycle,
 }: {
   strainCompute: StrainComputeBundle;
   seriesBusy: boolean;
   seriesError: string | null;
+  seriesProgress?: number | null;
   onRunFullCycle: () => void;
 }) {
   const edRef = React.useRef<HTMLInputElement>(null);
@@ -2325,7 +2377,7 @@ function ComputeStrainCard({
             Uses the auto-detected ED frame as reference — no frame picker or upload needed for the full cycle.
           </p>
           <Button size="sm" variant="outline" className="h-7 text-[10px]" disabled={seriesBusy} onClick={onRunFullCycle}>
-            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
+            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} progress={seriesProgress} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           {seriesError && <p className="text-[9px] text-destructive">{seriesError}</p>}
         </div>

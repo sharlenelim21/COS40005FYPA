@@ -904,7 +904,20 @@ export interface IProjectReconstruction {
   // its own vertex count/ordering, so labels are NOT interchangeable across frames -
   // only pair a frame's labels with that SAME frame's mesh geometry. Lets the mesh
   // viewer color/segment whichever frame is currently loaded, not just ED.
+  // Only populated when small enough to store uncompressed -- see
+  // frameAhaVertexLabelsGz below for the (common, for multi-frame reconstructions)
+  // case where it's compressed instead.
   frameAhaVertexLabels?: Record<string, number[]>;
+
+  // Same data as frameAhaVertexLabels (same shape once decoded: JSON.parse(gunzip(
+  // base64decode(this))) -> Record<string, number[]>), gzip-compressed and
+  // base64-encoded. Used instead of the plain field once the uncompressed JSON would
+  // be large enough to risk the reconstruction document hitting MongoDB's BSON
+  // serialization limits (see reconstruction_handler.ts) -- the per-frame labels are
+  // small repeated integers (1-17) over tens of thousands of vertices, which gzip
+  // compresses heavily. A reader should prefer this field when present and fall back
+  // to the plain frameAhaVertexLabels otherwise; never both at once.
+  frameAhaVertexLabelsGz?: string;
 
   // Based on mongoose timestamp
   createdAt?: Date; // Creation timestamp

@@ -182,7 +182,15 @@ export default function Standalone4DViewerPage() {
   // Poll for reconstruction when it doesn't exist yet (job was just started)
   const [isPolling, setIsPolling] = useState(false);
   const [pollTimedOut, setPollTimedOut] = useState(false);
-  const isMissing = !hasReconstructions || (!!selectedModel && !activeReconstruction);
+  // Only the true "nothing exists yet" case gets the full blocking page below (with its own
+  // "Reconstruction in Progress, 2-5 minutes" copy and no mesh to show). When a reconstruction
+  // already exists for ANY chamber/model and a second one (e.g. LV, while RV is already built) is
+  // just being built, hasReconstructions is already true -- the full viewer renders normally, with
+  // the existing mesh visible and the Chambers panel's own per-chamber progress bar covering the
+  // pending one. The previous `|| (!!selectedModel && !activeReconstruction)` clause blocked the
+  // whole viewer (including the already-built chamber) for that case too, which was reported live
+  // as it incorrectly falling back to this generic "go back to project" screen instead (2026-10).
+  const isMissing = !hasReconstructions;
 
   useEffect(() => {
     // Only poll after initial context load is done and something we expect is still missing.
@@ -437,6 +445,13 @@ export default function Standalone4DViewerPage() {
                     ? `Your ${selectedModel.toUpperCase()} 4D reconstruction is processing, this usually takes 2-5 minutes.`
                     : "Your 4D reconstruction is processing, this usually takes 2-5 minutes."}
                 </p>
+                {/* Same real tracked-progress bar the Chambers panel shows once a first
+                    reconstruction already exists -- this branch is only reached before ANY
+                    reconstruction exists yet (isMissing requires !hasReconstructions), so it
+                    was stuck on a bare spinner with no percentage until now. */}
+                <div className="mx-auto max-w-xs">
+                  <JobProgress progress={pendingChamberProgress} status="in_progress" />
+                </div>
               </div>
             </CardContent>
           </Card>

@@ -195,6 +195,11 @@ services:
     container_name: visheart-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
+    # Published so a backend running outside Docker (`npm run dev`, ts-node/
+    # nodemon) can reach it at localhost:6379 — every other dependency
+    # (Mongo, MinIO, GPU) already had a host port, only Redis didn't.
+    ports:
+      - "6379:6379"
     volumes:
       - redis_data:/data
     networks:

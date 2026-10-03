@@ -28,6 +28,32 @@ from evaluate import atomic_write_json  # noqa: E402
 from frozen_guard import DEFAULT_INDEX  # noqa: E402
 from jobs import NO_WINDOW, Step, StepFailed, now  # noqa: E402
 
+def _default_docker_cmd() -> list:
+    """Resolve a real path to the docker CLI instead of trusting bare "docker" to be on PATH.
+
+    subprocess.run(["docker", ...]) relies on the *worker process's own* PATH, not the
+    interactive shell's -- when this worker is started as a background/windowless process
+    (start-retraining-worker.bat's pythonw.exe, or any other launcher that doesn't inherit a
+    full user-profile PATH), Docker Desktop's CLI directory can be missing even though `docker`
+    works fine in a normal terminal. That surfaced live as every check/train step failing with
+    "[WinError 2] The system cannot find the file specified" despite Docker Desktop running
+    and `docker` working everywhere else on the same machine (2026-10). shutil.which() checks
+    the worker's actual PATH first (so a correctly configured environment is untouched); the
+    hardcoded fallback covers the single most common case (default Docker Desktop install on
+    Windows) when PATH doesn't have it.
+    """
+    found = shutil.which("docker")
+    if found:
+        return [found]
+    for candidate in (
+        r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
+        r"C:\ProgramData\DockerDesktop\version-bin\docker.exe",
+    ):
+        if Path(candidate).is_file():
+            return [candidate]
+    return ["docker"]  # last resort -- unchanged previous behaviour
+
+
 TRAIN_EPOCHS = 20  # train_candidate.py's default, passed explicitly so "epoch k of 20" on the page is always true
 STEP_TITLES = {"prepare": "Preparing data", "train": "Training", "evaluate": "Comparing with the current model",
                "examples": "Preparing example scans"}
@@ -45,7 +71,7 @@ class Config:
     frozen_manifest: Path
     frozen_index: Path
     server_dir: Path
-    docker: list = field(default_factory=lambda: ["docker"])
+    docker: list = field(default_factory=_default_docker_cmd)
     app_container: str = "visheart-local"
     gpu_containers: tuple = ("visheart-gpu-nvidia", "visheart-gpu-cpu")
 

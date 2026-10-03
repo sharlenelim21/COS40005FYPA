@@ -192,17 +192,33 @@ export function ReconstructedHeartModel({
     const posAttr = mesh.geometry.getAttribute("position");
     if (!posAttr) return;
 
-    if (posAttr.count !== labels.length) {
+    // A label array built for a DIFFERENT mesh (wrong vertex count) isn't
+    // just incomplete, it's actively wrong: `labels[i]` still returns a
+    // real-looking segment number for every index within its own (shorter
+    // or differently-ordered) range, just not the one that actually
+    // corresponds to vertex i of THIS mesh. Applying it anyway painted
+    // every vertex a semi-random segment color, which read as the mesh
+    // itself being corrupted/full of holes (it wasn't — only the coloring
+    // was garbage). This now happens on every non-ED frame of a
+    // reconstruction whose `frameAhaVertexLabels` was dropped for being
+    // too large to store (see reconstruction_handler.ts) and that silently
+    // fell back to frame 0's `ahaVertexLabels` on a frame whose mesh has a
+    // different vertex count (reported live, 2026-10). Falling back to "no
+    // per-vertex labels" here instead of a mismatched array is correct
+    // regardless of what causes the mismatch, not just this one case.
+    const safeLabels = posAttr.count === labels.length ? labels : null;
+    if (!safeLabels) {
       console.warn(
         `[ReconstructedHeartModel] Vertex count mismatch: mesh has ${posAttr.count} vertices, ` +
-        `flattened labels has ${labels.length}.`,
+        `flattened labels has ${labels.length} — ignoring labels for this mesh instead of ` +
+        `applying a mismatched array.`,
       );
     }
 
     const colors = new Float32Array(posAttr.count * 3);
     const byLabel = new Map<number, number[]>();
     for (let i = 0; i < posAttr.count; i++) {
-      const segment = labels[i] ?? 0;
+      const segment = safeLabels ? (safeLabels[i] ?? 0) : 0;
       // "strain" (value-heatmap) mode indexes `values` by the mesh's own
       // segment-label convention: LV labels are 1-indexed (1-17), so
       // segment-1; RV labels are 0-indexed (Apical_Seg1 = 0, see

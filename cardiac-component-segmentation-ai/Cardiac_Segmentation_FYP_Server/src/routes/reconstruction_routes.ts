@@ -203,6 +203,11 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                     segmentationModel: inferredModel, // Model used for this reconstruction (medsam, unet, etc)
                     ahaVertexLabels: recon.ahaVertexLabels ?? null,
                     frameAhaVertexLabels: recon.frameAhaVertexLabels ?? null,
+                    // Gzip+base64 companion to frameAhaVertexLabels, used instead of it for
+                    // reconstructions large enough that the plain field would risk the
+                    // document's BSON size (see reconstruction_handler.ts). The frontend
+                    // decodes this when present and frameAhaVertexLabels is null.
+                    frameAhaVertexLabelsGz: recon.frameAhaVertexLabelsGz ?? null,
                     // Which chamber this mesh is. Records written before the field existed have no
                     // value and are LV -- that is what the whole pipeline produced until now.
                     // The viewer keys its research-only RV warning off this, so it must be sent.

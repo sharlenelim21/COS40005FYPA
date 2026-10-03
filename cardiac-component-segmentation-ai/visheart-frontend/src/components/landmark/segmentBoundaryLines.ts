@@ -20,6 +20,22 @@ export function buildSegmentBoundaryEdges(mesh: THREE.Mesh, labels: number[]): F
   const index = geometry.getIndex();
   const triangleCount = index ? index.count / 3 : posAttr.count / 3;
 
+  // A labels array built for a DIFFERENT mesh (wrong vertex count) isn't just
+  // incomplete, it's actively wrong here: every triangle corner would get a
+  // near-random label, so almost every edge reads as a segment boundary --
+  // this rendered as a dense web of fine white lines covering the whole
+  // surface, which looked like the mesh geometry itself was corrupted/noisy
+  // (it wasn't; same root cause and fix as applyVertexColorsRef's safeLabels
+  // guard in ReconstructedHeartModel.tsx -- reported live, 2026-10).
+  if (posAttr.count !== labels.length) {
+    console.warn(
+      `[buildSegmentBoundaryEdges] Vertex count mismatch: mesh has ${posAttr.count} vertices, ` +
+      `labels has ${labels.length} — skipping boundary lines for this mesh instead of drawing ` +
+      `them from a mismatched array.`,
+    );
+    return new Float32Array(0);
+  }
+
   const cornerIndex = (t: number, corner: number) =>
     index ? index.getX(t * 3 + corner) : t * 3 + corner;
 

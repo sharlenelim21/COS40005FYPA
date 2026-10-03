@@ -12,6 +12,8 @@ import {
     jobModel,
     userModel,
     JobStatus,
+    createJob,
+    updateJob,
     projectSegmentationMaskModel
 } from "../services/database";
 import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
@@ -1535,10 +1537,18 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
 // The ED frame is emitted with zero strain — it is the reference by definition.
 //
 // POST /segmentation/compute-strain-series
-// body: { projectId, edFrameIndex, modelType?, frameStep? }
+// body: { projectId, edFrameIndex, modelType?, frameStep?, jobId? }
+//
+// jobId is OPTIONAL and purely additive: this route still blocks until the whole
+// series is done and returns the result in its response, same as before. When the
+// caller supplies a client-generated uuid, a Job record is created under it and its
+// `progress` is updated after every batch -- any existing job poller (the one
+// already used for segmentation/landmark/reconstruction jobs) can then show a real
+// live percentage for this compute too, instead of a bare spinner, without this
+// route's own response contract changing for callers that don't pass one.
 router.post("/compute-strain-series", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
-    const { projectId, edFrameIndex, modelType, frameStep } = req.body;
+    const { projectId, edFrameIndex, modelType, frameStep, jobId } = req.body;
 
     if (!projectId || edFrameIndex === undefined) {
         return res.status(400).json({ error: "projectId and edFrameIndex are required" });
@@ -1546,6 +1556,7 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
 
     const model = modelType ?? "unet";
     const tempId = uuidv4();
+    let progressJobId: string | null = null;
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `strain_series_${tempId}`);
 
     try {
@@ -1598,6 +1609,14 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             .filter((f: any) => f.frameindex !== edFrameIndex)
             .sort((a: any, b: any) => a.frameindex - b.frameindex)
             .filter((_: any, i: number) => i % step === 0);
+
+        if (jobId && typeof jobId === "string") {
+            const created = await createJob({
+                userid: userId, projectid: projectId, maskId: maskDoc._id.toString(), uuid: jobId,
+                status: JobStatus.IN_PROGRESS, model_used: "strain_series", segmentationModel: model as any, progress: 0,
+            });
+            if (created.success) progressJobId = jobId;
+        }
 
         const gpuBaseUrl = await getFreshGPUServerAddress();
         const token = getCurrentToken();
@@ -1698,6 +1717,10 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             const batch = targetFrames.slice(i, i + CONCURRENCY);
             const results = await Promise.all(batch.map(strainForFrame));
             for (const r of results) if (r) computed.push(r);
+            if (progressJobId) {
+                const pct = Math.round((Math.min(i + CONCURRENCY, targetFrames.length) / Math.max(targetFrames.length, 1)) * 100);
+                updateJob(progressJobId, { progress: pct }).catch(() => {});
+            }
         }
 
         // ED itself: zero strain by definition (it is the reference). Its wall
@@ -1757,11 +1780,18 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             logger.warn(`${serviceLocation}: Failed to persist strainSeries on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
 
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.COMPLETED, progress: 100 }).catch(() => {});
+        }
+
         return res.status(200).json(strainSeries);
 
     } catch (err: any) {
         await fs.remove(baseTempDir).catch(() => {});
         logger.error(`${serviceLocation}: compute-strain-series failed for project ${projectId}: ${err?.message}`);
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.FAILED, message: err?.message ?? "Strain series computation failed." }).catch(() => {});
+        }
         return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "Strain series computation failed." });
     }
 });
@@ -1774,10 +1804,11 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
 // LV field with a different data shape.
 //
 // POST /segmentation/compute-rv-strain-series
-// body: { projectId, edFrameIndex, modelType?, frameStep? }
+// body: { projectId, edFrameIndex, modelType?, frameStep?, jobId? }
+// jobId is optional/additive — see compute-strain-series's own comment above.
 router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
-    const { projectId, edFrameIndex, modelType, frameStep } = req.body;
+    const { projectId, edFrameIndex, modelType, frameStep, jobId } = req.body;
 
     if (!projectId || edFrameIndex === undefined) {
         return res.status(400).json({ error: "projectId and edFrameIndex are required" });
@@ -1785,6 +1816,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
 
     const model = modelType ?? "unet";
     const tempId = uuidv4();
+    let progressJobId: string | null = null;
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `rv_strain_series_${tempId}`);
 
     try {
@@ -1826,6 +1858,14 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             .filter((f: any) => f.frameindex !== edFrameIndex)
             .sort((a: any, b: any) => a.frameindex - b.frameindex)
             .filter((_: any, i: number) => i % step === 0);
+
+        if (jobId && typeof jobId === "string") {
+            const created = await createJob({
+                userid: userId, projectid: projectId, maskId: maskDoc._id.toString(), uuid: jobId,
+                status: JobStatus.IN_PROGRESS, model_used: "rv_strain_series", segmentationModel: model as any, progress: 0,
+            });
+            if (created.success) progressJobId = jobId;
+        }
 
         const gpuBaseUrl = await getFreshGPUServerAddress();
         const token = getCurrentToken();
@@ -1921,6 +1961,10 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             const batch = targetFrames.slice(i, i + CONCURRENCY);
             const results = await Promise.all(batch.map(rvStrainForFrame));
             for (const r of results) if (r) computed.push(r);
+            if (progressJobId) {
+                const pct = Math.round((Math.min(i + CONCURRENCY, targetFrames.length) / Math.max(targetFrames.length, 1)) * 100);
+                updateJob(progressJobId, { progress: pct }).catch(() => {});
+            }
         }
 
         // ED's own areas are the same in every comparison, so any computed frame that returned
@@ -1975,11 +2019,18 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             logger.warn(`${serviceLocation}: Failed to persist rvStrainSeries on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
 
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.COMPLETED, progress: 100 }).catch(() => {});
+        }
+
         return res.status(200).json(rvStrainSeries);
 
     } catch (err: any) {
         await fs.remove(baseTempDir).catch(() => {});
         logger.error(`${serviceLocation}: compute-rv-strain-series failed for project ${projectId}: ${err?.message}`);
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.FAILED, message: err?.message ?? "RV strain series computation failed." }).catch(() => {});
+        }
         return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "RV strain series computation failed." });
     }
 });

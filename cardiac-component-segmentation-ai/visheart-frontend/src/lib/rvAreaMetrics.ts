@@ -62,6 +62,26 @@ export function rvEdEsFac(rvStrain?: RvStrain | null): { rings: (number | null)[
   return { rings: ringFacs(pairs), global: facOf(pairs) };
 }
 
+/** Total RV cavity area (mm²) at ED and ES — the sum of all 9 segments' own
+ *  area, i.e. the whole-slice-stack cavity area FAC is computed from. Takes
+ *  a minimal structural shape rather than the full RvStrain type so it also
+ *  accepts the live Quick-compute result (StrainVisualization.tsx's
+ *  RvStrainResult), which carries the same region fields under a different
+ *  nominal type for the in-app vs. stored-report code paths. */
+export function rvTotalArea(
+  rv?: { regions?: { area_ed_mm2?: number | null; area_es_mm2?: number | null }[] } | null,
+): { ed: number | null; es: number | null } {
+  let sumEd = 0;
+  let sumEs = 0;
+  let nEd = 0;
+  let nEs = 0;
+  for (const r of rv?.regions ?? []) {
+    if (typeof r.area_ed_mm2 === "number" && Number.isFinite(r.area_ed_mm2)) { sumEd += r.area_ed_mm2; nEd++; }
+    if (typeof r.area_es_mm2 === "number" && Number.isFinite(r.area_es_mm2)) { sumEs += r.area_es_mm2; nEs++; }
+  }
+  return { ed: nEd ? sumEd : null, es: nEs ? sumEs : null };
+}
+
 /** Per-frame FAC per ring + global (each frame vs ED), from the full-cycle series.
  *  Series computed before per-frame areas were stored give nulls. */
 export function rvFacSeries(rvStrainSeries?: RvStrainSeries | null): { frameIndex: number; rings: (number | null)[]; global: number | null }[] {

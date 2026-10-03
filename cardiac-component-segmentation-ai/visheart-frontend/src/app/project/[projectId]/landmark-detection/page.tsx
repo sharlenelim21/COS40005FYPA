@@ -38,6 +38,7 @@ import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHear
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
 import { RV_SEGMENT_NAMES, RV_REGION_TO_SEGMENT3D, RV_SEGMENT3D_TO_REGION } from "@/components/landmark/heartColor";
 import { rvEdEsFac, rvFacSeries } from "@/lib/rvAreaMetrics";
+import { useFrameAhaVertexLabels } from "@/lib/frameAhaLabels";
 import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import { FrameSliceControls } from "@/components/landmark/FrameSliceControls";
@@ -257,6 +258,9 @@ export default function LandmarkDetectionPage() {
   // about it too (to show its own loading state) — reported up via the
   // strainCompute bundle's onFullCycleBusyChange.
   const [fullCycleBusy, setFullCycleBusy] = useState(false);
+  // Same idea, the real 0-100 reading — see strainCompute's own
+  // onFullCycleProgressChange doc comment.
+  const [fullCycleProgress, setFullCycleProgress] = useState<number | null>(null);
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
   // Lifted out of StrainPreviewPanel so the sidebar's Strain tab (a sibling,
   // not a descendant) can read it too -- the sidebar's own LV/RV toggle was
@@ -1411,6 +1415,7 @@ export default function LandmarkDetectionPage() {
     rvMetricType: selectedRvMetricType,
     onRvMetricTypeChange: setSelectedRvMetricType,
     onFullCycleBusyChange: setFullCycleBusy,
+    onFullCycleProgressChange: setFullCycleProgress,
   };
   // Whichever compute is relevant to the CURRENT scope — the main panel
   // shows one loading state regardless of which of the two ran.
@@ -1855,6 +1860,7 @@ export default function LandmarkDetectionPage() {
                   onRvMetricTypeChange={setSelectedRvMetricType}
                   computeScope={computeScope}
                   isComputeBusy={isComputeBusy}
+                  fullCycleProgress={fullCycleProgress}
                   chamberFocus={chamberFocus}
                   onChamberFocusChange={setChamberFocus}
                 />
@@ -2097,12 +2103,13 @@ function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
     };
   }, [rvReconstruction, model, currentFrame, getReconstructionGLB]);
 
+  const rvFrameAhaVertexLabels = useFrameAhaVertexLabels(rvReconstruction);
   const segmentLabels = useMemo(() => {
     // Same as the LV panels: labels must belong to the mesh that is loaded, not the requested frame.
-    const perFrame = rvReconstruction?.frameAhaVertexLabels?.[String(meshFrame ?? currentFrame)];
+    const perFrame = rvFrameAhaVertexLabels?.[String(meshFrame ?? currentFrame)];
     if (Array.isArray(perFrame)) return perFrame;
     return Array.isArray(rvReconstruction?.ahaVertexLabels) ? rvReconstruction.ahaVertexLabels : null;
-  }, [rvReconstruction, currentFrame, meshFrame]);
+  }, [rvReconstruction, rvFrameAhaVertexLabels, currentFrame, meshFrame]);
 
   return {
     available: !!rvReconstruction && !!segmentLabels?.length,
@@ -2208,15 +2215,16 @@ function AhaBullseyePanel({
   // Each frame's own marching-cubes mesh has its own vertex count/ordering, so labels
   // are NOT interchangeable across frames - falls back to the ED-only labels (older
   // reconstructions, or frames the GPU skipped as apex/base slices with no contour).
+  const frameAhaVertexLabels = useFrameAhaVertexLabels(activeReconstruction);
   const reconstructionLabels = useMemo(() => {
     // Labels follow the frame of the mesh that is actually loaded, not the requested frame:
     // while the next frame's mesh is still fetching, the previous mesh is on screen and its
     // vertex layout differs, so the new frame's labels would colour it wrongly (the glitch).
     const labelFrame = reconstructionMeshFrame ?? currentFrame;
-    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(labelFrame)];
+    const perFrame = frameAhaVertexLabels?.[String(labelFrame)];
     if (Array.isArray(perFrame)) return perFrame;
     return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
-  }, [activeReconstruction, currentFrame, reconstructionMeshFrame]);
+  }, [activeReconstruction, frameAhaVertexLabels, currentFrame, reconstructionMeshFrame]);
 
   const isReconstructionPending = useMemo(() => {
     if (!reconstructionModel) return false;
@@ -2639,6 +2647,7 @@ function StrainPreviewPanel({
   onRvMetricTypeChange,
   computeScope,
   isComputeBusy,
+  fullCycleProgress,
   chamberFocus,
   onChamberFocusChange,
 }: {
@@ -2669,6 +2678,11 @@ function StrainPreviewPanel({
    *  cycle's seriesBusy reported up) — shows a loading state over the
    *  bullseye/3D heart and their stat tiles instead of the now-stale values. */
   isComputeBusy: boolean;
+  /** Live 0-100 progress for the full-cycle compute, reported up from the
+   *  sidebar's job polling (see onFullCycleProgressChange) — null until the
+   *  first real reading comes in, in which case the spinner fallback below
+   *  is shown instead of a determinate bar. */
+  fullCycleProgress: number | null;
   /** Lifted to the page so the sidebar's Strain tab (a sibling of this
    *  panel, not a descendant) can read the same value — see the page-level
    *  chamberFocus state's own comment. */
@@ -2760,15 +2774,16 @@ function StrainPreviewPanel({
   // Per-frame AHA labels for whichever frame's geometry is currently loaded above -
   // each frame's own mesh has its own vertex layout, so labels can't be reused
   // across frames. Falls back to ED-only labels for older reconstructions.
+  const frameAhaVertexLabels = useFrameAhaVertexLabels(activeReconstruction);
   const reconstructionLabels = useMemo(() => {
     // Labels follow the frame of the mesh that is actually loaded, not the requested frame:
     // while the next frame's mesh is still fetching, the previous mesh is on screen and its
     // vertex layout differs, so the new frame's labels would colour it wrongly (the glitch).
     const labelFrame = reconstructionMeshFrame ?? currentFrame;
-    const perFrame = activeReconstruction?.frameAhaVertexLabels?.[String(labelFrame)];
+    const perFrame = frameAhaVertexLabels?.[String(labelFrame)];
     if (Array.isArray(perFrame)) return perFrame;
     return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
-  }, [activeReconstruction, currentFrame, reconstructionMeshFrame]);
+  }, [activeReconstruction, frameAhaVertexLabels, currentFrame, reconstructionMeshFrame]);
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number | null } | null>(null);
   const bullseyeResetRef = useRef<(() => void) | null>(null);
@@ -2944,10 +2959,18 @@ function StrainPreviewPanel({
       <div className="relative flex min-h-0 flex-1 flex-col">
       {isComputeBusy && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background/80 backdrop-blur-sm">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          <p className="text-xs font-medium text-muted-foreground">
-            {computeScope === "quick" ? "Computing…" : "Computing all frames…"}
-          </p>
+          {computeScope === "full" && hasProgressReading(fullCycleProgress) ? (
+            <div className="w-56">
+              <ProgressMeter value={fullCycleProgress as number} title="Computing all frames" />
+            </div>
+          ) : (
+            <>
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <p className="text-xs font-medium text-muted-foreground">
+                {computeScope === "quick" ? "Computing…" : "Computing all frames…"}
+              </p>
+            </>
+          )}
         </div>
       )}
       {!strainForDisplay && !rvStrainForDisplay ? (

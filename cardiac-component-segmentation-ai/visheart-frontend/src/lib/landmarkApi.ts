@@ -424,6 +424,11 @@ export async function computeStrainSeries(
   edFrameIndex: number,
   modelType: "unet" | "medsam" = "unet",
   frameStep = 1,
+  /** Client-generated uuid — optional and purely additive. When passed, the
+   *  backend creates a Job record under it and updates its `progress` after
+   *  every batch, so a caller can poll getUserJobs() for a real live
+   *  percentage instead of just waiting on this promise with no feedback. */
+  jobId?: string,
 ): Promise<{
   frames: { frameIndex: number; global_grs: number | null; global_gcs: number | null;
             segments: { segment: number; label: string; grs: number | null; gcs: number | null }[] }[];
@@ -436,7 +441,7 @@ export async function computeStrainSeries(
 }> {
   const response = await api.post(
     `/segmentation/compute-strain-series`,
-    { projectId, edFrameIndex, modelType, frameStep },
+    { projectId, edFrameIndex, modelType, frameStep, jobId },
     // One GPU call per frame — well beyond the default client timeout.
     { timeout: 600000 },
   );
@@ -448,6 +453,8 @@ export async function computeRvStrainSeries(
   edFrameIndex: number,
   modelType: "unet" | "medsam" = "unet",
   frameStep = 1,
+  /** See computeStrainSeries's own jobId param. */
+  jobId?: string,
 ): Promise<{
   frames: { frameIndex: number; global_rv_strain: number | null;
             regions: { region: number; label: string; strain: number | null; radius_mm?: number | null }[] }[];
@@ -459,7 +466,7 @@ export async function computeRvStrainSeries(
 }> {
   const response = await api.post(
     `/segmentation/compute-rv-strain-series`,
-    { projectId, edFrameIndex, modelType, frameStep },
+    { projectId, edFrameIndex, modelType, frameStep, jobId },
     { timeout: 600000 },
   );
   return response.data;

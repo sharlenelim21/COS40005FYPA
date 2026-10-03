@@ -5,6 +5,7 @@ import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
 import crypto from "crypto";
+import zlib from "zlib";
 import { execSync } from "child_process";
 import mongoose from "mongoose";
 import logger from "./logger";
@@ -791,6 +792,7 @@ async function createReconstructionRecord(
     // a malformed entry for one frame doesn't invalidate the others.
     const rawFrameAhaLabels = gpuResult?.frame_aha_vertex_labels;
     let frameAhaVertexLabels: Record<string, number[]> | undefined;
+    let frameAhaVertexLabelsGz: string | undefined;
     if (rawFrameAhaLabels && typeof rawFrameAhaLabels === 'object' && !Array.isArray(rawFrameAhaLabels)) {
       const validEntries: Record<string, number[]> = {};
       let droppedCount = 0;
@@ -805,7 +807,45 @@ async function createReconstructionRecord(
         logger.warn(`${serviceLocation}: Dropped ${droppedCount} malformed frame_aha_vertex_labels entries for job ${gpuJobId}`);
       }
       if (Object.keys(validEntries).length > 0) {
-        frameAhaVertexLabels = validEntries;
+        // One entry per frame, each ~vertex-count numbers -- scales with
+        // frame count in a way the single `ahaVertexLabels` field above
+        // doesn't. A 30-frame LV reconstruction's worth of this (as plain
+        // JSON) pushed the reconstruction document right up against an
+        // internal BSON serializer buffer-sizing bug (not the usual 16MB
+        // document limit -- this tripped at 17MB, inside mongodb's own
+        // serializeInto): "The value of 'offset' is out of range... Received
+        // 17825794", which createProjectReconstruction's save() then threw
+        // on every single time for that job, triggering the S3-upload
+        // rollback and failing the whole reconstruction right after the GPU
+        // had already finished successfully (reported live for LV
+        // specifically -- RV has no per-vertex AHA concept at all, so it
+        // never built this field).
+        //
+        // Previously this was dropped outright above a size threshold,
+        // falling back to the single ED-frame `ahaVertexLabels` for every
+        // frame -- but that array's vertex count/ordering only matches the
+        // ED mesh, so every OTHER frame's mesh viewer silently fell back to
+        // "no labels" (via the vertex-count guards in
+        // ReconstructedHeartModel.tsx / segmentBoundaryLines.ts), losing all
+        // AHA coloring and boundary lines on every non-ED frame (reported
+        // live, 2026-10). The labels are small integers (1-17) repeated
+        // across ~65k vertices/frame, which gzip compresses heavily (highly
+        // repetitive low-entropy data), so compressing instead of dropping
+        // keeps the full per-frame data within the BSON budget for
+        // reconstructions this size. Stored as a separate base64 string
+        // field (frameAhaVertexLabelsGz) rather than replacing
+        // frameAhaVertexLabels's shape, so existing readers of the
+        // uncompressed field are unaffected when it's small enough to keep
+        // as-is.
+        const json = JSON.stringify(validEntries);
+        const approxBytes = Buffer.byteLength(json);
+        const maxUncompressedBytes = 1 * 1024 * 1024;
+        if (approxBytes > maxUncompressedBytes) {
+          frameAhaVertexLabelsGz = zlib.gzipSync(json).toString('base64');
+          logger.info(`${serviceLocation}: frame_aha_vertex_labels for job ${gpuJobId} is ~${(approxBytes / 1024 / 1024).toFixed(1)}MB uncompressed (${Object.keys(validEntries).length} frames) -- storing gzip+base64 (~${(frameAhaVertexLabelsGz.length / 1024 / 1024).toFixed(2)}MB) instead of the plain field.`);
+        } else {
+          frameAhaVertexLabels = validEntries;
+        }
       }
     } else if (rawFrameAhaLabels !== undefined && rawFrameAhaLabels !== null) {
       logger.warn(`${serviceLocation}: Ignoring malformed frame_aha_vertex_labels in GPU result for job ${gpuJobId}`);
@@ -828,6 +868,7 @@ async function createReconstructionRecord(
       segmentationModel: normalizedSegmentationModel,
       ahaVertexLabels,
       frameAhaVertexLabels,
+      frameAhaVertexLabelsGz,
       chamber: reconstructionChamber,
       reconstructedMesh: {
         path: reconstructionFileS3Url,

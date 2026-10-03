@@ -1534,7 +1534,14 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       if (!response.success) {
         setJobsError(response.message);
         console.warn("[ProjectContext] Failed to refresh jobs:", response.message);
-        setJobs(null);
+        // Keep the previous `jobs` value rather than nulling it out. `jobs`
+        // drives pollJobList (page.tsx), which gates the very setInterval
+        // that calls this function every 5s -- nulling it on a single
+        // transient failure (one dropped request is not evidence a job
+        // finished) could flip pollJobList to false and tear down that
+        // interval, silently freezing every progress bar fed by it until
+        // something unrelated happened to restart polling. Reported live as
+        // "the progress bar sometimes freezes" (2026-10).
         return;
       }
 
@@ -1547,7 +1554,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     } catch (error) {
       console.error("[ProjectContext] Error refreshing jobs:", error);
       setJobsError("Failed to refresh job data");
-      setJobs(null);
+      // Same reasoning as above: keep the last known jobs rather than
+      // nulling them out on a transient network error.
     }
   }, [projectId]);
 
@@ -1569,7 +1577,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       if (!response.success) {
         setReconstructionJobsError(response.message || "Failed to refresh reconstruction jobs");
         console.warn("[ProjectContext] Failed to refresh reconstruction jobs:", response.message);
-        setReconstructionJobs(null);
+        // Keep the previous reconstructionJobs rather than nulling them out
+        // on one failed poll -- same reasoning as refreshJobs above.
         return;
       }
 
@@ -1582,7 +1591,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     } catch (error) {
       console.error("[ProjectContext] Error refreshing reconstruction jobs:", error);
       setReconstructionJobsError("Failed to refresh reconstruction job data");
-      setReconstructionJobs(null);
     }
   }, [projectId]);
 
