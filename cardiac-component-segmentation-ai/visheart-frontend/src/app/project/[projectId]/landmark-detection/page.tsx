@@ -100,9 +100,9 @@ const AHA_SEGMENTS = [
   "Mid Inferolateral",
   "Mid Anterolateral",
   "Apical Anterior",
-  "Apical Lateral",
-  "Apical Inferior",
   "Apical Septal",
+  "Apical Inferior",
+  "Apical Lateral",
   "Apex",
 ] as const;
 
@@ -527,9 +527,6 @@ export default function LandmarkDetectionPage() {
     });
   }, []);
 
-  // AHA alignment
-  const [ahaAlignmentAngle, setAhaAlignmentAngle] = useState<number | null>(null);
-
   // Zoom reset refs — shared between bullseye panel and toolbar button
   const bullseyeZoomResetRef = useRef<(() => void) | null>(null);
   const heartZoomResetRef = useRef<(() => void) | null>(null);
@@ -549,64 +546,16 @@ export default function LandmarkDetectionPage() {
   // (Apical-first) don't share the same segment order.
   const [selectedStructureRvRegion, setSelectedStructureRvRegion] = useState<number | null>(null);
 
-  // Refetch bullseye after detection finishes; clear alignment on new run
+  // Refetch bullseye after detection finishes
   const prevStatus = useRef(state.status);
   useEffect(() => {
     if (prevStatus.current !== state.status) {
-      if (state.status === "running") {
-        setAhaAlignmentAngle(null);
-      }
       if (prevStatus.current === "running" && state.status === "done") {
         fetchBullseye(selectedBullseyeModel);
       }
     }
     prevStatus.current = state.status;
   }, [state.status, fetchBullseye, selectedBullseyeModel]);
-
-  const handleApplyAlignment = useCallback(() => {
-    // Prefer avg_lm1/avg_lm2 from the new GPU response — more stable than per-slice mean.
-    // Fall back to the existing per-slice approach when those fields are absent.
-    if (state.avgLm1 && state.avgLm2) {
-      const dx = state.avgLm2.x - state.avgLm1.x;
-      const dy = state.avgLm2.y - state.avgLm1.y;
-      setAhaAlignmentAngle(Math.atan2(-dx, dy) * (180 / Math.PI));
-      return;
-    }
-
-    const validPreds = allPredictions.filter(
-      (p) => p.frame_id === 0 && p.rv_insertion_1 && p.rv_insertion_2,
-    );
-    if (validPreds.length === 0) return;
-
-    // Compute septal angle per slice (90° CW rotation of rv1→rv2 in y-down coords)
-    const allAngles = validPreds.map((p) => {
-      const dx = p.rv_insertion_2![0] - p.rv_insertion_1![0];
-      const dy = p.rv_insertion_2![1] - p.rv_insertion_1![1];
-      return Math.atan2(-dx, dy);
-    });
-
-    // Preliminary circular mean to establish a reference direction
-    const prelimRad = Math.atan2(
-      allAngles.reduce((s, a) => s + Math.sin(a), 0),
-      allAngles.reduce((s, a) => s + Math.cos(a), 0),
-    );
-
-    // Filter out slices whose angle deviates more than 30° from the preliminary mean
-    const filtered = allAngles.filter((a) => {
-      const diff = Math.abs((((a - prelimRad) * 180) / Math.PI + 540) % 360 - 180);
-      return diff < 30;
-    });
-
-    const finalRad = Math.atan2(
-      filtered.reduce((s, a) => s + Math.sin(a), 0),
-      filtered.reduce((s, a) => s + Math.cos(a), 0),
-    );
-    setAhaAlignmentAngle(finalRad * (180 / Math.PI));
-  }, [allPredictions, state.avgLm1, state.avgLm2]);
-
-  const handleResetAlignment = useCallback(() => {
-    setAhaAlignmentAngle(null);
-  }, []);
 
   const [showLabels, setShowLabels] = useState(true);
   const [frameImageUrl, setFrameImageUrl] = useState<string | null>(null);
@@ -1694,7 +1643,10 @@ export default function LandmarkDetectionPage() {
                     </span>
                   )}
                 </div>
-                {/* AHA alignment controls — visible once landmarks are detected */}
+                {/* View controls — visible once landmarks are detected. (The old
+                    "Align" button was removed: it rotated the chart, but the
+                    backend already aligns the segments to the landmark, and
+                    Anterior must always be at the top.) */}
                 {structureVentricle === "LV" && hasPredictions && (
                   <div className="flex items-center gap-1 flex-shrink-0">
                     <button
@@ -1705,27 +1657,6 @@ export default function LandmarkDetectionPage() {
                     >
                       Reset View
                     </button>
-                    {ahaAlignmentAngle === null ? (
-                      <button
-                        type="button"
-                        onClick={handleApplyAlignment}
-                        className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
-                        title="Rotate bullseye to match detected RV insertion points"
-                      >
-                        <CheckCircle2 className="h-3 w-3 text-green-500" />
-                        Align
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleResetAlignment}
-                        className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
-                        title="Reset bullseye rotation"
-                      >
-                        <RefreshCw className="h-3 w-3 text-muted-foreground" />
-                        Reset
-                      </button>
-                    )}
                   </div>
                 )}
               </div>
@@ -1863,19 +1794,6 @@ export default function LandmarkDetectionPage() {
                   bullseyeData={hasPredictions ? bullseyeData : null}
                   loading={hasPredictions ? bullseyeLoading : isRunning}
                   isComputing={bullseyeRecomputing || calculatingModels[activeModel]}
-                  // Prefers the manual "Align" button's own landmark-derived
-                  // angle (an explicit user action) when set; otherwise falls
-                  // back to the backend's own alignment_angle_deg (Stefani's
-                  // fix) instead of defaulting to unaligned (0) -- this
-                  // bullseye previously never used that value at all, even
-                  // though the backend has been computing it. Same -240
-                  // (start_angle_by_ring["basal"]'s fallback) conversion
-                  // CombinedVentricularChart/RvStrainChart already apply to
-                  // the identical field for the Strain tab's charts.
-                  referenceAngleDeg={
-                    ahaAlignmentAngle ??
-                    (bullseyeData?.alignment_angle_deg != null ? bullseyeData.alignment_angle_deg - 240 : 0)
-                  }
                   onCompute={() => fetchBullseye(selectedBullseyeModel, true, true)}
                   // Follows the shared cardiac-cycle playback (now driven from
                   // either the Structure or Strain tab), not the slice index —
@@ -2197,7 +2115,6 @@ function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
 function AhaBullseyePanel({
   bullseyeData,
   loading,
-  referenceAngleDeg = 0,
   currentFrame = 0,
   frameCount = 1,
   frameThickness = null,
@@ -2213,7 +2130,6 @@ function AhaBullseyePanel({
   loading: boolean;
   /** True only while the GPU is generating the bullseye (vs. loading stored data). */
   isComputing?: boolean;
-  referenceAngleDeg?: number;
   currentFrame?: number;
   frameCount?: number;
   /**
@@ -2405,7 +2321,6 @@ function AhaBullseyePanel({
                 names={displayBullseyeData.segment_metadata.map((m, i) => m?.name ?? `Segment ${i + 1}`)}
                 min={frameMin}
                 max={frameMax}
-                referenceAngleDeg={referenceAngleDeg}
                 onSegmentHover={setBullseyeTooltip}
                 onSegmentLeave={() => setBullseyeTooltip(null)}
                 selectedSegment={selectedBullseyeSegment}
@@ -3118,7 +3033,6 @@ function StrainPreviewPanel({
                   min={sharedMin}
                   max={sharedMax}
                   reverse={reverseColors}
-                  referenceAngleDeg={strainForDisplay?.alignment_angle_deg != null ? strainForDisplay.alignment_angle_deg - 240 : 0}
                   selectedSegment={(selectedSegment ?? 0) - 1}
                   onSegmentClick={(idx) => handleSegClick(idx + 1)}
                   onSegmentHover={(t) => setTooltip({ x: t.x, y: t.y, label: t.name, value: t.value })}
@@ -3138,7 +3052,6 @@ function StrainPreviewPanel({
                 sharedMin={sharedMin}
                 sharedMax={sharedMax}
                 reverseColors={reverseColors}
-                alignmentAngleDeg={strainForDisplay?.alignment_angle_deg}
                 rvRegions={rvRegionsForDisplay}
                 rvMetric={rvMetricType}
                 rvMin={rvRange.min}

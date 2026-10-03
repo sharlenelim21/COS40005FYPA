@@ -30,9 +30,13 @@ const runBullseyeRleScript = (
     width: number,
     height: number,
     logTag: string,
+    // Anterior RV insertion point [x, y], or null. With it the script aligns
+    // the segments to the landmark exactly as the GPU does; without it the
+    // script estimates the point from the RV in the mask.
+    rvInsertion1: number[] | null = null,
 ): Promise<any | null> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
-    const input = JSON.stringify({ frames, width, height });
+    const input = JSON.stringify({ frames, width, height, rv_insertion_1: rvInsertion1 });
 
     return new Promise<any | null>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
@@ -148,18 +152,31 @@ export const computeFrameRvAreaSeries = async (
     logger.info(`${serviceLocation}: [FrameRvArea] Stored ${results.length}/${frameIndices.length} frame(s) for mask ${maskId} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
 };
 
+// NOTE: test/stefani-strain-fix independently added a `resolveRvInsertionPoints`
+// here with the same name/purpose as `findLandmarkAlignment` below (itself
+// already built on the shared findSavedLandmarkDoc/meanSavedRvInsertionPoints/
+// findLatestLandmarkJobResult helpers imported above) — kept `findLandmarkAlignment`
+// as the one implementation and pointed every caller at it, rather than carrying
+// two near-identical RV-insertion-point resolvers with different return shapes
+// (merged 2026-10).
+
 /**
  * Compute AHA 17-segment bullseye analysis directly from the mask's RLE frame data
  * using the local Python script. No GPU or NIfTI file required.
  * Stores the result in MongoDB on the segmentation mask document.
+ *
+ * Pass `projectId` so the segments are aligned to the project's RV insertion
+ * landmark (same rule as the GPU); without it the fixed fallback angles are used.
  */
 export const computeBullseyeFromMaskDoc = async (
     maskId: string,
     frames: any[],
     width: number,
     height: number,
+    projectId?: string,
 ): Promise<void> => {
-    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`);
+    const rv1 = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
+    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1);
     if (!result) return;
     result.computed_at = new Date().toISOString();
     const writeResult = await projectSegmentationMaskModel.collection.updateOne(
@@ -178,20 +195,34 @@ export const computeBullseyeFromMaskDoc = async (
  * segmentation, so the Structure tab's bullseye/3D heart can animate without
  * waiting on a manual "Compute all frames" (which stays GRS/GCS-only).
  * Stores the result under `frameBullseye` on the mask document.
+ *
+ * Pass `projectId` so every frame is aligned to the project's RV insertion
+ * landmark (the same ED point for all frames, as the strain routes do);
+ * without it the fixed fallback angles are used.
  */
 export const computeFrameWallThicknessSeries = async (
     maskId: string,
     frames: any[],
     width: number,
     height: number,
+    projectId?: string,
 ): Promise<void> => {
     const frameIndices = Array.from(new Set(frames.map((f: any) => f.frameindex))).sort((a, b) => a - b);
     if (frameIndices.length <= 1) return; // nothing to animate with only one frame
 
+    // The point every frame's segments are aligned to. With a landmark it is
+    // the project's ED point. Without one, the script estimates it from the RV
+    // in the mask; we keep the estimate from the FIRST frame (ED) and reuse it
+    // for all later frames, so the segment borders do not move between frames.
+    let alignPoint: number[] | null = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
+
     const results: { frameIndex: number; segment_values: (number | null)[]; stats: any }[] = [];
     for (const frameIndex of frameIndices) {
         const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`);
+        const result = await runBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint);
+        if (!alignPoint && result?.alignment_source === "rv-mask" && Array.isArray(result.alignment_point)) {
+            alignPoint = result.alignment_point;
+        }
         if (result) {
             results.push({ frameIndex, segment_values: result.segment_values, stats: result.stats });
         }
@@ -979,7 +1010,7 @@ export const computeBullseyeAndStore = async (
                 logger.warn(`${serviceLocation}: [Bullseye] No dimensions for project ${projectId} — cannot fall back to local computation.`);
                 return;
             }
-            await computeBullseyeFromMaskDoc(maskId, frames, W, H);
+            await computeBullseyeFromMaskDoc(maskId, frames, W, H, projectId);
         } catch (fallbackErr: any) {
             logger.warn(`${serviceLocation}: [Bullseye] Local fallback also failed for mask ${maskId}: ${fallbackErr?.message}`);
         }
@@ -1054,7 +1085,7 @@ export const generateNiftiAndComputeBullseye = async (
             logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI not produced for mask ${maskId} — falling back to subprocess RLE path`);
             const frames = (maskDoc as any).frames ?? [];
             if (frames.length) {
-                await computeBullseyeFromMaskDoc(maskId, frames, W, H);
+                await computeBullseyeFromMaskDoc(maskId, frames, W, H, projectId);
             }
             return;
         }

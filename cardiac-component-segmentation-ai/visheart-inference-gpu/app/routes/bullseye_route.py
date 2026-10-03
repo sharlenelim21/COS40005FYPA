@@ -1,28 +1,50 @@
 """
 bullseye_route.py
 =================
-FastAPI router exposing AHA 17-segment wall-thickness analysis.
+FastAPI router for the LV and RV bullseye analyses.
+
+The geometry (slices, rays, segments, lengths, areas) is in
+bullseye_analysis.py. This file loads the NIfTI masks, applies the strain
+formulas and builds the JSON responses.
+
+Strain formula used everywhere:  (ES - ED) / ED x 100   (%)
+    negative = shortening / shrinking, positive = thickening.
 
 Endpoints
 ---------
 POST /bullseye/analyze
-    Mode A — direct NIfTI file upload (.nii or .nii.gz).
-    Accepts multipart/form-data with field `file`.
+    LV wall thickness (AHA 17 segments) — direct NIfTI file upload
+    (.nii or .nii.gz). Accepts multipart/form-data with field `file`.
 
 POST /bullseye/analyze-from-s3
-    Mode B — presigned S3 URL.
+    Same analysis — from a presigned S3 URL.
     Accepts JSON body with `s3_url` and optional `request_id`.
 
 POST /bullseye/compute-strain
-    Accepts ED and ES NIfTI files + optional RV insertion points.
-    Returns GRS and GCS per AHA segment.
+    LV strain. Accepts ED and ES NIfTI files + optional RV insertion points.
+    Returns GRS and GCS per AHA segment, plus the global values.
 
 POST /bullseye/compute-rv-strain
-    Accepts ED and ES NIfTI files + optional RV insertion points.
+    RV strain. Accepts ED and ES NIfTI files + optional RV insertion points.
     Returns GCS and GAS (separate, not combined) per RV free-wall segment
     (basal/mid/apical x 3), plus RV septal GCS per ring (septal_regions).
 
 Both analyze endpoints return the same BullseyeAnalysisResult schema.
+
+Alignment
+---------
+The LV segments are positioned from the ANTERIOR RV insertion point
+(rv_insertion_1): segment 1 is the 60° that end at it, segments 2–3 are the
+septum. If no landmark is sent, the point is estimated from the RV in the
+mask. Each result says which was used in `alignment_source`:
+"landmark", "rv-mask" (estimated) or "fixed-angle" (mask has no RV).
+
+Units
+-----
+The two analyze endpoints return wall thickness in PIXELS (no voxel size is
+applied). The two strain endpoints also return lengths / areas in mm / mm²,
+using the in-plane voxel size from the NIfTI header (`vox_xy_mm`). Strain is
+a percentage, so it does not depend on the voxel size.
 """
 
 from __future__ import annotations
@@ -47,6 +69,7 @@ from bullseye_analysis import (
     AHA_SEGMENTS,
     RING_NAMES,
     classify_slices,
+    estimate_anterior_rv_insertion,
     mask_to_17_segments,
     mask_to_rv_regions,
 )
@@ -56,7 +79,8 @@ router = APIRouter()
 # ── internal helpers ──────────────────────────────────────────────────────────
 
 def _load_nifti_bytes(data: bytes) -> np.ndarray:
-    """Load NIfTI from raw bytes via a temp file, return the array cast to uint8."""
+    """Load a NIfTI mask from raw bytes (via a temp file) and return it as a
+    3-D uint8 array. A 4-D file is collapsed to 3-D — see the comment below."""
     suffix = ".nii.gz" if data[:2] == b"\x1f\x8b" else ".nii"
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     try:
@@ -72,7 +96,10 @@ def _load_nifti_bytes(data: bytes) -> np.ndarray:
             )
         arr = np.asarray(img.dataobj)
         if arr.ndim == 4:
-            # 4D NIfTI (H×W×slices×frames): collapse frames by taking max label per voxel
+            # 4D NIfTI (H×W×slices×frames): collapse frames by taking max label per voxel.
+            # The result is therefore NOT one cardiac frame (e.g. not ED): each
+            # voxel keeps the highest class it had in any frame
+            # (LV cavity 3 > myocardium 2 > RV 1 > background 0).
             arr = arr.max(axis=-1)
         if arr.ndim != 3:
             raise HTTPException(
@@ -87,13 +114,46 @@ def _load_nifti_bytes(data: bytes) -> np.ndarray:
             pass
 
 
+def _load_strain_mask(data: bytes, fname: str):
+    """Load one ED or ES mask for the two strain routes (LV and RV).
+
+    Returns (mask as a 3-D uint8 array, in-plane voxel size in mm per pixel).
+    Raises ValueError on a bad shape; the routes turn that into a 422.
+    """
+    suffix = ".nii.gz" if (fname or "").endswith(".gz") else ".nii"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(data)
+        tmp.flush()
+        tmp.close()
+        img = nib.load(tmp.name)
+        arr = np.asarray(img.dataobj)
+        # A 4-D file is collapsed across frames (max label per voxel). The
+        # server sends ONE cardiac frame per file (a 4-D file with a single
+        # frame), so this only drops the frame axis.
+        if arr.ndim == 4:
+            arr = arr.max(axis=-1)
+        if arr.ndim != 3:
+            raise ValueError(f"Expected 3-D mask, got shape {arr.shape}")
+        # In-plane voxel size (mm per pixel) from the NIfTI header; 1.0 if missing.
+        zooms = img.header.get_zooms()
+        vox_xy = abs(float(zooms[0])) if len(zooms) > 0 and abs(float(zooms[0])) > 0 else 1.0
+        return arr.astype(np.uint8), vox_xy
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
 def _run_analysis(
     mask_3d: np.ndarray,
     request_id: Optional[str],
     rv_insertion_1: Optional[tuple[float, float]] = None,
     rv_insertion_2: Optional[tuple[float, float]] = None,
 ) -> BullseyeAnalysisResult:
-    """CPU-bound analysis — called via run_in_threadpool."""
+    """CPU-bound analysis — called via run_in_threadpool.
+    LV wall thickness per AHA segment, in pixels."""
     if not np.any(mask_3d == 2):
         raise HTTPException(
             status_code=422,
@@ -105,13 +165,10 @@ def _run_analysis(
     lv_centroid: Optional[List[float]] = analysis["lv_centroid"]
     slice_labels: list[str] = classify_slices(mask_3d)
 
-    # NaN-safe per-segment values: same _safe_float/finite_vals pattern already
-    # used in compute_bullseye_from_rle.py (the subprocess fallback). A bare
-    # Python NaN is rejected by FastAPI's JSON encoder outright (ValueError:
-    # Out of range float values are not JSON compliant), crashing the request
-    # with a 500 instead of a graceful null — this affects both individual
-    # invalid segments and the aggregate stats when every segment is invalid
-    # (e.g. insufficient myocardium in every slice).
+    # NaN → None. FastAPI's JSON encoder rejects NaN (it would fail the whole
+    # request with a 500), so a segment that could not be measured is returned
+    # as null, and the stats below skip it — they are None when every segment
+    # is invalid (e.g. too little myocardium in every slice).
     segment_values: List[Optional[float]] = [
         None if np.isnan(v) else float(v) for v in values
     ]
@@ -185,13 +242,17 @@ async def analyze_bullseye_upload(
 ) -> BullseyeAnalysisResult:
     """
     Accept a NIfTI segmentation mask as a multipart upload and return
-    the AHA 17-segment wall-thickness analysis.
+    the AHA 17-segment wall-thickness analysis (values in pixels).
 
-    The mask must be 3-D (H × W × N_slices) with class values:
+    The mask should be 3-D (H × W × N_slices) with class values:
     0=background, 1=RV, 2=myocardium, 3=LV cavity.
+    A 4-D mask (… × frames) is also accepted, but it is collapsed across
+    frames — see _load_nifti_bytes.
 
     Optional form fields rv_insertion_1_x/y and rv_insertion_2_x/y provide
     RV insertion point coordinates (pixel coords) for anatomical alignment.
+    Point 1 is the anterior insertion point; only point 1 is used. Without
+    it, the point is estimated from the RV in the mask.
     """
     fname = file.filename or ""
     if not (fname.endswith(".nii") or fname.endswith(".nii.gz")):
@@ -222,10 +283,12 @@ async def analyze_bullseye_s3(
 ) -> BullseyeAnalysisResult:
     """
     Download a NIfTI segmentation mask from an S3 presigned URL and return
-    the AHA 17-segment wall-thickness analysis.
+    the AHA 17-segment wall-thickness analysis (values in pixels).
 
-    The mask must be 3-D (H × W × N_slices) with class values:
+    The mask should be 3-D (H × W × N_slices) with class values:
     0=background, 1=RV, 2=myocardium, 3=LV cavity.
+    A 4-D mask (… × frames) is also accepted, but it is collapsed across
+    frames — see _load_nifti_bytes.
     """
     rv1 = tuple(request.rv_insertion_1) if request.rv_insertion_1 is not None else None
     rv2 = tuple(request.rv_insertion_2) if request.rv_insertion_2 is not None else None
@@ -237,13 +300,15 @@ async def analyze_bullseye_s3(
 
 # ── Route C: compute strain from ED + ES NIfTI uploads ───────────────────────
 
+# Segment names by index (1–17): the standard AHA 17-segment model. Same order
+# as AHA_SEGMENTS in bullseye_analysis.py — see the notes there.
 _AHA_NAMES = [
     "Basal Anterior", "Basal Anteroseptal", "Basal Inferoseptal",
     "Basal Inferior", "Basal Inferolateral", "Basal Anterolateral",
     "Mid Anterior",   "Mid Anteroseptal",    "Mid Inferoseptal",
     "Mid Inferior",   "Mid Inferolateral",   "Mid Anterolateral",
-    "Apical Anterior", "Apical Lateral",      "Apical Inferior",
-    "Apical Septal",   "Apex",
+    "Apical Anterior", "Apical Septal",       "Apical Inferior",
+    "Apical Lateral",  "Apex",
 ]
 
 
@@ -255,41 +320,36 @@ def _compute_strain_sync(
     rv1: Optional[tuple[float, float]],
     rv2: Optional[tuple[float, float]],
 ) -> dict:
-    """CPU-bound: load both NIfTIs, run mask_to_17_segments on each, compute GRS/GCS."""
+    """CPU-bound: load both NIfTIs, run mask_to_17_segments on each, compute GRS/GCS.
 
-    def _load(data: bytes, fname: str):
-        suffix = ".nii.gz" if (fname or "").endswith(".gz") else ".nii"
-        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        try:
-            tmp.write(data)
-            tmp.flush()
-            tmp.close()
-            img = nib.load(tmp.name)
-            arr = np.asarray(img.dataobj)
-            if arr.ndim == 4:
-                arr = arr.max(axis=-1)
-            if arr.ndim != 3:
-                raise ValueError(f"Expected 3-D mask, got shape {arr.shape}")
-            zooms = img.header.get_zooms()
-            vox_xy = abs(float(zooms[0])) if len(zooms) > 0 and abs(float(zooms[0])) > 0 else 1.0
-            return arr.astype(np.uint8), vox_xy
-        finally:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
+    GRS = % change in wall thickness, ED → ES.
+    GCS = mean of the % changes in the outer, mid-wall and inner boundary lengths.
 
-    mask_ed, vox_xy = _load(ed_bytes, ed_fname)
-    mask_es, _      = _load(es_bytes, es_fname)
+    ED and ES are each analysed on their own (ES gets its own slice
+    classification) — unlike the RV route, which reuses ED's layout at ES.
+    """
+
+    # The voxel size is taken from the ED file and used for both frames.
+    mask_ed, vox_xy = _load_strain_mask(ed_bytes, ed_fname)
+    mask_es, _      = _load_strain_mask(es_bytes, es_fname)
 
     if not np.any(mask_ed == 2):
         raise ValueError("ED mask contains no myocardium (class 2) pixels.")
     if not np.any(mask_es == 2):
         raise ValueError("ES mask contains no myocardium (class 2) pixels.")
 
-    from bullseye_analysis import mask_to_17_segments
-    res_ed = mask_to_17_segments(mask_ed, rv_insertion_1=rv1, rv_insertion_2=rv2)
-    res_es = mask_to_17_segments(mask_es, rv_insertion_1=rv1, rv_insertion_2=rv2)
+    # No landmark → estimate the anterior RV insertion point ONCE, from the ED
+    # mask, and use that same point for both frames, so ED and ES are split
+    # into the same wedges (estimating it separately per frame would shift the
+    # segment borders between the two).
+    align_pt = rv1
+    estimated_from_mask = False
+    if align_pt is None:
+        align_pt = estimate_anterior_rv_insertion(mask_ed)
+        estimated_from_mask = align_pt is not None
+
+    res_ed = mask_to_17_segments(mask_ed, rv_insertion_1=align_pt, rv_insertion_2=rv2)
+    res_es = mask_to_17_segments(mask_es, rv_insertion_1=align_pt, rv_insertion_2=rv2)
 
     wt_ed   = np.array(res_ed["values"],      dtype=float)
     wt_es   = np.array(res_es["values"],      dtype=float)
@@ -297,8 +357,7 @@ def _compute_strain_sync(
     # strain independently at the outer, mid-wall, and inner myocardium
     # boundaries (each boundary's "circumference" is a summed per-sector chord
     # length, not 2π×radius), then average the three boundaries' strains.
-    # This replaced an earlier mid-wall-only formula per client instruction to
-    # follow the notebook's method.
+    # (The notebook's method is used at the client's request.)
     outer_chord_ed = np.array(res_ed["outer_circ_chord"], dtype=float)
     outer_chord_es = np.array(res_es["outer_circ_chord"], dtype=float)
     mid_chord_ed   = np.array(res_ed["mid_circ_chord"],   dtype=float)
@@ -329,6 +388,7 @@ def _compute_strain_sync(
         ed_v = float(wt_ed[i])   if not np.isnan(wt_ed[i])   else None
         es_v = float(wt_es[i])   if not np.isnan(wt_es[i])   else None
 
+        # GRS: % change in this segment's wall thickness, ED → ES.
         grs: float | None = None
         if ed_v is not None and es_v is not None and ed_v > 0:
             grs = round((es_v - ed_v) / ed_v * 100.0, 2)
@@ -340,6 +400,7 @@ def _compute_strain_sync(
         mid_strain   = _boundary_strain(mid_chord_ed,   mid_chord_es,   i)
         inner_strain = _boundary_strain(inner_chord_ed, inner_chord_es, i)
 
+        # GCS: mean of the boundary strains that could be computed (up to three).
         gcs: float | None = None
         boundary_strains = [s for s in (outer_strain, mid_strain, inner_strain) if s is not None]
         if boundary_strains:
@@ -400,7 +461,7 @@ def _compute_strain_sync(
         "ed_wt_mean_mm":     round(float(np.mean(valid_ed_mm)), 3) if valid_ed_mm else None,
         "es_wt_mean_mm":     round(float(np.mean(valid_es_mm)), 3) if valid_es_mm else None,
         "vox_xy_mm":         vox_xy,
-        "alignment_source":  res_ed.get("alignment_source", "fixed-angle"),
+        "alignment_source":  "rv-mask" if estimated_from_mask else res_ed.get("alignment_source", "fixed-angle"),
         "alignment_angle_deg": res_ed.get("alignment_angle_deg"),
     }
 
@@ -421,9 +482,11 @@ async def compute_strain(
 ):
     """
     Upload segmentation masks for End-Diastole (ED) and End-Systole (ES) frames.
-    Returns GRS (wall thickening) and GCS (circumferential shortening) per AHA segment.
+    Returns GRS (wall thickening) and GCS (circumferential shortening) per AHA
+    segment, plus the global values.
 
-    Masks must be 3-D (H × W × N_slices) with class values:
+    Each mask should hold one cardiac frame: 3-D (H × W × N_slices), or 4-D
+    with a single frame, with class values:
     0=background, 1=RV, 2=myocardium, 3=LV cavity.
     """
     for f, label in ((ed_file, "ed_file"), (es_file, "es_file")):
@@ -459,6 +522,8 @@ async def compute_strain(
 # centre — see bullseye_analysis.mask_to_rv_regions. There is no RV free-wall
 # myocardium label in this mask, so per segment this reports GCS (free-wall
 # chord % change) and GAS (cavity area % change) rather than wall thickening.
+# GCS and GAS are reported separately and are never combined into one value.
+# The septal side of the RV gets its own GCS, one value per ring.
 
 def _compute_rv_strain_sync(
     ed_bytes: bytes,
@@ -468,32 +533,17 @@ def _compute_rv_strain_sync(
     rv1: Optional[tuple[float, float]],
     rv2: Optional[tuple[float, float]],
 ) -> dict:
-    """CPU-bound: load both NIfTIs, run mask_to_rv_regions on each, compute per-region strain."""
+    """CPU-bound: load both NIfTIs, run mask_to_rv_regions on each, compute per-region strain.
 
-    def _load(data: bytes, fname: str):
-        suffix = ".nii.gz" if (fname or "").endswith(".gz") else ".nii"
-        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        try:
-            tmp.write(data)
-            tmp.flush()
-            tmp.close()
-            img = nib.load(tmp.name)
-            arr = np.asarray(img.dataobj)
-            if arr.ndim == 4:
-                arr = arr.max(axis=-1)
-            if arr.ndim != 3:
-                raise ValueError(f"Expected 3-D mask, got shape {arr.shape}")
-            zooms = img.header.get_zooms()
-            vox_xy = abs(float(zooms[0])) if len(zooms) > 0 and abs(float(zooms[0])) > 0 else 1.0
-            return arr.astype(np.uint8), vox_xy
-        finally:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
+    Per free-wall segment (9): GCS = % change in free-wall length,
+                               GAS = % change in cavity area.
+    Per ring (3):              septal GCS = % change in septal-side length.
+    All ED → ES; negative = shortening / shrinking.
+    """
 
-    mask_ed, vox_xy = _load(ed_bytes, ed_fname)
-    mask_es, _      = _load(es_bytes, es_fname)
+    # The voxel size is taken from the ED file and used for both frames.
+    mask_ed, vox_xy = _load_strain_mask(ed_bytes, ed_fname)
+    mask_es, _      = _load_strain_mask(es_bytes, es_fname)
 
     if not np.any(mask_ed == 1):
         raise ValueError("ED mask contains no RV (class 1) pixels.")
@@ -505,15 +555,18 @@ def _compute_rv_strain_sync(
     res_ed = mask_to_rv_regions(mask_ed, rv_insertion_1=rv1, rv_insertion_2=rv2)
     res_es = mask_to_rv_regions(mask_es, rv_insertion_1=rv1, rv_insertion_2=rv2, layout=res_ed["layout"])
 
+    # NaN → None (a measurement that could not be made).
     def _opt(arr: np.ndarray, i: int) -> float | None:
         v = float(arr[i])
         return None if np.isnan(v) else v
 
+    # THE STRAIN FORMULA: % change from ED to ES. Used for GCS, GAS and septal GCS.
     def _pct(ed_v: float | None, es_v: float | None) -> float | None:
         if ed_v is None or es_v is None or ed_v <= 0:
             return None
         return round((es_v - ed_v) / ed_v * 100.0, 2)
 
+    # Pixels → mm (scale = vox_xy) or pixels² → mm² (scale = vox_xy²).
     def _mm(v: float | None, scale: float) -> float | None:
         return round(v * scale, 3) if v is not None else None
 
@@ -536,8 +589,8 @@ def _compute_rv_strain_sync(
         regions.append({
             "region":       meta["idx"],
             "label":        meta["label"],
-            # `strain` stays the GCS-style value (free-wall chord % change)
-            # until GCS and GAS are combined into a single RV strain.
+            # `strain` is the same value as `gcs` (free-wall GCS, the main RV
+            # value). GCS and GAS are reported separately, never combined.
             "strain":       gcs,
             "gcs":          gcs,
             "gas":          gas,
@@ -549,7 +602,9 @@ def _compute_rv_strain_sync(
             "radius_es_mm": _mm(radius_es, vox_xy),
         })
 
-    # Ratio of totals, same rationale as global_grs/global_gcs above.
+    # Global value = % change of the summed ED vs the summed ES values over the
+    # valid segments (ratio of totals), same rationale as global_grs/global_gcs
+    # above — not the average of the per-segment percentages.
     def _global(pairs: list[tuple[float, float]]) -> float | None:
         if not pairs:
             return None
@@ -575,6 +630,7 @@ def _compute_rv_strain_sync(
             "chord_es_mm": _mm(s_es, vox_xy),
         })
 
+    # `global_rv_strain` is the same value as `global_rv_gcs` (free-wall GCS).
     return {
         "regions":             regions,
         "septal_regions":      septal_regions,
@@ -605,11 +661,14 @@ async def compute_rv_strain(
     """
     Upload segmentation masks for ED and ES frames. Returns, per RV segment
     (basal/mid/apical x 3 sections, Seg1 inferior → Seg3 anterior), GCS
-    (free-wall chord % change) and GAS (cavity area % change). `strain`
-    currently equals `gcs`. Section wedges are fixed at ED and reused at ES —
-    see bullseye_analysis.mask_to_rv_regions.
+    (free-wall chord % change) and GAS (cavity area % change), reported
+    separately. `strain` is the same value as `gcs`. Also returns the RV
+    septal GCS per ring (`septal_regions`) and the global values. Section
+    wedges are fixed at ED and reused at ES — see
+    bullseye_analysis.mask_to_rv_regions.
 
-    Masks must be 3-D (H × W × N_slices) with class values:
+    Each mask should hold one cardiac frame: 3-D (H × W × N_slices), or 4-D
+    with a single frame, with class values:
     0=background, 1=RV, 2=myocardium, 3=LV cavity.
     """
     for f, label in ((ed_file, "ed_file"), (es_file, "es_file")):

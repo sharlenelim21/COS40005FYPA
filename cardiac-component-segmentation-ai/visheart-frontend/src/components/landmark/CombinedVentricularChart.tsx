@@ -30,9 +30,6 @@ interface CombinedVentricularChartProps {
   sharedMin?: number;
   sharedMax?: number;
   reverseColors?: boolean;
-  /** Landmark-derived anterior start angle from the backend (RealStrainResult's
-   *  alignment_angle_deg). Null/undefined = fixed-angle layout. */
-  alignmentAngleDeg?: number | null;
 
   rvRegions: RvStrainRegion[] | null;
   /** Which RV metric rvRegions[].strain holds — picks its fixed colour scale
@@ -70,10 +67,10 @@ interface CombinedVentricularChartProps {
   rvLabelFontWeight?: number;
 }
 
-// Same backend ray-cast start-angle fallback as StrainBullseyeChart/RvStrainChart
-// (bullseye_analysis.py's start_angle_by_ring["basal"] = 4*pi/3 = 240deg). The
-// fixed LV/RV wedge layouts below already assume this exact fallback.
-const BACKEND_FIXED_FALLBACK_DEG = 240;
+// The chart is NEVER rotated: segment 1 (Anterior) is always drawn at the top.
+// The backend already uses the RV insertion landmark to decide which part of
+// the wall each segment number is, so rotating the drawing by its
+// alignment_angle_deg as well would apply the alignment twice.
 
 // ── Layout constants (single source of truth for the geometry below) ────────
 const VIEW_W = 480, VIEW_H = 470;
@@ -97,7 +94,7 @@ const RV_SPAN_START = 100, RV_SPAN_END = 260;
 
 export function CombinedVentricularChart({
   lvData, hasLv, strainType, selectedSegment, onSegmentClick, onSegmentHover,
-  sharedMin, sharedMax, reverseColors = false, alignmentAngleDeg,
+  sharedMin, sharedMax, reverseColors = false,
   rvRegions, rvMetric = "GCS", rvMin, rvMax, selectedRvRegion, onRvRegionClick, onRvRegionHover,
   showLv = true, showRv = true, showColorBars = true,
   // Same wedge/label styling as the AHA bullseye (AhaBullseye.tsx) so every
@@ -119,7 +116,6 @@ export function CombinedVentricularChart({
   // when it's the only thing on screen (using the RV radius there left a
   // large, unbalanced gap between the LV circle and everything below it).
   const outerR = showRv ? RV_BASAL_OUTER : (LV_BASAL_OUTER + 4);
-  const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
 
   // ── LV (right side — unchanged 17-segment geometry, recentered) ──────────
   // Fixed colour scales (lib/strainColorScale.ts), not this patient's own min/max.
@@ -143,8 +139,8 @@ export function CombinedVentricularChart({
   const isLvSel = (seg1based: number) => selectedSegment === seg1based;
 
   const lvSegPath = (i: number, innerR: number, outerR: number, ring: "bm" | "ap") => {
-    const start = (ring === "bm" ? -120 - i * 60 : -135 - i * 90) + referenceAngleDeg;
-    const end   = (ring === "bm" ?  -60 - i * 60 :  -45 - i * 90) + referenceAngleDeg;
+    const start = ring === "bm" ? -120 - i * 60 : -135 - i * 90;
+    const end   = ring === "bm" ?  -60 - i * 60 :  -45 - i * 90;
     const mid   = (start + end) / 2;
     const lr    = (innerR + outerR) / 2;
     const lp    = polarPointAt(center, lr, mid);
@@ -178,12 +174,11 @@ export function CombinedVentricularChart({
   const isRvSel = (region1based: number) => selectedRvRegion === region1based;
 
   // 3 bands (apical = inner, touching the LV boundary; mid; basal = outer),
-  // 3 sectors each — see RV_SPAN_START/END above for the span. Rotated by
-  // the same referenceAngleDeg as the LV rings so the crescent stays fused
-  // to the LV circle's septal-side seam as the layout rotates.
+  // 3 sectors each — see RV_SPAN_START/END above for the span. Like the LV
+  // rings, the crescent is never rotated.
   const rvSegPath = (i: number, innerR: number, outerR: number) => {
     const sectorWidth = (RV_SPAN_END - RV_SPAN_START) / 3;
-    const start = RV_SPAN_START + i * sectorWidth + referenceAngleDeg;
+    const start = RV_SPAN_START + i * sectorWidth;
     const end = start + sectorWidth;
     const mid = (start + end) / 2;
     const lr = (innerR + outerR) / 2;
@@ -238,16 +233,17 @@ export function CombinedVentricularChart({
               was a fixed y=14 regardless of chamber, leaving a large,
               awkward gap above LV-only's smaller circle. */}
           <text x={center.x} y={center.y - outerR - 12} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Anterior</text>
-          {/* Lateral only makes sense as a single-chamber direction label --
-              in Combined, the RV crescent's own R#/segment labels already
-              occupy that side, and "Lateral" collided/clipped against them
-              there. */}
+          {/* Standard AHA layout: the septal segments (2, 3, 8, 9, 14) are on
+              the LEFT, which is also the side the RV crescent is drawn on --
+              the RV sits against the septum. So in Combined the "Septal"
+              label is dropped (the crescent's own R#/segment labels occupy
+              that side); it is only shown for the LV-only view. */}
           {!showRv && (
             <text x={center.x - (LV_BASAL_OUTER + 4) - 20} y={center.y + 4} textAnchor="end" fontSize="12" fontWeight="700" fill="currentColor">
-              Lateral
+              Septal
             </text>
           )}
-          <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Septal</text>
+          <text x={center.x + LV_BASAL_OUTER + 20} y={center.y + 4} textAnchor="start" fontSize="12" fontWeight="700" fill="currentColor">Lateral</text>
           <text x={center.x} y={center.y + outerR + 24} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">Inferior</text>
         </>
       )}

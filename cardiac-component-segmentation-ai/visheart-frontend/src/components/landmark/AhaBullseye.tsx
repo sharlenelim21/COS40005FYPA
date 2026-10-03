@@ -47,22 +47,19 @@ export function AhaBullseye({
   min,
   max,
   reverse = false,
-  referenceAngleDeg = 0,
   selectedSegment = -1,
   onSegmentClick,
   onSegmentHover,
   onSegmentLeave,
   ariaLabel = "AHA 17-segment bullseye",
 }: {
-  /** 17 values, AHA order (basal 1-6, mid 7-12, apical 13-16, apex 17). */
+  /** 17 values, standard AHA order (basal 1-6, mid 7-12, apical 13-16, apex 17). */
   values: (number | null)[];
   /** 17 segment names for the hover tooltip. */
   names: string[];
   min: number;
   max: number;
   reverse?: boolean;
-  /** Landmark alignment rotation (deg). */
-  referenceAngleDeg?: number;
   /** 0-based selected segment, -1 = none. */
   selectedSegment?: number;
   onSegmentClick?: (index: number) => void;
@@ -114,17 +111,20 @@ export function AhaBullseye({
     <svg viewBox="0 0 300 300" role="img" aria-label={ariaLabel} className="h-full w-full text-[#475569] dark:text-slate-300">
       <circle cx={center} cy={center} r="112" className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
 
+      {/* Standard AHA layout: Anterior at the top, the septal segments (2, 3,
+          8, 9, 14) on the LEFT and the lateral ones (5, 6, 11, 12, 16) on the
+          RIGHT. The chart is never rotated. */}
       <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Anterior</text>
-      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
+      <text x="298" y={center + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
       <text x={center} y="290" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">Inferior</text>
-      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Lateral</text>
+      <text x="2" y={center + 4} textAnchor="start" fontSize="11" fontWeight="700" fill="currentColor">Septal</text>
 
       {Array.from({ length: 6 }, (_, i) =>
-        segment(i, basalInner, basalOuter, -120 - i * 60 + referenceAngleDeg, -60 - i * 60 + referenceAngleDeg))}
+        segment(i, basalInner, basalOuter, -120 - i * 60, -60 - i * 60))}
       {Array.from({ length: 6 }, (_, i) =>
-        segment(i + 6, midInner, basalInner, -120 - i * 60 + referenceAngleDeg, -60 - i * 60 + referenceAngleDeg))}
+        segment(i + 6, midInner, basalInner, -120 - i * 60, -60 - i * 60))}
       {Array.from({ length: 4 }, (_, i) =>
-        segment(i + 12, apicalInner, midInner, -135 - i * 90 + referenceAngleDeg, -45 - i * 90 + referenceAngleDeg))}
+        segment(i + 12, apicalInner, midInner, -135 - i * 90, -45 - i * 90))}
 
       <circle
         cx={center}

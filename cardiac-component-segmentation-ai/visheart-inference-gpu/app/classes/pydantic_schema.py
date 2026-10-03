@@ -263,7 +263,7 @@ class BullseyeAnalysisResult(BaseModel):
     slice_labels: List[str] = Field(..., description="Label per slice: basal | mid | apical | apex | none")
     lv_centroid: Optional[List[float]] = Field(None, description="Average myocardium centroid [cx, cy] in pixel coords across basal/mid slices")
     alignment_angle_deg: Optional[float] = Field(None, description="Anterior start angle in degrees derived from RV insertion points; None when fixed-angle fallback was used")
-    alignment_source: Optional[str] = Field(None, description="'landmark' if RV insertion points were used, 'fixed-angle' if hardcoded fallback was used")
+    alignment_source: Optional[str] = Field(None, description="'landmark' if the RV insertion landmark was used, 'rv-mask' if there was no landmark and the point was estimated from the RV in the mask, 'fixed-angle' if neither was available")
 
 
 class FourDReconstructionResult(BaseModel):
