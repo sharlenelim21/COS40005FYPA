@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   Loader2,
   Scan,
@@ -182,6 +183,8 @@ export default function LandmarkDetectionPage() {
     tarCacheReady,
     getReconstructionGLB,
     reconstructionsByModel,
+    hasReconstructions,
+    refreshReconstructions,
   } = useProject();
 
   useEffect(() => {
@@ -568,6 +571,30 @@ export default function LandmarkDetectionPage() {
   const hasPredictions = state.status === "done" && state.predictions.length > 0;
   const autoRunStartedRef = useRef(false);
 
+  // Reconstruction-readiness guard -- landmark detection needs a finished 4D reconstruction to
+  // run against. The dashboard's own Landmark Detection card already locks itself while
+  // !hasReconstructions, but that doesn't stop direct URL navigation, browser back/forward, or a
+  // stale tab left open from before reconstruction finished -- any of those land here and the
+  // auto-run effect below would fire a real GPU detection job immediately on mount. This mirrors
+  // standalone-4d-viewer/page.tsx's isMissing pattern: refresh once (ProjectContext doesn't
+  // auto-populate hasReconstructions) and redirect back if nothing showed up.
+  const [reconCheckDone, setReconCheckDone] = useState(false);
+  useEffect(() => {
+    if (loading !== "done") return;
+    let cancelled = false;
+    (async () => {
+      if (!hasReconstructions) await refreshReconstructions();
+      if (!cancelled) setReconCheckDone(true);
+    })();
+    return () => { cancelled = true; };
+  }, [loading, hasReconstructions, refreshReconstructions]);
+
+  useEffect(() => {
+    if (loading !== "done" || !reconCheckDone || hasReconstructions) return;
+    toast.error("Build a 4D reconstruction before running landmark detection.");
+    router.replace(`/project/${projectId}`);
+  }, [loading, reconCheckDone, hasReconstructions, projectId, router]);
+
   // Real progress of the running detection job, as reported by the GPU per slice.
   const [detectionProgress, setDetectionProgress] = useState<number | null>(null);
   useEffect(() => {
@@ -638,6 +665,10 @@ export default function LandmarkDetectionPage() {
     if (!segModelsLoaded) return;
     if (segPending !== false) return;
     if (state.status !== "idle") return;
+    // Don't auto-run before the reconstruction-readiness check above has actually resolved --
+    // without this, a direct/stale navigation to this page could fire a real GPU detection job
+    // on the same render the redirect-away effect is still about to run on (reported live, 2026-10).
+    if (!reconCheckDone || !hasReconstructions) return;
 
     autoRunStartedRef.current = true;
     const model = landmarkSegModel;
@@ -647,7 +678,7 @@ export default function LandmarkDetectionPage() {
       if (done) handleAttachToJob(done, model);
       else runDetectionAndResetEdits(selectedModel);
     })();
-  }, [loading, projectData, hydrating, segModelsLoaded, segPending, state.status, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
+  }, [loading, projectData, hydrating, segModelsLoaded, segPending, state.status, reconCheckDone, hasReconstructions, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
 
   const runUnlessSegmentationPending = useCallback(async (run: () => void) => {
     if (segPending === true) return;
@@ -697,6 +728,14 @@ export default function LandmarkDetectionPage() {
     } as FramePrediction;
   }, [currentPrediction, currentLandmarkEditKey, savedLandmarkEdits]);
 
+  // NOTE: a cross-frame "sync the first frame's move to other frames at the same slice" feature
+  // was tried here and reverted (reported live, 2026-10): deleting a point on a frame that had
+  // received a synced position interacted badly with the RV anterior/inferior auto-swap in
+  // handleLandmarkMoveEnd (which only reorders rv_insertion_1/rv_insertion_2 on the frame being
+  // dragged), making a delete on one frame appear to also clear the point on others. Given this
+  // is a medical measurement tool, an edit silently affecting a frame the user didn't touch is a
+  // worse outcome than losing the convenience, so edits are back to fully independent per
+  // (frame, slice) pair, as they were before that feature existed.
   const handleLandmarkMove = useCallback((id: string, coord: [number, number]) => {
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey] ?? {};
@@ -1704,6 +1743,13 @@ export default function LandmarkDetectionPage() {
                             strainType="GRS"
                             rvRegions={currentFrameRvFacRegions}
                             rvMetric="FAC"
+                            // Share the SAME min/max the 3D mesh below uses (structureRvFacRange)
+                            // instead of falling back to the fixed 0-50 FAC scale -- otherwise the
+                            // same segment's FAC value gets normalized against two different
+                            // windows and renders a different color in each view (reported live,
+                            // 2026-10). Matches the Strain tab's rvRange pattern (page.tsx ~3080).
+                            rvMin={structureRvFacRange.min ?? undefined}
+                            rvMax={structureRvFacRange.max ?? undefined}
                             showLv={false}
                             showRv={true}
                             selectedRvRegion={selectedStructureRvRegion}

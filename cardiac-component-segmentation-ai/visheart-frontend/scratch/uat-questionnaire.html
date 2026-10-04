@@ -1,0 +1,449 @@
+<title>VisHeart UAT Questionnaire</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --ink: #1c2420;
+    --ink-soft: #55615a;
+    --line: #dcdfdb;
+    --accent: #b23b3b;
+    --accent-soft: #f3e2e0;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    --serif: "Source Serif 4", Georgia, serif;
+    --sans: "Inter", -apple-system, Segoe UI, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15181a;
+      --surface: #1e2225;
+      --ink: #eceeec;
+      --ink-soft: #a9b1ac;
+      --line: #343a3c;
+      --accent: #e0756a;
+      --accent-soft: #3a2422;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15181a;
+    --surface: #1e2225;
+    --ink: #eceeec;
+    --ink-soft: #a9b1ac;
+    --line: #343a3c;
+    --accent: #e0756a;
+    --accent-soft: #3a2422;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    margin: 0;
+    padding: 28px 16px 64px;
+    line-height: 1.5;
+  }
+  .sheet {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  .masthead {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+  }
+  .masthead h1 {
+    font-family: var(--serif);
+    font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.1rem);
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .masthead .kicker {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 8px;
+  }
+  .masthead p {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 13.5px;
+    max-width: 48ch;
+  }
+  .scale-key {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    white-space: nowrap;
+    background: var(--surface);
+  }
+  .scale-key strong { color: var(--ink); }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin-bottom: 30px;
+  }
+  .meta-field label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-soft);
+    margin-bottom: 4px;
+  }
+  .meta-field .fill {
+    border-bottom: 1px solid var(--ink);
+    height: 22px;
+  }
+
+  .section {
+    margin-bottom: 30px;
+  }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 8px;
+  }
+  .section-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 2px 9px;
+    flex-shrink: 0;
+  }
+  .section-head h2 {
+    font-family: var(--serif);
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+  }
+  .section-sub {
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin: -6px 0 12px;
+  }
+
+  table.items {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  table.items col.q { width: auto; }
+  table.items col.score { width: 26px; }
+  table.items col.notes { width: 130px; }
+  table.items thead th {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    font-weight: 500;
+    padding: 0 4px 6px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+  }
+  table.items thead th.q-head { text-align: left; }
+  table.items thead th.notes-head { text-align: left; padding-left: 10px; }
+  table.items tbody tr {
+    border-bottom: 1px solid var(--line);
+  }
+  table.items tbody tr:last-child { border-bottom: none; }
+  table.items td {
+    padding: 9px 4px;
+    vertical-align: middle;
+  }
+  table.items td.q-cell {
+    padding-right: 10px;
+  }
+  table.items td.notes-cell {
+    padding-left: 10px;
+    border-left: 1px dashed var(--line);
+  }
+  .notes-line { border-bottom: 1px solid var(--line); height: 17px; }
+
+  .box {
+    width: 17px;
+    height: 17px;
+    border: 1.3px solid var(--ink-soft);
+    border-radius: 3px;
+    margin: 0 auto;
+  }
+
+  .open-q {
+    margin-bottom: 16px;
+  }
+  .open-q .prompt {
+    font-size: 13.5px;
+    margin-bottom: 8px;
+  }
+  .open-q .prompt .n {
+    font-family: var(--mono);
+    color: var(--accent);
+    margin-right: 6px;
+  }
+  .lines .ln {
+    border-bottom: 1px solid var(--line);
+    height: 26px;
+  }
+
+  .task-list {
+    list-style: none;
+    margin: 0 0 14px;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .task-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  .task-list .tbox {
+    width: 16px;
+    height: 16px;
+    border: 1.3px solid var(--ink-soft);
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .task-list .tname { flex: 1; }
+  .task-list .ttime {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--line);
+    min-width: 54px;
+    text-align: center;
+  }
+
+  .footer-note {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    border-top: 1px dashed var(--line);
+    padding-top: 14px;
+    margin-top: 36px;
+  }
+
+  @media (max-width: 480px) {
+    table.items { font-size: 12px; }
+    table.items td, table.items thead th { padding: 7px 2px; }
+  }
+
+  @media print {
+    body { padding: 0; background: #fff; color: #000; }
+    .masthead, .scale-key, .section-num, .box, .tbox { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+
+<div class="sheet">
+
+  <div class="masthead">
+    <div>
+      <p class="kicker">VisHeart &middot; Final Year Project</p>
+      <h1>Usability &amp; UAT Questionnaire</h1>
+      <p>Post-test evaluation for the cardiac MRI segmentation, 4D reconstruction, landmark detection and strain-analysis platform. Score each statement 1&ndash;5, then answer the open questions at the end.</p>
+    </div>
+    <div class="scale-key">
+      <strong>1</strong> strongly disagree<br>
+      <strong>2</strong> disagree<br>
+      <strong>3</strong> neutral<br>
+      <strong>4</strong> agree<br>
+      <strong>5</strong> strongly agree
+    </div>
+  </div>
+
+  <div class="meta-grid">
+    <div class="meta-field"><label>Participant ID</label><div class="fill"></div></div>
+    <div class="meta-field"><label>Date</label><div class="fill"></div></div>
+    <div class="meta-field"><label>Role / background</label><div class="fill"></div></div>
+    <div class="meta-field"><label>Prior MRI/cardiac exp.</label><div class="fill"></div></div>
+  </div>
+
+  <!-- ============ SECTION A: TASKS COMPLETED ============ -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">A</span>
+      <h2>Tasks completed during this session</h2>
+    </div>
+    <p class="section-sub">Tick what the participant actually did before this session &mdash; it shapes how much weight to give the inference-accuracy section below.</p>
+    <ul class="task-list">
+      <li><span class="tbox"></span><span class="tname">Uploaded / selected an MRI case and ran segmentation (UNet or MedSAM)</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Manually corrected a segmentation mask</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Built a 4D reconstruction (LV and/or RV)</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Ran landmark detection and reviewed/edited points</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Computed Quick (ED&rarr;ES) strain</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Computed full-cycle (all-frame) strain</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Explored the Structure tab (wall thickness, 3D heart)</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Explored the Strain tab (bullseye + 3D heart colouring)</span><span class="ttime">___ min</span></li>
+      <li><span class="tbox"></span><span class="tname">Viewed / exported a PDF report</span><span class="ttime">___ min</span></li>
+    </ul>
+  </div>
+
+  <!-- ============ SECTION B: CORE USABILITY (original 15) ============ -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">B</span>
+      <h2>Core usability</h2>
+    </div>
+    <table class="items">
+      <colgroup><col class="q"><col class="score"><col class="score"><col class="score"><col class="score"><col class="score"><col class="notes"></colgroup>
+      <thead>
+        <tr>
+          <th class="q-head">Statement</th>
+          <th>1</th><th>2</th><th>3</th><th>4</th><th>5</th>
+          <th class="notes-head">Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="q-cell">1. The software is intuitive to use.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">2. The software improved my understanding of the heart.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">3. I had no problem using the basic features.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">4. I did not find any difficult tasks to perform during the test.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">5. I think I completed all the tasks correctly during the test.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">6. The features of the software are clear and understandable.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">7. The icons are intuitive and clear.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">8. Error messages are well-placed and I knew immediately that I was wrong.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">9. The software gives feedback that allows me to understand if a task has been completed successfully.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">10. I think I'd like to work with this software frequently.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">11. I think I would not need any initial support to use this software.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">12. I felt comfortable using this software.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">13. I didn't have any trouble using the software.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">14. I think it would be comfortable to use the touchscreen mode.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">15. I'd rather use the keyboard/mouse mode over touchscreen.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ SECTION C: VISUAL / UI-UX ============ -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">C</span>
+      <h2>Visual design &amp; layout</h2>
+    </div>
+    <table class="items">
+      <colgroup><col class="q"><col class="score"><col class="score"><col class="score"><col class="score"><col class="score"><col class="notes"></colgroup>
+      <thead>
+        <tr><th class="q-head">Statement</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th class="notes-head">Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="q-cell">16. The dashboard made it clear what stage my project was at (masks &rarr; reconstruction &rarr; landmarks).</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">17. Progress bars and loading states accurately reflected what was happening.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">18. The layout of the Structure / Strain / Landmarks tabs was easy to navigate between.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">19. The bullseye charts and 3D heart model were easy to read and interpret.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">20. Colours used for strain/wall-thickness values were easy to distinguish and interpret.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">21. Text, numbers and labels were legible at a normal viewing distance.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">22. The frame/slice playback controls (play, speed, scrub) behaved as expected.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ SECTION D: STRAIN & RV ACCURACY ============ -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">D</span>
+      <h2>Strain &amp; RV Analysis</h2>
+    </div>
+    <p class="section-sub">The core contribution of this project &mdash; please answer in as much detail as you can. Only skip an item if you did not complete that task in Section A.</p>
+    <table class="items">
+      <colgroup><col class="q"><col class="score"><col class="score"><col class="score"><col class="score"><col class="score"><col class="notes"></colgroup>
+      <thead>
+        <tr><th class="q-head">Statement</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th class="notes-head">Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="q-cell">23. The auto-detected landmark points (ED/ES, insertion points) were close enough to where I would place them.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">24. Adjusting a landmark point (drag to correct) was easy and responded smoothly.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">25. LV strain values (GCS/GRS) seemed consistent and physiologically plausible across the cardiac cycle.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">26. RV strain values (GCS/GAS/FAC) seemed consistent and physiologically plausible across the cardiac cycle.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">27. The RV bullseye/9-segment regional breakdown was clear and matched what I'd expect from the RV shape shown.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">28. The RV and LV results agreed with each other where I'd expect them to (e.g. colouring, segment highlighting, 3D model sync).</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">29. Full-cycle (all-frame) strain curves were smooth, with no implausible jumps between neighbouring frames.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">30. I trust the strain/RV numbers this software produces enough to use them in a clinical/research discussion.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">31. The 4D reconstructed mesh was a reasonable basis for the strain computed from it (shape roughly matched the MRI slices).</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">32. The PDF report presented the strain and RV findings clearly, and matched what I saw on screen.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">33. The report's interactive elements (hover/slider on charts, clickable segments) were useful for reviewing results.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ SECTION E: PERFORMANCE / RELIABILITY ============ -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">E</span>
+      <h2>Performance &amp; reliability</h2>
+    </div>
+    <table class="items">
+      <colgroup><col class="q"><col class="score"><col class="score"><col class="score"><col class="score"><col class="score"><col class="notes"></colgroup>
+      <thead>
+        <tr><th class="q-head">Statement</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th class="notes-head">Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="q-cell">34. Processing times (segmentation, reconstruction, landmark detection) were acceptable.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">35. The 3D heart model and charts responded smoothly (no noticeable lag or freezing).</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+        <tr><td class="q-cell">36. I did not encounter any crashes, freezes, or broken pages during the test.</td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td><div class="box"></div></td><td class="notes-cell"><div class="notes-line"></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ SECTION F: OPEN-ENDED ============ -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">F</span>
+      <h2>Open feedback</h2>
+    </div>
+
+    <div class="open-q">
+      <p class="prompt"><span class="n">F1.</span>What did you find most confusing or frustrating while using the software?</p>
+      <div class="lines"><div class="ln"></div><div class="ln"></div><div class="ln"></div></div>
+    </div>
+
+    <div class="open-q">
+      <p class="prompt"><span class="n">F2.</span>Which feature or visualisation was most useful for understanding the heart?</p>
+      <div class="lines"><div class="ln"></div><div class="ln"></div><div class="ln"></div></div>
+    </div>
+
+    <div class="open-q">
+      <p class="prompt"><span class="n">F3.</span>If any segmentation, reconstruction, or landmark result looked wrong, please describe where and how.</p>
+      <div class="lines"><div class="ln"></div><div class="ln"></div><div class="ln"></div></div>
+    </div>
+
+    <div class="open-q">
+      <p class="prompt"><span class="n">F4.</span>What single change would most improve your experience with this software?</p>
+      <div class="lines"><div class="ln"></div><div class="ln"></div><div class="ln"></div></div>
+    </div>
+
+    <div class="open-q">
+      <p class="prompt"><span class="n">F5.</span>Any other comments or suggestions?</p>
+      <div class="lines"><div class="ln"></div><div class="ln"></div><div class="ln"></div></div>
+    </div>
+  </div>
+
+  <p class="footer-note">
+    VisHeart &mdash; Cardiac MRI Segmentation, 4D Reconstruction &amp; Strain Analysis Platform. Usability items 1&ndash;15 follow the standard post-test questionnaire (mouse-mode) format; items 16&ndash;33 and Section F were added for this system's specific features. Thank you for participating.
+  </p>
+
+</div>

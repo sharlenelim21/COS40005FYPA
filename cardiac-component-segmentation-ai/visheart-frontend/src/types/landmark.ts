@@ -174,7 +174,7 @@ export interface PersistedLandmarkDoc {
   }[];
 }
 
-const LANDMARK_POINT_KEYS = [
+export const LANDMARK_POINT_KEYS = [
   "rv_insertion_1",
   "rv_insertion_2",
   "apex",

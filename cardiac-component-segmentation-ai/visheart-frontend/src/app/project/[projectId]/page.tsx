@@ -953,6 +953,29 @@ function ProjectPageInner() {
             <p>Sign in to unlock landmark detection</p>
           </TooltipContent>
         </Tooltip>
+      ) : !hasReconstructions ? (
+        // Landmark detection needs a finished 4D reconstruction to run against -- without this,
+        // the card's Link was clickable at any time (even mid-reconstruction, or before one was
+        // ever started), and landmark-detection/page.tsx auto-runs detection the moment it
+        // mounts, which is unsafe before reconstruction data exists. The page itself also guards
+        // this (redirects back here if reconstruction isn't ready), but locking the entry point
+        // here avoids the detour and makes the real prerequisite visible instead of just "running".
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Landmark Detection</p>
+                  <p className="text-xs text-muted-foreground">Needs a finished 4D reconstruction first</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Build a 4D reconstruction before running landmark detection</p>
+          </TooltipContent>
+        </Tooltip>
       ) : landmarkRunning ? (
         <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
           <KineticButtonFill state={landmarkProgressState} value={landmarkSummary?.progress} label="Landmark detection running" />
@@ -1012,6 +1035,26 @@ function ProjectPageInner() {
           </TooltipTrigger>
           <TooltipContent>
             <p>Sign in to unlock 4D reconstruction</p>
+          </TooltipContent>
+        </Tooltip>
+      ) : !hasMasks ? (
+        // Reconstruction needs segmentation masks to build from. Opening the config dialog with
+        // none yet would just fail once submitted -- lock the entry point instead, consistent
+        // with the Landmark Detection card's own !hasReconstructions lock above.
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Create 4D Reconstruction</p>
+                  <p className="text-xs text-muted-foreground">Needs segmentation masks first</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Generate segmentation masks before building a 4D reconstruction</p>
           </TooltipContent>
         </Tooltip>
       ) : reconRunning ? (
