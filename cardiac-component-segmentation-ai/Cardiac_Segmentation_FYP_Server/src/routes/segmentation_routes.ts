@@ -28,6 +28,10 @@ import { extractS3KeyFromUrl, downloadFromS3, uploadMaskToS3 } from "../services
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client"; // Import fresh GPU server address function
 
 const router = Router();
+
+// Only a project's owner saves its segmentation. Other users may view it (UNet Extend Training lists every user's
+// corrections), so each save route checks ownership before it writes anything.
+const NOT_OWNER_MESSAGE = "Only the project's owner can save its segmentation.";
 const serviceLocation = "SegmentationRoutes";
 
 const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
@@ -475,6 +479,14 @@ router.patch("/save-ai-segmentation", isAuthAndNotGuest, async (req: Request, re
             return res.status(404).json({ success: false, message: maskResult.message || "Segmentation mask not found." });
         }
         const projectId = maskResult.projectsegmentationmask.projectid;
+        const owned = await readProject(String(projectId), userId.toString());
+        if (!owned.success) {
+            return res.status(500).json({ success: false, message: owned.message || "The project could not be read." });
+        }
+        if (!owned.projects?.length) {
+            logger.warn(`${serviceLocation}: User ${userId} tried to save AI segmentation mask ${segmentationMaskId} of project ${projectId}, which is not theirs.`);
+            return res.status(403).json({ success: false, message: NOT_OWNER_MESSAGE });
+        }
         logger.debug(`${serviceLocation}: Updating AI segmentation mask ${segmentationMaskId} to isSaved: true.`);
         const segmentationDbUpdateResult = await updateProjectSegmentationMask(segmentationMaskId, { isSaved: true });
         if (!segmentationDbUpdateResult.success || !segmentationDbUpdateResult.projectsegmentationmask) {
@@ -594,6 +606,15 @@ router.put("/save-manual-segmentation/:projectId",
         }
 
         try {
+            const owned = await readProject(projectId, userId.toString());
+            if (!owned.success) {
+                return res.status(500).json({ success: false, message: owned.message || "The project could not be read." });
+            }
+            if (!owned.projects?.length) {
+                logger.warn(`${serviceLocation}: User ${userId} tried to save the segmentation of project ${projectId}, which is not theirs.`);
+                return res.status(403).json({ success: false, message: NOT_OWNER_MESSAGE });
+            }
+
             const masksResult = await readProjectSegmentationMask(projectId);
 
             if (!masksResult.success || !masksResult.projectsegmentationmasks) {
