@@ -155,6 +155,20 @@ export function differences(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out;
 }
 
+/** The label disagreementLabels gives a pixel this prediction leaves as background while the other labels it. */
+export const LEFT_OUT = 5;
+
+/**
+ * Where two predictions differ, this one's answer: its own label, or LEFT_OUT where it has none and the other has one;
+ * 0 where they agree. Each side of the viewer paints its own, so the two pictures differ exactly where the models do
+ * (one shared layer over both would hide what each model said there).
+ */
+export function disagreementLabels(own: Uint8Array, other: Uint8Array): Uint8Array {
+  const out = new Uint8Array(own.length);
+  for (let i = 0; i < own.length; i++) if (own[i] !== other[i]) out[i] = own[i] || LEFT_OUT;
+  return out;
+}
+
 /** 1 on the edge of every labelled region: a labelled pixel beside another label or the image border. */
 export function outline(labels: Uint8Array, width: number, height: number): Uint8Array {
   const out = new Uint8Array(labels.length);

@@ -87,6 +87,13 @@ test("saved masks become one label per pixel, their differences and their outlin
   assert.equal(edge[12], 0);
 });
 
+test("where two models disagree, each side shows its own answer, so the two pictures never look the same there", () => {
+  const left = new Uint8Array([0, 1, 2, 2, 0]);
+  const right = new Uint8Array([0, 1, 3, 0, 1]);
+  assert.deepEqual([...logic.disagreementLabels(left, right)], [0, 0, 2, 2, logic.LEFT_OUT]);
+  assert.deepEqual([...logic.disagreementLabels(right, left)], [0, 0, 3, logic.LEFT_OUT, 1]);
+});
+
 test("painting colours only labelled pixels", () => {
   const rgba = new Uint8ClampedArray(8);
   logic.paintLabels(rgba, new Uint8Array([0, 1]), { 1: [34, 197, 94] }, 0.5);

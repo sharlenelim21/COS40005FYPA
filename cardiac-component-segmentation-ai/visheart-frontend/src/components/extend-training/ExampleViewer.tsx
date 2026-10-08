@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { DATASET_NAMES, ExampleIndex, ExampleScan, ModelVersion, retrainingApi, VersionAction } from "@/lib/retraining-api";
-import { decisionFor, differences, exampleFor, exampleSides, exampleTitle, outline } from "@/components/extend-training/logic";
+import { decisionFor, disagreementLabels, exampleFor, exampleSides, exampleTitle, LEFT_OUT, outline } from "@/components/extend-training/logic";
 import { CHANGE_COLOR, LABEL_PALETTE, MaskLegend, OUTLINE_COLOR, Overlay, SliceCanvas } from "@/components/extend-training/SliceCanvas";
+
+const DISAGREEMENT_PALETTE = { ...LABEL_PALETTE, [LEFT_OUT]: CHANGE_COLOR };
 
 interface DecodedSlice {
   truth: Uint8Array;
@@ -154,13 +156,13 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
   const current = decoded?.[slice];
   const overlays = useMemo(() => {
     if (!current || !scan) return null;
-    const shared: Overlay[] = [];
-    if (disagreement) shared.push({ labels: differences(current.left, current.right), palette: { 1: CHANGE_COLOR }, alpha: 0.9 });
-    if (expert) shared.push({ labels: outline(current.truth, scan.size, scan.size), palette: { 1: OUTLINE_COLOR }, alpha: 1 });
-    return {
-      left: [{ labels: current.left, palette: LABEL_PALETTE, alpha: 0.45 }, ...shared],
-      right: [{ labels: current.right, palette: LABEL_PALETTE, alpha: 0.45 }, ...shared],
-    };
+    // With disagreement on, each side dims its mask and paints, at full strength, its own answer where the two differ.
+    const side = (own: Uint8Array, other: Uint8Array): Overlay[] => [
+      { labels: own, palette: LABEL_PALETTE, alpha: disagreement ? 0.25 : 0.45 },
+      ...(disagreement ? [{ labels: disagreementLabels(own, other), palette: DISAGREEMENT_PALETTE, alpha: 0.95 }] : []),
+      ...(expert ? [{ labels: outline(current.truth, scan.size, scan.size), palette: { 1: OUTLINE_COLOR }, alpha: 1 }] : []),
+    ];
+    return { left: side(current.left, current.right), right: side(current.right, current.left) };
   }, [current, scan, disagreement, expert]);
 
   const chooser = (
@@ -196,7 +198,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
   }
 
   const extras = [
-    ...(disagreement ? [{ label: "Disagreement", color: "#facc15", outline: false }] : []),
+    ...(disagreement ? [{ label: "Left out here, labelled by the other model", color: "#facc15", outline: false }] : []),
     ...(expert ? [{ label: "Expert outline", color: "#ffffff", outline: true }] : []),
   ];
   const isOriginal = (name: string) => versions.some(item => item.label === name && item.is_original);
