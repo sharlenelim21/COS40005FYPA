@@ -77,7 +77,7 @@ const ENDINGS: Record<string, string> = {
   interrupted: "Training was interrupted",
 };
 
-export function TrainingProgress({ job, admin, onChanged }: { job: TrainingJob; admin: boolean; onChanged: () => void }) {
+export function TrainingProgress({ job, onChanged }: { job: TrainingJob; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const running = isActiveJob(job);
@@ -144,7 +144,7 @@ export function TrainingProgress({ job, admin, onChanged }: { job: TrainingJob; 
             <AlertDescription>{job.error}</AlertDescription>
           </Alert>
         )}
-        {running && admin && (
+        {running && (
           <Button variant="outline" onClick={() => setConfirming(true)} disabled={cancelling}>
             Cancel training
           </Button>

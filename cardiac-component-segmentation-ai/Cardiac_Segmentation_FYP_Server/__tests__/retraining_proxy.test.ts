@@ -38,7 +38,7 @@ function closedPortUrl(): Promise<string> {
   });
 }
 
-function appWith(workerUrl: string, role = 'user',
+function appWith(workerUrl: string, role = 'admin',
                  projectImages?: (projectId: string) => Promise<{ presignedUrl: string; expiresAt: number } | null>) {
   const app = express();
   app.use(express.json());
@@ -46,21 +46,14 @@ function appWith(workerUrl: string, role = 'user',
     (req as unknown as { user: { _id: string; username: string; role: string } }).user = { _id: `u-${role}`, username: `dr-${role}`, role };
     next();
   });
-  const guard = (req: Request, res: Response, next: NextFunction): void => {   // behaves like isAuthAndNotGuest
-    if ((req as unknown as { user: { role: string } }).user.role === 'guest') {
-      res.status(403).json({ message: 'Forbidden. Admin or regular user access required.' });
-      return;
-    }
-    next();
-  };
-  const adminGuard = (req: Request, res: Response, next: NextFunction): void => {   // behaves like isAuthAndAdmin
+  const guard = (req: Request, res: Response, next: NextFunction): void => {   // behaves like isAuthAndAdmin
     if ((req as unknown as { user: { role: string } }).user.role !== 'admin') {
       res.status(403).json({ message: 'Forbidden. Admin access required.' });
       return;
     }
     next();
   };
-  app.use('/retraining', createRetrainingRouter({ guard, adminGuard, projectImages, workerUrl, timeoutMs: 2000 }));
+  app.use('/retraining', createRetrainingRouter({ guard, projectImages, workerUrl, timeoutMs: 2000 }));
   return app;
 }
 
@@ -140,10 +133,9 @@ describe('Extend Training proxy (plan WS13)', () => {
     ]);
   });
 
-  it('runs the guard before every route', async () => {
+  it('runs the guard before every route: users and guests get 403, so only admins use Extend Training', async () => {
     worker = await startFakeWorker(ok);
-    const app = appWith(worker.url, 'guest');
-    const replies = await Promise.all([
+    const ask = (app: ReturnType<typeof appWith>) => Promise.all([
       request(app).get('/retraining/status'),
       request(app).post('/retraining/eligible-cases/check'),
       request(app).post('/retraining/start'),
@@ -156,8 +148,11 @@ describe('Extend Training proxy (plan WS13)', () => {
       request(app).get('/retraining/versions/unet-2026-05-01/results'),
       request(app).get('/retraining/versions/unet-2026-05-01/examples/0'),
       request(app).get(`/retraining/cases/${'b'.repeat(24)}/images`),
+      request(app).post('/retraining/versions/unet-2026-05-01/compare').send({ against: 'unet-ui0925-120000' }),
     ]);
-    for (const res of replies) expect(res.status).toBe(403);
+    for (const role of ['user', 'guest']) {
+      for (const res of await ask(appWith(worker.url, role))) expect(res.status).toBe(403);
+    }
     expect(worker.seen).toHaveLength(0);
   });
 
@@ -167,39 +162,14 @@ describe('Extend Training proxy (plan WS13)', () => {
     await request(app).get('/retraining/status?owner=someone-else');
     await request(app).post('/retraining/eligible-cases/check').send({ requestedById: 'someone-else' });
     expect(worker.seen[0].url).toBe('/status');
-    expect(worker.seen[1]).toMatchObject({ url: '/eligible/check', body: { requestedBy: 'dr-user', requestedById: 'u-user' } });
+    expect(worker.seen[1]).toMatchObject({ url: '/eligible/check', body: { requestedBy: 'dr-admin', requestedById: 'u-admin' } });
   });
 
-  it('lets only an admin train, cancel, or use or delete a version; a user still sees everything', async () => {
-    worker = await startFakeWorker(ok);
-    const user = appWith(worker.url, 'user');
-    const changes = (app: ReturnType<typeof appWith>) => Promise.all([
-      request(app).post('/retraining/start').send({ selection: chosen }),
-      request(app).post('/retraining/job/job-20260925-120000-abcd/cancel'),
-      request(app).get('/retraining/job/job-20260925-120000-abcd/log'),
-      request(app).get('/retraining/versions/unet-ui0925-120000/preview'),
-      request(app).post('/retraining/versions/unet-ui0925-120000/activate').send({ confirm: [] }),
-      request(app).post('/retraining/versions/unet-ui0925-120000/reject').send({ confirm: [] }),
-    ]);
-    for (const res of await changes(user)) expect(res.status).toBe(403);
-    expect(worker.seen).toHaveLength(0);
-    const views = await Promise.all([
-      request(user).get('/retraining/status'),
-      request(user).post('/retraining/eligible-cases/check'),
-      request(user).get('/retraining/job/current'),
-      request(user).get('/retraining/versions/unet-ui0925-120000/results'),
-      request(user).get('/retraining/versions/unet-ui0925-120000/examples/0'),
-      request(user).post('/retraining/versions/unet-ui0925-120000/compare').send({ against: 'unet-2026-05-01' }),
-    ]);
-    for (const res of views) expect(res.status).toBe(200);
-    for (const res of await changes(appWith(worker.url, 'admin'))) expect(res.status).toBe(200);
-  });
-
-  it("serves a corrected case's images to any user, and no other project's", async () => {
+  it("serves a corrected case's images to an admin, whoever owns it, and no other project's", async () => {
     const listed = 'b'.repeat(24);
     worker = await startFakeWorker(() => ({ status: 200, body: { ok: true, data: { eligible: { cases: [{ projectId: listed }] } } } }));
     const asked: string[] = [];
-    const app = appWith(worker.url, 'user', async projectId => {
+    const app = appWith(worker.url, 'admin', async projectId => {
       asked.push(projectId);
       return { presignedUrl: `https://bucket/${projectId}.tar`, expiresAt: 1 };
     });
@@ -209,7 +179,7 @@ describe('Extend Training proxy (plan WS13)', () => {
     expect((await request(app).get(`/retraining/cases/${'c'.repeat(24)}/images`)).status).toBe(404);   // not corrected
     expect((await request(app).get('/retraining/cases/..%2Fx/images')).status).toBe(400);
     expect(asked).toEqual([listed]);
-    const without = appWith(worker.url, 'user', async () => null);
+    const without = appWith(worker.url, 'admin', async () => null);
     expect((await request(without).get(`/retraining/cases/${listed}/images`)).status).toBe(404);
   });
 
@@ -232,7 +202,7 @@ describe('Extend Training proxy (plan WS13)', () => {
       '/versions/unet-ui0925-120000/examples/2?left=unet-ui0925-120000&right=unet-2026-05-01',
       '/versions/unet-ui0925-120000/examples/2?right=unet-2026-05-01',
     ]);
-    expect(worker.seen[0].body).toMatchObject({ against: 'unet-2026-05-01', requestedById: 'u-user' });
+    expect(worker.seen[0].body).toMatchObject({ against: 'unet-2026-05-01', requestedById: 'u-admin' });
     for (const bad of [{ against: '../registry' }, { against: '' }, {}]) {
       expect((await request(app).post('/retraining/versions/unet-ui0925-120000/compare').send(bad)).status).toBe(400);
     }
@@ -242,9 +212,9 @@ describe('Extend Training proxy (plan WS13)', () => {
     expect(worker.seen).toHaveLength(3);
   });
 
-  it('is wired with isAuthAndNotGuest and isAuthAndAdmin, and mounted at /retraining', () => {
+  it('is wired with isAuthAndAdmin and mounted at /retraining', () => {
     const routes = fs.readFileSync(path.join(__dirname, '../src/routes/retraining_routes.ts'), 'utf8');
-    expect(routes).toMatch(/createRetrainingRouter\(\{\s*guard:\s*isAuthAndNotGuest,\s*adminGuard:\s*isAuthAndAdmin,/);
+    expect(routes).toMatch(/createRetrainingRouter\(\{\s*guard:\s*isAuthAndAdmin,/);
     const appSource = fs.readFileSync(path.join(__dirname, '../src/services/express_app.ts'), 'utf8');
     expect(appSource).toMatch(/app\.use\('\/retraining',\s*retrainingRoute\)/);
   });

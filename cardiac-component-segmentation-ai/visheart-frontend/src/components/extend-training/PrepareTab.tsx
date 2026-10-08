@@ -110,10 +110,9 @@ function IconAction({ label, children }: { label: string; children: ReactNode })
   );
 }
 
-export function PrepareTab({ status, admin, userId, selected, onSelectedChange, checking, starting, onCheck, onStart, onShowResults }: {
+export function PrepareTab({ status, userId, selected, onSelectedChange, checking, starting, onCheck, onStart, onShowResults }: {
   status: RetrainingStatus;
-  admin: boolean;          // only an admin chooses cases and trains
-  userId: string | null;   // the signed-in user, who edits only their own cases
+  userId: string | null;   // the signed-in admin, who edits only their own cases
   selected: Set<string>;
   onSelectedChange: (next: Set<string>) => void;
   checking: boolean;
@@ -155,8 +154,7 @@ export function PrepareTab({ status, admin, userId, selected, onSelectedChange, 
     : trainable.length === 0 ? "None of the corrections can train yet."
     : summary.cases === 0 ? "Choose at least one case."
     : null;
-  const canStart = admin && reason === null && !starting && status.training.allowed;
-  const owners = new Set(cases.map(item => item.ownerId ?? item.ownerName ?? "")).size;
+  const canStart = reason === null && !starting && status.training.allowed;
 
   return (
     <div className="space-y-6">
@@ -174,13 +172,11 @@ export function PrepareTab({ status, admin, userId, selected, onSelectedChange, 
       <Card>
         <CardContent className="flex flex-col gap-6 p-6 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1">
-            <p className="text-sm font-medium text-muted-foreground">{admin ? "Selected for training" : "Corrected cases"}</p>
+            <p className="text-sm font-medium text-muted-foreground">Selected for training</p>
             <p className="text-3xl font-semibold tabular-nums">
-              {admin ? summary.cases : cases.length}
+              {summary.cases}
               <span className="ml-2 text-base font-normal text-muted-foreground">
-                {admin
-                  ? `of ${trainable.length} cases · ${summary.slices} corrected slices`
-                  : `from ${owners} ${owners === 1 ? "user" : "users"} · ${cases.reduce((sum, item) => sum + item.slices.length, 0)} corrected slices`}
+                of {trainable.length} cases · {summary.slices} corrected slices
               </span>
             </p>
             {locked > 0 && (
@@ -197,27 +193,20 @@ export function PrepareTab({ status, admin, userId, selected, onSelectedChange, 
               </Button>
             </div>
           </div>
-          {admin ? (
-            <div className="flex flex-col gap-2 md:max-w-sm md:items-end">
-              <Button size="lg" disabled={!canStart} onClick={onStart}>
-                {starting
-                  ? "Starting…"
-                  : summary.cases > 0
-                    ? `Train a new version from ${summary.cases} ${summary.cases === 1 ? "case" : "cases"}`
-                    : "Train a new version"}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-              <p className="text-xs text-muted-foreground md:text-right">
-                The model in use stays active. Nothing is replaced without your approval.
-              </p>
-              {reason && <p className="text-sm text-amber-700 dark:text-amber-400 md:text-right">{reason}</p>}
-            </div>
-          ) : (
-            <p className="flex items-start gap-2 text-sm text-muted-foreground md:max-w-sm">
-              <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-              Only an admin can train a new version. You can preview every case and edit your own.
+          <div className="flex flex-col gap-2 md:max-w-sm md:items-end">
+            <Button size="lg" disabled={!canStart} onClick={onStart}>
+              {starting
+                ? "Starting…"
+                : summary.cases > 0
+                  ? `Train a new version from ${summary.cases} ${summary.cases === 1 ? "case" : "cases"}`
+                  : "Train a new version"}
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+            <p className="text-xs text-muted-foreground md:text-right">
+              The model in use stays active. Nothing is replaced without your approval.
             </p>
-          )}
+            {reason && <p className="text-sm text-amber-700 dark:text-amber-400 md:text-right">{reason}</p>}
+          </div>
         </CardContent>
       </Card>
 
@@ -226,7 +215,7 @@ export function PrepareTab({ status, admin, userId, selected, onSelectedChange, 
           <CardTitle>Corrected cases</CardTitle>
           <CardDescription>
             Every user&apos;s saved corrections. A case is one project, corrected in one model; only its changed slices
-            train the new version. Anyone can preview a case; only the user who owns the project can edit it.
+            train the new version. You can preview any case; only the user who owns the project can edit it.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -241,26 +230,22 @@ export function PrepareTab({ status, admin, userId, selected, onSelectedChange, 
                 className="pl-8"
               />
             </div>
-            {admin && (
-              <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                <span>{summary.cases} selected</span>
-                <Button variant="link" size="sm" className="h-auto p-0" disabled={running || summary.cases === 0}
-                        onClick={() => onSelectedChange(new Set())}>
-                  Clear selection
-                </Button>
-              </div>
-            )}
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span>{summary.cases} selected</span>
+              <Button variant="link" size="sm" className="h-auto p-0" disabled={running || summary.cases === 0}
+                      onClick={() => onSelectedChange(new Set())}>
+                Clear selection
+              </Button>
+            </div>
           </div>
           <div className="overflow-x-auto rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  {admin && (
-                    <TableHead className="w-10">
-                      <Checkbox checked={allShown} disabled={running || shownTrainable.length === 0}
-                                onCheckedChange={value => toggleShown(value === true)} aria-label="Select every case shown" />
-                    </TableHead>
-                  )}
+                  <TableHead className="w-10">
+                    <Checkbox checked={allShown} disabled={running || shownTrainable.length === 0}
+                              onCheckedChange={value => toggleShown(value === true)} aria-label="Select every case shown" />
+                  </TableHead>
                   <TableHead>Project</TableHead>
                   <TableHead>Corrected by</TableHead>
                   <TableHead>Model</TableHead>
@@ -290,16 +275,14 @@ export function PrepareTab({ status, admin, userId, selected, onSelectedChange, 
                   const model = MODEL_NAMES[item.model] ?? item.model;
                   const mine = canEditCase(item, userId);
                   return (
-                    <TableRow key={item.maskId} data-state={admin && selected.has(item.maskId) ? "selected" : undefined}
+                    <TableRow key={item.maskId} data-state={selected.has(item.maskId) ? "selected" : undefined}
                               className={item.frozen ? "text-muted-foreground" : undefined}>
-                      {admin && (
-                        <TableCell>
-                          <Checkbox checked={!item.frozen && selected.has(item.maskId)} disabled={running || !!item.frozen}
-                                    onCheckedChange={value => toggle(item.maskId, value === true)}
-                                    aria-label={item.frozen ? `${item.projectName} (${model}) is a test scan and is not used for training`
-                                      : `Train on ${item.projectName} (${model})`} />
-                        </TableCell>
-                      )}
+                      <TableCell>
+                        <Checkbox checked={!item.frozen && selected.has(item.maskId)} disabled={running || !!item.frozen}
+                                  onCheckedChange={value => toggle(item.maskId, value === true)}
+                                  aria-label={item.frozen ? `${item.projectName} (${model}) is a test scan and is not used for training`
+                                    : `Train on ${item.projectName} (${model})`} />
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           <button type="button" className="text-left font-medium hover:underline" onClick={() => setPreviewing(item)}>
@@ -354,7 +337,6 @@ export function PrepareTab({ status, admin, userId, selected, onSelectedChange, 
         selected={previewing ? selected.has(previewing.maskId) : false}
         locked={running || !!previewing?.frozen}
         canEdit={previewing ? canEditCase(previewing, userId) : false}
-        canSelect={admin}
         onSelectedChange={value => { if (previewing) toggle(previewing.maskId, value); }}
         onClose={() => setPreviewing(null)}
       />

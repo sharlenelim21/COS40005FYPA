@@ -2,8 +2,8 @@
 // Description: The UNet Extend Training API (plan WS13). Every call passes the guard, is checked here, and is then
 // forwarded to the training service on this computer (visheart-retraining/worker.py, 127.0.0.1:8010 on the host).
 // The service trusts this server, so the user's name and id always come from the session, never from the request.
-// Every user sees everyone's saved corrections and the versions' results; only an admin starts or cancels a training or
-// changes the model in use (the client's request, 2026-10-08). Editing a correction stays with its project's owner.
+// Only admins use Extend Training (the client's request, 2026-10-08, as Jy set it on 2026-10-09). An admin sees every
+// user's saved corrections; editing a correction stays with its project's owner, whose save route checks it.
 import express, { Request, RequestHandler, Response, Router } from 'express';
 import axios, { AxiosInstance } from 'axios';
 import logger from './logger';
@@ -19,8 +19,7 @@ const MAX_SELECTION = 500;
 const EXAMPLE = /^\d{1,2}$/;
 
 export interface RetrainingRouterOptions {
-  guard: RequestHandler; // who may use the page: isAuthAndNotGuest in production
-  adminGuard: RequestHandler; // who may train or change the model in use: isAuthAndAdmin in production
+  guard: RequestHandler; // who may use Extend Training: isAuthAndAdmin in production
   // A presigned URL for a project's slice images, whoever owns it; null when it has none. The route only asks for a
   // project among the corrected cases, so the preview never opens other projects.
   projectImages?: (projectId: string) => Promise<{ presignedUrl: string; expiresAt: number } | null>;
@@ -78,7 +77,6 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
   };
 
   router.use(options.guard); // in front of every route below, without exception
-  const adminOnly = options.adminGuard; // and this one in front of each route that trains or changes the model in use
 
   router.get('/status', (req, res) => forward(req, res, 'get', '/status'));
   router.post('/eligible-cases/check', (req, res) => forward(req, res, 'post', '/eligible/check', {}, 180000));
@@ -110,7 +108,7 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
     res.json({ success: true, message: 'OK', data: images });
   });
 
-  router.post('/start', adminOnly, (req, res) => {
+  router.post('/start', (req, res) => {
     const selection = (req.body as { selection?: unknown } | undefined)?.selection;
     if (!Array.isArray(selection) || selection.length === 0 || selection.length > MAX_SELECTION
         || !selection.every(id => typeof id === 'string' && MASK_ID.test(id))) {
@@ -120,27 +118,27 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
   });
   router.get('/job/current', (req, res) => forward(req, res, 'get', '/jobs/current'));
 
-  router.get('/job/:jobId/log', adminOnly, (req, res) => {
+  router.get('/job/:jobId/log', (req, res) => {
     const { jobId } = req.params;
     if (!JOB_ID.test(jobId)) return badRequest(res, 'Unknown job.');
     const tail = Math.min(Math.max(parseInt(String(req.query.tail ?? '200'), 10) || 200, 1), 500);
     return forward(req, res, 'get', `/jobs/${jobId}/log?tail=${tail}`);
   });
 
-  router.post('/job/:jobId/cancel', adminOnly, (req, res) => {
+  router.post('/job/:jobId/cancel', (req, res) => {
     const { jobId } = req.params;
     if (!JOB_ID.test(jobId)) return badRequest(res, 'Unknown job.');
     return forward(req, res, 'post', `/jobs/${jobId}/cancel`);
   });
 
-  router.get('/versions/:label/preview', adminOnly, (req, res) => {
+  router.get('/versions/:label/preview', (req, res) => {
     const { label } = req.params;
     if (!LABEL.test(label)) return badRequest(res, 'Unknown version.');
     const action = req.query.action === 'reject' ? 'reject' : 'activate';
     return forward(req, res, 'get', `/versions/${label}/preview?action=${action}`);
   });
 
-  router.post('/versions/:label/activate', adminOnly, (req, res) => {
+  router.post('/versions/:label/activate', (req, res) => {
     const { label } = req.params;
     if (!LABEL.test(label)) return badRequest(res, 'Unknown version.');
     const confirm = confirmLines(req);
@@ -148,7 +146,7 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
     return forward(req, res, 'post', `/versions/${label}/activate`, { confirm }, 240000);
   });
 
-  router.post('/versions/:label/reject', adminOnly, (req, res) => {
+  router.post('/versions/:label/reject', (req, res) => {
     const { label } = req.params;
     if (!LABEL.test(label)) return badRequest(res, 'Unknown version.');
     const confirm = confirmLines(req);

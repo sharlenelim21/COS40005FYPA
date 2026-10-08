@@ -46,9 +46,8 @@ function Changes({ version, active }: { version: ModelVersion; active: string })
   );
 }
 
-export function VersionsTable({ status, admin, reviewing, onReview, onAction }: {
+export function VersionsTable({ status, reviewing, onReview, onAction }: {
   status: RetrainingStatus;
-  admin: boolean;   // only an admin uses or deletes a version
   reviewing: string | null;
   onReview: (label: string) => void;
   onAction: (label: string, action: VersionAction) => void;
@@ -111,7 +110,7 @@ export function VersionsTable({ status, admin, reviewing, onReview, onAction }: 
                       <DropdownMenuItem onSelect={() => { viewing.current = true; onReview(version.label); }}>
                         View results
                       </DropdownMenuItem>
-                      {admin && version.status === "candidate" && (
+                      {version.status === "candidate" && (
                         <>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem disabled={cannotSwitch} onSelect={() => onAction(version.label, "activate")}>
@@ -123,7 +122,7 @@ export function VersionsTable({ status, admin, reviewing, onReview, onAction }: 
                           </DropdownMenuItem>
                         </>
                       )}
-                      {admin && version.is_original && !version.is_active && (
+                      {version.is_original && !version.is_active && (
                         <>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem disabled={cannotSwitch} onSelect={() => onAction(version.label, "activate")}>

@@ -38,12 +38,11 @@ function Heading({ children }: { children: string }) {
   return <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</p>;
 }
 
-export function CasePreview({ item, selected, locked, canEdit, canSelect, onSelectedChange, onClose }: {
+export function CasePreview({ item, selected, locked, canEdit, onSelectedChange, onClose }: {
   item: CorrectionCase | null;
   selected: boolean;
   locked: boolean;
-  canEdit: boolean;     // the signed-in user owns the project
-  canSelect: boolean;   // an admin, who chooses the cases a training uses
+  canEdit: boolean;   // the signed-in admin owns the project
   onSelectedChange: (value: boolean) => void;
   onClose: () => void;
 }) {
@@ -214,13 +213,11 @@ export function CasePreview({ item, selected, locked, canEdit, canSelect, onSele
                 </div>
 
                 <div className="mt-auto space-y-3 border-t pt-4">
-                  {canSelect && (
-                    <label className="flex items-center gap-2 text-sm">
-                      <Checkbox checked={selected && !item.frozen} disabled={locked}
-                                onCheckedChange={value => onSelectedChange(value === true)} />
-                      Include this case in training
-                    </label>
-                  )}
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={selected && !item.frozen} disabled={locked}
+                              onCheckedChange={value => onSelectedChange(value === true)} />
+                    Include this case in training
+                  </label>
                   {item.frozen && (
                     <p className="text-xs text-muted-foreground">
                       This is a test scan: every new version is tested on it, so it is not used for training.

@@ -6,7 +6,7 @@ import { useAuth } from "@/context/auth-context";
 import { useGpuStatus, useUserProjects, useUserJobs, useUserStats } from "@/lib/dashboard-hooks";
 import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStatus";
 import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstructionStatus";
-import { ShowForUser, ShowForGuest, ShowForRegisteredUser } from "@/components/RoleGuard";
+import { ShowForUser, ShowForGuest, ShowForRegisteredUser, ShowForAdmin } from "@/components/RoleGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { reconstructionApi } from "@/lib/api";
@@ -595,14 +595,14 @@ function DashboardPage() {
                 </Button>
               </Link>
 
-              <ShowForRegisteredUser fallback={null}>
+              <ShowForAdmin fallback={null}>
                 <Link href="/extend-training">
                   <Button variant="outline" className="w-full justify-start">
                     <Brain className="mr-2 h-4 w-4" />
                     UNet Extend Training
                   </Button>
                 </Link>
-              </ShowForRegisteredUser>
+              </ShowForAdmin>
 
               {/* <ShowForUser fallback={null}>
                 {user?.role === "admin" && (

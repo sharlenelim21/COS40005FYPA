@@ -121,10 +121,9 @@ function OverallAccuracy({ results, newName }: { results: VersionResults | null;
   );
 }
 
-function VersionReview({ label, status, admin, onReview, onAction }: {
+function VersionReview({ label, status, onReview, onAction }: {
   label: string;
   status: RetrainingStatus;
-  admin: boolean;
   onReview: (label: string) => void;
   onAction: (label: string, action: VersionAction) => void;
 }) {
@@ -221,12 +220,12 @@ function VersionReview({ label, status, admin, onReview, onAction }: {
             <h3 className="font-medium">Inspect scans neither model was trained on</h3>
             {results
               ? <ExampleViewer label={label} against={against} active={status.active} index={results.examples}
-                               dataset={shown} versions={status.versions} admin={admin} onChoose={onReview} onAction={onAction}
+                               dataset={shown} versions={status.versions} onChoose={onReview} onAction={onAction}
                                cannotSwitch={whyNotSwitch(status.problem, status.busy)} busy={status.busy} />
               : !problem && <div className="h-24 animate-pulse rounded-md bg-muted" />}
           </div>
         )}
-        {version.is_active && !version.is_original && admin && (
+        {version.is_active && !version.is_original && (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
             This version is in use. To go back, choose the original model in the scan viewer and use it.
@@ -237,9 +236,8 @@ function VersionReview({ label, status, admin, onReview, onAction }: {
   );
 }
 
-export function ResultsTab({ status, admin, reviewing, onReview, onAction, onChanged, onPrepare }: {
+export function ResultsTab({ status, reviewing, onReview, onAction, onChanged, onPrepare }: {
   status: RetrainingStatus;
-  admin: boolean;
   reviewing: string | null;
   onReview: (label: string) => void;
   onAction: (label: string, action: VersionAction) => void;
@@ -258,17 +256,15 @@ export function ResultsTab({ status, admin, reviewing, onReview, onAction, onCha
           </AlertDescription>
         </Alert>
       )}
-      {status.job && <TrainingProgress job={status.job} admin={admin} onChanged={onChanged} />}
+      {status.job && <TrainingProgress job={status.job} onChanged={onChanged} />}
       {reviewing ? (
-        <VersionReview key={reviewing} label={reviewing} status={status} admin={admin} onReview={onReview} onAction={onAction} />
+        <VersionReview key={reviewing} label={reviewing} status={status} onReview={onReview} onAction={onAction} />
       ) : !running && (
         <Card>
           <CardContent className="flex flex-col items-start gap-3 p-6">
             <p className="font-medium">No new version to review yet.</p>
             <p className="text-sm text-muted-foreground">
-              {admin
-                ? "Choose the corrected cases on the Prepare tab and train a new version. Its results appear here."
-                : "An admin trains new versions from the corrected cases. Their results appear here."}
+              Choose the corrected cases on the Prepare tab and train a new version. Its results appear here.
             </p>
             <Button variant="outline" onClick={onPrepare}>Go to Prepare</Button>
           </CardContent>
@@ -282,7 +278,7 @@ export function ResultsTab({ status, admin, reviewing, onReview, onAction, onCha
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <VersionsTable status={status} admin={admin} reviewing={reviewing} onReview={onReview} onAction={onAction} />
+          <VersionsTable status={status} reviewing={reviewing} onReview={onReview} onAction={onAction} />
         </CardContent>
       </Card>
     </div>
