@@ -581,6 +581,8 @@ function ProjectPageInner() {
     (hasActiveReconstructionJobs && !hasReconstructions);
   const landmarkRunning = pipeline.landmarkActive || !!landmarkSummary?.active;
   const landmarkProgressState: "running" | "queued" = landmarkSummary?.active === "queued" && !pipeline.landmarkActive ? "queued" : "running";
+  const landmarksDone = isGuest || landmarkSummary === null || landmarkSummary.hasCompleted;
+  const isPipelineComplete = hasMasks && hasReconstructions && landmarksDone;
   const modelName = (m: unknown) => (String(m ?? "").toLowerCase() === "unet" ? "UNet" : "MedSAM");
   const summarizeProgress = <J extends { progress?: unknown }>(
     inFlight: J[],
@@ -896,7 +898,7 @@ function ProjectPageInner() {
     : "Segmentation running — available when it finishes";
   const pipelineBusy = segRunning || pipeline.active || isStartingSegmentation;
 
-  const renderStageButtons = (layout: "masks" | "complete") => (
+  const renderStageButtons = () => (
     <>
       {segRunning ? (
         <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
@@ -1081,14 +1083,8 @@ function ProjectPageInner() {
             <Button
               onClick={() => handleOpenReconstruction()}
               size="lg"
-              variant={layout === "masks" && highlight === "reconstruction" ? "default" : "outline"}
-              className={`justify-start h-auto py-4 transition-all duration-300 ${
-                highlight !== "reconstruction"
-                  ? ""
-                  : layout === "masks"
-                  ? "animate-pulse shadow-lg"
-                  : "ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30"
-              }`}
+              variant={highlight === "reconstruction" ? "default" : "outline"}
+              className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "animate-pulse shadow-lg" : ""}`}
               disabled={isStartingReconstruction}
             >
               <div className="flex items-center gap-3 w-full">
@@ -1103,7 +1099,7 @@ function ProjectPageInner() {
                   </p>
                   <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
                   {reconstructionCards.length > 0 && (
-                    <p className="mt-0.5 text-xs font-medium text-green-600 dark:text-green-400">
+                    <p className={`mt-0.5 text-xs font-medium ${highlight === "reconstruction" ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
                       {reconstructionCards.length} Available
                     </p>
                   )}
@@ -1366,18 +1362,18 @@ function ProjectPageInner() {
       <div className="container mx-auto px-6 py-8 space-y-6">
         {/* Compact Processing Pipeline */}
         <div className="bg-muted/30 rounded-lg border p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Activity className="h-4 w-4" />
               <span>Progress</span>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               {/* Step 1: Dataset */}
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-950/30 border border-green-500 flex items-center justify-center">
                   <Database className="h-4 w-4 text-green-600" />
                 </div>
-                <div className="hidden sm:block">
+                <div className="hidden md:block">
                   <p className="text-xs font-medium">Dataset</p>
                   <p className="text-xs text-muted-foreground">Complete</p>
                 </div>
@@ -1398,7 +1394,7 @@ function ProjectPageInner() {
                     hasMasks ? 'text-green-600' : segRunning ? 'text-blue-600' : 'text-muted-foreground'
                   }`} />
                 </div>
-                <div className="hidden sm:block">
+                <div className="hidden md:block">
                   <p className="text-xs font-medium">Segmentation</p>
                   <p className="text-xs text-muted-foreground">
                     {hasMasks ? 'Complete' : segRunning ? 'Processing' : 'Pending'}
@@ -1409,7 +1405,31 @@ function ProjectPageInner() {
 
               <ChevronRight className="h-4 w-4 text-muted-foreground" />
 
-              {/* Step 3: Reconstruction */}
+              <div className="flex items-center gap-2">
+                <div className={`h-8 w-8 rounded-full flex items-center justify-center border ${
+                  landmarkSummary?.hasCompleted
+                    ? 'bg-green-100 dark:bg-green-950/30 border-green-500'
+                    : landmarkRunning
+                    ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500'
+                    : hasMasks && !isGuest
+                    ? 'bg-amber-100 dark:bg-amber-950/30 border-amber-500'
+                    : 'bg-muted border-muted-foreground/30'
+                }`}>
+                  <Crosshair className={`h-4 w-4 ${
+                    landmarkSummary?.hasCompleted ? 'text-green-600' : landmarkRunning ? 'text-blue-600' : hasMasks && !isGuest ? 'text-amber-600' : 'text-muted-foreground'
+                  }`} />
+                </div>
+                <div className="hidden md:block">
+                  <p className="text-xs font-medium">Landmark</p>
+                  <p className="text-xs text-muted-foreground">
+                    {landmarkSummary?.hasCompleted ? 'Complete' : landmarkRunning ? 'Processing' : hasMasks && !isGuest ? 'Available' : 'Locked'}
+                  </p>
+                  {!landmarkSummary?.hasCompleted && landmarkRunning && <KineticProgress size="h-1" className="mt-1 w-16" label="Landmark detection running" />}
+                </div>
+              </div>
+
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+
               <div className="flex items-center gap-2">
                 <div className={`h-8 w-8 rounded-full flex items-center justify-center border ${
                   hasReconstructions 
@@ -1424,7 +1444,7 @@ function ProjectPageInner() {
                     hasReconstructions ? 'text-green-600' : hasActiveReconstructionJobs ? 'text-blue-600' : hasMasks ? 'text-amber-600' : 'text-muted-foreground'
                   }`} />
                 </div>
-                <div className="hidden sm:block">
+                <div className="hidden md:block">
                   <p className="text-xs font-medium">4D Model</p>
                   <p className="text-xs text-muted-foreground">
                     {hasReconstructions ? 'Complete' : hasActiveReconstructionJobs ? 'Processing' : hasMasks ? 'Available' : 'Locked'}
@@ -1537,8 +1557,7 @@ function ProjectPageInner() {
               </Card>
             )}
 
-            {/* STATE 2: Has Masks, No Reconstructions - Refine & Reconstruct */}
-            {hasMasks && !hasReconstructions && (
+            {hasMasks && !isPipelineComplete && (
               <Card className="border-2 border-green-500/20">
                 <CardHeader>
                   <div className="flex items-center justify-between gap-3">
@@ -1548,7 +1567,13 @@ function ProjectPageInner() {
                       </div>
                       <div className="min-w-0">
                         <CardTitle>Segmentation Complete</CardTitle>
-                        <p className="text-sm text-muted-foreground">Refine your masks or create 3D models</p>
+                        <p className="text-sm text-muted-foreground">
+                          {!hasReconstructions
+                            ? "Refine your masks or create 3D models"
+                            : landmarkRunning
+                            ? "Landmark detection in progress…"
+                            : "Run landmark detection to complete the pipeline"}
+                        </p>
                       </div>
                     </div>
                     {rerunHeaderButton}
@@ -1577,7 +1602,7 @@ function ProjectPageInner() {
                         </TooltipContent>
                       </Tooltip>
 
-                      {renderStageButtons("masks")}
+                      {renderStageButtons()}
                     </div>
                   </TooltipProvider>
 
@@ -1591,8 +1616,7 @@ function ProjectPageInner() {
               </Card>
             )}
 
-            {/* STATE 3: Has Masks AND Reconstructions - Full Pipeline Complete */}
-            {hasMasks && hasReconstructions && (
+            {isPipelineComplete && (
               <Card className="border-2 border-blue-500/20">
                 <CardHeader>
                   <div className="flex items-center justify-between gap-3">
@@ -1631,7 +1655,7 @@ function ProjectPageInner() {
                         </TooltipContent>
                       </Tooltip>
 
-                      {renderStageButtons("complete")}
+                      {renderStageButtons()}
                     </div>
                   </TooltipProvider>
                 </CardContent>
