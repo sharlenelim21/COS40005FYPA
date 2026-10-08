@@ -186,6 +186,26 @@ test("versions can be switched unless a training runs or this computer's model f
   assert.match(logic.whyNotSwitch("anything", true), /training is running/);        // the running job comes first
 });
 
+test("the scan viewer offers to use or delete only the version it compares with the model in use", () => {
+  const candidate = { label: "v3", status: "candidate", is_original: false };
+  const original = { label: "v1", status: "original", is_original: true };
+  assert.deepEqual(logic.decisionFor(candidate, "v1"), { use: true, remove: true });
+  assert.deepEqual(logic.decisionFor(original, "v3"), { use: true, remove: false });   // the original is never deleted
+  assert.equal(logic.decisionFor(candidate, "v3"), null);                              // in use: nothing to compare
+  assert.equal(logic.decisionFor({ ...candidate, status: "deleted" }, "v1"), null);
+});
+
+test("the scan viewer shows the dataset chosen above the table, keeping the kind of scan shown before", () => {
+  const examples = [
+    { n: 0, dataset: "acdc", role: "lowest" }, { n: 1, dataset: "acdc", role: "median" },
+    { n: 3, dataset: "mms2", role: "lowest" }, { n: 4, dataset: "mms2", role: "highest" },
+  ];
+  assert.equal(logic.exampleFor(examples, "mms2", "highest"), 4);
+  assert.equal(logic.exampleFor(examples, "acdc", "highest"), 0);   // ACDC has no highest here: its first scan
+  assert.equal(logic.exampleFor(examples, "mms2", null), 3);
+  assert.equal(logic.exampleFor(examples, "mms1", "lowest"), null);  // no scans from that dataset
+});
+
 test("a version the user deleted is described in the user's words", () => {
   assert.deepEqual(logic.jobOutcome("v3", "v2", [{ label: "v3", status: "deleted", deleted_because: "rejected" }]), {
     title: "v3 was deleted",

@@ -1,24 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, Loader2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { DATASET_NAMES, ExampleIndex, ExampleScan, ModelVersion, retrainingApi } from "@/lib/retraining-api";
-import { differences, exampleSides, exampleTitle, outline } from "@/components/extend-training/logic";
+import { DATASET_NAMES, ExampleIndex, ExampleScan, ModelVersion, retrainingApi, VersionAction } from "@/lib/retraining-api";
+import { decisionFor, differences, exampleFor, exampleSides, exampleTitle, outline } from "@/components/extend-training/logic";
 import { CHANGE_COLOR, LABEL_PALETTE, MaskLegend, OUTLINE_COLOR, Overlay, SliceCanvas } from "@/components/extend-training/SliceCanvas";
 
 interface DecodedSlice {
   truth: Uint8Array;
   left: Uint8Array;
   right: Uint8Array;
-}
-
-interface Sides {
-  left: string;
-  right: string;
 }
 
 function loadImage(source: string): Promise<HTMLImageElement> {
@@ -45,34 +40,38 @@ async function readLabels(source: string, size: number): Promise<Uint8Array> {
   return labels;
 }
 
-/** What the right-hand version is to the user, for its caption. The left is always the model in use. */
-function roleOf(version: ModelVersion | undefined, label: string): string {
-  if (version?.label === label) return "New version";
-  if (version?.is_original) return "Original model";
-  return "Another version";
-}
-
 /**
  * Scans neither version was trained on, predicted by two versions side by side (plan WS13 R1). The model in use, the
- * one new segmentations get, is always on the left. The right is any other version that was not deleted, starting with
- * the one under review, so both sides are never the same version. The worker predicts these scans once with a version
- * other than this one and the one it was compared with in training, and keeps them.
+ * one new segmentations get, is always on the left; the version under review is on the right, and the choice above
+ * the pictures picks it, so the page, the pictures and the decision are always about the same version. A version
+ * made before the page has no example scans: the worker makes them the first time it is compared (about a minute),
+ * and predicts them with the model in use when that is not the version it was compared with in training.
+ * Using or deleting the version is offered under the pictures, once they are shown. The dataset is the one chosen above
+ * the results table, so the table and the pictures are always about the same scans.
  */
-export function ExampleViewer({ label, against, active, index, versions }: {
+export function ExampleViewer({ label, against, active, index, dataset, versions, onChoose, onAction, cannotSwitch, busy }: {
   label: string;
   against: string;
   active: string;
   index: ExampleIndex | null;
+  dataset: string;
   versions: ModelVersion[];
+  onChoose: (label: string) => void;
+  onAction: (label: string, action: VersionAction) => void;
+  cannotSwitch: string | null;
+  busy: boolean;
 }) {
-  const trainedAgainst = index?.against ?? against;
-  const sides = useMemo(() => exampleSides(versions, active, label, trainedAgainst),
-                        [versions, active, label, trainedAgainst]);
-  const [right, setRight] = useState<string | null>(sides.initial);
+  const [scans, setScans] = useState<ExampleIndex | null>(index);   // made here for a version that had none
+  const trainedAgainst = scans?.against ?? against;
+  const options = useMemo(() => exampleSides(versions, active, label, trainedAgainst).options,
+                          [versions, active, label, trainedAgainst]);
+  const comparing = label !== active;   // the version in use has nothing to be compared with but itself
+  const version = versions.find(item => item.label === label);
+  const decision = version ? decisionFor(version, active) : null;
   const [prepared, setPrepared] = useState<string[]>([]);   // versions the worker predicted these scans with
-  const [shown, setShown] = useState<Sides | null>(null);   // the two versions whose pictures are ready
+  const [readyFor, setReadyFor] = useState<string | null>(null);   // the model in use whose pictures are ready
   const [preparing, setPreparing] = useState<string | null>(null);
-  const [n, setN] = useState<number | null>(index?.examples[0]?.n ?? null);
+  const [n, setN] = useState<number | null>(exampleFor(index?.examples ?? [], dataset, null));
   const lastScan = useRef<number | null>(null);   // switching versions keeps the slice; another scan starts mid-way
   const [scan, setScan] = useState<ExampleScan | null>(null);
   const [decoded, setDecoded] = useState<DecodedSlice[] | null>(null);
@@ -82,56 +81,47 @@ export function ExampleViewer({ label, against, active, index, versions }: {
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
-    setN(index?.examples[0]?.n ?? null);
-  }, [index]);
+    const examples = scans?.examples ?? [];
+    setN(current => exampleFor(examples, dataset, examples.find(entry => entry.n === current)?.role ?? null));
+  }, [scans, dataset]);
 
-  // Another model put in use: it takes the left, so the right starts again from its default.
+  // The pictures: this version's example scans (made now if it has none) and the model in use's predictions of them.
   useEffect(() => {
-    setRight(sides.initial);
-  }, [active, sides.initial]);
-
-  // A right-hand version deleted meanwhile is no longer offered.
-  useEffect(() => {
-    if (right !== null && !sides.options.some(version => version.label === right)) setRight(sides.initial);
-  }, [right, sides]);
-
-  // Both sides' pictures, made once by the worker when neither this version nor its training comparison (about half a
-  // minute each), then kept.
-  useEffect(() => {
-    if (right === null || right === active) return;
-    const ready = (version: string) => version === label || version === trainedAgainst || prepared.includes(version);
-    const missing = [active, right].find(version => !ready(version));
-    if (!missing) {
-      setShown(current => (current?.left === active && current.right === right ? current : { left: active, right }));
+    if (!comparing) return;
+    const ready = scans !== null && (active === label || active === scans.against || prepared.includes(active));
+    if (ready) {
+      setReadyFor(active);
       return;
     }
     let stopped = false;
-    setPreparing(missing);
+    setReadyFor(null);
+    setPreparing(scans ? active : label);
     setProblem(null);
-    void retrainingApi.compareExamples(label, missing).then(reply => {
+    void retrainingApi.compareExamples(label, active).then(reply => {
       if (stopped) return;
       setPreparing(null);
-      if (reply.success) {
-        setPrepared(current => [...current, missing]);
+      if (reply.success && reply.data) {
+        if (reply.data.index) setScans(reply.data.index);
+        setPrepared(current => [...current, active]);
       } else {
         setProblem(reply.message);
-        if (missing === right && shown) setRight(shown.right);   // back to the pictures that are shown
       }
     });
     return () => {
       stopped = true;
       setPreparing(null);
     };
-  }, [active, right, label, trainedAgainst, prepared, shown]);
+  }, [comparing, active, label, scans, prepared]);
 
+  const shown = comparing && readyFor === active;
   useEffect(() => {
     setScan(null);
     setDecoded(null);
+    if (n === null || !shown) return;
     setProblem(null);
-    if (n === null || shown === null) return;
     let stopped = false;
     void (async () => {
-      const reply = await retrainingApi.example(label, n, shown);
+      const reply = await retrainingApi.example(label, n, { left: active, right: label });
       if (stopped) return;
       if (!reply.success || !reply.data) {
         setProblem(reply.message);
@@ -147,8 +137,10 @@ export function ExampleViewer({ label, against, active, index, versions }: {
         if (stopped) return;
         setScan(data);
         setDecoded(slices);
-        setSlice(current => (lastScan.current === n ? Math.min(current, data.count - 1) : Math.floor(data.count / 2)));
+        // Decide now: React runs the updater later, after lastScan has already been set to this scan.
+        const sameScan = lastScan.current === n;
         lastScan.current = n;
+        setSlice(current => (sameScan ? Math.min(current, data.count - 1) : Math.floor(data.count / 2)));
       } catch (error) {
         if (!stopped) setProblem(error instanceof Error ? error.message : "The example scan could not be shown.");
       }
@@ -156,7 +148,7 @@ export function ExampleViewer({ label, against, active, index, versions }: {
     return () => {
       stopped = true;
     };
-  }, [label, n, shown]);
+  }, [label, active, n, shown]);
 
   const current = decoded?.[slice];
   const overlays = useMemo(() => {
@@ -170,18 +162,34 @@ export function ExampleViewer({ label, against, active, index, versions }: {
     };
   }, [current, scan, disagreement, expert]);
 
-  if (!index || index.examples.length === 0) {
+  const chooser = (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-muted-foreground">Compare the model in use with</span>
+      <Select value={comparing ? label : undefined} onValueChange={(value: string) => onChoose(value)}
+              disabled={preparing !== null}>
+        <SelectTrigger className="h-8 min-w-56 max-w-full" aria-label="Choose the version to compare the model in use with">
+          <SelectValue placeholder="Choose a version" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(item => (
+            <SelectItem key={item.label} value={item.label}>
+              {item.label}
+              <span className="ml-1 text-muted-foreground">{item.is_original ? "(original)" : ""}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+
+  if (!comparing) {
     return (
-      <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-        No example scans for this version. Versions trained from this page get them automatically; this one was made
-        before that, so only its numbers are shown.
-      </div>
-    );
-  }
-  if (sides.initial === null) {
-    return (
-      <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-        There is no other version to compare the model in use with.
+      <div className="space-y-3 rounded-md border border-dashed p-4 text-sm">
+        <p className="text-muted-foreground">
+          This version is in use, so there is nothing to compare it with here. Choose another version to see it beside
+          the model in use.
+        </p>
+        {options.length > 0 && chooser}
       </div>
     );
   }
@@ -190,61 +198,55 @@ export function ExampleViewer({ label, against, active, index, versions }: {
     ...(disagreement ? [{ label: "Disagreement", color: "#facc15", outline: false }] : []),
     ...(expert ? [{ label: "Expert outline", color: "#ffffff", outline: true }] : []),
   ];
-  const isOriginal = (name: string) => versions.some(version => version.label === name && version.is_original);
+  const isOriginal = (name: string) => versions.some(item => item.label === name && item.is_original);
+  const datasetName = DATASET_NAMES[dataset] ?? dataset;
+  const mine = scans?.examples.filter(entry => entry.dataset === dataset) ?? [];
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <Select value={n === null ? undefined : String(n)} onValueChange={(value: string) => setN(Number(value))}>
-          <SelectTrigger className="w-full lg:w-[30rem]" aria-label="Choose an example scan">
-            <SelectValue placeholder="Choose a scan" />
-          </SelectTrigger>
-          <SelectContent>
-            {index.examples.map(entry => (
-              <SelectItem key={entry.n} value={String(entry.n)}>
-                {DATASET_NAMES[entry.dataset] ?? entry.dataset} · {exampleTitle(entry.role, entry.delta)} ·{" "}
-                {entry.case.replace(/\.nii\.gz$/, "")}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex flex-wrap items-center gap-4 text-sm">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        {mine.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-muted-foreground">Compare the model in use with</span>
-            <Select value={right ?? undefined} onValueChange={(value: string) => setRight(value)} disabled={preparing !== null}>
-              <SelectTrigger className="h-8 min-w-56 max-w-full" aria-label="Choose the version to compare the model in use with">
-                <SelectValue />
+            <span className="text-muted-foreground">{datasetName} scan</span>
+            <Select value={n === null ? undefined : String(n)} onValueChange={(value: string) => setN(Number(value))}>
+              <SelectTrigger className="h-8 min-w-64 max-w-full" aria-label={`Choose an example scan from ${datasetName}`}>
+                <SelectValue placeholder="Choose a scan" />
               </SelectTrigger>
               <SelectContent>
-                {sides.options.map(version => (
-                  <SelectItem key={version.label} value={version.label}>
-                    {version.label}
-                    <span className="ml-1 text-muted-foreground">
-                      {version.label === label ? "(this version)" : version.is_original ? "(original)" : ""}
-                    </span>
+                {mine.map(entry => (
+                  <SelectItem key={entry.n} value={String(entry.n)}>
+                    {exampleTitle(entry.role, entry.delta)}
+                    <span className="ml-1 text-muted-foreground">· {entry.case.replace(/\.nii\.gz$/, "")}</span>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-          <label className="flex items-center gap-2">
-            <Switch checked={disagreement} onCheckedChange={setDisagreement} />
-            Highlight disagreement
-          </label>
-          <label className="flex items-center gap-2">
-            <Switch checked={expert} onCheckedChange={setExpert} />
-            Show expert outline
-          </label>
-        </div>
+        ) : scans && (
+          <span className="text-muted-foreground">No example scans from {datasetName} for this version.</span>
+        )}
+        {chooser}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+        <label className="flex items-center gap-2">
+          <Switch checked={disagreement} onCheckedChange={setDisagreement} />
+          Highlight disagreement
+        </label>
+        <label className="flex items-center gap-2">
+          <Switch checked={expert} onCheckedChange={setExpert} />
+          Show expert outline
+        </label>
       </div>
       {problem && <Alert variant="destructive"><AlertDescription>{problem}</AlertDescription></Alert>}
       {preparing && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Preparing {preparing}&apos;s predictions on these scans: they are made once, which takes about half a minute.
+          {preparing === label
+            ? `Preparing ${label}'s example scans: made once, from the scans whose score it changed most and least. This takes about a minute.`
+            : `Preparing ${preparing}'s predictions on these scans: made once, which takes about half a minute.`}
         </p>
       )}
-      {!problem && (!scan || !overlays) && (
+      {!problem && (n !== null || !scans) && (!scan || !overlays) && (
         <div className="flex h-64 items-center justify-center rounded-md bg-muted">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
@@ -264,26 +266,56 @@ export function ExampleViewer({ label, against, active, index, versions }: {
             </figure>
             <figure className="space-y-1.5">
               <figcaption className="flex items-center justify-between gap-2 text-sm">
-                <span className="font-medium">
-                  {roleOf(versions.find(version => version.label === scan.right_label), label)}
-                </span>
+                <span className="font-medium">{version?.is_original ? "Original model" : "New version"}</span>
                 <span className="truncate text-xs text-muted-foreground">{scan.right_label}</span>
               </figcaption>
               <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
                            overlays={overlays.right} label={`${scan.right_label}, slice ${slice + 1}`} />
             </figure>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="w-28 shrink-0 text-sm tabular-nums">Slice {slice + 1} / {scan.count}</span>
-            <Slider value={[slice]} min={0} max={Math.max(0, scan.count - 1)} step={1}
-                    onValueChange={([value]) => setSlice(value)} aria-label="Slice" />
+          <div className="flex items-center justify-center gap-2">
+            <Button type="button" variant="outline" size="icon" className="h-8 w-8" aria-label="Previous slice"
+                    disabled={slice <= 0} onClick={() => setSlice(value => Math.max(0, value - 1))}>
+              <ArrowUp className="h-4 w-4" />
+            </Button>
+            <span className="w-28 text-center text-sm tabular-nums">Slice {slice + 1} / {scan.count}</span>
+            <Button type="button" variant="outline" size="icon" className="h-8 w-8" aria-label="Next slice"
+                    disabled={slice >= scan.count - 1} onClick={() => setSlice(value => Math.min(scan.count - 1, value + 1))}>
+              <ArrowDown className="h-4 w-4" />
+            </Button>
           </div>
         </>
       )}
       <MaskLegend extras={extras} />
       <p className="text-xs text-muted-foreground">
-        These scans include each dataset&apos;s lowest change, so a drop is never hidden. The table above covers every scan.
+        The dataset is the one chosen above the table. Its scan with the lowest change is always here, so a drop is never
+        hidden; the table covers every scan.
       </p>
+      {scan && overlays && decision && (
+        <div className="flex flex-col gap-3 rounded-lg border bg-muted/40 p-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="font-medium">{label} is not in use. The decision is yours.</p>
+            <p className="text-sm text-muted-foreground">
+              {cannotSwitch ?? (version?.is_original
+                ? `Going back to the original replaces ${active}. The original model is always kept.`
+                : "Nothing changes until you confirm. The original model is always kept.")}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button className="max-w-full whitespace-normal break-all" disabled={Boolean(cannotSwitch)}
+                    onClick={() => onAction(label, "activate")}>
+              Use {label}
+              <ArrowRight className="ml-2 h-4 w-4 shrink-0" />
+            </Button>
+            {decision.remove && (
+              <Button variant="outline" className="max-w-full whitespace-normal break-all" disabled={busy}
+                      onClick={() => onAction(label, "reject")}>
+                Delete {label}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

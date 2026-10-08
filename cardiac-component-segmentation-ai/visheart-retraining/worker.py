@@ -190,16 +190,26 @@ class WorkerApp:
 
     def compare_examples(self, label, against):
         """Another version's predictions on label's example scans, for the Results tab's viewer. They are made once,
-        about half a minute on a CPU, and kept; label's own and the version it was compared with come from training."""
+        about half a minute on a CPU, and kept; label's own and the version it was compared with come from training.
+        A version made before the page has no example scans: they are made here first, about a minute more."""
         registry = self.registry()
         self.known(registry, label)
         self.known(registry, against)
+        for name in (label, against):
+            if registry.entry(name).get("status") == "deleted":
+                raise jobs.JobError(409, f"{name} was deleted, so it cannot be compared.")
+        view = {"label": label, "against": against, "ready": True, "rendered": False}
         index = self.examples_index(label)
         if not index:
-            raise jobs.JobError(404, f"{label} has no example scans to compare.")
-        if registry.entry(against).get("status") == "deleted":
-            raise jobs.JobError(409, f"{against} was deleted, so it cannot be compared.")
-        view = {"label": label, "against": against, "ready": True, "rendered": False}
+            with self.compare_lock:
+                if not self.examples_index(label):   # another request may have just made them
+                    self.log_event(f"preparing {label}'s example scans")
+                    render_examples_for(self.config, label, self.config.examples / label)
+                    view["rendered"] = True
+            index = self.examples_index(label)
+            if not index:
+                raise jobs.JobError(500, f"The example scans for {label} could not be prepared. See worker.log.")
+        view["index"] = index
         if against in (label, index.get("against")) or self.comparison_ready(registry, label, against):
             return view
         with self.compare_lock:
@@ -481,19 +491,31 @@ def health(port, timeout=2):
         return json.loads(response.read())["data"]
 
 
-def render_comparison(config, label, against, out):
-    """against's predictions on label's example scans, by render_examples.py in its own process (it loads a model)."""
-    command = [config.python, str(config.tools / "render_examples.py"), "--label", label, "--compare-with", against,
-               "--registry", str(config.registry), "--manifest", str(config.frozen_manifest), "--out", str(out)]
+def run_renderer(config, arguments, what):
+    """render_examples.py in its own process (it loads models); a failure is reported with its last line."""
+    command = [config.python, str(config.tools / "render_examples.py"), *arguments,
+               "--registry", str(config.registry), "--manifest", str(config.frozen_manifest)]
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1", "MPLBACKEND": "Agg"}
     try:
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=900, env=env, creationflags=jobs.NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise jobs.JobError(500, f"The comparison with {against} could not run: {error}")
+        raise jobs.JobError(500, f"{what} could not run: {error}")
     if result.returncode != 0:
         last = (result.stderr or result.stdout).strip().splitlines()[-1:] or ["no output"]
-        raise jobs.JobError(500, f"The comparison with {against} failed: {last[0]}")
+        raise jobs.JobError(500, f"{what} failed: {last[0]}")
+
+
+def render_comparison(config, label, against, out):
+    """against's predictions on label's example scans."""
+    run_renderer(config, ["--label", label, "--compare-with", against, "--out", str(out)],
+                 f"The comparison with {against}")
+
+
+def render_examples_for(config, label, out):
+    """label's own example scans, as training makes them, for a version made before the page: the scans of the frozen
+    set whose score changed least, most and in between against the version it was compared with."""
+    run_renderer(config, ["--label", label, "--out", str(out)], f"The example scans for {label}")
 
 
 def terminate(app, exit=os._exit):

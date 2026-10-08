@@ -179,6 +179,8 @@ export interface Comparison {
   against: string;
   ready: boolean;
   rendered: boolean;
+  /** label's example scans: made by this call when a version made before the page had none. */
+  index?: ExampleIndex;
 }
 
 export interface VersionResults {

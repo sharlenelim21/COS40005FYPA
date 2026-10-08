@@ -285,6 +285,37 @@ class Worker(unittest.TestCase):
         original.write_bytes(kept)
         self.assertIsNone(app.status()["problem"])
 
+    def test_a_version_without_example_scans_gets_them_when_it_is_first_compared(self):
+        self.add_candidate("cand", b"candidate weights", warn=False)   # made before the page: no example scans
+        self.add_candidate("gone", b"gone weights", warn=False)
+        data = self.registry_data()
+        data["versions"]["gone"]["status"] = "deleted"
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+        app = self.make_app()
+        made = []
+
+        def fake_examples(config, label, out):
+            made.append(label)
+            (out / "0").mkdir(parents=True)
+            for name in ("image_0", "truth_0", "against_0", "label_0"):
+                (out / "0" / f"{name}.png").write_bytes(b"\x89PNG " + name.encode("ascii"))
+            (out / "index.json").write_text(json.dumps({"label": label, "against": "orig", "size": 256, "examples": [
+                {"n": 0, "dataset": "acdc", "case": "c1.nii.gz", "role": "lowest", "delta": -0.1, "scores": {},
+                 "slices": 1}]}), encoding="utf-8")
+
+        with mock.patch.object(worker, "render_examples_for", side_effect=fake_examples), \
+                mock.patch.object(worker, "render_comparison") as comparison:
+            view = app.compare_examples("cand", "orig")       # the model in use is the one it was trained against
+            again = app.compare_examples("cand", "orig")
+            with self.assertRaises(jobs.JobError) as refused:
+                app.compare_examples("gone", "orig")
+        self.assertEqual(made, ["cand"])                       # made once, and never for a deleted version
+        comparison.assert_not_called()
+        self.assertEqual((view["rendered"], again["rendered"]), (True, False))
+        self.assertEqual(view["index"]["examples"][0]["case"], "c1.nii.gz")   # the page can show them at once
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual(app.example("cand", 0)["right_label"], "cand")
+
     def test_the_example_scans_can_be_compared_with_another_version_that_still_exists(self):
         self.add_candidate("cand", b"candidate weights", warn=False)
         self.add_candidate("older", b"older weights", warn=False)

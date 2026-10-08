@@ -114,6 +114,16 @@ export function exampleTitle(role: string, delta: number): string {
   return `${rank} (${points(delta)})`;
 }
 
+/**
+ * The example scan shown for the dataset chosen above the results table: the one of the same kind (lowest, median or
+ * highest change) as the scan shown before, so switching dataset compares like with like; else the dataset's first.
+ */
+export function exampleFor(examples: { n: number; dataset: string; role: string }[], dataset: string,
+                           role: string | null): number | null {
+  const mine = examples.filter(entry => entry.dataset === dataset);
+  return (mine.find(entry => entry.role === role) ?? mine[0])?.n ?? null;
+}
+
 export type Rgb = [number, number, number];
 
 /** Edit tracking's class names as training labels; 0 is background. "manual" is no label: such slices never train. */
@@ -254,6 +264,16 @@ export function whyNotSwitch(problem: string | null | undefined, busy: boolean):
   if (busy) return TRAINING_RUNNING;
   if (problem) return `Versions cannot be switched on this computer: ${problem}.`;
   return null;
+}
+
+/**
+ * What the scan viewer offers for the version it compares with the model in use: using it, and deleting it unless
+ * it is the original, which is always kept. Nothing for the version in use, which has nothing to compare with.
+ */
+export function decisionFor(version: { label: string; status: string; is_original: boolean },
+                            active: string): { use: boolean; remove: boolean } | null {
+  if (version.label === active || version.status === "deleted") return null;
+  return { use: true, remove: version.status === "candidate" && !version.is_original };
 }
 
 /** Every version not deleted except `except`: in use, original, then newest. */
