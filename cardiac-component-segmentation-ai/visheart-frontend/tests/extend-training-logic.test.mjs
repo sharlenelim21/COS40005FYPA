@@ -110,6 +110,13 @@ test("the zoom box is one square around every labelled pixel, with a margin, kep
   assert.equal(logic.countDifferences(new Uint8Array([0, 1, 2]), new Uint8Array([0, 2, 2])), 1);
 });
 
+test("where two models differ, what each side says there is counted by label", () => {
+  const left = new Uint8Array([0, 2, 2, 3, 1]);
+  const right = new Uint8Array([0, 2, 3, 0, 0]);
+  assert.deepEqual(logic.disagreementSummary(left, right), { 2: 1, 3: 1, 1: 1 });
+  assert.deepEqual(logic.disagreementSummary(right, left), { 3: 1, 0: 2 });
+});
+
 test("painting colours only labelled pixels", () => {
   const rgba = new Uint8ClampedArray(8);
   logic.paintLabels(rgba, new Uint8Array([0, 1]), { 1: [34, 197, 94] }, 0.5);

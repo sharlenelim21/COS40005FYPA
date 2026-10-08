@@ -169,6 +169,13 @@ export function disagreementLabels(own: Uint8Array, other: Uint8Array): Uint8Arr
   return out;
 }
 
+/** Where two predictions differ, how many pixels this one gives each label (0: it labels nothing there). */
+export function disagreementSummary(own: Uint8Array, other: Uint8Array): Record<number, number> {
+  const counts: Record<number, number> = {};
+  for (let i = 0; i < own.length; i++) if (own[i] !== other[i]) counts[own[i]] = (counts[own[i]] ?? 0) + 1;
+  return counts;
+}
+
 /** How many pixels two predictions label differently. */
 export function countDifferences(a: Uint8Array, b: Uint8Array): number {
   let count = 0;

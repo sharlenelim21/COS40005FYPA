@@ -8,11 +8,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { DATASET_NAMES, ExampleIndex, ExampleScan, ModelVersion, retrainingApi, VersionAction } from "@/lib/retraining-api";
 import {
-  countDifferences, decisionFor, disagreementLabels, exampleFor, exampleSides, exampleTitle, heartBox, LEFT_OUT, outline,
+  countDifferences, decisionFor, disagreementLabels, disagreementSummary, exampleFor, exampleSides, exampleTitle, heartBox,
+  LEFT_OUT, outline,
 } from "@/components/extend-training/logic";
 import { CHANGE_COLOR, LABEL_PALETTE, MaskLegend, OUTLINE_COLOR, Overlay, SliceCanvas } from "@/components/extend-training/SliceCanvas";
 
 const DISAGREEMENT_PALETTE = { ...LABEL_PALETTE, [LEFT_OUT]: CHANGE_COLOR };
+const ANSWER_NAMES: Record<number, string> = { 1: "right ventricle", 2: "myocardium", 3: "left ventricle cavity", 0: "nothing" };
+
+/** "myocardium 98 px · nothing 42 px": what one side says where the two differ, the largest first. */
+function answerLine(counts: Record<number, number>): string {
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => `${ANSWER_NAMES[Number(label)] ?? `label ${label}`} ${count.toLocaleString()} px`).join(" · ");
+}
 
 interface DecodedSlice {
   truth: Uint8Array;
@@ -82,7 +90,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
   const [slice, setSlice] = useState(0);
   const [disagreement, setDisagreement] = useState(false);
   const [expert, setExpert] = useState(false);
-  const [zoom, setZoom] = useState(true);
+  const [zoom, setZoom] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
@@ -160,17 +168,26 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
   const box = useMemo(() => (decoded && scan
     ? heartBox(decoded.flatMap(item => [item.truth, item.left, item.right]), scan.size, scan.size)
     : null), [decoded, scan]);
-  const differing = useMemo(() => (current ? countDifferences(current.left, current.right) : 0), [current]);
+  // Where the two differ: how many pixels, and what each side says there.
+  const contrast = useMemo(() => {
+    if (!current || !disagreement) return null;
+    return {
+      count: countDifferences(current.left, current.right),
+      left: answerLine(disagreementSummary(current.left, current.right)),
+      right: answerLine(disagreementSummary(current.right, current.left)),
+    };
+  }, [current, disagreement]);
   const overlays = useMemo(() => {
     if (!current || !scan) return null;
-    // With disagreement on, each side fades what both agree on and paints, solid, its own answer where they differ.
+    // With disagreement on, the masks stay as they are and each side paints, solid, its own answer where the two
+    // differ: its label, or yellow where it leaves out what the other labels.
     const side = (own: Uint8Array, other: Uint8Array): Overlay[] => [
-      { labels: own, palette: LABEL_PALETTE, alpha: disagreement ? 0.15 : 0.45 },
-      ...(disagreement ? [{ labels: disagreementLabels(own, other), palette: DISAGREEMENT_PALETTE, alpha: 1 }] : []),
+      { labels: own, palette: LABEL_PALETTE, alpha: 0.45 },
+      ...(contrast ? [{ labels: disagreementLabels(own, other), palette: DISAGREEMENT_PALETTE, alpha: 1 }] : []),
       ...(expert ? [{ labels: outline(current.truth, scan.size, scan.size), palette: { 1: OUTLINE_COLOR }, alpha: 1 }] : []),
     ];
     return { left: side(current.left, current.right), right: side(current.right, current.left) };
-  }, [current, scan, disagreement, expert]);
+  }, [current, scan, contrast, expert]);
 
   const chooser = (
     <div className="flex flex-wrap items-center gap-2">
@@ -254,6 +271,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
             </figcaption>
             <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size} crop={zoom ? box : null}
                          overlays={overlays.left} label={`${scan.left_label}, slice ${slice + 1}`} />
+            {contrast?.count ? <p className="text-xs text-muted-foreground">Says, where they differ: {contrast.left}</p> : null}
           </figure>
           <figure className="space-y-1.5">
             <figcaption className="flex items-center justify-between gap-2 text-sm">
@@ -262,6 +280,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
             </figcaption>
             <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size} crop={zoom ? box : null}
                          overlays={overlays.right} label={`${scan.right_label}, slice ${slice + 1}`} />
+            {contrast?.count ? <p className="text-xs text-muted-foreground">Says, where they differ: {contrast.right}</p> : null}
           </figure>
         </div>
       )}
@@ -301,11 +320,11 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
         )}
       </div>
       <MaskLegend extras={extras} />
-      {disagreement && scan && overlays && (
+      {contrast && overlays && (
         <p className="text-sm">
-          {differing
-            ? <><span className="font-medium tabular-nums">{differing.toLocaleString()}</span> pixels differ on this slice.
-                Solid colour: what this model says there; faint colour: what both agree on.</>
+          {contrast.count
+            ? <><span className="font-medium tabular-nums">{contrast.count.toLocaleString()}</span> pixels differ on this
+                slice. Solid colour: what each model says there; yellow: what it leaves out.</>
             : "The two models agree on every pixel of this slice."}
         </p>
       )}
