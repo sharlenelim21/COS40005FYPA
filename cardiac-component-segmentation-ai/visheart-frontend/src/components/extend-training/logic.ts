@@ -169,6 +169,47 @@ export function disagreementLabels(own: Uint8Array, other: Uint8Array): Uint8Arr
   return out;
 }
 
+/** How many pixels two predictions label differently. */
+export function countDifferences(a: Uint8Array, b: Uint8Array): number {
+  let count = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) count++;
+  return count;
+}
+
+export interface Box {
+  x: number;
+  y: number;
+  size: number;
+}
+
+/**
+ * The square around every labelled pixel of these label maps, with a margin on each side, inside the image: the "Zoom
+ * to the heart" view. Given every slice of a scan, it is one box for all of them, so paging through the slices does not
+ * move the picture. Null when nothing is labelled.
+ */
+export function heartBox(maps: Uint8Array[], width: number, height: number, margin = 0.35, least = 48): Box | null {
+  let left = width, top = height, right = -1, bottom = -1;
+  for (const labels of maps) {
+    for (let i = 0; i < labels.length; i++) {
+      if (!labels[i]) continue;
+      const x = i % width, y = (i - x) / width;
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+  if (right < 0) return null;
+  const span = Math.max(right - left + 1, bottom - top + 1);
+  const size = Math.min(Math.max(Math.ceil(span * (1 + 2 * margin)), least), width, height);
+  const clamp = (start: number, extent: number) => Math.min(Math.max(start, 0), extent - size);
+  return {
+    x: clamp(Math.round((left + right + 1) / 2 - size / 2), width),
+    y: clamp(Math.round((top + bottom + 1) / 2 - size / 2), height),
+    size,
+  };
+}
+
 /** 1 on the edge of every labelled region: a labelled pixel beside another label or the image border. */
 export function outline(labels: Uint8Array, width: number, height: number): Uint8Array {
   const out = new Uint8Array(labels.length);

@@ -94,6 +94,22 @@ test("where two models disagree, each side shows its own answer, so the two pict
   assert.deepEqual([...logic.disagreementLabels(right, left)], [0, 0, 3, logic.LEFT_OUT, 1]);
 });
 
+test("the zoom box is one square around every labelled pixel, with a margin, kept inside the image", () => {
+  const map = (width, cells) => {
+    const labels = new Uint8Array(width * width);
+    for (const [x, y] of cells) labels[y * width + x] = 1;
+    return labels;
+  };
+  // A 20 x 10 heart at (40..59, 50..59) in a 100 x 100 scan: 20 px + 35% each side = 34 px, at least 30 here.
+  const heart = map(100, [[40, 50], [59, 59]]);
+  assert.deepEqual(logic.heartBox([heart], 100, 100, 0.35, 30), { x: 33, y: 38, size: 34 });
+  // Two slices share one box, so paging does not move the picture; the smallest box is `least`.
+  assert.deepEqual(logic.heartBox([map(100, [[10, 10]]), map(100, [[12, 12]])], 100, 100, 0.35, 30), { x: 0, y: 0, size: 30 });
+  assert.deepEqual(logic.heartBox([map(100, [[99, 99]])], 100, 100, 0.35, 30), { x: 70, y: 70, size: 30 });   // at the edge
+  assert.equal(logic.heartBox([new Uint8Array(100 * 100)], 100, 100), null);
+  assert.equal(logic.countDifferences(new Uint8Array([0, 1, 2]), new Uint8Array([0, 2, 2])), 1);
+});
+
 test("painting colours only labelled pixels", () => {
   const rgba = new Uint8ClampedArray(8);
   logic.paintLabels(rgba, new Uint8Array([0, 1]), { 1: [34, 197, 94] }, 0.5);

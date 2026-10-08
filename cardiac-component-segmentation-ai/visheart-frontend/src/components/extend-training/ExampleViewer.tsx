@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { DATASET_NAMES, ExampleIndex, ExampleScan, ModelVersion, retrainingApi, VersionAction } from "@/lib/retraining-api";
-import { decisionFor, disagreementLabels, exampleFor, exampleSides, exampleTitle, LEFT_OUT, outline } from "@/components/extend-training/logic";
+import {
+  countDifferences, decisionFor, disagreementLabels, exampleFor, exampleSides, exampleTitle, heartBox, LEFT_OUT, outline,
+} from "@/components/extend-training/logic";
 import { CHANGE_COLOR, LABEL_PALETTE, MaskLegend, OUTLINE_COLOR, Overlay, SliceCanvas } from "@/components/extend-training/SliceCanvas";
 
 const DISAGREEMENT_PALETTE = { ...LABEL_PALETTE, [LEFT_OUT]: CHANGE_COLOR };
@@ -80,6 +82,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
   const [slice, setSlice] = useState(0);
   const [disagreement, setDisagreement] = useState(false);
   const [expert, setExpert] = useState(false);
+  const [zoom, setZoom] = useState(true);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
@@ -153,12 +156,17 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
   }, [label, active, n, shown]);
 
   const current = decoded?.[slice];
+  // One box around the heart in every slice of this scan (both models and the expert), so paging does not move it.
+  const box = useMemo(() => (decoded && scan
+    ? heartBox(decoded.flatMap(item => [item.truth, item.left, item.right]), scan.size, scan.size)
+    : null), [decoded, scan]);
+  const differing = useMemo(() => (current ? countDifferences(current.left, current.right) : 0), [current]);
   const overlays = useMemo(() => {
     if (!current || !scan) return null;
-    // With disagreement on, each side dims its mask and paints, at full strength, its own answer where the two differ.
+    // With disagreement on, each side fades what both agree on and paints, solid, its own answer where they differ.
     const side = (own: Uint8Array, other: Uint8Array): Overlay[] => [
-      { labels: own, palette: LABEL_PALETTE, alpha: disagreement ? 0.25 : 0.45 },
-      ...(disagreement ? [{ labels: disagreementLabels(own, other), palette: DISAGREEMENT_PALETTE, alpha: 0.95 }] : []),
+      { labels: own, palette: LABEL_PALETTE, alpha: disagreement ? 0.15 : 0.45 },
+      ...(disagreement ? [{ labels: disagreementLabels(own, other), palette: DISAGREEMENT_PALETTE, alpha: 1 }] : []),
       ...(expert ? [{ labels: outline(current.truth, scan.size, scan.size), palette: { 1: OUTLINE_COLOR }, alpha: 1 }] : []),
     ];
     return { left: side(current.left, current.right), right: side(current.right, current.left) };
@@ -216,6 +224,10 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
           <Switch checked={expert} onCheckedChange={setExpert} />
           Show expert outline
         </label>
+        <label className="flex items-center gap-2">
+          <Switch checked={zoom} onCheckedChange={setZoom} />
+          Zoom to the heart
+        </label>
       </div>
       {problem && <Alert variant="destructive"><AlertDescription>{problem}</AlertDescription></Alert>}
       {preparing && (
@@ -240,7 +252,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
                 {scan.left_label}{isOriginal(scan.left_label) ? " (original)" : ""}
               </span>
             </figcaption>
-            <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
+            <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size} crop={zoom ? box : null}
                          overlays={overlays.left} label={`${scan.left_label}, slice ${slice + 1}`} />
           </figure>
           <figure className="space-y-1.5">
@@ -248,7 +260,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
               <span className="font-medium">{version?.is_original ? "Original model" : "New version"}</span>
               <span className="truncate text-xs text-muted-foreground">{scan.right_label}</span>
             </figcaption>
-            <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
+            <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size} crop={zoom ? box : null}
                          overlays={overlays.right} label={`${scan.right_label}, slice ${slice + 1}`} />
           </figure>
         </div>
@@ -289,6 +301,14 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
         )}
       </div>
       <MaskLegend extras={extras} />
+      {disagreement && scan && overlays && (
+        <p className="text-sm">
+          {differing
+            ? <><span className="font-medium tabular-nums">{differing.toLocaleString()}</span> pixels differ on this slice.
+                Solid colour: what this model says there; faint colour: what both agree on.</>
+            : "The two models agree on every pixel of this slice."}
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">
         The dataset is the one chosen above the table. Its scan with the lowest change is always here, so a drop is never
         hidden; the table covers every scan.
