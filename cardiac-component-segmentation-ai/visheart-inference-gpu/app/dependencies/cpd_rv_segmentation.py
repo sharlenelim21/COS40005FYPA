@@ -1493,6 +1493,14 @@ _RV_LABEL = 1
 _LV_CAVITY_LABEL = 3
 _CPD9_MIN_RV_PIXELS = 15
 _CPD9_LEVEL_NAMES = ["Apical", "Basal", "Mid"]
+# Minimum |cos| agreement a slice's own best "most distant hull pair" candidate must
+# have with the previous slice's chord axis before it's trusted outright -- below
+# this (axis would swing by more than ~37deg between two physically adjacent
+# slices), the previous slice's axis direction is kept instead. See the
+# label_cpd9_from_raw_slices loop for why: near the apex tip a slice's RV
+# cross-section can shrink to a few dozen pixels and go nearly circular, at which
+# point "most distant pair" is noise and can land ~90deg off a real anatomical axis.
+_CPD9_AXIS_CONTINUITY_MIN_COSINE = 0.8
 _cpd9_apex_at_start_cache: dict[str, bool] = {}
 
 
@@ -1641,14 +1649,32 @@ def label_cpd9_from_raw_slices(
             diffs = hull_pts[:, None, :] - hull_pts[None, :, :]
             dist2 = np.einsum("ijk,ijk->ij", diffs, diffs)
             cand_i, cand_j = np.where(dist2 >= 0.9 * dist2.max())
+            axis_from_prev = False
             if prev_axis is not None and len(cand_i) > 1:
                 cand_axes = hull_pts[cand_j].astype(float) - hull_pts[cand_i].astype(float)
                 cand_norms = np.linalg.norm(cand_axes, axis=1, keepdims=True)
                 cand_axes = cand_axes / cand_norms
-                best_k = np.argmax(np.abs(cand_axes @ prev_axis))
+                agreement = np.abs(cand_axes @ prev_axis)
+                best_k = np.argmax(agreement)
+                # Even the best-agreeing candidate still swings too far from the
+                # previous slice's axis -- this slice's own farthest-pair geometry
+                # isn't trustworthy (see _CPD9_AXIS_CONTINUITY_MIN_COSINE above).
+                # Confirmed on real data: the one slice where this fires is the
+                # smallest-area slice at the apex tip (41 px here vs 400-2000+ on
+                # neighbors), where the axis otherwise jumped ~150deg and flipped
+                # which side was Seg1 vs Seg3 -- a one-sided notch in the 3D
+                # boundary, clean from one camera angle and broken from the other.
+                axis_from_prev = agreement[best_k] < _CPD9_AXIS_CONTINUITY_MIN_COSINE
             else:
                 best_k = np.argmax(dist2[cand_i, cand_j])
-            i1, i2 = cand_i[best_k], cand_j[best_k]
+            if axis_from_prev:
+                # Keep the inherited axis direction outright, but still use THIS
+                # slice's own extreme points along it (not the previous slice's p1/
+                # p2) so the cuts below reflect its actual shape/centroid.
+                proj_hull = hull_pts.astype(float) @ prev_axis
+                i1, i2 = np.argmin(proj_hull), np.argmax(proj_hull)
+            else:
+                i1, i2 = cand_i[best_k], cand_j[best_k]
             p1, p2 = hull_pts[i1].astype(float), hull_pts[i2].astype(float)
 
             # q1 = midpoint(p1, c), q2 = midpoint(c, p2); the two cuts,
