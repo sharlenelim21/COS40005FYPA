@@ -59,7 +59,6 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
   const shown = status.versions
     .filter(version => version.status !== "deleted")
     .sort((a, b) => Number(b.is_active) - Number(a.is_active) || String(b.registered_at).localeCompare(String(a.registered_at)));
-  const deleted = status.versions.length - shown.length;
   // After many trainings the history grows long: the newest 10 (with the version in use and the original) by default.
   const [expanded, setExpanded] = useState(false);
   const { rows, hidden } = historyRows(shown, expanded);
@@ -145,8 +144,7 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
         </Button>
       )}
       <p className="text-xs text-muted-foreground">
-        Not choosing is fine: a new version stays here until you use it or delete it.
-        {deleted > 0 ? ` ${deleted} earlier versions were deleted when they were replaced or you deleted them; the original is always kept.` : ""}
+        You do not have to choose now: a new version stays here until you use it or delete it. The original is always kept.
       </p>
     </div>
   );

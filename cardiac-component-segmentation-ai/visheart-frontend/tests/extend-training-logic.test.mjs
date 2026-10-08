@@ -110,21 +110,18 @@ test("a frozen test patient's cases are listed but never trainable", () => {
   assert.deepEqual(logic.trainableCases(listed).map(item => item.maskId), ["m1", "m2", "m3"]);
 });
 
-test("the finished training says what happened to its version since", () => {
-  const versions = [{ label: "v1", status: "candidate" }, { label: "v2", status: "original" },
-                    { label: "v3", status: "deleted", deleted_because: "replaced by v2" }];
-  assert.deepEqual(logic.jobOutcome("v1", "v2", versions), {
-    title: "v1 is ready for review",
-    text: "Its results are below. Nothing has changed yet: the model in use stays active until you choose.",
+test("the three datasets' whole heart is averaged over every scan, so a bigger dataset counts more", () => {
+  const scores = (rv, myocardium, lv_cavity) => ({ rv, myocardium, lv_cavity, background: 1 });
+  const total = logic.overallAccuracy({
+    acdc: { n: 100, against: scores(0.9, 0.9, 0.9), label: scores(0.8, 0.8, 0.8) },
+    mms2: { n: 300, against: scores(0.7, 0.8, 0.9), label: scores(0.7, 0.8, 0.9) },
   });
-  assert.deepEqual(logic.jobOutcome("v1", "v1", versions), {
-    title: "v1 is in use",
-    text: "You chose to use it. The original model is always kept, and the version history can bring it back.",
-  });
-  assert.deepEqual(logic.jobOutcome("v3", "v2", versions), {
-    title: "v3 was deleted",
-    text: "It was replaced by v2. The model in use is v2.",
-  });
+  assert.equal(total.datasets, 2);
+  assert.equal(total.scans, 400);
+  assert.ok(Math.abs(total.against - 0.825) < 1e-9);   // (100 × 0.9 + 300 × 0.8) / 400
+  assert.ok(Math.abs(total.label - 0.8) < 1e-9);
+  assert.equal(logic.overallAccuracy(null), null);
+  assert.equal(logic.overallAccuracy({ acdc: { n: 0, against: scores(1, 1, 1), label: scores(1, 1, 1) } }), null);
 });
 
 test("a test scan is named by its dataset and case, in words", () => {
@@ -204,11 +201,4 @@ test("the scan viewer shows the dataset chosen above the table, keeping the kind
   assert.equal(logic.exampleFor(examples, "acdc", "highest"), 0);   // ACDC has no highest here: its first scan
   assert.equal(logic.exampleFor(examples, "mms2", null), 3);
   assert.equal(logic.exampleFor(examples, "mms1", "lowest"), null);  // no scans from that dataset
-});
-
-test("a version the user deleted is described in the user's words", () => {
-  assert.deepEqual(logic.jobOutcome("v3", "v2", [{ label: "v3", status: "deleted", deleted_because: "rejected" }]), {
-    title: "v3 was deleted",
-    text: "You deleted it from the version history. The model in use is v2.",
-  });
 });

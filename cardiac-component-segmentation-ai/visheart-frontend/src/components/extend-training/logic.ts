@@ -214,27 +214,19 @@ export function reviewLabel(versions: VersionLike[], lastResult: string | null |
   return alive.find(version => version.is_active && !version.is_original)?.label ?? null;
 }
 
-export interface VersionFate {
-  label: string;
-  status: string;
-  deleted_because?: string | null;
-}
-
-/** What the finished training's card says, from what has happened to its version since. */
-export function jobOutcome(label: string, active: string, versions: VersionFate[]): { title: string; text: string } {
-  if (label === active) {
-    return { title: `${label} is in use`,
-             text: "You chose to use it. The original model is always kept, and the version history can bring it back." };
-  }
-  const version = versions.find(item => item.label === label);
-  if (version?.status === "deleted") {
-    // versions.py records a user's delete as "rejected"; a replaced version as "replaced by <label>".
-    const why = version.deleted_because === "rejected" ? "You deleted it from the version history."
-      : version.deleted_because ? `It was ${version.deleted_because}.` : "It was deleted.";
-    return { title: `${label} was deleted`, text: `${why} The model in use is ${active}.` };
-  }
-  return { title: `${label} is ready for review`,
-           text: "Its results are below. Nothing has changed yet: the model in use stays active until you choose." };
+/**
+ * The whole heart over every scored scan of every dataset: each dataset's mean of the three structures (as the table's
+ * "Whole heart" row), weighted by its number of scans. Null when no dataset was scored.
+ */
+export function overallAccuracy(
+  datasets: Record<string, { n: number; against: Record<string, number>; label: Record<string, number> }> | null | undefined,
+): { datasets: number; scans: number; against: number; label: number } | null {
+  const rows = Object.values(datasets ?? {}).filter(row => row.n > 0);
+  const scans = rows.reduce((sum, row) => sum + row.n, 0);
+  if (!scans) return null;
+  const heart = (scores: Record<string, number>) => (scores.rv + scores.myocardium + scores.lv_cavity) / 3;
+  const mean = (side: "against" | "label") => rows.reduce((sum, row) => sum + row.n * heart(row[side]), 0) / scans;
+  return { datasets: rows.length, scans, against: mean("against"), label: mean("label") };
 }
 
 export const HISTORY_ROWS = 10;

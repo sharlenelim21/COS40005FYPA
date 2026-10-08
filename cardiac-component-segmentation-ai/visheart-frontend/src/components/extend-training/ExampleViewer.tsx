@@ -204,30 +204,8 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-        {mine.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-muted-foreground">{datasetName} scan</span>
-            <Select value={n === null ? undefined : String(n)} onValueChange={(value: string) => setN(Number(value))}>
-              <SelectTrigger className="h-8 min-w-64 max-w-full" aria-label={`Choose an example scan from ${datasetName}`}>
-                <SelectValue placeholder="Choose a scan" />
-              </SelectTrigger>
-              <SelectContent>
-                {mine.map(entry => (
-                  <SelectItem key={entry.n} value={String(entry.n)}>
-                    {exampleTitle(entry.role, entry.delta)}
-                    <span className="ml-1 text-muted-foreground">· {entry.case.replace(/\.nii\.gz$/, "")}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        ) : scans && (
-          <span className="text-muted-foreground">No example scans from {datasetName} for this version.</span>
-        )}
-        {chooser}
-      </div>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+        {chooser}
         <label className="flex items-center gap-2">
           <Switch checked={disagreement} onCheckedChange={setDisagreement} />
           Highlight disagreement
@@ -252,40 +230,62 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
         </div>
       )}
       {scan && overlays && (
-        <>
-          <div className="grid gap-3 md:grid-cols-2">
-            <figure className="space-y-1.5">
-              <figcaption className="flex items-center justify-between gap-2 text-sm">
-                <span className="font-medium" title="New segmentations use this model">Model in use</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {scan.left_label}{isOriginal(scan.left_label) ? " (original)" : ""}
-                </span>
-              </figcaption>
-              <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
-                           overlays={overlays.left} label={`${scan.left_label}, slice ${slice + 1}`} />
-            </figure>
-            <figure className="space-y-1.5">
-              <figcaption className="flex items-center justify-between gap-2 text-sm">
-                <span className="font-medium">{version?.is_original ? "Original model" : "New version"}</span>
-                <span className="truncate text-xs text-muted-foreground">{scan.right_label}</span>
-              </figcaption>
-              <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
-                           overlays={overlays.right} label={`${scan.right_label}, slice ${slice + 1}`} />
-            </figure>
+        <div className="grid gap-3 md:grid-cols-2">
+          <figure className="space-y-1.5">
+            <figcaption className="flex items-center justify-between gap-2 text-sm">
+              <span className="font-medium" title="New segmentations use this model">Model in use</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {scan.left_label}{isOriginal(scan.left_label) ? " (original)" : ""}
+              </span>
+            </figcaption>
+            <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
+                         overlays={overlays.left} label={`${scan.left_label}, slice ${slice + 1}`} />
+          </figure>
+          <figure className="space-y-1.5">
+            <figcaption className="flex items-center justify-between gap-2 text-sm">
+              <span className="font-medium">{version?.is_original ? "Original model" : "New version"}</span>
+              <span className="truncate text-xs text-muted-foreground">{scan.right_label}</span>
+            </figcaption>
+            <SliceCanvas imageUrl={scan.slices[slice].image} width={scan.size} height={scan.size}
+                         overlays={overlays.right} label={`${scan.right_label}, slice ${slice + 1}`} />
+          </figure>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm">
+        {mine.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground">{datasetName} scan</span>
+            <Select value={n === null ? undefined : String(n)} onValueChange={(value: string) => setN(Number(value))}>
+              <SelectTrigger className="h-8 min-w-64 max-w-full" aria-label={`Choose an example scan from ${datasetName}`}>
+                <SelectValue placeholder="Choose a scan" />
+              </SelectTrigger>
+              <SelectContent>
+                {mine.map(entry => (
+                  <SelectItem key={entry.n} value={String(entry.n)}>
+                    {exampleTitle(entry.role, entry.delta)}
+                    <span className="ml-1 text-muted-foreground">· {entry.case.replace(/\.nii\.gz$/, "")}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <div className="flex items-center justify-center gap-2">
+        ) : scans && (
+          <span className="text-muted-foreground">No example scans from {datasetName} for this version.</span>
+        )}
+        {scan && overlays && (
+          <div className="flex items-center gap-2">
             <Button type="button" variant="outline" size="icon" className="h-8 w-8" aria-label="Previous slice"
                     disabled={slice <= 0} onClick={() => setSlice(value => Math.max(0, value - 1))}>
               <ArrowUp className="h-4 w-4" />
             </Button>
-            <span className="w-28 text-center text-sm tabular-nums">Slice {slice + 1} / {scan.count}</span>
+            <span className="w-24 text-center tabular-nums">Slice {slice + 1} / {scan.count}</span>
             <Button type="button" variant="outline" size="icon" className="h-8 w-8" aria-label="Next slice"
                     disabled={slice >= scan.count - 1} onClick={() => setSlice(value => Math.min(scan.count - 1, value + 1))}>
               <ArrowDown className="h-4 w-4" />
             </Button>
           </div>
-        </>
-      )}
+        )}
+      </div>
       <MaskLegend extras={extras} />
       <p className="text-xs text-muted-foreground">
         The dataset is the one chosen above the table. Its scan with the lowest change is always here, so a drop is never

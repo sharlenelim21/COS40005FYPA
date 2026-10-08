@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { CheckCircle, Circle, Loader2, XCircle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -16,8 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { elapsed, isActiveJob, retrainingApi, RetrainingStatus, StepState, TrainingJob } from "@/lib/retraining-api";
-import { jobOutcome } from "@/components/extend-training/logic";
+import { elapsed, isActiveJob, retrainingApi, StepState, TrainingJob } from "@/lib/retraining-api";
 
 function StepIcon({ state }: { state: StepState }) {
   if (state === "done") return <CheckCircle className="h-5 w-5 shrink-0 text-green-600 dark:text-green-400" />;
@@ -72,49 +71,13 @@ function StepDetail({ job, stepKey }: { job: TrainingJob; stepKey: string }) {
   return null;
 }
 
-function JobLog({ job }: { job: TrainingJob }) {
-  const [open, setOpen] = useState(false);
-  const [lines, setLines] = useState<string[]>([]);
-  const running = isActiveJob(job);
-
-  useEffect(() => {
-    if (!open) return;
-    let stopped = false;
-    const load = async () => {
-      const reply = await retrainingApi.log(job.id, 200);
-      if (!stopped && reply.success && reply.data) setLines(reply.data.lines);
-    };
-    void load();
-    const timer = running ? window.setInterval(() => void load(), 5000) : undefined;
-    return () => {
-      stopped = true;
-      if (timer !== undefined) window.clearInterval(timer);
-    };
-  }, [open, job.id, running]);
-
-  return (
-    <details className="rounded-md border p-3" onToggle={event => setOpen(event.currentTarget.open)}>
-      <summary className="cursor-pointer text-sm font-medium">Technical log</summary>
-      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all text-xs text-muted-foreground">
-        {lines.length ? lines.join("\n") : "No output yet."}
-      </pre>
-    </details>
-  );
-}
-
 const ENDINGS: Record<string, string> = {
   failed: "Training did not finish",
   cancelled: "Training was cancelled",
   interrupted: "Training was interrupted",
 };
 
-export function TrainingProgress({ job, status, onChanged }: {
-  job: TrainingJob;
-  status: Pick<RetrainingStatus, "active" | "versions">;
-  onChanged: () => void;
-}) {
-  // The version may have been used or deleted since the training finished; say so rather than "nothing has changed".
-  const outcome = job.result ? jobOutcome(job.result.label, status.active, status.versions) : null;
+export function TrainingProgress({ job, onChanged }: { job: TrainingJob; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const running = isActiveJob(job);
@@ -167,14 +130,11 @@ export function TrainingProgress({ job, status, onChanged }: {
             <p className={job.state === "succeeded" ? "font-medium" : "text-muted-foreground"}>Ready for review</p>
           </li>
         </ol>
-        {job.state === "succeeded" && job.result && (
+        {job.state === "succeeded" && job.progress.examples?.error && (
           <Alert>
-            <AlertTitle>{job.result.simulated ? "Simulation finished" : outcome?.title}</AlertTitle>
             <AlertDescription>
-              {outcome?.text}
-              {job.progress.examples?.error
-                ? ` The example scans could not be prepared (${job.progress.examples.error}); the comparison is complete.`
-                : ""}
+              The example scans could not be prepared ({job.progress.examples.error}); the comparison is complete, and
+              the scans are made when the version is first compared below.
             </AlertDescription>
           </Alert>
         )}
@@ -189,7 +149,6 @@ export function TrainingProgress({ job, status, onChanged }: {
             Cancel training
           </Button>
         )}
-        <JobLog job={job} />
       </CardContent>
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>

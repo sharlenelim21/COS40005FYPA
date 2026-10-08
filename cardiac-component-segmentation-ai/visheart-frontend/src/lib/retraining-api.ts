@@ -225,8 +225,6 @@ export const retrainingApi = {
   checkCorrections: () =>
     call<Eligible>(api.post("/retraining/eligible-cases/check", {}, { ...anyStatus, timeout: 190000 })),
   start: (selection: string[]) => call<TrainingJob>(api.post("/retraining/start", { selection }, anyStatus)),
-  log: (jobId: string, tail = 200) =>
-    call<{ lines: string[] }>(api.get(`/retraining/job/${jobId}/log`, { ...anyStatus, params: { tail } })),
   cancel: (jobId: string) => call<TrainingJob>(api.post(`/retraining/job/${jobId}/cancel`, {}, anyStatus)),
   preview: (label: string, action: VersionAction) =>
     call<SwitchPreview>(api.get(`${versionPath(label)}/preview`, { ...anyStatus, params: { action } })),

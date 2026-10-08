@@ -14,7 +14,7 @@ import {
   StructureKey, VersionAction, VersionResults,
 } from "@/lib/retraining-api";
 import { LABEL_COLORS } from "@/types/segmentation";
-import { changeTone, percent, points, verdict, whyNotSwitch } from "@/components/extend-training/logic";
+import { changeTone, overallAccuracy, percent, points, verdict, whyNotSwitch } from "@/components/extend-training/logic";
 import { ExampleViewer } from "@/components/extend-training/ExampleViewer";
 import { TrainingProgress } from "@/components/extend-training/TrainingProgress";
 import { VersionsTable } from "@/components/extend-training/VersionsTable";
@@ -93,6 +93,34 @@ function StructureTable({ results, gate, dataset }: { results: VersionResults | 
   );
 }
 
+/** The whole heart over all three datasets' scans, above the per-dataset table. */
+function OverallAccuracy({ results, newName }: { results: VersionResults | null; newName: string }) {
+  const total = overallAccuracy(results?.datasets);
+  if (!total) return null;
+  const change = total.label - total.against;
+  const tone = changeTone(change);
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">
+        Whole-heart accuracy over all {total.datasets === 3 ? "3 datasets" : `${total.datasets} datasets`} ·{" "}
+        {total.scans} scans
+      </p>
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { title: "Model in use", value: percent(total.against), style: "" },
+          { title: newName, value: percent(total.label), style: tone === "down" ? CHANGE_STYLE.down : "" },
+          { title: "Change", value: points(change), style: CHANGE_STYLE[tone] },
+        ].map(item => (
+          <div key={item.title} className="rounded-lg border p-3">
+            <p className="text-xs text-muted-foreground">{item.title}</p>
+            <p className={cn("text-2xl font-semibold tabular-nums", item.style)}>{item.value}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function VersionReview({ label, status, onReview, onAction }: {
   label: string;
   status: RetrainingStatus;
@@ -160,6 +188,7 @@ function VersionReview({ label, status, onReview, onAction }: {
           </div>
         )}
         {problem && <Alert variant="destructive"><AlertDescription>{problem}</AlertDescription></Alert>}
+        <OverallAccuracy results={results} newName={version.is_original ? "Original model" : "New version"} />
         {datasets.length > 0 && (
           <div className="space-y-3">
             <ToggleGroup type="single" variant="outline" size="sm" value={shown} className="flex-wrap"
@@ -227,7 +256,7 @@ export function ResultsTab({ status, reviewing, onReview, onAction, onChanged, o
           </AlertDescription>
         </Alert>
       )}
-      {status.job && <TrainingProgress job={status.job} status={status} onChanged={onChanged} />}
+      {status.job && <TrainingProgress job={status.job} onChanged={onChanged} />}
       {reviewing ? (
         <VersionReview key={reviewing} label={reviewing} status={status} onReview={onReview} onAction={onAction} />
       ) : !running && (
