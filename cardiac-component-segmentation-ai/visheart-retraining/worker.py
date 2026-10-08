@@ -58,6 +58,7 @@ class WorkerApp:
         self.runner = jobs.JobRunner(self.store, plan)
         self.check_lock = threading.Lock()
         self.compare_lock = threading.Lock()  # one comparison is prepared at a time
+        self._integrity = None                 # (what it was computed from, the answer); see integrity()
         self.log_lock = threading.Lock()
         self.log_path = config.jobs / "worker.log"
 
@@ -92,10 +93,33 @@ class WorkerApp:
         recipe = None
         if entry["status"] != "deleted" and metadata.exists():
             recipe = (versions.read_json(metadata).get("recipe") or {}).get("name")
+        # What is really on this computer: a copied registry can name versions whose files never came with it.
+        on_disk = entry["status"] != "deleted" and registry.file(label).is_file()
         return {"label": label, "status": entry["status"], "registered_at": entry.get("registered_at"),
                 "base": entry.get("base"), "is_active": label == data["active"],
                 "is_original": label == data["original"], "gate": entry.get("gate"), "recipe": recipe,
-                "deleted_because": entry.get("deleted_because")}
+                "deleted_because": entry.get("deleted_because"), "on_disk": on_disk}
+
+    @staticmethod
+    def listed(view):
+        """Whether the page lists a version: one whose model file is not on this computer has no use here, so it is
+        left out. The original (served from the models folder), the version in use (its copy is in the active slot)
+        and deleted entries (history only, never offered) are always kept."""
+        return view["on_disk"] or view["is_original"] or view["is_active"] or view["status"] == "deleted"
+
+    def integrity(self, registry):
+        """Why versions cannot be switched on this computer (registry.integrity_problem()), or None. It hashes the
+        original model, so the answer is kept until either file it reads, or the registry's choice, changes."""
+        data = registry.data
+
+        def stamp(path):
+            path = Path(path)
+            return (path.stat().st_size, path.stat().st_mtime_ns) if path.is_file() else None
+        key = (data["original"], data["active"], data["original_file"], data["active_slot"],
+               stamp(data["original_file"]), stamp(data["active_slot"]))
+        if self._integrity is None or self._integrity[0] != key:
+            self._integrity = (key, registry.integrity_problem())
+        return self._integrity[1]
 
     def status(self, owner=None):
         registry = self.registry()
@@ -110,9 +134,11 @@ class WorkerApp:
                         "reason": "No corrected slices qualify yet. Correct a segmentation and save it, then check again."}
         else:
             training = {"allowed": True, "reason": None}
+        views = (self.version_view(registry, label) for label in registry.data["versions"])
         return {"simulated": self.simulate, "busy": busy, "training": training,
                 "original": registry.data["original"], "active": registry.data["active"],
-                "versions": [self.version_view(registry, label) for label in registry.data["versions"]],
+                "problem": self.integrity(registry),
+                "versions": [view for view in views if self.listed(view)],
                 "eligible": eligible, "job": job}
 
     def job(self, job_id):

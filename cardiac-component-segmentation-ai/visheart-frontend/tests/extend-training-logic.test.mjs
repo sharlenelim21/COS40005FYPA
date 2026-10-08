@@ -179,6 +179,13 @@ test("the example viewer keeps the model in use on the left and never offers it 
   assert.equal(logic.exampleSides([history[0]], "v1", "v1", null).initial, null);   // nothing else to compare
 });
 
+test("versions can be switched unless a training runs or this computer's model files do not match", () => {
+  assert.equal(logic.whyNotSwitch(null, false), null);
+  assert.match(logic.whyNotSwitch("unet.pth is not the registered original any more", false),
+               /cannot be switched on this computer: unet\.pth is not the registered original/);
+  assert.match(logic.whyNotSwitch("anything", true), /training is running/);        // the running job comes first
+});
+
 test("a version the user deleted is described in the user's words", () => {
   assert.deepEqual(logic.jobOutcome("v3", "v2", [{ label: "v3", status: "deleted", deleted_because: "rejected" }]), {
     title: "v3 was deleted",

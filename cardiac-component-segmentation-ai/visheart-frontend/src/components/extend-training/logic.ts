@@ -243,6 +243,19 @@ export function historyRows<V extends VersionLike>(sorted: V[], expanded: boolea
   return { rows, hidden: sorted.length - rows.length };
 }
 
+export const TRAINING_RUNNING = "A training is running. Versions can be changed when it has finished.";
+
+/**
+ * Why versions cannot be switched here, or null when they can: a running training, or a problem the service found
+ * with this computer's original model or active slot (status.problem). Versions whose model file is not on this
+ * computer are never listed, so they need no reason.
+ */
+export function whyNotSwitch(problem: string | null | undefined, busy: boolean): string | null {
+  if (busy) return TRAINING_RUNNING;
+  if (problem) return `Versions cannot be switched on this computer: ${problem}.`;
+  return null;
+}
+
 /** Every version not deleted except `except`: in use, original, then newest. */
 export function compareOptions<V extends VersionLike>(versions: V[], except: string): V[] {
   const rank = (version: V) => (version.is_active ? 0 : version.is_original ? 1 : 2);

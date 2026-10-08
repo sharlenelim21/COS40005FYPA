@@ -108,6 +108,8 @@ export interface ModelVersion {
   gate: Gate | null;
   recipe: string | null;
   deleted_because: string | null;
+  /** Its model file is on this computer; a copied registry can name versions whose files are not. */
+  on_disk: boolean;
 }
 
 export interface Eligible {
@@ -126,6 +128,8 @@ export interface RetrainingStatus {
   training: { allowed: boolean; reason: string | null };
   original: string;
   active: string;
+  /** Why versions cannot be switched on this computer (the original model or the active slot), or null. */
+  problem: string | null;
   versions: ModelVersion[];
   eligible: Eligible | null;
   job: TrainingJob | null;

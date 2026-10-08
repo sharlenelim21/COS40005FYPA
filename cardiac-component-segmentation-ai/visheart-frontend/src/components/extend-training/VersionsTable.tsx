@@ -10,7 +10,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { DATASET_NAMES, ModelVersion, RetrainingStatus, VersionAction } from "@/lib/retraining-api";
-import { changeTone, historyRows, HISTORY_ROWS, points } from "@/components/extend-training/logic";
+import { changeTone, historyRows, HISTORY_ROWS, points, whyNotSwitch } from "@/components/extend-training/logic";
 
 const CHIP = {
   up: "border-green-200 text-green-700 dark:border-green-900 dark:text-green-400",
@@ -53,6 +53,7 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
   onAction: (label: string, action: VersionAction) => void;
 }) {
   const disabled = status.busy;
+  const cannotSwitch = Boolean(whyNotSwitch(status.problem, status.busy));
   // View results scrolls the page up; handing focus back to the ⋯ button would scroll it back down.
   const viewing = useRef(false);
   const shown = status.versions
@@ -113,7 +114,7 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
                       {version.status === "candidate" && (
                         <>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem disabled={disabled} onSelect={() => onAction(version.label, "activate")}>
+                          <DropdownMenuItem disabled={cannotSwitch} onSelect={() => onAction(version.label, "activate")}>
                             Use this version
                           </DropdownMenuItem>
                           <DropdownMenuItem disabled={disabled} className="text-red-600 focus:text-red-600 dark:text-red-400"
@@ -125,7 +126,7 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
                       {version.is_original && !version.is_active && (
                         <>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem disabled={disabled} onSelect={() => onAction(version.label, "activate")}>
+                          <DropdownMenuItem disabled={cannotSwitch} onSelect={() => onAction(version.label, "activate")}>
                             Back to the original model
                           </DropdownMenuItem>
                         </>

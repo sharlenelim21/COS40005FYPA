@@ -296,6 +296,13 @@ def switch_refusal(registry, target, action="activate"):
         return f"{target} is already serving"
     if entry["status"] == "deleted":
         return f"{target} was deleted and cannot serve again"
+    if target != data["original"]:
+        # Serving copies this file into the active slot: it must be here, and be the registered one.
+        weights = registry.file(target)
+        if not weights.is_file():
+            return f"{target}'s model file is not on this computer ({weights}), so it cannot be used here"
+        if sha256_file(weights) != entry["sha256"]:
+            return f"{target}'s model file on this computer is not the registered one ({weights})"
     problem = registry.integrity_problem()
     return f"{action} refused: {problem}" if problem else None
 

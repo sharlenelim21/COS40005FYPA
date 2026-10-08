@@ -258,6 +258,33 @@ class Worker(unittest.TestCase):
             app.example("cand", 5)
         self.assertEqual(missing.exception.status, 404)
 
+    def test_only_versions_whose_model_file_is_on_this_computer_are_listed(self):
+        self.add_candidate("cand", b"candidate weights", warn=False)
+        self.add_candidate("other", b"other weights", warn=False)
+        self.add_candidate("gone", b"gone weights", warn=False)
+        data = self.registry_data()
+        data["versions"]["gone"]["status"] = "deleted"
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+        folder = self.registry.parent
+        (folder / "cand.pth").unlink()                                  # e.g. a copy of the data without it
+        (folder / "other.pth").write_bytes(b"something else")           # or a different file under its name
+        (folder / "orig.pth").unlink()                                  # the original serves from models/unet.pth
+        app = self.make_app()
+        listed = {version["label"]: version["on_disk"] for version in app.status()["versions"]}
+        self.assertEqual(listed, {"orig": False, "other": True, "gone": False})   # the deleted entry is history
+        self.assertIn("not on this computer", app.preview("cand", "activate")["refusal"])   # asked for directly
+        self.assertIn("not the registered", app.preview("other", "activate")["refusal"])
+
+    def test_the_status_says_why_versions_cannot_be_switched_on_this_computer(self):
+        app = self.make_app()
+        self.assertIsNone(app.status()["problem"])
+        original = Path(self.registry_data()["original_file"])
+        kept = original.read_bytes()
+        original.write_bytes(b"a different model")
+        self.assertIn("is not the registered original", app.status()["problem"])
+        original.write_bytes(kept)
+        self.assertIsNone(app.status()["problem"])
+
     def test_the_example_scans_can_be_compared_with_another_version_that_still_exists(self):
         self.add_candidate("cand", b"candidate weights", warn=False)
         self.add_candidate("older", b"older weights", warn=False)

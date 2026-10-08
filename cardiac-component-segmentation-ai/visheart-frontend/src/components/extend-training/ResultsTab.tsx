@@ -14,7 +14,7 @@ import {
   StructureKey, VersionAction, VersionResults,
 } from "@/lib/retraining-api";
 import { LABEL_COLORS } from "@/types/segmentation";
-import { changeTone, percent, points, verdict } from "@/components/extend-training/logic";
+import { changeTone, percent, points, verdict, whyNotSwitch } from "@/components/extend-training/logic";
 import { ExampleViewer } from "@/components/extend-training/ExampleViewer";
 import { TrainingProgress } from "@/components/extend-training/TrainingProgress";
 import { VersionsTable } from "@/components/extend-training/VersionsTable";
@@ -99,18 +99,18 @@ function DecisionBar({ version, status, onAction }: {
   onAction: (label: string, action: VersionAction) => void;
 }) {
   const busy = status.busy;
-  const waiting = "A training is running. Versions can be changed when it has finished.";
+  const cannotSwitch = whyNotSwitch(status.problem, busy);
   if (version.status === "candidate") {
     return (
       <div className="flex flex-col gap-3 rounded-lg border bg-muted/40 p-4 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="font-medium">This version is not in use. The decision is yours.</p>
           <p className="text-sm text-muted-foreground">
-            {busy ? waiting : "Nothing changes until you confirm. The original model is always kept."}
+            {cannotSwitch ?? "Nothing changes until you confirm. The original model is always kept."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={busy} onClick={() => onAction(version.label, "activate")}>
+          <Button disabled={Boolean(cannotSwitch)} onClick={() => onAction(version.label, "activate")}>
             Use this version
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
@@ -128,10 +128,11 @@ function DecisionBar({ version, status, onAction }: {
             This version is in use.
           </p>
           <p className="text-sm text-muted-foreground">
-            {busy ? waiting : "Going back to the original deletes this version. The original model is always kept."}
+            {cannotSwitch ?? "Going back to the original deletes this version. The original model is always kept."}
           </p>
         </div>
-        <Button variant="outline" disabled={busy} onClick={() => onAction(status.original, "activate")}>Back to the original model</Button>
+        <Button variant="outline" disabled={Boolean(cannotSwitch)}
+                onClick={() => onAction(status.original, "activate")}>Back to the original model</Button>
       </div>
     );
   }
@@ -256,6 +257,15 @@ export function ResultsTab({ status, reviewing, onReview, onAction, onChanged, o
   const running = isActiveJob(status.job);
   return (
     <div className="space-y-6">
+      {status.problem && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            Versions cannot be switched on this computer: {status.problem}. The training data or the model files here
+            do not match; see SETUP-ANOTHER-PC.md in visheart-retraining.
+          </AlertDescription>
+        </Alert>
+      )}
       {status.job && <TrainingProgress job={status.job} status={status} onChanged={onChanged} />}
       {reviewing ? (
         <VersionReview key={reviewing} label={reviewing} status={status} onAction={onAction} />
