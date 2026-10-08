@@ -49,13 +49,14 @@ async function readLabels(source: string, size: number): Promise<Uint8Array> {
  * Using or deleting the version is offered under the pictures, once they are shown. The dataset is the one chosen above
  * the results table, so the table and the pictures are always about the same scans.
  */
-export function ExampleViewer({ label, against, active, index, dataset, versions, onChoose, onAction, cannotSwitch, busy }: {
+export function ExampleViewer({ label, against, active, index, dataset, versions, admin, onChoose, onAction, cannotSwitch, busy }: {
   label: string;
   against: string;
   active: string;
   index: ExampleIndex | null;
   dataset: string;
   versions: ModelVersion[];
+  admin: boolean;   // only an admin uses or deletes a version
   onChoose: (label: string) => void;
   onAction: (label: string, action: VersionAction) => void;
   cannotSwitch: string | null;
@@ -291,7 +292,7 @@ export function ExampleViewer({ label, against, active, index, dataset, versions
         The dataset is the one chosen above the table. Its scan with the lowest change is always here, so a drop is never
         hidden; the table covers every scan.
       </p>
-      {scan && overlays && decision && (
+      {scan && overlays && decision && admin && (
         <div className="flex flex-col gap-3 rounded-lg border bg-muted/40 p-4 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="font-medium">{label} is not in use. The decision is yours.</p>

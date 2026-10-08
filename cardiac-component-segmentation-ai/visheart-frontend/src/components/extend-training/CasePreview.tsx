@@ -38,10 +38,12 @@ function Heading({ children }: { children: string }) {
   return <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</p>;
 }
 
-export function CasePreview({ item, selected, locked, onSelectedChange, onClose }: {
+export function CasePreview({ item, selected, locked, canEdit, canSelect, onSelectedChange, onClose }: {
   item: CorrectionCase | null;
   selected: boolean;
   locked: boolean;
+  canEdit: boolean;     // the signed-in user owns the project
+  canSelect: boolean;   // an admin, who chooses the cases a training uses
   onSelectedChange: (value: boolean) => void;
   onClose: () => void;
 }) {
@@ -110,6 +112,7 @@ export function CasePreview({ item, selected, locked, onSelectedChange, onClose 
     return layers;
   }, [labels, view, highlight]);
 
+  const correctionName = canEdit ? "Your correction" : `${item?.ownerName ?? "Their"}${item?.ownerName ? "'s" : ""} correction`;
   const imageBox = item ? { maxWidth: `calc(${IMAGE_HEIGHT} * ${item.width / Math.max(item.height, 1)})` } : undefined;
 
   return (
@@ -120,6 +123,7 @@ export function CasePreview({ item, selected, locked, onSelectedChange, onClose 
             <DialogHeader>
               <DialogTitle>{item.projectName} · {MODEL_NAMES[item.model] ?? item.model}</DialogTitle>
               <DialogDescription>
+                {item.ownerName ? `Corrected by ${canEdit ? "you" : item.ownerName} · ` : ""}
                 {item.slices.length} corrected {item.slices.length === 1 ? "slice" : "slices"} ·{" "}
                 {item.pixelsChanged.toLocaleString()} pixels changed in all
               </DialogDescription>
@@ -135,7 +139,7 @@ export function CasePreview({ item, selected, locked, onSelectedChange, onClose 
                       width={item.width}
                       height={item.height}
                       overlays={overlays}
-                      label={`${view === "ai" ? "AI result" : "Your correction"}, frame ${current.frameindex + 1}, slice ${current.sliceindex + 1}`}
+                      label={`${view === "ai" ? "AI result" : correctionName}, frame ${current.frameindex + 1}, slice ${current.sliceindex + 1}`}
                     />
                   </div>
                 ) : (
@@ -162,18 +166,18 @@ export function CasePreview({ item, selected, locked, onSelectedChange, onClose 
                   <ToggleGroup type="single" variant="outline" size="sm" value={view} className="w-full"
                                onValueChange={value => { if (value) setView(value as View); }}>
                     <ToggleGroupItem value="ai" disabled={!labels?.ai} className="flex-1">AI result</ToggleGroupItem>
-                    <ToggleGroupItem value="correction" className="flex-1">Your correction</ToggleGroupItem>
+                    <ToggleGroupItem value="correction" className="flex-1">{correctionName}</ToggleGroupItem>
                   </ToggleGroup>
                   <label className="flex items-center justify-between gap-2 pt-1 text-sm">
                     <span>
                       Highlight changes
-                      <span className="block text-xs text-muted-foreground">The pixels you changed, in yellow</span>
+                      <span className="block text-xs text-muted-foreground">The pixels {canEdit ? "you" : "they"} changed, in yellow</span>
                     </span>
                     <Switch checked={highlight} onCheckedChange={setHighlight} disabled={!labels?.ai} />
                   </label>
                   {masks && !masks.ai && (
                     <p className="text-xs text-muted-foreground">
-                      The AI result of this case was not kept, so only your correction can be shown.
+                      The AI result of this case was not kept, so only the correction can be shown.
                     </p>
                   )}
                 </div>
@@ -210,23 +214,32 @@ export function CasePreview({ item, selected, locked, onSelectedChange, onClose 
                 </div>
 
                 <div className="mt-auto space-y-3 border-t pt-4">
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox checked={selected && !item.frozen} disabled={locked}
-                              onCheckedChange={value => onSelectedChange(value === true)} />
-                    Include this case in training
-                  </label>
+                  {canSelect && (
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox checked={selected && !item.frozen} disabled={locked}
+                                onCheckedChange={value => onSelectedChange(value === true)} />
+                      Include this case in training
+                    </label>
+                  )}
                   {item.frozen && (
                     <p className="text-xs text-muted-foreground">
                       This is a test scan: every new version is tested on it, so it is not used for training.
                     </p>
                   )}
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button asChild variant="outline">
-                      <Link href={editorHref(item.projectId, item.model, current.frameindex, current.sliceindex)} onClick={markEdited}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit slice
-                      </Link>
-                    </Button>
+                  {!canEdit && (
+                    <p className="text-xs text-muted-foreground">
+                      Preview only: {item.ownerName ?? "another user"} owns this project, so only they can edit it.
+                    </p>
+                  )}
+                  <div className={canEdit ? "grid grid-cols-2 gap-2" : "grid gap-2"}>
+                    {canEdit && (
+                      <Button asChild variant="outline">
+                        <Link href={editorHref(item.projectId, item.model, current.frameindex, current.sliceindex)} onClick={markEdited}>
+                          <Pencil className="mr-2 h-4 w-4" />
+                          Edit slice
+                        </Link>
+                      </Button>
+                    )}
                     <Button onClick={onClose}>Done</Button>
                   </div>
                 </div>

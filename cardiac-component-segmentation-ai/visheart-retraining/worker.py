@@ -43,7 +43,6 @@ ALLOWED_HOSTS = ("127.0.0.1", "localhost", "host.docker.internal")
 MAX_BODY = 64 * 1024
 FRESH_CHECK_SECONDS = 600
 LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
-OWNER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 MAX_SELECTION = 500
 
 
@@ -77,7 +76,8 @@ class WorkerApp:
         return self.config.jobs / (f"eligible-{owner}.json" if owner else "eligible.json")
 
     def eligible(self, owner=None):
-        """This user's latest correction check, or None. Another user's check is never read."""
+        """The latest correction check, or None. The page's is everyone's (no owner): every user sees every case, and
+        only an admin trains (the server's admin guard). With an owner, only that user's check is read."""
         path = self.eligible_path(owner)
         if not path.exists():
             return None
@@ -277,14 +277,14 @@ class WorkerApp:
         return self.eligible(owner)
 
     def chosen(self, owner, selection):
-        """The chosen cases, which must come from this user's latest check: nobody trains a case they were not shown."""
+        """The chosen cases, which must come from the latest check: nobody trains a case they were not shown."""
         if not selection:
             raise jobs.JobError(400, "Choose at least one case to train on.")
         known = {case["maskId"]: case for case in (self.eligible(owner) or {}).get("cases", [])}
         if not known:
             raise jobs.JobError(409, "Check the corrections first, then choose the cases.")
         if any(mask_id not in known for mask_id in selection):
-            raise jobs.JobError(409, "Some chosen cases are not in your latest check. Check again, then choose.")
+            raise jobs.JobError(409, "Some chosen cases are not in the latest check. Check again, then choose.")
         locked = [known[mask_id]["projectName"] for mask_id in selection if known[mask_id].get("frozen")]
         if locked:
             raise jobs.JobError(409, f"{', '.join(dict.fromkeys(locked))} is a test scan: every new version is "
@@ -366,15 +366,6 @@ def who(body):
     return name.strip()
 
 
-def owner_of(value):
-    """The signed-in user's id, which the server adds. It names that user's check file, so it must be a safe name."""
-    if value in (None, ""):
-        return None
-    if not isinstance(value, str) or not OWNER_RE.fullmatch(value):
-        raise jobs.JobError(400, "The user id is not valid.")
-    return value
-
-
 def selection_of(body):
     chosen = body.get("selection")
     if chosen is None:
@@ -404,10 +395,10 @@ def host_allowed(header, port):
 ROUTES = [
     ("GET", r"/health", lambda app, m, q, b: {"ok": True, "busy": app.runner.busy(), "simulated": app.simulate,
                                               "pid": os.getpid()}),
-    ("GET", r"/status", lambda app, m, q, b: app.status(owner_of(q.get("owner", [None])[0]))),
-    ("POST", r"/eligible/check", lambda app, m, q, b: app.check_eligible(owner_of(b.get("requestedById")))),
-    ("POST", r"/jobs/train", lambda app, m, q, b: app.start_training(who(b), owner_of(b.get("requestedById")),
-                                                                     selection_of(b))),
+    # One check for everyone: the page lists every user's corrections (requestedById only names who asked).
+    ("GET", r"/status", lambda app, m, q, b: app.status()),
+    ("POST", r"/eligible/check", lambda app, m, q, b: app.check_eligible()),
+    ("POST", r"/jobs/train", lambda app, m, q, b: app.start_training(who(b), None, selection_of(b))),
     ("GET", r"/jobs/current", lambda app, m, q, b: app.runner.current()),
     ("GET", rf"/jobs/({jobs.JOB_ID_PATTERN})", lambda app, m, q, b: app.job(m[1])),
     ("GET", rf"/jobs/({jobs.JOB_ID_PATTERN})/log", lambda app, m, q, b: app.log(m[1], q.get("tail", ["200"])[0])),

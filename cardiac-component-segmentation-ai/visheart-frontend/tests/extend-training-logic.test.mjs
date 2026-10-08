@@ -26,9 +26,17 @@ test("the summary counts the chosen cases and their slices", () => {
   assert.deepEqual(logic.selectionSummary(cases, new Set(["m1", "m3"])), { cases: 2, slices: 5 });
 });
 
-test("a search matches every word in the project name or the model", () => {
+test("a search matches every word in the project name, the model or the owner's name", () => {
   assert.deepEqual(cases.filter(item => logic.matchesQuery(item, "patient UNET")).map(item => item.maskId), ["m1"]);
   assert.equal(cases.filter(item => logic.matchesQuery(item, "  ")).length, 3);
+  assert.ok(logic.matchesQuery({ ...cases[1], ownerName: "dr_lee" }, "LEE patient"));
+});
+
+test("only a case's owner may edit it, an admin included; everyone may preview it", () => {
+  assert.equal(logic.canEditCase({ ownerId: "u1" }, "u1"), true);
+  assert.equal(logic.canEditCase({ ownerId: "u1" }, "u-admin"), false);
+  assert.equal(logic.canEditCase({ ownerId: null }, "u1"), false);   // an owner the export could not name
+  assert.equal(logic.canEditCase({ ownerId: "u1" }, null), false);
 });
 
 test("the verdict names every dataset, and a lower one is never left out", () => {

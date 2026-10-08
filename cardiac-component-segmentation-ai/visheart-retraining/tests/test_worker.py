@@ -193,6 +193,26 @@ class Worker(unittest.TestCase):
             json.dumps({**empty, "checked_at": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
         self.assertTrue(app.status("u1")["training"]["allowed"])    # an old count never blocks: the job checks again
 
+    def test_the_page_checks_and_lists_everyones_corrections_whoever_asks(self):
+        app = self.make_app(self.waiting())
+        cases = [{"maskId": "m1", "projectId": "p1", "projectName": "Patient 012", "model": "unet", "slices": [{}],
+                  "ownerId": "u1", "ownerName": "dr-lee"},
+                 {"maskId": "m2", "projectId": "p2", "projectName": "Patient 007", "model": "unet", "slices": [{}],
+                  "ownerId": "u2", "ownerName": "dr-tan"}]
+        checked = {"checked_at": jobs.now(), "projects": 2, "slices": 2, "conflicts": 0, "cases": cases}
+        port = self.serve(app)
+        with mock.patch.object(pipeline, "check_corrections", return_value=checked) as check:
+            status, body = self.request(port, "POST", "/eligible/check", body={"requestedBy": "dr-tan", "requestedById": "u2"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(check.call_args.args[1])                         # no owner: every user's corrections
+        status, body = self.request(port, "GET", "/status?owner=u1")
+        self.assertEqual([case["ownerName"] for case in body["data"]["eligible"]["cases"]], ["dr-lee", "dr-tan"])
+        with mock.patch.object(app.runner, "start", side_effect=lambda kind, by, params: params):
+            status, body = self.request(port, "POST", "/jobs/train",
+                                        body={"requestedBy": "admin", "requestedById": "u9", "selection": ["m1", "m2"]})
+        self.assertEqual(status, 200)
+        self.assertEqual([case["maskId"] for case in body["data"]["cases"]], ["m1", "m2"])   # anyone's case trains
+
     def test_a_training_takes_only_cases_from_that_users_latest_check(self):
         app = self.make_app(self.waiting())
         cases = [{"maskId": "m1", "projectId": "p1", "projectName": "Patient 012", "model": "unet", "slices": [{}, {}]},
@@ -433,7 +453,7 @@ class Worker(unittest.TestCase):
         self.assertEqual((status, body["ok"]), (415, False))
         self.assertEqual(self.request(port, "GET", "/no/such/endpoint")[0], 404)
         self.assertEqual(self.request(port, "GET", "/versions/..%2Fregistry/preview")[0], 404)
-        self.assertEqual(self.request(port, "GET", "/status?owner=..%2Fjobs")[0], 400)   # a user id is a safe name
+        self.assertEqual(self.request(port, "GET", "/status?owner=..%2Fjobs")[0], 200)   # no owner is read
         status, body = self.request(port, "POST", "/jobs/train", body={})        # no requestedBy: nothing starts
         self.assertEqual((status, body["ok"]), (400, False))
 

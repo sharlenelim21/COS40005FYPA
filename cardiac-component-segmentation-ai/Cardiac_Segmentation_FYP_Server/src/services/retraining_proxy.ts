@@ -1,8 +1,9 @@
 // File: src/services/retraining_proxy.ts
 // Description: The UNet Extend Training API (plan WS13). Every call passes the guard, is checked here, and is then
 // forwarded to the training service on this computer (visheart-retraining/worker.py, 127.0.0.1:8010 on the host).
-// The service trusts this server, so the user's name and id always come from the session, never from the request. The
-// id decides whose corrections are listed and exported: each user prepares their own (plan WS13 R1).
+// The service trusts this server, so the user's name and id always come from the session, never from the request.
+// Every user sees everyone's saved corrections and the versions' results; only an admin starts or cancels a training or
+// changes the model in use (the client's request, 2026-10-08). Editing a correction stays with its project's owner.
 import express, { Request, RequestHandler, Response, Router } from 'express';
 import axios, { AxiosInstance } from 'axios';
 import logger from './logger';
@@ -19,6 +20,10 @@ const EXAMPLE = /^\d{1,2}$/;
 
 export interface RetrainingRouterOptions {
   guard: RequestHandler; // who may use the page: isAuthAndNotGuest in production
+  adminGuard: RequestHandler; // who may train or change the model in use: isAuthAndAdmin in production
+  // A presigned URL for a project's slice images, whoever owns it; null when it has none. The route only asks for a
+  // project among the corrected cases, so the preview never opens other projects.
+  projectImages?: (projectId: string) => Promise<{ presignedUrl: string; expiresAt: number } | null>;
   workerUrl?: string; // default: RETRAINING_WORKER_URL, then DEFAULT_WORKER_URL
   timeoutMs?: number; // default for quick calls
 }
@@ -73,13 +78,39 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
   };
 
   router.use(options.guard); // in front of every route below, without exception
+  const adminOnly = options.adminGuard; // and this one in front of each route that trains or changes the model in use
 
-  router.get('/status', (req, res) => {
-    const { userId } = sessionUser(req);
-    return forward(req, res, 'get', userId ? `/status?owner=${encodeURIComponent(userId)}` : '/status');
-  });
+  router.get('/status', (req, res) => forward(req, res, 'get', '/status'));
   router.post('/eligible-cases/check', (req, res) => forward(req, res, 'post', '/eligible/check', {}, 180000));
-  router.post('/start', (req, res) => {
+
+  // A corrected case's slice images for the preview, also when another user owns the project.
+  router.get('/cases/:projectId/images', async (req, res) => {
+    const { projectId } = req.params;
+    if (!MASK_ID.test(projectId)) return badRequest(res, 'Unknown project.');
+    let listed = false;
+    try {
+      const reply = await worker.get<WorkerBody>('/status');
+      const cases = (reply.data?.data as { eligible?: { cases?: { projectId?: string }[] } | null } | undefined)
+        ?.eligible?.cases ?? [];
+      listed = cases.some(item => item.projectId === projectId);
+    } catch (error) {
+      logger.warn(`${serviceLocation}: training service unreachable: ${(error as Error).message}`);
+      res.status(503).json({ success: false, message: WORKER_OFFLINE_MESSAGE, data: { workerOnline: false } });
+      return;
+    }
+    if (!listed) {
+      res.status(404).json({ success: false, message: 'This project is not among the corrected cases. Check the corrections again.', data: null });
+      return;
+    }
+    const images = options.projectImages ? await options.projectImages(projectId).catch(() => null) : null;
+    if (!images) {
+      res.status(404).json({ success: false, message: "This project's scan images are not available.", data: null });
+      return;
+    }
+    res.json({ success: true, message: 'OK', data: images });
+  });
+
+  router.post('/start', adminOnly, (req, res) => {
     const selection = (req.body as { selection?: unknown } | undefined)?.selection;
     if (!Array.isArray(selection) || selection.length === 0 || selection.length > MAX_SELECTION
         || !selection.every(id => typeof id === 'string' && MASK_ID.test(id))) {
@@ -89,27 +120,27 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
   });
   router.get('/job/current', (req, res) => forward(req, res, 'get', '/jobs/current'));
 
-  router.get('/job/:jobId/log', (req, res) => {
+  router.get('/job/:jobId/log', adminOnly, (req, res) => {
     const { jobId } = req.params;
     if (!JOB_ID.test(jobId)) return badRequest(res, 'Unknown job.');
     const tail = Math.min(Math.max(parseInt(String(req.query.tail ?? '200'), 10) || 200, 1), 500);
     return forward(req, res, 'get', `/jobs/${jobId}/log?tail=${tail}`);
   });
 
-  router.post('/job/:jobId/cancel', (req, res) => {
+  router.post('/job/:jobId/cancel', adminOnly, (req, res) => {
     const { jobId } = req.params;
     if (!JOB_ID.test(jobId)) return badRequest(res, 'Unknown job.');
     return forward(req, res, 'post', `/jobs/${jobId}/cancel`);
   });
 
-  router.get('/versions/:label/preview', (req, res) => {
+  router.get('/versions/:label/preview', adminOnly, (req, res) => {
     const { label } = req.params;
     if (!LABEL.test(label)) return badRequest(res, 'Unknown version.');
     const action = req.query.action === 'reject' ? 'reject' : 'activate';
     return forward(req, res, 'get', `/versions/${label}/preview?action=${action}`);
   });
 
-  router.post('/versions/:label/activate', (req, res) => {
+  router.post('/versions/:label/activate', adminOnly, (req, res) => {
     const { label } = req.params;
     if (!LABEL.test(label)) return badRequest(res, 'Unknown version.');
     const confirm = confirmLines(req);
@@ -117,7 +148,7 @@ export function createRetrainingRouter(options: RetrainingRouterOptions): Router
     return forward(req, res, 'post', `/versions/${label}/activate`, { confirm }, 240000);
   });
 
-  router.post('/versions/:label/reject', (req, res) => {
+  router.post('/versions/:label/reject', adminOnly, (req, res) => {
     const { label } = req.params;
     if (!LABEL.test(label)) return badRequest(res, 'Unknown version.');
     const confirm = confirmLines(req);

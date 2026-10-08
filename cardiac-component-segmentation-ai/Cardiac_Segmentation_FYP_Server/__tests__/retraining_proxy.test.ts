@@ -38,7 +38,8 @@ function closedPortUrl(): Promise<string> {
   });
 }
 
-function appWith(workerUrl: string, role = 'user') {
+function appWith(workerUrl: string, role = 'user',
+                 projectImages?: (projectId: string) => Promise<{ presignedUrl: string; expiresAt: number } | null>) {
   const app = express();
   app.use(express.json());
   app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -52,7 +53,14 @@ function appWith(workerUrl: string, role = 'user') {
     }
     next();
   };
-  app.use('/retraining', createRetrainingRouter({ guard, workerUrl, timeoutMs: 2000 }));
+  const adminGuard = (req: Request, res: Response, next: NextFunction): void => {   // behaves like isAuthAndAdmin
+    if ((req as unknown as { user: { role: string } }).user.role !== 'admin') {
+      res.status(403).json({ message: 'Forbidden. Admin access required.' });
+      return;
+    }
+    next();
+  };
+  app.use('/retraining', createRetrainingRouter({ guard, adminGuard, projectImages, workerUrl, timeoutMs: 2000 }));
   return app;
 }
 
@@ -71,20 +79,20 @@ describe('Extend Training proxy (plan WS13)', () => {
     const res = await request(appWith(worker.url)).get('/retraining/status');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, message: 'OK', data: { busy: false } });
-    expect(worker.seen[0]).toMatchObject({ method: 'GET', url: '/status?owner=u-user' });
+    expect(worker.seen[0]).toMatchObject({ method: 'GET', url: '/status' });
   });
 
   it('names the session user, never whoever the request body claims to be', async () => {
     worker = await startFakeWorker(ok);
-    await request(appWith(worker.url)).post('/retraining/start')
+    await request(appWith(worker.url, 'admin')).post('/retraining/start')
       .send({ requestedBy: 'someone-else', requestedById: 'someone-else', selection: chosen });
     expect(worker.seen[0]).toMatchObject({ method: 'POST', url: '/jobs/train',
-      body: { requestedBy: 'dr-user', requestedById: 'u-user', selection: chosen } });
+      body: { requestedBy: 'dr-admin', requestedById: 'u-admin', selection: chosen } });
   });
 
   it("passes the worker's refusal through with its reason", async () => {
     worker = await startFakeWorker(() => ({ status: 409, body: { ok: false, error: 'A training is already running (started by dr-lee).' } }));
-    const res = await request(appWith(worker.url)).post('/retraining/start').send({ selection: chosen });
+    const res = await request(appWith(worker.url, 'admin')).post('/retraining/start').send({ selection: chosen });
     expect(res.status).toBe(409);
     expect(res.body.success).toBe(false);
     expect(res.body.message).toContain('dr-lee');
@@ -98,7 +106,7 @@ describe('Extend Training proxy (plan WS13)', () => {
 
   it('refuses a malformed label, job id or confirmation without calling the worker', async () => {
     worker = await startFakeWorker(ok);
-    const app = appWith(worker.url);
+    const app = appWith(worker.url, 'admin');
     expect((await request(app).post('/retraining/versions/..%2Fregistry/activate').send({ confirm: [] })).status).toBe(400);
     expect((await request(app).post('/retraining/versions/unet-ui0925-120000/activate').send({})).status).toBe(400);
     expect((await request(app).post('/retraining/versions/unet-ui0925-120000/reject').send({ confirm: [1] })).status).toBe(400);
@@ -114,14 +122,14 @@ describe('Extend Training proxy (plan WS13)', () => {
   it('forwards a confirmed activation with exactly the lines the user saw', async () => {
     worker = await startFakeWorker(() => ({ status: 200, body: { ok: true, data: { active: 'unet-ui0925-120000' } } }));
     const lines = ['public acdc: lower score than unet-2026-05-01'];
-    const res = await request(appWith(worker.url)).post('/retraining/versions/unet-ui0925-120000/activate').send({ confirm: lines });
+    const res = await request(appWith(worker.url, 'admin')).post('/retraining/versions/unet-ui0925-120000/activate').send({ confirm: lines });
     expect(res.status).toBe(200);
-    expect(worker.seen[0]).toMatchObject({ url: '/versions/unet-ui0925-120000/activate', body: { confirm: lines, requestedBy: 'dr-user' } });
+    expect(worker.seen[0]).toMatchObject({ url: '/versions/unet-ui0925-120000/activate', body: { confirm: lines, requestedBy: 'dr-admin' } });
   });
 
   it('clamps the log tail and passes only a known preview action', async () => {
     worker = await startFakeWorker(ok);
-    const app = appWith(worker.url);
+    const app = appWith(worker.url, 'admin');
     await request(app).get('/retraining/job/job-20260925-120000-abcd/log?tail=100000');
     await request(app).get('/retraining/versions/unet-ui0925-120000/preview?action=reject');
     await request(app).get('/retraining/versions/unet-ui0925-120000/preview?action=anything');
@@ -147,18 +155,62 @@ describe('Extend Training proxy (plan WS13)', () => {
       request(app).post('/retraining/versions/unet-2026-05-01/reject').send({ confirm: [] }),
       request(app).get('/retraining/versions/unet-2026-05-01/results'),
       request(app).get('/retraining/versions/unet-2026-05-01/examples/0'),
+      request(app).get(`/retraining/cases/${'b'.repeat(24)}/images`),
     ]);
     for (const res of replies) expect(res.status).toBe(403);
     expect(worker.seen).toHaveLength(0);
   });
 
-  it("tells the worker whose corrections to list, from the session", async () => {
+  it("lists everyone's corrections, and names the session user to the worker", async () => {
     worker = await startFakeWorker(ok);
     const app = appWith(worker.url);
     await request(app).get('/retraining/status?owner=someone-else');
     await request(app).post('/retraining/eligible-cases/check').send({ requestedById: 'someone-else' });
-    expect(worker.seen[0].url).toBe('/status?owner=u-user');
+    expect(worker.seen[0].url).toBe('/status');
     expect(worker.seen[1]).toMatchObject({ url: '/eligible/check', body: { requestedBy: 'dr-user', requestedById: 'u-user' } });
+  });
+
+  it('lets only an admin train, cancel, or use or delete a version; a user still sees everything', async () => {
+    worker = await startFakeWorker(ok);
+    const user = appWith(worker.url, 'user');
+    const changes = (app: ReturnType<typeof appWith>) => Promise.all([
+      request(app).post('/retraining/start').send({ selection: chosen }),
+      request(app).post('/retraining/job/job-20260925-120000-abcd/cancel'),
+      request(app).get('/retraining/job/job-20260925-120000-abcd/log'),
+      request(app).get('/retraining/versions/unet-ui0925-120000/preview'),
+      request(app).post('/retraining/versions/unet-ui0925-120000/activate').send({ confirm: [] }),
+      request(app).post('/retraining/versions/unet-ui0925-120000/reject').send({ confirm: [] }),
+    ]);
+    for (const res of await changes(user)) expect(res.status).toBe(403);
+    expect(worker.seen).toHaveLength(0);
+    const views = await Promise.all([
+      request(user).get('/retraining/status'),
+      request(user).post('/retraining/eligible-cases/check'),
+      request(user).get('/retraining/job/current'),
+      request(user).get('/retraining/versions/unet-ui0925-120000/results'),
+      request(user).get('/retraining/versions/unet-ui0925-120000/examples/0'),
+      request(user).post('/retraining/versions/unet-ui0925-120000/compare').send({ against: 'unet-2026-05-01' }),
+    ]);
+    for (const res of views) expect(res.status).toBe(200);
+    for (const res of await changes(appWith(worker.url, 'admin'))) expect(res.status).toBe(200);
+  });
+
+  it("serves a corrected case's images to any user, and no other project's", async () => {
+    const listed = 'b'.repeat(24);
+    worker = await startFakeWorker(() => ({ status: 200, body: { ok: true, data: { eligible: { cases: [{ projectId: listed }] } } } }));
+    const asked: string[] = [];
+    const app = appWith(worker.url, 'user', async projectId => {
+      asked.push(projectId);
+      return { presignedUrl: `https://bucket/${projectId}.tar`, expiresAt: 1 };
+    });
+    const res = await request(app).get(`/retraining/cases/${listed}/images`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, message: 'OK', data: { presignedUrl: `https://bucket/${listed}.tar`, expiresAt: 1 } });
+    expect((await request(app).get(`/retraining/cases/${'c'.repeat(24)}/images`)).status).toBe(404);   // not corrected
+    expect((await request(app).get('/retraining/cases/..%2Fx/images')).status).toBe(400);
+    expect(asked).toEqual([listed]);
+    const without = appWith(worker.url, 'user', async () => null);
+    expect((await request(without).get(`/retraining/cases/${listed}/images`)).status).toBe(404);
   });
 
   it("forwards a version's results and one of its example scans", async () => {
@@ -190,9 +242,9 @@ describe('Extend Training proxy (plan WS13)', () => {
     expect(worker.seen).toHaveLength(3);
   });
 
-  it('is wired with isAuthAndNotGuest and mounted at /retraining', () => {
+  it('is wired with isAuthAndNotGuest and isAuthAndAdmin, and mounted at /retraining', () => {
     const routes = fs.readFileSync(path.join(__dirname, '../src/routes/retraining_routes.ts'), 'utf8');
-    expect(routes).toMatch(/createRetrainingRouter\(\{\s*guard:\s*isAuthAndNotGuest\s*\}\)/);
+    expect(routes).toMatch(/createRetrainingRouter\(\{\s*guard:\s*isAuthAndNotGuest,\s*adminGuard:\s*isAuthAndAdmin,/);
     const appSource = fs.readFileSync(path.join(__dirname, '../src/services/express_app.ts'), 'utf8');
     expect(appSource).toMatch(/app\.use\('\/retraining',\s*retrainingRoute\)/);
   });

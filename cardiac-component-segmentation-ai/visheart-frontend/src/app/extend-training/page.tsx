@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { AlertCircle, ArrowLeft, Brain, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowLeft, Brain, Eye, Loader2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -82,6 +82,8 @@ function ExtendTrainingInner() {
   const autoChecked = useRef(false);
   const knownCases = useRef<string | null>(null);
   const registered = Boolean(user && user.role !== "guest");
+  // Only an admin trains or changes the model in use (the server's admin guard says the same); a user previews.
+  const admin = user?.role === "admin";
 
   const setTab = useCallback((next: Tab) => {
     setTabState(next);
@@ -214,12 +216,23 @@ function ExtendTrainingInner() {
             UNet Extend Training
           </h1>
           <p className="max-w-2xl text-muted-foreground">
-            Teach the segmentation model from the corrections you saved. A new version is compared on scans it has never
-            seen, and nothing changes until you choose to use it.
+            Teach the segmentation model from the corrections saved in VisHeart. A new version is compared on scans it
+            has never seen, and nothing changes until an admin chooses to use it.
           </p>
         </div>
         {status && <ModelInUse status={status} />}
       </header>
+
+      {!admin && (
+        <Alert>
+          <Eye className="h-4 w-4" />
+          <AlertTitle>Preview only</AlertTitle>
+          <AlertDescription>
+            Only an admin can train a new version or change the model in use. You can see every user&apos;s corrected
+            cases and each version&apos;s results, and edit the cases of your own projects.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {status?.simulated && (
         <Alert>
@@ -256,6 +269,8 @@ function ExtendTrainingInner() {
           <TabsContent value="prepare">
             <PrepareTab
               status={status}
+              admin={admin}
+              userId={user?._id ?? null}
               selected={selected}
               onSelectedChange={changeSelection}
               checking={checking}
@@ -268,12 +283,13 @@ function ExtendTrainingInner() {
           <TabsContent value="results">
             <ResultsTab
               status={status}
+              admin={admin}
               reviewing={shownReview}
               onReview={label => {
                 setReviewing(label);
                 window.scrollTo({ top: 0, behavior: "smooth" });
               }}
-              onAction={(label, action) => setTarget({ label, action })}
+              onAction={(label, action) => { if (admin) setTarget({ label, action }); }}
               onChanged={() => void refresh()}
               onPrepare={() => setTab("prepare")}
             />

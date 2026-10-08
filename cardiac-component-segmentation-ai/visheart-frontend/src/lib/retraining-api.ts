@@ -37,6 +37,9 @@ export interface CorrectionCase {
   shared: number;
   /** The project is a scan of the frozen test set: listed so the user sees it, but it never trains. */
   frozen?: { frame: number; slice: number; frozen: string } | null;
+  /** The project's owner: every user sees every case, and only the owner edits it. */
+  ownerId?: string | null;
+  ownerName?: string | null;
 }
 
 export interface JobCase {
@@ -238,6 +241,12 @@ export const retrainingApi = {
   /** One of label's example scans, with the predictions of `left` and `right` (by default as trained). */
   example: (label: string, n: number, sides: { left?: string; right?: string } = {}) =>
     call<ExampleScan>(api.get(`${versionPath(label)}/examples/${n}`, { ...anyStatus, timeout: 70000, params: sides })),
+  /** A corrected case's slice images, also when another user owns it, in the shape the image cache reads. */
+  caseImages: async (projectId: string): Promise<{ success: boolean; presignedUrl?: string; expiresAt?: number; message?: string }> => {
+    const reply = await call<{ presignedUrl: string; expiresAt: number }>(
+      api.get(`/retraining/cases/${encodeURIComponent(projectId)}/images`, anyStatus));
+    return reply.success && reply.data ? { success: true, ...reply.data } : { success: false, message: reply.message };
+  },
   /** Another version's predictions on these example scans: made once, about half a minute, then kept. */
   compareExamples: (label: string, against: string) =>
     call<Comparison>(api.post(`${versionPath(label)}/compare`, { against }, { ...anyStatus, timeout: 910000 })),

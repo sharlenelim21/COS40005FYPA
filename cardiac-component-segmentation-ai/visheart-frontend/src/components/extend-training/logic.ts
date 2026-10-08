@@ -10,6 +10,7 @@ export interface SelectableCase {
   model: string;
   slices: unknown[];
   frozen?: unknown;
+  ownerName?: string | null;
 }
 
 const TEST_SET_NAMES: Record<string, string> = { acdc: "ACDC", mms1: "M&Ms-1", mms2: "M&Ms-2" };
@@ -43,9 +44,9 @@ export function selectionSummary(cases: SelectableCase[], selected: Set<string>)
   return { cases: chosen.length, slices: chosen.reduce((sum, item) => sum + item.slices.length, 0) };
 }
 
-/** Every word of the query appears in the project name or the model. */
+/** Every word of the query appears in the project name, the model or the owner's name. */
 export function matchesQuery(item: SelectableCase, query: string): boolean {
-  const text = `${item.projectName} ${item.model}`.toLowerCase();
+  const text = `${item.projectName} ${item.model} ${item.ownerName ?? ""}`.toLowerCase();
   return query.trim().toLowerCase().split(/\s+/).filter(Boolean).every(word => text.includes(word));
 }
 
@@ -188,6 +189,14 @@ export function paintLabels(rgba: Uint8ClampedArray, labels: Uint8Array, palette
 export function hexToRgb(hex: string): Rgb {
   const value = Number.parseInt(hex.replace("#", ""), 16);
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+}
+
+/**
+ * Whether the signed-in user may edit this case: only its project's owner may, admins included (the client's request,
+ * 2026-10-08). Everyone else previews it. The server refuses anyone else's save too.
+ */
+export function canEditCase(item: { ownerId?: string | null }, userId: string | null | undefined): boolean {
+  return Boolean(userId) && item.ownerId === userId;
 }
 
 /** The editor at exactly this mask, frame and slice (plan WS13 R1's deep link). */
