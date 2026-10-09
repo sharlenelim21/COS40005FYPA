@@ -774,7 +774,7 @@ def _smooth_labels_by_face_adjacency(
 
 
 def _reassign_stray_islands(labels: np.ndarray, faces: np.ndarray, n_segments: int,
-                             max_iterations: int = 30) -> np.ndarray:
+                             max_iterations: int = 30, min_component_vertices: int = 0) -> np.ndarray:
     """
     Per-vertex majority-vote smoothing only looks at each vertex's immediate
     neighbours, so it has no way to notice that a self-consistent patch of
@@ -786,14 +786,26 @@ def _reassign_stray_islands(labels: np.ndarray, faces: np.ndarray, n_segments: i
     each other. That's what shows up as an island of one colour stranded
     inside another.
 
-    Fixed by keeping only each segment's LARGEST connected component as
-    confirmed, then growing the confirmed regions outward one adjacency-ring
-    at a time: an unconfirmed vertex adjacent to at least one confirmed
-    neighbour takes the majority label among those confirmed neighbours and
-    becomes confirmed itself for the next round. Islands are small (single
-    digits to a couple hundred vertices, measured), so this converges in a
-    handful of rounds -- max_iterations is just a safety bound, not expected
-    to bind in practice.
+    min_component_vertices (default 0, i.e. the OLD "keep only the single
+    largest piece" behaviour): a component is reassigned only if it has
+    FEWER than this many vertices; a component at or above the threshold is
+    kept as-is, even if it isn't the largest for its segment. 2026-10, per
+    Sharlene: the unconditional (threshold=0) version was confirmed live to
+    delete REAL anatomy, not just noise -- a segment's raw 2D source could be
+    one whole, connected region on every contributing slice, yet still split
+    into two substantial pieces (thousands of faces each) once fused onto
+    the DeepSDF-reconstructed mesh, because that mesh doesn't always rigidly
+    match the raw segmentation. Measured directly across all 30 frames of a
+    real patient: genuine secondary regions start at ~80 vertices (~164
+    faces) and run into the thousands, while actual noise islands (stray
+    tie-break artifacts from refine_mesh_for_smooth_boundaries' own boundary
+    subdivision) are 1-14 faces (a handful of vertices) -- a >10x gap with
+    nothing in between, so a vertex-count threshold cleanly separates the
+    two without needing anything geodesic/distance-based (tried once,
+    separately: it didn't meaningfully help and introduced new fragmentation
+    elsewhere). `refine_mesh_for_smooth_boundaries` calls this with a
+    nonzero threshold; a caller wanting the old all-or-nothing behavior back
+    can still pass 0 explicitly.
     """
     n = labels.shape[0]
     edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
@@ -817,8 +829,14 @@ def _reassign_stray_islands(labels: np.ndarray, faces: np.ndarray, n_segments: i
         if n_comp <= 1:
             confirmed[idx] = True
             continue
-        largest = np.argmax(np.bincount(comp_of))
-        confirmed[idx[comp_of == largest]] = True
+        comp_sizes = np.bincount(comp_of)
+        largest = np.argmax(comp_sizes)
+        # Keep the largest component, PLUS any other component that already
+        # meets the size threshold on its own -- only genuinely small
+        # (likely-noise) components get sent through reassignment below.
+        keep_component = comp_sizes >= max(min_component_vertices, 1)
+        keep_component[largest] = True
+        confirmed[idx[keep_component[comp_of]]] = True
 
     needs_fix = ~confirmed
     for _ in range(max_iterations):
@@ -1346,6 +1364,13 @@ def label_with_warp(
 # boundaries' own docstring for why this is the real fix, not a cosmetic one.
 _BOUNDARY_SUBDIVISION_ITERATIONS = 1
 
+# Vertex-count floor _reassign_stray_islands uses to tell a genuine secondary
+# region apart from a stray noise island -- see that function's own docstring
+# and refine_mesh_for_smooth_boundaries' call site for the measured face-count
+# gap (noise <=14 faces, real secondary regions >=164 faces, nothing between)
+# this was picked from, on real patient005 data across all 30 frames.
+_MIN_ISLAND_VERTICES_TO_KEEP = 30
+
 
 def refine_mesh_for_smooth_boundaries(
     vertices: np.ndarray, faces: np.ndarray, labels: np.ndarray, n_segments: int = 9,
@@ -1436,23 +1461,36 @@ def refine_mesh_for_smooth_boundaries(
             current_labels = np.concatenate([current_labels, new_labels])
             current_vertices, current_faces = new_vertices, new_faces
 
-        # 2026-10, per Sharlene, intentionally NOT calling _reassign_stray_islands
-        # here anymore (it used to run as a final cleanup pass). Confirmed live on
-        # real patient data that it was deleting REAL anatomy, not noise: a
+        # 2026-10, per Sharlene: calls _reassign_stray_islands with a size
+        # THRESHOLD now, not unconditionally (and not skipped entirely either --
+        # see git history for both of those earlier states). Unconditional
+        # erasure was confirmed live to delete REAL anatomy, not noise: a
         # segment's raw 2D source data (label_cpd9_from_raw_slices' own per-slice
-        # masks) was a single whole, connected region on every contributing slice,
-        # yet still came out as 2 disconnected pieces on the RECONSTRUCTED mesh --
-        # because the DeepSDF reconstruction doesn't always align rigidly enough
-        # with the raw segmentation in every region, not because of a labeling
-        # bug. Measured directly: the two mesh pieces sat ~100mm apart along the
-        # actual surface (geodesic) despite only ~20-30mm apart in straight-line
-        # distance -- a reconstruction-alignment gap, not a stray label island.
-        # _reassign_stray_islands has no way to tell that apart from genuine noise
-        # (it keeps only the single largest connected piece per segment, always),
-        # so it discarded a real ~19% chunk of one segment on this patient. The
-        # trade-off accepted instead: a segment can occasionally render as two
-        # separate-looking pieces rather than one perfectly smooth blob, in
-        # exchange for never silently deleting real labeled data.
+        # masks) was a single whole, connected region on every contributing
+        # slice, yet still came out as 2 disconnected pieces on the
+        # RECONSTRUCTED mesh -- because the DeepSDF reconstruction doesn't
+        # always align rigidly enough with the raw segmentation in every
+        # region, not because of a labeling bug (one measured case: the two
+        # mesh pieces sat ~100mm apart along the actual surface despite only
+        # ~20-30mm apart in straight-line distance). Simply never erasing
+        # anything (this function's own state for a while) traded that away
+        # for the opposite problem: tiny genuine noise islands (stray
+        # boundary-subdivision tie-break artifacts, 1-14 faces) were left
+        # in place too, visible as small flecks of the wrong colour.
+        #
+        # Measured directly across all 30 frames of a real patient
+        # (patient005): every GENUINE secondary region is >=164 faces
+        # (several hundred to several thousand), while every actual noise
+        # island is <=14 faces -- a clean >10x gap with nothing in between.
+        # _MIN_ISLAND_VERTICES_TO_KEEP (30, comfortably inside that gap once
+        # converted from faces to vertices) lets _reassign_stray_islands tell
+        # the two apart: a component at or above the threshold is kept even
+        # if it isn't the largest piece of its segment; only genuinely small
+        # components get reassigned to a neighbouring label.
+        current_labels = _reassign_stray_islands(
+            current_labels, current_faces, n_segments,
+            min_component_vertices=_MIN_ISLAND_VERTICES_TO_KEEP,
+        )
         return current_vertices, current_faces, current_labels
 
     except Exception as exc:
@@ -1696,6 +1734,30 @@ def label_cpd9_from_raw_slices(
     direction -- see that helper's docstring for the full method and its
     history (replaced a free-wall arc-length cut, which itself replaced an
     earlier three-straight-chords geometry).
+
+    The single most apex-ward and most base-ward slice still get levels/
+    sectors computed (they still count for the apex-base rank/level thirds,
+    and for prev-slice state where relevant) but DON'T contribute points to
+    the nearest-neighbor fusion point cloud below -- 2026-10, per Sharlene,
+    after tracing a recurring Basal_Seg1/Basal_Seg2 (and, symmetrically,
+    Apical_Seg3) 3D fragmentation report back to its source: in every traced
+    case, >90% of the orphaned smaller piece's vertices nearest-matched to
+    that single edge slice specifically. The outermost slice sits right at
+    the boundary of what the DeepSDF reconstruction is actually constrained
+    by (no further slice beyond it to help pin the surface down), so it's
+    the most likely place for the reconstructed mesh to drift from the raw
+    segmentation -- a mesh vertex near that drifted tip can end up closer to
+    the edge slice's points than to its own true neighboring region,
+    producing a small second piece far from the main segment body. Excluding
+    just that one slice's points lets such a vertex fall back to its nearest
+    INTERIOR slice instead. Verified directly on patient005, all 30 frames:
+    this fixed Basal/Apical edge fragmentation on 6 of 30 frames with zero
+    frames getting WORSE, while leaving Mid_Seg2's own (different, interior-
+    slice) fragmentation completely unaffected, as expected -- see
+    _septal_anchored_chord_sector_labels and this function's own git history
+    for that separate, still-open issue. Only applied when there are enough
+    slices left to still be meaningful (>=5 valid slices); smaller stacks
+    keep every slice, same as before.
     """
     try:
         arr, lps2world = _cpd9_load_frame_labelmap(nifti_path, frame_idx)
@@ -1740,6 +1802,11 @@ def label_cpd9_from_raw_slices(
             if rank not in ref_dirs:
                 ref_dirs[rank] = ref_dirs[int(known_ranks[np.argmin(np.abs(known_ranks - rank))])]
 
+        # See this function's own docstring for why the two outermost slices'
+        # points are excluded from fusion when there's enough stack depth to
+        # spare them.
+        exclude_edges = n_valid >= 5
+
         points, region_id = [], []
         for rank, s in enumerate(valid_sorted):
             rv_ij = np.argwhere(s["rv_mask"])
@@ -1754,6 +1821,8 @@ def label_cpd9_from_raw_slices(
                 # valid slice.
                 logger.warning(f"[CPD9] Frame {frame_idx}, slice z={s['z']}: degenerate for the "
                                 "septal-anchored chord cut; skipping this slice.")
+                continue
+            if exclude_edges and (rank == 0 or rank == n_valid - 1):
                 continue
 
             region_id.append(s["level"] * 3 + sector + 1)

@@ -611,16 +611,25 @@ export function ReconstructedHeartModel({
       // (confirmed 2026-09-10: this was never a data problem, only this
       // flattening step's own effect, for LV's strain bullseye same as RV's).
       //
-      // 2026-10, per Sharlene: "rv-segment" (categorical segment IDENTITY,
-      // not a value) now flattens too, same as "debug-segment" always has.
-      // A smooth color gradient makes sense for a continuous metric, but for
-      // a categorical id it reads as one segment visually bleeding into its
-      // neighbour -- reported live on patient005's Basal_Seg1/Basal_Seg2
-      // boundary, on the Structure tab. The underlying per-vertex labels
-      // were confirmed correct and non-overlapping there (cpd_rv_segmentation
-      // .label_cpd9_from_raw_slices output, checked directly); the bleed was
-      // purely this smooth-fill rendering choice, not a labeling bug.
-      const useSmoothFill = colorModeRef.current === "strain";
+      // 2026-10, per Sharlene: RV now flattens ALWAYS, regardless of
+      // colorMode -- "rv-segment" (categorical segment IDENTITY) first, then
+      // found "strain" needed the same fix: RV's `values` is indexed per
+      // SEGMENT (0-8, see applyVertexColorsRef below), one scalar broadcast
+      // to every vertex in that segment, never a genuinely per-vertex
+      // continuous field -- so interpolating between two segments' FAC/
+      // strain values at their shared boundary doesn't reveal a real
+      // anatomical gradient, it just blends two discrete constants and
+      // implies a smoothness the data doesn't have. Reported live on
+      // patient005's Basal_Seg1/Basal_Seg2 boundary on the Structure tab,
+      // which (once traced through structureRvFacRange.mean != null in
+      // page.tsx) turned out to already be in "strain" mode, not
+      // "rv-segment" -- the first fix (rv-segment only) had no effect
+      // there. The underlying per-vertex labels were confirmed correct and
+      // non-overlapping (cpd_rv_segmentation.label_cpd9_from_raw_slices
+      // output, checked directly); the bleed was purely this smooth-fill
+      // rendering choice, not a labeling or FAC-computation bug. LV's
+      // "strain" stays smooth -- not reported as an issue, left alone.
+      const useSmoothFill = chamberRef.current !== "rv" && colorModeRef.current === "strain";
       // Boundary lines stay ON for LV even with a smooth fill -- a pure
       // color gradient between adjacent AHA segments can be too subtle to
       // read at a glance, so the (already Catmull-Rom-smoothed) line
