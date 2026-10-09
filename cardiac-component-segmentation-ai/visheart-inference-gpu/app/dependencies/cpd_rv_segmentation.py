@@ -1500,19 +1500,26 @@ def classify_vertices_to_rv9_cpd(mesh_points_canonical: np.ndarray) -> np.ndarra
 # et al. (CinC 2023) / Bayer et al. (2018 Universal Ventricular Coordinates),
 # computed on the patient's real slices rather than a deformed generic atlas.
 #
-# 2026-10, per Sharlene: the per-slice SECTOR cut (below) was ported from
-# rv-deformation's rv_chord_geometry.py (compute_freewall_arc_sectors /
-# sector_labels_from_freewall_arc), replacing this function's own earlier
-# inline "three parallel chords from the centroid" geometry. Both methods
-# were validated side by side on real patient005 data this session: the
-# chord method cuts along a straight line through the centroid, which can
-# land outside the RV mask entirely on a crescent-shaped slice (forcing the
-# "closest single pixel" fallback below to keep Seg2 non-empty); the arc
-# method instead walks the free wall's OWN curved boundary and cuts it by
-# arc length, which respects the crescent shape and needs no such fallback.
-# Level assignment (apex-base rank into thirds) and the apex-orientation
-# cache are UNCHANGED -- only the sector math and its continuity scheme
-# are new. See compute_freewall_arc_sectors below for the full method.
+# 2026-10, per Sharlene: the per-slice SECTOR cut (below) has gone through two
+# rounds of replacement, both ported from rv-deformation's rv_chord_geometry.py
+# and validated on real sample_3_frames/patient005 data before being wired in
+# here (earlier methods kept there as unused reference code, not deleted):
+#   1. This module's original inline "three parallel chords from the centroid"
+#      geometry -> a free-wall arc-length cut (compute_freewall_arc_sectors):
+#      the chord method's straight line through the centroid could land
+#      outside the RV mask entirely on a crescent-shaped slice, where the arc
+#      method instead walks the free wall's OWN curved boundary.
+#   2. The free-wall arc cut -> a single chord through the centroid, ANCHORED
+#      to each slice's own septal (RV->LV) direction instead of searched from
+#      the mask's own shape (_septal_anchored_chord_sector_labels, per
+#      Sharlene's preference after comparing both side by side). This gives
+#      the same clean result as the arc method without needing its slice-to-
+#      slice horn-continuity machinery, since the chord's direction is
+#      re-derived fresh each slice from anatomy rather than from a per-slice
+#      shape search.
+# Level assignment (apex-base rank into thirds) and the apex-orientation cache
+# are UNCHANGED throughout -- only the sector math has moved. See
+# _septal_anchored_chord_sector_labels below for the current method.
 _RV_LABEL = 1
 _LV_CAVITY_LABEL = 3
 _CPD9_MIN_RV_PIXELS = 15
@@ -1585,130 +1592,92 @@ def _mask_boundary_contour(mask: np.ndarray) -> np.ndarray | None:
     return contour[:-1]  # drop the duplicate closing point (first == last)
 
 
-def _freewall_arc_sector_labels(
+def _septal_anchored_chord_sector_labels(
     rv_ij: np.ndarray, rv_mask: np.ndarray, centroid: np.ndarray, septal_direction: np.ndarray,
-    prev_axis: np.ndarray | None, prev_horns: tuple[np.ndarray, np.ndarray] | None,
-    cut_fractions: tuple[float, float] = (1 / 3, 2 / 3),
-) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]] | None:
+) -> np.ndarray | None:
     """
-    Seg1/Seg2/Seg3 (0/1/2) per rv_ij row, cut along the RV free wall's OWN
-    curved boundary rather than a straight chord through the centroid.
-    Replaces this module's earlier "three parallel chords" sector geometry
-    (2026-09-30 - 2026-10), ported and validated against real patient005 data
-    in Sharlene's rv-deformation repo (src/rv_chord_geometry.py,
-    compute_freewall_arc_sectors / sector_labels_from_freewall_arc) before
-    being wired in here -- see that module for the exploratory history
-    (three-chord method kept as unused reference code there, not deleted).
+    Seg1/Seg2/Seg3 (0/1/2) per rv_ij row, cut along a single straight chord
+    through the centroid, ANCHORED to this slice's own septal (RV centroid ->
+    LV centroid) direction. Replaces this module's free-wall arc-length cut
+    (2026-10a) after side-by-side comparison on real sample_3_frames/
+    patient005 data confirmed this simpler method -- ported from Sharlene's
+    rv-deformation repo (src/rv_chord_geometry.py,
+    compute_septal_anchored_chord / sector_labels_from_septal_chord) -- gives
+    the same clean result without needing the arc method's slice-to-slice
+    horn-continuity machinery (prev_axis/prev_horns): the chord's direction
+    is re-derived fresh each slice from that slice's OWN septal direction
+    (anatomy), not searched for from the mask's own shape, so there's no
+    independent-vs-continuity drift to correct in the first place. Two
+    earlier methods are kept as unused reference code in rv_chord_geometry.py
+    (the free-wall arc method this replaces, and an even earlier three-
+    parallel-chord method) -- not deleted, for the exploratory history.
 
     Method, per slice:
-      1. Trace the RV mask's own boundary contour (marching squares).
-      2. Find the two "horns" (septal/free-wall hinge points) as the
-         farthest pair ON THE CONTOUR -- continuity-matched against the
-         previous slice's own horns (direction AND position) when
-         `prev_axis`/`prev_horns` are given, so adjacent slices' horns don't
-         drift ~30deg apart purely from independent per-slice noise. This
-         was confirmed live to matter: without it, a segment's raw 2D source
-         could be whole and connected on every single slice yet still split
-         into 2 disconnected pieces once fused onto the 3D mesh.
-      3. Split the closed contour at the two horns into two arcs; keep
-         whichever sits farther along `septal_direction` from the centroid
-         as the septal one (discard), the other is the free wall (keep).
-      4. Cut the free-wall arc into thirds by ARC LENGTH (not a straight
-         line), and assign every RV pixel to whichever third its nearest
-         free-wall-arc point belongs to.
-      5. Which end (horn_a-side vs horn_b-side) is "Seg1" vs "Seg3" is fixed
-         by septal_direction's handedness (same role this module's old
-         chord method used `d`'s cross product for) -- independent of
-         prev_axis/prev_horns, so Seg1/Seg3 identity stays anatomically
-         consistent slice-to-slice AND frame-to-frame/patient-to-patient,
-         not just self-consistent within one arbitrary horn ordering.
+      1. The chord is the full straight line through `centroid`,
+         PERPENDICULAR to `septal_direction` -- anchored to anatomy, not to
+         the mask's own widest extent (confirmed on real data: anchoring to
+         the mask's own farthest-pair axis instead can drift the cut
+         orientation up to ~40deg between adjacent slices).
+      2. p1/p2 = where that line exits the mask's own boundary contour on
+         each side (sub-pixel, via linear interpolation on whichever contour
+         edge the line crosses).
+      3. q1 = the Euclidean midpoint of centroid-to-p1, q2 = the midpoint of
+         centroid-to-p2 -- both land exactly ON the chord, since it already
+         passes through the centroid (unlike a plain farthest-pair chord,
+         confirmed able to sit up to ~9.5% of its own length off-centroid).
+         The perpendicular cuts through q1/q2 are the Seg1|Seg2 and
+         Seg2|Seg3 boundaries.
+      4. Which side is Seg1 vs Seg3 is fixed by `septal_direction`'s
+         handedness, so segment identity stays anatomically consistent
+         slice-to-slice and frame-to-frame/patient-to-patient.
 
-    Returns (sector, new_axis, new_horns) to thread into the NEXT slice's own
-    prev_axis/prev_horns, or None if this slice is too degenerate to cut
-    (too few contour points, horns coincide, or a zero-length free-wall arc
-    -- confirmed rare in practice, limited to near-circular apex-tip slices a
-    few dozen pixels wide).
+    Returns None if this slice is too degenerate to cut (no boundary
+    contour, or the septal-perpendicular line doesn't cross the mask
+    boundary at least twice -- confirmed rare in practice).
     """
     contour = _mask_boundary_contour(rv_mask)
     if contour is None or len(contour) < 3:
         return None
+    contour_closed = np.vstack([contour, contour[0]])
 
-    diffs = contour[:, None, :] - contour[None, :, :]
-    dist2 = np.einsum("ijk,ijk->ij", diffs, diffs)
-    best_i, best_j = np.unravel_index(np.argmax(dist2), dist2.shape)
-    if prev_axis is not None:
-        cand_i, cand_j = np.where(dist2 >= 0.9 * dist2.max())
-        cand_axes = contour[cand_j] - contour[cand_i]
-        cand_norms = np.linalg.norm(cand_axes, axis=1, keepdims=True)
-        valid = cand_norms[:, 0] > 1e-9
-        if valid.any():
-            cand_i, cand_j = cand_i[valid], cand_j[valid]
-            cand_axes = cand_axes[valid] / cand_norms[valid]
-            agreement = np.abs(cand_axes @ prev_axis)
-            if prev_horns is not None:
-                well_aligned = agreement > 0.95
-                if well_aligned.any():
-                    ci, cj = cand_i[well_aligned], cand_j[well_aligned]
-                    pa, pb = prev_horns
-                    d_direct = np.linalg.norm(contour[ci] - pa, axis=1) + np.linalg.norm(contour[cj] - pb, axis=1)
-                    d_swapped = np.linalg.norm(contour[ci] - pb, axis=1) + np.linalg.norm(contour[cj] - pa, axis=1)
-                    pos_score = np.minimum(d_direct, d_swapped)
-                    k = np.argmin(pos_score)
-                    best_i, best_j = ci[k], cj[k]
-                else:
-                    k = np.argmax(agreement)
-                    best_i, best_j = cand_i[k], cand_j[k]
-            else:
-                k = np.argmax(agreement)
-                best_i, best_j = cand_i[k], cand_j[k]
-    ia, ib = best_i, best_j
-    if ia > ib:
-        ia, ib = ib, ia
-    horn_a, horn_b = contour[ia], contour[ib]
-    horn_axis = horn_b - horn_a
-    horn_axis_norm = np.linalg.norm(horn_axis)
-    if horn_axis_norm < 1e-9:
+    axis = np.array([-septal_direction[1], septal_direction[0]])  # perpendicular to septal_direction
+    perp_off = (contour_closed - centroid) @ septal_direction
+    crossings = []
+    for k in range(len(contour_closed) - 1):
+        a, b = perp_off[k], perp_off[k + 1]
+        if a == 0:
+            crossings.append(contour_closed[k])
+            continue
+        if (a < 0) != (b < 0):
+            t = a / (a - b)
+            crossings.append(contour_closed[k] + t * (contour_closed[k + 1] - contour_closed[k]))
+    if len(crossings) < 2:
         return None
-    horn_axis = horn_axis / horn_axis_norm
+    crossings = np.array(crossings)
+    proj = (crossings - centroid) @ axis
+    p1, p2 = crossings[np.argmin(proj)], crossings[np.argmax(proj)]
 
-    arc_1 = contour[ia:ib + 1]
-    arc_2 = np.concatenate([contour[ib:], contour[:ia + 1]])
-    score_1 = (arc_1.mean(axis=0) - centroid) @ septal_direction
-    score_2 = (arc_2.mean(axis=0) - centroid) @ septal_direction
-    freewall_arc = arc_1 if score_1 < score_2 else arc_2
+    proj_all = (rv_ij - centroid) @ axis
+    cut_lo, cut_hi = sorted([((p1 - centroid) @ axis) / 2.0, ((p2 - centroid) @ axis) / 2.0])
 
-    seg_lengths = np.linalg.norm(np.diff(freewall_arc, axis=0), axis=1)
-    cum_length = np.concatenate([[0.0], np.cumsum(seg_lengths)])
-    total_length = cum_length[-1]
-    if total_length < 1e-6:
-        return None
-    arc_length_fraction = cum_length / total_length
+    rel_p1 = p1 - centroid
+    cross_p1 = septal_direction[0] * rel_p1[1] - septal_direction[1] * rel_p1[0]
+    p1_seg, p2_seg = (0, 2) if cross_p1 > 0 else (2, 0)
 
-    pixel_diffs = rv_ij[:, None, :].astype(float) - freewall_arc[None, :, :]
-    pixel_dist2 = np.einsum("ijk,ijk->ij", pixel_diffs, pixel_diffs)
-    nearest = np.argmin(pixel_dist2, axis=1)
-    pixel_fraction = arc_length_fraction[nearest]
-    cut_lo, cut_hi = cut_fractions
-    sector = np.where(pixel_fraction < cut_lo, 0, np.where(pixel_fraction < cut_hi, 1, 2))
+    sector = np.full(len(rv_ij), 1, dtype=np.int64)
+    sector[proj_all < cut_lo] = p1_seg
+    sector[proj_all >= cut_hi] = p2_seg
 
-    # Fixed Seg1/Seg3 identity (see docstring point 5): horn_a's side is Seg1
-    # only when septal_direction's handedness agrees; otherwise flip (0<->2,
-    # 1 unchanged) -- "2 - sector" does exactly that swap in one step.
-    cross_a = septal_direction[0] * (horn_a - centroid)[1] - septal_direction[1] * (horn_a - centroid)[0]
-    if cross_a <= 0:
-        sector = 2 - sector
-
-    # Guard against an empty middle band (same rationale as the old chord
-    # method's guard -- see git history / rv_chord_geometry.py's docstring):
-    # force the single pixel closest to the arc's own midpoint fraction into
-    # Seg2 so every slice contributes at least one point to its level's
-    # middle band.
+    # Guard against an empty middle band (same rationale as every earlier
+    # sector method in this module's history): force the single pixel
+    # closest to the cut midpoint into Seg2 so every slice contributes at
+    # least one point to its level's middle band.
     if not np.any(sector == 1):
         cut_mid = (cut_lo + cut_hi) / 2.0
-        nearest_px = np.argmin(np.abs(pixel_fraction - cut_mid))
+        nearest_px = np.argmin(np.abs(proj_all - cut_mid))
         sector[nearest_px] = 1
 
-    return sector, horn_axis, (horn_a, horn_b)
+    return sector
 
 
 def label_cpd9_from_raw_slices(
@@ -1722,10 +1691,11 @@ def label_cpd9_from_raw_slices(
     profile: the smaller-area end is apical) and cached, so which end is
     "apical" can't flip frame-to-frame due to per-frame area noise.
 
-    Sector (Seg1/Seg2/Seg3) is computed by _freewall_arc_sector_labels: a
-    free-wall arc-length cut, not the three-straight-chords geometry this
-    function used before 2026-10 -- see that helper's docstring for the full
-    method and why it replaced the chord cut.
+    Sector (Seg1/Seg2/Seg3) is computed by _septal_anchored_chord_sector_labels:
+    a single chord through the centroid, anchored to each slice's own septal
+    direction -- see that helper's docstring for the full method and its
+    history (replaced a free-wall arc-length cut, which itself replaced an
+    earlier three-straight-chords geometry).
     """
     try:
         arr, lps2world = _cpd9_load_frame_labelmap(nifti_path, frame_idx)
@@ -1771,22 +1741,20 @@ def label_cpd9_from_raw_slices(
                 ref_dirs[rank] = ref_dirs[int(known_ranks[np.argmin(np.abs(known_ranks - rank))])]
 
         points, region_id = [], []
-        prev_axis, prev_horns = None, None  # threaded slice-to-slice, see _freewall_arc_sector_labels
         for rank, s in enumerate(valid_sorted):
             rv_ij = np.argwhere(s["rv_mask"])
             c = s["rv_centroid_ij"]
             d = ref_dirs[rank]  # septal direction
 
-            cut = _freewall_arc_sector_labels(rv_ij, s["rv_mask"], c, d, prev_axis, prev_horns)
-            if cut is None:
-                # Too degenerate to cut (see _freewall_arc_sector_labels' docstring) --
-                # skip this slice rather than guess; the nearest-neighbor fuse below
-                # still labels the mesh from every other valid slice, and prev_axis/
-                # prev_horns simply carry over unchanged to the next one.
+            sector = _septal_anchored_chord_sector_labels(rv_ij, s["rv_mask"], c, d)
+            if sector is None:
+                # Too degenerate to cut (see _septal_anchored_chord_sector_labels'
+                # docstring) -- skip this slice rather than guess; the nearest-
+                # neighbor fuse below still labels the mesh from every other
+                # valid slice.
                 logger.warning(f"[CPD9] Frame {frame_idx}, slice z={s['z']}: degenerate for the "
-                                "free-wall-arc cut; skipping this slice.")
+                                "septal-anchored chord cut; skipping this slice.")
                 continue
-            sector, prev_axis, prev_horns = cut
 
             region_id.append(s["level"] * 3 + sector + 1)
 
@@ -1795,7 +1763,7 @@ def label_cpd9_from_raw_slices(
             points.append((lps2world @ homog.T).T[:, :3])
 
         if not points:
-            logger.warning(f"[CPD9] Frame {frame_idx}: every slice was degenerate for the free-wall-arc cut.")
+            logger.warning(f"[CPD9] Frame {frame_idx}: every slice was degenerate for the septal-anchored chord cut.")
             return None
         points = np.concatenate(points, axis=0)
         region_id = np.concatenate(region_id, axis=0)
