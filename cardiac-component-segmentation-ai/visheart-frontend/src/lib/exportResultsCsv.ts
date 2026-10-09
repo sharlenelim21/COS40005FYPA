@@ -282,12 +282,14 @@ export function buildResultsCsv(
   // label, so GCS = free-wall chord % change and GAS = cavity area % change.
   // See bullseye_analysis.mask_to_rv_regions for the full rationale.
   lines.push(row("REGIONAL RV STRAIN — ED→ES (9 segments)"));
-  lines.push(row("Model", "Region", "Label", "RV GCS %", "RV GAS %", "Chord ED (mm)", "Chord ES (mm)", "Area ED (mm²)", "Area ES (mm²)"));
+  lines.push(row("Model", "Region", "Label", "RV GCS %", "RV GAS %", "RV FAC %", "Chord ED (mm)", "Chord ES (mm)", "Area ED (mm²)", "Area ES (mm²)"));
   for (const m of present) {
     const regions = byModel[m]!.rvStrain?.regions;
-    if (!regions?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 9)); continue; }
+    if (!regions?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 10)); continue; }
     for (const r of regions) {
-      lines.push(row(MODEL_LABEL[m], r.region, r.label, r.gcs ?? r.strain, r.gas ?? null,
+      const gas = r.gas ?? null;
+      const fac = gas == null ? null : -gas;
+      lines.push(row(MODEL_LABEL[m], r.region, r.label, r.gcs ?? r.strain, gas, fac,
         r.chord_ed_mm ?? null, r.chord_es_mm ?? null, r.area_ed_mm2 ?? null, r.area_es_mm2 ?? null));
     }
   }
@@ -307,17 +309,34 @@ export function buildResultsCsv(
   lines.push("");
 
   // ── Per-frame RV strain series ──────────────────────────────────────────
-  lines.push(row("PER-FRAME RV STRAIN SERIES (global + per region)"));
-  lines.push(row("Model", "Frame", "Global RV Strain %", "Region", "Label", "RV Strain %", "Radius (mm)"));
+  // FAC = −GAS (short-axis MRI cavity-area convention, same rule
+  // rvAreaMetrics.ts uses everywhere else) — derived here rather than
+  // recomputed from area_mm2/area_ed_mm2 so this always agrees with the
+  // on-screen report and never drifts from it.
+  lines.push(row("PER-FRAME RV STRAIN SERIES (global + per region, GCS/GAS/FAC)"));
+  lines.push(row(
+    "Model", "Frame",
+    "Global RV GCS %", "Global RV GAS %", "Global RV FAC %",
+    "Region", "Label", "RV GCS %", "RV GAS %", "RV FAC %",
+    "Area ED (mm²)", "Area (mm²)", "Radius (mm)",
+  ));
   let anyRvSeries = false;
   for (const m of present) {
     const rvs = byModel[m]!.rvStrainSeries;
     if (!rvs?.frames?.length) continue;
     anyRvSeries = true;
     for (const f of rvs.frames) {
+      const globalGas = f.global_rv_gas ?? null;
+      const globalFac = globalGas == null ? null : -globalGas;
       for (const r of f.regions ?? []) {
-        lines.push(row(MODEL_LABEL[m], f.frameIndex, f.global_rv_strain,
-          r.region, r.label, r.strain, r.radius_mm ?? null));
+        const regionGas = r.gas ?? null;
+        const regionFac = regionGas == null ? null : -regionGas;
+        lines.push(row(
+          MODEL_LABEL[m], f.frameIndex,
+          f.global_rv_strain, globalGas, globalFac,
+          r.region, r.label, r.strain, regionGas, regionFac,
+          r.area_ed_mm2 ?? null, r.area_mm2 ?? null, r.radius_mm ?? null,
+        ));
       }
     }
   }
