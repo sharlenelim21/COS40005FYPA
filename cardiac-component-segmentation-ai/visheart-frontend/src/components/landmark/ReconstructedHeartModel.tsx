@@ -600,22 +600,27 @@ export function ReconstructedHeartModel({
       // whenever no LV reference was given, or loading/using one failed --
       // never leaves the mesh unaligned.
       if (!alignedViaLv) alignCenterAndScale(mesh);
-      // Skip the flatten-to-per-triangle step for real (non-debug) color
-      // modes. Flattening duplicates every vertex per-triangle and forces
-      // all 3 corners of a triangle to one majority-voted label -- that's
-      // what makes boundaries hard-edged/jagged, for LV's "strain" bullseye
-      // exactly as much as it did for RV: confirmed 2026-09-10 by rendering
-      // RV's real, current pipeline output directly (no flattening) and
-      // seeing smooth boundaries where the flattened version looked jagged
-      // -- this was never a data problem, only this flattening step's own
-      // effect. Keeping the ORIGINAL indexed geometry (triangles still share
-      // vertices with their neighbours) lets Three.js interpolate each
-      // triangle's vertex colors the normal way, so a vertex near a segment
-      // boundary blends smoothly into its neighbour instead of stepping
-      // across a hard triangle edge. "debug-segment" keeps the old flattened/
-      // hard-edge behaviour -- it's a distinct, deliberately categorical
-      // debug view, not the clinical one this fix targets.
-      const useSmoothFill = colorModeRef.current !== "debug-segment";
+      // Skip the flatten-to-per-triangle step only for "strain" (a continuous
+      // value heatmap, where a smooth gradient between neighbouring segments'
+      // values is the correct reading, not an artifact). Flattening
+      // duplicates every vertex per-triangle and forces all 3 corners of a
+      // triangle to one majority-voted label -- keeping the ORIGINAL indexed
+      // geometry instead (triangles still share vertices with their
+      // neighbours) lets Three.js interpolate each triangle's vertex colors
+      // the normal way, which is what gives "strain" its smooth gradient
+      // (confirmed 2026-09-10: this was never a data problem, only this
+      // flattening step's own effect, for LV's strain bullseye same as RV's).
+      //
+      // 2026-10, per Sharlene: "rv-segment" (categorical segment IDENTITY,
+      // not a value) now flattens too, same as "debug-segment" always has.
+      // A smooth color gradient makes sense for a continuous metric, but for
+      // a categorical id it reads as one segment visually bleeding into its
+      // neighbour -- reported live on patient005's Basal_Seg1/Basal_Seg2
+      // boundary, on the Structure tab. The underlying per-vertex labels
+      // were confirmed correct and non-overlapping there (cpd_rv_segmentation
+      // .label_cpd9_from_raw_slices output, checked directly); the bleed was
+      // purely this smooth-fill rendering choice, not a labeling bug.
+      const useSmoothFill = colorModeRef.current === "strain";
       // Boundary lines stay ON for LV even with a smooth fill -- a pure
       // color gradient between adjacent AHA segments can be too subtle to
       // read at a glance, so the (already Catmull-Rom-smoothed) line
