@@ -232,6 +232,36 @@ export type RegionalHealthStatus = {
   computed_at: string;
 };
 
+/** RV analog of RegionalHealthStatus — advisory per-region (9-region RV free
+ *  wall) assessment. Unlike LV, the borrowed cutoff is not RV-validated at
+ *  any level; see `disclaimer` for the exact wording shown to users. */
+export type RvRegionalHealthStatus = {
+  status: "ok" | "unavailable";
+  overall_grade_unchanged: true;
+  source: "rvStrain" | "rvStrainSeries" | null;
+  segments: {
+    idx: number;
+    region: "basal" | "mid" | "apical";
+    label?: string;
+    gcs: number;
+    gas: number | null;
+    level: "normal" | "mild" | "moderate" | "severe";
+    abs_level: "normal" | "mild" | "moderate" | "severe";
+    rel_gap: number;
+    rel_flag: boolean;
+  }[];
+  reduced_count: number;
+  affected_idx: number[];
+  skipped_idx: number[];
+  summary: string;
+  patient_mean_gcs: number | null;
+  relative_rule_applied?: boolean;
+  disclaimer: string;
+  method: string;
+  warnings: string[];
+  computed_at: string;
+};
+
 /** Single ED→ES strain result (global peaks + 17 AHA segments). */
 export type Strain = {
   segments: {
@@ -278,15 +308,25 @@ export type StrainSeries = {
 };
 
 /**
- * Regional RV strain — sibling to `Strain`/`StrainSeries` above. `strain` per
- * region is % change in RV cavity boundary radius, not wall thickness (there
- * is no separate RV free-wall myocardium label) — see the backend's
- * bullseye_analysis.mask_to_rv_regions for the full rationale. No GRS/GCS
- * split: it's a single radius-based measure, closer in spirit to GCS.
+ * Regional RV strain — sibling to `Strain`/`StrainSeries` above. 9 segments
+ * (basal/mid/apical x 3); per segment `gcs` (free-wall chord % change) and
+ * `gas` (cavity area % change), with `strain` = `gcs` for now — see the
+ * backend's bullseye_analysis.mask_to_rv_regions for the full rationale.
  */
 export type RvStrain = {
-  regions: { region: number; label: string; strain: number | null; radius_ed_mm?: number | null; radius_es_mm?: number | null }[];
+  regions: {
+    region: number; label: string; strain: number | null;
+    gcs?: number | null; gas?: number | null;
+    chord_ed_mm?: number | null; chord_es_mm?: number | null;
+    area_ed_mm2?: number | null; area_es_mm2?: number | null;
+    radius_ed_mm?: number | null; radius_es_mm?: number | null;
+  }[];
   global_rv_strain: number | null;
+  global_rv_gcs?: number | null;
+  global_rv_gas?: number | null;
+  /** RV septal GCS (septal-side border, one segment per ring) — separate from the free-wall GCS. */
+  global_rv_septal_gcs?: number | null;
+  septal_regions?: { region: number; ring: string; label: string; gcs: number | null; chord_ed_mm?: number | null; chord_es_mm?: number | null }[];
   edFrameIndex?: number;
   esFrameIndex?: number;
   computed_at?: string;
@@ -296,7 +336,14 @@ export type RvStrainSeries = {
   frames: {
     frameIndex: number;
     global_rv_strain: number | null;
-    regions: { region: number; label: string; strain: number | null; radius_mm?: number | null }[];
+    global_rv_gas?: number | null;
+    global_rv_septal_gcs?: number | null;
+    septal_regions?: { region: number; ring: string; label: string; gcs: number | null }[];
+    regions: {
+      region: number; label: string; strain: number | null; gas?: number | null; radius_mm?: number | null;
+      /** RV cavity area in this segment at this frame / at ED (mm²) — absent on series computed before they were stored. */
+      area_mm2?: number | null; area_ed_mm2?: number | null;
+    }[];
   }[];
   edFrameIndex: number;
   peakFrameIndex?: number | null;
@@ -316,6 +363,7 @@ export type MaskDoc = {
   diseaseSimilarity?: DiseaseSimilarity;
   healthStatus?: HealthStatus;
   regionalHealthStatus?: RegionalHealthStatus;
+  rvRegionalHealthStatus?: RvRegionalHealthStatus;
   rvHealthStatus?: RvHealthStatus;
   strain?: Strain;
   strainSeries?: StrainSeries;
@@ -378,6 +426,44 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 const masksCache = new Map<string, MaskDoc[]>();
 
+/**
+ * Cross-instance refresh pub/sub, keyed by projectId. The page mounts this
+ * hook several SEPARATE times for the same project (e.g. the landmark page's
+ * bullseye panel, its Strain-tab full-cycle panel, and the sidebar each hold
+ * their own instance) — each has its own `masks` state, so calling one
+ * instance's `refresh()` after a compute only updated THAT instance. Every
+ * other instance kept showing its pre-compute snapshot until something else
+ * happened to remount it (a full page reload, or switching model), which
+ * read as "I ran Compute all frames, it finished, but still shows no
+ * result" (reported live, 2026-10) even though the data was already in
+ * Mongo. `notifyMasksRefreshed` below is called after every EXPLICIT
+ * `refresh()` (never after internal polling, which would cause every open
+ * instance to refetch on every poll tick) so every sibling instance for the
+ * same project also refetches and re-renders with the new data.
+ */
+const masksRefreshListeners = new Map<string, Set<() => void>>();
+
+function subscribeMasksRefresh(projectId: string, listener: () => void): () => void {
+  let set = masksRefreshListeners.get(projectId);
+  if (!set) {
+    set = new Set();
+    masksRefreshListeners.set(projectId, set);
+  }
+  set.add(listener);
+  return () => {
+    set!.delete(listener);
+    if (set!.size === 0) masksRefreshListeners.delete(projectId);
+  };
+}
+
+function notifyMasksRefreshed(projectId: string, exclude: () => void) {
+  const set = masksRefreshListeners.get(projectId);
+  if (!set) return;
+  for (const listener of set) {
+    if (listener !== exclude) listener();
+  }
+}
+
 export function useProjectResults(
   projectId: string | undefined,
   autoSelect: AutoSelect = "prefer-unet",
@@ -418,6 +504,7 @@ export function useProjectResults(
     const res = await segmentationApi.getSegmentationResults(projectId);
     // Editable masks carry the computed fields; raw MedSAM output does not.
     const editable = ((res.segmentations ?? []) as MaskDoc[]).filter((m) => !m.isMedSAMOutput);
+    masksCache.set(projectId, editable);
     setMasks(editable);
     return editable;
   }, [projectId]);
@@ -443,6 +530,26 @@ export function useProjectResults(
     })();
     return () => { cancelled = true; };
   }, [projectId, loadMasks]);
+
+  // Join this instance to the cross-instance refresh pub/sub (see
+  // notifyMasksRefreshed above) so an explicit refresh() from ANY other
+  // mounted instance for this same project also refetches here.
+  useEffect(() => {
+    if (!projectId) return;
+    const unsubscribe = subscribeMasksRefresh(projectId, () => { loadMasks(); });
+    return unsubscribe;
+  }, [projectId, loadMasks]);
+
+  /** Explicit, user-facing refresh — unlike `loadMasks` used internally by
+   *  the poller, this also wakes up every other mounted instance for this
+   *  project (see notifyMasksRefreshed). Notifying every listener including
+   *  this instance's own is harmless (loadMasks is idempotent/cheap), so
+   *  there's no need to track/exclude "self" here. */
+  const refresh = useCallback(async (): Promise<MaskDoc[] | null> => {
+    const result = await loadMasks();
+    if (projectId) notifyMasksRefreshed(projectId, () => {});
+    return result;
+  }, [loadMasks, projectId]);
 
   // Group by model, preferring whichever doc actually has computed data.
   const byModel = useMemo(() => {
@@ -645,6 +752,21 @@ export function useProjectResults(
             )) ?? current;
         }
 
+        // 5. RV Regional (Layer 2 analog) — advisory. Backend already auto-fires
+        //    this right after an RV strain compute, so this is purely a backfill
+        //    for masks whose RV strain was computed before this field existed.
+        //    Only attempted when RV strain is actually present — unlike LV's
+        //    step 4, there is no point grading "no RV strain yet" on every load.
+        if ((current.rvStrain || current.rvStrainSeries) && (force || !current.rvRegionalHealthStatus)) {
+          const before = current.rvRegionalHealthStatus?.computed_at;
+          await segmentationApi.triggerRvRegionalHealthStatus(maskId);
+          current =
+            (await pollUntil((x) =>
+              !!x.rvRegionalHealthStatus &&
+              (!force || x.rvRegionalHealthStatus?.computed_at !== before),
+            )) ?? current;
+        }
+
         setComputeState("idle");
       } catch (e: unknown) {
         const err = e as { response?: { data?: { message?: string } }; message?: string };
@@ -819,7 +941,7 @@ export function useProjectResults(
      *  what's displayed comes from an earlier run. */
     newerMaskAvailable,
     /** Re-read the masks without triggering any compute. */
-    refresh: loadMasks,
+    refresh,
     model,
     setModel,
     chooseModel,
@@ -876,6 +998,8 @@ export function useProjectResults(
     healthStatus: doc?.healthStatus,
     /** Layer 2 — advisory regional assessment; never changes healthStatus. */
     regionalHealthStatus: doc?.regionalHealthStatus,
+    /** RV analog of regionalHealthStatus; never changes rvHealthStatus/healthStatus. */
+    rvRegionalHealthStatus: doc?.rvRegionalHealthStatus,
     /** RV health status — sex-specific reference ranges; echoes the sex/BSA it used. */
     rvHealthStatus: doc?.rvHealthStatus,
     similarity: doc?.diseaseSimilarity,

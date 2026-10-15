@@ -4,7 +4,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { valueToColor, rvSegmentColor } from "./heartColor";
+import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { findFirstMesh, loadMesh, computeLvAlignment } from "./lvAlignment";
+import { createSegmentBoundaryLines } from "./segmentBoundaryLines";
 
 /**
  * Combined LV+RV 3D view for the Strain tab's "Combined" chamber focus.
@@ -30,13 +32,21 @@ interface CombinedHeartModelProps {
   lvMeshUrl?: string | null;
   lvMeshFormat?: "obj" | "glb";
   lvSegmentLabels?: number[] | null;
-  lvValues?: number[];
+  lvValues?: (number | null)[];
   lvMin?: number;
   lvMax?: number;
   lvReverseColors?: boolean;
   rvMeshUrl?: string | null;
   rvMeshFormat?: "obj" | "glb";
   rvSegmentLabels?: number[] | null;
+  /** Per-segment RV values (0-8, CPD atlas numbering — same indexing as
+   *  rvSegmentLabels), for value-heatmap coloring. Omit to fall back to
+   *  rvSegmentColor identity colors (e.g. before any RV strain/FAC has been
+   *  computed for this project). */
+  rvValues?: (number | null)[];
+  rvMin?: number;
+  rvMax?: number;
+  rvReverseColors?: boolean;
   className?: string;
   /** Starting camera distance (world units, along +Z) -- see
    * ReconstructedHeartModel's identical prop. */
@@ -99,7 +109,11 @@ function buildSelectionState(
     else { sumBySegment.get(seg)!.add(v); countBySegment.set(seg, (countBySegment.get(seg) ?? 0) + 1); }
   }
   mesh.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  mesh.material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  mesh.material = new THREE.MeshBasicMaterial({
+    vertexColors: true, side: THREE.DoubleSide,
+    // Pushes the surface back so the white segment outlines drawn on it stay visible.
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
 
   const centroidBySegment = new Map<number, THREE.Vector3>();
   for (const [seg, sum] of sumBySegment) centroidBySegment.set(seg, sum.divideScalar(countBySegment.get(seg) ?? 1));
@@ -119,7 +133,7 @@ function moveVertices(mesh: THREE.Mesh, positions: Float32Array): boolean {
 
 export function CombinedHeartModel({
   lvMeshUrl, lvMeshFormat = "glb", lvSegmentLabels, lvValues, lvMin = -10, lvMax = 45, lvReverseColors = false,
-  rvMeshUrl, rvMeshFormat = "glb", rvSegmentLabels,
+  rvMeshUrl, rvMeshFormat = "glb", rvSegmentLabels, rvValues, rvMin = -10, rvMax = 45, rvReverseColors = false,
   className,
   initialCameraDistance = 11,
   selectedLvSegment = -1,
@@ -139,6 +153,8 @@ export function CombinedHeartModel({
 
   const lvStateRef = useRef<MeshSelectionState | null>(null);
   const rvStateRef = useRef<MeshSelectionState | null>(null);
+  // Outline materials need the canvas size (in pixels) to draw their fixed-width lines.
+  const lineMaterialsRef = useRef<LineMaterial[]>([]);
   const selectedLvSegmentRef = useRef(selectedLvSegment);
   const selectedRvSegmentRef = useRef(selectedRvSegment);
   const onLvSegmentClickRef = useRef(onLvSegmentClick);
@@ -221,6 +237,7 @@ export function CombinedHeartModel({
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
+      for (const material of lineMaterialsRef.current) material.resolution.set(width, height);
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(container);
@@ -382,9 +399,17 @@ export function CombinedHeartModel({
 
         const lvColorOf = (seg: number) => {
           const value = lvValues?.[seg - 1];
-          return value !== undefined ? valueToColor(value, lvMin, lvMax, lvReverseColors) : new THREE.Color(0.6, 0.2, 0.2);
+          return valueToColor(value, lvMin, lvMax, lvReverseColors);
         };
         const lvState = buildSelectionState(lvMesh, lvSegmentLabels, alignment, lvColorOf);
+        const outlineSize = {
+          width: containerRef.current?.clientWidth ?? 1,
+          height: containerRef.current?.clientHeight ?? 1,
+        };
+        const outlines: THREE.Object3D[] = [];
+        const lvLines = createSegmentBoundaryLines(lvMesh, lvSegmentLabels, outlineSize);
+        lvMesh.add(lvLines);
+        outlines.push(lvLines);
 
         let rvObject: THREE.Object3D | null = null;
         let rvState: MeshSelectionState | null = null;
@@ -392,7 +417,19 @@ export function CombinedHeartModel({
           rvObject = await loadMesh(rvMeshUrl, rvMeshFormat);
           const rvMesh = findFirstMesh(rvObject);
           if (rvMesh) {
-            rvState = buildSelectionState(rvMesh, rvSegmentLabels, alignment, (seg) => rvSegmentColor(seg));
+            // Value-heatmap coloring when real per-segment RV values are
+            // available (same fallback convention ReconstructedHeartModel's
+            // RV-only view uses) -- identity colors only before any RV
+            // strain/FAC has been computed for this project.
+            const rvColorOf = (seg: number) => {
+              if (!rvValues) return rvSegmentColor(seg);
+              const value = rvValues[seg];
+              return valueToColor(value, rvMin, rvMax, rvReverseColors);
+            };
+            rvState = buildSelectionState(rvMesh, rvSegmentLabels, alignment, rvColorOf);
+            const rvLines = createSegmentBoundaryLines(rvMesh, rvSegmentLabels, outlineSize);
+            rvMesh.add(rvLines);
+            outlines.push(rvLines);
           }
         }
 
@@ -414,6 +451,7 @@ export function CombinedHeartModel({
         if (rvObject) group.add(rvObject);
         pivot.add(group);
         loadedRef.current = group;
+        lineMaterialsRef.current = outlines.map((o) => (o as unknown as { material: LineMaterial }).material);
         lvStateRef.current = lvState;
         rvStateRef.current = rvState;
         loadedUrlsRef.current = { lv: lvMeshUrl, rv: rvState ? rvMeshUrl ?? null : null };
@@ -424,7 +462,7 @@ export function CombinedHeartModel({
     })();
 
     return () => { cancelled = true; };
-  }, [lvMeshUrl, lvMeshFormat, lvSegmentLabels, lvValues, lvMin, lvMax, lvReverseColors, rvMeshUrl, rvMeshFormat, rvSegmentLabels]);
+  }, [lvMeshUrl, lvMeshFormat, lvSegmentLabels, lvValues, lvMin, lvMax, lvReverseColors, rvMeshUrl, rvMeshFormat, rvSegmentLabels, rvValues, rvMin, rvMax, rvReverseColors]);
 
   return (
     <div ref={containerRef} className={`relative ${className ?? ""}`} aria-label="Combined LV+RV 3D heart model">

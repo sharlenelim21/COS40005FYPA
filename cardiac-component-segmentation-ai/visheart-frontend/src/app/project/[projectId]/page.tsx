@@ -13,7 +13,7 @@ import { inferDocModel as inferMaskModel } from "@/lib/segmentation-model-utils"
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
 
 // UI Components
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +57,11 @@ import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
 import { useAuth } from "@/context/auth-context";
 import { AffineMatrixDisplay } from "@/components/ui/AffineMatrixDisplay";
 import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
+import { JobProgress, KineticButtonFill, KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
+import { buildReconstructionRequest } from "@/lib/reconstructionDefaults";
+import { useAutoPipelineChain, type PipelineSelection } from "@/hooks/useAutoPipelineChain";
+import { StartPipelineDialog } from "@/components/project/StartPipelineDialog";
+import { landmarkApi } from "@/lib/landmarkApi";
 
 // Types
 import * as ProjectTypes from "@/types/project";
@@ -448,7 +453,7 @@ function ProjectPageInner() {
   // "view existing" button an RV id. RV occupancy is tracked separately below.
   // Which (model, chamber) pairs have a build in flight. Fetched by the hook rather than read
   // from ProjectContext, which clears its job list once any reconstruction exists.
-  const { building: buildingReconstructions, refresh: refreshActiveReconstructionJobs } =
+  const { building: buildingReconstructions, refresh: refreshActiveReconstructionJobs, jobs: activeReconstructionJobList } =
     useActiveReconstructionJobs(projectId);
 
   const existing4DModels = useMemo(() => {
@@ -518,6 +523,125 @@ function ProjectPageInner() {
     }
     return models;
   }, [reconstructionRows]);
+
+  const existingByChamber = useMemo(
+    () => ({ lv: existing4DModels, rv: existingRvModels }),
+    [existing4DModels, existingRvModels],
+  );
+  const refreshMasksSilently = useCallback(() => refreshMasks({ silent: true }), [refreshMasks]);
+  const pipeline = useAutoPipelineChain({
+    projectId,
+    projectName: projectData?.name,
+    gpuAvailable: processingUnit.gpuAvailable,
+    ready: loading === "done",
+    existing: existingByChamber,
+    building: buildingReconstructions,
+    refreshJobs,
+    refreshMasks: refreshMasksSilently,
+    refreshReconstructions,
+    refreshActiveReconstructionJobs,
+  });
+  const [showPipelineDialog, setShowPipelineDialog] = useState(false);
+  const [landmarkSummary, setLandmarkSummary] = useState<{ active: "running" | "queued" | null; hasCompleted: boolean; progress: number | null } | null>(null);
+  const refreshLandmarkSummary = useCallback(async () => {
+    if (!projectId || isGuest) return;
+    const summary = await landmarkApi.jobSummary(projectId);
+    if (summary) setLandmarkSummary(summary);
+  }, [projectId, isGuest]);
+  useEffect(() => {
+    refreshLandmarkSummary();
+  }, [refreshLandmarkSummary, pipeline.landmarkActive]);
+  useEffect(() => {
+    if (!landmarkSummary?.active && !pipeline.landmarkActive) return;
+    const timer = setInterval(refreshLandmarkSummary, 5000);
+    return () => clearInterval(timer);
+  }, [landmarkSummary?.active, pipeline.landmarkActive, refreshLandmarkSummary]);
+  const activeSegJobs = (jobs ?? []).filter(
+    (j) => isActiveSegmentationJob(j) && !/4d_reconstruction|landmark/i.test(String(j.modelUsed ?? "")),
+  );
+  const segRunning = pipeline.segActive || activeSegJobs.length > 0;
+  const segProgressState: "running" | "queued" =
+    activeSegJobs.some((j) => j.status === ProjectTypes.JobStatus.IN_PROGRESS) || (pipeline.segActive && !pipeline.segQueued)
+      ? "running"
+      : "queued";
+  // A (model, chamber) that already has a finished reconstruction is not "building", whatever a
+  // leftover job record says -- otherwise the button stays on "Building 4D model" after it is done.
+  const stillBuilding = (chamber: "lv" | "rv") =>
+    [...buildingReconstructions[chamber]].some((m) => !existingByChamber[chamber].has(m));
+  // Which builds are keeping the button busy, so a stuck state says what it is waiting on.
+  const busyBuildLabel = (["lv", "rv"] as const)
+    .flatMap((chamber) =>
+      [...buildingReconstructions[chamber]]
+        .filter((m) => !existingByChamber[chamber].has(m))
+        .map((m) => `${m === "unet" ? "UNet" : "MedSAM"} ${chamber.toUpperCase()}`),
+    )
+    .join(", ");
+  const reconRunning =
+    pipeline.reconActive || stillBuilding("lv") || stillBuilding("rv") ||
+    (hasActiveReconstructionJobs && !hasReconstructions);
+  const landmarkRunning = pipeline.landmarkActive || !!landmarkSummary?.active;
+  const landmarkProgressState: "running" | "queued" = landmarkSummary?.active === "queued" && !pipeline.landmarkActive ? "queued" : "running";
+  const landmarksDone = isGuest || landmarkSummary === null || landmarkSummary.hasCompleted;
+  const isPipelineComplete = hasMasks && hasReconstructions && landmarksDone;
+  const modelName = (m: unknown) => (String(m ?? "").toLowerCase() === "unet" ? "UNet" : "MedSAM");
+  const summarizeProgress = <J extends { progress?: unknown }>(
+    inFlight: J[],
+    labelOne: (job: J) => string,
+    labelMany: (count: number) => string,
+  ): { value: number; label: string } | null => {
+    if (inFlight.length === 0) return null;
+    const total = inFlight.reduce((sum, j) => sum + (hasProgressReading(j.progress) ? j.progress : 0), 0);
+    const value = Math.round(total / inFlight.length);
+    if (!hasProgressReading(value)) return null;
+    return { value, label: inFlight.length === 1 ? labelOne(inFlight[0]) : labelMany(inFlight.length) };
+  };
+  const segProgress = summarizeProgress(
+    activeSegJobs,
+    (j) => `${modelName(j.segmentationModel)} segmentation`,
+    (n) => `${n} segmentations running`,
+  );
+  const reconProgress = summarizeProgress(
+    (activeReconstructionJobList ?? []).filter(
+      (j) =>
+        String(j.projectId ?? "") === String(projectId) &&
+        ["pending", "in_progress"].includes(String(j.status ?? "").toLowerCase()),
+    ),
+    (j) => `${modelName(j.segmentationModel)} · ${normalizeReconstructionChamber(j.chamber).toUpperCase()}`,
+    (n) => `${n} reconstructions running`,
+  );
+  const reconstructionChamberById = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const j of activeReconstructionJobList ?? []) {
+      if (j.jobId && j.chamber) out.set(String(j.jobId), normalizeReconstructionChamber(j.chamber).toUpperCase());
+    }
+    return out;
+  }, [activeReconstructionJobList]);
+  const jobDisplayName = (job: ProjectTypes.UserJob) => {
+    const kind = String(job.modelUsed ?? "").toLowerCase();
+    if (kind.includes("landmark")) return `${modelName(job.segmentationModel)} Landmark Detection`;
+    if (kind.includes("4d_reconstruction")) {
+      const chamber = job.chamber ? normalizeReconstructionChamber(job.chamber).toUpperCase() : reconstructionChamberById.get(job.jobId);
+      return `${modelName(job.segmentationModel)}${chamber ? ` · ${chamber}` : ""} Reconstruction`;
+    }
+    return `${modelName(job.segmentationModel)} Segmentation`;
+  };
+  useEffect(() => {
+    if (!reconRunning) return;
+    const timer = setInterval(() => { refreshActiveReconstructionJobs(); }, 5000);
+    return () => clearInterval(timer);
+  }, [reconRunning, refreshActiveReconstructionJobs]);
+  const listHasActiveJob = (jobs ?? []).some(isActiveRecentJob);
+  const pollJobList = segRunning || reconRunning || landmarkRunning || listHasActiveJob;
+  useEffect(() => {
+    if (!pollJobList) return;
+    const timer = setInterval(() => { refreshJobs(); }, 5000);
+    return () => clearInterval(timer);
+  }, [pollJobList, refreshJobs]);
+  const prevSegRunningRef = useRef(segRunning);
+  useEffect(() => {
+    if (prevSegRunningRef.current && !segRunning && hasMasks && !pipeline.active) refreshMasks({ silent: true });
+    prevSegRunningRef.current = segRunning;
+  }, [segRunning, hasMasks, pipeline.active, refreshMasks]);
 
   // Missing projectId handling
   if (!projectId) return <NoProjectFound message="Project ID is missing." />;
@@ -608,42 +732,16 @@ function ProjectPageInner() {
     }
   };
 
-  // Start segmentation
-  const handleStartSegmentation = async () => {
-    setIsStartingSegmentation(true);
+  const handleStartSegmentation = () => {
     setSegmentationError(null);
+    setShowPipelineDialog(true);
+  };
 
+  const handlePipelineSubmit = async (selection: PipelineSelection) => {
+    setIsStartingSegmentation(true);
     try {
-      console.log('[Project] Start segmentation button clicked - current jobs state:', { jobs });
-      console.log('[Project] jobsError:', jobsError);
-
-      // CPU-safe default: only choose MedSAM when GPU is explicitly online.
-      const detectedMode = processingUnit.gpuAvailable ? "gpu" : "cpu";
-      const selectedModel: "medsam" | "unet" =
-        detectedMode === "gpu" ? "medsam" : "unet";
-
-      console.log("[Project] Start AI Segmentation mode/model:", {
-        processingUnit,
-        detectedMode,
-        selectedModel,
-      });
-
-      await segmentationApi.startSegmentation(
-        projectId,
-        selectedModel,
-        "auto"
-      );
-      
-      // Wait a moment for the backend to create the job, then refresh
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Refresh jobs to detect the new segmentation job
-      await refreshJobs();
-      
-      console.log("[Project] ✅ Segmentation job started successfully - polling will check for completion");
-    } catch (error: unknown) {
-      console.error("Error starting segmentation:", error);
-      setSegmentationError((error as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to start segmentation");
+      await pipeline.start(isGuest ? { ...selection, combos: [], runLandmark: false } : selection);
+    } finally {
       setIsStartingSegmentation(false);
     }
   };
@@ -721,24 +819,10 @@ function ProjectPageInner() {
     setReconstructionError(null);
 
     try {
-      await reconstructionApi.startReconstruction(projectId, {
-        reconstructionName: requestedChamber === "rv"
-          ? `RV Reconstruction — RESEARCH ONLY (${config.segmentationModel.toUpperCase()}) - ${projectData.name}`
-          : `4D Cardiac Reconstruction (${config.segmentationModel.toUpperCase()}) - ${projectData.name}`,
-        reconstructionDescription: requestedChamber === "rv"
-          ? `RV cavity, research/reference only — not for clinical diagnosis. Generated from ${config.segmentationModel.toUpperCase()} segmentation`
-          : `Generated via configuration wizard from ${config.segmentationModel.toUpperCase()} segmentation`,
-        ed_frame: config.edFrame, // Pass 1-based ED frame from user selection
-        export_format: config.exportFormat, // Pass user's format choice to backend
-        // Tell the backend exactly which model's editable mask to consume.
-        segmentationModel: config.segmentationModel,
-        chamber: requestedChamber,
-        parameters: {
-          num_iterations: config.numIterations,
-          resolution: config.resolution,
-          process_all_frames: true,
-        },
-      });
+      await reconstructionApi.startReconstruction(
+        projectId,
+        buildReconstructionRequest({ ...config, chamber: requestedChamber }, projectData.name),
+      );
 
       console.log("[Project] ✅ Reconstruction job started successfully on backend");
       refreshActiveReconstructionJobs();
@@ -761,10 +845,14 @@ function ProjectPageInner() {
         // The effect will handle clearing isStartingReconstruction when the job appears
       }
       
-      console.log("[Project] ✅ Job polling complete - effect will clear loading state when job detected");
-      
-      // Keep showing loading state until the job appears
-      // The loading state will be cleared by the effect when hasActiveReconstructionJobs becomes true
+      console.log("[Project] ✅ Job polling complete - clearing starting state");
+
+      // The in-flight state is owned by `reconRunning` (backed by the active-job hook) from here on.
+      // Clearing it only when the context's job list showed an active job left the button stuck on
+      // "Starting Reconstruction..." forever: that list is emptied as soon as any reconstruction
+      // exists, so the effect above never fired once a build had completed.
+      await refreshActiveReconstructionJobs();
+      setIsStartingReconstruction(false);
     } catch (error: unknown) {
       const response = (error as { response?: { status?: number; data?: { message?: string; reason?: string } } })?.response;
 
@@ -781,6 +869,7 @@ function ProjectPageInner() {
           setShowReconstructionDialog(false);
           goToReconstructionViewer(config.segmentationModel, undefined, requestedChamber);
           await refreshReconstructionJobs();
+          setIsStartingReconstruction(false);
           return;
         }
         console.info("[Project] Reconstruction already exists or is running:", response?.data?.message);
@@ -801,6 +890,262 @@ function ProjectPageInner() {
       setIsStartingReconstruction(false);
     }
   };
+  const STAGE_BUSY_CLASS = "relative overflow-hidden justify-start h-auto py-4 disabled:opacity-100";
+  const segBusyText = segProgress
+    ? "Available when it finishes"
+    : segProgressState === "queued"
+    ? "Segmentation queued — waiting for the GPU"
+    : "Segmentation running — available when it finishes";
+  const pipelineBusy = segRunning || pipeline.active || isStartingSegmentation;
+
+  const renderStageButtons = () => (
+    <>
+      {segRunning ? (
+        <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
+          <KineticButtonFill state={segProgressState} value={segProgress?.value} label="Segmentation running" />
+          <div className="relative flex items-center gap-3 w-full">
+            <Edit className="h-5 w-5 text-blue-600" />
+            <div className="text-left flex-1 min-w-0">
+              <p className="font-semibold">Edit Segmentation Masks</p>
+              <p className="text-xs text-muted-foreground">{segBusyText}</p>
+              {segProgress && <ProgressMeter className="mt-2" value={segProgress.value} title={segProgress.label} />}
+            </div>
+          </div>
+        </Button>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
+              <Link href={`/project/${projectId}/segmentation`}>
+                <div className="flex items-center gap-3 w-full">
+                  <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
+                  <div className="text-left flex-1">
+                    <p className="font-semibold">Edit Segmentation Masks</p>
+                    <p className="text-xs text-muted-foreground">
+                      Refine with brush tools and manual adjustments
+                    </p>
+                    <p className={`mt-0.5 text-xs font-medium ${glowEditMasks ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
+                      Masks Available
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Manually adjust and refine AI-generated segmentation masks</p>
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {isGuest ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Landmark Detection</p>
+                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Sign in to unlock landmark detection</p>
+          </TooltipContent>
+        </Tooltip>
+      ) : !hasReconstructions ? (
+        // Landmark detection needs a finished 4D reconstruction to run against -- without this,
+        // the card's Link was clickable at any time (even mid-reconstruction, or before one was
+        // ever started), and landmark-detection/page.tsx auto-runs detection the moment it
+        // mounts, which is unsafe before reconstruction data exists. The page itself also guards
+        // this (redirects back here if reconstruction isn't ready), but locking the entry point
+        // here avoids the detour and makes the real prerequisite visible instead of just "running".
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Landmark Detection</p>
+                  <p className="text-xs text-muted-foreground">Needs a finished 4D reconstruction first</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Build a 4D reconstruction before running landmark detection</p>
+          </TooltipContent>
+        </Tooltip>
+      ) : landmarkRunning ? (
+        <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
+          <KineticButtonFill state={landmarkProgressState} value={landmarkSummary?.progress} label="Landmark detection running" />
+          <div className="relative flex items-center gap-3 w-full">
+            <Crosshair className="h-5 w-5 text-blue-600" />
+            <div className="text-left flex-1">
+              <p className="font-semibold">Landmark Detection</p>
+              <p className="text-xs text-muted-foreground">
+                {landmarkProgressState === "queued"
+                  ? "Landmark detection queued — waiting for the GPU"
+                  : "Landmark detection running — available when it finishes"}
+              </p>
+              {hasProgressReading(landmarkSummary?.progress) && landmarkProgressState === "running" && (
+                <ProgressMeter className="mt-2" value={landmarkSummary!.progress!} title="Landmark detection" />
+              )}
+            </div>
+          </div>
+        </Button>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
+              <Link href={`/project/${projectId}/landmark-detection`}>
+                <div className="flex items-center gap-3 w-full">
+                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
+                  <div className="text-left flex-1">
+                    <p className="font-semibold">Landmark Detection</p>
+                    <p className="text-xs text-muted-foreground">Detect landmarks, preview strain, and export reports</p>
+                    {landmarkSummary?.hasCompleted && (
+                      <p className={`mt-0.5 text-xs font-medium ${highlight === "landmark" ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
+                        Landmarks Available
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Run landmark detection, view strain previews, and export a PDF report</p>
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {isGuest ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Create 4D Reconstruction</p>
+                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Sign in to unlock 4D reconstruction</p>
+          </TooltipContent>
+        </Tooltip>
+      ) : !hasMasks ? (
+        // Reconstruction needs segmentation masks to build from. Opening the config dialog with
+        // none yet would just fail once submitted -- lock the entry point instead, consistent
+        // with the Landmark Detection card's own !hasReconstructions lock above.
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Create 4D Reconstruction</p>
+                  <p className="text-xs text-muted-foreground">Needs segmentation masks first</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Generate segmentation masks before building a 4D reconstruction</p>
+          </TooltipContent>
+        </Tooltip>
+      ) : reconRunning ? (
+        <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
+          <KineticButtonFill value={reconProgress?.value} label="Reconstruction running" />
+          <div className="relative flex items-center gap-3 w-full">
+            <Box className="h-5 w-5 text-blue-600" />
+            <div className="text-left flex-1 min-w-0">
+              <p className="font-semibold">Create 4D Reconstruction</p>
+              <p className="text-xs text-muted-foreground">
+                {reconProgress
+                  ? "Available when it finishes"
+                  : busyBuildLabel
+                  ? `Building ${busyBuildLabel} — this may take several minutes`
+                  : "Building 4D model — this may take several minutes"}
+              </p>
+              {reconProgress && <ProgressMeter className="mt-2" value={reconProgress.value} title={reconProgress.label} />}
+            </div>
+          </div>
+        </Button>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              onClick={() => handleOpenReconstruction()}
+              size="lg"
+              variant={highlight === "reconstruction" ? "default" : "outline"}
+              className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "animate-pulse shadow-lg" : ""}`}
+              disabled={isStartingReconstruction}
+            >
+              <div className="flex items-center gap-3 w-full">
+                {isStartingReconstruction ? (
+                  <RefreshCw className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-5 w-5" />
+                )}
+                <div className="text-left flex-1">
+                  <p className="font-semibold">
+                    {isStartingReconstruction ? "Starting Reconstruction..." : "Create 4D Reconstruction"}
+                  </p>
+                  <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
+                  {reconstructionCards.length > 0 && (
+                    <p className={`mt-0.5 text-xs font-medium ${highlight === "reconstruction" ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
+                      {reconstructionCards.length} Available
+                    </p>
+                  )}
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Build animated 4D cardiac models for visualization and analysis</p>
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </>
+  );
+
+  const rerunHeaderButton = (
+    <ShowForUser fallback={null}>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="shrink-0">
+              <Button
+                onClick={handleStartSegmentation}
+                disabled={pipelineBusy}
+                variant="outline"
+                size="sm"
+                aria-label="Re-run Segmentation"
+              >
+                <RefreshCw className={`h-4 w-4 ${isStartingSegmentation ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">
+                  {isStartingSegmentation ? "Starting…" : "Re-run Segmentation"}
+                </span>
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>
+              {pipelineBusy && !isStartingSegmentation
+                ? "Available when the current run finishes"
+                : "Choose models and reconstructions to run again"}
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </ShowForUser>
+  );
 
   // Handle delete reconstructions
   const handleDeleteReconstructions = async () => {
@@ -862,8 +1207,22 @@ function ProjectPageInner() {
     }
   };
 
-  // Get job statistics
-  const jobCounts = (jobs || []).reduce(
+  const processJobs: ProjectTypes.UserJob[] = [];
+  const seenProcesses = new Set<string>();
+  for (const job of jobs ?? []) {
+    const kind = String(job.modelUsed ?? "").toLowerCase();
+    const model = String(job.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
+    const key = kind.includes("landmark")
+      ? `landmark:${model}`
+      : kind.includes("4d_reconstruction")
+      ? `recon:${model}:${normalizeReconstructionChamber(job.chamber ?? reconstructionChamberById.get(job.jobId))}`
+      : `seg:${model}`;
+    if (seenProcesses.has(key)) continue;
+    seenProcesses.add(key);
+    processJobs.push(job);
+  }
+
+  const jobCounts = processJobs.reduce(
     (acc, job) => {
       acc[job.status] = (acc[job.status] || 0) + 1;
       return acc;
@@ -1003,18 +1362,18 @@ function ProjectPageInner() {
       <div className="container mx-auto px-6 py-8 space-y-6">
         {/* Compact Processing Pipeline */}
         <div className="bg-muted/30 rounded-lg border p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Activity className="h-4 w-4" />
               <span>Progress</span>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               {/* Step 1: Dataset */}
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-950/30 border border-green-500 flex items-center justify-center">
                   <Database className="h-4 w-4 text-green-600" />
                 </div>
-                <div className="hidden sm:block">
+                <div className="hidden md:block">
                   <p className="text-xs font-medium">Dataset</p>
                   <p className="text-xs text-muted-foreground">Complete</p>
                 </div>
@@ -1027,31 +1386,56 @@ function ProjectPageInner() {
                 <div className={`h-8 w-8 rounded-full flex items-center justify-center border ${
                   hasMasks 
                     ? 'bg-green-100 dark:bg-green-950/30 border-green-500' 
-                    : hasActiveJobs
-                    ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500 animate-pulse'
+                    : segRunning
+                    ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500'
                     : 'bg-muted border-muted-foreground/30'
                 }`}>
                   <Layers className={`h-4 w-4 ${
-                    hasMasks ? 'text-green-600' : hasActiveJobs ? 'text-blue-600' : 'text-muted-foreground'
+                    hasMasks ? 'text-green-600' : segRunning ? 'text-blue-600' : 'text-muted-foreground'
                   }`} />
                 </div>
-                <div className="hidden sm:block">
+                <div className="hidden md:block">
                   <p className="text-xs font-medium">Segmentation</p>
                   <p className="text-xs text-muted-foreground">
-                    {hasMasks ? 'Complete' : hasActiveJobs ? 'Processing' : 'Pending'}
+                    {hasMasks ? 'Complete' : segRunning ? 'Processing' : 'Pending'}
                   </p>
+                  {!hasMasks && segRunning && <KineticProgress size="h-1" className="mt-1 w-16" label="Segmentation running" />}
                 </div>
               </div>
 
               <ChevronRight className="h-4 w-4 text-muted-foreground" />
 
-              {/* Step 3: Reconstruction */}
+              <div className="flex items-center gap-2">
+                <div className={`h-8 w-8 rounded-full flex items-center justify-center border ${
+                  landmarkSummary?.hasCompleted
+                    ? 'bg-green-100 dark:bg-green-950/30 border-green-500'
+                    : landmarkRunning
+                    ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500'
+                    : hasMasks && !isGuest
+                    ? 'bg-amber-100 dark:bg-amber-950/30 border-amber-500'
+                    : 'bg-muted border-muted-foreground/30'
+                }`}>
+                  <Crosshair className={`h-4 w-4 ${
+                    landmarkSummary?.hasCompleted ? 'text-green-600' : landmarkRunning ? 'text-blue-600' : hasMasks && !isGuest ? 'text-amber-600' : 'text-muted-foreground'
+                  }`} />
+                </div>
+                <div className="hidden md:block">
+                  <p className="text-xs font-medium">Landmark</p>
+                  <p className="text-xs text-muted-foreground">
+                    {landmarkSummary?.hasCompleted ? 'Complete' : landmarkRunning ? 'Processing' : hasMasks && !isGuest ? 'Available' : 'Locked'}
+                  </p>
+                  {!landmarkSummary?.hasCompleted && landmarkRunning && <KineticProgress size="h-1" className="mt-1 w-16" label="Landmark detection running" />}
+                </div>
+              </div>
+
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+
               <div className="flex items-center gap-2">
                 <div className={`h-8 w-8 rounded-full flex items-center justify-center border ${
                   hasReconstructions 
                     ? 'bg-green-100 dark:bg-green-950/30 border-green-500' 
                     : hasActiveReconstructionJobs
-                    ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500 animate-pulse'
+                    ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500'
                     : hasMasks
                     ? 'bg-amber-100 dark:bg-amber-950/30 border-amber-500'
                     : 'bg-muted border-muted-foreground/30'
@@ -1060,11 +1444,12 @@ function ProjectPageInner() {
                     hasReconstructions ? 'text-green-600' : hasActiveReconstructionJobs ? 'text-blue-600' : hasMasks ? 'text-amber-600' : 'text-muted-foreground'
                   }`} />
                 </div>
-                <div className="hidden sm:block">
+                <div className="hidden md:block">
                   <p className="text-xs font-medium">4D Model</p>
                   <p className="text-xs text-muted-foreground">
                     {hasReconstructions ? 'Complete' : hasActiveReconstructionJobs ? 'Processing' : hasMasks ? 'Available' : 'Locked'}
                   </p>
+                  {!hasReconstructions && hasActiveReconstructionJobs && <KineticProgress size="h-1" className="mt-1 w-16" label="Reconstruction running" />}
                 </div>
               </div>
             </div>
@@ -1115,13 +1500,15 @@ function ProjectPageInner() {
 
                       {/* Start Segmentation Action */}
                       <ShowForUser fallback={null}>
-                        {hasActiveJobs ? (
-                          <Button disabled variant="secondary" size="lg" className="justify-start h-auto py-4">
-                            <div className="flex items-center gap-3 w-full">
-                              <RefreshCw className="h-5 w-5 animate-spin" />
-                              <div className="text-left flex-1">
-                                <p className="font-semibold">Segmentation in Progress</p>
-                                <p className="text-xs text-muted-foreground">Check the Processing Jobs panel for updates</p>
+                        {segRunning ? (
+                          <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
+                            <KineticButtonFill state={segProgressState} value={segProgress?.value} label="Segmentation running" />
+                            <div className="relative flex items-center gap-3 w-full">
+                              <Layers className="h-5 w-5 text-blue-600" />
+                              <div className="text-left flex-1 min-w-0">
+                                <p className="font-semibold">Start AI Segmentation</p>
+                                <p className="text-xs text-muted-foreground">{segBusyText}</p>
+                                {segProgress && <ProgressMeter className="mt-2" value={segProgress.value} title={segProgress.label} />}
                               </div>
                             </div>
                           </Button>
@@ -1170,18 +1557,26 @@ function ProjectPageInner() {
               </Card>
             )}
 
-            {/* STATE 2: Has Masks, No Reconstructions - Refine & Reconstruct */}
-            {hasMasks && !hasReconstructions && (
+            {hasMasks && !isPipelineComplete && (
               <Card className="border-2 border-green-500/20">
                 <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-green-500/10 flex items-center justify-center">
-                      <CheckCircle className="h-5 w-5 text-green-600" />
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-10 w-10 shrink-0 rounded-lg bg-green-500/10 flex items-center justify-center">
+                        <CheckCircle className="h-5 w-5 text-green-600" />
+                      </div>
+                      <div className="min-w-0">
+                        <CardTitle>Segmentation Complete</CardTitle>
+                        <p className="text-sm text-muted-foreground">
+                          {!hasReconstructions
+                            ? "Refine your masks or create 3D models"
+                            : landmarkRunning
+                            ? "Landmark detection in progress…"
+                            : "Run landmark detection to complete the pipeline"}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <CardTitle>Segmentation Complete</CardTitle>
-                      <p className="text-sm text-muted-foreground">Refine your masks or create 3D models</p>
-                    </div>
+                    {rerunHeaderButton}
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -1207,119 +1602,7 @@ function ProjectPageInner() {
                         </TooltipContent>
                       </Tooltip>
 
-                      {/* Edit Segmentation */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
-                            <Link href={`/project/${projectId}/segmentation`}>
-                              <div className="flex items-center gap-3 w-full">
-                                <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">Edit Segmentation Masks</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Refine with brush tools and manual adjustments
-                                  </p>
-                                </div>
-                              </div>
-                            </Link>
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Manually adjust and refine AI-generated segmentation masks</p>
-                        </TooltipContent>
-                      </Tooltip>
-
-                      {/* Landmark Detection */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          {isGuest ? (
-                            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
-                              <div className="flex items-center gap-3 w-full">
-                                <Lock className="h-5 w-5 text-muted-foreground" />
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">Landmark Detection</p>
-                                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
-                                </div>
-                              </div>
-                            </Button>
-                          ) : (
-                            <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
-                              <Link href={`/project/${projectId}/landmark-detection`}>
-                                <div className="flex items-center gap-3 w-full">
-                                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
-                                  <div className="text-left flex-1">
-                                    <p className="font-semibold">Landmark Detection</p>
-                                    <p className="text-xs text-muted-foreground">
-                                      Detect landmarks, preview strain, and export reports
-                                    </p>
-                                  </div>
-                                </div>
-                              </Link>
-                            </Button>
-                          )}
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>{isGuest ? "Sign in to unlock landmark detection" : "Run landmark detection, view strain previews, and export a PDF report"}</p>
-                        </TooltipContent>
-                      </Tooltip>
-
-                      {/* Start Reconstruction */}
-                      {hasActiveReconstructionJobs ? (
-                        <Button disabled variant="secondary" size="lg" className="justify-start h-auto py-4">
-                          <div className="flex items-center gap-3 w-full">
-                            <RefreshCw className="h-5 w-5 animate-spin" />
-                            <div className="text-left flex-1">
-                              <p className="font-semibold">Reconstruction in Progress</p>
-                              <p className="text-xs text-muted-foreground">Your 4D model is being generated - this may take several minutes</p>
-                            </div>
-                          </div>
-                        </Button>
-                      ) : (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            {isGuest ? (
-                              <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
-                                <div className="flex items-center gap-3 w-full">
-                                  <Lock className="h-5 w-5 text-muted-foreground" />
-                                  <div className="text-left flex-1">
-                                    <p className="font-semibold">Create 4D Reconstruction</p>
-                                    <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
-                                  </div>
-                                </div>
-                              </Button>
-                            ) : (
-                              <Button
-                                onClick={() => handleOpenReconstruction()}
-                                size="lg"
-                                variant={highlight === "reconstruction" ? "default" : "outline"}
-                                className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "animate-pulse shadow-lg" : ""}`}
-                                disabled={isStartingReconstruction}
-                              >
-                                <div className="flex items-center gap-3 w-full">
-                                  {isStartingReconstruction ? (
-                                    <RefreshCw className="h-5 w-5 animate-spin" />
-                                  ) : (
-                                    <Sparkles className="h-5 w-5" />
-                                  )}
-                                  <div className="text-left flex-1">
-                                    <p className="font-semibold">
-                                      {isStartingReconstruction
-                                        ? 'Starting Reconstruction...'
-                                        : 'Create 4D Reconstruction'}
-                                    </p>
-                                    <p className="text-xs opacity-90">
-                                      Generate model-scoped 4D meshes from segmentation
-                                    </p>
-                                  </div>
-                                </div>
-                              </Button>
-                            )}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{isGuest ? "Sign in to unlock 4D reconstruction" : "Build animated 4D cardiac models for visualization and analysis"}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
+                      {renderStageButtons()}
                     </div>
                   </TooltipProvider>
 
@@ -1333,18 +1616,20 @@ function ProjectPageInner() {
               </Card>
             )}
 
-            {/* STATE 3: Has Masks AND Reconstructions - Full Pipeline Complete */}
-            {hasMasks && hasReconstructions && (
+            {isPipelineComplete && (
               <Card className="border-2 border-blue-500/20">
                 <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                      <Box className="h-5 w-5 text-blue-600" />
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-10 w-10 shrink-0 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                        <Box className="h-5 w-5 text-blue-600" />
+                      </div>
+                      <div className="min-w-0">
+                        <CardTitle>Pipeline Complete</CardTitle>
+                        <p className="text-sm text-muted-foreground">All processing stages finished</p>
+                      </div>
                     </div>
-                    <div>
-                      <CardTitle>Pipeline Complete</CardTitle>
-                      <p className="text-sm text-muted-foreground">All processing stages finished</p>
-                    </div>
+                    {rerunHeaderButton}
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -1370,103 +1655,7 @@ function ProjectPageInner() {
                         </TooltipContent>
                       </Tooltip>
 
-                      {/* Edit Segmentation */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
-                            <Link href={`/project/${projectId}/segmentation`}>
-                              <div className="flex items-center gap-3 w-full">
-                                <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">Edit Segmentation Masks</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Refine and update segmentation data
-                                  </p>
-                                </div>
-                              </div>
-                            </Link>
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Update masks to regenerate 3D models</p>
-                        </TooltipContent>
-                      </Tooltip>
-
-                      {/* Landmark Detection */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          {isGuest ? (
-                            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
-                              <div className="flex items-center gap-3 w-full">
-                                <Lock className="h-5 w-5 text-muted-foreground" />
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">Landmark Detection</p>
-                                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
-                                </div>
-                              </div>
-                            </Button>
-                          ) : (
-                            <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
-                              <Link href={`/project/${projectId}/landmark-detection`}>
-                                <div className="flex items-center gap-3 w-full">
-                                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
-                                  <div className="text-left flex-1">
-                                    <p className="font-semibold">Landmark Detection</p>
-                                    <p className="text-xs text-muted-foreground">
-                                      Detect landmarks, preview strain, and export reports
-                                    </p>
-                                  </div>
-                                </div>
-                              </Link>
-                            </Button>
-                          )}
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>{isGuest ? "Sign in to unlock landmark detection" : "Run landmark detection, view strain previews, and export a PDF report"}</p>
-                        </TooltipContent>
-                      </Tooltip>
-
-                      {/* Start Reconstruction */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          {isGuest ? (
-                            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
-                              <div className="flex items-center gap-3 w-full">
-                                <Lock className="h-5 w-5 text-muted-foreground" />
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">Create 4D Reconstruction</p>
-                                  <p className="text-xs text-muted-foreground">Sign in to unlock this feature</p>
-                                </div>
-                              </div>
-                            </Button>
-                          ) : (
-                            <Button
-                              onClick={() => handleOpenReconstruction()}
-                              size="lg"
-                              variant="outline"
-                              className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30" : ""}`}
-                              disabled={isStartingReconstruction}
-                            >
-                              <div className="flex items-center gap-3 w-full">
-                                {isStartingReconstruction ? (
-                                  <RefreshCw className="h-5 w-5 animate-spin" />
-                                ) : (
-                                  <Sparkles className="h-5 w-5" />
-                                )}
-                                <div className="text-left flex-1">
-                                  <p className="font-semibold">
-                                    {isStartingReconstruction ? "Starting Reconstruction..." : "Create 4D Reconstruction"}
-                                  </p>
-                                  <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
-                                </div>
-                              </div>
-                            </Button>
-                          )}
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>{isGuest ? "Sign in to unlock 4D reconstruction" : "Build animated 4D cardiac models for visualization and analysis"}</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      {renderStageButtons()}
                     </div>
                   </TooltipProvider>
                 </CardContent>
@@ -1754,13 +1943,10 @@ function ProjectPageInner() {
             {/* Jobs Section - Redesigned */}
             <Card>
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Activity className="h-4 w-4" />
-                    Processing Jobs
-                  </CardTitle>
-                  {jobs && jobs.length > 0 && <Badge variant="secondary">{jobs.length}</Badge>}
-                </div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Activity className="h-4 w-4" />
+                  Processing Jobs
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 {jobsError ? (
@@ -1775,12 +1961,13 @@ function ProjectPageInner() {
                       {jobCounts[ProjectTypes.JobStatus.IN_PROGRESS] > 0 && (
                         <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800">
                           <div className="flex items-center gap-1.5">
-                            <RefreshCw className="h-3.5 w-3.5 text-blue-600 animate-spin" />
-                            <div>
+                            <Activity className="h-3.5 w-3.5 text-blue-600" />
+                            <div className="flex-1">
                               <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">{jobCounts[ProjectTypes.JobStatus.IN_PROGRESS]}</p>
                               <p className="text-xs text-muted-foreground">Running</p>
                             </div>
                           </div>
+                          <KineticProgress size="h-1" className="mt-1.5" label="Jobs running" />
                         </div>
                       )}
                       {jobCounts[ProjectTypes.JobStatus.PENDING] > 0 && (
@@ -1821,15 +2008,16 @@ function ProjectPageInner() {
                     {/* Job List - Compact */}
                     <ScrollArea className="h-32">
                       <div className="space-y-2">
-                        {jobs.slice(0, 5).map((job, index) => (
+                        {processJobs.map((job, index) => (
                           <div key={job.jobId || index} className="flex items-center gap-2 p-2 border rounded text-xs">
                             {job.status === ProjectTypes.JobStatus.PENDING && <Clock className="h-3 w-3 text-yellow-600 flex-shrink-0" />}
-                            {job.status === ProjectTypes.JobStatus.IN_PROGRESS && <RefreshCw className="h-3 w-3 text-blue-600 animate-spin flex-shrink-0" />}
+                            {job.status === ProjectTypes.JobStatus.IN_PROGRESS && <Activity className="h-3 w-3 text-blue-600 flex-shrink-0" />}
                             {job.status === ProjectTypes.JobStatus.COMPLETED && <CheckCircle className="h-3 w-3 text-green-600 flex-shrink-0" />}
                             {job.status === ProjectTypes.JobStatus.FAILED && <XCircle className="h-3 w-3 text-red-600 flex-shrink-0" />}
                             <div className="flex-1 min-w-0">
-                              <p className="font-medium truncate">Segmentation</p>
+                              <p className="font-medium truncate">{jobDisplayName(job)}</p>
                               <p className="text-muted-foreground truncate">{job.jobId}</p>
+                              <JobProgress className="mt-1" status={job.status} progress={job.progress} />
                             </div>
                             <Badge 
                               variant={
@@ -1864,6 +2052,17 @@ function ProjectPageInner() {
           </div>
         </div>
       </div>
+
+      <StartPipelineDialog
+        open={showPipelineDialog}
+        onOpenChange={setShowPipelineDialog}
+        onSubmit={handlePipelineSubmit}
+        gpuAvailable={processingUnit.gpuAvailable}
+        isGuest={isGuest}
+        isRerun={hasMasks}
+        existing={existingByChamber}
+        building={buildingReconstructions}
+      />
 
       {/* Reconstruction Configuration Dialog */}
       <ReconstructionConfigDialog
@@ -1908,7 +2107,7 @@ function ProjectPageInner() {
             <AlertDialogAction
               onClick={handleDeleteModelReconstruction}
               disabled={isDeletingReconstruction || !selectedReconstructionForDeletion?.reconstructionId}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className={buttonVariants({ variant: "destructive" })}
             >
               {isDeletingReconstruction ? (
                 <>
@@ -1946,7 +2145,7 @@ function ProjectPageInner() {
             <AlertDialogAction 
               onClick={confirmDeleteProject} 
               disabled={isDeleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className={buttonVariants({ variant: "destructive" })}
             >
               {isDeleting ? (
                 <>

@@ -300,6 +300,20 @@ export interface IProjectSegmentationMask {
     computed_at: string;
   };
   /**
+   * Per-cardiac-cycle-frame RV cavity area, per 9-segment RV bullseye region
+   * — RV analogue of `frameBullseye` above, same "pure RLE, no GPU, no
+   * landmark data" auto-run design (see computeFrameRvAreaSeries). `area` is
+   * in raw pixel units (no voxel spacing passed to the script) — only
+   * ratios of it (e.g. frontend FAC = (area_ED - area_frame) / area_ED) are
+   * meaningful, not the absolute number. Lets the Structure/Strain tabs' RV
+   * FAC animate across the cycle without a manual "Compute all frames"
+   * (which remains the landmark-aligned GCS/GAS pipeline).
+   */
+  rvFrameAreas?: {
+    frames: { frameIndex: number; regions: { region: number; area: number | null }[] }[];
+    computed_at: string;
+  };
+  /**
    * Cardiac clinical metrics derived from this mask's RLE frames plus the
    * project's stored 4x4 affine. Produced by compute_heart_metrics_from_rle.py
    * and stored parallel to `bullseye`. Fields may be null when the input is
@@ -446,6 +460,50 @@ export interface IProjectSegmentationMask {
     computed_at: string;
   };
   /**
+   * RV analog of `regionalHealthStatus` — advisory per-region (9-region RV
+   * free wall) assessment, produced by compute_rv_regional_health_status.py
+   * from this mask's stored `rvStrain.regions[]` (or the peak frame of
+   * `rvStrainSeries`). Sits beside `rvHealthStatus`/`healthStatus` and never
+   * alters either: `overall_grade_unchanged` is always true.
+   *
+   * Unlike the LV version, the borrowed EACVI/ASE -17/-12/-7 GCS cutoff is
+   * NOT validated for RV at any level (global or regional) — it is reused
+   * here purely as a conservative, consistently applied anchor. See the
+   * `disclaimer` field for the exact wording shown to users.
+   *
+   * `status` is "unavailable" (never "healthy") when RV regional strain is
+   * absent or its ED/ES frames don't align with heartMetrics.ed_frame/
+   * es_frame — this layer is read-only w.r.t. RV strain and never
+   * recomputes it.
+   */
+  rvRegionalHealthStatus?: {
+    status: "ok" | "unavailable";
+    overall_grade_unchanged: true;
+    source: "rvStrain" | "rvStrainSeries" | null;
+    segments: {
+      idx: number;                                   // 1..9
+      region: "basal" | "mid" | "apical";
+      label?: string;
+      gcs: number;                                   // %, more negative = better
+      gas: number | null;                            // %, cavity-area change (context only)
+      level: "normal" | "mild" | "moderate" | "severe";   // hybrid result
+      abs_level: "normal" | "mild" | "moderate" | "severe"; // absolute band only
+      rel_gap: number;                               // gcs - patient mean
+      rel_flag: boolean;                             // relative rule fired
+    }[];
+    reduced_count: number;
+    affected_idx: number[];
+    skipped_idx: number[];        // regions with NaN/missing GCS
+    summary: string;
+    patient_mean_gcs: number | null;
+    relative_rule_applied?: boolean;
+    thresholds: Record<string, number>;
+    disclaimer: string;
+    method: string;
+    warnings: string[];
+    computed_at: string;
+  };
+  /**
    * RV health status — sex-specific reference-range comparison (SCMR 2025),
    * NOT a diagnosis and not a severity grade. Produced by
    * compute_rv_health_status.py from heartMetrics RVEF/RVEDV/RVESV plus the sex
@@ -575,22 +633,40 @@ export interface IProjectSegmentationMask {
 
   /**
    * Regional RV strain computed from an ED→ES frame pair, sibling to `strain`.
-   * There is no separate RV free-wall myocardium label in the segmentation
-   * mask (only RV cavity), so unlike `strain.segments[].grs` this is NOT a
-   * wall-thickness measure — `regions[].strain` is % change in RV cavity
-   * boundary radius per region, the same radius-based methodology `gcs`
-   * already uses for the LV. Produced by the GPU /bullseye/compute-rv-strain
-   * endpoint. See bullseye_analysis.mask_to_rv_regions for the full rationale.
+   * 9 segments (basal/mid/apical x 3 sections, rays from the LV centroid,
+   * wedges fixed at ED). There is no RV free-wall myocardium label, so per
+   * segment `gcs` = free-wall chord % change and `gas` = RV cavity area %
+   * change; `strain` currently equals `gcs`. Produced by the GPU
+   * /bullseye/compute-rv-strain endpoint. See
+   * bullseye_analysis.mask_to_rv_regions for the full rationale.
    */
   rvStrain?: {
     regions: {
       region: number;
       label: string;
       strain: number | null;
+      gcs?: number | null;
+      gas?: number | null;
+      chord_ed_mm?: number | null;
+      chord_es_mm?: number | null;
+      area_ed_mm2?: number | null;
+      area_es_mm2?: number | null;
       radius_ed_mm?: number | null;
       radius_es_mm?: number | null;
     }[];
     global_rv_strain: number | null;
+    global_rv_gcs?: number | null;
+    global_rv_gas?: number | null;
+    /** RV septal GCS — septal-side border, one segment per ring, separate from the free wall. */
+    global_rv_septal_gcs?: number | null;
+    septal_regions?: {
+      region: number;
+      ring: string;
+      label: string;
+      gcs: number | null;
+      chord_ed_mm?: number | null;
+      chord_es_mm?: number | null;
+    }[];
     vox_xy_mm: number;
     alignment_source: string;
     alignment_angle_deg?: number | null;
@@ -656,11 +732,18 @@ export interface IProjectSegmentationMask {
     frames: {
       frameIndex: number;
       global_rv_strain: number | null;
+      global_rv_gas?: number | null;
+      global_rv_septal_gcs?: number | null;
+      septal_regions?: { region: number; ring: string; label: string; gcs: number | null }[];
       regions: {
         region: number;
         label: string;
         strain: number | null;
+        gas?: number | null;
         radius_mm?: number | null;
+        /** RV cavity area in this segment at this frame / at ED (mm²). */
+        area_mm2?: number | null;
+        area_ed_mm2?: number | null;
       }[];
     }[];
     edFrameIndex: number;
@@ -821,7 +904,20 @@ export interface IProjectReconstruction {
   // its own vertex count/ordering, so labels are NOT interchangeable across frames -
   // only pair a frame's labels with that SAME frame's mesh geometry. Lets the mesh
   // viewer color/segment whichever frame is currently loaded, not just ED.
+  // Only populated when small enough to store uncompressed -- see
+  // frameAhaVertexLabelsGz below for the (common, for multi-frame reconstructions)
+  // case where it's compressed instead.
   frameAhaVertexLabels?: Record<string, number[]>;
+
+  // Same data as frameAhaVertexLabels (same shape once decoded: JSON.parse(gunzip(
+  // base64decode(this))) -> Record<string, number[]>), gzip-compressed and
+  // base64-encoded. Used instead of the plain field once the uncompressed JSON would
+  // be large enough to risk the reconstruction document hitting MongoDB's BSON
+  // serialization limits (see reconstruction_handler.ts) -- the per-frame labels are
+  // small repeated integers (1-17) over tens of thousands of vertices, which gzip
+  // compresses heavily. A reader should prefer this field when present and fall back
+  // to the plain frameAhaVertexLabels otherwise; never both at once.
+  frameAhaVertexLabelsGz?: string;
 
   // Based on mongoose timestamp
   createdAt?: Date; // Creation timestamp
@@ -865,7 +961,8 @@ export interface IJob {
   chamber?: ReconstructionChamber; // 4D reconstruction jobs only: which chamber this job builds.
                                    // Absent means LV. Needed so an in-flight RV job does not block
                                    // an LV job for the same segmentation model, and vice versa.
-  model_used?: string; // Compatibility field mirrored to DB for external tools (string)
+  model_used?: string;
+  progress?: number; 
 }
 export interface IJobDocument extends IJob, Document {}
 

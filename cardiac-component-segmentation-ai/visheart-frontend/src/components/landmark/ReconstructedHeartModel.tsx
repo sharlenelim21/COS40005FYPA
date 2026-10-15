@@ -10,13 +10,14 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { valueToColor, debugSegmentColor, rvSegmentColor } from "./heartColor";
 import { loadMesh as loadAlignmentMesh, computeLvAlignment } from "./lvAlignment";
+import { buildSegmentBoundaryEdges } from "./segmentBoundaryLines";
 
 interface ReconstructedHeartModelProps {
   meshUrl: string;
   meshFormat: "obj" | "glb";
   segmentLabels: number[];
   colorMode: "debug-segment" | "strain" | "rv-segment";
-  values?: number[];
+  values?: (number | null)[];
   min?: number;
   max?: number;
   reverseColors?: boolean;
@@ -120,143 +121,6 @@ function flattenToFaceLabels(mesh: THREE.Mesh, labels: number[]): number[] {
   mesh.geometry = newGeometry;
 
   return newLabels;
-}
-
-// NOTE: this overlay does NOT fix the jagged/zigzag boundary look - that was
-// tried (control-point decimation) and reverted; measured and confirmed a
-// line-overlay-on-unchanged-fill approach can't do both (stay glued to the
-// fill AND look smooth) without reshaping the fill geometry itself, which is
-// out of scope. This only cleans up minor seam/gap artifacts between
-// adjacent flat-colored triangles. Don't re-investigate "why is it still
-// jagged" against this function - it's expected.
-function buildSegmentBoundaryEdges(mesh: THREE.Mesh, labels: number[]): Float32Array {
-  const geometry = mesh.geometry;
-  const posAttr = geometry.getAttribute("position");
-  const index = geometry.getIndex();
-  const triangleCount = index ? index.count / 3 : posAttr.count / 3;
-
-  const cornerIndex = (t: number, corner: number) =>
-    index ? index.getX(t * 3 + corner) : t * 3 + corner;
-
-  const majorityLabel = (la: number, lb: number, lc: number) => {
-    if (la === lb || la === lc) return la;
-    if (lb === lc) return lb;
-    return la;
-  };
-
-  const keyOf = (i: number) => `${posAttr.getX(i).toFixed(4)},${posAttr.getY(i).toFixed(4)},${posAttr.getZ(i).toFixed(4)}`;
-  const groupIndexByKey = new Map<string, number>();
-  const groupPosition = new Map<number, THREE.Vector3>();
-  const groupOf = (i: number) => {
-    const k = keyOf(i);
-    let g = groupIndexByKey.get(k);
-    if (g === undefined) {
-      g = groupIndexByKey.size;
-      groupIndexByKey.set(k, g);
-      groupPosition.set(g, new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)));
-    }
-    return g;
-  };
-
-  const edgeFirstLabel = new Map<string, { label: number; ga: number; gb: number }>();
-  const boundaryAdjacency = new Map<number, Set<number>>();
-  const addBoundaryEdge = (ga: number, gb: number) => {
-    if (!boundaryAdjacency.has(ga)) boundaryAdjacency.set(ga, new Set());
-    if (!boundaryAdjacency.has(gb)) boundaryAdjacency.set(gb, new Set());
-    boundaryAdjacency.get(ga)!.add(gb);
-    boundaryAdjacency.get(gb)!.add(ga);
-  };
-
-  for (let t = 0; t < triangleCount; t++) {
-    const a = cornerIndex(t, 0);
-    const b = cornerIndex(t, 1);
-    const c = cornerIndex(t, 2);
-    const label = majorityLabel(labels[a] ?? 0, labels[b] ?? 0, labels[c] ?? 0);
-    const ga = groupOf(a), gb = groupOf(b), gc = groupOf(c);
-
-    for (const [x, y] of [[ga, gb], [gb, gc], [gc, ga]] as [number, number][]) {
-      if (x === y) continue;
-      const key = x < y ? `${x},${y}` : `${y},${x}`;
-      const seen = edgeFirstLabel.get(key);
-      if (!seen) {
-        edgeFirstLabel.set(key, { label, ga: x, gb: y });
-      } else if (seen.label !== label) {
-        addBoundaryEdge(seen.ga, seen.gb);
-      }
-    }
-  }
-
-  const degreeOf = (g: number) => boundaryAdjacency.get(g)?.size ?? 0;
-  const edgeKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
-  const visitedEdges = new Set<string>();
-  const chains: number[][] = [];
-
-  for (const [g, neighbors] of boundaryAdjacency) {
-    if (degreeOf(g) === 2) continue;
-    for (const n of neighbors) {
-      const startKey = edgeKey(g, n);
-      if (visitedEdges.has(startKey)) continue;
-      visitedEdges.add(startKey);
-      const chain = [g, n];
-      let prev = g, current = n;
-      while (degreeOf(current) === 2) {
-        const [n1, n2] = Array.from(boundaryAdjacency.get(current)!);
-        const next = n1 === prev ? n2 : n1;
-        const key = edgeKey(current, next);
-        if (visitedEdges.has(key)) break;
-        visitedEdges.add(key);
-        chain.push(next);
-        prev = current;
-        current = next;
-      }
-      chains.push(chain);
-    }
-  }
-
-  for (const [g, neighbors] of boundaryAdjacency) {
-    for (const n of neighbors) {
-      const startKey = edgeKey(g, n);
-      if (visitedEdges.has(startKey)) continue;
-      visitedEdges.add(startKey);
-      const chain = [g, n];
-      let prev = g, current = n;
-      while (current !== g) {
-        const [n1, n2] = Array.from(boundaryAdjacency.get(current)!);
-        const next = n1 === prev ? n2 : n1;
-        const key = edgeKey(current, next);
-        if (visitedEdges.has(key)) break;
-        visitedEdges.add(key);
-        chain.push(next);
-        prev = current;
-        current = next;
-      }
-      chains.push(chain);
-    }
-  }
-
-  const segmentPoints: number[] = [];
-  for (const chain of chains) {
-    const points = chain.map((g) => groupPosition.get(g)!);
-    if (points.length < 3) {
-      for (let i = 0; i < points.length - 1; i++) {
-        segmentPoints.push(points[i].x, points[i].y, points[i].z, points[i + 1].x, points[i + 1].y, points[i + 1].z);
-      }
-      continue;
-    }
-    const closed = points.length > 3 && chain[0] === chain[chain.length - 1];
-    const curvePoints = closed ? points.slice(0, -1) : points;
-    const curve = new THREE.CatmullRomCurve3(curvePoints, closed);
-    const smoothed = curve.getPoints(Math.max(curvePoints.length * 4, 8));
-    for (let i = 0; i < smoothed.length - 1; i++) {
-      segmentPoints.push(smoothed[i].x, smoothed[i].y, smoothed[i].z, smoothed[i + 1].x, smoothed[i + 1].y, smoothed[i + 1].z);
-    }
-    if (closed) {
-      const first = smoothed[0], last = smoothed[smoothed.length - 1];
-      segmentPoints.push(last.x, last.y, last.z, first.x, first.y, first.z);
-    }
-  }
-
-  return new Float32Array(segmentPoints);
 }
 
 function disposeObject(object: THREE.Object3D) {
@@ -392,23 +256,43 @@ export function ReconstructedHeartModel({
     const posAttr = mesh.geometry.getAttribute("position");
     if (!posAttr) return;
 
-    if (posAttr.count !== labels.length) {
+    // A label array built for a DIFFERENT mesh (wrong vertex count) isn't
+    // just incomplete, it's actively wrong: `labels[i]` still returns a
+    // real-looking segment number for every index within its own (shorter
+    // or differently-ordered) range, just not the one that actually
+    // corresponds to vertex i of THIS mesh. Applying it anyway painted
+    // every vertex a semi-random segment color, which read as the mesh
+    // itself being corrupted/full of holes (it wasn't — only the coloring
+    // was garbage). This now happens on every non-ED frame of a
+    // reconstruction whose `frameAhaVertexLabels` was dropped for being
+    // too large to store (see reconstruction_handler.ts) and that silently
+    // fell back to frame 0's `ahaVertexLabels` on a frame whose mesh has a
+    // different vertex count (reported live, 2026-10). Falling back to "no
+    // per-vertex labels" here instead of a mismatched array is correct
+    // regardless of what causes the mismatch, not just this one case.
+    const safeLabels = posAttr.count === labels.length ? labels : null;
+    if (!safeLabels) {
       console.warn(
         `[ReconstructedHeartModel] Vertex count mismatch: mesh has ${posAttr.count} vertices, ` +
-        `flattened labels has ${labels.length}.`,
+        `flattened labels has ${labels.length} — ignoring labels for this mesh instead of ` +
+        `applying a mismatched array.`,
       );
     }
 
     const colors = new Float32Array(posAttr.count * 3);
     const byLabel = new Map<number, number[]>();
     for (let i = 0; i < posAttr.count; i++) {
-      const segment = labels[i] ?? 0;
+      const segment = safeLabels ? (safeLabels[i] ?? 0) : 0;
+      // "strain" (value-heatmap) mode indexes `values` by the mesh's own
+      // segment-label convention: LV labels are 1-indexed (1-17), so
+      // segment-1; RV labels are 0-indexed (Apical_Seg1 = 0, see
+      // heartColor.ts's RV_SEGMENT_NAMES), so segment itself, no shift.
       const color =
         colorMode === "debug-segment"
           ? debugSegmentColor(segment)
           : colorMode === "rv-segment"
           ? rvSegmentColor(segment)
-          : valueToColor(values?.[segment - 1] ?? min, min, max, reverseColors);
+          : valueToColor(values?.[chamber === "rv" ? segment : segment - 1], min, max, reverseColors);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
@@ -551,7 +435,9 @@ export function ReconstructedHeartModel({
       const sel = selectedSegmentRef.current ?? -1;
 
       if (sel !== lastPulsedSegment) {
-        const prevIndices = lastPulsedSegment >= 1 ? segmentVertexIndices.get(lastPulsedSegment) : undefined;
+        // >= 0, not >= 1: RV segments are 0-indexed (Apical_Seg1 = 0), so a
+        // real RV selection can legitimately be 0 -- only -1 means "none".
+        const prevIndices = lastPulsedSegment >= 0 ? segmentVertexIndices.get(lastPulsedSegment) : undefined;
         if (prevIndices) {
           for (const vi of prevIndices) {
             colorAttr.setXYZ(vi, baseColors[vi * 3], baseColors[vi * 3 + 1], baseColors[vi * 3 + 2]);
@@ -561,7 +447,7 @@ export function ReconstructedHeartModel({
         lastPulsedSegment = sel;
       }
 
-      if (sel >= 1) {
+      if (sel >= 0) {
         const indices = segmentVertexIndices.get(sel);
         if (indices) {
           const t = ((Math.sin(clock.getElapsedTime() * 6) + 1) / 2) * 0.9;
@@ -594,7 +480,7 @@ export function ReconstructedHeartModel({
 
       if (sel !== lastFocusedSegment) {
         lastFocusedSegment = sel;
-        const indices = sel >= 1 ? segmentVertexIndices.get(sel) : undefined;
+        const indices = sel >= 0 ? segmentVertexIndices.get(sel) : undefined;
         const posAttr = mesh.geometry.getAttribute("position");
         if (indices && indices.length && posAttr) {
           let sumX = 0, sumZ = 0;
@@ -619,7 +505,7 @@ export function ReconstructedHeartModel({
     const animate = () => {
       animationId = requestAnimationFrame(animate);
       const focusing = updateFocusRotation();
-      if (!isDragging && !isPausedRef.current && !focusing && (selectedSegmentRef.current ?? -1) < 1) {
+      if (!isDragging && !isPausedRef.current && !focusing && (selectedSegmentRef.current ?? -1) < 0) {
         pivot.rotation.y += 0.006;
       }
       updateSelectionHighlight();
@@ -786,22 +672,36 @@ export function ReconstructedHeartModel({
       // whenever no LV reference was given, or loading/using one failed --
       // never leaves the mesh unaligned.
       if (!alignedViaLv) alignment = alignCenterAndScale(mesh);
-      // Skip the flatten-to-per-triangle step for real (non-debug) color
-      // modes. Flattening duplicates every vertex per-triangle and forces
-      // all 3 corners of a triangle to one majority-voted label -- that's
-      // what makes boundaries hard-edged/jagged, for LV's "strain" bullseye
-      // exactly as much as it did for RV: confirmed 2026-09-10 by rendering
-      // RV's real, current pipeline output directly (no flattening) and
-      // seeing smooth boundaries where the flattened version looked jagged
-      // -- this was never a data problem, only this flattening step's own
-      // effect. Keeping the ORIGINAL indexed geometry (triangles still share
-      // vertices with their neighbours) lets Three.js interpolate each
-      // triangle's vertex colors the normal way, so a vertex near a segment
-      // boundary blends smoothly into its neighbour instead of stepping
-      // across a hard triangle edge. "debug-segment" keeps the old flattened/
-      // hard-edge behaviour -- it's a distinct, deliberately categorical
-      // debug view, not the clinical one this fix targets.
-      const useSmoothFill = colorModeRef.current !== "debug-segment";
+      // Skip the flatten-to-per-triangle step only for "strain" (a continuous
+      // value heatmap, where a smooth gradient between neighbouring segments'
+      // values is the correct reading, not an artifact). Flattening
+      // duplicates every vertex per-triangle and forces all 3 corners of a
+      // triangle to one majority-voted label -- keeping the ORIGINAL indexed
+      // geometry instead (triangles still share vertices with their
+      // neighbours) lets Three.js interpolate each triangle's vertex colors
+      // the normal way, which is what gives "strain" its smooth gradient
+      // (confirmed 2026-09-10: this was never a data problem, only this
+      // flattening step's own effect, for LV's strain bullseye same as RV's).
+      //
+      // 2026-10, per Sharlene: RV now flattens ALWAYS, regardless of
+      // colorMode -- "rv-segment" (categorical segment IDENTITY) first, then
+      // found "strain" needed the same fix: RV's `values` is indexed per
+      // SEGMENT (0-8, see applyVertexColorsRef below), one scalar broadcast
+      // to every vertex in that segment, never a genuinely per-vertex
+      // continuous field -- so interpolating between two segments' FAC/
+      // strain values at their shared boundary doesn't reveal a real
+      // anatomical gradient, it just blends two discrete constants and
+      // implies a smoothness the data doesn't have. Reported live on
+      // patient005's Basal_Seg1/Basal_Seg2 boundary on the Structure tab,
+      // which (once traced through structureRvFacRange.mean != null in
+      // page.tsx) turned out to already be in "strain" mode, not
+      // "rv-segment" -- the first fix (rv-segment only) had no effect
+      // there. The underlying per-vertex labels were confirmed correct and
+      // non-overlapping (cpd_rv_segmentation.label_cpd9_from_raw_slices
+      // output, checked directly); the bleed was purely this smooth-fill
+      // rendering choice, not a labeling or FAC-computation bug. LV's
+      // "strain" stays smooth -- not reported as an issue, left alone.
+      const useSmoothFill = chamberRef.current !== "rv" && colorModeRef.current === "strain";
       // Boundary lines stay ON for LV even with a smooth fill -- a pure
       // color gradient between adjacent AHA segments can be too subtle to
       // read at a glance, so the (already Catmull-Rom-smoothed) line
@@ -810,8 +710,9 @@ export function ReconstructedHeartModel({
       // blocked: a smoothed line over a HARD-edged fill looked glued-on and
       // mismatched (see the note above LV's line-smoothing code); over a
       // smooth fill, it reads as an intentional boundary marker instead.
-      // RV skips it, per Sharlene's preference, 2026-09-10.
-      const showBoundaryLines = !useSmoothFill || chamberRef.current !== "rv";
+      // RV draws them too: its 9 segments are just as hard to tell apart by
+      // color gradient alone. (Previously skipped for RV, reversed 2026-10-01.)
+      const showBoundaryLines = true;
       const boundaryLinePositions = showBoundaryLines
         ? buildSegmentBoundaryEdges(mesh, segmentLabelsRef.current)
         : new Float32Array(0);
@@ -898,10 +799,8 @@ export function ReconstructedHeartModel({
   useLayoutEffect(() => {
     applyVertexColorsRef.current();
     if (boundaryLinesRef.current) {
-      // Mirrors onLoaded's showBoundaryLines: on for "debug-segment" (hard-
-      // edge fill) and for LV (smoothed line over a smooth fill), off for
-      // RV's smooth-fill view.
-      boundaryLinesRef.current.visible = colorMode === "debug-segment" || chamber !== "rv";
+      // Mirrors onLoaded's showBoundaryLines: always on, for both chambers.
+      boundaryLinesRef.current.visible = true;
     }
   }, [colorMode, values, min, max, reverseColors, segmentLabels, chamber]);
 

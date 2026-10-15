@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
 import { computeAndStoreEditTracking } from "../services/edit_tracking";
 import {
     readProjectSegmentationMask,
@@ -12,8 +12,9 @@ import {
     jobModel,
     userModel,
     JobStatus,
-    projectSegmentationMaskModel,
-    projectLandmarkModel
+    createJob,
+    updateJob,
+    projectSegmentationMaskModel
 } from "../services/database";
 import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
 import LogError from "../utils/error_logger";
@@ -26,6 +27,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { extractS3KeyFromUrl, downloadFromS3, uploadMaskToS3 } from "../services/s3_handler";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client"; // Import fresh GPU server address function
+import { resolveRvInsertionPoints } from "../services/rv_insertion_points";
 
 const router = Router();
 
@@ -397,6 +399,8 @@ router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
                     // chain therefore reports a reconstruction as "medsam"/"unet", and a caller
                     // filtering on that alone cannot tell the two job types apart.
                     modelUsed: job.model_used || null,
+                    chamber: (job as any).chamber || null,
+                    progress: typeof job.progress === "number" ? job.progress : null,
                     createdAt: (job as any).createdAt?.toISOString?.() || null,
                     updatedAt: (job as any).updatedAt?.toISOString?.() || null
                 };
@@ -1178,7 +1182,7 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile,   { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 logger.info(`${serviceLocation}: compute-strain-from-frames [${label}] seg JSON frames=${singleFrameMaskDoc.frames.length} frameindex=${singleFrameDoc.frameindex} dimsFrames=1`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
@@ -1215,64 +1219,9 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
         // raw GPU job result if the user has never saved landmark edits for
         // this model. This mirrors segmentation masks preferring the
         // editable doc over the raw AI output.
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-
-        // Landmark edits are shared across segmentation models (one editable doc
-        // per project) — a corrected RV insertion point is an anatomical image
-        // location, not a per-model value. So we do NOT filter by segmentationModel
-        // here; that would miss the user's edits whenever the active strain model
-        // differs from the model that was active when the doc was last saved.
-        // (The segmentation MASK input above IS still per-model — only the
-        // landmark alignment points are shared.)
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-
-        if (savedLandmarkDoc) {
-            // Average rv_insertion_1 / rv_insertion_2 points across every slice of
-            // ED (frame 0) only, matching the GPU's own per-frame avg_lm1/avg_lm2
-            // aggregation (visheart-inference-gpu/app/helpers/landmark_inference_api.py) —
-            // a saved doc can now hold every cardiac frame's landmarks, and averaging
-            // across cardiac phases (not just slices within one phase) would blend
-            // positions from a heart that's moved throughout the cycle into a
-            // physically meaningless point.
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
-                points.length
-                    ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
-                    : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-            logger.info(`${serviceLocation}: compute-strain-from-frames using saved landmark edits (doc ${savedLandmarkDoc._id}) for project ${projectId}.`);
-        }
-
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
+        const { lm1, lm2, savedDocId } = await resolveRvInsertionPoints(projectId);
+        if (savedDocId) {
+            logger.info(`${serviceLocation}: compute-strain-from-frames using saved landmark edits (doc ${savedDocId}) for project ${projectId}.`);
         }
 
         // 6. POST both NIfTI files to GPU
@@ -1494,7 +1443,7 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile,   { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
             } else {
@@ -1526,53 +1475,7 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
 
         // 5. Look up RV insertion landmarks (same lookup as LV strain — shared,
         // model-independent alignment points)
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-
-        if (savedLandmarkDoc) {
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            // ED (frame 0) only — see the comment on this same pattern earlier in
-            // this file for why averaging across cardiac frames (not just slices)
-            // would be wrong now that a saved doc can hold every cardiac frame.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (points: { x: number; y: number }[]): { x: number; y: number } | null =>
-                points.length
-                    ? { x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length }
-                    : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-        }
-
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
-        }
+        const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
 
         // 6. POST both NIfTI files to GPU
         const FormDataNode = require("form-data");
@@ -1616,6 +1519,14 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
                 { new: true },
             ).lean();
             logger.info(`${serviceLocation}: Stored rvStrain on mask ${maskDoc._id} — global_rv_strain=${gpuRes.data?.global_rv_strain} edFrame=${edFrameIndex} esFrame=${esFrameIndex}`);
+
+            // RV analog of Layer 2 — advisory regional (per-RV-region) status.
+            // Fired after RV strain lands because per-region RV strain IS its
+            // input. Fire-and-forget: it must never affect this response.
+            computeRvRegionalHealthStatusFromStrain(maskDoc._id.toString()).catch((rhErr: any) => {
+                logger.warn(`${serviceLocation}: Auto RV regional-health-status after RV strain failed for mask ${maskDoc._id}: ${rhErr?.message}`);
+            });
+            logger.info(`${serviceLocation}: Auto-fired RV regional health status for mask ${maskDoc._id} after RV strain compute.`);
         } catch (persistErr: any) {
             logger.warn(`${serviceLocation}: Failed to persist rvStrain on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
@@ -1647,10 +1558,18 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
 // The ED frame is emitted with zero strain — it is the reference by definition.
 //
 // POST /segmentation/compute-strain-series
-// body: { projectId, edFrameIndex, modelType?, frameStep? }
+// body: { projectId, edFrameIndex, modelType?, frameStep?, jobId? }
+//
+// jobId is OPTIONAL and purely additive: this route still blocks until the whole
+// series is done and returns the result in its response, same as before. When the
+// caller supplies a client-generated uuid, a Job record is created under it and its
+// `progress` is updated after every batch -- any existing job poller (the one
+// already used for segmentation/landmark/reconstruction jobs) can then show a real
+// live percentage for this compute too, instead of a bare spinner, without this
+// route's own response contract changing for callers that don't pass one.
 router.post("/compute-strain-series", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
-    const { projectId, edFrameIndex, modelType, frameStep } = req.body;
+    const { projectId, edFrameIndex, modelType, frameStep, jobId } = req.body;
 
     if (!projectId || edFrameIndex === undefined) {
         return res.status(400).json({ error: "projectId and edFrameIndex are required" });
@@ -1658,6 +1577,7 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
 
     const model = modelType ?? "unet";
     const tempId = uuidv4();
+    let progressJobId: string | null = null;
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `strain_series_${tempId}`);
 
     try {
@@ -1711,6 +1631,14 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             .sort((a: any, b: any) => a.frameindex - b.frameindex)
             .filter((_: any, i: number) => i % step === 0);
 
+        if (jobId && typeof jobId === "string") {
+            const created = await createJob({
+                userid: userId, projectid: projectId, maskId: maskDoc._id.toString(), uuid: jobId,
+                status: JobStatus.IN_PROGRESS, model_used: "strain_series", segmentationModel: model as any, progress: 0,
+            });
+            if (created.success) progressJobId = jobId;
+        }
+
         const gpuBaseUrl = await getFreshGPUServerAddress();
         const token = getCurrentToken();
         if (!gpuBaseUrl || !token) {
@@ -1732,7 +1660,7 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
             } else {
@@ -1755,47 +1683,7 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         // Landmark alignment — identical resolution order to the ED→ES route:
         // saved user edits first (shared across models, since a corrected RV
         // insertion point is an anatomical location), then the raw GPU job.
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (savedLandmarkDoc) {
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            // ED (frame 0) only — see the comment on this same pattern earlier in
-            // this file for why averaging across cardiac frames (not just slices)
-            // would be wrong now that a saved doc can hold every cardiac frame.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (pts: { x: number; y: number }[]) =>
-                pts.length ? { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length } : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-        }
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
-        }
+        const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
 
         // ED is the fixed reference for every comparison — build it once.
         const edPath = await buildNIfTI(edFrame, "ed");
@@ -1850,6 +1738,10 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             const batch = targetFrames.slice(i, i + CONCURRENCY);
             const results = await Promise.all(batch.map(strainForFrame));
             for (const r of results) if (r) computed.push(r);
+            if (progressJobId) {
+                const pct = Math.round((Math.min(i + CONCURRENCY, targetFrames.length) / Math.max(targetFrames.length, 1)) * 100);
+                updateJob(progressJobId, { progress: pct }).catch(() => {});
+            }
         }
 
         // ED itself: zero strain by definition (it is the reference). Its wall
@@ -1909,11 +1801,18 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             logger.warn(`${serviceLocation}: Failed to persist strainSeries on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
 
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.COMPLETED, progress: 100 }).catch(() => {});
+        }
+
         return res.status(200).json(strainSeries);
 
     } catch (err: any) {
         await fs.remove(baseTempDir).catch(() => {});
         logger.error(`${serviceLocation}: compute-strain-series failed for project ${projectId}: ${err?.message}`);
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.FAILED, message: err?.message ?? "Strain series computation failed." }).catch(() => {});
+        }
         return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "Strain series computation failed." });
     }
 });
@@ -1926,10 +1825,11 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
 // LV field with a different data shape.
 //
 // POST /segmentation/compute-rv-strain-series
-// body: { projectId, edFrameIndex, modelType?, frameStep? }
+// body: { projectId, edFrameIndex, modelType?, frameStep?, jobId? }
+// jobId is optional/additive — see compute-strain-series's own comment above.
 router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
-    const { projectId, edFrameIndex, modelType, frameStep } = req.body;
+    const { projectId, edFrameIndex, modelType, frameStep, jobId } = req.body;
 
     if (!projectId || edFrameIndex === undefined) {
         return res.status(400).json({ error: "projectId and edFrameIndex are required" });
@@ -1937,6 +1837,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
 
     const model = modelType ?? "unet";
     const tempId = uuidv4();
+    let progressJobId: string | null = null;
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `rv_strain_series_${tempId}`);
 
     try {
@@ -1979,6 +1880,14 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             .sort((a: any, b: any) => a.frameindex - b.frameindex)
             .filter((_: any, i: number) => i % step === 0);
 
+        if (jobId && typeof jobId === "string") {
+            const created = await createJob({
+                userid: userId, projectid: projectId, maskId: maskDoc._id.toString(), uuid: jobId,
+                status: JobStatus.IN_PROGRESS, model_used: "rv_strain_series", segmentationModel: model as any, progress: 0,
+            });
+            if (created.success) progressJobId = jobId;
+        }
+
         const gpuBaseUrl = await getFreshGPUServerAddress();
         const token = getCurrentToken();
         if (!gpuBaseUrl || !token) {
@@ -1999,7 +1908,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
-                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1 }, { spaces: 2 });
+                await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
                 pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
             } else {
@@ -2019,47 +1928,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             return niftiPath;
         };
 
-        const extractCoord = (lm: any): { x: number; y: number } | null => {
-            if (!lm) return null;
-            if (typeof lm.x === "number" && typeof lm.y === "number") return { x: lm.x, y: lm.y };
-            if (Array.isArray(lm) && lm.length >= 2) return { x: lm[0], y: lm[1] };
-            return null;
-        };
-        let lm1: { x: number; y: number } | null = null;
-        let lm2: { x: number; y: number } | null = null;
-        const savedLandmarkDoc = await projectLandmarkModel
-            .findOne({ projectid: projectId, isModelOutput: false })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (savedLandmarkDoc) {
-            const lm1Points: { x: number; y: number }[] = [];
-            const lm2Points: { x: number; y: number }[] = [];
-            // ED (frame 0) only — see the comment on this same pattern earlier in
-            // this file for why averaging across cardiac frames (not just slices)
-            // would be wrong now that a saved doc can hold every cardiac frame.
-            const edFrame = ((savedLandmarkDoc as any).frames ?? []).find((f: any) => f.frameindex === 0);
-            for (const slice of edFrame?.slices ?? []) {
-                for (const point of slice.landmarks ?? []) {
-                    if (point.key === "rv_insertion_1") lm1Points.push({ x: point.x, y: point.y });
-                    if (point.key === "rv_insertion_2") lm2Points.push({ x: point.x, y: point.y });
-                }
-            }
-            const mean = (pts: { x: number; y: number }[]) =>
-                pts.length ? { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length } : null;
-            lm1 = mean(lm1Points);
-            lm2 = mean(lm2Points);
-        }
-        if (!lm1 || !lm2) {
-            const landmarkJob = await jobModel
-                .findOne({ projectid: projectId, model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } })
-                .sort({ updatedAt: -1 })
-                .lean();
-            const lmResult = landmarkJob?.result
-                ? (typeof landmarkJob.result === "string" ? JSON.parse(landmarkJob.result) : landmarkJob.result)
-                : null;
-            lm1 = lm1 ?? extractCoord(lmResult?.avg_lm1);
-            lm2 = lm2 ?? extractCoord(lmResult?.avg_lm2);
-        }
+        const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
 
         const edPath = await buildNIfTI(edFrame, "ed");
         const FormDataNode = require("form-data");
@@ -2082,12 +1951,23 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                 return {
                     frameIndex: frame.frameindex,
                     global_rv_strain: typeof r.data?.global_rv_strain === "number" ? r.data.global_rv_strain : null,
+                    global_rv_gas: typeof r.data?.global_rv_gas === "number" ? r.data.global_rv_gas : null,
+                    global_rv_septal_gcs: typeof r.data?.global_rv_septal_gcs === "number" ? r.data.global_rv_septal_gcs : null,
+                    septal_regions: (r.data?.septal_regions ?? []).map((sr: any) => ({
+                        region: sr.region,
+                        ring: sr.ring,
+                        label: sr.label,
+                        gcs: sr.gcs ?? null,
+                    })),
                     regions: (r.data?.regions ?? []).map((reg: any) => ({
                         region: reg.region,
                         label: reg.label,
                         strain: reg.strain ?? null,
+                        gas: reg.gas ?? null,
                         radius_mm: reg.radius_es_mm ?? null,
                         radius_ed_mm: reg.radius_ed_mm ?? null,
+                        area_mm2: reg.area_es_mm2 ?? null,
+                        area_ed_mm2: reg.area_ed_mm2 ?? null,
                     })),
                 };
             } catch (frameErr: any) {
@@ -2102,16 +1982,29 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             const batch = targetFrames.slice(i, i + CONCURRENCY);
             const results = await Promise.all(batch.map(rvStrainForFrame));
             for (const r of results) if (r) computed.push(r);
+            if (progressJobId) {
+                const pct = Math.round((Math.min(i + CONCURRENCY, targetFrames.length) / Math.max(targetFrames.length, 1)) * 100);
+                updateJob(progressJobId, { progress: pct }).catch(() => {});
+            }
         }
 
-        const edRegions = (computed[0]?.regions ?? []).map((r: any) => ({
+        // ED's own areas are the same in every comparison, so any computed frame that returned
+        // regions can supply them -- not just whichever happened to finish first.
+        const edSource = computed.find((c: any) => Array.isArray(c?.regions) && c.regions.length > 0) ?? computed[0];
+        const edRegions = (edSource?.regions ?? []).map((r: any) => ({
             region: r.region,
             label: r.label,
             strain: 0,
+            gas: 0,
             radius_mm: r.radius_ed_mm ?? null,
+            area_mm2: r.area_ed_mm2 ?? null,
+            area_ed_mm2: r.area_ed_mm2 ?? null,
         }));
         const series = [
-            { frameIndex: edFrameIndex, global_rv_strain: 0, regions: edRegions },
+            {
+                frameIndex: edFrameIndex, global_rv_strain: 0, global_rv_gas: 0, global_rv_septal_gcs: 0, regions: edRegions,
+                septal_regions: (edSource?.septal_regions ?? []).map((sr: any) => ({ ...sr, gcs: 0 })),
+            },
             ...computed,
         ].sort((a, b) => a.frameIndex - b.frameIndex);
 
@@ -2147,11 +2040,18 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             logger.warn(`${serviceLocation}: Failed to persist rvStrainSeries on mask ${maskDoc._id}: ${persistErr?.message}`);
         }
 
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.COMPLETED, progress: 100 }).catch(() => {});
+        }
+
         return res.status(200).json(rvStrainSeries);
 
     } catch (err: any) {
         await fs.remove(baseTempDir).catch(() => {});
         logger.error(`${serviceLocation}: compute-rv-strain-series failed for project ${projectId}: ${err?.message}`);
+        if (progressJobId) {
+            updateJob(progressJobId, { status: JobStatus.FAILED, message: err?.message ?? "RV strain series computation failed." }).catch(() => {});
+        }
         return res.status(500).json({ error: err?.response?.data?.detail ?? err?.message ?? "RV strain series computation failed." });
     }
 });
@@ -2198,8 +2098,16 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
         // Per-frame wall thickness — RLE-only, no GPU, safe to always auto-run
         // alongside the single-snapshot bullseye above. See its own docstring
         // for why this is deliberately kept separate from strain (GRS/GCS).
-        computeFrameWallThicknessSeries(maskId, frames, W, H).catch((err: any) => {
+        // The project id lets it align the segments to the RV insertion
+        // landmark, the same way the GPU bullseye and the strain routes do.
+        computeFrameWallThicknessSeries(maskId, frames, W, H, maskDoc.projectid?.toString()).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-bullseye frame-series async error for mask ${maskId}: ${err?.message}`);
+        });
+
+        // Per-frame RV cavity area — RLE-only, no GPU, no landmark data, same
+        // reasoning as the LV frame series above. See computeFrameRvAreaSeries.
+        computeFrameRvAreaSeries(maskId, frames, W, H).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-bullseye RV frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 
     } catch (error: unknown) {
@@ -2542,6 +2450,40 @@ router.post("/trigger-regional-health-status/:maskId", isAuth, async (req: Reque
 
     } catch (error: unknown) {
         LogError(error as Error, serviceLocation, `Error triggering regional health status for mask ${maskId}`);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: "An unexpected error occurred." });
+        }
+    }
+});
+
+// RV analog of trigger-regional-health-status — reads this mask's stored
+// per-region RV strain and writes `rvRegionalHealthStatus`. Mirrors the LV
+// route 1:1, same "unavailable, not 400" behavior when heart metrics/RV
+// strain are absent.
+// POST /segmentation/trigger-rv-regional-health-status/:maskId
+router.post("/trigger-rv-regional-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id?.toString();
+    const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
+
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId).lean();
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+
+        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
+        if (!projectResult.success || !projectResult.projects?.length) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+
+        res.json({ success: true, message: "RV regional health-status computation started." });
+
+        computeRvRegionalHealthStatusFromStrain(maskId).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-rv-regional-health-status async error for mask ${maskId}: ${err?.message}`);
+        });
+
+    } catch (error: unknown) {
+        LogError(error as Error, serviceLocation, `Error triggering RV regional health status for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }

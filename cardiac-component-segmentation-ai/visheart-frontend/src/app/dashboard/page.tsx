@@ -8,7 +8,8 @@ import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStat
 import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstructionStatus";
 import { ShowForUser, ShowForGuest, ShowForRegisteredUser, ShowForAdmin } from "@/components/RoleGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { JobProgress } from "@/components/ui/kinetic-progress";
 import { reconstructionApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -1036,6 +1037,7 @@ function DashboardPage() {
                               <span className="hidden sm:inline">•</span>
                               <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
                             </div>
+                            <JobProgress className="mt-2 max-w-xs" status={job.status} progress={(job as { progress?: number | null }).progress} />
                           </div>
                         </div>
                         <Badge variant="outline" className={`${statusDisplay.color} flex-shrink-0`}>
@@ -1251,7 +1253,7 @@ function DashboardPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setProjectToDelete(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDeleteProject} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+            <AlertDialogAction onClick={confirmDeleteProject} className={buttonVariants({ variant: "destructive" })}>
               Delete Permanently
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -3,8 +3,8 @@ export type LandmarkCoord = [number, number];
 export interface FramePrediction {
   frame_id: number;                   // 0-indexed cardiac phase frame
   slice_id?: number;                  // 0-indexed MRI slice, when returned by the backend
-  rv_insertion_1: LandmarkCoord;      // RV insertion point A  [x, y]
-  rv_insertion_2: LandmarkCoord;      // RV insertion point B  [x, y]
+  rv_insertion_1: LandmarkCoord;      // Anterior RV insertion point (top)     [x, y]
+  rv_insertion_2: LandmarkCoord;      // Inferior RV insertion point (bottom)  [x, y]
   apex?: LandmarkCoord;
   basal_anterior?: LandmarkCoord;
   basal_inferior?: LandmarkCoord;
@@ -32,19 +32,28 @@ export interface LandmarkInferenceResponse {
   n_collapsed?: number;
   n_2ch?: number;
   n_1ch_fallback?: number;
+  // Distinct cardiac-frame count — present once the backend returns the
+  // multi-frame GPU response; absent on older persisted single-frame results.
+  n_frames?: number;
 }
 
 export interface LandmarkDefinition {
   id: keyof Omit<FramePrediction, "frame_id">;  
   label: string;
+  fullLabel?: string;
   color: string;
   shape: "circle" | "square";
   priority: number;
 }
 
+export const LANDMARK_LABELS = {
+  rv_insertion_1: { short: "Anterior", full: "Anterior RV insertion" },
+  rv_insertion_2: { short: "Inferior", full: "Inferior RV insertion" },
+} as const;
+
 export const LANDMARK_DEFINITIONS: LandmarkDefinition[] = [
-  { id: "rv_insertion_1", label: "RV Insertion 1", color: "#ef4444", shape: "circle", priority: 10 },
-  { id: "rv_insertion_2", label: "RV Insertion 2", color: "#3b82f6", shape: "circle", priority: 9  },
+  { id: "rv_insertion_1", label: LANDMARK_LABELS.rv_insertion_1.short, fullLabel: LANDMARK_LABELS.rv_insertion_1.full, color: "#ef4444", shape: "circle", priority: 10 },
+  { id: "rv_insertion_2", label: LANDMARK_LABELS.rv_insertion_2.short, fullLabel: LANDMARK_LABELS.rv_insertion_2.full, color: "#3b82f6", shape: "circle", priority: 9  },
   { id: "apex",           label: "Apex",           color: "#22c55e", shape: "circle", priority: 8  },
   { id: "basal_anterior", label: "Basal Anterior", color: "#60a5fa", shape: "circle", priority: 7  },
   { id: "basal_inferior", label: "Basal Inferior", color: "#fb923c", shape: "circle", priority: 6  },
@@ -62,6 +71,49 @@ export function getLandmarkCoord(
   return val as LandmarkCoord;
 }
 
+/**
+ * Ordering rule for the two RV insertion points: rv_insertion_1 is the ANTERIOR
+ * point = the TOP point on the displayed short-axis image (smaller y);
+ * rv_insertion_2 is the INFERIOR point (larger y). Ties keep the current order;
+ * if either point is missing nothing is swapped. Returns [anterior, inferior].
+ *
+ * Copy of normalizeRvInsertionOrder in
+ * Cardiac_Segmentation_FYP_Server/src/utils/landmark_order.ts — keep the two in sync.
+ */
+export function normalizeRvInsertionOrder<T extends { y: number } | readonly number[]>(
+  first: T | null | undefined,
+  second: T | null | undefined,
+): [T | null | undefined, T | null | undefined] {
+  if (!first || !second) return [first, second];
+  const yOf = (p: T) => (Array.isArray(p) ? (p as readonly number[])[1] : (p as { y: number }).y);
+  return yOf(first) > yOf(second) ? [second, first] : [first, second];
+}
+
+export function normalizeLandmarkResponse(result: LandmarkInferenceResponse): LandmarkInferenceResponse {
+  let anySwapped = false;
+  const predictions = result.predictions.map((p) => {
+    const [anterior] = normalizeRvInsertionOrder(p.rv_insertion_1, p.rv_insertion_2);
+    if (anterior === p.rv_insertion_1) return p;
+    anySwapped = true;
+    return {
+      ...p,
+      rv_insertion_1: p.rv_insertion_2, rv_insertion_2: p.rv_insertion_1,
+      hm1_max: p.hm2_max, hm2_max: p.hm1_max,
+    };
+  });
+  if (!anySwapped) return result;
+
+  const out: LandmarkInferenceResponse = { ...result, predictions };
+  // ED (frame 0) only -- the mean must not blend positions across cardiac phases.
+  const both = predictions.filter((p) => p.rv_insertion_1 && p.rv_insertion_2 && p.frame_id === 0);
+  if (result.avg_lm1 && result.avg_lm2 && both.length) {
+    const mean = (vals: number[]) => vals.reduce((s, v) => s + v, 0) / vals.length;
+    out.avg_lm1 = { x: mean(both.map((p) => p.rv_insertion_1[0])), y: mean(both.map((p) => p.rv_insertion_1[1])) };
+    out.avg_lm2 = { x: mean(both.map((p) => p.rv_insertion_2[0])), y: mean(both.map((p) => p.rv_insertion_2[1])) };
+  }
+  return out;
+}
+
 export type LandmarkPageStatus =
   | "idle"      
   | "running"    
@@ -73,7 +125,12 @@ export interface LandmarkPageState {
   predictions: FramePrediction[];
   totalFrames: number;
   imageDimensions: { width: number; height: number };
+  /** Slice position within the selected cardiac frame's predictions. */
   currentFrame: number;
+  /** Cardiac-phase frame whose slices the landmark viewer is showing (0-indexed frame_id). */
+  landmarkFrame: number;
+  /** Every cardiac frame the detection returned landmarks for, ascending. */
+  frameIds: number[];
   isPlaying: boolean;
   playbackFps: number;
   error: string | null;
@@ -117,7 +174,7 @@ export interface PersistedLandmarkDoc {
   }[];
 }
 
-const LANDMARK_POINT_KEYS = [
+export const LANDMARK_POINT_KEYS = [
   "rv_insertion_1",
   "rv_insertion_2",
   "apex",
@@ -213,6 +270,13 @@ export function landmarkFramesToEdits(
           if (!savedKeys.has(pointKey) && getLandmarkCoord(raw, pointKey)) {
             (entry as Record<string, unknown>)[pointKey] = undefined;
           }
+        }
+        // A saved slice only reaches this point if it carries no collapsed_to_mean point, so the
+        // user has edited it. When both points were deleted nothing is left to carry the promoted
+        // "normal" flag, and the slice would fall back to the raw prediction's collapsed_to_mean
+        // flag on reload -- drawing the mean point again for landmarks that were deleted and saved.
+        if (raw.flag === "collapsed_to_mean" && !("flag" in entry)) {
+          entry.flag = "normal";
         }
       }
       if (Object.keys(entry).length > 0) {

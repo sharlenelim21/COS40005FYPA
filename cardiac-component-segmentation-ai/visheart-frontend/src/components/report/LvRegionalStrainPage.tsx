@@ -47,8 +47,6 @@ export function LvRegionalStrainPage({
           <StrainBullseyeChart
             data={values.map((v, i) => ({ segment: i + 1, label: SEGMENT_LABELS[i], strain: v ?? 0 }))}
             strainType="GRS"
-            sharedMin={0}
-            sharedMax={42}
           />
         )}
       />
@@ -67,9 +65,6 @@ export function LvRegionalStrainPage({
           <StrainBullseyeChart
             data={values.map((v, i) => ({ segment: i + 1, label: SEGMENT_LABELS[i], strain: v ?? 0 }))}
             strainType="GCS"
-            sharedMin={-26}
-            sharedMax={2}
-            reverseColors
           />
         )}
       />

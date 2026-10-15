@@ -33,6 +33,12 @@ const docs = [
     keywords: ['segmentation', 'mri viewer', 'segmentation viewer', 'manual editing', 'upload', 'workflow'],
   },
   {
+    tab: 'landmark-detection',
+    title: 'How Landmark Detection Works',
+    excerpt: 'Detect RV insertion points on each frame, compute regional strain on the AHA 17-segment bullseye, and open the report or export data.',
+    keywords: ['landmark detection', 'landmarks', 'rv insertion points', 'strain', 'bullseye', 'aha 17-segment', 'report', 'export data'],
+  },
+  {
     tab: 'reconstruction',
     title: '3D/4D Reconstruction',
     excerpt: 'Run 3D and 4D reconstructions, configure parameters, inspect results, and download outputs.',

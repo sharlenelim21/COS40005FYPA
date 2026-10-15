@@ -14,6 +14,7 @@ ENV MPLBACKEND=Agg
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     software-properties-common \
+    gnupg \
     wget \
     ca-certificates \
     libgl1 \
@@ -40,7 +41,13 @@ RUN apt-get update && \
     libgles2 \
     libglvnd0 \
     libglx0 && \
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+    # Add deadsnakes PPA directly via keyserver, not `add-apt-repository` --
+    # that shells out to Launchpad's launchpadlib REST API for the signing
+    # key, which intermittently 500s with GPGKeyTemporarilyNotFoundError.
+    # This talks to the keyserver directly instead, sidestepping that API.
+    mkdir -p /etc/apt/keyrings && \
+    wget -qO- "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBA6932366A755776" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu jammy main" > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.12 \
@@ -95,6 +102,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     software-properties-common \
+    gnupg \
     wget \
     ca-certificates \
     libgl1 \
@@ -121,8 +129,13 @@ RUN apt-get update && \
     libgles2 \
     libglvnd0 \
     libglx0 && \
-    # Add deadsnakes PPA for Python 3.12 runtime
-    add-apt-repository ppa:deadsnakes/ppa -y && \
+    # Add deadsnakes PPA for Python 3.12 runtime, directly via keyserver --
+    # `add-apt-repository` shells out to Launchpad's launchpadlib REST API
+    # for the signing key, which intermittently 500s with
+    # GPGKeyTemporarilyNotFoundError. This talks to the keyserver directly.
+    mkdir -p /etc/apt/keyrings && \
+    wget -qO- "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBA6932366A755776" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu jammy main" > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     python3.12 && \

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { landmarkApi, LandmarkApiError } from "@/lib/landmarkApi";
 import type {
   LandmarkPageState,
   FramePrediction,
   LandmarkInferenceResponse,
 } from "@/types/landmark";
+import { normalizeLandmarkResponse } from "@/types/landmark";
 
 const DEFAULT_PLAYBACK_FPS = 2;
 const DEFAULT_LANDMARK_MODEL = "unetresnet34-landmark";
@@ -17,6 +18,8 @@ const INITIAL_STATE: LandmarkPageState = {
   totalFrames: 0,
   imageDimensions: { width: 256, height: 256 },
   currentFrame: 0,
+  landmarkFrame: 0,
+  frameIds: [],
   isPlaying: false,
   playbackFps: DEFAULT_PLAYBACK_FPS,
   error: null,
@@ -127,12 +130,18 @@ export function useLandmarkDetection(
   }, []);
 
   const applyResult = useCallback(
-    (result: LandmarkInferenceResponse) => {
+    (rawResult: LandmarkInferenceResponse) => {
+      const result = normalizeLandmarkResponse(rawResult);
+      const frameIds = Array.from(new Set(result.predictions.map((p) => p.frame_id))).sort((a, b) => a - b);
+      const firstFrame = frameIds[0] ?? 0;
       setState((s) => ({
         ...s,
         status: "done",
         predictions: result.predictions,
-        totalFrames: result.total_frames,
+        frameIds,
+        landmarkFrame: firstFrame,
+        // Slices in the selected frame -- not the raw prediction count, which spans every frame.
+        totalFrames: result.predictions.filter((p) => p.frame_id === firstFrame).length,
         // Only update dimensions when the result carries real values.
         // New GPU format omits image_dimensions (returns {width:0,height:0});
         // keep existing project dimensions so the canvas scales correctly.
@@ -166,24 +175,44 @@ export function useLandmarkDetection(
     let cancelled = false;
     setHydrating(true);
 
-    if (landmarkApi.hasCached(projectId)) {
-      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL)
-        .then((r) => { if (!cancelled) applyResult(r); })
-        .catch(() => { /* cache miss/error — fall through to auto-run */ })
-        .finally(() => { if (!cancelled) setHydrating(false); });
-      return () => { cancelled = true; };
-    }
+    const hydrate = async () => {
+      const active = await landmarkApi.findActiveJob(projectId);
+      if (cancelled) return;
+      if (active) {
+        stopPlayback();
+        setState((s) => ({ ...s, status: "running", error: null }));
+        setHydrating(false);
+        try {
+          const r = await landmarkApi.attachToJob(projectId, active.uuid, active.segmentationModel);
+          if (!cancelled) applyResult(r);
+        } catch (err) {
+          if (cancelled) return;
+          const msg = err instanceof LandmarkApiError ? err.message : "Landmark detection failed. Please try again.";
+          setState((s) => ({ ...s, status: "error", error: msg }));
+        }
+        return;
+      }
 
-    // No in-memory cache (e.g. page refresh): ask the backend for the last
-    // persisted job result before paying for a fresh inference run.
-    landmarkApi.fetchPersistedResult(projectId)
-      .then((r) => { if (!cancelled && r) applyResult(r); })
-      .catch(() => { /* nothing saved / error — page auto-run handles it */ })
-      .finally(() => { if (!cancelled) setHydrating(false); });
+      const cached = landmarkApi.getCached(projectId);
+      if (cached) {
+        applyResult(cached);
+        setHydrating(false);
+        return;
+      }
+
+      try {
+        const r = await landmarkApi.fetchPersistedResult(projectId);
+        if (!cancelled && r) applyResult(r);
+      } catch {
+      } finally {
+        if (!cancelled) setHydrating(false);
+      }
+    };
+    hydrate();
 
     return () => { cancelled = true; };
-  }, [projectId, applyResult]);
-  
+  }, [projectId, applyResult, stopPlayback]);
+
   const handleRunDetection = useCallback(
     async (model = DEFAULT_LANDMARK_MODEL, segmentationModel = "medsam") => {
       if (state.status === "running") return;
@@ -228,7 +257,21 @@ export function useLandmarkDetection(
     [state.status, state.replacementFile, projectId, stopPlayback, applyResult],
   );
 
-  /** Force a fresh run, bypassing cache. */
+  const handleAttachToJob = useCallback(
+    async (jobUuid: string, segmentationModel: "medsam" | "unet") => {
+      if (state.status === "running") return;
+      stopPlayback();
+      setState((s) => ({ ...s, status: "running", error: null }));
+      try {
+        applyResult(await landmarkApi.attachToJob(projectId, jobUuid, segmentationModel));
+      } catch (err) {
+        const msg = err instanceof LandmarkApiError ? err.message : "Landmark detection failed. Please try again.";
+        setState((s) => ({ ...s, status: "error", error: msg }));
+      }
+    },
+    [state.status, projectId, stopPlayback, applyResult],
+  );
+
   const handleRerunDetection = useCallback(
     (model = DEFAULT_LANDMARK_MODEL, segmentationModel = "medsam") => {
       landmarkApi.invalidateCache(projectId);
@@ -266,9 +309,8 @@ export function useLandmarkDetection(
   const handleClearReplacementFile = useCallback(() => {
     setState((s) => ({ ...s, replacementFile: null, status: "idle", error: null }));
     setReplacementFileError(null);
-    if (landmarkApi.hasCached(projectId)) {
-      landmarkApi.runDetectionByProject(projectId, DEFAULT_LANDMARK_MODEL).then(applyResult).catch(() => {});
-    }
+    const cached = landmarkApi.getCached(projectId);
+    if (cached) applyResult(cached);
   }, [projectId, applyResult]);
 
   const handlePlay = useCallback(() => {
@@ -332,21 +374,52 @@ export function useLandmarkDetection(
     setReplacementFileError(null);
   }, [projectId, stopPlayback]);
 
-  const currentPrediction: FramePrediction | null =
-    state.predictions[state.currentFrame] ?? null;
+  // `state.predictions` holds every cardiac frame's slices. The viewer and sidebar only ever want
+  // the selected frame's slices (indexed by slice position), so they receive a view narrowed to it;
+  // `allPredictions` is the full set for saving/loading edits across frames.
+  const slicePredictions = useMemo(
+    () => state.predictions.filter((p) => p.frame_id === state.landmarkFrame),
+    [state.predictions, state.landmarkFrame],
+  );
+  const viewState = useMemo<LandmarkPageState>(
+    () => ({ ...state, predictions: slicePredictions, totalFrames: slicePredictions.length }),
+    [state, slicePredictions],
+  );
 
-  const confidentCount = state.predictions.filter(
+  const handleLandmarkFrameChange = useCallback(
+    (frameId: number) => {
+      stopPlayback();
+      setState((s) => {
+        if (s.landmarkFrame === frameId || !s.frameIds.includes(frameId)) return s;
+        const count = s.predictions.filter((p) => p.frame_id === frameId).length;
+        return {
+          ...s,
+          landmarkFrame: frameId,
+          totalFrames: count,
+          currentFrame: Math.max(0, Math.min(s.currentFrame, count - 1)),
+        };
+      });
+    },
+    [stopPlayback],
+  );
+
+  const currentPrediction: FramePrediction | null = slicePredictions[state.currentFrame] ?? null;
+
+  const confidentCount = slicePredictions.filter(
     (p) => p.flag === "normal" && p.confidence === "high",
   ).length;
 
   return {
-    state,
+    state: viewState,
+    allPredictions: state.predictions,
+    handleLandmarkFrameChange,
     hydrating,
     replacementFileError,
     currentPrediction,
     confidentCount,
     handleRunDetection,
     handleRerunDetection,
+    handleAttachToJob,
     handleFileSelect,
     handleClearReplacementFile,
     handleTogglePlay,

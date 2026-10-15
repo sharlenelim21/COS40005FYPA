@@ -69,7 +69,7 @@ interface ProjectContextType {
   threeJSPreloadProgress: { current: number; total: number } | null;
 
   // Cache invalidation
-  refreshMasks: () => Promise<void>;
+  refreshMasks: (options?: { silent?: boolean }) => Promise<void>;
   refreshJobs: () => Promise<void>;
   refreshReconstructionJobs: () => Promise<void>;
 
@@ -1042,32 +1042,18 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     }
   }, [projectData, undecodedMasks, decodedMasks]);
 
-  // 3. Optimized jobs loading - if no masks exist, check for jobs with race condition prevention
   useEffect(() => {
     const abortController = new AbortController();
 
-    // If masks are present, clear any previous job data and error about missing results
-    if (hasMasks) {
-      if (jobsError) {
-        setJobsError(null);
-      }
-      if (jobs !== null) {
-        console.log("[ProjectContext] Clearing segmentation jobs since masks are now available");
-        setJobs(null);
-      }
-      // Reset the fetch flag so jobs can be fetched again if masks are later removed
-      jobsFetchedRef.current = false;
+    if (hasMasks && jobsError) {
+      setJobsError(null);
+    }
+    
+    if (!maskFetchDone || !projectData || !projectId || jobsFetchedRef.current) {
       return;
     }
 
-    // Only fetch jobs if mask fetch is done, we don't have masks, and project data is loaded
-    // Don't block on segmentationError (e.g., 'No masks found')
-    // IMPORTANT: Only fetch if we haven't already fetched jobs (prevents redundant API calls during mask polling)
-    if (!maskFetchDone || hasMasks || !projectData || !projectId || jobsFetchedRef.current) {
-      return;
-    }
-
-    setLoading("job");
+    setLoading((prev) => (prev === "done" ? prev : "job"));
 
     // Mark that we're fetching jobs to prevent redundant calls
     jobsFetchedRef.current = true;
@@ -1479,7 +1465,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
   }, [error, projectData, maskFetchDone, tarCacheReady, tarCacheError, hasReconstructions, reconstructionCacheReady, reconstructionCacheError, loading, shouldSkipReconstructionPreload]);
 
   // Cache invalidation function to refresh masks from backend
-  const refreshMasks = useCallback(async () => {
+  const refreshMasks = useCallback(async (options?: { silent?: boolean }) => {
     if (!projectId || !projectData?.dimensions) {
       console.warn("[ProjectContext] Cannot refresh masks - missing projectId or dimensions");
       return;
@@ -1489,10 +1475,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     try {
       // Clear current mask cache
-      setUndecodedMasks(null);
-      setDecodedMasks(null);
+      if (!options?.silent) {
+        setUndecodedMasks(null);
+        setDecodedMasks(null);
+        setHasMasks(false);
+      }
       setSegmentationError(null);
-      setHasMasks(false);
 
       // Fetch fresh masks from backend
       const response = await segmentationApi.getSegmentationResults(projectId);
@@ -1546,7 +1534,14 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       if (!response.success) {
         setJobsError(response.message);
         console.warn("[ProjectContext] Failed to refresh jobs:", response.message);
-        setJobs(null);
+        // Keep the previous `jobs` value rather than nulling it out. `jobs`
+        // drives pollJobList (page.tsx), which gates the very setInterval
+        // that calls this function every 5s -- nulling it on a single
+        // transient failure (one dropped request is not evidence a job
+        // finished) could flip pollJobList to false and tear down that
+        // interval, silently freezing every progress bar fed by it until
+        // something unrelated happened to restart polling. Reported live as
+        // "the progress bar sometimes freezes" (2026-10).
         return;
       }
 
@@ -1559,7 +1554,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     } catch (error) {
       console.error("[ProjectContext] Error refreshing jobs:", error);
       setJobsError("Failed to refresh job data");
-      setJobs(null);
+      // Same reasoning as above: keep the last known jobs rather than
+      // nulling them out on a transient network error.
     }
   }, [projectId]);
 
@@ -1581,7 +1577,8 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       if (!response.success) {
         setReconstructionJobsError(response.message || "Failed to refresh reconstruction jobs");
         console.warn("[ProjectContext] Failed to refresh reconstruction jobs:", response.message);
-        setReconstructionJobs(null);
+        // Keep the previous reconstructionJobs rather than nulling them out
+        // on one failed poll -- same reasoning as refreshJobs above.
         return;
       }
 
@@ -1594,7 +1591,6 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     } catch (error) {
       console.error("[ProjectContext] Error refreshing reconstruction jobs:", error);
       setReconstructionJobsError("Failed to refresh reconstruction job data");
-      setReconstructionJobs(null);
     }
   }, [projectId]);
 

@@ -28,6 +28,7 @@ export interface Project {
     status: string;
     message: string;
     createdAt: string;
+    progress?: number | null;
   }
   
   export interface UserStats {

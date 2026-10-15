@@ -1,11 +1,13 @@
 "use client";
 
+import { strainScaleMinMax } from "@/lib/strainColorScale";
 import React from "react";
 import { rdYlGn, polarPoint, annularSectorPath } from "./StrainVisualization";
 import type { RvStrainRegion } from "./StrainVisualization";
 
 /**
- * Regional RV strain chart — 2 rings (basal, mid) x 3 free-wall sectors.
+ * Regional RV strain chart — 3 rings (basal, mid, apical) x 3 sections,
+ * data order basal 1-3, mid 4-6, apical 7-9 (backend mask_to_rv_regions).
  *
  * Deliberately a separate, simpler component from StrainBullseyeChart rather
  * than a generalized version of it: StrainBullseyeChart's 17-segment layout
@@ -14,45 +16,38 @@ import type { RvStrainRegion } from "./StrainVisualization";
  * `strain` here is a cavity-radius % change instead. Negative (shrinking
  * radius) is the healthy direction, same convention as GCS.
  */
-// Same backend ray-cast start-angle fallback as StrainBullseyeChart — see
-// BACKEND_FIXED_FALLBACK_DEG there. mask_to_rv_regions uses the same
-// compute_alignment_angle/240deg basal fallback as the LV pipeline.
-const BACKEND_FIXED_FALLBACK_DEG = 240;
+// Like the LV bullseye charts, this chart is never rotated by the backend's
+// alignment_angle_deg — see StrainBullseyeChart.
 
 interface RvStrainChartProps {
   regions: RvStrainRegion[];
   selectedRegion?: number | null; // 1-based
   onRegionClick?: (region: number) => void;
   onRegionHover?: (info: { x: number; y: number; label: string; value: number | null } | null) => void;
-  /** Landmark-derived anterior start angle from the backend (RvStrainResult's
-   *  alignment_angle_deg). Null/undefined = fixed-angle layout. */
-  alignmentAngleDeg?: number | null;
 }
 
-export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegionHover, alignmentAngleDeg }: RvStrainChartProps) {
+export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegionHover }: RvStrainChartProps) {
   const center = 150;
-  const basalOuter = 108, basalInner = 68, midInner = 30;
+  const basalOuter = 108, basalInner = 78, midInner = 48, apicalInner = 20;
   const nSectors = 3;
   const sectorDeg = 360 / nSectors;
-  const referenceAngleDeg = alignmentAngleDeg != null ? alignmentAngleDeg - BACKEND_FIXED_FALLBACK_DEG : 0;
 
-  const values = regions.map((r) => r.strain).filter((v): v is number => v != null);
-  const colMin = values.length ? Math.min(...values) : -20;
-  const colMax = values.length ? Math.max(...values) : 0;
+  // Fixed RV GCS colour scale (lib/strainColorScale.ts), not this patient's min/max.
+  const { min: colMin, max: colMax } = strainScaleMinMax("RV_GCS");
 
   const val = (i: number) => regions[i]?.strain ?? null;
   const lbl = (i: number) => regions[i]?.label ?? `Region ${i + 1}`;
   // Negative strain (shrinking RV cavity) is healthy — same reversed ramp as GCS.
   const col = (i: number) => {
     const v = val(i);
-    if (v == null) return "#94a3b8"; // slate — no data for this region
+    if (v == null || v === 0) return "#94a3b8"; // slate — no data (or no change measured) for this region
     const t = colMin === colMax ? 0.5 : Math.max(0, Math.min(1, (v - colMin) / (colMax - colMin)));
     return rdYlGn(1 - t);
   };
   const isSel = (region1based: number) => selectedRegion === region1based;
 
   const segPath = (i: number, innerR: number, outerR: number) => {
-    const start = -90 - sectorDeg / 2 - i * sectorDeg + referenceAngleDeg;
+    const start = -90 - sectorDeg / 2 - i * sectorDeg;
     const end = start + sectorDeg;
     const mid = (start + end) / 2;
     const lr = (innerR + outerR) / 2;
@@ -64,7 +59,7 @@ export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegion
     ? (e: React.MouseEvent) => onRegionHover({ x: e.clientX, y: e.clientY, label: lbl(i), value: val(i) })
     : undefined;
 
-  const ring = (ringIndex: 0 | 1, innerR: number, outerR: number, keyPrefix: string) =>
+  const ring = (ringIndex: 0 | 1 | 2, innerR: number, outerR: number, keyPrefix: string) =>
     Array.from({ length: nSectors }, (_, i) => {
       const dataIdx = ringIndex * nSectors + i;
       const region = dataIdx + 1;
@@ -98,13 +93,14 @@ export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegion
 
       <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">RV Free Wall</text>
       <text x={center} y="290" textAnchor="middle" fontSize="9" fill="currentColor" opacity="0.7">
-        Basal + mid free-wall regions — cavity-radius strain (approximate)
+        Basal / mid / apical x 3 — free-wall chord strain (GCS-style)
       </text>
 
       {ring(0, basalInner, basalOuter, "b")}
       {ring(1, midInner, basalInner, "m")}
+      {ring(2, apicalInner, midInner, "a")}
 
-      <circle cx={center} cy={center} r={midInner} className="fill-slate-200/70 dark:fill-zinc-800/70" />
+      <circle cx={center} cy={center} r={apicalInner} className="fill-slate-200/70 dark:fill-zinc-800/70" />
 
       {/* Colour scale bar */}
       <defs>

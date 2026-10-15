@@ -2,11 +2,11 @@
 # This builds a single Docker image containing both frontend and backend
 #
 # Usage:
-#   .\build.ps1                 # builds sharlene21/visheart-local:1.4.0 (+ :latest)
-#   .\build.ps1 -Version 1.5.0  # builds a different version tag (+ :latest)
+#   .\build.ps1                 # builds sharlene21/visheart-local:1.5.0 (+ :latest)
+#   .\build.ps1 -Version 1.6.0  # builds a different version tag (+ :latest)
 
 param(
-    [string]$Version = "1.4.0",
+    [string]$Version = "1.5.0",
     [string]$ImageName = "sharlene21/visheart-local"
 )
 

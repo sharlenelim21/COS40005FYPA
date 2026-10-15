@@ -72,8 +72,9 @@ DECODE_TIGHT_HEADROOM = 0.95
 
 
 def _classify_rv_mesh(
-    mesh_file: str, cpd_warp_state: Optional[dict], lv_reference_points: Optional[np.ndarray] = None,
-) -> Tuple[Optional[List[int]], Optional[dict]]:
+    mesh_file: str, lv_reference_points: Optional[np.ndarray] = None,
+    nifti_path: Optional[str] = None, frame_idx: int = 0,
+) -> Optional[List[int]]:
     """
     RV's equivalent of deep_sdf/mesh.py's classify_aha branch, called from OUTSIDE
     that shared LV/RV mesh-generation code path (see cpd_rv_segmentation.py's module
@@ -94,17 +95,30 @@ def _classify_rv_mesh(
     vertex order/count isn't changed by the reload -- required for the returned labels
     to line up with this mesh file's own vertices index-for-index.
 
-    `lv_reference_points`, when given, is this same reconstruction's LV contour point
-    cloud for the SAME frame (see the 4D-sequence and single-frame callers) -- used to
-    anchor the azimuthal rotation search to a real, patient-specific septal direction
-    instead of a pure "maximize populated segments" heuristic. See
-    cpd_rv_segmentation.register_cpd_warp/label_with_warp for how; optional and purely
-    additive (omitting it reproduces the exact prior behaviour).
+    `lv_reference_points` is kept as a parameter for call-site compatibility but is
+    no longer used by this function directly (see below).
 
-    Returns (aha_vertex_labels, new_warp_state) -- (None, cpd_warp_state) on any
-    failure, so a bad RV frame degrades to "no segmentation for this frame" rather
-    than raising and losing the (successfully generated) mesh.
+    2026-09-30, per Sharlene: level/sector labels now come entirely from
+    cpd_rv_segmentation.label_cpd9_from_raw_slices (per-slice, LV-referenced,
+    computed directly on the patient's own raw segmentation), not from a
+    CPD-warped Zenodo atlas -- see that function's docstring for why (the
+    atlas approach kept producing diagonal/fragmented boundaries on this
+    pipeline's genuinely curved reconstructions, confirmed directly:
+    nearest-neighbor-from-warped-atlas fragmented a single segment into up
+    to 34 disconnected islands on one real patient mesh). The atlas-CPD path
+    (register_cpd_warp/label_with_warp) has been removed from this function
+    entirely, not just superseded -- `nifti_path` is now required. `frame_idx`
+    is the same per-frame raw segmentation file/index the caller already
+    extracts `lv_reference_points` from.
+
+    Returns aha_vertex_labels, or None on any failure, so a bad RV frame
+    degrades to "no segmentation for this frame" rather than raising and
+    losing the (successfully generated) mesh.
     """
+    if nifti_path is None:
+        logging.warning(f"[CPD-RV] No nifti_path given for {mesh_file!r}; cannot classify without it.")
+        return None
+
     try:
         # force='mesh': GLB/GLTF always loads as a trimesh.Scene by default (even
         # for a file containing exactly one mesh, which is all these exports ever
@@ -116,21 +130,14 @@ def _classify_rv_mesh(
         vertices = np.asarray(mesh.vertices, dtype=np.float64)
     except Exception as exc:
         logging.warning(f"[CPD-RV] Could not reload {mesh_file!r} for RV classification: {exc}")
-        return None, cpd_warp_state
-
-    new_warp_state = cpd_warp_state
-    if new_warp_state is None:
-        new_warp_state = cpd_rv_segmentation.register_cpd_warp(vertices, lv_reference_points=lv_reference_points)
-
-    if new_warp_state is None:
-        return None, None
+        return None
 
     faces = np.asarray(mesh.faces, dtype=np.int64) if hasattr(mesh, "faces") else None
-    labels = cpd_rv_segmentation.label_with_warp(
-        vertices, new_warp_state, faces=faces, lv_reference_points=lv_reference_points,
-    )
-    if labels is None:
-        return None, new_warp_state
+
+    region_id = cpd_rv_segmentation.label_cpd9_from_raw_slices(nifti_path, frame_idx, vertices)
+    if region_id is None:
+        return None
+    labels = (region_id - 1).astype(np.int16)
 
     if faces is not None and faces.shape[0] > 0:
         # The actual fix for jagged segment boundaries: genuinely finer
@@ -140,7 +147,7 @@ def _classify_rv_mesh(
         # re-exported with the refined geometry -- the labels alone aren't
         # enough, unlike every other step in this function.
         refined_vertices, refined_faces, refined_labels = cpd_rv_segmentation.refine_mesh_for_smooth_boundaries(
-            vertices, faces, labels, new_warp_state,
+            vertices, faces, labels,
         )
         if refined_vertices.shape[0] != vertices.shape[0]:
             try:
@@ -152,8 +159,7 @@ def _classify_rv_mesh(
                     "keeping the unrefined mesh and labels for this frame."
                 )
 
-    labels_list = labels.tolist() if labels is not None else None
-    return labels_list, new_warp_state
+    return labels.tolist()
 
 
 class FourDReconstructionHandler:
@@ -1262,7 +1268,10 @@ class FourDReconstructionHandler:
                 # see cpd_rv_segmentation.register_cpd_warp's own docstring for
                 # why this needs no extra coordinate transform either.
                 lv_reference_points = self._extract_contour_from_nifti_sync(nifti_file_path, "lv")
-                aha_vertex_labels, _ = _classify_rv_mesh(mesh_file, None, lv_reference_points=lv_reference_points)
+                aha_vertex_labels = _classify_rv_mesh(
+                    mesh_file, lv_reference_points=lv_reference_points,
+                    nifti_path=nifti_file_path, frame_idx=0,
+                )
 
 
             # Debug mode: Copy to persistent location if enabled
@@ -1360,6 +1369,7 @@ class FourDReconstructionHandler:
             chamber = (kwargs.get('chamber') or 'lv').lower()
             # Which seed produced each delivered frame, keyed by frame index.
             frame_selections: Dict[int, Dict[str, Any]] = {}
+            progress_callback = kwargs.get('progress_callback')
 
             print(f"Starting 4D reconstruction for: {nifti_file_path}")
             print("[4D Reconstruction] Reconstruction started")
@@ -1452,17 +1462,17 @@ class FourDReconstructionHandler:
                 # approximation. Turns per-frame CPD labeling from ~28s/frame into a
                 # cheap nearest-neighbor lookup for every frame after the first.
                 cpd_warp_state: Optional[dict] = None
-                # RV's own warp state, same reuse-across-frames idea as cpd_warp_state above,
-                # but a DIFFERENT dict shape (cpd_rv_segmentation.register_cpd_warp's, not
-                # cpd_aha_segmentation's) -- kept separate so the two never get crossed.
-                rv_cpd_warp_state: Optional[dict] = None
+                # RV no longer uses a CPD-warped atlas at all (see _classify_rv_mesh's
+                # docstring) -- label_cpd9_from_raw_slices needs no cross-frame warp
+                # state to reuse, so there is no RV equivalent of cpd_warp_state above.
 
                 os.makedirs(output_dir, exist_ok=True)
                 input_filename = os.path.splitext(os.path.basename(nifti_file_path))[0]
                 file_extension = export_format  # "obj" or "glb"
-                
-                # Process each extracted frame
+                         
                 for i, (frame_path, original_frame_idx) in enumerate(zip(temp_frame_paths, frame_indices)):
+                    if progress_callback:
+                        progress_callback(i, len(temp_frame_paths))
                     print(f"Processing frame {i+1}/{len(temp_frame_paths)}: original frame {original_frame_idx}")
                     
                     try:
@@ -1512,9 +1522,8 @@ class FourDReconstructionHandler:
                         is_ed_frame = original_frame_idx == ed_frame_index
                         is_rv = chamber == "rv"
                         # AHA-17 (deep_sdf.mesh's classify_aha) is LV-atlas-specific, so it's
-                        # always off for RV here -- RV gets its own classifier + its own
-                        # warp-state variable (rv_cpd_warp_state) just below, reused across
-                        # frames the same way cpd_warp_state is for LV, but never mixed with it.
+                        # always off for RV here -- RV gets its own classifier just below
+                        # (_classify_rv_mesh), which needs no cross-frame warp state to reuse.
                         frame_mesh_file, frame_c_s, frame_c_m, frame_selection, frame_aha_labels, cpd_warp_state = self._fit_and_mesh_sync(
                             frame_sdf_data, frame_point_cloud, output_file, resolution, export_format,
                             num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
@@ -1526,12 +1535,17 @@ class FourDReconstructionHandler:
                             # (frame_point_cloud) just came from -- see
                             # _classify_rv_mesh's docstring for why no extra
                             # transform is needed to match RV's classification
-                            # space. Recomputed every frame (not reused from an
-                            # ED-frame anchor) since LV and RV each move
-                            # independently across the cardiac cycle.
+                            # space. Independent per-frame recompute -- DeepSDF's
+                            # own per-frame motion field was briefly used to carry
+                            # ED's labels forward instead, but reverted 2026-09-30
+                            # per Sharlene to keep DeepSDF's role limited to the
+                            # 4D/temporal MESH reconstruction itself, not label
+                            # tracking (see git history for the motion-tracked
+                            # version, _classify_rv_mesh_motion_tracked).
                             frame_lv_reference_points = self._extract_contour_from_nifti_sync(frame_path, "lv")
-                            frame_aha_labels, rv_cpd_warp_state = _classify_rv_mesh(
-                                frame_mesh_file, rv_cpd_warp_state, lv_reference_points=frame_lv_reference_points,
+                            frame_aha_labels = _classify_rv_mesh(
+                                frame_mesh_file, lv_reference_points=frame_lv_reference_points,
+                                nifti_path=frame_path, frame_idx=0,
                             )
                         print(f"Completed optimization for frame {original_frame_idx}")
                         frame_selections[original_frame_idx] = frame_selection
@@ -1560,6 +1574,9 @@ class FourDReconstructionHandler:
                         # Continue with other frames
                         continue
                 
+                if progress_callback:
+                    progress_callback(len(temp_frame_paths), len(temp_frame_paths))
+
                 # Primary mesh file is the ED frame
                 ed_mesh_file = None
                 for mesh_file in mesh_files:
@@ -1624,8 +1641,9 @@ class FourDReconstructionHandler:
                 )
                 if is_rv:
                     ed_lv_reference_points = self._extract_contour_from_nifti_sync(ed_frame_path, "lv")
-                    ed_aha_vertex_labels, _ = _classify_rv_mesh(
-                        primary_mesh_file, None, lv_reference_points=ed_lv_reference_points,
+                    ed_aha_vertex_labels = _classify_rv_mesh(
+                        primary_mesh_file, lv_reference_points=ed_lv_reference_points,
+                        nifti_path=ed_frame_path, frame_idx=0,
                     )
                 frame_selections[ed_frame_index] = ed_selection
                 print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")

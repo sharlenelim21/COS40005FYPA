@@ -1,0 +1,276 @@
+<title>VisHeart Forms Script</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --ink: #1c2420;
+    --ink-soft: #55615a;
+    --line: #dcdfdb;
+    --accent: #b23b3b;
+    --accent-soft: #f3e2e0;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    --serif: "Source Serif 4", Georgia, serif;
+    --sans: "Inter", -apple-system, Segoe UI, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15181a; --surface: #1e2225; --ink: #eceeec; --ink-soft: #a9b1ac;
+      --line: #343a3c; --accent: #e0756a; --accent-soft: #3a2422; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15181a; --surface: #1e2225; --ink: #eceeec; --ink-soft: #a9b1ac;
+    --line: #343a3c; --accent: #e0756a; --accent-soft: #3a2422; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--sans);
+    margin: 0; padding: 28px 16px 64px; line-height: 1.5;
+  }
+  .sheet { max-width: 760px; margin: 0 auto; }
+
+  .masthead {
+    border-bottom: 2px solid var(--ink); padding-bottom: 18px; margin-bottom: 26px;
+  }
+  .masthead .kicker {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 8px;
+  }
+  .masthead h1 {
+    font-family: var(--serif); font-size: clamp(1.4rem, 1.1rem + 1.2vw, 1.9rem);
+    font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em;
+  }
+  .masthead p { margin: 0; color: var(--ink-soft); font-size: 13.5px; max-width: 58ch; }
+
+  .how-to {
+    display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 30px;
+  }
+  .how-to .step {
+    flex: 1; min-width: 180px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .how-to .step .num {
+    font-family: var(--mono); font-size: 10px; color: var(--accent); display: block; margin-bottom: 4px;
+  }
+  .how-to .step p { margin: 0; font-size: 12.5px; color: var(--ink-soft); }
+
+  .section-block {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 20px 20px; margin-bottom: 22px;
+  }
+  .section-tag {
+    display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+    background: var(--accent-soft); border-radius: 999px; padding: 3px 10px; margin-bottom: 10px;
+  }
+
+  .field-label {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--ink-soft); margin: 14px 0 4px;
+  }
+  .field-label:first-of-type { margin-top: 0; }
+  .field-value {
+    font-size: 15px; font-weight: 600; font-family: var(--serif);
+  }
+  .field-value.subtitle {
+    font-family: var(--sans); font-weight: 400; font-size: 13.5px; color: var(--ink-soft);
+    font-style: normal;
+  }
+  .copy-box {
+    border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; background: var(--bg);
+  }
+
+  .qtype {
+    display: inline-block; font-family: var(--mono); font-size: 10px; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 5px; padding: 1px 7px; margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  ol.qlist {
+    margin: 6px 0 0; padding-left: 22px; font-size: 13.5px;
+  }
+  ol.qlist li { margin-bottom: 6px; }
+  ol.qlist li .only-if {
+    display: block; font-size: 11.5px; color: var(--ink-soft); font-style: italic;
+  }
+
+  ul.tasklist { margin: 6px 0 0; padding-left: 22px; font-size: 13.5px; }
+  ul.tasklist li { margin-bottom: 4px; }
+
+  .likert-note {
+    font-size: 12px; color: var(--ink-soft); background: var(--accent-soft); border-radius: 8px;
+    padding: 8px 12px; margin-top: 10px;
+  }
+
+  .footer-note {
+    font-size: 11.5px; color: var(--ink-soft); border-top: 1px dashed var(--line);
+    padding-top: 14px; margin-top: 36px;
+  }
+
+  @media (max-width: 480px) {
+    .how-to { flex-direction: column; }
+  }
+</style>
+
+<div class="sheet">
+
+  <div class="masthead">
+    <p class="kicker">VisHeart &middot; Microsoft Forms build script</p>
+    <h1>UAT Questionnaire &mdash; Forms Copy Sheet</h1>
+    <p>Everything below is written to be copy-pasted straight into Microsoft Forms: one section per block, in order, with the exact title, subtitle, question text, and recommended Forms question type.</p>
+  </div>
+
+  <div class="how-to">
+    <div class="step"><span class="num">01</span><p>In Forms, click <strong>+ Add new</strong> &rarr; <strong>Section</strong> for each block below, then paste its title and subtitle.</p></div>
+    <div class="step"><span class="num">02</span><p>Inside each section, click <strong>+ Insert new question</strong> and add the questions listed, using the question type shown in the tag.</p></div>
+    <div class="step"><span class="num">03</span><p>For <span class="qtype">Likert</span> blocks, add all listed statements as rows under one Likert question, with columns 1&ndash;5 as shown.</p></div>
+  </div>
+
+  <!-- SECTION A -->
+  <div class="section-block">
+    <span class="section-tag">Section A</span>
+    <div class="field-label">Title</div>
+    <div class="copy-box field-value">Tasks Completed During This Session</div>
+    <div class="field-label">Subtitle</div>
+    <div class="copy-box field-value subtitle">Tick everything you did before filling in this form. This helps us weigh your later answers correctly &mdash; for example, skip Section D's accuracy questions if you didn't run that feature.</div>
+    <div class="field-label">Questions</div>
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:2px 0 0;">One question, type <span class="qtype">Choice</span> (allow multiple selections) &mdash; title it "Which of the following did you do?" &mdash; with these options:</p>
+    <ul class="tasklist">
+      <li>Uploaded / selected an MRI case and ran segmentation (UNet or MedSAM)</li>
+      <li>Manually corrected a segmentation mask</li>
+      <li>Built a 4D reconstruction (LV and/or RV)</li>
+      <li>Ran landmark detection and reviewed/edited points</li>
+      <li>Computed Quick (ED&rarr;ES) strain</li>
+      <li>Computed full-cycle (all-frame) strain</li>
+      <li>Explored the Structure tab (wall thickness, 3D heart)</li>
+      <li>Explored the Strain tab (bullseye + 3D heart colouring)</li>
+      <li>Viewed / exported a PDF report</li>
+    </ul>
+  </div>
+
+  <!-- SECTION B -->
+  <div class="section-block">
+    <span class="section-tag">Section B</span>
+    <div class="field-label">Title</div>
+    <div class="copy-box field-value">Core Usability</div>
+    <div class="field-label">Subtitle</div>
+    <div class="copy-box field-value subtitle">Rate each statement from 1 (Strongly Disagree) to 5 (Strongly Agree) based on your experience using VisHeart during this session. Please answer based on your actual experience, not how you expect the software to perform.</div>
+    <div class="field-label">Questions <span class="qtype">Likert</span></div>
+    <p class="likert-note">Columns: 1 &ndash; Strongly Disagree &middot; 2 &middot; 3 &middot; 4 &middot; 5 &ndash; Strongly Agree. Forms allows up to ~8 rows per Likert question comfortably &mdash; split into two Likert questions (1&ndash;8, 9&ndash;15) if rows start feeling cramped.</p>
+    <ol class="qlist">
+      <li>The software is intuitive to use.</li>
+      <li>The software improved my understanding of the heart.</li>
+      <li>I had no problem using the basic features.</li>
+      <li>I did not find any difficult tasks to perform during the test.</li>
+      <li>I think I completed all the tasks correctly during the test.</li>
+      <li>The features of the software are clear and understandable.</li>
+      <li>The icons are intuitive and clear.</li>
+      <li>Error messages are well-placed and I knew immediately that I was wrong.</li>
+      <li>The software gives feedback that allows me to understand if a task has been completed successfully.</li>
+      <li>I think I'd like to work with this software frequently.</li>
+      <li>I think I would not need any initial support to use this software.</li>
+      <li>I felt comfortable using this software.</li>
+      <li>I didn't have any trouble using the software.</li>
+      <li>I think it would be comfortable to use the touchscreen mode.</li>
+      <li>I'd rather use the keyboard/mouse mode over touchscreen.</li>
+    </ol>
+  </div>
+
+  <!-- SECTION C -->
+  <div class="section-block">
+    <span class="section-tag">Section C</span>
+    <div class="field-label">Title</div>
+    <div class="copy-box field-value">Visual Design &amp; Layout</div>
+    <div class="field-label">Subtitle</div>
+    <div class="copy-box field-value subtitle">Rate each statement from 1 (Strongly Disagree) to 5 (Strongly Agree), thinking specifically about how the interface looked and how it was organised.</div>
+    <div class="field-label">Questions <span class="qtype">Likert</span></div>
+    <ol class="qlist" start="16">
+      <li>The dashboard made it clear what stage my project was at (masks &rarr; reconstruction &rarr; landmarks).</li>
+      <li>Progress bars and loading states accurately reflected what was happening.</li>
+      <li>The layout of the Structure / Strain / Landmarks tabs was easy to navigate between.</li>
+      <li>The bullseye charts and 3D heart model were easy to read and interpret.</li>
+      <li>Colours used for strain/wall-thickness values were easy to distinguish and interpret.</li>
+      <li>Text, numbers and labels were legible at a normal viewing distance.</li>
+      <li>The frame/slice playback controls (play, speed, scrub) behaved as expected.</li>
+    </ol>
+  </div>
+
+  <!-- SECTION D -->
+  <div class="section-block">
+    <span class="section-tag">Section D</span>
+    <div class="field-label">Title</div>
+    <div class="copy-box field-value">Strain &amp; RV Analysis</div>
+    <div class="field-label">Subtitle</div>
+    <div class="copy-box field-value subtitle">The core contribution of this project &mdash; please answer in as much detail as you can. Only skip an item if you did not complete that task in Section A.</div>
+    <div class="field-label">Questions <span class="qtype">Likert</span></div>
+    <p class="likert-note">This is the largest/most important section &mdash; split across two Likert questions (23&ndash;27, 28&ndash;33) to keep each block readable.</p>
+    <ol class="qlist" start="23">
+      <li>The auto-detected landmark points (ED/ES, insertion points) were close enough to where I would place them.</li>
+      <li>Adjusting a landmark point (drag to correct) was easy and responded smoothly.</li>
+      <li>LV strain values (GCS/GRS) seemed consistent and physiologically plausible across the cardiac cycle.</li>
+      <li>RV strain values (GCS/GAS/FAC) seemed consistent and physiologically plausible across the cardiac cycle.</li>
+      <li>The RV bullseye/9-segment regional breakdown was clear and matched what I'd expect from the RV shape shown.</li>
+      <li>The RV and LV results agreed with each other where I'd expect them to (e.g. colouring, segment highlighting, 3D model sync).</li>
+      <li>Full-cycle (all-frame) strain curves were smooth, with no implausible jumps between neighbouring frames.</li>
+      <li>I trust the strain/RV numbers this software produces enough to use them in a clinical/research discussion.</li>
+      <li>The 4D reconstructed mesh was a reasonable basis for the strain computed from it (shape roughly matched the MRI slices).</li>
+      <li>The PDF report presented the strain and RV findings clearly, and matched what I saw on screen.</li>
+      <li>The report's interactive elements (hover/slider on charts, clickable segments) were useful for reviewing results.</li>
+    </ol>
+  </div>
+
+  <!-- SECTION E -->
+  <div class="section-block">
+    <span class="section-tag">Section E</span>
+    <div class="field-label">Title</div>
+    <div class="copy-box field-value">Performance &amp; Reliability</div>
+    <div class="field-label">Subtitle</div>
+    <div class="copy-box field-value subtitle">Rate each statement from 1 (Strongly Disagree) to 5 (Strongly Agree), thinking about speed, stability, and whether the software behaved consistently.</div>
+    <div class="field-label">Questions <span class="qtype">Likert</span></div>
+    <ol class="qlist" start="34">
+      <li>Processing times (segmentation, reconstruction, landmark detection) were acceptable.</li>
+      <li>The 3D heart model and charts responded smoothly (no noticeable lag or freezing).</li>
+      <li>I did not encounter any crashes, freezes, or broken pages during the test.</li>
+    </ol>
+  </div>
+
+  <!-- SECTION F -->
+  <div class="section-block">
+    <span class="section-tag">Section F</span>
+    <div class="field-label">Title</div>
+    <div class="copy-box field-value">Open Feedback</div>
+    <div class="field-label">Subtitle</div>
+    <div class="copy-box field-value subtitle">Please answer in your own words &mdash; as much or as little detail as you'd like.</div>
+    <div class="field-label">Questions <span class="qtype">Long answer / Text</span></div>
+    <ol class="qlist">
+      <li>What did you find most confusing or frustrating while using the software?</li>
+      <li>Which feature or visualisation was most useful for understanding the heart?</li>
+      <li>If any segmentation, reconstruction, or landmark result looked wrong, please describe where and how.</li>
+      <li>What single change would most improve your experience with this software?</li>
+      <li>Any other comments or suggestions?</li>
+    </ol>
+  </div>
+
+  <!-- META -->
+  <div class="section-block">
+    <span class="section-tag">Before Section A</span>
+    <div class="field-label">Title</div>
+    <div class="copy-box field-value">Participant Information</div>
+    <div class="field-label">Subtitle</div>
+    <div class="copy-box field-value subtitle">A few quick details before you begin.</div>
+    <div class="field-label">Questions</div>
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:2px 0 0;">Four short-answer <span class="qtype">Text</span> questions:</p>
+    <ol class="qlist">
+      <li>Participant ID</li>
+      <li>Role / background (e.g. student, clinician, researcher)</li>
+      <li>Prior MRI / cardiac imaging experience</li>
+    </ol>
+    <p style="font-size:11.5px;color:var(--ink-soft);margin-top:8px;">Date is unnecessary as a question &mdash; Forms timestamps every submission automatically.</p>
+  </div>
+
+  <p class="footer-note">
+    Build the form in this order: Participant Information &rarr; Section A &rarr; Section B &rarr; Section C &rarr; Section D &rarr; Section E &rarr; Section F. Use Forms' built-in "Required" toggle only for Section A and B; leave C&ndash;F optional so partial completion still submits.
+  </p>
+
+</div>

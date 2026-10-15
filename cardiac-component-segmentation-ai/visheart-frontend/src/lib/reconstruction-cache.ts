@@ -31,6 +31,8 @@
  * 4. Clean up with clearProjectModels()
  */
 
+import { loadUntar } from "./load-untar";
+
 // Type definitions for js-untar
 interface UntarFile {
   name: string;
@@ -119,6 +121,16 @@ class ReconstructionCacheDB {
         this.db.onerror = (event) => {
           console.error('[ReconstructionCacheDB] Database error:', event);
         };
+        // The browser can close this connection on its own (observed live:
+        // "InvalidStateError: database connection is closing" from a
+        // transaction() call during a combined LV+RV 4D reconstruction,
+        // 2026-10) — clearing the reference here lets withRetry() below
+        // detect it and transparently reopen instead of every subsequent
+        // call failing forever.
+        this.db.onclose = () => {
+          console.warn('[ReconstructionCacheDB] IndexedDB connection closed unexpectedly.');
+          this.db = null;
+        };
 
         resolve();
       };
@@ -150,42 +162,63 @@ class ReconstructionCacheDB {
     });
   }
 
-  async storeModel(entry: ModelCacheEntry): Promise<void> {
+  /** Returns the open connection, reopening it first if it isn't (or no
+   *  longer is) open. */
+  private async ensureDb(): Promise<IDBDatabase> {
+    if (this.db) return this.db;
+    await this.init();
     if (!this.db) throw new Error('Database not initialized');
+    return this.db;
+  }
 
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
+  /** Runs `fn` against the open connection, and if the browser had already
+   *  started closing it from under us — `.transaction()` throws
+   *  `InvalidStateError` synchronously in that case — reopens the
+   *  connection and retries exactly once rather than failing the whole
+   *  caller (reported live: this surfaced as a 4D reconstruction appearing
+   *  to fail even though the backend job had actually finished, 2026-10). */
+  private async withRetry<T>(fn: (db: IDBDatabase) => Promise<T>): Promise<T> {
+    const db = await this.ensureDb();
+    try {
+      return await fn(db);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'InvalidStateError') {
+        console.warn('[ReconstructionCacheDB] Connection was closing — reopening and retrying once.');
+        this.db = null;
+        const reopened = await this.ensureDb();
+        return await fn(reopened);
+      }
+      throw err;
+    }
+  }
+
+  async storeModel(entry: ModelCacheEntry): Promise<void> {
+    return this.withRetry((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
 
       const request = store.put(entry);
 
       request.onsuccess = () => resolve();
       request.onerror = () => reject(new Error('Failed to store model'));
-    });
+    }));
   }
 
   async getModel(id: string): Promise<ModelCacheEntry | null> {
-    if (!this.db) throw new Error('Database not initialized');
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readonly');
+    return this.withRetry((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
 
       const request = store.get(id);
 
       request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => reject(new Error('Failed to get model'));
-    });
+    }));
   }
 
   async getModelsByProject(projectId: string): Promise<ModelCacheEntry[]> {
-    if (!this.db) {
-      console.error('[ReconstructionCacheDB] Database not initialized when getting models by project');
-      throw new Error('Database not initialized');
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readonly');
+    return this.withRetry((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
       const index = store.index('projectId');
 
@@ -193,17 +226,12 @@ class ReconstructionCacheDB {
 
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(new Error('Failed to get models by project'));
-    });
+    }));
   }
 
   async getModelsByReconstruction(reconstructionId: string): Promise<ModelCacheEntry[]> {
-    if (!this.db) {
-      console.error('[ReconstructionCacheDB] Database not initialized when getting models by reconstruction');
-      throw new Error('Database not initialized');
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readonly');
+    return this.withRetry((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
       const index = store.index('reconstructionId');
 
@@ -211,16 +239,14 @@ class ReconstructionCacheDB {
 
       request.onsuccess = () => resolve(request.result || []);
       request.onerror = () => reject(new Error('Failed to get models by reconstruction'));
-    });
+    }));
   }
 
   async clearProject(projectId: string): Promise<void> {
-    if (!this.db) throw new Error('Database not initialized');
-
     const models = await this.getModelsByProject(projectId);
 
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
+    return this.withRetry((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
 
       let deleted = 0;
@@ -239,16 +265,14 @@ class ReconstructionCacheDB {
         };
         deleteRequest.onerror = () => reject(new Error('Failed to delete model'));
       });
-    });
+    }));
   }
 
   async clearReconstruction(reconstructionId: string): Promise<void> {
-    if (!this.db) throw new Error('Database not initialized');
-
     const models = await this.getModelsByReconstruction(reconstructionId);
 
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
+    return this.withRetry((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
 
       let deleted = 0;
@@ -267,21 +291,19 @@ class ReconstructionCacheDB {
         };
         deleteRequest.onerror = () => reject(new Error('Failed to delete model'));
       });
-    });
+    }));
   }
 
   async getCacheSize(): Promise<number> {
-    if (!this.db) throw new Error('Database not initialized');
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readonly');
+    return this.withRetry((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
 
       const request = store.count();
 
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(new Error('Failed to get cache size'));
-    });
+    }));
   }
 }
 
@@ -617,21 +639,18 @@ export class ReconstructionCache {
         throw new Error(`Blob conversion failed: ${errorMsg}`);
       }
 
-      // Dynamic import of js-untar v2.0.0
+      // See load-untar.ts: js-untar must stay a runtime import (it's
+      // browser-only, touches `window` at module scope, and this module is
+      // pulled into a server-rendered page) — loadUntar() retries the
+      // chunk fetch a few times so an ordinary network hiccup doesn't fail
+      // the whole extraction outright (reported live, 2026-10).
       console.log(`[ReconstructionCache] 📚 Loading js-untar library...`);
-      const untarModule = await import('js-untar');
-
-      // js-untar v2.0.0 exports untar as the default export
-      const untar = untarModule.default || untarModule.untar || untarModule;
-
-      if (typeof untar !== 'function') {
-        throw new Error(`js-untar did not export a function. Got: ${typeof untar}. Available exports: ${Object.keys(untarModule).join(', ')}`);
-      }
+      const untar = await loadUntar();
       console.log(`[ReconstructionCache] ✅ js-untar loaded successfully`);
 
       console.log(`[ReconstructionCache] 📦 Extracting TAR archive...`);
       const untarStartTime = performance.now();
-      
+
       let files;
       try {
         files = await untar(arrayBuffer);

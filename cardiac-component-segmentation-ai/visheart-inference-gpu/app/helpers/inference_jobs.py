@@ -2,14 +2,14 @@
 import asyncio
 import httpx
 import aiohttp
-import os, traceback, time, json, tempfile
+import os, traceback, time, json, tempfile, threading
 import re
 import logging
 from enum import Enum
 from functools import wraps
 from uuid import UUID
 from pydantic import HttpUrl, Field
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 #import torch
 import numpy as np
 import base64
@@ -175,6 +175,55 @@ except ValueError:
     gpu_semaphore_count_int = 1
 gpu_semaphore = asyncio.Semaphore(gpu_semaphore_count_int)
 
+PROGRESS_MIN_INTERVAL_S = float(os.getenv("PROGRESS_MIN_INTERVAL_S", "2"))
+
+
+class ProgressReporter:
+
+    def __init__(self, callback_url: HttpUrl, uuid: UUID, min_interval: float = PROGRESS_MIN_INTERVAL_S):
+        self._url = urljoin(str(callback_url), "gpu-progress")
+        self._uuid = str(uuid)
+        self._min_interval = min_interval
+        self._loop = asyncio.get_running_loop()
+        self._lock = threading.Lock()
+        self._last_pct = -1
+        self._last_time = 0.0
+        self._tasks: set = set()
+
+    def report(self, done: int, total: int) -> None:
+        if total <= 0:
+            return
+        pct = max(0, min(100, int(done * 100 / total)))
+        now = time.monotonic()
+        with self._lock:
+            if pct <= self._last_pct:
+                return
+            if pct < 100 and now - self._last_time < self._min_interval:
+                return
+            self._last_pct = pct
+            self._last_time = now
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._loop:
+            task = self._loop.create_task(self._post(done, total))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+        else:
+            asyncio.run_coroutine_threadsafe(self._post(done, total), self._loop)
+
+    async def _post(self, done: int, total: int) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    self._url,
+                    json={"uuid": self._uuid, "done": done, "total": total},
+                    headers={"User-Agent": "VisHeart-GPU-Service/1.0", "X-Job-ID": self._uuid},
+                )
+        except Exception as e:
+            logger.debug(f"[{serviceLocation}] Progress post failed for job {self._uuid}: {e}")
+
 
 async def send_callback_with_files(
     callback_url: HttpUrl,
@@ -241,7 +290,24 @@ async def send_callback_with_files(
                 "X-File-Count": str(len(mesh_files)),
             }
             
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            # A short client timeout here measures the WRONG thing: this request only completes
+            # once the backend has read every mesh file off the wire AND finished its own
+            # synchronous work before replying -- building the reconstruction TAR and uploading it
+            # to S3 (see processReconstructionCallback / createReconstructionTar in
+            # reconstruction_handler.ts, which runs to completion before the HTTP response is
+            # sent). Both the upload itself and that server-side work scale with mesh size, which
+            # scales with marching-cubes resolution (default raised 64 -> 128 on 2026-10-01) and
+            # with frame count. A fixed 60s budget was fine for small single-frame meshes at the
+            # old default; at 128 with several frames bundled into one multipart POST it is a race
+            # the client increasingly loses, and a lost race here falls through to the `except`
+            # below -- which drops the mesh files entirely and sends a files-less "completed"
+            # callback. Node then sees zero mesh files and marks the job FAILED, which is exactly
+            # the "reaches 100%, then fails" symptom this is here to fix. 10 minutes covers a large
+            # multi-frame upload plus the backend's TAR+S3 work with real margin; 30s to establish
+            # the connection is unrelated to mesh size and stays tight to still catch a genuinely
+            # unreachable host quickly.
+            callback_timeout = httpx.Timeout(600.0, connect=30.0)
+            async with httpx.AsyncClient(timeout=callback_timeout) as client:
                 start_time = time.time()
                 print(f"[{serviceLocation}] Sending multipart callback to {callback_url}")
                 
@@ -276,7 +342,12 @@ async def send_callback(
     success: bool,
     result: dict | None,
     error_detail: str | None,
-    segmentation_model: str = "medsam",
+    # None (not "medsam"): this was a hardcoded default, and only the MedSAM/UNet segmentation
+    # call sites ever actually pass a real value. Every other caller -- including 4D
+    # reconstruction, which has no single "segmentation model" of its own to report here -- was
+    # silently inheriting "medsam" and printing it as if it meant something, which is what made a
+    # UNet-sourced reconstruction's own logs read "model=medsam" and looked like a real mix-up.
+    segmentation_model: str | None = None,
 ):
     """Sends the processing result back to the client's callback URL with enhanced error logging."""
     callback_payload = {
@@ -305,7 +376,7 @@ async def send_callback(
             }
         callback_summary = (
             f"[{serviceLocation}] Callback payload summary for job {uuid}: "
-            f"status={callback_payload['status']}, model={segmentation_model}, "
+            f"status={callback_payload['status']}, model={segmentation_model or 'n/a'}, "
             f"success={success}, error={error_detail}, result_summary={result_summary}"
         )
         logger.info(callback_summary)
@@ -495,10 +566,12 @@ async def _process_medsam_job(
                 total_detections = sum(len(dets) for dets in filtered_images_map.values())
                 print(f"[{serviceLocation}] Found {total_detections} relevant detections across {num_filtered_images} images")
                 processed_count = 0
+                progress = ProgressReporter(callback_url, uuid)
                 for image_path, filtered_dets in filtered_images_map.items():
                     if not filtered_dets:
                         continue
                     filename = os.path.basename(image_path)
+                    progress.report(processed_count, num_filtered_images)
                     processed_count += 1
                     print(f"[{serviceLocation}] Processing image {processed_count}/{num_filtered_images}: {filename}")
                     max_retries = 2
@@ -538,6 +611,7 @@ async def _process_medsam_job(
                             print(f"[{serviceLocation}] Error calculating 'myo' mask for {filename}: {subtraction_error}")
                     mask_files = encode_and_name_masks(filename, masks, medsam_handler)
                     all_results[filename] = {"boxes": filtered_dets, "masks": mask_files}
+                progress.report(num_filtered_images, num_filtered_images)
             elif file_path and os.path.isfile(file_path):
                 if not file_path.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
                     error_detail = "Downloaded file is not a supported image format"
@@ -668,11 +742,13 @@ async def _process_unet_job(
                 await send_callback(callback_url, uuid, success, result, error_detail, segmentation_model="unet")
                 return
 
+            progress = ProgressReporter(callback_url, uuid)
             inference_output = await asyncio.to_thread(
                 run_unet_inference_from_nifti,
                 file_path,
                 device,
                 checkpoint_path,
+                progress.report,
             )
             if isinstance(inference_output, dict):
                 mask_payload = inference_output.get("mask")
@@ -804,13 +880,18 @@ async def _process_landmark_job(
                 seg_mask_path,
                 device,
                 checkpoint_path,
+                None,
+                None,
+                None,
+                ProgressReporter(callback_url, uuid).report,
             )
 
-            # New response format: direct dict with "slices", "avg_lm1", etc.
+            # Current response format: {"slices": [...], "n_frames", "avg_lm1", "avg_lm2"}
+            # — flat list, every entry tagged with its own "frame"/"slice"
+            # (run_landmark_inference_from_nifti now runs every cardiac frame).
             # Legacy format (from old inference.py): {"success": True, "landmarks": {...}}
             if isinstance(inference_output, dict):
                 if "slices" in inference_output:
-                    # New format — return the whole dict as result
                     result = inference_output
                     success = True
                 elif inference_output.get("success"):
@@ -1121,7 +1202,8 @@ async def _process_fourd_reconstruction_job(
                         chamber=request.chamber,
                         # Reproducibility and best-of-N candidate selection
                         seed=request.seed,
-                        num_candidates=request.num_candidates
+                        num_candidates=request.num_candidates,
+                        progress_callback=ProgressReporter(request.callback_url, request.uuid).report,
                     )
                     
                     if reconstruction_result["success"]:

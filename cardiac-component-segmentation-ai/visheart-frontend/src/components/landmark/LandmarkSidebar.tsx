@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { useProject } from "@/context/ProjectContext";
 import { computeStrainSeries, computeRvStrainSeries } from "@/lib/landmarkApi";
+import { segmentationApi } from "@/lib/api";
+import { JobProgress } from "@/components/ui/kinetic-progress";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -43,6 +45,7 @@ import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
 import { getDummyStrainData, getStrainColor, type StrainType, type RealStrainResult, type RvStrainResult } from "@/components/landmark/StrainVisualization";
 import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries, ringForRvSegment } from "@/components/landmark/RegionalStrainCharts";
 import { DualFrameRangePicker } from "@/components/landmark/DualFrameRangePicker";
+import { rvTotalArea } from "@/lib/rvAreaMetrics";
 
 /**
  * Everything the sidebar's "Compute strain" card (Strain tab) needs to render
@@ -82,15 +85,18 @@ export interface StrainComputeBundle {
    *  one. Drives the Quick-scope "peak value only" view in the Strain tab. */
   quickLvResult: RealStrainResult | null;
   quickRvResult: RvStrainResult | null;
-  /** RV's own metric toggle (GCS/GAS) — GAS has no computation in the
-   *  pipeline at all, so selecting it must render as an explicit prototype
-   *  state, never fabricated values. */
+  /** RV's own metric toggle (GCS/GAS) — two separate RV metrics from the
+   *  9-segment RV bullseye (never combined). */
   rvMetricType: "GCS" | "GAS";
   onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
   /** Reports Full cycle's busy state up to the page, so the main panel can
    *  show a loading state too while "Compute/Recompute all frames" runs
    *  (StrainTab's own seriesBusy is local and the page can't see it otherwise). */
   onFullCycleBusyChange: (busy: boolean) => void;
+  /** Same idea as onFullCycleBusyChange, but the real 0-100 reading (see
+   *  seriesProgress above) — lets the main panel's own "Computing all
+   *  frames…" overlay show a real percentage too, not just a spinner. */
+  onFullCycleProgressChange?: (progress: number | null) => void;
 }
 
 const NAV_ITEMS = [
@@ -146,6 +152,8 @@ export interface LandmarkSidebarProps {
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
   isPerFrame?: boolean;
+  rvFacStats?: { global: number | null; rings: (number | null)[] } | null;
+  isRvPerFrame?: boolean;
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
@@ -158,6 +166,8 @@ export interface LandmarkSidebarProps {
   onNextFrame: () => void;
   onPrevFrame: () => void;
   onSliderChange: (frame: number) => void;
+  /** Switches the cardiac frame whose slices the Landmarks tab shows and edits. */
+  onLandmarkFrameChange?: (frameId: number) => void;
   onPlaybackSpeedChange: (fps: number) => void;
   onRerun: () => void;
   onReset: () => void;
@@ -196,6 +206,8 @@ export function LandmarkSidebar({
   onStructureVentricleChange,
   structureStats,
   isPerFrame,
+  rvFacStats,
+  isRvPerFrame,
   hasUnsavedLandmarkEdits,
   isSavingLandmarks,
   onSaveLandmarks,
@@ -208,6 +220,7 @@ export function LandmarkSidebar({
   onNextFrame,
   onPrevFrame,
   onSliderChange,
+  onLandmarkFrameChange,
   onPlaybackSpeedChange,
   onRerun,
   onReset,
@@ -304,6 +317,22 @@ export function LandmarkSidebar({
       </div>
 
 
+      {/* Frame selection itself now lives in the top-of-viewer FrameSliceControls
+          (page.tsx) -- this just keeps the one thing that had no equivalent
+          there: warning when a saved result predates per-frame detection and
+          only covers some of the study's frames. */}
+      {hasPredictions && activeTab === "landmarks" && strainFrameCount > state.frameIds.length && (
+        <div className="px-4 py-2 border-b border-[var(--sidebar-border)] flex-shrink-0">
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            This result only has landmarks for {state.frameIds.length} of {strainFrameCount} frames.{" "}
+            <button type="button" onClick={onRerun} className="font-medium text-primary underline underline-offset-2">
+              Re-run detection
+            </button>{" "}
+            to detect and edit every frame.
+          </p>
+        </div>
+      )}
+
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
           axisLabel="Slice"
@@ -392,6 +421,8 @@ export function LandmarkSidebar({
             onStructureVentricleChange={onStructureVentricleChange}
             structureStats={structureStats}
             isPerFrame={isPerFrame}
+            rvFacStats={rvFacStats}
+            isRvPerFrame={isRvPerFrame}
           />
         )}
         {activeTab === "strain" && (
@@ -415,7 +446,9 @@ export function LandmarkSidebar({
   );
 }
 
-// Playback bar 
+// Cardiac-frame switcher for the Landmarks tab. Each frame has its own slices, confidence
+// indicators and edits, so choosing a frame swaps everything below it to that frame.
+// Playback bar
 function PlaybackBar({
   currentFrame,
   totalFrames,
@@ -813,7 +846,7 @@ function LandmarksTab({
               >
                 <Trash2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 text-xs text-muted-foreground">
-                  {def.label} removed from Slice {currentFrame + 1}
+                  {def.fullLabel ?? def.label} removed from Slice {currentFrame + 1}
                 </span>
                 <button
                   type="button"
@@ -857,7 +890,7 @@ function LandmarksTab({
               />
               {/* Label */}
               <span className="flex-1 text-xs font-medium truncate">
-                {def.label}
+                {def.fullLabel ?? def.label}
               </span>
               {/* Coords */}
               {hasCoord ? (
@@ -906,8 +939,8 @@ function LandmarksTab({
                     }
                   }}
                   className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                  title={`Delete ${def.label} from this slice`}
-                  aria-label={`Delete ${def.label} from this slice`}
+                  title={`Delete ${def.fullLabel ?? def.label} from this slice`}
+                  aria-label={`Delete ${def.fullLabel ?? def.label} from this slice`}
                 >
                   <Trash2 className="h-3 w-3" />
                 </span>
@@ -1092,12 +1125,17 @@ function ReplacementFileRow({
 }
 
 /**
- * Busy label for the compute buttons. The backend runs the whole series in one
- * request (one GPU pass per frame), so there's no per-frame progress to stream —
- * we show a spinner + the frame count so the wait is understood, not a bare
- * "Computing…". `verb` is "Computing" or "Recomputing".
+ * Busy label for the compute buttons. The backend now creates a Job record for
+ * this compute and reports real progress against it (see compute-strain-series's
+ * jobId param) — when the caller has a live reading, show the same real progress
+ * bar every other job type uses instead of a bare spinner. `verb` is "Computing"
+ * or "Recomputing". Falls back to the old indeterminate spinner for the brief
+ * window before the first poll reports a reading.
  */
-function ComputeBusyLabel({ verb, frames }: { verb: string; frames: number }) {
+function ComputeBusyLabel({ verb, frames, progress }: { verb: string; frames: number; progress?: number | null }) {
+  if (typeof progress === "number" && progress > 0) {
+    return <JobProgress progress={progress} status="in_progress" label={`${verb} ${frames} frames`} className="w-full" />;
+  }
   return (
     <span className="inline-flex items-center gap-1.5">
       <Loader2 className="h-3 w-3 animate-spin" />
@@ -1161,6 +1199,8 @@ function StructureTab({
   onStructureVentricleChange,
   structureStats,
   isPerFrame,
+  rvFacStats,
+  isRvPerFrame,
 }: {
   hasPredictions: boolean;
   activeModel: "unet" | "medsam";
@@ -1172,6 +1212,12 @@ function StructureTab({
    *  per-frame strain series exists); false when it's the single ED-frame
    *  snapshot repeated across playback. */
   isPerFrame?: boolean;
+  /** RV cavity-area FAC (%), global + per-ring [basal, mid, apical], from
+   *  rvAreaMetrics.ts (derived from the stored 9-segment RV strain result). */
+  rvFacStats?: { global: number | null; rings: (number | null)[] } | null;
+  /** True when rvFacStats tracks the currently playing frame (a real
+   *  per-frame RV strain series exists); false for the single ED->ES snapshot. */
+  isRvPerFrame?: boolean;
 }) {
   if (!hasPredictions) {
     return (
@@ -1227,13 +1273,34 @@ function StructureTab({
       </div>
 
       {!isLv ? (
-        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
-          <LayoutGrid className="mx-auto h-7 w-7 opacity-25" />
-          <p className="mt-2 text-xs text-muted-foreground">
-            RV cavity-area (FAC) numbers aren&apos;t computed by the backend yet — see the main panel for the
-            real RV mesh shape with prototype (placeholder) colors.
-          </p>
-        </div>
+        rvFacStats && rvFacStats.global != null ? (
+          <>
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-medium text-foreground">Cavity Area (FAC)</h4>
+              {isRvPerFrame && (
+                <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                  Live per-frame
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              <StructureStatTile label="Global" value={`${rvFacStats.global.toFixed(1)} %`} />
+              <StructureStatTile label="Basal" value={rvFacStats.rings[0] != null ? `${rvFacStats.rings[0].toFixed(1)} %` : "—"} />
+              <StructureStatTile label="Mid" value={rvFacStats.rings[1] != null ? `${rvFacStats.rings[1].toFixed(1)} %` : "—"} />
+              <StructureStatTile label="Apical" value={rvFacStats.rings[2] != null ? `${rvFacStats.rings[2].toFixed(1)} %` : "—"} />
+            </div>
+            <p className="text-[9px] text-muted-foreground leading-relaxed">
+              Short-axis MRI FAC (= −GAS), 9-segment RV bullseye — not the echo 4-chamber FAC, no validated reference range.
+            </p>
+          </>
+        ) : (
+          <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
+            <LayoutGrid className="mx-auto h-7 w-7 opacity-25" />
+            <p className="mt-2 text-xs text-muted-foreground">
+              No RV cavity-area (FAC) computed yet — run RV strain to populate this panel.
+            </p>
+          </div>
+        )
       ) : structureStats && structureStats.mean != null ? (
         <>
           <div className="flex items-center justify-between">
@@ -1350,6 +1417,14 @@ function StrainTab({
   // automatic. ED comes from the stored ED→ES result when available.
   const [seriesBusy, setSeriesBusy] = useState(false);
   const [seriesError, setSeriesError] = useState<string | null>(null);
+  // Real 0-100 progress, averaged across whichever of LV/RV are still
+  // in flight — read from the Job records the backend now creates for these
+  // computes (see compute-strain-series's jobId param), polled the same way
+  // every other job type's progress bar already is. null until the first
+  // poll reports a real reading, so the UI can fall back to an indeterminate
+  // spinner for that brief gap instead of claiming "0%". Was a bare "Computing
+  // N frames..." spinner with no percentage at all (reported live, 2026-10).
+  const [seriesProgress, setSeriesProgress] = useState<number | null>(null);
   const runStrainSeries = useCallback(async () => {
     if (!projectId) return;
     // ED must be the true end-diastole (largest LV cavity) — it is the reference
@@ -1365,17 +1440,50 @@ function StrainTab({
     setSeriesBusy(true);
     strainCompute?.onFullCycleBusyChange(true);
     setSeriesError(null);
+    setSeriesProgress(null);
+
+    const lvJobId = crypto.randomUUID();
+    const rvJobId = crypto.randomUUID();
+    const pollTimer = setInterval(async () => {
+      try {
+        const { jobs } = await segmentationApi.getUserJobs();
+        const byId = new Map<string, any>((jobs ?? []).map((j: any) => [j.jobId, j]));
+        const lvJob: any = byId.get(lvJobId);
+        const rvJob: any = byId.get(rvJobId);
+        const readings = [lvJob?.progress, rvJob?.progress].filter(
+          (p): p is number => typeof p === "number" && p > 0,
+        );
+        if (readings.length) {
+          const avg = Math.round(readings.reduce((a, b) => a + b, 0) / readings.length);
+          setSeriesProgress(avg);
+          strainCompute?.onFullCycleProgressChange?.(avg);
+        }
+      } catch {
+        // Keep the previous reading — a dropped poll is not evidence of anything.
+      }
+    }, 2000);
+
     try {
       // Fire LV and RV series together — one button, both computed. Independent
       // GPU calls, so a failure in one shouldn't lose the other.
       const [lvOutcome, rvOutcome] = await Promise.allSettled([
-        computeStrainSeries(projectId, edIndex, strainModel),
-        computeRvStrainSeries(projectId, edIndex, strainModel),
+        computeStrainSeries(projectId, edIndex, strainModel, 1, lvJobId),
+        computeRvStrainSeries(projectId, edIndex, strainModel, 1, rvJobId),
       ]);
+      const errMessage = (outcome: PromiseRejectedResult) =>
+        (outcome.reason as any)?.response?.data?.error ?? (outcome.reason as any)?.message ?? "Strain series failed.";
       if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
-        const err: any = lvOutcome.reason;
-        setSeriesError(err?.response?.data?.error ?? err?.message ?? "Strain series failed.");
+        setSeriesError(errMessage(lvOutcome));
         return;
+      }
+      // A failure in only ONE of the two must still be reported -- previously
+      // this branch was silent whenever LV succeeded, so an RV-only failure
+      // left the RV full-cycle panel permanently empty with no visible error
+      // (the user would just see stale/no data and no indication why).
+      if (lvOutcome.status === "rejected") {
+        setSeriesError(`LV strain series failed: ${errMessage(lvOutcome)}`);
+      } else if (rvOutcome.status === "rejected") {
+        setSeriesError(`RV strain series failed: ${errMessage(rvOutcome)}`);
       }
       // Stored on the mask — re-read it so every consumer (this tab, the
       // main panel's bullseye/3D heart) picks up the new series. A full
@@ -1385,41 +1493,78 @@ function StrainTab({
       // only re-fetches the masks themselves.
       await refreshResults();
     } finally {
+      clearInterval(pollTimer);
       setSeriesBusy(false);
+      setSeriesProgress(null);
       strainCompute?.onFullCycleBusyChange(false);
+      strainCompute?.onFullCycleProgressChange?.(null);
     }
   }, [projectId, realStrain, realSeries, strainModel, autoEdFrame, strainCompute, refreshResults]);
 
-  const usingRealRvSeries = !!realRvSeries?.frames?.length;
-  const usingRealRvStrain = !!realRvStrain?.regions?.length;
+  // RV GCS and GAS are two separate metrics (never combined); everything
+  // below reads whichever one the RV toggle selects. `strain` on a region is
+  // GCS; `gas` is GAS (absent on results computed before GAS existed).
+  const rvIsGas = (strainCompute?.rvMetricType ?? "GCS") === "GAS";
+  const rvRegionValue = useCallback(
+    (r: { strain: number | null; gas?: number | null }) => (rvIsGas ? r.gas : r.strain) ?? null,
+    [rvIsGas],
+  );
+  const rvFrameGlobal = useCallback(
+    (f: { global_rv_strain: number | null; global_rv_gas?: number | null }) => (rvIsGas ? f.global_rv_gas : f.global_rv_strain) ?? null,
+    [rvIsGas],
+  );
+
+  const usingRealRvSeries = !!realRvSeries?.frames?.some((f) => f.regions.some((r) => rvRegionValue(r) != null));
+  const usingRealRvStrain = !!realRvStrain?.regions?.some((r) => rvRegionValue(r) != null);
 
   /** Global RV strain curve, mirroring `curveData`'s "global" shape for LV. */
   const rvCurveData = useMemo(() => {
-    if (!realRvSeries?.frames?.length) return [];
+    if (!usingRealRvSeries || !realRvSeries) return [];
     const n = realRvSeries.frames.length;
     return realRvSeries.frames.map((f, i) => ({
       frame: f.frameIndex + 1,
       time: Math.round((i / Math.max(n - 1, 1)) * 1200),
-      strain: Number((f.global_rv_strain ?? 0).toFixed(1)),
+      strain: Number((rvFrameGlobal(f) ?? 0).toFixed(1)),
     }));
-  }, [realRvSeries]);
+  }, [realRvSeries, usingRealRvSeries, rvFrameGlobal]);
+
+  /** Real per-frame x per-segment RV series (9 segments), for the By Region
+   *  and Full Cycle charts — same shape as LV's cycle series. */
+  const rvCycleSeries = useMemo(() => {
+    if (!usingRealRvSeries || !realRvSeries) return [];
+    return realRvSeries.frames.map((f) =>
+      f.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: rvRegionValue(r) ?? 0 })),
+    );
+  }, [realRvSeries, usingRealRvSeries, rvRegionValue]);
 
   /** Per-region RV values at the frame being viewed (falls back to the peak
    *  frame, then to the single ED→ES result — same preference order as LV's
    *  `segmentValues`). */
   const rvRegionValues = useMemo(() => {
+    const toRows = (regions: { region: number; label: string; strain: number | null; gas?: number | null }[]) =>
+      regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: rvRegionValue(r) ?? 0 }));
+    if (usingRealRvSeries && realRvSeries) {
+      const frame =
+        realRvSeries.frames.find((f) => f.frameIndex === currentFrame) ??
+        realRvSeries.frames.find((f) => f.frameIndex === realRvSeries.peakFrameIndex);
+      if (frame?.regions?.length) return toRows(frame.regions);
+    }
+    if (usingRealRvStrain && realRvStrain) return toRows(realRvStrain.regions);
+    return [];
+  }, [realRvSeries, realRvStrain, usingRealRvSeries, usingRealRvStrain, currentFrame, rvRegionValue]);
+
+  /** RV septal GCS per ring at the frame being viewed (same frame preference
+   *  as rvRegionValues) — separate from the free-wall regions, GCS only. */
+  const rvSeptalValues = useMemo(() => {
+    const toRows = (septal?: { region: number; label: string; gcs: number | null }[]) =>
+      (septal ?? []).map((r) => ({ segment: r.region, label: r.label, strain: r.gcs ?? 0, missing: r.gcs == null }));
     if (realRvSeries?.frames?.length) {
       const frame =
         realRvSeries.frames.find((f) => f.frameIndex === currentFrame) ??
         realRvSeries.frames.find((f) => f.frameIndex === realRvSeries.peakFrameIndex);
-      if (frame?.regions?.length) {
-        return frame.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
-      }
+      if (frame?.septal_regions?.length) return toRows(frame.septal_regions).filter((r) => !r.missing);
     }
-    if (realRvStrain?.regions?.length) {
-      return realRvStrain.regions.map((r) => ({ segment: r.region, label: RV_REAL_REGION_NAMES[r.region - 1] ?? r.label, strain: r.strain ?? 0 }));
-    }
-    return [];
+    return toRows(realRvStrain?.septal_regions).filter((r) => !r.missing);
   }, [realRvSeries, realRvStrain, currentFrame]);
 
   const rvCurrentAverage = rvRegionValues.length
@@ -1428,14 +1573,12 @@ function StrainTab({
 
   /** Peak = most negative global RV strain across the cycle (most shrinkage). */
   const rvPeakValue = useMemo(() => {
-    if (realRvSeries?.frames?.length) {
-      const globals = realRvSeries.frames
-        .map((f) => f.global_rv_strain)
-        .filter((v): v is number => typeof v === "number");
+    if (usingRealRvSeries && realRvSeries) {
+      const globals = realRvSeries.frames.map(rvFrameGlobal).filter((v): v is number => typeof v === "number");
       if (globals.length) return Math.min(...globals);
     }
-    return typeof realRvStrain?.global_rv_strain === "number" ? realRvStrain.global_rv_strain : 0;
-  }, [realRvSeries, realRvStrain]);
+    return (realRvStrain ? rvFrameGlobal(realRvStrain) : null) ?? 0;
+  }, [realRvSeries, realRvStrain, usingRealRvSeries, rvFrameGlobal]);
   /**
    * Global curve: one point per frame. When a segment is selected the curve
    * tracks that segment; otherwise it is the mean across all 17. Uses the
@@ -1605,6 +1748,7 @@ function StrainTab({
             strainCompute={strainCompute}
             seriesBusy={seriesBusy}
             seriesError={seriesError}
+            seriesProgress={seriesProgress}
             onRunFullCycle={runStrainSeries}
           />
         )}
@@ -1642,6 +1786,7 @@ function StrainTab({
           strainCompute={strainCompute}
           seriesBusy={seriesBusy}
           seriesError={seriesError}
+          seriesProgress={seriesProgress}
           onRunFullCycle={runStrainSeries}
         />
       )}
@@ -1663,7 +1808,9 @@ function StrainTab({
           usingRealRvSeries={usingRealRvSeries}
           usingRealRvStrain={usingRealRvStrain}
           rvCurveData={rvCurveData}
+          rvCycleSeries={rvCycleSeries}
           rvRegionValues={rvRegionValues}
+          rvSeptalValues={rvSeptalValues}
           rvCurrentAverage={rvCurrentAverage}
           rvPeakValue={rvPeakValue}
           currentTime={currentTime}
@@ -1689,7 +1836,7 @@ function StrainTab({
             onClick={runStrainSeries}
           >
             {seriesBusy
-              ? <ComputeBusyLabel verb="Recomputing" frames={frameCount} />
+              ? <ComputeBusyLabel verb="Recomputing" frames={frameCount} progress={seriesProgress} />
               : `Recompute all frames with current landmarks (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
@@ -1883,6 +2030,8 @@ function QuickCombinedStrainView({
 
   const fmtPct = (v: number | null | undefined) => (v == null ? "N/A" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
   const fmtMm = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(2)} mm`);
+  const fmtMm2 = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)} mm²`);
+  const rvArea = rvTotalArea(rv);
 
   return (
     <div className="space-y-3">
@@ -1924,24 +2073,28 @@ function QuickCombinedStrainView({
       {chamberFocus !== "LV" && (
       <div className="rounded-lg border border-border bg-background p-3 space-y-2">
         <div className="flex items-center gap-1.5">
-          <span className="shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-            Prototype
-          </span>
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">RV Global Strain</h4>
         </div>
         <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
           <p className="text-[9px] leading-snug text-amber-800 dark:text-amber-300">
-            RV metrics are still prototype and in progress — GCS is computed but not yet validated against a
-            reference range, and GAS/cavity area have no computation at all. Every value below is labeled
-            Prototype until that work is done.
+            GCS (free-wall length) and GAS/FAC (cavity area) are computed as separate measures but not yet
+            validated against a reference range.
           </p>
         </div>
         {rv ? (
           <div className="grid grid-cols-2 gap-2">
             <StrainMetricCard label="Peak GCS" value={fmtPct(rv.global_rv_strain)} strainType="GCS" valueNumber={rv.global_rv_strain ?? 0} loading={sc.isComputing} />
-            <PlainMetricTile label="Peak GAS" value="—" />
-            <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value="—" />
-            <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value="—" />
+            <StrainMetricCard label="Peak GAS" value={fmtPct(rv.global_rv_gas ?? null)} strainType="GCS" valueNumber={rv.global_rv_gas ?? 0} loading={sc.isComputing} />
+            <StrainMetricCard
+              label="Peak FAC"
+              value={fmtPct(rv.global_rv_gas != null ? -rv.global_rv_gas : null)}
+              strainType="GCS"
+              valueNumber={rv.global_rv_gas != null ? -rv.global_rv_gas : 0}
+              loading={sc.isComputing}
+            />
+            <StrainMetricCard label="Peak Septal GCS" value={fmtPct(rv.global_rv_septal_gcs ?? null)} strainType="GCS" valueNumber={rv.global_rv_septal_gcs ?? 0} loading={sc.isComputing} />
+            <PlainMetricTile label={`Frame ${(rv.edFrameIndex ?? 0) + 1} area`} value={fmtMm2(rvArea.ed)} loading={sc.isComputing} />
+            <PlainMetricTile label={`Frame ${(rv.esFrameIndex ?? 0) + 1} area`} value={fmtMm2(rvArea.es)} loading={sc.isComputing} />
           </div>
         ) : (
           <p className="text-[10px] text-muted-foreground">Not computed for the current ED/ES pair yet — use Compute ED → ES above.</p>
@@ -1983,11 +2136,13 @@ function ComputeStrainCard({
   strainCompute: sc,
   seriesBusy,
   seriesError,
+  seriesProgress,
   onRunFullCycle,
 }: {
   strainCompute: StrainComputeBundle;
   seriesBusy: boolean;
   seriesError: string | null;
+  seriesProgress?: number | null;
   onRunFullCycle: () => void;
 }) {
   const edRef = React.useRef<HTMLInputElement>(null);
@@ -2222,7 +2377,7 @@ function ComputeStrainCard({
             Uses the auto-detected ED frame as reference — no frame picker or upload needed for the full cycle.
           </p>
           <Button size="sm" variant="outline" className="h-7 text-[10px]" disabled={seriesBusy} onClick={onRunFullCycle}>
-            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
+            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} progress={seriesProgress} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           {seriesError && <p className="text-[9px] text-destructive">{seriesError}</p>}
         </div>
@@ -2233,63 +2388,41 @@ function ComputeStrainCard({
   );
 }
 
-/**
- * RV side of the Strain Results panel — deliberately simpler than the LV
- * panel above it (no GRS/GCS split, no region/cycle chart views, no 3D
- * heart): RV strain is a single cavity-radius measure per region, not a
- * 17-segment wall-thickness field, so there's less structure to visualize.
- * Reuses getStrainColor(..., "GCS") for coloring since RV strain shares
- * GCS's "more negative is healthier" convention.
- */
-/** AHA-style label set for RV's prototype 9-segment breakdown — there is no
- *  real per-region time series at this granularity yet (the real pipeline
- *  only produces the 6 basal/mid free-wall regions in rvRegionValues), so
- *  this exists purely to preview the eventual layout, sharing LV's
- *  RegionalStrainByRegion/FullCycleChart components (they only care about
- *  segment numbers/labels/values, not that they're LV-specific). */
-// Same convention as CRESCENT_REGION_NAMES (landmark-detection page.tsx) and
-// RV_SEGMENT_NAMES (heartColor.ts) — the RV-deformation notebook's naming, not
-// LV's anatomical Anterior/Lateral/Inferior labels.
-const RV_DUMMY_SEGMENT_LABELS = [
+// Notebook-style names for the REAL 9-segment RV breakdown the backend
+// computes (basal/mid/apical 1-3 — see rvRegionValues above). Same convention
+// as CRESCENT_REGION_NAMES (CombinedVentricularChart) and RV_SEGMENT_NAMES
+// (heartColor.ts) — the RV-deformation notebook's naming, not LV's anatomical
+// Anterior/Lateral/Inferior labels.
+const RV_REAL_REGION_NAMES = [
   "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
   "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
   "Apical_Seg1", "Apical_Seg2", "Apical_Seg3",
 ];
 
-// Notebook-style names for the REAL 6-region RV free-wall breakdown the backend
-// actually computes (basal 1-3, mid 1-3 — see rvRegionValues below). Same
-// convention/order as RV_DUMMY_SEGMENT_LABELS' first six entries.
-const RV_REAL_REGION_NAMES = [
-  "Basal_Seg1", "Basal_Seg2", "Basal_Seg3",
-  "Mid_Seg1", "Mid_Seg2", "Mid_Seg3",
-];
-function buildDummyRvCycleSeries(totalFrames: number): { segment: number; label: string; strain: number }[][] {
-  const frames = Math.max(totalFrames || 9, 2);
-  return Array.from({ length: frames }, (_, f) => {
-    const wobble = Math.sin((f / Math.max(frames - 1, 1)) * Math.PI);
-    return RV_DUMMY_SEGMENT_LABELS.map((label, i) => ({
-      segment: i + 1,
-      label,
-      strain: Number((-13 - i * 1.1 - wobble * 6).toFixed(1)),
-    }));
-  });
-}
-
+/**
+ * RV side of the Strain Results panel. GCS and GAS are two separate metrics
+ * (not combined) — the parent already resolved every value to whichever one
+ * the RV toggle selects. Reuses LV's RegionalStrainByRegion/FullCycleChart
+ * (they only care about segment numbers/labels/values) and
+ * getStrainColor(..., "GCS") since both RV metrics share GCS's "more negative
+ * is healthier" convention.
+ */
 function RvStrainPanel({
   usingRealRvSeries,
   usingRealRvStrain,
   rvCurveData,
+  rvCycleSeries,
   rvRegionValues,
-  rvCurrentAverage,
-  rvPeakValue,
+  rvSeptalValues,
   currentTime,
   strainCompute,
-  seriesBusy,
 }: {
   usingRealRvSeries: boolean;
   usingRealRvStrain: boolean;
   rvCurveData: { frame: number; time: number; strain: number }[];
+  rvCycleSeries: { segment: number; label: string; strain: number }[][];
   rvRegionValues: { segment: number; label: string; strain: number }[];
+  rvSeptalValues: { segment: number; label: string; strain: number }[];
   rvCurrentAverage: number;
   rvPeakValue: number;
   currentTime: number;
@@ -2300,60 +2433,39 @@ function RvStrainPanel({
   const isGas = rvMetricType === "GAS";
   const [rvCurveView, setRvCurveView] = useState<"global" | "region" | "cycle">("global");
 
-  // A 9-segment prototype series, illustrative for both metrics: real GCS
-  // only has the 6-region breakdown in rvRegionValues (used for "Global"
-  // below); GAS has no computation at all, so it's dummy everywhere.
-  const dummyFrameCount = rvCurveData.length || 30;
-  const dummyRvSeries = useMemo(() => buildDummyRvCycleSeries(dummyFrameCount), [dummyFrameCount]);
-  const dummyRvGlobalCurve = useMemo(
-    () => dummyRvSeries.map((frameSegs, i) => ({
-      frame: i + 1,
-      time: rvCurveData[i]?.time ?? Math.round((i / Math.max(dummyRvSeries.length - 1, 1)) * 1200),
-      strain: Number((frameSegs.reduce((sum, d) => sum + d.strain, 0) / frameSegs.length).toFixed(1)),
-    })),
-    [dummyRvSeries, rvCurveData],
-  );
-
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5">
-        <span className="mt-0.5 shrink-0 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-          Prototype
-        </span>
         <p className="text-[9.5px] leading-snug text-amber-800 dark:text-amber-300">
           {isGas
-            ? "RV GAS has no computation in this pipeline yet — every value below is a placeholder, not a measurement."
-            : "RV GCS is still prototype and in progress — computed, but not validated against a reference range yet."}
+            ? "RV GAS = % change in RV cavity area per segment (short-axis). Computed, but not validated against a reference range yet."
+            : "RV GCS = % change in RV free-wall length per segment (short-axis). Computed, but not validated against a reference range yet."}
         </p>
       </div>
 
-      {!isGas && !usingRealRvSeries && (
+      {!usingRealRvSeries && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">
           <p className="text-[10px] leading-snug text-muted-foreground">
             {usingRealRvStrain
               ? "Only the ED→ES RV strain is stored — compute all frames for a full-cycle curve."
-              : "No RV strain computed for this model yet."}
+              : `No RV ${rvMetricType} computed for this model yet${isGas ? " (results from before GAS was added need recomputing)" : ""}.`}
           </p>
         </div>
       )}
 
-      {/* Global / By Region / Full Cycle — same structure as LV. Global uses
-          the real per-frame curve for GCS; By Region and Full Cycle are an
-          illustrative 9-segment prototype for both metrics (GAS is dummy
-          everywhere, including Global). */}
+      {/* Global / By Region / Full Cycle — same structure as LV, all from the
+          real per-frame 9-segment series. */}
       <div className="rounded-lg border border-border bg-background p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
             {rvCurveView === "global"
-              ? (isGas ? "Prototype — Global GAS Curve" : "Global GCS Curve")
+              ? `Global ${rvMetricType} Curve`
               : rvCurveView === "region"
-              ? "Prototype — By Region (9 segments)"
-              : "Prototype — Full Cycle (9 segments)"}
+              ? `By Region (9 segments) — ${rvMetricType}`
+              : `Full Cycle (9 segments) — ${rvMetricType}`}
           </h4>
-          {rvCurveView === "global" && (
-            <span className="text-[10px] text-muted-foreground shrink-0">
-              {isGas ? "Dummy preview" : usingRealRvSeries ? `${rvCurveData.length} frames` : "Preview"}
-            </span>
+          {usingRealRvSeries && (
+            <span className="text-[10px] text-muted-foreground shrink-0">{rvCurveData.length} frames</span>
           )}
         </div>
         <div className="mb-2 grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
@@ -2378,10 +2490,12 @@ function RvStrainPanel({
           ))}
         </div>
 
-        {rvCurveView === "global" && (isGas || usingRealRvSeries) && (
+        {!usingRealRvSeries ? (
+          <p className="py-4 text-center text-[10px] text-muted-foreground">No full-cycle RV {rvMetricType} computed for this model yet.</p>
+        ) : rvCurveView === "global" ? (
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={isGas ? dummyRvGlobalCurve : rvCurveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
+              <LineChart data={rvCurveData} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
                 <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
                 <YAxis
@@ -2393,7 +2507,7 @@ function RvStrainPanel({
                 />
                 <Tooltip
                   cursor={{ stroke: "var(--border)" }}
-                  formatter={(value) => [`${Number(value).toFixed(1)}%`, isGas ? "RV GAS (dummy)" : "RV GCS"]}
+                  formatter={(value) => [`${Number(value).toFixed(1)}%`, `RV ${rvMetricType}`]}
                   labelFormatter={(label) => `${label} ms`}
                   contentStyle={{
                     borderRadius: 8,
@@ -2408,44 +2522,40 @@ function RvStrainPanel({
               </LineChart>
             </ResponsiveContainer>
           </div>
-        )}
-        {rvCurveView === "global" && !isGas && !usingRealRvSeries && (
-          <p className="py-4 text-center text-[10px] text-muted-foreground">No RV strain computed for this model yet.</p>
-        )}
-
-        {rvCurveView === "region" && <RegionalStrainByRegion series={dummyRvSeries} ringForSegment={ringForRvSegment} />}
-
-        {rvCurveView === "cycle" && (
+        ) : rvCurveView === "region" ? (
+          <RegionalStrainByRegion series={rvCycleSeries} ringForSegment={ringForRvSegment} />
+        ) : (
           <div className="w-full overflow-x-auto">
-            <FullCycleChart series={dummyRvSeries} strainType="GCS" width={480} height={240} ringForSegment={ringForRvSegment} />
+            <FullCycleChart series={rvCycleSeries} strainType="GCS" width={480} height={240} ringForSegment={ringForRvSegment} />
           </div>
-        )}
-
-        {rvCurveView !== "global" && (
-          <p className="mt-2 text-[9px] text-amber-700 dark:text-amber-400">
-            Prototype — illustrative 9-segment breakdown, not backed by a real per-region computation yet.
-          </p>
         )}
       </div>
 
       <div className="rounded-lg border border-border bg-background">
         <div className="border-b border-border px-3 py-2">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-            {rvCurveView === "global" ? "Region Values" : "Prototype — Segment Values"}
-          </h4>
+          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Region Values — {rvMetricType}</h4>
         </div>
-        {rvCurveView === "global" ? (
-          isGas ? (
-            <p className="p-3 text-[10px] text-muted-foreground">Switch to RV GCS for computed (still prototype) region values.</p>
-          ) : rvRegionValues.length ? (
-            <SegmentValuesTable segmentValues={rvRegionValues} strainType="GCS" />
-          ) : (
-            <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
-          )
+        {rvRegionValues.length ? (
+          <SegmentValuesTable segmentValues={rvRegionValues} strainType="GCS" />
         ) : (
-          <SegmentValuesTable segmentValues={dummyRvSeries[0] ?? []} strainType="GCS" />
+          <p className="p-3 text-[10px] text-muted-foreground">No RV region data yet.</p>
         )}
       </div>
+
+      {/* RV septal GCS — septal-side border, one segment per ring, reported
+          separately from the free-wall segments above (GCS only). */}
+      {!isGas && (
+        <div className="rounded-lg border border-border bg-background">
+          <div className="border-b border-border px-3 py-2">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">Septal GCS — per ring</h4>
+          </div>
+          {rvSeptalValues.length ? (
+            <SegmentValuesTable segmentValues={rvSeptalValues} strainType="GCS" />
+          ) : (
+            <p className="p-3 text-[10px] text-muted-foreground">No RV septal GCS yet — recompute RV strain.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

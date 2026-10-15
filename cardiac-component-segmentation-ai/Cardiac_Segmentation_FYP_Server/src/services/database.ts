@@ -778,10 +778,12 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   frames: [{ type: projectSegmentationMaskFramesSchema, required: true }], // Array of frames for the segmentation mask
   bullseye: { type: Schema.Types.Mixed, required: false }, // AHA 17-segment bullseye analysis result
   frameBullseye: { type: Schema.Types.Mixed, required: false }, // Per-frame wall thickness, RLE-only — see IProjectSegmentationMask.frameBullseye
+  rvFrameAreas: { type: Schema.Types.Mixed, required: false }, // Per-frame RV cavity area per segment, RLE-only — see IProjectSegmentationMask.rvFrameAreas
   heartMetrics: { type: Schema.Types.Mixed, required: false }, // Chamber volumes / EF / LV mass — see IProjectSegmentationMask.heartMetrics
   healthStatus: { type: Schema.Types.Mixed, required: false }, // Rule-based LV systolic-function health-status assessment (Task 2)
   regionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // Layer 2 — advisory per-AHA-segment assessment from regional strain. Mixed for the same reason as healthStatus/bullseye: a typed sub-schema would strip unknown keys.
   rvHealthStatus: { type: Schema.Types.Mixed, required: false }, // RV health status — sex-specific reference-range comparison (no severity grade), beside healthStatus; never changes the LV grade. Mixed for the same reason as regionalHealthStatus.
+  rvRegionalHealthStatus: { type: Schema.Types.Mixed, required: false }, // RV analog of regionalHealthStatus — advisory per-region (9-region RV free wall) assessment from regional RV strain. Mixed for the same reason as regionalHealthStatus.
   editTracking: { type: Schema.Types.Mixed, required: false }, // Slices that differ from this model's preserved AI output (compute_edit_tracking.py). Mixed, like rvHealthStatus.
   strain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES strain result (global + 17-segment) — see IProjectSegmentationMask.strain
   strainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame strain vs. the fixed ED reference — see IProjectSegmentationMask.strainSeries
@@ -899,8 +901,12 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
   ahaVertexLabels: { type: [Number], required: false },
   // Per-frame labels, keyed by original frame index (string keys). Mongoose's Map
   // type stores this as a real BSON map (not a nested-object schema), which is what
-  // an arbitrary/variable set of frame-index keys needs.
+  // an arbitrary/variable set of frame-index keys needs. Only set when small enough
+  // to store uncompressed -- see frameAhaVertexLabelsGz.
   frameAhaVertexLabels: { type: Map, of: [Number], required: false },
+  // Gzip+base64 of the same data, used instead of the plain field once it's large
+  // enough to risk the document's BSON size (see reconstruction_handler.ts).
+  frameAhaVertexLabelsGz: { type: String, required: false },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Hooks for pre-save and pre-delete operations (must be before the model creation)
@@ -2001,8 +2007,17 @@ const createProjectReconstruction = async (
     logger.info(`${serviceLocation}: Project reconstruction ${result._id} created successfully for project ${recon.projectid}.`);
     return { success: true, operation, projectreconstruction: result };
   } catch (error: unknown) {
+    // Was `message: "Error creating project reconstruction."` with no detail -- every real cause
+    // (the pre-save hook's own thrown Errors for a missing project/mask, a Mongoose
+    // ValidationError, a duplicate-key error on the (projectid, name) unique index, etc.) was
+    // discarded here and replaced with this one canned string. That made a genuinely diagnosable
+    // failure (e.g. "Referenced segmentation mask does not exist...", which happens when a
+    // reconstruction's mask is superseded/deleted by a re-run while the GPU is still working on
+    // the mesh) indistinguishable from any other failure in the job's own stored message -- the
+    // one place a user or developer could actually see it without reading server logs.
+    const detail = error instanceof Error ? error.message : String(error);
     LogError(error as Error, serviceLocation, `Error creating project reconstruction, ${error}`);
-    return { success: false, operation, message: "Error creating project reconstruction." };
+    return { success: false, operation, message: `Error creating project reconstruction: ${detail}` };
   }
 };
 
@@ -2237,6 +2252,7 @@ const jobSchema = new mongoose.Schema({
   // this field existed -- both read as LV, which is what they were.
   chamber: { type: String, required: false, enum: Object.values(ReconstructionChamber) },
   model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
+  progress: { type: Number, required: false, min: 0, max: 100 },
 }, { timestamps: true });
 const jobModel = mongoose.model<IJobDocument>('Job', jobSchema);
 

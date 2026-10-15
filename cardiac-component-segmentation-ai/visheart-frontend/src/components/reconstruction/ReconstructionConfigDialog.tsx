@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -144,11 +144,15 @@ export function ReconstructionConfigDialog({
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
   const [edFrame, setEdFrame] = useState(1);
   const [numIterations, setNumIterations] = useState(gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU);
-  // 32 was the old default and is too coarse: at N=32 the marching-cubes facets are ~17x larger
-  // by area than at N=128, which flat-shades into what looks like holes in a closed surface.
-  // 64 costs ~0.3s more per frame to decode and gives ~4x the vertices. Raise it further (96-128)
-  // for figures or anything measured off the surface.
-  const [resolution, setResolution] = useState(64);
+  // 32 was the original default and is too coarse: at N=32 the marching-cubes facets are ~17x
+  // larger by area than at N=128, which flat-shades into what looks like holes in a closed
+  // surface. 64 (the default from 2026-09 onward) still under-renders a small RV segment as a
+  // thin, easily-occluded sliver on a crescent-shaped cross-section -- confirmed directly
+  // (2026-10-01): a segment with a healthy, correctly-computed vertex share (7.4% of the mesh)
+  // was barely visible at N=64 but clearly visible at the notebook's own N=128 equivalent on the
+  // same patient. 128 is now the default; this stays opt-in/advanced (not forced), so a user who
+  // wants the old fast-but-coarse behavior can still dial it back down.
+  const [resolution, setResolution] = useState(128);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Derive a stable Set for membership checks.
@@ -216,6 +220,22 @@ export function ReconstructionConfigDialog({
   const noModelsAvailable = availableSet.size === 0;
   const noCreatableModels = (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
     (model) => !availableSet.has(model) || blockedSet.has(model),
+  );
+  // Same "nothing left to build" check as noCreatableModels, but for a GIVEN chamber rather than
+  // whichever one is currently selected -- so the chamber cards below can show the same
+  // already-built state the model cards already do, instead of letting you switch to a chamber
+  // where every model is already occupied with no indication anything is wrong until Start
+  // silently disables itself.
+  const chamberFullyOccupied = useCallback(
+    (ch: ReconstructionChamber) => {
+      const blocked = new Set<ReconstructionSegmentationModel>(
+        (ch === "rv" ? blockedRvModels : blockedModels) ?? [],
+      );
+      return (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
+        (model) => !availableSet.has(model) || blocked.has(model),
+      );
+    },
+    [availableSet, blockedModels, blockedRvModels],
   );
   const selectedIsBuilding = buildingSet.has(selectedModel);
   const startDisabled =
@@ -396,23 +416,39 @@ export function ReconstructionConfigDialog({
                 },
               ]).map((option) => {
                 const isSelected = chamber === option.value;
+                // A chamber with every model already reconstructed has nothing left to build --
+                // switching to it just to find that out at the Start button is the bug being
+                // fixed here, so it's disabled up front, same treatment the model cards already
+                // get when they're individually occupied.
+                const isOccupied = chamberFullyOccupied(option.value);
+                const isDisabled = isLoading || isOccupied;
                 return (
                   <div
                     key={option.value}
                     role="button"
-                    tabIndex={isLoading ? -1 : 0}
-                    onClick={() => !isLoading && setChamber(option.value)}
+                    tabIndex={isDisabled ? -1 : 0}
+                    aria-disabled={isDisabled}
+                    onClick={() => !isDisabled && setChamber(option.value)}
                     onKeyDown={(event) => {
-                      if (isLoading) return;
+                      if (isDisabled) return;
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         setChamber(option.value);
                       }
                     }}
+                    title={
+                      isOccupied
+                        ? `A 4D reconstruction already exists for every segmentation model in this chamber. Delete an existing result to build another one here.`
+                        : undefined
+                    }
                     className={cn(
                       "rounded-lg border p-3 transition-colors",
-                      isLoading ? "cursor-not-allowed opacity-60" : "cursor-pointer",
-                      isSelected
+                      isLoading
+                        ? "cursor-not-allowed opacity-60"
+                        : isOccupied
+                        ? "cursor-not-allowed opacity-50 bg-muted/30"
+                        : "cursor-pointer",
+                      isSelected && !isOccupied
                         ? option.value === "rv"
                           ? "border-amber-500 bg-amber-500/10"
                           : "border-primary bg-primary/5"
@@ -422,6 +458,9 @@ export function ReconstructionConfigDialog({
                     <p className="text-sm font-medium flex items-center gap-1.5">
                       {option.value === "rv" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
                       {option.title}
+                      {isOccupied && (
+                        <span className="ml-auto text-[10px] font-normal text-muted-foreground">Already built</span>
+                      )}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">{option.blurb}</p>
                   </div>
@@ -576,7 +615,7 @@ export function ReconstructionConfigDialog({
                 />
                 <p className="text-xs text-muted-foreground">
                   Mesh generation resolution (32-256). Higher values create more detailed
-                  meshes but increase processing time and file size. Default: 32
+                  meshes but increase processing time and file size. Default: 128
                 </p>
               </div>
 

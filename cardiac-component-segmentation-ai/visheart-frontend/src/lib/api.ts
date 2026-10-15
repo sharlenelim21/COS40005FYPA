@@ -194,6 +194,7 @@ export const projectApi = {
         headers: {
           "Content-Type": "multipart/form-data",
         },
+        timeout: 300000,
       });
       return response.data;
     } catch (error) {
@@ -428,6 +429,20 @@ export const segmentationApi = {
   triggerRegionalHealthStatus: async (maskId: string) => {
     try {
       const response = await api.post(`/segmentation/trigger-regional-health-status/${maskId}`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /**
+   * RV analog of triggerRegionalHealthStatus — reads this mask's stored
+   * per-region RV strain; never changes rvHealthStatus/healthStatus. Same
+   * "unavailable, not 400" behavior when inputs are missing.
+   */
+  triggerRvRegionalHealthStatus: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/trigger-rv-regional-health-status/${maskId}`);
       return response.data;
     } catch (error) {
       throw error;
