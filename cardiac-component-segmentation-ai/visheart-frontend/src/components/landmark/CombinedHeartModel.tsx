@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { valueToColor, rvSegmentColor } from "./heartColor";
@@ -47,6 +47,14 @@ interface CombinedHeartModelProps {
   /** RV segment (0-8, CPD atlas numbering), -1/undefined = none selected. */
   selectedRvSegment?: number;
   onRvSegmentClick?: (segment: number) => void;
+  /** Smooth motion (hooks/useMotionMesh): this frame's vertex positions for the loaded LV / RV mesh, in the mesh
+   * file's own coordinates and vertex order. Each mesh then stays loaded and only its vertices move (the shared
+   * alignment is on the group, so raw positions go straight in); null keeps a mesh as loaded. */
+  lvMotionPositions?: Float32Array | null;
+  rvMotionPositions?: Float32Array | null;
+  /** Called when that chamber's motion does not fit its loaded mesh (different vertex count). */
+  onLvMotionUnusable?: () => void;
+  onRvMotionUnusable?: () => void;
 }
 
 function disposeObject(object: THREE.Object3D) {
@@ -99,6 +107,16 @@ function buildSelectionState(
   return { mesh, vertexIndicesBySegment, baseColors: colors.slice(), centroidBySegment };
 }
 
+/** Moves a mesh's vertices to `positions` (raw file coordinates); false when they do not fit the mesh. */
+function moveVertices(mesh: THREE.Mesh, positions: Float32Array): boolean {
+  const posAttr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+  if (positions.length !== posAttr.count * 3) return false;
+  for (let i = 0; i < posAttr.count; i++) posAttr.setXYZ(i, positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+  posAttr.needsUpdate = true;
+  mesh.geometry.computeBoundingSphere();
+  return true;
+}
+
 export function CombinedHeartModel({
   lvMeshUrl, lvMeshFormat = "glb", lvSegmentLabels, lvValues, lvMin = -10, lvMax = 45, lvReverseColors = false,
   rvMeshUrl, rvMeshFormat = "glb", rvSegmentLabels,
@@ -108,6 +126,10 @@ export function CombinedHeartModel({
   onLvSegmentClick,
   selectedRvSegment = -1,
   onRvSegmentClick,
+  lvMotionPositions = null,
+  rvMotionPositions = null,
+  onLvMotionUnusable,
+  onRvMotionUnusable,
 }: CombinedHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pivotRef = useRef<THREE.Object3D | null>(null);
@@ -125,6 +147,37 @@ export function CombinedHeartModel({
   useEffect(() => { selectedRvSegmentRef.current = selectedRvSegment; }, [selectedRvSegment]);
   useEffect(() => { onLvSegmentClickRef.current = onLvSegmentClick; }, [onLvSegmentClick]);
   useEffect(() => { onRvSegmentClickRef.current = onRvSegmentClick; }, [onRvSegmentClick]);
+
+  // Smooth motion: positions are applied only to meshes loaded from the URLs wanted NOW (until a new file has
+  // loaded, the previous one is still on screen), on load and whenever the frame's positions change.
+  const motionRef = useRef({ lv: lvMotionPositions, rv: rvMotionPositions });
+  const wantedUrlsRef = useRef({ lv: lvMeshUrl ?? null, rv: rvMeshUrl ?? null });
+  const loadedUrlsRef = useRef<{ lv: string | null; rv: string | null }>({ lv: null, rv: null });
+  const onMotionUnusableRef = useRef({ lv: onLvMotionUnusable, rv: onRvMotionUnusable });
+  useEffect(() => { onMotionUnusableRef.current = { lv: onLvMotionUnusable, rv: onRvMotionUnusable }; },
+    [onLvMotionUnusable, onRvMotionUnusable]);
+  const applyMotionRef = useRef<() => void>(() => {});
+  applyMotionRef.current = () => {
+    const chambers = [
+      { key: "lv" as const, state: lvStateRef.current },
+      { key: "rv" as const, state: rvStateRef.current },
+    ];
+    for (const { key, state } of chambers) {
+      const positions = motionRef.current[key];
+      if (!state || !positions || loadedUrlsRef.current[key] !== wantedUrlsRef.current[key]) continue;
+      if (!moveVertices(state.mesh, positions)) {
+        console.warn(`[CombinedHeartModel] ${key.toUpperCase()} motion does not fit the loaded mesh; ignoring it`);
+        onMotionUnusableRef.current[key]?.();
+      }
+    }
+  };
+  useLayoutEffect(() => {
+    wantedUrlsRef.current = { lv: lvMeshUrl ?? null, rv: rvMeshUrl ?? null };
+  }, [lvMeshUrl, rvMeshUrl]);
+  useLayoutEffect(() => {
+    motionRef.current = { lv: lvMotionPositions, rv: rvMotionPositions };
+    applyMotionRef.current();
+  }, [lvMotionPositions, rvMotionPositions]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -363,6 +416,8 @@ export function CombinedHeartModel({
         loadedRef.current = group;
         lvStateRef.current = lvState;
         rvStateRef.current = rvState;
+        loadedUrlsRef.current = { lv: lvMeshUrl, rv: rvState ? rvMeshUrl ?? null : null };
+        applyMotionRef.current();
       } catch (err) {
         console.error("[CombinedHeartModel] Failed to load combined LV+RV mesh:", err);
       }

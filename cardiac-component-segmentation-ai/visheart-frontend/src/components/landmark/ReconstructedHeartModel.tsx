@@ -64,6 +64,12 @@ interface ReconstructedHeartModelProps {
    * fixed minDistance=5/maxDistance=20, so this only changes the initial
    * framing, not how far the user can scroll-zoom either way. */
   initialCameraDistance?: number;
+  /** Smooth motion (hooks/useMotionMesh): this frame's vertex positions for the loaded mesh, in the mesh file's own
+   * coordinates and vertex order (vertexCount x 3). The mesh then stays loaded and only its vertices move, with the
+   * same alignment as at load; null keeps the mesh as loaded. */
+  motionPositions?: Float32Array | null;
+  /** Called when motionPositions do not fit the loaded mesh (different vertex count), so the caller can fall back. */
+  onMotionUnusable?: () => void;
 }
 
 function findFirstMesh(root: THREE.Object3D): THREE.Mesh | null {
@@ -283,6 +289,8 @@ export function ReconstructedHeartModel({
   lvAlignmentMeshFormat = "glb",
   lvAlignmentLabels,
   initialCameraDistance = 11,
+  motionPositions = null,
+  onMotionUnusable,
 }: ReconstructedHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -295,6 +303,17 @@ export function ReconstructedHeartModel({
   const boundaryLinesRef = useRef<LineSegments2 | null>(null);
   const lineMaterialRef = useRef<LineMaterial | null>(null);
   const flatSegmentLabelsRef = useRef<number[] | null>(null);
+  // Smooth motion: the alignment applied at load, the mesh's own vertex count, and for the flattened debug view which
+  // original vertex each triangle corner came from.
+  const alignmentRef = useRef<THREE.Matrix4 | null>(null);
+  const vertexCountRef = useRef(0);
+  const cornerSourceRef = useRef<Uint32Array | null>(null);
+  // Which file the mesh on screen came from, and which one is wanted now: until the wanted one has loaded, the
+  // previous mesh is still on screen and motion meant for the new one must wait (it is applied on load).
+  const loadedUrlRef = useRef<string | null>(null);
+  const wantedUrlRef = useRef<string | null>(meshUrl);
+  const motionPositionsRef = useRef(motionPositions);
+  const onMotionUnusableRef = useRef(onMotionUnusable);
 
   const selectedSegmentRef = useRef(selectedSegment);
   const onSegmentClickRef = useRef(onSegmentClick);
@@ -319,6 +338,51 @@ export function ReconstructedHeartModel({
   useEffect(() => { segmentLabelsRef.current = segmentLabels; }, [segmentLabels]);
   useEffect(() => { colorModeRef.current = colorMode; }, [colorMode]);
   useEffect(() => { chamberRef.current = chamber; }, [chamber]);
+  useEffect(() => { onMotionUnusableRef.current = onMotionUnusable; }, [onMotionUnusable]);
+
+  // Moves the loaded mesh's vertices to motionPositions (aligned exactly as the mesh was at load), then refreshes its
+  // normals and the segment boundary lines. Labels, colours and selection are untouched: the vertices keep their order.
+  const applyMotionRef = useRef<() => void>(() => {});
+  applyMotionRef.current = () => {
+    const mesh = currentMeshRef.current;
+    const positions = motionPositionsRef.current;
+    const matrix = alignmentRef.current;
+    if (!mesh || !positions || !matrix || loadedUrlRef.current !== wantedUrlRef.current) return;
+    const count = vertexCountRef.current;
+    if (positions.length !== count * 3) {
+      console.warn(`[ReconstructedHeartModel] motion has ${positions.length / 3} vertices, mesh has ${count}; ignoring it`);
+      onMotionUnusableRef.current?.();
+      return;
+    }
+    const e = matrix.elements;
+    const moved = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+      moved[i * 3] = e[0] * x + e[4] * y + e[8] * z + e[12];
+      moved[i * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+      moved[i * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+    }
+    const posAttr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const corners = cornerSourceRef.current;
+    for (let i = 0; i < posAttr.count; i++) {
+      const source = (corners ? corners[i] : i) * 3;
+      posAttr.setXYZ(i, moved[source], moved[source + 1], moved[source + 2]);
+    }
+    posAttr.needsUpdate = true;
+    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeBoundingSphere();
+    const lines = boundaryLinesRef.current;
+    if (lines?.visible && flatSegmentLabelsRef.current) {
+      (lines.geometry as LineSegmentsGeometry).setPositions(buildSegmentBoundaryEdges(mesh, flatSegmentLabelsRef.current));
+    }
+  };
+  useLayoutEffect(() => {
+    wantedUrlRef.current = meshUrl;
+  }, [meshUrl]);
+  useLayoutEffect(() => {
+    motionPositionsRef.current = motionPositions;
+    applyMotionRef.current();
+  }, [motionPositions]);
 
   const applyVertexColorsRef = useRef<() => void>(() => {});
   applyVertexColorsRef.current = () => {
@@ -631,7 +695,7 @@ export function ReconstructedHeartModel({
     const BASE_LABELS = chamberRef.current === "rv" ? [3, 4, 5] : [1, 2, 3, 4, 5, 6];
     const AZIMUTH_ANCHOR_LABEL = chamberRef.current === "rv" ? 0 : 1;
 
-    const alignCenterAndScale = (mesh: THREE.Mesh) => {
+    const alignCenterAndScale = (mesh: THREE.Mesh): THREE.Matrix4 => {
       let rotation = new THREE.Quaternion();
       const apexCentroid = labelCentroidLocal(mesh, new Set(APEX_LABELS));
       const baseCentroid = labelCentroidLocal(mesh, new Set(BASE_LABELS));
@@ -662,7 +726,8 @@ export function ReconstructedHeartModel({
           }
         }
       }
-      mesh.geometry.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rotation));
+      const rotationMatrix = new THREE.Matrix4().makeRotationFromQuaternion(rotation);
+      mesh.geometry.applyMatrix4(rotationMatrix);
 
       mesh.geometry.computeBoundingBox();
       const box = mesh.geometry.boundingBox!;
@@ -684,6 +749,7 @@ export function ReconstructedHeartModel({
         .makeScale(scale, scale, scale)
         .multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
       mesh.geometry.applyMatrix4(centerAndScale);
+      return new THREE.Matrix4().multiplyMatrices(centerAndScale, rotationMatrix);
     };
 
     const onLoaded = async (object: THREE.Object3D) => {
@@ -693,6 +759,11 @@ export function ReconstructedHeartModel({
         console.error("[ReconstructedHeartModel] Loaded mesh file contains no THREE.Mesh");
         return;
       }
+
+      // For smooth motion: the mesh's own vertex count and triangle corners, before alignment/flattening change them.
+      const rawVertexCount = mesh.geometry.getAttribute("position")?.count ?? 0;
+      const rawIndex = mesh.geometry.getIndex();
+      let alignment: THREE.Matrix4 | null = null;
 
       let alignedViaLv = false;
       if (chamberRef.current === "rv" && lvAlignmentMeshUrl && lvAlignmentLabels?.length) {
@@ -704,6 +775,7 @@ export function ReconstructedHeartModel({
           if (lvPos) {
             const matrix = computeLvAlignment(lvPos, lvAlignmentLabels);
             mesh.geometry.applyMatrix4(matrix);
+            alignment = matrix;
             alignedViaLv = true;
           }
         } catch (err) {
@@ -713,7 +785,7 @@ export function ReconstructedHeartModel({
       // Falls back to RV's (or LV's) own independent apex/base alignment
       // whenever no LV reference was given, or loading/using one failed --
       // never leaves the mesh unaligned.
-      if (!alignedViaLv) alignCenterAndScale(mesh);
+      if (!alignedViaLv) alignment = alignCenterAndScale(mesh);
       // Skip the flatten-to-per-triangle step for real (non-debug) color
       // modes. Flattening duplicates every vertex per-triangle and forces
       // all 3 corners of a triangle to one majority-voted label -- that's
@@ -743,6 +815,7 @@ export function ReconstructedHeartModel({
       const boundaryLinePositions = showBoundaryLines
         ? buildSegmentBoundaryEdges(mesh, segmentLabelsRef.current)
         : new Float32Array(0);
+      const cornerSource = !useSmoothFill && rawIndex ? Uint32Array.from(rawIndex.array as ArrayLike<number>) : null;
       flatSegmentLabelsRef.current = useSmoothFill
         ? segmentLabelsRef.current
         : flattenToFaceLabels(mesh, segmentLabelsRef.current);
@@ -779,7 +852,12 @@ export function ReconstructedHeartModel({
       pivot.add(object);
       loadedObjectRef.current = object;
       currentMeshRef.current = mesh;
+      alignmentRef.current = alignment;
+      vertexCountRef.current = rawVertexCount;
+      cornerSourceRef.current = cornerSource;
+      loadedUrlRef.current = meshUrl;
       applyVertexColorsRef.current();
+      applyMotionRef.current();
       // Only the FIRST successful load reveals the canvas -- later frame
       // swaps during playback already have a colored mesh on screen and
       // shouldn't re-fade, or normal playback would flicker every frame.
