@@ -144,6 +144,8 @@ export interface LandmarkSidebarProps {
   replacementFileError: string | null;
   confidentCount?: number;
   onStrainFrameChange?: (frame: number) => void;
+  /** The cardiac-cycle playback speed (frames per second), reported so the page's 3D hearts ease at the same pace. */
+  onStrainFpsChange?: (fps: number) => void;
   onTabChange?: (tab: "landmarks" | "structure" | "strain") => void;
   activeTab?: "landmarks" | "structure" | "strain";
   activeModel?: "unet" | "medsam";
@@ -198,6 +200,7 @@ export function LandmarkSidebar({
   replacementFileError,
   confidentCount,
   onStrainFrameChange,
+  onStrainFpsChange,
   onTabChange,
   activeTab: activeTabProp,
   activeModel,
@@ -258,6 +261,14 @@ export function LandmarkSidebar({
   const [strainPlaying, setStrainPlaying] = useState(false);
   useEffect(() => { onStrainFrameChange?.(strainFrame); }, [strainFrame, onStrainFrameChange]);
 
+  // The cardiac cycle has its own speed (the slice playback keeps state.playbackFps). Default: real time — one cycle
+  // per heartbeat at REAL_TIME_BPM, since the scans carry no heart rate of their own (pixdim t is a placeholder 1).
+  // null = real time, so it follows the project's frame count.
+  const realTimeFps = (strainFrameCount * REAL_TIME_BPM) / 60;
+  const [strainFps, setStrainFps] = useState<number | null>(null);
+  const strainPlaybackFps = strainFps ?? realTimeFps;
+  useEffect(() => { onStrainFpsChange?.(strainPlaybackFps); }, [strainPlaybackFps, onStrainFpsChange]);
+
   // Landmark and strain playback are independent loops (slices vs. frames).
   // Switching tabs pauses BOTH, so a loop started in one tab can't keep running
   // while the user thinks the playback bar in the other tab is what's moving.
@@ -274,10 +285,10 @@ export function LandmarkSidebar({
     if (!strainPlaying || strainFrameCount < 2) return;
     const id = setInterval(
       () => setStrainFrame((f) => (f + 1) % strainFrameCount),
-      1000 / Math.max(state.playbackFps || 2, 0.5),
+      1000 / Math.max(strainPlaybackFps, 0.5),
     );
     return () => clearInterval(id);
-  }, [strainPlaying, strainFrameCount, state.playbackFps]);
+  }, [strainPlaying, strainFrameCount, strainPlaybackFps]);
   // Keep the index valid if the project's frame count arrives late or changes.
   useEffect(() => {
     setStrainFrame((f) => Math.min(f, strainFrameCount - 1));
@@ -361,13 +372,16 @@ export function LandmarkSidebar({
               currentFrame={strainFrame}
               totalFrames={strainFrameCount}
               isPlaying={strainPlaying}
-              playbackFps={state.playbackFps}
+              playbackFps={strainPlaybackFps}
+              realTimeFps={realTimeFps}
+              isRealTime={strainFps === null}
+              onRealTime={() => setStrainFps(null)}
               confidentCount={confidentCount ?? 0}
               onTogglePlay={() => setStrainPlaying((p) => !p)}
               onNextFrame={() => setStrainFrame((f) => Math.min(f + 1, strainFrameCount - 1))}
               onPrevFrame={() => setStrainFrame((f) => Math.max(f - 1, 0))}
               onSliderChange={(f) => setStrainFrame(Math.max(0, Math.min(f, strainFrameCount - 1)))}
-              onPlaybackSpeedChange={onPlaybackSpeedChange}
+              onPlaybackSpeedChange={setStrainFps}
             />
           </div>
         )}
@@ -461,6 +475,9 @@ function PlaybackBar({
   onSliderChange,
   onPlaybackSpeedChange,
   axisLabel = "Frame",
+  realTimeFps,
+  isRealTime = false,
+  onRealTime,
 }: {
   currentFrame: number;
   totalFrames: number;
@@ -474,8 +491,16 @@ function PlaybackBar({
   onPrevFrame: () => void;
   onSliderChange: (f: number) => void;
   onPlaybackSpeedChange: (fps: number) => void;
+  /** Cardiac cycle only: offer "Real time" (one cycle per heartbeat at REAL_TIME_BPM) before the fixed speeds. */
+  realTimeFps?: number;
+  isRealTime?: boolean;
+  onRealTime?: () => void;
 }) {
   const speedOptions = [0.5, 1, 2, 4];
+  const realTimeTip = realTimeFps
+    ? `Real heart-rate speed: one cardiac cycle per heartbeat at ${REAL_TIME_BPM} bpm (a normal resting heart rate), ` +
+      `${Math.round(realTimeFps)} frames per second. The scan does not record the patient's own heart rate.`
+    : "";
 
   return (
     <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-2 flex-shrink-0">
@@ -539,7 +564,21 @@ function PlaybackBar({
         <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           Speed
         </span>
-        <div className="grid grid-cols-4 gap-1 rounded-lg border border-border bg-background p-1">
+        <div className={cn("grid gap-1 rounded-lg border border-border bg-background p-1", realTimeFps ? "grid-cols-5" : "grid-cols-4")}>
+          {realTimeFps ? (
+            <button
+              type="button"
+              onClick={onRealTime}
+              className={cn(
+                "min-w-10 rounded-md px-1.5 py-1 text-[10px] font-medium transition-colors",
+                isRealTime ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              title={realTimeTip}
+              aria-label={realTimeTip}
+            >
+              Real-time
+            </button>
+          ) : null}
           {speedOptions.map((fps) => (
             <button
               key={fps}
@@ -547,7 +586,7 @@ function PlaybackBar({
               onClick={() => onPlaybackSpeedChange(fps)}
               className={cn(
                 "min-w-10 rounded-md px-1.5 py-1 text-[10px] font-medium tabular-nums transition-colors",
-                stateSpeedClass(fps, playbackFps),
+                stateSpeedClass(fps, isRealTime ? undefined : playbackFps),
               )}
               aria-label={`Set playback speed to ${fps} frames per second`}
             >
@@ -559,6 +598,9 @@ function PlaybackBar({
     </div>
   );
 }
+
+/** "Real time" for the cardiac cycle: one cycle per heartbeat at this rate (a normal resting heart rate). */
+const REAL_TIME_BPM = 60;
 
 function stateSpeedClass(fps: number, currentFps?: number) {
   return currentFps === fps

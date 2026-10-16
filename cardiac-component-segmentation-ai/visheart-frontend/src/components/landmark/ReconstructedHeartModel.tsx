@@ -10,7 +10,9 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { valueToColor, debugSegmentColor, rvSegmentColor } from "./heartColor";
 import { loadMesh as loadAlignmentMesh, computeLvAlignment } from "./lvAlignment";
-import { buildSegmentBoundaryEdges } from "./segmentBoundaryLines";
+import {
+  buildSegmentBoundaryEdges, buildSegmentBoundaryTopology, segmentBoundaryEdgesAt, type SegmentBoundaryTopology,
+} from "./segmentBoundaryLines";
 
 interface ReconstructedHeartModelProps {
   meshUrl: string;
@@ -214,6 +216,8 @@ export function ReconstructedHeartModel({
   const motionTransitionMsRef = useRef(motionTransitionMs);
   useEffect(() => { motionTransitionMsRef.current = motionTransitionMs; }, [motionTransitionMs]);
   const shownPositionsRef = useRef<Float32Array | null>(null);
+  // The outlines' topology for the loaded mesh and its labels (built once; each frame only re-reads positions).
+  const boundaryTopologyRef = useRef<{ labels: number[]; topology: SegmentBoundaryTopology | null } | null>(null);
   const motionAnimationRef = useRef<number | null>(null);
   const stopMotionAnimation = () => {
     if (motionAnimationRef.current !== null) cancelAnimationFrame(motionAnimationRef.current);
@@ -262,7 +266,12 @@ export function ReconstructedHeartModel({
     const fromLines = lineArray()?.slice();
     // The new frame's boundary lines are built once, from the new positions; in between, both are eased.
     show(target);
-    const targetLines = lineGeometry ? buildSegmentBoundaryEdges(mesh, flatSegmentLabelsRef.current!) : null;
+    const outlineLabels = flatSegmentLabelsRef.current;
+    if (lineGeometry && outlineLabels && boundaryTopologyRef.current?.labels !== outlineLabels) {
+      boundaryTopologyRef.current = { labels: outlineLabels, topology: buildSegmentBoundaryTopology(mesh, outlineLabels) };
+    }
+    const topology = boundaryTopologyRef.current?.topology;
+    const targetLines = lineGeometry && topology ? segmentBoundaryEdgesAt(topology, mesh) : null;
     const finish = () => {
       show(target);
       shownPositionsRef.current = target;
@@ -817,6 +826,7 @@ export function ReconstructedHeartModel({
       loadedUrlRef.current = meshUrl;
       stopMotionAnimation();
       shownPositionsRef.current = null;
+      boundaryTopologyRef.current = null;
       applyVertexColorsRef.current();
       applyMotionRef.current();
       // Only the FIRST successful load reveals the canvas -- later frame

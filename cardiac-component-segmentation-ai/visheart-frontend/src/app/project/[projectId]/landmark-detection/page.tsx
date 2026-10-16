@@ -941,7 +941,8 @@ export default function LandmarkDetectionPage() {
   const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
   // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (LandmarkSidebar advances
   // strainPlaybackFrame every 1000 / playbackFps ms), so the heart moves continuously instead of jumping per frame.
-  const motionTransitionMs = Math.min(1000, 1000 / Math.max(state.playbackFps || 2, 0.5));
+  const [strainPlaybackFps, setStrainPlaybackFps] = useState(2);
+  const motionTransitionMs = Math.min(1000, 1000 / Math.max(strainPlaybackFps, 0.5));
 
 
   // Per-frame wall thickness, when the full-cycle strain series has been run for
@@ -1618,6 +1619,7 @@ export default function LandmarkDetectionPage() {
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
             onStrainFrameChange={setStrainPlaybackFrame}
+            onStrainFpsChange={setStrainPlaybackFps}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
@@ -2018,6 +2020,7 @@ export default function LandmarkDetectionPage() {
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
                 onStrainFrameChange={setStrainPlaybackFrame}
+            onStrainFpsChange={setStrainPlaybackFps}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
@@ -3258,6 +3261,7 @@ function StrainPreviewPanel({
                     rvMotionPositions={rvMesh.motionPositions}
                     onLvMotionUnusable={markReconstructionMotionUnusable}
                     onRvMotionUnusable={rvMesh.markUnusable}
+                    motionTransitionMs={motionTransitionMs}
                     className="w-full h-full"
                     initialCameraDistance={8}
                     selectedLvSegment={selectedCombinedSegment ?? -1}
