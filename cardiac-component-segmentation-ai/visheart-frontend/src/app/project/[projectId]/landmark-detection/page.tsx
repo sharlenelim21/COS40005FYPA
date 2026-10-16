@@ -941,7 +941,7 @@ export default function LandmarkDetectionPage() {
   const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
   // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (LandmarkSidebar advances
   // strainPlaybackFrame every 1000 / playbackFps ms), so the heart moves continuously instead of jumping per frame.
-  const [strainPlaybackFps, setStrainPlaybackFps] = useState(2);
+  const [strainPlaybackFps, setStrainPlaybackFps] = useState(4);
   const motionTransitionMs = Math.min(1000, 1000 / Math.max(strainPlaybackFps, 0.5));
 
 

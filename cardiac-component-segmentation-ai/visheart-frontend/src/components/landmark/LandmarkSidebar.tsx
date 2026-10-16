@@ -261,11 +261,12 @@ export function LandmarkSidebar({
   const [strainPlaying, setStrainPlaying] = useState(false);
   useEffect(() => { onStrainFrameChange?.(strainFrame); }, [strainFrame, onStrainFrameChange]);
 
-  // The cardiac cycle has its own speed (the slice playback keeps state.playbackFps). Default: real time — one cycle
-  // per heartbeat at REAL_TIME_BPM, since the scans carry no heart rate of their own (pixdim t is a placeholder 1).
-  // null = real time, so it follows the project's frame count.
+  // The cardiac cycle has its own speed (the slice playback keeps state.playbackFps). Default 4 fps: slow enough to
+  // follow the walls (Jy, 2026-10-16: real time looked too fast to read). "Real time" = one cycle per heartbeat at
+  // REAL_TIME_BPM, since the scans carry no heart rate of their own (pixdim t is a placeholder 1); null selects it,
+  // so it follows the project's frame count.
   const realTimeFps = (strainFrameCount * REAL_TIME_BPM) / 60;
-  const [strainFps, setStrainFps] = useState<number | null>(null);
+  const [strainFps, setStrainFps] = useState<number | null>(DEFAULT_CYCLE_FPS);
   const strainPlaybackFps = strainFps ?? realTimeFps;
   useEffect(() => { onStrainFpsChange?.(strainPlaybackFps); }, [strainPlaybackFps, onStrainFpsChange]);
 
@@ -601,6 +602,8 @@ function PlaybackBar({
 
 /** "Real time" for the cardiac cycle: one cycle per heartbeat at this rate (a normal resting heart rate). */
 const REAL_TIME_BPM = 60;
+/** Default cardiac-cycle playback speed (frames per second). */
+const DEFAULT_CYCLE_FPS = 4;
 
 function stateSpeedClass(fps: number, currentFps?: number) {
   return currentFps === fps
