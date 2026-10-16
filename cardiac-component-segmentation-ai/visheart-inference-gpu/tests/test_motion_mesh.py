@@ -94,7 +94,7 @@ def test_motion_follows_the_surface_and_keeps_ed_exact():
 
     assert header["format"] == "visheart-motion"
     assert header["chamber"] == "lv"
-    assert header["method"] == "ffd1"
+    assert header["method"] == "ffd2"
     assert header["frames"] == list(range(FRAMES))
     assert header["edFrame"] == ED
     assert header["vertexCount"] == len(ed_vertices)              # the ED file's own vertices, nothing added
@@ -138,6 +138,16 @@ def test_jittery_reconstructions_do_not_crumple():
     assert result["stats"]["surfaceErrorMean"] < 1.0, result["stats"]
     steps = np.linalg.norm(np.diff(result["positions"], axis=0), axis=2)
     assert steps.max() < 3.0, steps.max()
+
+
+def test_playback_loop_closes():
+    """The cycle is smoothed as a loop: the last frame leads back into ED without a jump."""
+    result = build_motion({frame: ellipsoid_mesh(frame) for frame in range(FRAMES)}, ED)
+    positions = result["positions"]
+    step = np.linalg.norm(np.diff(positions, axis=0), axis=2).mean(axis=1).max()
+    wrap = np.linalg.norm(positions[0] - positions[-1], axis=1).mean()
+    assert wrap <= step * 1.5, (wrap, step)
+    assert result["stats"]["periodic"] is True
 
 
 def test_missing_frames_are_filled_in():

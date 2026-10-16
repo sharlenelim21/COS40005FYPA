@@ -3,7 +3,7 @@
 // each meshed on its own, so frames share no vertices and the page swaps whole meshes during playback. This service
 // sends the reconstruction's tar to the GPU service's /inference/v2/4d-motion (motion_mesh.py), which returns the
 // end-diastole mesh's own vertices moved onto every frame, and stores that file beside the tar in S3
-// ("<tar>.motion.ffd1.bin"). The page keeps loading the ED mesh and its ED AHA labels and only moves the vertices.
+// ("<tar>.motion.ffd2.bin"). The page keeps loading the ED mesh and its ED AHA labels and only moves the vertices.
 // No database field is added: the file's presence in S3 is the state, and a running build is remembered in memory.
 import fs from "fs";
 import os from "os";
@@ -36,7 +36,7 @@ export interface MotionSource {
 // The motion file is named after the GPU method that made it (motion_mesh.py's METHOD, also in the file's header): when
 // the method changes, change both, and every reconstruction's motion is rebuilt on its next view (files made by an
 // older method are simply no longer looked at).
-const MOTION_SUFFIX = ".motion.ffd1.bin";
+const MOTION_SUFFIX = ".motion.ffd2.bin";
 
 /** The motion file's S3 URL: beside the tar, same name, MOTION_SUFFIX. */
 export function motionUrlFor(tarUrl: string): string {

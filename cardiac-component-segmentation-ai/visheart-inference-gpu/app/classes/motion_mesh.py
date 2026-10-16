@@ -15,9 +15,12 @@ on patient108's real LV/RV reconstruction, 2026-10-15):
      and the displacement field is refitted to them with a smoothness and a small pull-back term, a few times. A
      smooth field cannot crumple the surface or let points drift along it, which per-vertex tracking did on real,
      frame-to-frame jittery reconstructions (patient108: 1,472 folded LV triangles and a visible dent; now none);
-  3. the field is smoothed lightly over time (Gaussian, 0.75 frame), which removes the frame-to-frame jitter of
-     independently fitted meshes without assuming the sequence closes into a cycle; the ED frame stays exactly the
-     reconstructed ED mesh.
+  3. every frame is fitted from ED on its own (not from the previous frame), so one collapsed reconstruction frame
+     cannot crush the mesh for the frames after it;
+  4. the field is smoothed over time as one closed cardiac cycle (Gaussian, 5 % of the cycle = 1.5 frames at 30
+     frames, wrapping from the last frame back to ED), which removes the frame-to-frame jitter of independently
+     fitted meshes and the jump when playback loops; the ED frame stays exactly the reconstructed ED mesh.
+     Chosen by Jy (2026-10-16) from a side-by-side of 0.75 frame / 1.5 frames / 1.5 frames closed on patient108 UNet.
 
 Output (encode_motion): b"VHMO", version, a JSON header (frame numbers, vertex count, quantisation), then int16
 positions for every frame and vertex. Motion along the surface (twist, base descent) is not observed: the field moves
@@ -37,7 +40,7 @@ from scipy import ndimage, sparse
 from scipy.sparse.linalg import splu
 
 FORMAT_VERSION = 1
-METHOD = "ffd1"          # the backend names the file after it (reconstruction_motion.ts MOTION_SUFFIX): change both
+METHOD = "ffd2"          # the backend names the file after it (reconstruction_motion.ts MOTION_SUFFIX): change both
 FRAME_NAME = re.compile(r"frame[_\s-]*(\d+)", re.IGNORECASE)   # the frontend's own rule (reconstruction-cache.ts)
 
 
@@ -263,14 +266,15 @@ def track_frame(points: np.ndarray, basis: sparse.csr_matrix, basis_t: sparse.cs
 
 
 def build_motion(meshes: dict, ed_frame: int | None = None, pitch: float | None = None, spacing: float = 6.0,
-                 stiffness: float = 0.5, anchor: float = 0.1, smoothing: float = 0.75, iterations: int = 15,
+                 stiffness: float = 0.5, anchor: float = 0.1, smoothing: float = 0.05, periodic: bool = True, iterations: int = 25,
                  samples: int = 4000, margin: float = 8.0) -> dict:
     """meshes: {frame number: (vertices, faces)} of one chamber, in mm. Returns the ED vertices moved onto every
     frame (frames without a mesh are filled in from their neighbours), plus quality figures.
 
     spacing: control-point spacing (mm) of the displacement field; stiffness / anchor: how strongly neighbouring
     control points must agree / how strongly the field is pulled back to no motion (both relative to the data);
-    smoothing: Gaussian sigma over time in frames (0 = none)."""
+    smoothing: Gaussian sigma over time as a fraction of the cycle (0.05 = 1.5 frames at 30; 0 = none); periodic: the
+    frames are one cardiac cycle, so smoothing wraps from the last frame back to ED (no jump when playback loops)."""
     start = time.time()
     numbers = sorted(meshes)
     if len(numbers) < 3:
@@ -297,14 +301,14 @@ def build_motion(meshes: dict, ed_frame: int | None = None, pitch: float | None 
     system = basis_t @ basis + stiffness * scale * (roughness.T @ roughness) + anchor * scale * sparse.identity(grid.size)
     solve = splu(system.tocsc()).solve
 
-    # Frames in cycle order from ED; each starts from the previous frame's field (the pull-back keeps it from drifting).
+    # Every frame is fitted from ED, not from the previous frame: a reconstruction that collapses in one frame (patient108
+    # UNet RV: 18 ml -> 4.8 ml -> 18 ml) would otherwise crush the mesh and keep it crushed for the frames after
+    # (chained fit: 0.8 ml where the input was back at 18 ml).
     cycle = [n for n in numbers if n >= ed_frame] + [n for n in numbers if n < ed_frame]
     fields, known = {}, {ed_frame: np.zeros((grid.size, 3))}
-    coefficients = known[ed_frame]
     for n in cycle[1:]:
         fields[n] = mesh_field(*meshes[n], low, shape, pitch)
-        coefficients = track_frame(points, basis, basis_t, solve, fields[n], coefficients, iterations)
-        known[n] = coefficients
+        known[n] = track_frame(points, basis, basis_t, solve, fields[n], np.zeros((grid.size, 3)), iterations)
 
     # Every frame number from first to last: missing ones linear in time between their neighbours.
     all_frames = list(range(numbers[0], numbers[-1] + 1))
@@ -318,9 +322,13 @@ def build_motion(meshes: dict, ed_frame: int | None = None, pitch: float | None 
             t = (n - before) / (after - before)
             field_series[i] = (1 - t) * known[before] + t * known[after]
     ed_index = all_frames.index(ed_frame)
-    if smoothing > 0:
-        field_series = ndimage.gaussian_filter1d(field_series, smoothing, axis=0, mode="nearest")
-        fade = np.exp(-0.5 * ((np.arange(len(all_frames)) - ed_index) / smoothing) ** 2)
+    sigma = smoothing * len(all_frames)                                    # in frames
+    if sigma > 0:
+        field_series = ndimage.gaussian_filter1d(field_series, sigma, axis=0, mode="wrap" if periodic else "nearest")
+        distance = np.abs(np.arange(len(all_frames)) - ed_index)
+        if periodic:
+            distance = np.minimum(distance, len(all_frames) - distance)
+        fade = np.exp(-0.5 * (distance / sigma) ** 2)
         field_series -= fade[:, None, None] * field_series[ed_index]          # ED exactly as reconstructed
     else:
         field_series[ed_index] = 0.0
@@ -341,6 +349,7 @@ def build_motion(meshes: dict, ed_frame: int | None = None, pitch: float | None 
                   "foldedAreaPercent": round(max(f[1] for f in folds), 3),
                   "endToEdGap": round(float(np.linalg.norm(positions[-1] - positions[0], axis=1).mean()), 3),
                   "pitch": round(pitch, 3), "spacing": round(spacing, 3),
+                  "smoothingFrames": round(sigma, 2), "periodic": periodic,
                   "framesTracked": len(cycle), "framesFilled": len(all_frames) - len(cycle),
                   "seconds": round(time.time() - start, 1)},
     }

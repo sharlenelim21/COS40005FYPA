@@ -42,8 +42,8 @@ beforeEach(() => {
 
 describe("motionUrlFor", () => {
     it("puts the motion file beside the tar", () => {
-        expect(motionUrlFor(TAR)).toBe("http://minio:9000/bucket/user/recon/case_4D_lv.motion.ffd1.bin");
-        expect(motionUrlFor("http://minio:9000/bucket/a/mesh")).toBe("http://minio:9000/bucket/a/mesh.motion.ffd1.bin");
+        expect(motionUrlFor(TAR)).toBe("http://minio:9000/bucket/user/recon/case_4D_lv.motion.ffd2.bin");
+        expect(motionUrlFor("http://minio:9000/bucket/a/mesh")).toBe("http://minio:9000/bucket/a/mesh.motion.ffd2.bin");
     });
 });
 
@@ -57,7 +57,7 @@ describe("getMotion", () => {
         (getS3FileSize as jest.Mock).mockResolvedValue(1024);
         const first = await getMotion(source("r-ready"));
         const second = await getMotion(source("r-ready"));
-        expect(first).toEqual({ status: "ready", url: "https://signed.example/user/recon/case_4D_lv.motion.ffd1.bin" });
+        expect(first).toEqual({ status: "ready", url: "https://signed.example/user/recon/case_4D_lv.motion.ffd2.bin" });
         expect(second).toEqual(first);
         expect(getS3FileSize).toHaveBeenCalledTimes(1);
     });
@@ -84,8 +84,8 @@ describe("startMotion", () => {
         expect(Buffer.from(body).toString()).toBe("tar bytes");
         expect(options.params).toEqual({ chamber: "lv" });
         expect(options.headers.Authorization).toBe("Bearer token");
-        expect((uploadToS3 as jest.Mock).mock.calls[0][5]).toBe("user/recon/case_4D_lv.motion.ffd1.bin");
-        await expect(getMotion(source("r-build"))).resolves.toEqual({ status: "ready", url: "https://signed.example/user/recon/case_4D_lv.motion.ffd1.bin" });
+        expect((uploadToS3 as jest.Mock).mock.calls[0][5]).toBe("user/recon/case_4D_lv.motion.ffd2.bin");
+        await expect(getMotion(source("r-build"))).resolves.toEqual({ status: "ready", url: "https://signed.example/user/recon/case_4D_lv.motion.ffd2.bin" });
     });
 
     it("remembers a failure until it is cleared", async () => {
