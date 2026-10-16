@@ -117,6 +117,13 @@ export type DiseasePatternGate = {
   reasons: string[];
   /** The gate's own criterion, in plain text, for display next to it. */
   criterion_text: string;
+  /** Present on MINF/DCM/HCM/RV (null on NOR, whose criterion_text already
+   *  names its sources): a static, dataset-level note comparing this
+   *  project's ACDC ground-truth-derived stats against this app's own
+   *  deployed-model (UNet + manual QC) derived stats for that gate's
+   *  feature(s) — pipeline-accuracy evidence, not a per-patient value and
+   *  not a new threshold. */
+  validation_note?: string | null;
   /** Set only when 2+ non-RV gates are met at once (e.g. MINF+DCM — the ACDC
    *  paper's own MINF description allows a co-occurring dilated LV). Ranks
    *  by an internal, never-exposed margin — a plain label, not a percentage,

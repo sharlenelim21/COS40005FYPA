@@ -30,12 +30,20 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 
-PILOT_PATIENT_IDS = [
+BATCH_1_PATIENT_IDS = [
     "patient001", "patient002", "patient003", "patient004", "patient005",
     "patient021", "patient022", "patient023", "patient024", "patient025",
     "patient041", "patient042", "patient043", "patient044", "patient045",
     "patient061", "patient062", "patient063", "patient064", "patient065",
     "patient081", "patient082", "patient083", "patient084", "patient085",
+]
+
+BATCH_2_PATIENT_IDS = [
+    "patient006", "patient007", "patient008", "patient009", "patient010",
+    "patient026", "patient027", "patient028", "patient029", "patient030",
+    "patient046", "patient047", "patient048", "patient049", "patient050",
+    "patient066", "patient067", "patient068", "patient069", "patient070",
+    "patient086", "patient087", "patient088", "patient089", "patient090",
 ]
 
 # RV, myocardium, LV cavity — matches the label values (1,2,3) this app's
@@ -98,6 +106,7 @@ def main() -> None:
     ap.add_argument("--acdc-dir", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--frame", choices=["ED", "ES", "both"], default="ED")
+    ap.add_argument("--batch", type=int, choices=[1, 2], default=1)
     args = ap.parse_args()
 
     acdc_dir = Path(args.acdc_dir)
@@ -106,8 +115,9 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     info = parse_csv(acdc_dir / "training_info.csv")
 
+    patient_ids = BATCH_2_PATIENT_IDS if args.batch == 2 else BATCH_1_PATIENT_IDS
     frames_wanted = ["ED", "ES"] if args.frame == "both" else [args.frame]
-    for pid in PILOT_PATIENT_IDS:
+    for pid in patient_ids:
         row = info.get(pid)
         if not row:
             print(f"  {pid}: skipped — not in CSV")

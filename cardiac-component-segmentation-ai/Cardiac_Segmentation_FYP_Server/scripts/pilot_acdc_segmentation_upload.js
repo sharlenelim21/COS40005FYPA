@@ -23,7 +23,11 @@
  * each project once QC is done.
  *
  * Usage:
- *   node scripts/pilot_acdc_segmentation_upload.js
+ *   node scripts/pilot_acdc_segmentation_upload.js            # batch 1 (first 5/group)
+ *   node scripts/pilot_acdc_segmentation_upload.js --batch 2  # batch 2 (next 5/group)
+ *
+ * Re-running for a later batch APPENDS to the existing mapping file rather
+ * than overwriting it, so batch 1's project IDs survive.
  *
  * Config via env vars (all optional):
  *   VISHEART_BASE_URL   default http://localhost:5000
@@ -39,16 +43,30 @@ const TRAINING_DIR = path.join(ACDC_DIR, "training");
 const CSV_PATH = path.join(ACDC_DIR, "training_info.csv");
 const OUT_PATH = path.join(ACDC_DIR, "pilot_segmentation_projects.json");
 
-// First 5 patients per group, by lowest numeric ID — deterministic, matches
-// ACDC's own contiguous per-group ID blocks (DCM 1-20, HCM 21-40, MINF
-// 41-60, NOR 61-80, RV 81-100).
-const PILOT_PATIENT_IDS = [
+// Batch 1: first 5 patients per group, by lowest numeric ID — deterministic,
+// matches ACDC's own contiguous per-group ID blocks (DCM 1-20, HCM 21-40,
+// MINF 41-60, NOR 61-80, RV 81-100).
+const BATCH_1_PATIENT_IDS = [
   "patient001", "patient002", "patient003", "patient004", "patient005", // DCM
   "patient021", "patient022", "patient023", "patient024", "patient025", // HCM
   "patient041", "patient042", "patient043", "patient044", "patient045", // MINF
   "patient061", "patient062", "patient063", "patient064", "patient065", // NOR
   "patient081", "patient082", "patient083", "patient084", "patient085", // RV
 ];
+
+// Batch 2: next 5 patients per group — brings total to 10/group (50 overall,
+// half of the full 100-patient ACDC training set).
+const BATCH_2_PATIENT_IDS = [
+  "patient006", "patient007", "patient008", "patient009", "patient010", // DCM
+  "patient026", "patient027", "patient028", "patient029", "patient030", // HCM
+  "patient046", "patient047", "patient048", "patient049", "patient050", // MINF
+  "patient066", "patient067", "patient068", "patient069", "patient070", // NOR
+  "patient086", "patient087", "patient088", "patient089", "patient090", // RV
+];
+
+const batchArgIdx = process.argv.indexOf("--batch");
+const batchNum = batchArgIdx !== -1 ? parseInt(process.argv[batchArgIdx + 1], 10) : 1;
+const PILOT_PATIENT_IDS = batchNum === 2 ? BATCH_2_PATIENT_IDS : BATCH_1_PATIENT_IDS;
 
 function parseCsv(text) {
   const [headerLine, ...lines] = text.trim().split(/\r?\n/);
@@ -225,6 +243,8 @@ async function main() {
 
   const cookie = await registerAndLogin();
 
+  console.log(`\nBatch ${batchNum}: ${PILOT_PATIENT_IDS.length} patients.`);
+
   const pending = [];
   console.log(`\nUploading ${PILOT_PATIENT_IDS.length} patients...`);
   for (const pid of PILOT_PATIENT_IDS) {
@@ -251,8 +271,21 @@ async function main() {
   // Note: the session cookie itself is deliberately NOT persisted here (it's
   // a live credential) — re-run registerAndLogin() (or log in as
   // PILOT_USERNAME in the app) to get a fresh one.
-  fs.writeFileSync(OUT_PATH, JSON.stringify({ generated_at: new Date().toISOString(), account: PILOT_USERNAME, patients: pending }, null, 2));
-  console.log(`\nWrote mapping to ${OUT_PATH}`);
+  //
+  // Merge into any existing mapping (from an earlier batch) rather than
+  // overwrite it, keyed by patientId, so re-running for batch 2+ doesn't
+  // lose batch 1's project IDs.
+  let existingPatients = [];
+  if (fs.existsSync(OUT_PATH)) {
+    try {
+      existingPatients = JSON.parse(fs.readFileSync(OUT_PATH, "utf8")).patients || [];
+    } catch { /* ignore unreadable existing file, start fresh */ }
+  }
+  const merged = new Map(existingPatients.map((p) => [p.patientId, p]));
+  for (const p of pending) merged.set(p.patientId, p);
+
+  fs.writeFileSync(OUT_PATH, JSON.stringify({ generated_at: new Date().toISOString(), account: PILOT_USERNAME, patients: [...merged.values()] }, null, 2));
+  console.log(`\nWrote mapping to ${OUT_PATH} (${merged.size} total patients across all batches)`);
   console.log("\nNext step (MANUAL, cannot be scripted): open each project in the app, review the");
   console.log("segmentation (ED/ES at minimum) and brush-correct anything missing (dropped RV/");
   console.log("myocardium region on any slice) before deriving reference ranges from these masks.");

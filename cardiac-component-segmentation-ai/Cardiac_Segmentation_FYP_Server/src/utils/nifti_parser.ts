@@ -10,8 +10,18 @@ const serviceLocation = "NIfTI Parser";
 
 const execFileAsync = promisify(execFile);
 
-// Path to the Python script that extracts metadata
-const PYTHON_SCRIPT = path.join(__dirname, '..', 'python', 'extract_metadata.py');
+// Path to the Python script that extracts metadata.
+// NOTE: deliberately '..', '..', 'src', 'python' (matching every other caller
+// in this codebase, e.g. segmentation_routes.ts's create_nifti_* calls), NOT
+// '..', 'python'. At runtime __dirname is dist/utils, so '..', 'python' would
+// resolve to dist/python -- a copy baked into the Docker image at build time,
+// NOT the src/python bind mount docker-compose.yml maps into the container.
+// Confirmed live (2026-10): dist/python/extract_metadata.py still had the old
+// unit-scale-affine bug long after src/python/extract_metadata.py was fixed,
+// because this one path silently pointed at the stale baked-in copy instead
+// of the live-edited source -- every fix to this script was a no-op for real
+// uploads until this path itself was corrected.
+const PYTHON_SCRIPT = path.join(__dirname, '..', '..', 'src', 'python', 'extract_metadata.py');
 
 /**
  * Interface describing the structure of metadata extracted from a NIfTI file.

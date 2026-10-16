@@ -524,8 +524,27 @@ export const MEDICAL_GUIDE: MedicalGuide = {
           title: "How this relates to VisHeart",
           body: [
             {
-              text: "VisHeart's Disease Similarity feature compares a scan's measurements with patterns typical of a normal heart, HCM and DCM. It shows how similar the patterns are. It does not diagnose disease.",
+              text: "VisHeart's Disease Pattern Gates feature checks a scan's measurements against each condition's own published classification criteria (normal, MINF, DCM, HCM, and an abnormal-right-ventricle group) and reports which criteria are met. It does not diagnose disease, and meeting zero, one, or more than one gate at once is expected and not an error.",
               refs: [],
+            },
+          ],
+        },
+        {
+          kind: "callout",
+          variant: "info",
+          title: "How VisHeart checks its own measurements against this research",
+          body: [
+            {
+              text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the ACDC Challenge dataset's own published classification rules directly (for example, ejection fraction below 40% for MINF).",
+              refs: [],
+            },
+            {
+              text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the results against the dataset's official hand-labelled ground truth for the same patients. The two agreed closely for every condition, which is evidence the pipeline's own numbers can be trusted, not a new diagnostic range.",
+              refs: [],
+            },
+            {
+              text: "The normal (NOR) group is the one exception: the ACDC Challenge publishes no numeric criterion for it at all. VisHeart instead uses the widest combination of three sources — a published meta-analysis of healthy adults, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group — so a genuinely healthy heart is not wrongly flagged just because of how one single study happened to measure it.",
+              refs: ["zhan2024"],
             },
           ],
         },

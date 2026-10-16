@@ -488,13 +488,25 @@ export class TarImageCache {
         };
       }
 
-      const tarBlob = await tarResponse.blob();
+      // Read straight into an ArrayBuffer instead of response.blob() — a
+      // Blob obtained from fetch() can get backed by a Chromium-internal
+      // temp file for larger responses, and reading IT BACK via
+      // .arrayBuffer() a moment later can throw "NotReadableError...
+      // permission problems that have occurred after a reference to a file
+      // was acquired" (a known Chromium Blob/temp-file bug class, not an
+      // IndexedDB/cache issue — reported live, 2026-10, reproduced on a
+      // *freshly fetched* tar, not a cached one, confirmed via console
+      // logs showing the failure land immediately after "Extracting tar
+      // file", before any IndexedDB write). Reading the network response
+      // directly into memory sidesteps that disk-backed intermediate
+      // entirely.
+      const tarArrayBuffer = await tarResponse.arrayBuffer();
       this.debugInfo.tarFileFetched = true;
-      this.debugInfo.tarFileSize = tarBlob.size;
+      this.debugInfo.tarFileSize = tarArrayBuffer.byteLength;
 
       // Step 3: Extract and store images
-      console.log(`[TarImageCache] Extracting tar file (${tarBlob.size} bytes)`);
-      const extractionResult = await this.extractAndStoreImages(projectId, tarBlob);
+      console.log(`[TarImageCache] Extracting tar file (${tarArrayBuffer.byteLength} bytes)`);
+      const extractionResult = await this.extractAndStoreImages(projectId, tarArrayBuffer);
 
       this.debugInfo.processingTime = performance.now() - startTime;
 
@@ -515,15 +527,12 @@ export class TarImageCache {
     }
   }
 
-  private async extractAndStoreImages(projectId: string, tarBlob: Blob): Promise<TarExtractionResult> {
+  private async extractAndStoreImages(projectId: string, arrayBuffer: ArrayBuffer): Promise<TarExtractionResult> {
     this.debugInfo.extractionStarted = true;
 
     try {
       // Clear existing images for this project
       await this.db.clearProject(projectId);
-
-      // Convert blob to array buffer for js-untar
-      const arrayBuffer = await tarBlob.arrayBuffer();
 
       // js-untar is browser-only (touches `window` at module scope), so it
       // has to stay a runtime import rather than a static one — this file

@@ -137,7 +137,37 @@ export function ReferenceCriteriaPage({
         ]}
         cite={
           <>
-            Zhan et al., <em>Circ Cardiovasc Imaging</em> 2024;17(2):e016090.
+            Zhan et al., <em>Circ Cardiovasc Imaging</em> 2024;17(2):e016090. The NOR gate on earlier pages does not
+            use these numbers alone — it widens each bound to the union of this table and this project&apos;s own
+            ACDC-derived ranges below, so a genuinely-normal patient is never excluded purely from a difference in
+            measurement convention between this meta-analysis and this project&apos;s own pipeline.
+          </>
+        }
+      />
+
+      <RefTable
+        caption="This project's own pipeline validation — ACDC pilot cohort"
+        columns={["Gate", "Feature", "Ground truth (n=20/group)", "This app's own pipeline, QC'd (n=10/group)", "ACDC cutoff used above"]}
+        rows={[
+          ["NOR", "EF / EDVI / LVMI", "51.5–72.9% / 48.1–95.4 / 36.9–75.0", "51.8–65.1% / 47.5–84.9 / 37.4–75.0", "— (NOR has none; see note above)"],
+          ["MINF", "EF", "31.0%", "28.9%", "< 40%"],
+          ["DCM", "EDVI / EF", "153.3 mL/m² / 18.4%", "155.7 mL/m² / 16.2%", "> 100 mL/m² / < 40%"],
+          ["HCM", "LVMI / wall thickness", "92.2 g/m² / 17.8 mm", "99.7 g/m² / 17.1 mm", "> 110 g/m² / > 15 mm"],
+          ["RV", "RVEDVI / RVEF", "111.9 mL/m² / 31.4%", "110.7 mL/m² / 27.0%", "> 110 mL/m² or < 40%"],
+        ]}
+        cite={
+          <>
+            This project&apos;s own ACDC Challenge training-set pilot: &ldquo;Ground truth&rdquo; is this pipeline
+            run against ACDC&apos;s official ground-truth segmentation masks, all 100 patients
+            (scripts/derive_acdc_reference_ranges.py). &ldquo;This app&apos;s own pipeline&rdquo; is this app&apos;s
+            deployed UNet segmentation model&apos;s output after manual QC/correction in the app, a 50-patient pilot
+            subset (scripts/derive_system_reference_ranges.js). Shown as evidence that this app&apos;s own
+            measurement pipeline agrees with the official ground truth for each gate&apos;s defining feature(s) —
+            not a new threshold; MINF/DCM/HCM/RV&apos;s cutoffs are ACDC&apos;s own fixed criteria (above) and are
+            not replaced by sample data. HCM&apos;s LVMI group average sits below the &gt;110 g/m² cutoff in both
+            measurements — expected, since ACDC&apos;s HCM label is a clinical diagnosis and not every labelled
+            patient individually clears every numeric ACDC criterion; the HCM gate still evaluates each
+            patient&apos;s own measurements, never the group average.
           </>
         }
       />
