@@ -17,10 +17,11 @@ on patient108's real LV/RV reconstruction, 2026-10-15):
      frame-to-frame jittery reconstructions (patient108: 1,472 folded LV triangles and a visible dent; now none);
   3. every frame is fitted from ED on its own (not from the previous frame), so one collapsed reconstruction frame
      cannot crush the mesh for the frames after it;
-  4. the field is smoothed over time as one closed cardiac cycle (Gaussian, 5 % of the cycle = 1.5 frames at 30
-     frames, wrapping from the last frame back to ED), which removes the frame-to-frame jitter of independently
-     fitted meshes and the jump when playback loops; the ED frame stays exactly the reconstructed ED mesh.
-     Chosen by Jy (2026-10-16) from a side-by-side of 0.75 frame / 1.5 frames / 1.5 frames closed on patient108 UNet.
+  4. the field is smoothed lightly over time (Gaussian, 2.5 % of the cycle = 0.75 frame at 30 frames, not wrapped),
+     which removes most frame-to-frame jitter of independently fitted meshes while staying close to every
+     reconstructed frame; the ED frame stays exactly the reconstructed ED mesh. Jy (2026-10-16): the view is for
+     doctors, who focus on the LV, so fidelity comes first; the stronger closed-loop smoothing (5 %, periodic) shrank
+     the visible contraction (patient108 UNet: LV volume swing -8 %, RV -23 %) and is kept only as an option.
 
 Output (encode_motion): b"VHMO", version, a JSON header (frame numbers, vertex count, quantisation), then int16
 positions for every frame and vertex. Motion along the surface (twist, base descent) is not observed: the field moves
@@ -40,7 +41,7 @@ from scipy import ndimage, sparse
 from scipy.sparse.linalg import splu
 
 FORMAT_VERSION = 1
-METHOD = "ffd2"          # the backend names the file after it (reconstruction_motion.ts MOTION_SUFFIX): change both
+METHOD = "ffd3"          # the backend names the file after it (reconstruction_motion.ts MOTION_SUFFIX): change both
 FRAME_NAME = re.compile(r"frame[_\s-]*(\d+)", re.IGNORECASE)   # the frontend's own rule (reconstruction-cache.ts)
 
 
@@ -266,14 +267,14 @@ def track_frame(points: np.ndarray, basis: sparse.csr_matrix, basis_t: sparse.cs
 
 
 def build_motion(meshes: dict, ed_frame: int | None = None, pitch: float | None = None, spacing: float = 6.0,
-                 stiffness: float = 0.5, anchor: float = 0.1, smoothing: float = 0.05, periodic: bool = True, iterations: int = 25,
+                 stiffness: float = 0.5, anchor: float = 0.1, smoothing: float = 0.025, periodic: bool = False, iterations: int = 25,
                  samples: int = 4000, margin: float = 8.0) -> dict:
     """meshes: {frame number: (vertices, faces)} of one chamber, in mm. Returns the ED vertices moved onto every
     frame (frames without a mesh are filled in from their neighbours), plus quality figures.
 
     spacing: control-point spacing (mm) of the displacement field; stiffness / anchor: how strongly neighbouring
     control points must agree / how strongly the field is pulled back to no motion (both relative to the data);
-    smoothing: Gaussian sigma over time as a fraction of the cycle (0.05 = 1.5 frames at 30; 0 = none); periodic: the
+    smoothing: Gaussian sigma over time as a fraction of the cycle (0.025 = 0.75 frame at 30; 0 = none); periodic: the
     frames are one cardiac cycle, so smoothing wraps from the last frame back to ED (no jump when playback loops)."""
     start = time.time()
     numbers = sorted(meshes)
