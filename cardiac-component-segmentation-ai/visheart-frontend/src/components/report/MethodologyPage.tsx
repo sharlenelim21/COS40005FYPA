@@ -3,7 +3,7 @@
 import React from "react";
 import { ReportPageFrame } from "./ReportPageFrame";
 
-const PIPELINE = ["MRI", "Segmentation", "LV / RV masks", "Heart metrics", "Wall thickness / FAC", "Strain", "Disease similarity"];
+const PIPELINE = ["MRI", "Segmentation", "LV / RV masks", "Heart metrics", "Wall thickness / FAC", "Strain", "Disease pattern gates"];
 
 const METHOD_LIST: [string, string][] = [
   ["EDV / ESV", "Summed voxel volume of the LV/RV blood-pool mask at the auto-detected end-diastolic and end-systolic frames."],
@@ -11,13 +11,13 @@ const METHOD_LIST: [string, string][] = [
   ["BSA indexing", "Mosteller formula, √(height × weight / 3600); every “…I” suffixed metric divides the raw value by BSA."],
   ["Max wall thickness", "Maximum of the 17 AHA-segment ED wall-thickness values from the bullseye analysis."],
   ["GRS / GCS", "Mask-difference deformation between ED and ES contours per AHA segment — a geometric surrogate, not CMR feature-tracking strain."],
-  ["Disease similarity", "Weighted z-score distance to reference profiles, converted to percentages via softmax; rule-based gates flag when the top match's essential criterion isn't met."],
+  ["Disease pattern gates", "Each of the ACDC Challenge dataset's 5 diagnostic-group criteria (NOR/MINF/DCM/HCM/RV) is checked independently as its own met/not-met gate, since RV's criterion uses different measurements than the 4 LV criteria and can't be ranked against them on one scale; a patient can meet zero, one, or more than one gate."],
 ];
 
 const LIMITATIONS = [
   "Results depend entirely on segmentation quality.",
   "GRS/GCS/GAS are method-dependent geometric surrogates, not validated feature-tracking strain.",
-  "Disease-pattern scores are computational similarity scores, not diagnostic probabilities.",
+  "Disease-pattern gates report whether published classification criteria are met, not a diagnostic probability.",
   "Published clinical thresholds are shown for context and are not standalone diagnostic criteria.",
   "Results have not been clinically validated.",
 ];

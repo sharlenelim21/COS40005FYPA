@@ -280,6 +280,12 @@ export interface IProjectSegmentationMask {
     }[];
   }[];
   bullseye?: {
+    /** PIXELS, not mm — compute_bullseye_from_rle.py and the GPU's
+     *  /bullseye/analyze route both ray-cast in pixel-index space with no
+     *  spacing input, by design. Callers that need a real-mm wall thickness
+     *  (e.g. assembleDiseasePatternGateInputs's MaxWallThicknessMm for the
+     *  HCM gate) must multiply by heartMetrics.spacing_mm[0] themselves —
+     *  this field was previously read as mm with no conversion at all. */
     segment_values: number[];
     segment_metadata: { idx: number; name: string; ring: string; value: number }[];
     stats: { min: number; max: number; mean: number; n_nan: number };
@@ -549,27 +555,36 @@ export interface IProjectSegmentationMask {
     computed_at: string;
   };
   /**
-   * Disease Pattern Similarity Assessment — NOT a diagnosis.
-   * Produced by compute_disease_similarity.py from this mask's measurements
-   * (heartMetrics.measurements + strain PeakGRS/PeakGCS). Reports which known
-   * cardiac reference pattern (NOR/HCM/DCM) the measurements most resemble,
-   * with per-metric reasoning. `most_similar` is the top-ranked pattern code;
-   * `similarities` is sorted descending by `percent` (percentages sum to 100).
+   * Unified LV+RV Disease Pattern Similarity Assessment — NOT a diagnosis.
+   * Produced by compute_disease_pattern_gates.py. Each of ACDC's 5 diagnostic
+   * groups (NOR/MINF/DCM/HCM/RV) is its own independent gate (met/not-met/
+   * pending), since RV uses a different feature space than the 4 LV groups
+   * and can't honestly share one ranked score with them. A patient can meet
+   * zero, one, or more than one gate — see the Python module's own docstring
+   * for full method/citation detail.
    */
-  diseaseSimilarity?: {
-    most_similar: "NOR" | "HCM" | "DCM";
-    similarities: {
-      code: "NOR" | "HCM" | "DCM";
+  diseasePatternGates?: {
+    gates: {
+      code: "NOR" | "MINF" | "DCM" | "HCM" | "RV";
       label: string;
-      percent: number;      // 0–100, all entries sum to 100
-      distance: number;     // weighted z-distance (smaller = more similar)
-      reasons: string[];    // plain-language per-metric explanation
+      met: boolean | null;     // null = not enough data to decide (pending) — never treat as false
+      reasons: string[];       // plain-language per-criterion explanation
+      criterion_text: string;  // the gate's own criterion, in plain text, for display next to it
     }[];
-    features_used: string[];
-    features_missing: string[];
-    temperature: number;
-    disclaimer: string;     // fixed non-diagnostic disclaimer
-    method: string;         // "zscore-weighted-distance+softmax"
+    met_codes: string[];       // codes with met === true, gates-array order preserved
+    // Advisory layering shown only when the RV gate is met — see module
+    // docstring "RV gate severity layering" for why these 3 notes are kept
+    // independent rather than combined into one score.
+    rv_severity: {
+      ratio_note: string;        // primary, disease-agnostic — RV/LV volume ratio vs ACDC's own RV/NOR group stats
+      arvc_note: string | null;  // secondary — only set when close to the Kubler et al. 2021 ARVC cohort range
+      pah_note: string | null;   // secondary — only set when in the ESC/ERS 2022 PAH higher-risk band
+      generic_note: string | null; // set only when neither secondary note fired
+    } | null;
+    sex: "male" | "female" | "unspecified";
+    disclaimer: string;        // fixed non-diagnostic disclaimer
+    method: string;            // "acdc-criteria-gates"
+    reference_source: string;  // ACDC page + every literature citation used, in one string
     warnings: string[];
     computed_at: string;
   };
@@ -598,7 +613,7 @@ export interface IProjectSegmentationMask {
    * recomputing on every visit. Keyed by the ED/ES frames + model used, so the
    * frontend can tell whether a stored result matches the currently-selected
    * frames. Global peaks (`global_grs`/`global_gcs`) are the values consumed by
-   * the disease-similarity module as PeakGRS/PeakGCS.
+   * the health status module as PeakGRS/PeakGCS.
    */
   strain?: {
     segments: {

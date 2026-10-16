@@ -789,7 +789,7 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   strainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame strain vs. the fixed ED reference — see IProjectSegmentationMask.strainSeries
   rvStrain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES regional RV (cavity-radius) strain — see IProjectSegmentationMask.rvStrain
   rvStrainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame RV strain vs. the fixed ED reference — see IProjectSegmentationMask.rvStrainSeries
-  diseaseSimilarity: { type: Schema.Types.Mixed, required: false }, // NOR/HCM/DCM pattern-similarity assessment (NOT a diagnosis)
+  diseasePatternGates: { type: Schema.Types.Mixed, required: false }, // Unified LV+RV ACDC-criteria gate assessment (NOT a diagnosis) — compute_disease_pattern_gates.py. Mixed for the same reason as regionalHealthStatus.
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Create the model with proper typing

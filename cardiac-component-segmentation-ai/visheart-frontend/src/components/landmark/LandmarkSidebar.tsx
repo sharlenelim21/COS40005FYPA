@@ -1636,8 +1636,8 @@ function StrainTab({
   /**
    * "Peak" = the extreme over the whole cycle. Prefer measured values:
    *   1. strainSeries — the true peak across every computed frame
-   *   2. strain       — the single ED→ES global peak (what disease similarity
-   *                     and health status consume, so the panels agree)
+   *   2. strain       — the single ED→ES global peak (what health status
+   *                     consumes, so the panels agree)
    *   3. the dummy curve, when nothing has been computed
    * GRS peaks positive (thickening), GCS negative (shortening).
    */
@@ -2264,8 +2264,8 @@ function ComputeStrainCard({
               {/* Peak strain is only physiologically meaningful between the TRUE
                   end-diastole and end-systole. When the picker is moved off the
                   auto-detected pair the backend deliberately withholds the peaks
-                  from heartMetrics (and therefore from disease similarity and
-                  health status) — surface that here so the omission isn't silent. */}
+                  from heartMetrics (and therefore from health status) —
+                  surface that here so the omission isn't silent. */}
               {sc.autoFrames && (sc.edFrameIdx !== sc.autoFrames.ed || sc.esFrameIdx !== sc.autoFrames.es) && (
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
                   <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">

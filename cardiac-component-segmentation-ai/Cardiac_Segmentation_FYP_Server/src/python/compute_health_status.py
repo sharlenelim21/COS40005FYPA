@@ -2,7 +2,7 @@
 compute_health_status.py
 ========================
 Rule-based cardiac health-status assessment from a mask document's stored
-`heartMetrics.measurements`. Mirrors compute_disease_similarity.py's I/O
+`heartMetrics.measurements`. Mirrors compute_disease_pattern_gates.py's I/O
 contract: read one JSON object from stdin, write one JSON object to stdout.
 
 **This module is NOT a diagnostic tool.** It reports a rule-based grading of

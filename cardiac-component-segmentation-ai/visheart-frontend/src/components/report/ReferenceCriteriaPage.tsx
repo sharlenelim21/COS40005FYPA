@@ -46,11 +46,13 @@ function RefTable({
 }
 
 /**
- * Static reference material — published diagnostic criteria, published risk
- * ranges, and this project's own disease-similarity scoring profiles. None of
- * it is computed from this patient's data (unlike every other report page),
- * so it carries no "preview"/"real value" distinction; it exists purely to
- * give the values on earlier pages something to be read against.
+ * Static reference material — the ACDC Challenge's own classification
+ * criteria (what Disease Pattern Gates checks each gate against), published
+ * risk ranges used for the RV gate's severity sub-notes, and the normal
+ * reference ranges used for the NOR gate. None of it is computed from this
+ * patient's data (unlike every other report page), so it carries no
+ * "preview"/"real value" distinction; it exists purely to give the values on
+ * earlier pages something to be read against.
  */
 export function ReferenceCriteriaPage({
   patientLabel,
@@ -74,7 +76,27 @@ export function ReferenceCriteriaPage({
       generatedAt={generatedAt}
     >
       <RefTable
-        caption="ARVC — 2010 Revised Task Force Criteria (CMR)"
+        caption="Disease Pattern Gates — ACDC Challenge classification criteria"
+        columns={["Gate", "Criterion"]}
+        rows={[
+          ["NOR", "No criterion stated by ACDC — this project uses the LV normal reference ranges below instead."],
+          ["MINF", "LV ejection fraction < 40% and several myocardial segments with abnormal contraction (operationalised here as ≥1 LV segment at moderate/severe on regional strain — see Methodology)."],
+          ["DCM", "LV end-diastolic volume index > 100 mL/m² and LV ejection fraction < 40%."],
+          ["HCM", "LV mass index > 110 g/m², maximum wall thickness > 15 mm in diastole, and preserved ejection fraction (≥ 50%)."],
+          ["RV", "RV end-diastolic volume index > 110 mL/m² or RV ejection fraction < 40%. ACDC does not attribute a specific disease to this group — the RV severity sub-notes below (ARVC/PAH) are a separate, secondary check."],
+        ]}
+        cite={
+          <>
+            ACDC Challenge database documentation, creatis.insa-lyon.fr/Challenge/acdc/databases.html, quoted
+            directly. "Several segments" is ACDC's own wording and is not numerically defined there or in the
+            companion paper (Bernard et al., <em>IEEE Trans Med Imaging</em> 2018); this project does not invent a
+            segment count for it — see Methodology for why.
+          </>
+        }
+      />
+
+      <RefTable
+        caption="RV gate severity sub-note — ARVC, 2010 Revised Task Force Criteria (CMR)"
         columns={["Criterion", "Major", "Minor"]}
         rows={[
           ["RVEDVI, male", "≥ 110 mL/m²", "100 – <110 mL/m²"],
@@ -91,7 +113,7 @@ export function ReferenceCriteriaPage({
       />
 
       <RefTable
-        caption="PAH-associated RV dysfunction — 2022 ESC/ERS Guidelines (cMRI)"
+        caption="RV gate severity sub-note — PAH-associated RV dysfunction, 2022 ESC/ERS Guidelines (cMRI)"
         columns={["Measure", "Lower risk", "Intermediate", "Higher risk"]}
         rows={[
           ["RVEF", "> 54%", "37 – 54%", "< 37%"],
@@ -139,41 +161,38 @@ export function ReferenceCriteriaPage({
       />
 
       <RefTable
-        caption="LV Phenotype Similarity — reference profiles used for scoring (mean ± SD)"
-        columns={["Feature", "NOR-like", "HCM-like", "DCM-like"]}
+        caption="Gate severity sub-notes — cohort mean ± SD, shown only after a gate is met"
+        columns={["Feature", "HCM cohort", "DCM cohort", "ARVC cohort (RV gate)"]}
         rows={[
-          ["EF (%)", "63.5 ± 5.8 (pooled)", "59.0 ± 9.0", "29.0 ± 13.0"],
-          ["EDV (mL) / EDVI (mL/m²)", "157.6 ± 25.3 / 82.5 ± 13.3", "179.5 ± 24.8 / 94.0 ± 13.0", "252.1 ± 78.3 / 132.0 ± 41.0"],
-          ["ESV (mL) / ESVI (mL/m²)", "58.3 ± 13.8 / 30.5 ± 7.3", "74.5 ± 17.2 / 39.0 ± 9.0", "183.4 ± 76.4 / 96.0 ± 40.0"],
-          ["LV mass (g) / LVMI (g/m²)", "104.1 ± 20.5 / 54.5 ± 10.8", "147.1 ± 22.9 / 77.0 ± 12.0", "133.7 ± 40.1 / 70.0 ± 21.0"],
+          ["EF (%)", "59.0 ± 9.0", "29.0 ± 13.0", "—"],
+          ["EDVI (mL/m²)", "94.0 ± 13.0", "132.0 ± 41.0", "—"],
+          ["LVMI (g/m²)", "77.0 ± 12.0", "70.0 ± 21.0", "—"],
+          ["RVEDVI (mL/m²)", "—", "—", "103 ± 26"],
+          ["RVESVI (mL/m²)", "—", "—", "56 ± 23"],
+          ["RVEF (%)", "—", "—", "46 ± 10"],
         ]}
         cite={
           <>
-            Both indexed (…I / BSA-adjusted) and non-indexed forms shown — whichever the patient&apos;s own BSA
-            availability selected on earlier pages is the one actually scored. Indexed NOR: Zhan et al. 2024 (pooled
-            shown; sex-specific used when sex is known). Indexed HCM/DCM: Kübler et al., <em>Int J Cardiovasc
-            Imaging</em> 2021;37:2501–2515 (not sex-specific in the source). Non-indexed (absolute) values for all
-            three profiles are the indexed figures multiplied by a declared generic reference BSA of 1.91 m² — an
-            approximation used only when the patient&apos;s own height/weight are unavailable. These are provisional
-            external references, not yet derived from this project&apos;s own deployed segmentation pipeline.
+            Kübler et al., <em>Int J Cardiovasc Imaging</em> 2021;37:2501–2515 — HCM (n=14) and DCM (n=48) LV
+            columns are Table 2; ARVC (n=18) RV column is Table 3. Not used to decide whether a gate is met (that
+            uses the ACDC thresholds above directly) — shown here only to support the RV gate's "may be worth
+            looking into ARVC" sub-note and, on the on-screen report, an optional severity read once the HCM/DCM/RV
+            gate is already met.
           </>
         }
       />
 
       <p className="mb-3 text-[8.5px] leading-snug text-gray-600">
-        <strong>Not scored, shown for context only:</strong> maximum ED wall thickness is used only as a threshold
-        gate (≥ 15 mm supports HCM-like, &lt; 12 mm supports DCM-like — the ACDC classification thresholds), not as a
-        weighted similarity feature, since the nearest published cohort measures interventricular septal thickness
-        specifically (Kübler et al.: HCM 12.4 ± 2.4 mm, DCM 8.8 ± 1.8 mm), which is not necessarily the same
-        measurement as this pipeline&apos;s own per-segment maximum. Peak GRS/GCS are geometric mask-deformation
-        measurements, not conventional CMR feature-tracking strain, and are displayed as informational values only —
-        they are not compared against any reference range or included in the similarity score.
+        <strong>Not part of any gate's met/not-met decision:</strong> Peak GRS/GCS are geometric mask-deformation
+        measurements, not conventional CMR feature-tracking strain, and are displayed as informational values only.
+        "Several myocardial segments" (MINF/HCM) is ACDC's own wording with no published numeric definition — see
+        the Methodology page for how this project operationalises it without inventing an uncited number.
       </p>
 
       <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
-        These are disease-specific criteria, published risk ranges, and this project&apos;s own scoring reference
-        profiles — not universal &ldquo;normal ranges&rdquo; — presented for context alongside the values on
-        earlier pages, never as a standalone verdict.
+        These are published diagnostic criteria, published risk ranges, and the ACDC Challenge's own classification
+        rules — not universal &ldquo;normal ranges&rdquo; — presented for context alongside the values on earlier
+        pages, never as a standalone verdict.
       </p>
     </ReportPageFrame>
   );

@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import type { HistoryEntry, AnatomicalLabel } from '@/types/segmentation';
-import { generateFrameSliceKey } from '@/types/segmentation';
+import { generateFrameSliceKey, generateFrameSlicePrefix } from '@/types/segmentation';
 
 interface UseSegmentationHistoryProps {
   currentFrame: number;
@@ -41,6 +41,24 @@ export function useSegmentationHistory({
     maskChanges?: HistoryEntry["maskChanges"],
     componentLabel?: AnatomicalLabel
   ): HistoryEntry => {
+    // masksSnapshot as passed in is routinely the WHOLE PROJECT's decoded
+    // masks (every frame x every slice x every class) — every call site
+    // (initialize, clear, and every single brush-stroke edit in
+    // page.tsx's updateMasksWithHistory) passes its full `decodedMasks`
+    // object, not something pre-scoped to this frame/slice. Cloning it
+    // unfiltered meant every history entry stored a full duplicate of the
+    // entire project's mask data; with up to MAX_HISTORY_ENTRIES=50 kept
+    // PER frame/slice key, memory grew as (entries created) x (whole-
+    // project size) instead of (entries created) x (one slice's few KB) —
+    // reported live as a browser "Array buffer allocation failed" crash on
+    // a project with many frames/slices (2026-10). Safe to scope down:
+    // restoreMasksFromHistory (page.tsx) already filters by this same
+    // frame/slice prefix when reading a snapshot back, so the rest of the
+    // data was already being ignored on restore — pure dead weight.
+    const prefix = generateFrameSlicePrefix(currentFrame, currentSlice);
+    const scoped = Object.fromEntries(
+      Object.entries(masksSnapshot).filter(([key]) => key.startsWith(prefix))
+    );
     return {
       id: `history_${Date.now()}_${++historyIdCounter.current}`,
       type,
@@ -50,7 +68,7 @@ export function useSegmentationHistory({
       maskChanges,
       // Deep clone masks to prevent references
       masksSnapshot: Object.fromEntries(
-        Object.entries(masksSnapshot).map(([key, data]) => [key, new Uint8Array(data)])
+        Object.entries(scoped).map(([key, data]) => [key, new Uint8Array(data)])
       ),
       componentLabel,
     };

@@ -2,7 +2,7 @@
 
 /**
  * useProjectResults — single source of truth for a project's stored, per-model
- * analysis results (heart metrics, health status, disease similarity).
+ * analysis results (heart metrics, health status, disease pattern gates).
  *
  * Both the interactive results page and the printable report read from here so
  * they can never disagree about what the pipeline actually produced. Each
@@ -85,65 +85,67 @@ export type HeartMetrics = {
   ed_frame?: number;
   es_frame?: number;
   LV_mass_g?: number | null;
+  /** [dx, dy, dz] mm, derived from the project's affine — see
+   *  compute_heart_metrics_from_rle.py. dx (in-plane spacing) is what
+   *  converts bullseye.segment_values (pixels) into a real-mm wall
+   *  thickness; see MaxWallThicknessMm below. */
+  spacing_mm?: (number | null)[];
   warnings?: string[];
   /** Set by the backend on every write — lets a forced recompute detect that a
    *  NEW result landed rather than just seeing the old one still present. */
   computed_at?: string;
 };
 
-export type SimilarityEntry = {
-  code: "NOR" | "HCM" | "DCM";
+/** Biological sex, as entered on the report page — never persisted
+ *  server-side; used for sex-specific reference ranges (NOR gate, RV health
+ *  status). "unspecified" uses the pooled/wider range. */
+export type Sex = "male" | "female" | "unspecified";
+
+/**
+ * Unified LV+RV Disease Pattern Similarity gate assessment — NOT a diagnosis.
+ * Each of ACDC's 5 diagnostic groups is scored as an independent gate rather than one ranked
+ * %, since RV uses a different feature space than the 4 LV groups and can't
+ * honestly share a single softmax score with them — see
+ * compute_disease_pattern_gates.py's own docstring for full method/citation
+ * detail. A patient can meet zero, one, or more than one gate.
+ */
+export type DiseasePatternGate = {
+  code: "NOR" | "MINF" | "DCM" | "HCM" | "RV";
   label: string;
-  percent: number;
-  distance: number;
-  reasons: string[];
-};
-
-/** Rule-based essential-criterion check for the TOP-ranked profile only — see
- *  compute_disease_similarity.py::_apply_gate. Advisory: never changes
- *  `most_similar` or `similarities`, only `phenotype_headline`/`confidence`. */
-export type DiseaseSimilarityGate = {
-  code: "NOR" | "HCM" | "DCM";
+  /** null = not enough data to decide (pending) — never treat as false. */
   met: boolean | null;
-  reason: string;
+  reasons: string[];
+  /** The gate's own criterion, in plain text, for display next to it. */
+  criterion_text: string;
+  /** Set only when 2+ non-RV gates are met at once (e.g. MINF+DCM — the ACDC
+   *  paper's own MINF description allows a co-occurring dilated LV). Ranks
+   *  by an internal, never-exposed margin — a plain label, not a percentage,
+   *  so it can't be misread as a diagnostic confidence. RV never gets one. */
+  rank_label: "Primary match" | "Also meets" | null;
 };
 
-export type DiseaseSimilarity = {
-  most_similar: "NOR" | "HCM" | "DCM";
-  /** Display headline — same as PROFILE_LABELS[most_similar] UNLESS the gate
-   *  above failed or couldn't be assessed, in which case it reads
-   *  "Indeterminate LV phenotype pattern" or "...cannot be assessed reliably".
-   *  Prefer this over most_similar for anything user-facing. */
-  phenotype_headline?: string;
-  mode?: "indexed" | "non_indexed";
-  sex?: "male" | "female" | "unspecified";
-  /** 0-1, advisory — see compute_disease_similarity.py::_compute_confidence. */
-  confidence?: number;
-  confidence_notes?: string[];
-  /** Informational only — does NOT affect `confidence` (e.g. confirming
-   *  BSA-indexing was used, or the GRS/GCS mask-difference-strain caveat).
-   *  Render with a neutral icon, not the confidence_notes warning triangle. */
-  notes?: string[];
-  gate?: DiseaseSimilarityGate;
-  /** Authoritative gate facts for ALL THREE profiles (not just the top-ranked
-   *  one) plus two standalone facts — see
-   *  compute_disease_similarity.py::_all_gate_facts. `null` means "not enough
-   *  data to assess", which must NOT be treated as false (e.g. by the research
-   *  assistant deciding what it's allowed to say). */
-  phenotype_facts?: {
-    dcm_gate_met: boolean | null;
-    hcm_gate_met: boolean | null;
-    nor_gate_met: boolean | null;
-    lv_dilatation_present: boolean | null;
-    severe_lv_systolic_dysfunction: boolean | null;
-    hcm_wall_thickness_signal: boolean | null;
-  };
-  informational?: { StrokeVolume?: number | null; StrokeVolumeIndex?: number | null };
-  similarities: SimilarityEntry[];
-  features_used: string[];
-  features_missing: string[];
+export type DiseasePatternGates = {
+  gates: DiseasePatternGate[];
+  /** codes with met === true, `gates` array order preserved. */
+  met_codes: string[];
+  /** Advisory layering shown only when the RV gate is met — see the Python
+   *  module's "RV gate severity layering" docstring section for why these 3
+   *  notes are kept independent rather than combined into one score. */
+  rv_severity: {
+    /** Primary, disease-agnostic — RV/LV volume ratio vs ACDC's own RV/NOR group stats. */
+    ratio_note: string;
+    /** Secondary — only set when close to the Kubler et al. 2021 ARVC cohort range. */
+    arvc_note: string | null;
+    /** Secondary — only set when in the ESC/ERS 2022 PAH higher-risk band. */
+    pah_note: string | null;
+    /** Set only when neither secondary note fired. */
+    generic_note: string | null;
+  } | null;
+  sex: "male" | "female" | "unspecified";
   disclaimer: string;
   method: string;
+  /** ACDC page + every literature citation used, in one string. */
+  reference_source: string;
   warnings: string[];
   computed_at: string;
 };
@@ -360,7 +362,7 @@ export type MaskDoc = {
   segmentationModel?: string;
   model_used?: string;
   heartMetrics?: HeartMetrics;
-  diseaseSimilarity?: DiseaseSimilarity;
+  diseasePatternGates?: DiseasePatternGates;
   healthStatus?: HealthStatus;
   regionalHealthStatus?: RegionalHealthStatus;
   rvRegionalHealthStatus?: RvRegionalHealthStatus;
@@ -369,12 +371,13 @@ export type MaskDoc = {
   strainSeries?: StrainSeries;
   rvStrain?: RvStrain;
   rvStrainSeries?: RvStrainSeries;
-  /** Per-AHA-segment ED wall thickness (mm) — see compute_bullseye_from_rle.py.
-   *  Max across segments is this mask's MaxWallThicknessMm, the same value
-   *  assembleSimilarityMeasurements (segmentation_routes.ts) computes
-   *  server-side for Disease Pattern Similarity's HCM gate. Surfaced here too
-   *  so the report can show it as an actual metric, not just feed it silently
-   *  into that one downstream score. */
+  /** Per-AHA-segment ED wall thickness, in PIXELS — see
+   *  compute_bullseye_from_rle.py (no spacing input, by design). Max across
+   *  segments, multiplied by heartMetrics.spacing_mm[0], is this mask's
+   *  real-mm MaxWallThicknessMm, the same value assembleDiseasePatternGateInputs
+   *  (segmentation_routes.ts) computes server-side for Disease Pattern
+   *  Similarity's HCM gate. Surfaced here too so the report can show it as an
+   *  actual metric, not just feed it silently into that one downstream score. */
   bullseye?: { segment_values?: (number | null)[]; computed_at?: string };
 };
 
@@ -471,8 +474,8 @@ export function useProjectResults(
     /**
      * When true (default), the hook makes the displayed model's results
      * self-healing: if the selected mask has no heartMetrics / healthStatus /
-     * diseaseSimilarity, it fires the corresponding trigger endpoints and polls
-     * until the results land, then re-renders with the real numbers.
+     * diseasePatternGates, it fires the corresponding trigger endpoints and
+     * polls until the results land, then re-renders with the real numbers.
      *
      * Why this exists: those three fields are only ever written by the
      * reconstruction pipeline or an explicit trigger call. A project that was
@@ -569,7 +572,7 @@ export function useProjectResults(
       // showing an empty newer one. `newerMaskAvailable` flags when that happens.
       return (
         newestFirst.find(
-          (m) => m.heartMetrics?.measurements || m.diseaseSimilarity || m.healthStatus ||
+          (m) => m.heartMetrics?.measurements || m.diseasePatternGates || m.healthStatus ||
                  m.strain || m.strainSeries || m.rvStrain || m.rvStrainSeries,
         ) ?? newestFirst[0]
       );
@@ -602,7 +605,7 @@ export function useProjectResults(
     return candidates.some(
       (m) =>
         String(m._id) > String(shown._id) &&
-        !m.heartMetrics?.measurements && !m.healthStatus && !m.diseaseSimilarity &&
+        !m.heartMetrics?.measurements && !m.healthStatus && !m.diseasePatternGates &&
         !m.strain && !m.strainSeries && !m.rvStrain && !m.rvStrainSeries,
     );
   }, [masks, byModel, model]);
@@ -618,7 +621,7 @@ export function useProjectResults(
     const stamps = [
       m.strainSeries?.computed_at,
       m.strain?.computed_at,
-      m.diseaseSimilarity?.computed_at,
+      m.diseasePatternGates?.computed_at,
       m.healthStatus?.computed_at,
     ]
       .filter(Boolean)
@@ -659,15 +662,16 @@ export function useProjectResults(
 
   // ── Self-healing analysis compute ─────────────────────────────────────────
   /**
-   * Make sure `maskId` has heart metrics, health status and disease similarity,
-   * firing whichever triggers are missing and polling until the results land.
+   * Make sure `maskId` has heart metrics, health status and disease pattern
+   * gates, firing whichever triggers are missing and polling until the
+   * results land.
    *
-   * Order matters: health status and disease similarity both read
+   * Order matters: health status and disease pattern gates both read
    * `heartMetrics.measurements` server-side and return 400 without it, so
    * volumes must complete first. Health status is normally auto-chained by the
    * heart-metrics compute, so step 2 is usually a no-op.
    *
-   * Only step 1 is treated as fatal — if volumes computed but similarity timed
+   * Only step 1 is treated as fatal — if volumes computed but the gates timed
    * out, the page still shows real EF/EDV/ESV rather than reverting to dashes.
    */
   const ensureComputed = useCallback(
@@ -726,20 +730,9 @@ export function useProjectResults(
             )) ?? current;
         }
 
-        // 3. Disease similarity — depends on measurements, so it runs last.
-        if (force || !current.diseaseSimilarity) {
-          const before = current.diseaseSimilarity?.computed_at;
-          await segmentationApi.triggerDiseaseSimilarity(maskId);
-          current =
-            (await pollUntil((x) =>
-              !!x.diseaseSimilarity &&
-              (!force || x.diseaseSimilarity?.computed_at !== before),
-            )) ?? current;
-        }
-
-        // 4. Regional (Layer 2) — advisory. Depends on per-segment STRAIN, not
-        //    on measurements, so it is independent of steps 2-3 and is attempted
-        //    even if they failed. It resolves either way: when strain is missing
+        // 3. Regional (Layer 2) — advisory. Depends on per-segment STRAIN, not
+        //    on measurements, so it is independent of step 2 and is attempted
+        //    even if it failed. It resolves either way: when strain is missing
         //    or misaligned it stores status "unavailable" rather than erroring,
         //    so there is nothing to treat as a failure here.
         if (force || !current.regionalHealthStatus) {
@@ -749,6 +742,22 @@ export function useProjectResults(
             (await pollUntil((x) =>
               !!x.regionalHealthStatus &&
               (!force || x.regionalHealthStatus?.computed_at !== before),
+            )) ?? current;
+        }
+
+        // 4. Unified LV+RV disease pattern gates — runs AFTER regional (step 3)
+        //    deliberately: the MINF gate needs regionalHealthStatus.segments to
+        //    assess its "abnormal regional contraction" part, and the backend
+        //    re-reads the whole mask doc fresh at trigger time, so sequencing
+        //    this after step 3's poll has completed guarantees that data is
+        //    already persisted when the gates module runs.
+        if (force || !current.diseasePatternGates) {
+          const before = current.diseasePatternGates?.computed_at;
+          await segmentationApi.triggerDiseasePatternGates(maskId);
+          current =
+            (await pollUntil((x) =>
+              !!x.diseasePatternGates &&
+              (!force || x.diseasePatternGates?.computed_at !== before),
             )) ?? current;
         }
 
@@ -787,7 +796,7 @@ export function useProjectResults(
     const id = doc?._id;
     if (!id) return;
     const complete =
-      !!doc?.heartMetrics?.measurements && !!doc?.healthStatus && !!doc?.diseaseSimilarity;
+      !!doc?.heartMetrics?.measurements && !!doc?.healthStatus && !!doc?.diseasePatternGates;
     if (complete || attempted.current.has(id)) return;
     attempted.current.add(id);
     void ensureComputed(id);
@@ -801,48 +810,44 @@ export function useProjectResults(
     await ensureComputed(id, true);
   }, [doc, ensureComputed]);
 
-  const [recomputingSimilarity, setRecomputingSimilarity] = useState(false);
-  const [recomputeSimilarityError, setRecomputeSimilarityError] = useState<string | null>(null);
+  const [recomputingPatternGates, setRecomputingPatternGates] = useState(false);
+  const [recomputePatternGatesError, setRecomputePatternGatesError] = useState<string | null>(null);
 
   /**
-   * Recompute + PERSIST disease similarity specifically, with a caller-supplied
-   * bsa_m2/sex — the one way to actually get indexed-mode similarity stored on
-   * the mask doc. Deliberately separate from `recompute()` above: that function
-   * only fires triggers for results that are MISSING, so it can never switch an
-   * already-computed non-indexed result into indexed mode. This one always
-   * fires, unconditionally, because the caller is explicitly asking for a mode
-   * change, not filling a gap.
-   *
-   * Called automatically (debounced) by InteractiveReport whenever BSA/sex
-   * change on screen — including back to `null` when height/weight are
-   * cleared, which is what lets the mode badge revert to non-indexed instead
-   * of getting stuck on whatever was last explicitly recomputed.
+   * Recompute + PERSIST the unified disease-pattern gates with a caller-
+   * supplied bsa_m2/sex — the one way to get indexed-mode gates (EDVI/LVMI/
+   * RVEDVI/RVESVI/SVI) stored on the mask doc. Deliberately separate from
+   * `recompute()` above: that function only fires triggers for results that
+   * are MISSING, so it can never switch an already-computed non-indexed
+   * result into indexed mode. This one always fires unconditionally, since
+   * the caller is explicitly asking for a mode change (BSA/sex just changed
+   * on screen), not filling a gap.
    */
-  const recomputeSimilarityWithBsa = useCallback(
+  const recomputePatternGatesWithBsa = useCallback(
     async (bsa_m2: number | null, sex: "male" | "female" | "unspecified") => {
       const id = doc?._id;
       if (!id) return;
-      setRecomputingSimilarity(true);
-      setRecomputeSimilarityError(null);
+      setRecomputingPatternGates(true);
+      setRecomputePatternGatesError(null);
       try {
-        const before = doc?.diseaseSimilarity?.computed_at;
-        await segmentationApi.triggerDiseaseSimilarity(id, { bsa_m2, sex });
+        const before = doc?.diseasePatternGates?.computed_at;
+        await segmentationApi.triggerDiseasePatternGates(id, { bsa_m2, sex });
         for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
           await sleep(POLL_INTERVAL_MS);
           const list = await loadMasks();
           const m = list?.find((x) => x._id === id);
-          if (m?.diseaseSimilarity && m.diseaseSimilarity.computed_at !== before) {
+          if (m?.diseasePatternGates && m.diseasePatternGates.computed_at !== before) {
             return; // loadMasks() already updated `doc` via state
           }
         }
-        setRecomputeSimilarityError("Recompute did not finish in time — try again.");
+        setRecomputePatternGatesError("Recompute did not finish in time — try again.");
       } catch (e: unknown) {
         const err = e as { response?: { data?: { message?: string } }; message?: string };
-        setRecomputeSimilarityError(
+        setRecomputePatternGatesError(
           err?.response?.data?.message ?? err?.message ?? "Recompute failed.",
         );
       } finally {
-        setRecomputingSimilarity(false);
+        setRecomputingPatternGates(false);
       }
     },
     [doc, loadMasks],
@@ -926,13 +931,13 @@ export function useProjectResults(
     /** True when results are absent *because* a compute is still in flight —
      *  lets the UI say "Computing…" instead of "Not computed yet". */
     computing: computeState === "computing",
-    /** Force a fresh recompute of metrics + status + similarity. */
+    /** Force a fresh recompute of metrics + status + disease pattern gates. */
     recompute,
-    /** Recompute + persist disease similarity in indexed mode for a caller-
-     *  supplied bsa_m2/sex — see the function's own docstring above. */
-    recomputeSimilarityWithBsa,
-    recomputingSimilarity,
-    recomputeSimilarityError,
+    /** Recompute + persist the unified disease-pattern gates in indexed mode
+     *  for a caller-supplied bsa_m2/sex — see the function's own docstring. */
+    recomputePatternGatesWithBsa,
+    recomputingPatternGates,
+    recomputePatternGatesError,
     /** Recompute + persist RV health status for the page's BSA/sex. */
     recomputeRvHealthStatus,
     recomputingRvHealthStatus,
@@ -952,7 +957,7 @@ export function useProjectResults(
     measurements: doc?.heartMetrics?.measurements,
     /**
      * RV metrics, surfaced separately from `measurements` so the LV-only
-     * contract that feeds health status and disease similarity is unchanged.
+     * contract that feeds health status and disease pattern gates is unchanged.
      * `null` when the mask has no RV cavity — callers must handle that rather
      * than rendering NaN.
      */
@@ -978,15 +983,19 @@ export function useProjectResults(
           LVESVI: doc.heartMetrics.LVESVI ?? null,
           LV_SVI: doc.heartMetrics.LV_SVI ?? null,
           LVMassG: doc.heartMetrics.LV_mass_g ?? null,
-          // Same max-across-segments computation assembleSimilarityMeasurements
-          // does server-side for the disease-similarity HCM gate (see
+          // Same max-across-segments computation assembleDiseasePatternGateInputs
+          // does server-side for the disease pattern gates' HCM gate (see
           // segmentation_routes.ts) — duplicated here client-side so the report
           // can show the number itself, not just its downstream effect on a score.
+          // bullseye.segment_values is in PIXELS (see compute_bullseye_from_rle.py);
+          // spacing_mm[0] (in-plane dx) converts the max to real mm — without a
+          // known spacing this must read as null, never a raw pixel count mislabeled mm.
           MaxWallThicknessMm: (() => {
             const vals = (doc.bullseye?.segment_values ?? []).filter(
               (v): v is number => typeof v === "number" && Number.isFinite(v),
             );
-            return vals.length ? Math.max(...vals) : null;
+            const dx = doc.heartMetrics?.spacing_mm?.[0];
+            return vals.length && typeof dx === "number" ? Math.max(...vals) * dx : null;
           })(),
         }
       : undefined,
@@ -1002,7 +1011,7 @@ export function useProjectResults(
     rvRegionalHealthStatus: doc?.rvRegionalHealthStatus,
     /** RV health status — sex-specific reference ranges; echoes the sex/BSA it used. */
     rvHealthStatus: doc?.rvHealthStatus,
-    similarity: doc?.diseaseSimilarity,
+    patternGates: doc?.diseasePatternGates,
     strain: doc?.strain,
     strainSeries: doc?.strainSeries,
     rvStrain: doc?.rvStrain,

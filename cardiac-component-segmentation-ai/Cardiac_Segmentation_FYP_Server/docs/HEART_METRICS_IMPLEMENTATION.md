@@ -80,12 +80,12 @@ one-paragraph summary is:
 
 ```text
    (this module)                (Stefani)                    (Sharlene)
-   Heart Metrics    ─────►      Strain                ─────► Disease Similarity
-   heartMetrics.                strain.global_grs            diseaseSimilarity
-   measurements                 strain.global_gcs            (most_similar,
-     .EF, .EDV,                 backfilled into              per-pattern %,
-     .ESV, .StrokeVolume        heartMetrics                 reasoning)
-     .PeakGRS = null            .measurements.PeakGRS
+   Heart Metrics    ─────►      Strain                ─────► Disease Pattern Gates
+   heartMetrics.                strain.global_grs            diseasePatternGates
+   measurements                 strain.global_gcs            (5 ACDC gates —
+     .EF, .EDV,                 backfilled into              NOR/MINF/DCM/HCM/RV,
+     .ESV, .StrokeVolume        heartMetrics                 each met/not-met/
+     .PeakGRS = null            .measurements.PeakGRS        pending, with reasons)
      .PeakGCS = null            .measurements.PeakGCS
 ```
 

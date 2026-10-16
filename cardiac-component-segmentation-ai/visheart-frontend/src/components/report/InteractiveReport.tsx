@@ -19,11 +19,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
-import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw, XCircle, HelpCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { rvGasMeasuredNote, rvPeakGas as rvPeakGasOf, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
-import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
-import type { Measurements, HealthStatus, DiseaseSimilarity, Strain, StrainSeries, RegionalHealthStatus, RvRegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
+import { rvPeakGas as rvPeakGasOf, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
+import type { Sex, Measurements, HealthStatus, DiseasePatternGates, Strain, StrainSeries, RegionalHealthStatus, RvRegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
@@ -33,8 +32,11 @@ const RINGS = [
   { rInner: 30,  rOuter: 65,  count: 4, firstSegment: 13 },
 ];
 
-const PATTERN_COLORS: Record<string, string> = { NOR: "#15803d", DCM: "#b45309", HCM: "#dc2626" };
-const RV_PATTERN_COLORS: Record<string, string> = { ARVC: "#dc2626", PAH: "#7c3aed", GENERAL: "#64748b" };
+// "Met" gate color — one hue (green), not per-diagnostic-group: solid for the
+// Primary/sole match, a lighter tint (derived from the same hex via alpha
+// suffixes, see usage) for a co-firing "Also meets" gate.
+const MET_COLOR = "#16a34a";
+const MET_COLOR_SECONDARY_ICON = "#4ade80";
 
 // Notebook-style names for the 9-segment RV breakdown (basal/mid/apical 1-3)
 // — same convention/order as CRESCENT_REGION_NAMES in
@@ -507,10 +509,10 @@ function EmptyState({ computing, error }: { computing?: boolean; error?: string 
 
 export function InteractiveReport({
   patientLabel, scanSummary, generatedAt,
-  measurements, healthStatus, similarity, strain, strainSeries, regionalHealthStatus, rvRegionalHealthStatus,
+  measurements, healthStatus, patternGates, strain, strainSeries, regionalHealthStatus, rvRegionalHealthStatus,
   computing, computeError, rv, lvVolumes, rvStrain, rvStrainSeries,
   bsaM2, heightCm, weightKg, onHeightCmChange, onWeightKgChange,
-  onRecomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError,
+  onRecomputePatternGatesWithBsa, recomputingPatternGates, recomputePatternGatesError,
   patientSex: patientSexProp, onPatientSexChange,
   rvHealthStatus, onRecomputeRvHealthStatus, recomputingRvHealthStatus, recomputeRvHealthStatusError,
   heartMetricsComputedAt,
@@ -543,13 +545,15 @@ export function InteractiveReport({
   weightKg?: string;
   onHeightCmChange?: (v: string) => void;
   onWeightKgChange?: (v: string) => void;
-  /** Re-runs Disease Pattern Similarity server-side with the current BSA/sex
-   *  so the headline actually switches into BSA-indexed mode — without this,
-   *  typing a height/weight only changes the client-side mL/m² sub-values
-   *  above and never touches the similarity result itself. */
-  onRecomputeSimilarityWithBsa?: (bsaM2: number | null, sex: "male" | "female" | "unspecified") => Promise<void>;
-  recomputingSimilarity?: boolean;
-  recomputeSimilarityError?: string | null;
+  /** Unified LV+RV ACDC-criteria gate assessment (NOR/MINF/DCM/HCM/RV). */
+  patternGates?: DiseasePatternGates;
+  /** Re-runs the unified disease-pattern gates server-side with the current
+   *  BSA/sex — so the result actually switches into BSA-indexed mode;
+   *  without this, typing a height/weight only changes the client-side
+   *  mL/m² sub-values elsewhere and never touches this result itself. */
+  onRecomputePatternGatesWithBsa?: (bsaM2: number | null, sex: "male" | "female" | "unspecified") => Promise<void>;
+  recomputingPatternGates?: boolean;
+  recomputePatternGatesError?: string | null;
   /** Owned by report/page.tsx (same pattern as bsaM2 above) so the CSV export
    *  and print pages can read the sex the user actually selected here. Falls
    *  back to "unspecified" when the caller doesn't control it. */
@@ -564,7 +568,6 @@ export function InteractiveReport({
   /** Per-frame RV strain series — the RV twin of `strainSeries`. */
   rvStrainSeries?: RvStrainSeries;
   healthStatus?: HealthStatus;
-  similarity?: DiseaseSimilarity;
   strain?: Strain;
   strainSeries?: StrainSeries;
   /** Layer 2 — advisory, shown beneath the Layer-1 evidence. Never alters the grade. */
@@ -838,33 +841,14 @@ export function InteractiveReport({
   const setPatientSex = onPatientSexChange ?? (() => {});
   const rvedvi = bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null;
   const rvesvi = bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null;
-  const rvSvi = bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null;
-  // RV GAS / regional area change are measured (9-segment RV bullseye) but
-  // have no validated abnormal cutoff, so they stay unscored (`null`) — the
-  // measured value is shown in the factor text instead (see rvDiseasePattern.ts).
-  const rvDiseasePatterns = computeRvDiseasePatterns({
-    rvedvi, rvesvi, rvef: rv?.RVEF ?? null, svi: rvSvi, sex: patientSex,
-    regionalContractionAbnormal: null,
-    gasAbnormal: null,
-    rvGasMeasured: rvGasMeasuredNote(rvStrain, rvStrainSeries),
-  });
-
-  // Qualitative confidence tier — same three bands the badge used to encode as
-  // a raw percentage, now bucketed like Health Status's normal/low confidence
-  // pill instead of surfacing the number itself.
-  const diseaseConfidenceTier: "high" | "reduced" | "low" | null =
-    typeof similarity?.confidence === "number"
-      ? similarity.confidence >= 0.85 ? "high" : similarity.confidence >= 0.6 ? "reduced" : "low"
-      : null;
 
   /**
-   * Auto-recompute Disease Pattern Similarity whenever BSA or sex actually
-   * change on screen, debounced so typing doesn't fire a request per
-   * keystroke. Without this, clearing height/weight left the mode badge and
-   * confidence note stuck on whatever was last explicitly recomputed — the
-   * fields and the explanation could silently disagree. Skips the initial
-   * mount so opening the report doesn't immediately fire a request before
-   * the user has touched anything.
+   * Auto-recompute Disease Pattern Gates whenever BSA or sex actually change
+   * on screen, debounced so typing doesn't fire a request per keystroke.
+   * Without this, clearing height/weight left the result stuck on whatever
+   * was last explicitly recomputed — the fields and the explanation could
+   * silently disagree. Skips the initial mount so opening the report doesn't
+   * immediately fire a request before the user has touched anything.
    */
   const skipFirstRecompute = useRef(true);
   useEffect(() => {
@@ -872,12 +856,11 @@ export function InteractiveReport({
       skipFirstRecompute.current = false;
       return;
     }
-    if (!onRecomputeSimilarityWithBsa) return;
     const timer = window.setTimeout(() => {
-      onRecomputeSimilarityWithBsa(bsaM2 ?? null, patientSex);
+      onRecomputePatternGatesWithBsa?.(bsaM2 ?? null, patientSex);
     }, 800);
     return () => window.clearTimeout(timer);
-    // onRecomputeSimilarityWithBsa is excluded deliberately: its identity
+    // onRecomputePatternGatesWithBsa is excluded deliberately: its identity
     // changes on every poll tick while a recompute is in flight, and
     // including it here would retrigger this effect mid-recompute.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -923,7 +906,7 @@ export function InteractiveReport({
             <span className="text-[11px] font-semibold tabular-nums text-foreground">
               {bsaM2 != null ? `${bsaM2.toFixed(2)} m²` : "—"}
             </span>
-            <div className="inline-flex rounded-md border border-border bg-background p-0.5" title="Used for RVEDVI's sex-specific ARVC cutoffs (RV patterns below) and for sex-specific LV reference ranges in Disease Pattern Similarity.">
+            <div className="inline-flex rounded-md border border-border bg-background p-0.5" title="Used for the NOR gate's sex-specific LV reference ranges and RV health status in Disease Pattern Gates.">
               {(["male", "female", "unspecified"] as const).map((s) => (
                 <button
                   key={s}
@@ -940,7 +923,7 @@ export function InteractiveReport({
         )}
       </header>
 
-      {/* Summary strip: measurements · health status · disease similarity.
+      {/* Summary strip: measurements · health status · disease pattern gates.
           Health Status is the widest column — it now carries the metric table
           and the Regional Findings entry point. */}
       {/* Two columns, not three: Health Status carries the metric table AND
@@ -1652,193 +1635,150 @@ export function InteractiveReport({
         </div>
 
         <div className="p-4 lg:col-start-1 lg:row-start-2">
-          <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
-            <Info className="h-3.5 w-3.5 text-primary" /> Disease Pattern Similarity
-          </p>
-          <p className="mb-3 mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            LV patterns
-          </p>
-          {similarity ? (
-            <>
-              {/* Headline + mode/confidence — the headline reads "Indeterminate"
-                  or "...cannot be assessed reliably" instead of a confident
-                  profile label whenever the top profile's gate (see
-                  compute_disease_similarity.py::_apply_gate) failed or
-                  couldn't be checked, even though the bars below still show
-                  the full, untouched z-score ranking for transparency. */}
-              {similarity.phenotype_headline && (
-                <div className="mb-3 flex flex-wrap items-center gap-1.5">
-                  <span className="rounded-md bg-muted px-2 py-1 text-[11px] font-bold text-foreground">
-                    {similarity.phenotype_headline}
+          {/* Unified LV+RV Disease Pattern Gates — each of ACDC's 5 diagnostic
+              groups (NOR/MINF/DCM/HCM/RV) is its own independent gate rather
+              than one ranked score, since RV's own gate uses a different
+              feature space than the 4 LV gates and can't honestly share a
+              softmax with them — see compute_disease_pattern_gates.py's own
+              docstring for the full method and citations. Replaces the old
+              LV z-score similarity bars and RV ARVC/PAH/GENERAL prototype
+              scoring that used to render here. */}
+          <div className="mb-2 flex items-center justify-between">
+            <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+              <Info className="h-3.5 w-3.5 text-primary" /> Disease Pattern Similarity
+            </p>
+            {recomputingPatternGates && (
+              <span className="inline-flex items-center gap-1 text-[9.5px] font-medium text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" /> Updating…
+              </span>
+            )}
+          </div>
+          {recomputePatternGatesError && (
+            <p className="mb-2 text-[10px] text-red-600 dark:text-red-400">{recomputePatternGatesError}</p>
+          )}
+          {patternGates ? (
+              <>
+                {/* "Met" is always green — solid for the Primary/sole match,
+                    lighter for a co-firing "Also meets" gate, so color itself
+                    reinforces the rank_label text rather than identifying
+                    which ACDC group a gate is (dropped the old per-group
+                    color scheme, which implied a distinction — which group —
+                    that read as more meaningful than it was). */}
+                <div className="mb-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[9px] text-muted-foreground">
+                  <span className="font-semibold text-muted-foreground/80">Met badge:</span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: MET_COLOR }} />
+                    Primary / sole match
                   </span>
-                  {similarity.mode && (
-                    <span className="rounded-full border border-border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {similarity.mode === "indexed" ? "BSA-indexed" : "Non-indexed"}
-                    </span>
-                  )}
-                  {/* Qualitative, not a raw percentage — same style as Health
-                      Status's normal/low confidence pill (see the RV FUNCTION
-                      badge above), just with a middle "reduced" tier since this
-                      confidence is continuous rather than Health Status's
-                      two-valued normal/low. */}
-                  {diseaseConfidenceTier && (
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-semibold ${
-                        diseaseConfidenceTier === "high" ? "border border-border bg-muted text-muted-foreground"
-                        : diseaseConfidenceTier === "reduced" ? "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                        : "border border-red-500/50 bg-red-500/15 text-red-700 dark:text-red-300"}`}
-                      title={similarity.confidence_notes?.join(" ") || "No confidence-reducing factors."}
-                    >
-                      {diseaseConfidenceTier !== "high" && <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />}
-                      {diseaseConfidenceTier === "high" ? "High confidence" : diseaseConfidenceTier === "reduced" ? "Reduced confidence" : "Low confidence"}
-                    </span>
-                  )}
-                  {/* BSA/sex above auto-recompute this result (debounced) — this
-                      just surfaces that a request is in flight or failed, since
-                      there's no button anymore to carry a loading/error state. */}
-                  {recomputingSimilarity && (
-                    <span className="inline-flex items-center gap-1 text-[9.5px] font-medium text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" /> Updating…
-                    </span>
-                  )}
+                  <span className="inline-flex items-center gap-1">
+                    <span className="h-2 w-2 shrink-0 rounded-full border" style={{ borderColor: MET_COLOR }} />
+                    Also meets
+                  </span>
                 </div>
-              )}
-              {recomputeSimilarityError && (
-                <p className="mb-3 text-[10px] text-red-600 dark:text-red-400">{recomputeSimilarityError}</p>
-              )}
-              <div className="flex flex-col gap-2.5">
-                {similarity.similarities.map((d) => (
-                  <div key={d.code}>
-                    <div className="mb-1 flex justify-between text-[11.5px]">
-                      <span className="text-foreground">{d.label}</span>
-                      <span className="font-bold text-foreground">{d.percent.toFixed(0)}%</span>
+                <div className="flex flex-col gap-2">
+                  {patternGates.gates.map((g) => {
+                    const isSecondaryMet = g.met === true && g.rank_label === "Also meets";
+                    return (
+                    <div key={g.code} className="rounded-md border border-border p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
+                          {g.met === true ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" style={{ color: isSecondaryMet ? MET_COLOR_SECONDARY_ICON : MET_COLOR }} />
+                          ) : g.met === false ? (
+                            <XCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40" />
+                          ) : (
+                            <HelpCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                          )}
+                          {g.label}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          {g.rank_label && (
+                            <span
+                              className={`rounded-full px-1.5 py-0.5 text-[8.5px] font-semibold ${
+                                g.rank_label === "Primary match"
+                                  ? "border border-foreground/30 text-foreground"
+                                  : "border border-border text-muted-foreground"
+                              }`}
+                              title="Both gates' own criteria are met — this label only ranks which one's measurements clear their threshold by more, not a diagnosis."
+                            >
+                              {g.rank_label}
+                            </span>
+                          )}
+                          <span
+                            className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+                              g.met === true ? (isSecondaryMet ? "border text-green-700 dark:text-green-400" : "text-white")
+                              : g.met === false ? "border border-border text-muted-foreground"
+                              : "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"}`}
+                            style={
+                              g.met === true
+                                ? isSecondaryMet
+                                  ? { background: `${MET_COLOR}1a`, borderColor: `${MET_COLOR}66` }
+                                  : { background: MET_COLOR }
+                                : undefined
+                            }
+                          >
+                            {g.met === true ? "Met" : g.met === false ? "Not met" : "Pending"}
+                          </span>
+                        </span>
+                      </div>
+                      <ul className="mt-1 flex flex-col gap-0.5">
+                        {g.reasons.map((r, i) => (
+                          <li key={i} className="flex gap-1 text-[10px] leading-snug text-muted-foreground">
+                            <span className="text-muted-foreground/50">•</span>
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1 text-[9px] italic leading-snug text-muted-foreground/70">{g.criterion_text}</p>
                     </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                      <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, d.percent))}%`, background: PATTERN_COLORS[d.code] ?? "#64748b" }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {/* Why the top pattern matched — the per-metric reasoning the
-                  module already computes, shown so the % isn't a black box. */}
-              {(() => {
-                const top = similarity.similarities.find((s) => s.code === similarity.most_similar);
-                if (!top?.reasons?.length) return null;
-                return (
-                  <div className="mt-3 border-t border-border pt-2">
+                  );})}
+                </div>
+
+                {/* RV severity layering — shown only when the RV gate is met.
+                    ratio_note is always present then (disease-agnostic,
+                    primary); arvc_note/pah_note are secondary and optional;
+                    generic_note fires only when neither secondary note did.
+                    Kept as three visually distinct lines, never blended into
+                    one score — see the Python module's own docstring for why. */}
+                {patternGates.rv_severity && (
+                  <div className="mt-3 rounded-md border border-dashed border-border p-2">
                     <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      Why {top.label}
+                      RV gate met — severity context
                     </p>
-                    <ul className="flex flex-col gap-0.5">
-                      {top.reasons.slice(0, 4).map((r, i) => (
-                        <li key={i} className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                    <ul className="flex flex-col gap-1">
+                      <li className="flex gap-1 text-[10.5px] leading-snug text-foreground">
+                        <span className="text-muted-foreground/50">•</span>
+                        <span>{patternGates.rv_severity.ratio_note}</span>
+                      </li>
+                      {patternGates.rv_severity.arvc_note && (
+                        <li className="flex gap-1 text-[10.5px] leading-snug text-foreground">
                           <span className="text-muted-foreground/50">•</span>
-                          <span>{r}</span>
+                          <span>{patternGates.rv_severity.arvc_note}</span>
                         </li>
-                      ))}
+                      )}
+                      {patternGates.rv_severity.pah_note && (
+                        <li className="flex gap-1 text-[10.5px] leading-snug text-foreground">
+                          <span className="text-muted-foreground/50">•</span>
+                          <span>{patternGates.rv_severity.pah_note}</span>
+                        </li>
+                      )}
+                      {patternGates.rv_severity.generic_note && (
+                        <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                          <span className="text-muted-foreground/50">•</span>
+                          <span>{patternGates.rv_severity.generic_note}</span>
+                        </li>
+                      )}
                     </ul>
                   </div>
-                );
-              })()}
-              {/* Gate check — the essential-criterion reasoning behind the
-                  headline above. Shown even when met=true, so the reader sees
-                  WHY the headline is confident, not just that it is. */}
-              {similarity.gate?.reason && (
-                <div className="mt-2 flex items-start gap-1.5 text-[10.5px]">
-                  {similarity.gate.met === true
-                    ? <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                    : <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />}
-                  <span className="text-muted-foreground">{similarity.gate.reason}</span>
-                </div>
-              )}
-              {!!similarity.confidence_notes?.length && (
-                <ul className="mt-1.5 flex flex-col gap-0.5">
-                  {similarity.confidence_notes.map((n, i) => (
-                    <li key={i} className="flex items-start gap-1 text-[10px] leading-snug text-muted-foreground/80">
-                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-red-600 dark:text-red-400" />
-                      <span>{n}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* Informational only — does NOT reduce confidence (e.g. confirming
-                  BSA-indexing was used, or the GRS/GCS strain-surrogate caveat).
-                  Neutral icon deliberately, so it doesn't read as a warning like
-                  confidence_notes above. */}
-              {!!similarity.notes?.length && (
-                <ul className="mt-1.5 flex flex-col gap-0.5">
-                  {similarity.notes.map((n, i) => (
-                    <li key={i} className="flex items-start gap-1 text-[10px] leading-snug text-muted-foreground/80">
-                      <Info className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50" />
-                      <span>{n}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          ) : (
-            <EmptyState computing={computing} error={computeError} />
-          )}
+                )}
 
-          {/* RV patterns — prototype. Rule-based against published ARVC TFC /
-              PAH risk-stratification cutoffs (see rvDiseasePattern.ts for the
-              exact citations), NOT the NOR/HCM/DCM z-score engine above —
-              those reference profiles are LV-derived and don't apply here.
-              Every score is explicitly non-diagnostic; the disclaimer is
-              rendered with every result, never omitted. */}
-          <div className="mt-4 border-t border-border pt-3">
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                RV patterns <span className="normal-case tracking-normal">· prototype</span>
-              </p>
-              {/* Sex toggle now lives in the Cardiac Measurements header above,
-                  shared with Disease Pattern Similarity's BSA recompute — this
-                  readout just reflects that shared value. */}
-              <span className="text-[9px] font-medium capitalize text-muted-foreground">
-                {patientSex === "unspecified" ? "Sex: —" : `Sex: ${patientSex}`}
-              </span>
-            </div>
-
-            <div className="flex flex-col gap-2.5">
-              {rvDiseasePatterns.map((p) => (
-                <div key={p.code}>
-                  <div className="mb-1 flex justify-between text-[11.5px]">
-                    <span className="text-foreground">{p.label}</span>
-                    <span className="font-bold text-foreground">{p.score}%</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full" style={{ width: `${p.score}%`, background: RV_PATTERN_COLORS[p.code] }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-            {/* Why the top pattern scored the way it did — same "Why {label}"
-                treatment as the LV patterns above, only for the highest-
-                scoring RV pattern instead of every row. */}
-            {(() => {
-              const top = rvDiseasePatterns.reduce((a, b) => (b.score > a.score ? b : a), rvDiseasePatterns[0]);
-              if (!top) return null;
-              return (
-                <div className="mt-3 border-t border-border pt-2">
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Why {top.label}
-                  </p>
-                  <ul className="flex flex-col gap-0.5">
-                    {top.factors.filter((f) => f.status !== "pending").slice(0, 4).map((f, i) => (
-                      <li key={i} className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
-                        <span className="text-muted-foreground/50">•</span>
-                        <span>{f.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="mt-1.5 text-[8.5px] leading-snug text-muted-foreground/80">{top.reference}</p>
-                </div>
-              );
-            })()}
-            <p className="mt-3 border-t border-border pt-2 text-[9px] leading-snug text-muted-foreground">
-              {rvDiseasePatterns[0]?.disclaimer}
-            </p>
-          </div>
+                <p className="mt-3 border-t border-border pt-2 text-[9px] leading-snug text-muted-foreground">
+                  {patternGates.disclaimer}
+                </p>
+              </>
+            ) : (
+              <EmptyState computing={computing} error={computeError} />
+            )}
         </div>
       </section>
 

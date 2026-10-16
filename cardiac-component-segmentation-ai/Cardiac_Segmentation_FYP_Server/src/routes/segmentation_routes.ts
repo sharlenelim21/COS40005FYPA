@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
+import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseasePatternGatesFromMetrics, computeRegionalHealthStatusFromStrain, computeRvRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
 import { computeAndStoreEditTracking } from "../services/edit_tracking";
 import {
     readProjectSegmentationMask,
@@ -1234,8 +1234,9 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
         // Also backfill heartMetrics.measurements.PeakGRS/PeakGCS from the strain
         // peaks (they were null placeholders — the metrics module doesn't compute
         // strain), so the flat measurements block downstream consumers read is
-        // complete. Then auto-fire the disease-similarity assessment now that both
-        // halves of its input (volumes + strain peaks) exist — no manual trigger.
+        // complete. Then auto-fire disease pattern gates and health status now
+        // that both halves of health status's input (volumes + strain peaks)
+        // exist — no manual trigger.
         try {
             const gGRS = typeof gpuRes.data?.global_grs === "number" ? gpuRes.data.global_grs : null;
             const gGCS = typeof gpuRes.data?.global_gcs === "number" ? gpuRes.data.global_gcs : null;
@@ -1278,19 +1279,23 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             ).lean();
             logger.info(`${serviceLocation}: Stored strain on mask ${maskDoc._id} — global_grs=${gGRS} global_gcs=${gGCS} edFrame=${edFrameIndex} esFrame=${esFrameIndex}`);
 
-            // Auto-chain disease similarity if heart metrics are present (otherwise
-            // it will run when the user triggers it, or after metrics are computed).
-            // No body here — this is an automatic chain after strain compute, not
-            // a user-initiated trigger, so there's no bsa_m2/sex to read. Runs in
-            // non-indexed mode; a caller wanting indexed-mode similarity should
-            // use the manual trigger-disease-similarity route with bsa_m2/sex set.
-            const simMeasurements = assembleSimilarityMeasurements(updatedMask);
-            if (simMeasurements) {
-                const { sex: autoSex, ...autoMeasurementsOnly } = simMeasurements;
-                computeDiseaseSimilarityFromMetrics(maskDoc._id.toString(), autoMeasurementsOnly, autoSex).catch((simErr: any) => {
-                    logger.warn(`${serviceLocation}: Auto disease-similarity after strain failed for mask ${maskDoc._id}: ${simErr?.message}`);
+            // Auto-chain disease pattern gates if heart metrics are present
+            // (otherwise it will run when the user triggers it, or after metrics
+            // are computed). No body here — this is an automatic chain after
+            // strain compute, not a user-initiated trigger, so there's no
+            // bsa_m2/sex to read. Runs in non-indexed mode; a caller wanting
+            // indexed-mode gates should use the manual trigger-disease-pattern-
+            // gates route with bsa_m2/sex set. regionalLvSegments is null here —
+            // regional health status hasn't run yet at this point in the chain
+            // (it fires further below) — so the MINF gate reads as pending from
+            // this auto-fire; the frontend's own sequenced poll backfills it
+            // properly once regional health status lands.
+            const gateInputs = assembleDiseasePatternGateInputs(updatedMask);
+            if (gateInputs) {
+                computeDiseasePatternGatesFromMetrics(maskDoc._id.toString(), gateInputs.lv, gateInputs.rv, null, gateInputs.sex, gateInputs.volumeSignals).catch((gateErr: any) => {
+                    logger.warn(`${serviceLocation}: Auto disease-pattern-gates after strain failed for mask ${maskDoc._id}: ${gateErr?.message}`);
                 });
-                logger.info(`${serviceLocation}: Auto-fired disease similarity for mask ${maskDoc._id} after strain compute.`);
+                logger.info(`${serviceLocation}: Auto-fired disease pattern gates for mask ${maskDoc._id} after strain compute.`);
 
                 // Re-fire Health Status too — strain has just backfilled
                 // measurements.PeakGRS/PeakGCS (when frames matched), so the
@@ -1303,12 +1308,12 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
                 });
                 logger.info(`${serviceLocation}: Auto-fired health status for mask ${maskDoc._id} after strain compute.`);
             } else {
-                logger.info(`${serviceLocation}: Skipped auto disease-similarity for mask ${maskDoc._id} — heart metrics not computed yet.`);
+                logger.info(`${serviceLocation}: Skipped auto disease-pattern-gates for mask ${maskDoc._id} — heart metrics not computed yet.`);
             }
 
             // Layer 2 — advisory regional (per-AHA-segment) status. Fired after
             // strain lands because per-segment strain IS its input. Deliberately
-            // OUTSIDE the simMeasurements branch above: it needs no measurements,
+            // OUTSIDE the gateInputs branch above: it needs no measurements,
             // so it runs whether or not heart metrics exist — when they don't it
             // stores status "unavailable" with the reason rather than guessing.
             // Fire-and-forget: it must never affect this response.
@@ -1340,8 +1345,8 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
 // almost exactly (same NIfTI generation, since the combined mask already
 // carries the RV label; same RV-insertion-landmark lookup), but proxies to
 // the GPU's /bullseye/compute-rv-strain instead and persists to `rvStrain`.
-// Deliberately skips the disease-similarity/health-status auto-chaining that
-// follows LV strain — those consumers are LV-metric-specific.
+// Deliberately skips the disease-pattern-gates/health-status auto-chaining
+// that follows LV strain — those consumers are LV-metric-specific.
 router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
     const { projectId, edFrameIndex, esFrameIndex, modelType } = req.body;
@@ -2152,115 +2157,104 @@ router.post("/trigger-heart-metrics/:maskId", isAuth, async (req: Request, res: 
 });
 
 /**
- * Assemble the flat measurements block a disease-similarity run needs, reading
- * everything from the mask document:
- *   EF/EDV/ESV/StrokeVolume ← heartMetrics.measurements (volumes)
- *   PeakGRS/PeakGCS         ← strain.global_grs / strain.global_gcs (strain peaks)
- * An optional bodyPeaks override wins over the persisted strain (used when the
- * caller has fresher peaks in hand). Returns null when heart metrics are missing.
+ * Assembles the LV + RV inputs compute_disease_pattern_gates.py needs, from
+ * this mask's own stored heartMetrics/bullseye/regionalHealthStatus. Returns
+ * null only when heartMetrics.measurements is entirely absent (nothing to
+ * assess at all) — unlike the old LV-only similarity assembler, this one
+ * still returns a (mostly-null) RV block even if only LV heart metrics exist,
+ * since each of the 5 gates is independently scored and a caller should see
+ * "RV not assessed" as its own pending gate, not a hard failure for everyone.
  */
-function assembleSimilarityMeasurements(
+function assembleDiseasePatternGateInputs(
     maskDoc: any,
-    body?: {
-        PeakGRS?: number | null; PeakGCS?: number | null;
-        // BSA is never persisted (see report/page.tsx's client-side-only BSA
-        // card) — a caller wanting indexed-mode similarity must supply it fresh
-        // on every trigger call. sex is likewise request-scoped, never stored.
-        bsa_m2?: number | null;
-        sex?: "male" | "female" | "unspecified";
-    },
+    body?: { bsa_m2?: number | null; sex?: "male" | "female" | "unspecified" },
 ): {
-    EF: number | null; EDV: number | null; ESV: number | null;
-    EDVI?: number | null; ESVI?: number | null;
-    LVMassG?: number | null; LVMI?: number | null;
-    MaxWallThicknessMm?: number | null;
-    StrokeVolume: number | null; StrokeVolumeIndex?: number | null;
-    PeakGRS: number | null; PeakGCS: number | null;
+    lv: { EF: number | null; EDV: number | null; EDVI: number | null; LVMassG: number | null; LVMI: number | null; MaxWallThicknessMm: number | null };
+    rv: { RVEDV: number | null; RVEDVI: number | null; RVESVI: number | null; RVEF: number | null; SVI: number | null };
+    regionalLvSegments: { segment: number; level: string }[] | null;
     sex: "male" | "female" | "unspecified";
+    volumeSignals: { voxel_mm3: number | null; duplicate_slices: unknown[] };
 } | null {
     const hm = maskDoc?.heartMetrics?.measurements;
     if (!hm) return null;
 
     const bsaM2 = typeof body?.bsa_m2 === "number" && body.bsa_m2 > 0 ? body.bsa_m2 : null;
     const sex = body?.sex === "male" || body?.sex === "female" ? body.sex : "unspecified";
-    const lvMassG: number | null = maskDoc?.heartMetrics?.LV_mass_g ?? null;
-    const lvEdv: number | null = hm.EDV ?? null;
-    const lvEsv: number | null = hm.ESV ?? null;
-    const lvSv: number | null = hm.StrokeVolume ?? null;
-
-    // Indexed features are pure division — computed fresh here rather than
-    // read off heartMetrics (which was computed without any bsa_m2, since
-    // nothing persists BSA), so a caller can go from non-indexed to indexed
-    // mode on demand just by supplying bsa_m2 on this one request.
     const indexed = (v: number | null): number | null => (bsaM2 && v != null ? v / bsaM2 : null);
 
-    // Maximum ED wall thickness — the one morphology feature that needs NO
-    // client input at all: it's max() over the AHA segment values already
-    // stored on this mask's own bullseye (see compute_bullseye_from_rle.py),
-    // computed at the ED frame. Real, server-side, always available once the
-    // bullseye has been computed for this mask.
+    const lvEdv: number | null = hm.EDV ?? null;
+    const lvMassG: number | null = maskDoc?.heartMetrics?.LV_mass_g ?? null;
+
+    // bullseye.segment_values is in PIXELS, by design — both
+    // compute_bullseye_from_rle.py and the GPU's /bullseye/analyze route
+    // document this explicitly ("values in pixels"), since wall thickness is
+    // ray-cast in pixel-index space with no spacing input. Converting to real
+    // mm needs the project's own in-plane pixel spacing (heartMetrics.
+    // spacing_mm[0], the same dx compute_heart_metrics_from_rle.py already
+    // derives from the stored affine) — multiplying AFTER taking the max,
+    // since scaling is linear. Previously this was taken as mm with no
+    // conversion at all, silently comparing a pixel count against the HCM
+    // gate's 15mm clinical threshold (reported live, 2026-10).
     const bullseyeValues: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values;
     const finiteSegmentValues = (bullseyeValues ?? []).filter(
         (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
     );
-    const maxWallThicknessMm: number | null = finiteSegmentValues.length
-        ? Math.max(...finiteSegmentValues)
+    const inPlaneSpacingMm: number | null = maskDoc?.heartMetrics?.spacing_mm?.[0] ?? null;
+    const maxWallThicknessMm: number | null = finiteSegmentValues.length && inPlaneSpacingMm
+        ? Math.max(...finiteSegmentValues) * inPlaneSpacingMm
         : null;
 
-    const strain = maskDoc?.strain;
-    const bodyGRS = typeof body?.PeakGRS === "number" ? body.PeakGRS : null;
-    const bodyGCS = typeof body?.PeakGCS === "number" ? body.PeakGCS : null;
+    const hmTop = maskDoc?.heartMetrics;
+    const rvEdv: number | null = hmTop?.RVEDV ?? null;
+    const rvEf: number | null = hmTop?.RVEF ?? null;
+    const rvSv: number | null = hmTop?.RV_SV ?? null;
+    const rvEsv: number | null = hmTop?.RVESV ?? null;
 
-    // Strain peaks are only physiologically meaningful when measured between the
-    // TRUE end-diastole and end-systole frames. Heart metrics auto-detects those
-    // (ED = largest LV cavity, ES = smallest — heartMetrics.ed_frame/es_frame).
-    // Only trust the persisted strain peaks when they were computed at those exact
-    // frames; otherwise they came from an arbitrary user-picked pair and would
-    // give an unreliable similarity result, so we drop them and let similarity run
-    // on the volume features alone (honest, rather than fabricating peaks).
-    const hmDoc = maskDoc?.heartMetrics;
-    const strainAtCorrectFrames =
-        strain &&
-        typeof hmDoc?.ed_frame === "number" && typeof hmDoc?.es_frame === "number" &&
-        strain.edFrameIndex === hmDoc.ed_frame &&
-        strain.esFrameIndex === hmDoc.es_frame;
-    const strainGRS = strainAtCorrectFrames && typeof strain?.global_grs === "number" ? strain.global_grs : null;
-    const strainGCS = strainAtCorrectFrames && typeof strain?.global_gcs === "number" ? strain.global_gcs : null;
+    const regionalSegments = maskDoc?.regionalHealthStatus?.segments;
+    const regionalLvSegments = Array.isArray(regionalSegments)
+        ? regionalSegments.map((s: any) => ({ segment: s.idx, level: s.level }))
+        : null;
 
     return {
-        EF:           hm.EF ?? null,
-        EDV:          lvEdv,
-        ESV:          lvEsv,
-        // Indexed mode (compute_disease_similarity.py picks the mode by whether
-        // EDVI is present) — null unless this specific request supplied bsa_m2.
-        EDVI:         indexed(lvEdv),
-        ESVI:         indexed(lvEsv),
-        LVMassG:      lvMassG,
-        LVMI:         indexed(lvMassG),
-        // Real regardless of BSA — see maxWallThicknessMm derivation above.
-        MaxWallThicknessMm: maxWallThicknessMm,
-        StrokeVolume: lvSv,
-        StrokeVolumeIndex: indexed(lvSv),
-        // Prefer explicit body override → strain peaks (only if computed at the
-        // auto ED/ES) → any value already on heartMetrics (usually null).
-        PeakGRS:      bodyGRS ?? strainGRS ?? hm.PeakGRS ?? null,
-        PeakGCS:      bodyGCS ?? strainGCS ?? hm.PeakGCS ?? null,
+        lv: {
+            EF: hm.EF ?? null,
+            EDV: lvEdv,
+            EDVI: indexed(lvEdv),
+            LVMassG: lvMassG,
+            LVMI: indexed(lvMassG),
+            MaxWallThicknessMm: maxWallThicknessMm,
+        },
+        rv: {
+            RVEDV: rvEdv,
+            RVEDVI: indexed(rvEdv),
+            RVESVI: indexed(rvEsv),
+            RVEF: rvEf,
+            SVI: indexed(rvSv),
+        },
+        regionalLvSegments,
         sex,
+        // Same structured fields compute_health_status.py/compute_rv_health_status.py
+        // already use to withhold unreliable absolute-volume evidence (see
+        // compute_disease_pattern_gates.py's "Volume-reliability guard") — without
+        // this, a corrupted EDV/LVMassG (bad affine, e.g. LVEDV=6.9 mL) gets
+        // confidently compared against NOR/DCM/HCM's thresholds as if trustworthy.
+        volumeSignals: {
+            voxel_mm3: maskDoc?.heartMetrics?.voxel_mm3 ?? null,
+            duplicate_slices: Array.isArray(maskDoc?.heartMetrics?.duplicate_slices) ? maskDoc.heartMetrics.duplicate_slices : [],
+        },
     };
 }
 
-// Trigger Disease Pattern Similarity Assessment (NOT a diagnosis) for a single
-// mask. Compares the mask's measurements against literature-derived NOR/HCM/DCM
-// reference profiles. Volume metrics (EF/EDV/ESV/SV) come from stored
-// heartMetrics.measurements; PeakGRS/PeakGCS come from the persisted strain
-// result (strain.global_grs/global_gcs) — or from the request body if supplied.
-// POST /segmentation/trigger-disease-similarity/:maskId
-//   body (optional): { PeakGRS?: number, PeakGCS?: number, bsa_m2?: number,
-//                       sex?: "male"|"female"|"unspecified" }
-//   bsa_m2/sex are NEVER persisted (BSA is a client-side-only report-page
-//   input — see report/page.tsx) — supply them fresh on each call to get
-//   indexed-mode similarity; omit them for the non-indexed fallback.
-router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, res: Response) => {
+// Trigger the unified LV+RV Disease Pattern Similarity gate assessment (NOT a
+// diagnosis) for a single mask — see diseasePatternGates's own doc comment.
+// POST /segmentation/trigger-disease-pattern-gates/:maskId
+//   body (optional): { bsa_m2?: number, sex?: "male"|"female"|"unspecified" }
+//   bsa_m2/sex are NEVER persisted server-side —
+//   supply them fresh on each call to get indexed-mode gates (EDVI/LVMI/
+//   RVEDVI/RVESVI/SVI); omit them to still get the gates that don't need BSA
+//   (EF-only parts of MINF/HCM's "normal EF", RVEF-only part of RV, and the
+//   RV/LV volume-ratio severity note, which uses absolute volumes).
+router.post("/trigger-disease-pattern-gates/:maskId", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
     const maskId = Array.isArray(req.params.maskId) ? req.params.maskId[0] : req.params.maskId;
 
@@ -2275,8 +2269,8 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
 
-        const measurements = assembleSimilarityMeasurements(maskDoc, req.body);
-        if (!measurements) {
+        const inputs = assembleDiseasePatternGateInputs(maskDoc, req.body);
+        if (!inputs) {
             return res.status(400).json({
                 success: false,
                 message: "Heart metrics not computed for this mask yet — run trigger-heart-metrics first.",
@@ -2285,15 +2279,14 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
 
         // Respond immediately and run computation async — same pattern as the
         // other trigger routes.
-        res.json({ success: true, message: "Disease similarity computation started." });
+        res.json({ success: true, message: "Disease pattern gate computation started." });
 
-        const { sex, ...measurementsOnly } = measurements;
-        computeDiseaseSimilarityFromMetrics(maskId, measurementsOnly, sex).catch((err: any) => {
-            logger.warn(`SegmentationRoutes: trigger-disease-similarity async error for mask ${maskId}: ${err?.message}`);
+        computeDiseasePatternGatesFromMetrics(maskId, inputs.lv, inputs.rv, inputs.regionalLvSegments, inputs.sex, inputs.volumeSignals).catch((err: any) => {
+            logger.warn(`SegmentationRoutes: trigger-disease-pattern-gates async error for mask ${maskId}: ${err?.message}`);
         });
 
     } catch (error: unknown) {
-        LogError(error as Error, serviceLocation, `Error triggering disease similarity for mask ${maskId}`);
+        LogError(error as Error, serviceLocation, `Error triggering disease pattern gates for mask ${maskId}`);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }
@@ -2302,9 +2295,9 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
 
 // Trigger the rule-based Health Status computation for a single mask.
 // Reads heartMetrics.measurements + heartMetrics.warnings off the mask doc
-// and stores healthStatus back on the same doc. Mirrors trigger-disease-
-// similarity 1:1 — no request body (this module has no external inputs
-// beyond the mask itself), 200 response, async compute.
+// and stores healthStatus back on the same doc. No request body (this
+// module has no external inputs beyond the mask itself), 200 response,
+// async compute.
 // POST /segmentation/trigger-health-status/:maskId
 router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: Response) => {
     const userId = (req.user as any)?._id?.toString();
@@ -2316,7 +2309,7 @@ router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: 
             return res.status(404).json({ success: false, message: "Mask not found." });
         }
 
-        // Project access check — same as trigger-disease-similarity.
+        // Project access check.
         const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
         if (!projectResult.success || !projectResult.projects?.length) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
@@ -2351,7 +2344,7 @@ router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: 
 // beside `healthStatus` and never touches the LV grade.
 // POST /segmentation/trigger-rv-health-status/:maskId
 //   body (optional): { sex?: "male"|"female"|"unspecified", bsa_m2?: number }
-//   Supply both on each call, as for trigger-disease-similarity; the stored
+//   Supply both on each call; neither is persisted, and the stored
 //   result echoes them back. Without a sex the status is "Not assessable" —
 //   no sex-blind limit is substituted.
 router.post("/trigger-rv-health-status/:maskId", isAuth, async (req: Request, res: Response) => {

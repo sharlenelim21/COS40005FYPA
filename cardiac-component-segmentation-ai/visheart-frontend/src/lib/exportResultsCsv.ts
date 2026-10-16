@@ -13,9 +13,8 @@
  * each section reads as its own small table.
  */
 
-import type { MaskDoc, Model } from "@/hooks/useProjectResults";
-import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
-import { rvGasMeasuredNote, rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
+import type { MaskDoc, Model, Sex } from "@/hooks/useProjectResults";
+import { rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 
 /** BSA/sex entered on the report screen — never persisted server-side, so
  *  this is the only way the export can know them. Optional: omit entirely
@@ -50,13 +49,17 @@ const MODELS: Model[] = ["unet", "medsam"];
 const MODEL_LABEL: Record<Model, string> = { unet: "UNet", medsam: "MedSAM" };
 
 /** Max across the 17 AHA-segment ED wall-thickness values — same computation
- *  assembleSimilarityMeasurements does server-side for the HCM gate, and
- *  useProjectResults.ts duplicates client-side for the report's display. */
+ *  assembleDiseasePatternGateInputs does server-side for the HCM gate, and
+ *  useProjectResults.ts duplicates client-side for the report's display.
+ *  bullseye.segment_values is in PIXELS (see compute_bullseye_from_rle.py);
+ *  spacing_mm[0] (in-plane dx) converts the max to real mm — without a known
+ *  spacing this must read as null, never a raw pixel count mislabeled mm. */
 function maxWallThicknessMm(d: MaskDoc): number | null {
   const vals = (d.bullseye?.segment_values ?? []).filter(
     (v): v is number => typeof v === "number" && Number.isFinite(v),
   );
-  return vals.length ? Math.max(...vals) : null;
+  const dx = d.heartMetrics?.spacing_mm?.[0];
+  return vals.length && typeof dx === "number" ? Math.max(...vals) * dx : null;
 }
 
 export function buildResultsCsv(
@@ -172,37 +175,6 @@ export function buildResultsCsv(
   }
   lines.push("");
 
-  // ── Disease pattern similarity ──────────────────────────────────────────
-  lines.push(row("DISEASE PATTERN SIMILARITY (similarity comparison — not a diagnosis)"));
-  lines.push(row("Model", "Headline", "Confidence", "Mode", "Gate", "Notes"));
-  for (const m of present) {
-    const ds = byModel[m]!.diseaseSimilarity;
-    if (!ds) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
-    lines.push(row(
-      MODEL_LABEL[m],
-      ds.phenotype_headline ?? "",
-      typeof ds.confidence === "number" ? ds.confidence.toFixed(2) : "",
-      ds.mode ?? "",
-      ds.gate?.reason ?? "",
-      (ds.notes ?? []).join(" | "),
-    ));
-  }
-  lines.push("");
-  lines.push(row("Model", "Pattern", "Similarity %", "Reasoning"));
-  for (const m of present) {
-    const ds = byModel[m]!.diseaseSimilarity;
-    if (!ds) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
-    for (const s of ds.similarities ?? []) {
-      lines.push(row(
-        MODEL_LABEL[m],
-        `${s.label}${s.code === ds.most_similar ? " (most similar)" : ""}`,
-        s.percent.toFixed(1),
-        (s.reasons ?? []).join(" | "),
-      ));
-    }
-  }
-  lines.push("");
-
   // ── Regional health status (advisory, never changes the overall grade) ──
   lines.push(row("REGIONAL HEALTH STATUS (advisory — per-segment, doesn't change overall grade)"));
   lines.push(row("Model", "Status", "Reduced segment count", "Summary"));
@@ -213,32 +185,28 @@ export function buildResultsCsv(
   }
   lines.push("");
 
-  // ── RV disease-pattern analysis (prototype scoring, not a diagnosis) ────
-  // Entirely client-side (see rvDiseasePattern.ts) — never stored server-side
-  // — so this recomputes it fresh from whatever's in `byModel` plus the
-  // BSA/sex passed in, the same way InteractiveReport.tsx and the printed
-  // report's DiseasePatternSimilarityPage do.
-  lines.push(row("RV DISEASE PATTERN ANALYSIS — PROTOTYPE (rule-based similarity scoring, not a diagnosis)"));
-  lines.push(row("Model", "Pattern", "Score /100", "Contributing factors"));
+  // ── Unified LV+RV Disease Pattern Gates (ACDC-based) ─────────────────────
+  // See compute_disease_pattern_gates.py for the full method.
+  lines.push(row("DISEASE PATTERN GATES — ACDC-based (not a diagnosis)"));
+  lines.push(row("Model", "Gate", "Met", "Rank (when 2+ gates co-fire)", "Reasons", "Criterion"));
   for (const m of present) {
-    const d = byModel[m]!;
-    const rvedvi = idx(d.heartMetrics?.RVEDV);
-    const rvesvi = idx(d.heartMetrics?.RVESV);
-    const svi = idx(d.heartMetrics?.RV_SV);
-    const patterns = computeRvDiseasePatterns({
-      rvedvi, rvesvi, rvef: d.heartMetrics?.RVEF ?? null, svi,
-      sex: sex ?? "unspecified",
-      // Measured, but no validated cutoff — left unscored (null), same as the
-      // on-screen card and printed report; the measured value goes in the text.
-      regionalContractionAbnormal: null,
-      gasAbnormal: null,
-      rvGasMeasured: rvGasMeasuredNote(d.rvStrain, d.rvStrainSeries),
-    });
-    for (const p of patterns) {
-      const factors = p.factors
-        .map((f) => `${f.detail}${f.status === "pending" ? " (PROTOTYPE — not scored)" : ""}`)
+    const pg = byModel[m]!.diseasePatternGates;
+    if (!pg) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
+    for (const g of pg.gates) {
+      lines.push(row(
+        MODEL_LABEL[m],
+        g.label,
+        g.met === true ? "Met" : g.met === false ? "Not met" : "Pending",
+        g.rank_label ?? "",
+        g.reasons.join(" | "),
+        g.criterion_text,
+      ));
+    }
+    if (pg.rv_severity) {
+      const notes = [pg.rv_severity.ratio_note, pg.rv_severity.arvc_note, pg.rv_severity.pah_note, pg.rv_severity.generic_note]
+        .filter((n): n is string => !!n)
         .join(" | ");
-      lines.push(row(MODEL_LABEL[m], p.label, p.score, factors));
+      lines.push(row(MODEL_LABEL[m], "RV severity context", "", notes, ""));
     }
   }
   lines.push("");
