@@ -939,6 +939,9 @@ export default function LandmarkDetectionPage() {
   // separate from `state.currentFrame`, which is the SLICE index used by the
   // landmark viewer.
   const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
+  // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (LandmarkSidebar advances
+  // strainPlaybackFrame every 1000 / playbackFps ms), so the heart moves continuously instead of jumping per frame.
+  const motionTransitionMs = Math.min(1000, 1000 / Math.max(state.playbackFps || 2, 0.5));
 
 
   // Per-frame wall thickness, when the full-cycle strain series has been run for
@@ -1788,6 +1791,7 @@ export default function LandmarkDetectionPage() {
                             lvAlignmentLabels={structureLvAlignmentLabels}
                             motionPositions={structureRvMesh.motionPositions}
                             onMotionUnusable={structureRvMesh.markUnusable}
+                            motionTransitionMs={motionTransitionMs}
                           />
                           {structureRvTooltip && (
                             <div
@@ -1852,6 +1856,7 @@ export default function LandmarkDetectionPage() {
                   // either the Structure or Strain tab), not the slice index —
                   // the bullseye is a per-frame view of the cycle.
                   currentFrame={strainPlaybackFrame}
+                  motionTransitionMs={motionTransitionMs}
                   frameCount={bullseyeFrameCount}
                   frameThickness={frameThicknessValues}
                   reconstructionModel={selectedBullseyeModel}
@@ -1894,6 +1899,7 @@ export default function LandmarkDetectionPage() {
                   selectedStrainType={selectedStrainType}
                   activeModel={activeModel}
                   currentFrame={strainPlaybackFrame}
+                  motionTransitionMs={motionTransitionMs}
                   selectedSegment={selectedStrainSegment}
                   onSelectSegment={setSelectedStrainSegment}
                   avgLm1={state.avgLm1 ?? null}
@@ -2157,6 +2163,7 @@ function AhaBullseyePanel({
   onCompute,
   onBullseyeResetRef,
   onHeartResetRef,
+  motionTransitionMs = 0,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
@@ -2177,6 +2184,8 @@ function AhaBullseyePanel({
   onCompute?: () => void;
   onBullseyeResetRef?: (fn: () => void) => void;
   onHeartResetRef?: (fn: () => void) => void;
+  /** Smooth motion: ease between frames over this many ms (see the page's motionTransitionMs). */
+  motionTransitionMs?: number;
 }) {
   const baseBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
 
@@ -2364,6 +2373,7 @@ function AhaBullseyePanel({
               reconstructionLabels={reconstructionLabels}
               reconstructionMotion={reconstructionMotion}
               onReconstructionMotionUnusable={markReconstructionMotionUnusable}
+              motionTransitionMs={motionTransitionMs}
               reconstructionPending={isReconstructionPending}
               onZoomChange={(fn) => { heartZoomRef.current = fn; }}
               onResetZoom={(fn) => { if (onHeartResetRef) onHeartResetRef(fn); }}
@@ -2470,6 +2480,7 @@ function AhaHeartProjection({
   reconstructionLabels,
   reconstructionMotion = null,
   onReconstructionMotionUnusable,
+  motionTransitionMs = 0,
   reconstructionPending = false,
   onZoomChange,
   onResetZoom,
@@ -2485,6 +2496,7 @@ function AhaHeartProjection({
   reconstructionLabels?: number[] | null;
   reconstructionMotion?: Float32Array | null;
   onReconstructionMotionUnusable?: () => void;
+  motionTransitionMs?: number;
   reconstructionPending?: boolean;
   onZoomChange?: (fn: (delta: number) => void) => void;
   onResetZoom?: (fn: () => void) => void;
@@ -2515,6 +2527,7 @@ function AhaHeartProjection({
           onSegmentHover={setHeartTooltip}
           motionPositions={reconstructionMotion}
           onMotionUnusable={onReconstructionMotionUnusable}
+          motionTransitionMs={motionTransitionMs}
         />
         {heartTooltip && (
           <div
@@ -2567,6 +2580,7 @@ function StrainHeartModel({
   reconstructionLabels,
   reconstructionMotion = null,
   onReconstructionMotionUnusable,
+  motionTransitionMs = 0,
   onReconstructionSegmentClick,
 }: {
   segments: RealStrainSegment[];
@@ -2580,6 +2594,7 @@ function StrainHeartModel({
   reconstructionLabels?: number[] | null;
   reconstructionMotion?: Float32Array | null;
   onReconstructionMotionUnusable?: () => void;
+  motionTransitionMs?: number;
   onReconstructionSegmentClick?: (segment: number) => void;
 }) {
   // Build 17-element values array (0-indexed matching HEART_SEGMENTS order)
@@ -2608,6 +2623,7 @@ function StrainHeartModel({
           initialCameraDistance={8}
           motionPositions={reconstructionMotion}
           onMotionUnusable={onReconstructionMotionUnusable}
+          motionTransitionMs={motionTransitionMs}
         />
         {heartTooltip && (
           <div
@@ -2638,6 +2654,7 @@ function StrainHeartModel({
 function StrainPreviewPanel({
   selectedStrainType,
   currentFrame,
+  motionTransitionMs = 0,
   selectedSegment,
   onSelectSegment,
   avgLm1,
@@ -2659,6 +2676,7 @@ function StrainPreviewPanel({
 }: {
   selectedStrainType: StrainType;
   currentFrame: number;
+  motionTransitionMs?: number;
   selectedSegment: number | null;
   onSelectSegment: (segment: number) => void;
   avgLm1: { x: number; y: number } | null;
@@ -3190,6 +3208,7 @@ function StrainPreviewPanel({
                     initialCameraDistance={9}
                     motionPositions={rvMesh.motionPositions}
                     onMotionUnusable={rvMesh.markUnusable}
+                    motionTransitionMs={motionTransitionMs}
                   />
                   {rvHeartTooltip && (
                     <div
@@ -3313,6 +3332,7 @@ function StrainPreviewPanel({
                     reconstructionLabels={reconstructionLabels}
                     reconstructionMotion={reconstructionMotion}
                     onReconstructionMotionUnusable={markReconstructionMotionUnusable}
+                    motionTransitionMs={motionTransitionMs}
                     onReconstructionSegmentClick={handleSegClick}
                   />
                 </div>

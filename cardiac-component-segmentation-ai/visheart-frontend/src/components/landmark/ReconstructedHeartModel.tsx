@@ -71,6 +71,9 @@ interface ReconstructedHeartModelProps {
   motionPositions?: Float32Array | null;
   /** Called when motionPositions do not fit the loaded mesh (different vertex count), so the caller can fall back. */
   onMotionUnusable?: () => void;
+  /** Smooth motion: ease from the shown positions to new motionPositions over this many ms (the page's frame
+   * interval), so playback moves continuously instead of jumping once per frame. 0 = jump (default). */
+  motionTransitionMs?: number;
 }
 
 function findFirstMesh(root: THREE.Object3D): THREE.Mesh | null {
@@ -155,6 +158,7 @@ export function ReconstructedHeartModel({
   initialCameraDistance = 11,
   motionPositions = null,
   onMotionUnusable,
+  motionTransitionMs = 0,
 }: ReconstructedHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -206,6 +210,17 @@ export function ReconstructedHeartModel({
 
   // Moves the loaded mesh's vertices to motionPositions (aligned exactly as the mesh was at load), then refreshes its
   // normals and the segment boundary lines. Labels, colours and selection are untouched: the vertices keep their order.
+  // Easing between frames: what is on screen now (aligned, one entry per mesh-file vertex) and the running animation.
+  const motionTransitionMsRef = useRef(motionTransitionMs);
+  useEffect(() => { motionTransitionMsRef.current = motionTransitionMs; }, [motionTransitionMs]);
+  const shownPositionsRef = useRef<Float32Array | null>(null);
+  const motionAnimationRef = useRef<number | null>(null);
+  const stopMotionAnimation = () => {
+    if (motionAnimationRef.current !== null) cancelAnimationFrame(motionAnimationRef.current);
+    motionAnimationRef.current = null;
+  };
+  useEffect(() => stopMotionAnimation, []);
+
   const applyMotionRef = useRef<() => void>(() => {});
   applyMotionRef.current = () => {
     const mesh = currentMeshRef.current;
@@ -219,26 +234,69 @@ export function ReconstructedHeartModel({
       return;
     }
     const e = matrix.elements;
-    const moved = new Float32Array(count * 3);
+    const target = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
       const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
-      moved[i * 3] = e[0] * x + e[4] * y + e[8] * z + e[12];
-      moved[i * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
-      moved[i * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+      target[i * 3] = e[0] * x + e[4] * y + e[8] * z + e[12];
+      target[i * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+      target[i * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
     }
     const posAttr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
     const corners = cornerSourceRef.current;
-    for (let i = 0; i < posAttr.count; i++) {
-      const source = (corners ? corners[i] : i) * 3;
-      posAttr.setXYZ(i, moved[source], moved[source + 1], moved[source + 2]);
-    }
-    posAttr.needsUpdate = true;
-    mesh.geometry.computeVertexNormals();
-    mesh.geometry.computeBoundingSphere();
+    const show = (vertices: Float32Array) => {
+      for (let i = 0; i < posAttr.count; i++) {
+        const source = (corners ? corners[i] : i) * 3;
+        posAttr.setXYZ(i, vertices[source], vertices[source + 1], vertices[source + 2]);
+      }
+      posAttr.needsUpdate = true;
+    };
     const lines = boundaryLinesRef.current;
-    if (lines?.visible && flatSegmentLabelsRef.current) {
-      (lines.geometry as LineSegmentsGeometry).setPositions(buildSegmentBoundaryEdges(mesh, flatSegmentLabelsRef.current));
+    const lineGeometry = lines?.visible && flatSegmentLabelsRef.current ? (lines.geometry as LineSegmentsGeometry) : null;
+    const lineArray = () =>
+      (lineGeometry?.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute | undefined)?.data.array as
+        Float32Array | undefined;
+
+    stopMotionAnimation();
+    const from = shownPositionsRef.current;
+    const duration = motionTransitionMsRef.current;
+    const fromLines = lineArray()?.slice();
+    // The new frame's boundary lines are built once, from the new positions; in between, both are eased.
+    show(target);
+    const targetLines = lineGeometry ? buildSegmentBoundaryEdges(mesh, flatSegmentLabelsRef.current!) : null;
+    const finish = () => {
+      show(target);
+      shownPositionsRef.current = target;
+      if (lineGeometry && targetLines) lineGeometry.setPositions(targetLines);
+      mesh.geometry.computeVertexNormals();
+      mesh.geometry.computeBoundingSphere();
+      motionAnimationRef.current = null;
+    };
+    if (!from || from.length !== target.length || duration <= 0) {
+      finish();
+      return;
     }
+    const easeLines = !!(lineGeometry && targetLines && fromLines && fromLines.length === targetLines.length);
+    const workingLines = easeLines ? fromLines!.slice() : null;
+    if (lineGeometry && workingLines) lineGeometry.setPositions(workingLines);
+    const current = new Float32Array(target.length);
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      if (t >= 1) {
+        finish();
+        return;
+      }
+      for (let i = 0; i < current.length; i++) current[i] = from[i] + (target[i] - from[i]) * t;
+      show(current);
+      shownPositionsRef.current = current;
+      if (workingLines) {
+        for (let i = 0; i < workingLines.length; i++) workingLines[i] = fromLines![i] + (targetLines![i] - fromLines![i]) * t;
+        const attribute = lineGeometry!.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute;
+        attribute.data.needsUpdate = true;
+      }
+      motionAnimationRef.current = requestAnimationFrame(step);
+    };
+    step(start);                                       // same tick: the target is never drawn before the easing starts
   };
   useLayoutEffect(() => {
     wantedUrlRef.current = meshUrl;
@@ -757,6 +815,8 @@ export function ReconstructedHeartModel({
       vertexCountRef.current = rawVertexCount;
       cornerSourceRef.current = cornerSource;
       loadedUrlRef.current = meshUrl;
+      stopMotionAnimation();
+      shownPositionsRef.current = null;
       applyVertexColorsRef.current();
       applyMotionRef.current();
       // Only the FIRST successful load reveals the canvas -- later frame
