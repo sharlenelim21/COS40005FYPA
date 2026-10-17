@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useProject } from "@/context/ProjectContext";
 import { decodeMotion, framePositions, MotionData, reconstructionMotionApi } from "@/lib/reconstruction-motion";
+import { useFrameAhaVertexLabels } from "@/lib/frameAhaLabels";
 
 const POLL_MS = 4000;
 const GIVE_UP_MS = 20 * 60 * 1000;
@@ -119,7 +120,8 @@ export function useMotionMesh(
   const hasLabels =
     (Array.isArray(reconstruction?.ahaVertexLabels) && reconstruction.ahaVertexLabels.length > 0) ||
     (!!reconstruction?.frameAhaVertexLabels && typeof reconstruction.frameAhaVertexLabels === "object" &&
-      Object.keys(reconstruction.frameAhaVertexLabels).length > 0);
+      Object.keys(reconstruction.frameAhaVertexLabels).length > 0) ||
+    !!reconstruction?.frameAhaVertexLabelsGz;
   const { motion: built, state } = useReconstructionMotion(
     hasLabels ? params?.projectId : undefined,
     hasLabels ? reconstructionId : undefined,
@@ -144,12 +146,20 @@ export function useMotionMesh(
   }, [reconstructionId, hasLabels, model, meshFrame, getReconstructionGLB]);
   const current = resolved && resolved.id === reconstructionId && resolved.model === model ? resolved : null;
 
+  // Resolves EITHER shape the backend may have sent (plain frameAhaVertexLabels, or the
+  // gzip+base64 frameAhaVertexLabelsGz companion used for larger reconstructions -- see
+  // reconstruction_handler.ts). A naive `reconstruction?.frameAhaVertexLabels?.[frame]`
+  // lookup silently came back empty for every Gz-only reconstruction (the common case for
+  // multi-frame LV reconstructions), falling through to the single ED-frame
+  // `ahaVertexLabels` for every other frame -- whose vertex count/ordering only matches the
+  // ED mesh, so every non-ED frame's viewer rendered gray (reported live, 2026-10).
+  const decodedFrameLabels = useFrameAhaVertexLabels(reconstruction);
   const segmentLabels: number[] | null = useMemo(() => {
     if (!current) return null;
-    const perFrame = reconstruction?.frameAhaVertexLabels?.[String(current.frame)];
+    const perFrame = decodedFrameLabels?.[String(current.frame)];
     if (Array.isArray(perFrame)) return perFrame;
     return Array.isArray(reconstruction?.ahaVertexLabels) ? reconstruction.ahaVertexLabels : null;
-  }, [reconstruction, current]);
+  }, [reconstruction, current, decodedFrameLabels]);
 
   const motionPositions = useMemo(() => {
     if (!motion || !current || current.frame !== motion.edFrame) return null;
