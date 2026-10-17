@@ -88,7 +88,7 @@ export function StartPipelineDialog({
   };
 
   const comboNote = (m: Model, c: Chamber): string | null => {
-    if (existing[c].has(m)) return "Already exists — will be skipped";
+    if (existing[c].has(m)) return "Already built — delete it on the project page to re-run";
     if (building[c].has(m)) return "Already building — will be followed";
     return null;
   };
@@ -171,8 +171,13 @@ export function StartPipelineDialog({
                 {RECON_COMBOS.map(({ model, chamber }) => {
                   const key = comboKey(model, chamber);
                   const id = `pipeline-recon-${model}-${chamber}`;
-                  const enabled = segModels.has(model) && !modelDisabled(model);
-                  const note = enabled ? comboNote(model, chamber) : `Select ${MODEL_LABEL[model]} segmentation`;
+                  const segOk = segModels.has(model) && !modelDisabled(model);
+                  // Already-built and already-building combos are locked out of selection entirely --
+                  // re-running one would just be skipped/followed server-side anyway (see comboNote),
+                  // so letting the checkbox look interactive was confusing. The note below points at
+                  // the project page's existing delete button to free the combo back up.
+                  const enabled = segOk && !existing[chamber].has(model) && !building[chamber].has(model);
+                  const note = !segOk ? `Select ${MODEL_LABEL[model]} segmentation` : comboNote(model, chamber);
                   return (
                     <Label
                       key={key}
