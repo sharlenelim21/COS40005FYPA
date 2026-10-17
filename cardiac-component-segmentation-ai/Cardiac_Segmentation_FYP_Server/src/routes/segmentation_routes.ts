@@ -27,7 +27,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { extractS3KeyFromUrl, downloadFromS3, uploadMaskToS3 } from "../services/s3_handler";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client"; // Import fresh GPU server address function
-import { resolveRvInsertionPoints } from "../services/rv_insertion_points";
+import { loadRvInsertionSlicesByFrame, resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
 
 const router = Router();
 
@@ -1223,6 +1223,12 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
         if (savedDocId) {
             logger.info(`${serviceLocation}: compute-strain-from-frames using saved landmark edits (doc ${savedDocId}) for project ${projectId}.`);
         }
+        // Both insertion points of every slice of the ED frame: the GPU picks
+        // the anterior one per slice and aligns each ring to its own slices.
+        // The ES frame is aligned to its OWN landmarks (slice by slice, falling
+        // back to ED's where the ES points are unusable).
+        const rvSlices = await resolveRvInsertionSlices(projectId, edFrameIndex);
+        const rvSlicesEs = (await loadRvInsertionSlicesByFrame(projectId))(esFrameIndex);
 
         // 6. POST both NIfTI files to GPU
         const FormDataNode = require("form-data");
@@ -1237,6 +1243,8 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             form.append("rv_insertion_2_x", String(lm2.x));
             form.append("rv_insertion_2_y", String(lm2.y));
         }
+        if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
+        if (rvSlices.length && rvSlicesEs.length) form.append("rv_insertion_slices_es", JSON.stringify(rvSlicesEs));
 
         const gpuRes = await axios.post(`${gpuBaseUrl}/bullseye/compute-strain`, form, {
             headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
@@ -1689,6 +1697,12 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
         // saved user edits first (shared across models, since a corrected RV
         // insertion point is an anatomical location), then the raw GPU job.
         const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
+        // Per-slice landmarks: ED's align the ED mask; each compared frame is
+        // aligned to its OWN landmarks (slice by slice, falling back to ED's
+        // where that frame's points are unusable), so the segments follow the
+        // heart through the cycle.
+        const rvSlices = await resolveRvInsertionSlices(projectId, edFrameIndex);
+        const rvSlicesForFrame = await loadRvInsertionSlicesByFrame(projectId);
 
         // ED is the fixed reference for every comparison — build it once.
         const edPath = await buildNIfTI(edFrame, "ed");
@@ -1703,6 +1717,9 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
                 form.append("es_file", fs.createReadStream(framePath), { filename: `${label}.nii.gz`, contentType: "application/gzip" });
                 if (lm1) { form.append("rv_insertion_1_x", String(lm1.x)); form.append("rv_insertion_1_y", String(lm1.y)); }
                 if (lm2) { form.append("rv_insertion_2_x", String(lm2.x)); form.append("rv_insertion_2_y", String(lm2.y)); }
+                if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
+                const frameSlices = rvSlices.length ? rvSlicesForFrame(frame.frameindex) : [];
+                if (frameSlices.length) form.append("rv_insertion_slices_es", JSON.stringify(frameSlices));
 
                 const r = await axios.post(`${gpuBaseUrl}/bullseye/compute-strain`, form, {
                     headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
