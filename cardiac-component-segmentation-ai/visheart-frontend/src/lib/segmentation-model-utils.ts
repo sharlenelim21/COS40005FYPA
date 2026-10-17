@@ -3,8 +3,8 @@ import type { BaseSegmentationMask } from "@/types/project";
 export type SegmentationModelId = "medsam" | "unet";
 
 export const SEGMENTATION_MODEL_OPTIONS: { value: SegmentationModelId; label: string }[] = [
-  { value: "medsam", label: "MedSam" },
-  { value: "unet", label: "Unet" },
+  { value: "medsam", label: "MedSAM" },
+  { value: "unet", label: "UNet" },
 ];
 
 export function inferDocModel(m: unknown): SegmentationModelId | null {

@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 // API
 import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
-import { inferDocModel as inferMaskModel } from "@/lib/segmentation-model-utils";
+import { inferDocModel as inferMaskModel, SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
 
 // UI Components
@@ -61,6 +61,7 @@ import { JobProgress, KineticButtonFill, KineticProgress, ProgressMeter, hasProg
 import { buildReconstructionRequest } from "@/lib/reconstructionDefaults";
 import { useAutoPipelineChain, type PipelineSelection } from "@/hooks/useAutoPipelineChain";
 import { StartPipelineDialog } from "@/components/project/StartPipelineDialog";
+import { ExportReconstructionButton } from "@/components/project/ExportReconstructionButton";
 import { landmarkApi } from "@/lib/landmarkApi";
 
 // Types
@@ -103,7 +104,7 @@ function ProjectPageInner() {
   const buildModelParam = searchParams.get("model");
   const requestedBuildModel =
     buildModelParam === "medsam" || buildModelParam === "unet" ? buildModelParam : null;
-  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache } = useProject();
+  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache, maskAvailabilityByModel } = useProject();
   // Glow "Start AI Segmentation" when there are no masks and no active jobs
   const glowStartSegmentation = loading === "done" && !hasMasks && (jobs ?? []).filter(j => j.status === ProjectTypes.JobStatus.PENDING || j.status === ProjectTypes.JobStatus.IN_PROGRESS).length === 0;
 
@@ -585,6 +586,38 @@ function ProjectPageInner() {
   const landmarkProgressState: "running" | "queued" = landmarkSummary?.active === "queued" && !pipeline.landmarkActive ? "queued" : "running";
   const landmarksDone = isGuest || landmarkSummary === null || landmarkSummary.hasCompleted;
   const isPipelineComplete = hasMasks && hasReconstructions && landmarksDone;
+  const maskModelLabels = SEGMENTATION_MODEL_OPTIONS.filter((opt) => maskAvailabilityByModel[opt.value]).map((opt) => opt.label).join(", ");
+
+  type StageKey = "segmentation" | "reconstruction" | "landmark";
+  const urlStage: StageKey | null =
+    highlight === "segmentation" || highlight === "reconstruction" || highlight === "landmark" ? highlight : null;
+  const explicitStage: StageKey | null = urlStage ?? (glowEditMasks ? "segmentation" : null);
+  const derivedNextStage: StageKey | null =
+    loading !== "done" || isGuest || !hasMasks
+      ? null
+      : !hasReconstructions
+      ? (reconRunning ? null : "reconstruction")
+      : landmarkSummary && !landmarkSummary.hasCompleted && !landmarkRunning
+      ? "landmark"
+      : null;
+  const highlightedStage = explicitStage ?? derivedNextStage;
+  const [pulseStage, setPulseStage] = useState<StageKey | null>(null);
+  useEffect(() => {
+    if (!derivedNextStage || !projectId) return;
+    try {
+      const key = `next-step-pulse-${projectId}-${derivedNextStage}`;
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, "1");
+      setPulseStage(derivedNextStage);
+    } catch {}
+  }, [derivedNextStage, projectId]);
+  const isHighlighted = (stage: StageKey) => highlightedStage === stage;
+  const stageHighlightClass = (stage: StageKey) =>
+    !isHighlighted(stage)
+      ? ""
+      : explicitStage === stage || pulseStage === stage
+      ? "shadow-lg motion-safe:animate-pulse"
+      : "shadow-lg";
   const modelName = (m: unknown) => (String(m ?? "").toLowerCase() === "unet" ? "UNet" : "MedSAM");
   const summarizeProgress = <J extends { progress?: unknown }>(
     inFlight: J[],
@@ -919,16 +952,16 @@ function ProjectPageInner() {
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button asChild size="lg" variant={glowEditMasks ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${glowEditMasks ? "animate-pulse shadow-lg" : ""}`}>
+            <Button asChild size="lg" variant={isHighlighted("segmentation") ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${stageHighlightClass("segmentation")}`}>
               <Link href={`/project/${projectId}/segmentation`}>
                 <div className="flex items-center gap-3 w-full">
-                  <Edit className={`h-5 w-5 ${glowEditMasks ? "text-primary-foreground" : "text-primary"}`} />
+                  <Edit className={`h-5 w-5 ${isHighlighted("segmentation") ? "text-primary-foreground" : "text-primary"}`} />
                   <div className="text-left flex-1">
                     <p className="font-semibold">Edit Segmentation Masks</p>
                     <p className="text-xs text-muted-foreground">
                       Refine with brush tools and manual adjustments
                     </p>
-                    <p className={`mt-0.5 text-xs font-medium ${glowEditMasks ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
+                    <p className={`mt-0.5 text-xs font-medium ${isHighlighted("segmentation") ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
                       Masks Available
                     </p>
                   </div>
@@ -1005,8 +1038,8 @@ function ProjectPageInner() {
             <Button
               onClick={() => handleOpenReconstruction()}
               size="lg"
-              variant={highlight === "reconstruction" ? "default" : "outline"}
-              className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "reconstruction" ? "animate-pulse shadow-lg" : ""}`}
+              variant={isHighlighted("reconstruction") ? "default" : "outline"}
+              className={`justify-start h-auto py-4 transition-all duration-300 ${stageHighlightClass("reconstruction")}`}
               disabled={isStartingReconstruction}
             >
               <div className="flex items-center gap-3 w-full">
@@ -1021,7 +1054,7 @@ function ProjectPageInner() {
                   </p>
                   <p className="text-xs opacity-90">Generate model-scoped 4D meshes from segmentation</p>
                   {reconstructionCards.length > 0 && (
-                    <p className={`mt-0.5 text-xs font-medium ${highlight === "reconstruction" ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
+                    <p className={`mt-0.5 text-xs font-medium ${isHighlighted("reconstruction") ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
                       {reconstructionCards.length} Available
                     </p>
                   )}
@@ -1096,15 +1129,15 @@ function ProjectPageInner() {
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button asChild size="lg" variant={highlight === "landmark" ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${highlight === "landmark" ? "animate-pulse shadow-lg" : ""}`}>
+            <Button asChild size="lg" variant={isHighlighted("landmark") ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${stageHighlightClass("landmark")}`}>
               <Link href={`/project/${projectId}/landmark-detection`}>
                 <div className="flex items-center gap-3 w-full">
-                  <Crosshair className={`h-5 w-5 ${highlight === "landmark" ? "text-primary-foreground" : "text-primary"}`} />
+                  <Crosshair className={`h-5 w-5 ${isHighlighted("landmark") ? "text-primary-foreground" : "text-primary"}`} />
                   <div className="text-left flex-1">
                     <p className="font-semibold">Landmark Detection</p>
                     <p className="text-xs text-muted-foreground">Detect landmarks, preview strain, and export reports</p>
                     {landmarkSummary?.hasCompleted && (
-                      <p className={`mt-0.5 text-xs font-medium ${highlight === "landmark" ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
+                      <p className={`mt-0.5 text-xs font-medium ${isHighlighted("landmark") ? "text-primary-foreground" : "text-green-600 dark:text-green-400"}`}>
                         Landmarks Available
                       </p>
                     )}
@@ -1800,7 +1833,10 @@ function ProjectPageInner() {
                     <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800">
                       <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0" />
                       <div className="flex-1">
-                        <p className="text-sm font-semibold text-green-900 dark:text-green-100">Masks Available</p>
+                        <p className="text-sm font-semibold text-green-900 dark:text-green-100">
+                          Masks Available
+                          {maskModelLabels && <span className="font-normal text-green-800/80 dark:text-green-200/80"> · {maskModelLabels}</span>}
+                        </p>
                         <p className="text-xs text-muted-foreground">Ready for editing and reconstruction</p>
                       </div>
                     </div>
@@ -1846,12 +1882,15 @@ function ProjectPageInner() {
             {hasReconstructions && reconstructionRows.length > 0 && (
               <Card>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Box className="h-4 w-4" />
                       4D Reconstruction
                     </CardTitle>
-                    <Badge variant="default">{reconstructionCards.length} Available</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="default">{reconstructionCards.length} Available</Badge>
+                      <ExportReconstructionButton />
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">

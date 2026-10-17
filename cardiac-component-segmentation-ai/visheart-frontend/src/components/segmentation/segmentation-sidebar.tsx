@@ -493,7 +493,7 @@ export function SegmentationSidebar({
         <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] text-muted-foreground">Model:</span>
         <span className="text-[11px] font-semibold text-foreground truncate">
-          {selectedModel === "medsam" ? "MedSam" : "Unet"}
+          {selectedModel === "medsam" ? "MedSAM" : "UNet"}
         </span>
         <span
           className={cn(

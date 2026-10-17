@@ -74,9 +74,6 @@ export default function ReportPage() {
     Number.isFinite(heightNum) && Number.isFinite(weightNum) && heightNum > 0 && weightNum > 0
       ? Math.sqrt((heightNum * weightNum) / 3600)
       : null;
-  // The toolbar's sticky *top* offset (not padding — see below), kept in sync
-  // with the real bottom edge of whatever's fixed above it (site header +
-  // ProjectDashboardBar's floating pill, whichever is currently taller).
   const [clearance, setClearance] = useState(64);
 
   const generatedAt = useMemo(
@@ -90,19 +87,12 @@ export default function ReportPage() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // `top` on a sticky element is a no-op until the element would otherwise
-  // scroll past it — unlike padding, it can't double-count against normal
-  // document flow while ProjectDashboardBar (expanded or collapsed) still
-  // reserves its own space above. So this only needs the real, current
-  // geometry of what's fixed on screen, not a guess about *why*.
   useEffect(() => {
     let rafId: number;
     const measure = () => {
       const globalHeader = document.querySelector("header");
-      const reopenPill = document.querySelector('[aria-label="Show dashboard"]');
       const headerBottom = globalHeader?.getBoundingClientRect().bottom ?? 0;
-      const pillBottom = reopenPill?.getBoundingClientRect().bottom ?? 0;
-      setClearance(Math.max(headerBottom, pillBottom, 0));
+      setClearance(Math.max(headerBottom, 0));
       rafId = requestAnimationFrame(measure);
     };
     rafId = requestAnimationFrame(measure);
