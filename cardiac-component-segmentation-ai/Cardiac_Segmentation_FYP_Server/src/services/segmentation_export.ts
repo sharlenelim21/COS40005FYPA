@@ -14,7 +14,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
-import { findSavedLandmarkDoc, findLatestLandmarkJobResult, meanSavedRvInsertionPoints } from "./rv_insertion_points";
+import { findSavedLandmarkDoc, findLatestLandmarkJobResult, loadRvInsertionSlicesByFrame, meanSavedRvInsertionPoints, resolveRvInsertionSlices, type RvInsertionSlice } from "./rv_insertion_points";
 
 const serviceLocation = 'SegmentationExport';
 
@@ -34,9 +34,19 @@ const runBullseyeRleScript = (
     // the segments to the landmark exactly as the GPU does; without it the
     // script estimates the point from the RV in the mask.
     rvInsertion1: number[] | null = null,
+    // Per-slice landmarks: both points of every slice of THIS frame (the script
+    // picks the anterior one on this mask) and/or anterior points already
+    // picked on a reference frame (used for any slice without a usable point
+    // of its own). Either one makes each ring align to its own slices;
+    // rvInsertion1 is then not used.
+    perSlice: { rvSlices?: RvInsertionSlice[]; anteriorPoints?: { slice: number; point: number[] }[] } = {},
 ): Promise<any | null> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
-    const input = JSON.stringify({ frames, width, height, rv_insertion_1: rvInsertion1 });
+    const input = JSON.stringify({
+        frames, width, height, rv_insertion_1: rvInsertion1,
+        rv_insertion_slices: perSlice.rvSlices ?? null,
+        anterior_points: perSlice.anteriorPoints ?? null,
+    });
 
     return new Promise<any | null>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
@@ -176,7 +186,8 @@ export const computeBullseyeFromMaskDoc = async (
     projectId?: string,
 ): Promise<void> => {
     const rv1 = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
-    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1);
+    const rvSlices = projectId ? await resolveRvInsertionSlices(projectId, 0) : [];
+    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1, { rvSlices });
     if (!result) return;
     result.computed_at = new Date().toISOString();
     const writeResult = await projectSegmentationMaskModel.collection.updateOne(
@@ -215,11 +226,31 @@ export const computeFrameWallThicknessSeries = async (
     // in the mask; we keep the estimate from the FIRST frame (ED) and reuse it
     // for all later frames, so the segment borders do not move between frames.
     let alignPoint: number[] | null = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
+    // Per-slice landmarks: the first frame is the reference — it is aligned to
+    // its landmarks and its chosen anterior points are kept. Every later frame
+    // is aligned to its OWN landmarks, using the reference point for any slice
+    // whose own points are unusable, so the segments follow the heart through
+    // the cycle without jumping where a frame's landmarks are missing.
+    const refSlices: RvInsertionSlice[] = projectId ? await resolveRvInsertionSlices(projectId, frameIndices[0]) : [];
+    let rvSlicesForFrame: (frameIndex: number) => RvInsertionSlice[] =
+        projectId && refSlices.length ? await loadRvInsertionSlicesByFrame(projectId) : () => [];
+    let anteriorPoints: { slice: number; point: number[] }[] | undefined;
 
     const results: { frameIndex: number; segment_values: (number | null)[]; stats: any }[] = [];
     for (const frameIndex of frameIndices) {
         const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint);
+        const result = await runBullseyeRleScript(
+            framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint,
+            anteriorPoints ? { anteriorPoints, rvSlices: rvSlicesForFrame(frameIndex) } : { rvSlices: refSlices },
+        );
+        if (!anteriorPoints && refSlices.length && result) {
+            if (Array.isArray(result.anterior_points) && result.anterior_points.length) {
+                anteriorPoints = result.anterior_points;
+            } else {
+                // no usable slice on the reference frame — keep the single point for every frame
+                rvSlicesForFrame = () => [];
+            }
+        }
         if (!alignPoint && result?.alignment_source === "rv-mask" && Array.isArray(result.alignment_point)) {
             alignPoint = result.alignment_point;
         }
@@ -965,6 +996,9 @@ export const computeBullseyeAndStore = async (
             form.append('rv_insertion_2_x', String(rv2[0]));
             form.append('rv_insertion_2_y', String(rv2[1]));
         }
+        // Per-slice landmarks of frame 0 — the GPU aligns each ring to its own slices.
+        const rvSlices = await resolveRvInsertionSlices(projectId, 0);
+        if (rvSlices.length) form.append('rv_insertion_slices', JSON.stringify(rvSlices));
 
         const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
             headers: {
@@ -1120,6 +1154,9 @@ export async function recomputeBullseyeWithLandmarks(
     projectId: string,
     avgLm1: [number, number],
     avgLm2: [number, number],
+    // Per-slice points from the same landmark job (frame 0). When given, the
+    // GPU aligns each ring to its own slices instead of the averaged point.
+    rvSlices: RvInsertionSlice[] = [],
 ): Promise<void> {
     const tempId = uuidv4();
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_lm_${tempId}`);
@@ -1226,6 +1263,7 @@ export async function recomputeBullseyeWithLandmarks(
                 form.append('rv_insertion_1_y', String(avgLm1[1]));
                 form.append('rv_insertion_2_x', String(avgLm2[0]));
                 form.append('rv_insertion_2_y', String(avgLm2[1]));
+                if (rvSlices.length) form.append('rv_insertion_slices', JSON.stringify(rvSlices));
 
                 const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
                     headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },

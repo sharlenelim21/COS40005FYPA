@@ -16,7 +16,7 @@ import {
 import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
-import { resolveRvInsertionPoints } from "../services/rv_insertion_points";
+import { resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
 import { normalizeLandmarkFrames, normalizeLandmarkJobResult } from "../utils/landmark_order";
 
 const memUpload = multer({ storage: multer.memoryStorage() });
@@ -305,6 +305,9 @@ router.post(
         form.append("rv_insertion_2_x", String(lm2.x));
         form.append("rv_insertion_2_y", String(lm2.y));
       }
+      // Per-slice landmarks of frame 0 (the uploaded files carry no frame index).
+      const rvSlices = await resolveRvInsertionSlices(projectId, 0);
+      if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
 
       const response = await axios.post(`${gpuBaseUrl}/bullseye/compute-strain`, form, {
         headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },

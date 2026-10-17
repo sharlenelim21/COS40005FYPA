@@ -60,6 +60,107 @@ export const findLatestLandmarkJobResult = async (
         : null;
 };
 
+/**
+ * Both RV insertion points of one slice, as sent to the GPU / the RLE script
+ * in the `rv_insertion_slices` field. `slice` is the stored sliceindex. Which
+ * of p1/p2 is anterior does not matter: the analysis picks the anterior one
+ * from the mask (select_anterior_insertions in bullseye_analysis.py).
+ */
+export type RvInsertionSlice = { slice: number; p1: [number, number]; p2: [number, number] };
+
+const isNum = (v: any): v is number => typeof v === "number" && Number.isFinite(v);
+
+/**
+ * Per-slice RV insertion points of one cardiac frame from a saved landmark doc
+ * (falls back to frame 0 when that frame is not stored, unless
+ * `fallbackToFrame0` is false). Only slices that have both points are returned.
+ */
+export const savedDocRvInsertionSlices = (savedDoc: any, frameIndex = 0, fallbackToFrame0 = true): RvInsertionSlice[] => {
+    const frames: any[] = savedDoc?.frames ?? [];
+    const frame = frames.find((f) => f.frameindex === frameIndex)
+        ?? (fallbackToFrame0 ? frames.find((f) => f.frameindex === 0) : undefined);
+    const out: RvInsertionSlice[] = [];
+    for (const slice of frame?.slices ?? []) {
+        const p1 = (slice.landmarks ?? []).find((p: any) => p.key === "rv_insertion_1");
+        const p2 = (slice.landmarks ?? []).find((p: any) => p.key === "rv_insertion_2");
+        if (isNum(slice.sliceindex) && p1 && p2 && isNum(p1.x) && isNum(p1.y) && isNum(p2.x) && isNum(p2.y)) {
+            out.push({ slice: slice.sliceindex, p1: [p1.x, p1.y], p2: [p2.x, p2.y] });
+        }
+    }
+    return out;
+};
+
+/**
+ * Per-slice RV insertion points of one cardiac frame from a landmark job
+ * result. Handles the multi-frame format ({ frames: [{ frameindex, slices }] })
+ * and the flat format ({ slices: [{ frame?, slice, lm1, lm2 }] }); falls back
+ * to frame 0 when the requested frame is not in the result.
+ */
+export const jobResultRvInsertionSlices = (result: any, frameIndex = 0, fallbackToFrame0 = true): RvInsertionSlice[] => {
+    if (!result) return [];
+    let slices: any[] = [];
+    if (Array.isArray(result.frames)) {
+        const frame = result.frames.find((f: any) => f.frameindex === frameIndex)
+            ?? (fallbackToFrame0 ? result.frames.find((f: any) => f.frameindex === 0) : undefined);
+        slices = frame?.slices ?? [];
+    } else if (Array.isArray(result.slices)) {
+        const wanted = result.slices.filter((s: any) => (s?.frame ?? 0) === frameIndex);
+        slices = wanted.length || !fallbackToFrame0 ? wanted : result.slices.filter((s: any) => (s?.frame ?? 0) === 0);
+    }
+    const out: RvInsertionSlice[] = [];
+    for (const s of slices) {
+        const z = s?.slice ?? s?.sliceindex;
+        const p1 = extractCoord(s?.lm1);
+        const p2 = extractCoord(s?.lm2);
+        if (isNum(z) && p1 && p2 && isNum(p1.x) && isNum(p1.y) && isNum(p2.x) && isNum(p2.y)) {
+            out.push({ slice: z, p1: [p1.x, p1.y], p2: [p2.x, p2.y] });
+        }
+    }
+    return out;
+};
+
+/**
+ * Per-slice RV insertion points for aligning each bullseye ring to its own
+ * slices. Same source order as resolveRvInsertionPoints: the saved
+ * (user-edited) landmark doc first, then the latest completed landmark job.
+ * `frameIndex` is the cardiac frame the alignment refers to (the strain's ED
+ * frame); it falls back to frame 0. Never throws — returns [] on any failure,
+ * in which case callers keep using the single averaged point.
+ */
+export const resolveRvInsertionSlices = async (projectId: string, frameIndex = 0): Promise<RvInsertionSlice[]> => {
+    try {
+        const fromSaved = savedDocRvInsertionSlices(await findSavedLandmarkDoc(projectId), frameIndex);
+        if (fromSaved.length) return fromSaved;
+        return jobResultRvInsertionSlices(await findLatestLandmarkJobResult(projectId), frameIndex);
+    } catch {
+        return [];
+    }
+};
+
+/**
+ * Every cardiac frame's own per-slice RV insertion points, for aligning each
+ * frame's bullseye to that frame's landmarks (the segments then follow the
+ * heart through the cycle). Loads the source once — the saved landmark doc if
+ * it holds any usable slice, else the latest landmark job — and returns a
+ * lookup by frame index. The lookup does NOT fall back to frame 0: a frame
+ * with no landmarks returns [], so the caller keeps the reference frame's
+ * points for it. Never throws.
+ */
+export const loadRvInsertionSlicesByFrame = async (
+    projectId: string,
+): Promise<(frameIndex: number) => RvInsertionSlice[]> => {
+    try {
+        const saved: any = await findSavedLandmarkDoc(projectId);
+        if ((saved?.frames ?? []).some((f: any) => savedDocRvInsertionSlices(saved, f.frameindex, false).length)) {
+            return (frameIndex: number) => savedDocRvInsertionSlices(saved, frameIndex, false);
+        }
+        const job = await findLatestLandmarkJobResult(projectId);
+        return (frameIndex: number) => jobResultRvInsertionSlices(job, frameIndex, false);
+    } catch {
+        return () => [];
+    }
+};
+
 export const resolveRvInsertionPoints = async (
     projectId: string,
 ): Promise<{ lm1: RvPoint | null; lm2: RvPoint | null; savedDocId: string | null; usedSavedEdits: boolean }> => {

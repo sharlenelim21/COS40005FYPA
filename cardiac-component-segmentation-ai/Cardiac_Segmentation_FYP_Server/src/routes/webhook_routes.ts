@@ -38,6 +38,7 @@ import { v4 as uuidv4 } from "uuid"; // For generating new _id for the manual ma
 import { gpuObjUploadFilter } from "../middleware/uploadmiddleware";
 import { processReconstructionCallback } from "../services/reconstruction_handler";
 import { recomputeBullseyeWithLandmarks } from "../services/segmentation_export";
+import { jobResultRvInsertionSlices } from "../services/rv_insertion_points";
 
 const serviceLocation = "InferenceCallback(Webhook)";
 const router = express.Router();
@@ -170,7 +171,7 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
     const avgLm2 = extractLm(result?.avg_lm2);
 
     if (projectId && avgLm1 && avgLm2) {
-      recomputeBullseyeWithLandmarks(projectId, avgLm1, avgLm2).catch((err: any) => {
+      recomputeBullseyeWithLandmarks(projectId, avgLm1, avgLm2, jobResultRvInsertionSlices(result, 0)).catch((err: any) => {
         logger.warn(`${serviceLocation}: [BullseyeLM] Recompute error for project ${projectId}: ${err?.message}`);
       });
     } else {
