@@ -37,6 +37,9 @@ export interface CorrectionCase {
   shared: number;
   /** The project is a scan of the frozen test set: listed so the user sees it, but it never trains. */
   frozen?: { frame: number; slice: number; frozen: string } | null;
+  /** The project's owner: every user sees every case, and only the owner edits it. */
+  ownerId?: string | null;
+  ownerName?: string | null;
 }
 
 export interface JobCase {
@@ -108,6 +111,8 @@ export interface ModelVersion {
   gate: Gate | null;
   recipe: string | null;
   deleted_because: string | null;
+  /** Its model file is on this computer; a copied registry can name versions whose files are not. */
+  on_disk: boolean;
 }
 
 export interface Eligible {
@@ -126,6 +131,8 @@ export interface RetrainingStatus {
   training: { allowed: boolean; reason: string | null };
   original: string;
   active: string;
+  /** Why versions cannot be switched on this computer (the original model or the active slot), or null. */
+  problem: string | null;
   versions: ModelVersion[];
   eligible: Eligible | null;
   job: TrainingJob | null;
@@ -175,6 +182,8 @@ export interface Comparison {
   against: string;
   ready: boolean;
   rendered: boolean;
+  /** label's example scans: made by this call when a version made before the page had none. */
+  index?: ExampleIndex;
 }
 
 export interface VersionResults {
@@ -219,8 +228,6 @@ export const retrainingApi = {
   checkCorrections: () =>
     call<Eligible>(api.post("/retraining/eligible-cases/check", {}, { ...anyStatus, timeout: 190000 })),
   start: (selection: string[]) => call<TrainingJob>(api.post("/retraining/start", { selection }, anyStatus)),
-  log: (jobId: string, tail = 200) =>
-    call<{ lines: string[] }>(api.get(`/retraining/job/${jobId}/log`, { ...anyStatus, params: { tail } })),
   cancel: (jobId: string) => call<TrainingJob>(api.post(`/retraining/job/${jobId}/cancel`, {}, anyStatus)),
   preview: (label: string, action: VersionAction) =>
     call<SwitchPreview>(api.get(`${versionPath(label)}/preview`, { ...anyStatus, params: { action } })),
@@ -234,6 +241,12 @@ export const retrainingApi = {
   /** One of label's example scans, with the predictions of `left` and `right` (by default as trained). */
   example: (label: string, n: number, sides: { left?: string; right?: string } = {}) =>
     call<ExampleScan>(api.get(`${versionPath(label)}/examples/${n}`, { ...anyStatus, timeout: 70000, params: sides })),
+  /** A corrected case's slice images, also when another user owns it, in the shape the image cache reads. */
+  caseImages: async (projectId: string): Promise<{ success: boolean; presignedUrl?: string; expiresAt?: number; message?: string }> => {
+    const reply = await call<{ presignedUrl: string; expiresAt: number }>(
+      api.get(`/retraining/cases/${encodeURIComponent(projectId)}/images`, anyStatus));
+    return reply.success && reply.data ? { success: true, ...reply.data } : { success: false, message: reply.message };
+  },
   /** Another version's predictions on these example scans: made once, about half a minute, then kept. */
   compareExamples: (label: string, against: string) =>
     call<Comparison>(api.post(`${versionPath(label)}/compare`, { against }, { ...anyStatus, timeout: 910000 })),

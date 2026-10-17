@@ -1,5 +1,7 @@
 # In zz_gemini/app/routes/inference_route.py
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Response
+from starlette.concurrency import run_in_threadpool
+import json
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, Field, field_validator
 import os, asyncio, traceback, logging
@@ -385,3 +387,41 @@ async def queue_4d_reconstruction(
             status_code=500,
             detail=f"Failed to queue 4D reconstruction job: {str(e)}"
         )
+
+
+# Smooth motion for the landmark page (motion_mesh.py): the end-diastole mesh of a finished 4D reconstruction carried
+# through every frame, in the ED file's vertex order, so the page moves one mesh instead of swapping one per frame.
+# The body is the reconstruction's tar (the per-frame meshes). CPU only, one request at a time, so a laptop running the
+# whole stack is never swamped; it does not touch the 4D reconstruction itself.
+_MOTION_MAX_BYTES = 600 * 1024 * 1024
+_motion_slot = asyncio.Semaphore(1)
+
+
+@router.post("/4d-motion")
+async def build_4d_motion(
+    token_payload: Annotated[TokenPayLoad, Depends(conditional_verify_jwt)],
+    request: Request,
+    chamber: str | None = None,
+    ed_frame: int | None = None,
+):
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="The reconstruction archive is missing.")
+    if len(body) > _MOTION_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="The reconstruction archive is too large.")
+    if chamber is not None and chamber.lower() not in ("lv", "rv"):
+        raise HTTPException(status_code=400, detail="chamber must be lv or rv.")
+    async with _motion_slot:
+        try:
+            # Imported here, not at the top: a container whose mounts predate motion_mesh.py then loses only this
+            # endpoint (the landmark page keeps its per-frame meshes), not every inference route.
+            from app.classes.motion_mesh import motion_from_tar
+            content, summary = await run_in_threadpool(motion_from_tar, body, chamber, ed_frame)
+        except ValueError as error:          # too few frames, unreadable meshes: the request, not the server
+            raise HTTPException(status_code=422, detail=str(error))
+        except Exception as error:
+            logger.exception("4D motion failed")
+            raise HTTPException(status_code=500, detail=f"4D motion failed: {error}")
+    logger.info(f"4D motion built: chamber={chamber} frames={len(summary['frames'])} stats={summary['stats']}")
+    return Response(content=content, media_type="application/octet-stream",
+                    headers={"X-Motion-Stats": json.dumps(summary["stats"])})

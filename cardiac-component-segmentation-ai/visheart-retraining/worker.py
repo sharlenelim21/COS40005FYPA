@@ -43,7 +43,6 @@ ALLOWED_HOSTS = ("127.0.0.1", "localhost", "host.docker.internal")
 MAX_BODY = 64 * 1024
 FRESH_CHECK_SECONDS = 600
 LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
-OWNER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 MAX_SELECTION = 500
 
 
@@ -58,6 +57,7 @@ class WorkerApp:
         self.runner = jobs.JobRunner(self.store, plan)
         self.check_lock = threading.Lock()
         self.compare_lock = threading.Lock()  # one comparison is prepared at a time
+        self._integrity = None                 # (what it was computed from, the answer); see integrity()
         self.log_lock = threading.Lock()
         self.log_path = config.jobs / "worker.log"
 
@@ -76,7 +76,8 @@ class WorkerApp:
         return self.config.jobs / (f"eligible-{owner}.json" if owner else "eligible.json")
 
     def eligible(self, owner=None):
-        """This user's latest correction check, or None. Another user's check is never read."""
+        """The latest correction check, or None. The page's is everyone's (no owner): every user sees every case, and
+        only an admin trains (the server's admin guard). With an owner, only that user's check is read."""
         path = self.eligible_path(owner)
         if not path.exists():
             return None
@@ -92,10 +93,33 @@ class WorkerApp:
         recipe = None
         if entry["status"] != "deleted" and metadata.exists():
             recipe = (versions.read_json(metadata).get("recipe") or {}).get("name")
+        # What is really on this computer: a copied registry can name versions whose files never came with it.
+        on_disk = entry["status"] != "deleted" and registry.file(label).is_file()
         return {"label": label, "status": entry["status"], "registered_at": entry.get("registered_at"),
                 "base": entry.get("base"), "is_active": label == data["active"],
                 "is_original": label == data["original"], "gate": entry.get("gate"), "recipe": recipe,
-                "deleted_because": entry.get("deleted_because")}
+                "deleted_because": entry.get("deleted_because"), "on_disk": on_disk}
+
+    @staticmethod
+    def listed(view):
+        """Whether the page lists a version: one whose model file is not on this computer has no use here, so it is
+        left out. The original (served from the models folder), the version in use (its copy is in the active slot)
+        and deleted entries (history only, never offered) are always kept."""
+        return view["on_disk"] or view["is_original"] or view["is_active"] or view["status"] == "deleted"
+
+    def integrity(self, registry):
+        """Why versions cannot be switched on this computer (registry.integrity_problem()), or None. It hashes the
+        original model, so the answer is kept until either file it reads, or the registry's choice, changes."""
+        data = registry.data
+
+        def stamp(path):
+            path = Path(path)
+            return (path.stat().st_size, path.stat().st_mtime_ns) if path.is_file() else None
+        key = (data["original"], data["active"], data["original_file"], data["active_slot"],
+               stamp(data["original_file"]), stamp(data["active_slot"]))
+        if self._integrity is None or self._integrity[0] != key:
+            self._integrity = (key, registry.integrity_problem())
+        return self._integrity[1]
 
     def status(self, owner=None):
         registry = self.registry()
@@ -110,9 +134,11 @@ class WorkerApp:
                         "reason": "No corrected slices qualify yet. Correct a segmentation and save it, then check again."}
         else:
             training = {"allowed": True, "reason": None}
+        views = (self.version_view(registry, label) for label in registry.data["versions"])
         return {"simulated": self.simulate, "busy": busy, "training": training,
                 "original": registry.data["original"], "active": registry.data["active"],
-                "versions": [self.version_view(registry, label) for label in registry.data["versions"]],
+                "problem": self.integrity(registry),
+                "versions": [view for view in views if self.listed(view)],
                 "eligible": eligible, "job": job}
 
     def job(self, job_id):
@@ -164,16 +190,26 @@ class WorkerApp:
 
     def compare_examples(self, label, against):
         """Another version's predictions on label's example scans, for the Results tab's viewer. They are made once,
-        about half a minute on a CPU, and kept; label's own and the version it was compared with come from training."""
+        about half a minute on a CPU, and kept; label's own and the version it was compared with come from training.
+        A version made before the page has no example scans: they are made here first, about a minute more."""
         registry = self.registry()
         self.known(registry, label)
         self.known(registry, against)
+        for name in (label, against):
+            if registry.entry(name).get("status") == "deleted":
+                raise jobs.JobError(409, f"{name} was deleted, so it cannot be compared.")
+        view = {"label": label, "against": against, "ready": True, "rendered": False}
         index = self.examples_index(label)
         if not index:
-            raise jobs.JobError(404, f"{label} has no example scans to compare.")
-        if registry.entry(against).get("status") == "deleted":
-            raise jobs.JobError(409, f"{against} was deleted, so it cannot be compared.")
-        view = {"label": label, "against": against, "ready": True, "rendered": False}
+            with self.compare_lock:
+                if not self.examples_index(label):   # another request may have just made them
+                    self.log_event(f"preparing {label}'s example scans")
+                    render_examples_for(self.config, label, self.config.examples / label)
+                    view["rendered"] = True
+            index = self.examples_index(label)
+            if not index:
+                raise jobs.JobError(500, f"The example scans for {label} could not be prepared. See worker.log.")
+        view["index"] = index
         if against in (label, index.get("against")) or self.comparison_ready(registry, label, against):
             return view
         with self.compare_lock:
@@ -241,14 +277,14 @@ class WorkerApp:
         return self.eligible(owner)
 
     def chosen(self, owner, selection):
-        """The chosen cases, which must come from this user's latest check: nobody trains a case they were not shown."""
+        """The chosen cases, which must come from the latest check: nobody trains a case they were not shown."""
         if not selection:
             raise jobs.JobError(400, "Choose at least one case to train on.")
         known = {case["maskId"]: case for case in (self.eligible(owner) or {}).get("cases", [])}
         if not known:
             raise jobs.JobError(409, "Check the corrections first, then choose the cases.")
         if any(mask_id not in known for mask_id in selection):
-            raise jobs.JobError(409, "Some chosen cases are not in your latest check. Check again, then choose.")
+            raise jobs.JobError(409, "Some chosen cases are not in the latest check. Check again, then choose.")
         locked = [known[mask_id]["projectName"] for mask_id in selection if known[mask_id].get("frozen")]
         if locked:
             raise jobs.JobError(409, f"{', '.join(dict.fromkeys(locked))} is a test scan: every new version is "
@@ -330,15 +366,6 @@ def who(body):
     return name.strip()
 
 
-def owner_of(value):
-    """The signed-in user's id, which the server adds. It names that user's check file, so it must be a safe name."""
-    if value in (None, ""):
-        return None
-    if not isinstance(value, str) or not OWNER_RE.fullmatch(value):
-        raise jobs.JobError(400, "The user id is not valid.")
-    return value
-
-
 def selection_of(body):
     chosen = body.get("selection")
     if chosen is None:
@@ -368,10 +395,10 @@ def host_allowed(header, port):
 ROUTES = [
     ("GET", r"/health", lambda app, m, q, b: {"ok": True, "busy": app.runner.busy(), "simulated": app.simulate,
                                               "pid": os.getpid()}),
-    ("GET", r"/status", lambda app, m, q, b: app.status(owner_of(q.get("owner", [None])[0]))),
-    ("POST", r"/eligible/check", lambda app, m, q, b: app.check_eligible(owner_of(b.get("requestedById")))),
-    ("POST", r"/jobs/train", lambda app, m, q, b: app.start_training(who(b), owner_of(b.get("requestedById")),
-                                                                     selection_of(b))),
+    # One check for everyone: the page lists every user's corrections (requestedById only names who asked).
+    ("GET", r"/status", lambda app, m, q, b: app.status()),
+    ("POST", r"/eligible/check", lambda app, m, q, b: app.check_eligible()),
+    ("POST", r"/jobs/train", lambda app, m, q, b: app.start_training(who(b), None, selection_of(b))),
     ("GET", r"/jobs/current", lambda app, m, q, b: app.runner.current()),
     ("GET", rf"/jobs/({jobs.JOB_ID_PATTERN})", lambda app, m, q, b: app.job(m[1])),
     ("GET", rf"/jobs/({jobs.JOB_ID_PATTERN})/log", lambda app, m, q, b: app.log(m[1], q.get("tail", ["200"])[0])),
@@ -455,19 +482,31 @@ def health(port, timeout=2):
         return json.loads(response.read())["data"]
 
 
-def render_comparison(config, label, against, out):
-    """against's predictions on label's example scans, by render_examples.py in its own process (it loads a model)."""
-    command = [config.python, str(config.tools / "render_examples.py"), "--label", label, "--compare-with", against,
-               "--registry", str(config.registry), "--manifest", str(config.frozen_manifest), "--out", str(out)]
+def run_renderer(config, arguments, what):
+    """render_examples.py in its own process (it loads models); a failure is reported with its last line."""
+    command = [config.python, str(config.tools / "render_examples.py"), *arguments,
+               "--registry", str(config.registry), "--manifest", str(config.frozen_manifest)]
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1", "MPLBACKEND": "Agg"}
     try:
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=900, env=env, creationflags=jobs.NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise jobs.JobError(500, f"The comparison with {against} could not run: {error}")
+        raise jobs.JobError(500, f"{what} could not run: {error}")
     if result.returncode != 0:
         last = (result.stderr or result.stdout).strip().splitlines()[-1:] or ["no output"]
-        raise jobs.JobError(500, f"The comparison with {against} failed: {last[0]}")
+        raise jobs.JobError(500, f"{what} failed: {last[0]}")
+
+
+def render_comparison(config, label, against, out):
+    """against's predictions on label's example scans."""
+    run_renderer(config, ["--label", label, "--compare-with", against, "--out", str(out)],
+                 f"The comparison with {against}")
+
+
+def render_examples_for(config, label, out):
+    """label's own example scans, as training makes them, for a version made before the page: the scans of the frozen
+    set whose score changed least, most and in between against the version it was compared with."""
+    run_renderer(config, ["--label", label, "--out", str(out)], f"The example scans for {label}")
 
 
 def terminate(app, exit=os._exit):

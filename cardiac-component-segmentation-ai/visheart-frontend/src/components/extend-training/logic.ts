@@ -10,6 +10,7 @@ export interface SelectableCase {
   model: string;
   slices: unknown[];
   frozen?: unknown;
+  ownerName?: string | null;
 }
 
 const TEST_SET_NAMES: Record<string, string> = { acdc: "ACDC", mms1: "M&Ms-1", mms2: "M&Ms-2" };
@@ -43,9 +44,9 @@ export function selectionSummary(cases: SelectableCase[], selected: Set<string>)
   return { cases: chosen.length, slices: chosen.reduce((sum, item) => sum + item.slices.length, 0) };
 }
 
-/** Every word of the query appears in the project name or the model. */
+/** Every word of the query appears in the project name, the model or the owner's name. */
 export function matchesQuery(item: SelectableCase, query: string): boolean {
-  const text = `${item.projectName} ${item.model}`.toLowerCase();
+  const text = `${item.projectName} ${item.model} ${item.ownerName ?? ""}`.toLowerCase();
   return query.trim().toLowerCase().split(/\s+/).filter(Boolean).every(word => text.includes(word));
 }
 
@@ -114,6 +115,16 @@ export function exampleTitle(role: string, delta: number): string {
   return `${rank} (${points(delta)})`;
 }
 
+/**
+ * The example scan shown for the dataset chosen above the results table: the one of the same kind (lowest, median or
+ * highest change) as the scan shown before, so switching dataset compares like with like; else the dataset's first.
+ */
+export function exampleFor(examples: { n: number; dataset: string; role: string }[], dataset: string,
+                           role: string | null): number | null {
+  const mine = examples.filter(entry => entry.dataset === dataset);
+  return (mine.find(entry => entry.role === role) ?? mine[0])?.n ?? null;
+}
+
 export type Rgb = [number, number, number];
 
 /** Edit tracking's class names as training labels; 0 is background. "manual" is no label: such slices never train. */
@@ -142,6 +153,68 @@ export function differences(a: Uint8Array, b: Uint8Array): Uint8Array {
   const out = new Uint8Array(a.length);
   for (let i = 0; i < a.length; i++) out[i] = a[i] !== b[i] ? 1 : 0;
   return out;
+}
+
+/** The label disagreementLabels gives a pixel this prediction leaves as background while the other labels it. */
+export const LEFT_OUT = 5;
+
+/**
+ * Where two predictions differ, this one's answer: its own label, or LEFT_OUT where it has none and the other has one;
+ * 0 where they agree. Each side of the viewer paints its own, so the two pictures differ exactly where the models do
+ * (one shared layer over both would hide what each model said there).
+ */
+export function disagreementLabels(own: Uint8Array, other: Uint8Array): Uint8Array {
+  const out = new Uint8Array(own.length);
+  for (let i = 0; i < own.length; i++) if (own[i] !== other[i]) out[i] = own[i] || LEFT_OUT;
+  return out;
+}
+
+/** Where two predictions differ, how many pixels this one gives each label (0: it labels nothing there). */
+export function disagreementSummary(own: Uint8Array, other: Uint8Array): Record<number, number> {
+  const counts: Record<number, number> = {};
+  for (let i = 0; i < own.length; i++) if (own[i] !== other[i]) counts[own[i]] = (counts[own[i]] ?? 0) + 1;
+  return counts;
+}
+
+/** How many pixels two predictions label differently. */
+export function countDifferences(a: Uint8Array, b: Uint8Array): number {
+  let count = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) count++;
+  return count;
+}
+
+export interface Box {
+  x: number;
+  y: number;
+  size: number;
+}
+
+/**
+ * The square around every labelled pixel of these label maps, with a margin on each side, inside the image: the "Zoom
+ * to the heart" view. Given every slice of a scan, it is one box for all of them, so paging through the slices does not
+ * move the picture. Null when nothing is labelled.
+ */
+export function heartBox(maps: Uint8Array[], width: number, height: number, margin = 0.35, least = 48): Box | null {
+  let left = width, top = height, right = -1, bottom = -1;
+  for (const labels of maps) {
+    for (let i = 0; i < labels.length; i++) {
+      if (!labels[i]) continue;
+      const x = i % width, y = (i - x) / width;
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+  if (right < 0) return null;
+  const span = Math.max(right - left + 1, bottom - top + 1);
+  const size = Math.min(Math.max(Math.ceil(span * (1 + 2 * margin)), least), width, height);
+  const clamp = (start: number, extent: number) => Math.min(Math.max(start, 0), extent - size);
+  return {
+    x: clamp(Math.round((left + right + 1) / 2 - size / 2), width),
+    y: clamp(Math.round((top + bottom + 1) / 2 - size / 2), height),
+    size,
+  };
 }
 
 /** 1 on the edge of every labelled region: a labelled pixel beside another label or the image border. */
@@ -180,6 +253,14 @@ export function hexToRgb(hex: string): Rgb {
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 }
 
+/**
+ * Whether the signed-in user may edit this case: only its project's owner may, admins included (the client's request,
+ * 2026-10-08). Everyone else previews it. The server refuses anyone else's save too.
+ */
+export function canEditCase(item: { ownerId?: string | null }, userId: string | null | undefined): boolean {
+  return Boolean(userId) && item.ownerId === userId;
+}
+
 /** The editor at exactly this mask, frame and slice (plan WS13 R1's deep link). */
 export function editorHref(projectId: string, model: string, frame: number, slice: number): string {
   const query = new URLSearchParams({ model, frame: String(frame), slice: String(slice), from: "extend-training" });
@@ -204,27 +285,19 @@ export function reviewLabel(versions: VersionLike[], lastResult: string | null |
   return alive.find(version => version.is_active && !version.is_original)?.label ?? null;
 }
 
-export interface VersionFate {
-  label: string;
-  status: string;
-  deleted_because?: string | null;
-}
-
-/** What the finished training's card says, from what has happened to its version since. */
-export function jobOutcome(label: string, active: string, versions: VersionFate[]): { title: string; text: string } {
-  if (label === active) {
-    return { title: `${label} is in use`,
-             text: "You chose to use it. The original model is always kept, and the version history can bring it back." };
-  }
-  const version = versions.find(item => item.label === label);
-  if (version?.status === "deleted") {
-    // versions.py records a user's delete as "rejected"; a replaced version as "replaced by <label>".
-    const why = version.deleted_because === "rejected" ? "You deleted it from the version history."
-      : version.deleted_because ? `It was ${version.deleted_because}.` : "It was deleted.";
-    return { title: `${label} was deleted`, text: `${why} The model in use is ${active}.` };
-  }
-  return { title: `${label} is ready for review`,
-           text: "Its results are below. Nothing has changed yet: the model in use stays active until you choose." };
+/**
+ * The whole heart over every scored scan of every dataset: each dataset's mean of the three structures (as the table's
+ * "Whole heart" row), weighted by its number of scans. Null when no dataset was scored.
+ */
+export function overallAccuracy(
+  datasets: Record<string, { n: number; against: Record<string, number>; label: Record<string, number> }> | null | undefined,
+): { datasets: number; scans: number; against: number; label: number } | null {
+  const rows = Object.values(datasets ?? {}).filter(row => row.n > 0);
+  const scans = rows.reduce((sum, row) => sum + row.n, 0);
+  if (!scans) return null;
+  const heart = (scores: Record<string, number>) => (scores.rv + scores.myocardium + scores.lv_cavity) / 3;
+  const mean = (side: "against" | "label") => rows.reduce((sum, row) => sum + row.n * heart(row[side]), 0) / scans;
+  return { datasets: rows.length, scans, against: mean("against"), label: mean("label") };
 }
 
 export const HISTORY_ROWS = 10;
@@ -241,6 +314,29 @@ export function historyRows<V extends VersionLike>(sorted: V[], expanded: boolea
   const keep = new Set([...pinned, ...others.map(version => version.label)]);
   const rows = sorted.filter(version => keep.has(version.label));
   return { rows, hidden: sorted.length - rows.length };
+}
+
+export const TRAINING_RUNNING = "A training is running. Versions can be changed when it has finished.";
+
+/**
+ * Why versions cannot be switched here, or null when they can: a running training, or a problem the service found
+ * with this computer's original model or active slot (status.problem). Versions whose model file is not on this
+ * computer are never listed, so they need no reason.
+ */
+export function whyNotSwitch(problem: string | null | undefined, busy: boolean): string | null {
+  if (busy) return TRAINING_RUNNING;
+  if (problem) return `Versions cannot be switched on this computer: ${problem}.`;
+  return null;
+}
+
+/**
+ * What the scan viewer offers for the version it compares with the model in use: using it, and deleting it unless
+ * it is the original, which is always kept. Nothing for the version in use, which has nothing to compare with.
+ */
+export function decisionFor(version: { label: string; status: string; is_original: boolean },
+                            active: string): { use: boolean; remove: boolean } | null {
+  if (version.label === active || version.status === "deleted") return null;
+  return { use: true, remove: version.status === "candidate" && !version.is_original };
 }
 
 /** Every version not deleted except `except`: in use, original, then newest. */

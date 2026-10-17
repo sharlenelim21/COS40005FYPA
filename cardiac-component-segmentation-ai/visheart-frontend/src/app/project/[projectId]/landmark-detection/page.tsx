@@ -37,9 +37,9 @@ import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { LandmarkSidebar, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
+import { useMotionMesh } from "@/hooks/useMotionMesh";
 import { RV_SEGMENT_NAMES, RV_REGION_TO_SEGMENT3D, RV_SEGMENT3D_TO_REGION } from "@/components/landmark/heartColor";
 import { rvEdEsFac, rvFacSeries } from "@/lib/rvAreaMetrics";
-import { useFrameAhaVertexLabels } from "@/lib/frameAhaLabels";
 import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import { FrameSliceControls } from "@/components/landmark/FrameSliceControls";
@@ -939,6 +939,10 @@ export default function LandmarkDetectionPage() {
   // separate from `state.currentFrame`, which is the SLICE index used by the
   // landmark viewer.
   const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
+  // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (LandmarkSidebar advances
+  // strainPlaybackFrame every 1000 / playbackFps ms), so the heart moves continuously instead of jumping per frame.
+  const [strainPlaybackFps, setStrainPlaybackFps] = useState(4);
+  const motionTransitionMs = Math.min(1000, 1000 / Math.max(strainPlaybackFps, 0.5));
 
 
   // Per-frame wall thickness, when the full-cycle strain series has been run for
@@ -1615,6 +1619,7 @@ export default function LandmarkDetectionPage() {
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
             onStrainFrameChange={setStrainPlaybackFrame}
+            onStrainFpsChange={setStrainPlaybackFps}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
@@ -1769,7 +1774,7 @@ export default function LandmarkDetectionPage() {
                           <ReconstructedHeartModel
                             meshUrl={structureRvMesh.meshUrl}
                             meshFormat={structureRvMesh.meshFormat}
-                            segmentLabels={structureRvMesh.segmentLabels}
+                            segmentLabels={structureRvMesh.segmentLabels ?? []}
                             colorMode={structureRvFacRange.mean != null ? "strain" : "rv-segment"}
                             values={structureRv3dValues as number[]}
                             min={structureRvFacRange.min ?? undefined}
@@ -1786,6 +1791,9 @@ export default function LandmarkDetectionPage() {
                             onSegmentHover={(info) => setStructureRvTooltip(info ? { x: info.x, y: info.y, label: RV_SEGMENT_NAMES[info.segment] ?? `Segment ${info.segment}` } : null)}
                             lvAlignmentMeshUrl={structureLvAlignmentMeshUrl}
                             lvAlignmentLabels={structureLvAlignmentLabels}
+                            motionPositions={structureRvMesh.motionPositions}
+                            onMotionUnusable={structureRvMesh.markUnusable}
+                            motionTransitionMs={motionTransitionMs}
                           />
                           {structureRvTooltip && (
                             <div
@@ -1850,6 +1858,7 @@ export default function LandmarkDetectionPage() {
                   // either the Structure or Strain tab), not the slice index —
                   // the bullseye is a per-frame view of the cycle.
                   currentFrame={strainPlaybackFrame}
+                  motionTransitionMs={motionTransitionMs}
                   frameCount={bullseyeFrameCount}
                   frameThickness={frameThicknessValues}
                   reconstructionModel={selectedBullseyeModel}
@@ -1892,6 +1901,7 @@ export default function LandmarkDetectionPage() {
                   selectedStrainType={selectedStrainType}
                   activeModel={activeModel}
                   currentFrame={strainPlaybackFrame}
+                  motionTransitionMs={motionTransitionMs}
                   selectedSegment={selectedStrainSegment}
                   onSelectSegment={setSelectedStrainSegment}
                   avgLm1={state.avgLm1 ?? null}
@@ -2010,6 +2020,7 @@ export default function LandmarkDetectionPage() {
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
                 onStrainFrameChange={setStrainPlaybackFrame}
+            onStrainFpsChange={setStrainPlaybackFps}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
@@ -2111,7 +2122,7 @@ function getDummyBullseyeData(currentFrame = 0, frameCount = 1): BullseyeData {
  * see heartColor.ts's RV_SEGMENT_PALETTE), not a value-based heatmap.
  */
 function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
-  const { getReconstructionGLB, reconstructionResults } = useProject();
+  const { reconstructionResults } = useProject();
 
   const rvReconstruction = useMemo(() => {
     const candidates = (reconstructionResults ?? []).filter(
@@ -2128,40 +2139,17 @@ function useRvPrototypeMesh(model: "unet" | "medsam", currentFrame: number) {
     return sameModel ?? null;
   }, [reconstructionResults, model]);
 
-  const [meshUrl, setMeshUrl] = useState<string | null>(null);
-  const [meshFrame, setMeshFrame] = useState<number | null>(null);
-  useEffect(() => {
-    setMeshUrl(null);
-    setMeshFrame(null);
-  }, [rvReconstruction?.reconstructionId]);
-  useEffect(() => {
-    let cancelled = false;
-    if (!rvReconstruction?.reconstructionId) return;
-    (async () => {
-      const url = await getReconstructionGLB(currentFrame, model, rvReconstruction.reconstructionId);
-      if (!cancelled) {
-        setMeshUrl(url);
-        setMeshFrame(currentFrame);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [rvReconstruction, model, currentFrame, getReconstructionGLB]);
-
-  const rvFrameAhaVertexLabels = useFrameAhaVertexLabels(rvReconstruction);
-  const segmentLabels = useMemo(() => {
-    // Same as the LV panels: labels must belong to the mesh that is loaded, not the requested frame.
-    const perFrame = rvFrameAhaVertexLabels?.[String(meshFrame ?? currentFrame)];
-    if (Array.isArray(perFrame)) return perFrame;
-    return Array.isArray(rvReconstruction?.ahaVertexLabels) ? rvReconstruction.ahaVertexLabels : null;
-  }, [rvReconstruction, rvFrameAhaVertexLabels, currentFrame, meshFrame]);
+  // Smooth motion when it is built (the ED mesh with its ED labels, vertices moved per frame), otherwise this
+  // frame's own mesh and labels -- see hooks/useMotionMesh.
+  const { meshUrl, segmentLabels, motionPositions, markUnusable } = useMotionMesh(rvReconstruction, model, currentFrame);
 
   return {
     available: !!rvReconstruction && !!segmentLabels?.length,
     meshUrl,
     meshFormat: (rvReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb") as "obj" | "glb",
     segmentLabels,
+    motionPositions,
+    markUnusable,
   };
 }
 
@@ -2178,6 +2166,7 @@ function AhaBullseyePanel({
   onCompute,
   onBullseyeResetRef,
   onHeartResetRef,
+  motionTransitionMs = 0,
 }: {
   bullseyeData: BullseyeData | null | undefined;
   loading: boolean;
@@ -2198,6 +2187,8 @@ function AhaBullseyePanel({
   onCompute?: () => void;
   onBullseyeResetRef?: (fn: () => void) => void;
   onHeartResetRef?: (fn: () => void) => void;
+  /** Smooth motion: ease between frames over this many ms (see the page's motionTransitionMs). */
+  motionTransitionMs?: number;
 }) {
   const baseBullseyeData = previewMode ? getDummyBullseyeData(currentFrame, frameCount) : bullseyeData;
 
@@ -2226,51 +2217,18 @@ function AhaBullseyePanel({
   }, [baseBullseyeData, frameThickness]);
   const heartZoomRef = useRef<((delta: number) => void) | null>(null);
 
-  const { getReconstructionGLB, reconstructionsByModel, reconstructionJobs } = useProject();
+  const { reconstructionsByModel, reconstructionJobs } = useProject();
   const activeReconstruction = reconstructionModel ? reconstructionsByModel?.[reconstructionModel] ?? null : null;
-  const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
-  const [reconstructionMeshFrame, setReconstructionMeshFrame] = useState<number | null>(null);
-  // Reset ONLY when switching to a genuinely different reconstruction/model - not on
-  // every frame change, otherwise fast playback (many frame changes per second) spends
-  // most of its time with the mesh nulled out while each fetch is still in flight,
-  // which is exactly what caused the flicker/disappearing model during playback.
-  useEffect(() => {
-    setReconstructionMeshUrl(null);
-    setReconstructionMeshFrame(null);
-  }, [activeReconstruction?.reconstructionId, reconstructionModel]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!activeReconstruction?.reconstructionId || !Array.isArray(activeReconstruction?.ahaVertexLabels)) {
-      return;
-    }
-    (async () => {
-      const url = await getReconstructionGLB(currentFrame, reconstructionModel, activeReconstruction.reconstructionId);
-      // Swap in directly, without nulling first - keeps the previous frame's mesh
-      // visible until the new one is ready, so rapid playback doesn't flash empty.
-      // The frame is recorded with the url so labels always match the mesh on screen.
-      if (!cancelled) {
-        setReconstructionMeshUrl(url);
-        setReconstructionMeshFrame(currentFrame);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeReconstruction, reconstructionModel, getReconstructionGLB, currentFrame]);
-
-  // Per-frame AHA labels for whichever frame's geometry is currently loaded above.
-  // Each frame's own marching-cubes mesh has its own vertex count/ordering, so labels
-  // are NOT interchangeable across frames - falls back to the ED-only labels (older
-  // reconstructions, or frames the GPU skipped as apex/base slices with no contour).
-  const frameAhaVertexLabels = useFrameAhaVertexLabels(activeReconstruction);
-  const reconstructionLabels = useMemo(() => {
-    // Labels follow the frame of the mesh that is actually loaded, not the requested frame:
-    // while the next frame's mesh is still fetching, the previous mesh is on screen and its
-    // vertex layout differs, so the new frame's labels would colour it wrongly (the glitch).
-    const labelFrame = reconstructionMeshFrame ?? currentFrame;
-    const perFrame = frameAhaVertexLabels?.[String(labelFrame)];
-    if (Array.isArray(perFrame)) return perFrame;
-    return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
-  }, [activeReconstruction, frameAhaVertexLabels, currentFrame, reconstructionMeshFrame]);
+  // The 3D heart's mesh and AHA labels: with smooth motion, the ED mesh and its ED labels, vertices moved per frame;
+  // without it (not built yet, or not buildable), this frame's own mesh and labels as before. Each frame's own
+  // marching-cubes mesh has its own vertex layout, so labels always come with the mesh they belong to; the previous
+  // mesh stays on screen until the next one is ready, so fast playback never flashes empty -- see hooks/useMotionMesh.
+  const {
+    meshUrl: reconstructionMeshUrl,
+    segmentLabels: reconstructionLabels,
+    motionPositions: reconstructionMotion,
+    markUnusable: markReconstructionMotionUnusable,
+  } = useMotionMesh(activeReconstruction, reconstructionModel ?? "unet", currentFrame);
 
   const isReconstructionPending = useMemo(() => {
     if (!reconstructionModel) return false;
@@ -2416,6 +2374,9 @@ function AhaBullseyePanel({
               reconstructionMeshUrl={reconstructionMeshUrl}
               reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
               reconstructionLabels={reconstructionLabels}
+              reconstructionMotion={reconstructionMotion}
+              onReconstructionMotionUnusable={markReconstructionMotionUnusable}
+              motionTransitionMs={motionTransitionMs}
               reconstructionPending={isReconstructionPending}
               onZoomChange={(fn) => { heartZoomRef.current = fn; }}
               onResetZoom={(fn) => { if (onHeartResetRef) onHeartResetRef(fn); }}
@@ -2520,6 +2481,9 @@ function AhaHeartProjection({
   reconstructionMeshUrl,
   reconstructionMeshFormat,
   reconstructionLabels,
+  reconstructionMotion = null,
+  onReconstructionMotionUnusable,
+  motionTransitionMs = 0,
   reconstructionPending = false,
   onZoomChange,
   onResetZoom,
@@ -2533,6 +2497,9 @@ function AhaHeartProjection({
   reconstructionMeshUrl?: string | null;
   reconstructionMeshFormat?: "obj" | "glb";
   reconstructionLabels?: number[] | null;
+  reconstructionMotion?: Float32Array | null;
+  onReconstructionMotionUnusable?: () => void;
+  motionTransitionMs?: number;
   reconstructionPending?: boolean;
   onZoomChange?: (fn: (delta: number) => void) => void;
   onResetZoom?: (fn: () => void) => void;
@@ -2561,6 +2528,9 @@ function AhaHeartProjection({
             onSelectSegment?.(selectedSegment === seg - 1 ? -1 : seg - 1)
           }
           onSegmentHover={setHeartTooltip}
+          motionPositions={reconstructionMotion}
+          onMotionUnusable={onReconstructionMotionUnusable}
+          motionTransitionMs={motionTransitionMs}
         />
         {heartTooltip && (
           <div
@@ -2611,6 +2581,9 @@ function StrainHeartModel({
   reconstructionMeshUrl,
   reconstructionMeshFormat,
   reconstructionLabels,
+  reconstructionMotion = null,
+  onReconstructionMotionUnusable,
+  motionTransitionMs = 0,
   onReconstructionSegmentClick,
 }: {
   segments: RealStrainSegment[];
@@ -2622,6 +2595,9 @@ function StrainHeartModel({
   reconstructionMeshUrl?: string | null;
   reconstructionMeshFormat?: "obj" | "glb";
   reconstructionLabels?: number[] | null;
+  reconstructionMotion?: Float32Array | null;
+  onReconstructionMotionUnusable?: () => void;
+  motionTransitionMs?: number;
   onReconstructionSegmentClick?: (segment: number) => void;
 }) {
   // Build 17-element values array (0-indexed matching HEART_SEGMENTS order)
@@ -2648,6 +2624,9 @@ function StrainHeartModel({
           onSegmentClick={onReconstructionSegmentClick}
           onSegmentHover={setHeartTooltip}
           initialCameraDistance={8}
+          motionPositions={reconstructionMotion}
+          onMotionUnusable={onReconstructionMotionUnusable}
+          motionTransitionMs={motionTransitionMs}
         />
         {heartTooltip && (
           <div
@@ -2678,6 +2657,7 @@ function StrainHeartModel({
 function StrainPreviewPanel({
   selectedStrainType,
   currentFrame,
+  motionTransitionMs = 0,
   selectedSegment,
   onSelectSegment,
   avgLm1,
@@ -2699,6 +2679,7 @@ function StrainPreviewPanel({
 }: {
   selectedStrainType: StrainType;
   currentFrame: number;
+  motionTransitionMs?: number;
   selectedSegment: number | null;
   onSelectSegment: (segment: number) => void;
   avgLm1: { x: number; y: number } | null;
@@ -2781,7 +2762,7 @@ function StrainPreviewPanel({
     return vals.length ? Math.min(...vals) : null;
   }, [realRvSeries]);
 
-  const { getReconstructionGLB, reconstructionsByModel } = useProject();
+  const { reconstructionsByModel } = useProject();
   const activeReconstruction = reconstructionsByModel?.[strainModel] ?? null;
 
   // RV side of the 3D Heart toggle: real mesh + real segment boundaries,
@@ -2789,47 +2770,15 @@ function StrainPreviewPanel({
   // Independent of the LV reconstruction above; RV has its own reconstruction record.
   const rvMesh = useRvPrototypeMesh(strainModel, currentFrame);
 
-  const [reconstructionMeshUrl, setReconstructionMeshUrl] = useState<string | null>(null);
-  const [reconstructionMeshFrame, setReconstructionMeshFrame] = useState<number | null>(null);
-  // Reset ONLY when switching to a genuinely different reconstruction/model - not on
-  // every frame change, otherwise fast playback spends most of its time with the mesh
-  // nulled out while each fetch is still in flight (the flicker/disappearing bug).
-  useEffect(() => {
-    setReconstructionMeshUrl(null);
-    setReconstructionMeshFrame(null);
-  }, [activeReconstruction?.reconstructionId, strainModel]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!activeReconstruction?.reconstructionId || !Array.isArray(activeReconstruction?.ahaVertexLabels)) {
-      return;
-    }
-    (async () => {
-      const url = await getReconstructionGLB(currentFrame, strainModel, activeReconstruction.reconstructionId);
-      // Swap in directly, without nulling first - keeps the previous frame's mesh
-      // visible until the new one is ready, so rapid playback doesn't flash empty.
-      // The frame is recorded with the url so labels always match the mesh on screen.
-      if (!cancelled) {
-        setReconstructionMeshUrl(url);
-        setReconstructionMeshFrame(currentFrame);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeReconstruction, strainModel, getReconstructionGLB, currentFrame]);
-
-  // Per-frame AHA labels for whichever frame's geometry is currently loaded above -
-  // each frame's own mesh has its own vertex layout, so labels can't be reused
-  // across frames. Falls back to ED-only labels for older reconstructions.
-  const frameAhaVertexLabels = useFrameAhaVertexLabels(activeReconstruction);
-  const reconstructionLabels = useMemo(() => {
-    // Labels follow the frame of the mesh that is actually loaded, not the requested frame:
-    // while the next frame's mesh is still fetching, the previous mesh is on screen and its
-    // vertex layout differs, so the new frame's labels would colour it wrongly (the glitch).
-    const labelFrame = reconstructionMeshFrame ?? currentFrame;
-    const perFrame = frameAhaVertexLabels?.[String(labelFrame)];
-    if (Array.isArray(perFrame)) return perFrame;
-    return Array.isArray(activeReconstruction?.ahaVertexLabels) ? activeReconstruction.ahaVertexLabels : null;
-  }, [activeReconstruction, frameAhaVertexLabels, currentFrame, reconstructionMeshFrame]);
+  // LV 3D heart: smooth motion when built (the ED mesh with its ED labels, vertices moved per frame), otherwise this
+  // frame's own mesh and labels as before -- labels always come with the mesh they belong to, and the previous mesh
+  // stays on screen until the next is ready (no flicker during playback). See hooks/useMotionMesh.
+  const {
+    meshUrl: reconstructionMeshUrl,
+    segmentLabels: reconstructionLabels,
+    motionPositions: reconstructionMotion,
+    markUnusable: markReconstructionMotionUnusable,
+  } = useMotionMesh(activeReconstruction, strainModel, currentFrame);
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; label: string; value: number | null } | null>(null);
   const bullseyeResetRef = useRef<(() => void) | null>(null);
@@ -3221,7 +3170,7 @@ function StrainPreviewPanel({
                   <ReconstructedHeartModel
                     meshUrl={rvMesh.meshUrl}
                     meshFormat={rvMesh.meshFormat}
-                    segmentLabels={rvMesh.segmentLabels}
+                    segmentLabels={rvMesh.segmentLabels ?? []}
                     colorMode={rvHasValues ? "strain" : "rv-segment"}
                     values={rv3dValues as number[]}
                     min={rvRange.min ?? undefined}
@@ -3260,6 +3209,9 @@ function StrainPreviewPanel({
                     // 7.5 still did -- 9 is the first value that leaves
                     // visible margin around the mesh by default.
                     initialCameraDistance={9}
+                    motionPositions={rvMesh.motionPositions}
+                    onMotionUnusable={rvMesh.markUnusable}
+                    motionTransitionMs={motionTransitionMs}
                   />
                   {rvHeartTooltip && (
                     <div
@@ -3305,6 +3257,11 @@ function StrainPreviewPanel({
                     rvMin={rvRange.min ?? undefined}
                     rvMax={rvRange.max ?? undefined}
                     rvReverseColors
+                    lvMotionPositions={reconstructionMotion}
+                    rvMotionPositions={rvMesh.motionPositions}
+                    onLvMotionUnusable={markReconstructionMotionUnusable}
+                    onRvMotionUnusable={rvMesh.markUnusable}
+                    motionTransitionMs={motionTransitionMs}
                     className="w-full h-full"
                     initialCameraDistance={8}
                     selectedLvSegment={selectedCombinedSegment ?? -1}
@@ -3377,6 +3334,9 @@ function StrainPreviewPanel({
                     reconstructionMeshUrl={reconstructionMeshUrl}
                     reconstructionMeshFormat={activeReconstruction?.meshFormat?.toLowerCase() === "obj" ? "obj" : "glb"}
                     reconstructionLabels={reconstructionLabels}
+                    reconstructionMotion={reconstructionMotion}
+                    onReconstructionMotionUnusable={markReconstructionMotionUnusable}
+                    motionTransitionMs={motionTransitionMs}
                     onReconstructionSegmentClick={handleSegClick}
                   />
                 </div>

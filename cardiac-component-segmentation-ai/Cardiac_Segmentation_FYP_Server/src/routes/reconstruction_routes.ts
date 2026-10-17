@@ -17,6 +17,7 @@ import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
 import { extractS3KeyFromUrl, deleteFromS3 } from "../services/s3_handler";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import LogError from "../utils/error_logger";
+import { clearFailedMotion, getMotion, MotionSource, startMotion } from "../services/reconstruction_motion";
 
 const router = Router();
 const serviceLocation = "ReconstructionRoutes";
@@ -762,5 +763,52 @@ router.delete("/delete-model-reconstruction/:projectId",
             });
         }
     });
+
+// Smooth heart motion for the landmark page's 3D heart (services/reconstruction_motion.ts): GET says where a
+// reconstruction's motion stands (missing / processing / failed / ready with a link), POST starts building it.
+// Only the project's owner; the motion is built from the reconstruction's own meshes, so nothing else is read.
+async function motionSource(req: Request): Promise<{ source?: MotionSource; status: number; message?: string }> {
+    const projectId = String(req.params.projectId);
+    const reconstructionId = String(req.params.reconstructionId);
+    const userId = (req.user as { _id?: unknown } | undefined)?._id?.toString();
+    if (!userId) return { status: 401, message: "Unauthorized." };
+    if (!/^[0-9a-f]{24}$/i.test(projectId) || !/^[0-9a-f]{24}$/i.test(reconstructionId)) {
+        return { status: 400, message: "Unknown project or reconstruction." };
+    }
+    const project = await readProject(projectId, userId);
+    if (!project.success) return { status: 500, message: "The project could not be read." };
+    if (!project.projects?.length) return { status: 404, message: "Project not found." };
+    const result = await readProjectReconstruction(projectId, reconstructionId);
+    // With a reconstruction id the reader returns that one document (projectreconstruction), already scoped to the project.
+    const reconstruction = result.projectreconstruction;
+    if (!result.success || !reconstruction) return { status: 404, message: "Reconstruction not found." };
+    const tarUrl = reconstruction.reconstructedMesh?.path;
+    if (!tarUrl) return { status: 409, message: "This reconstruction has no meshes yet." };
+    return { status: 200, source: { reconstructionId, tarUrl, chamber: reconstruction.chamber, userId } };
+}
+
+router.get("/motion/:projectId/:reconstructionId", isAuth, async (req: Request, res: Response) => {
+    try {
+        const { source, status, message } = await motionSource(req);
+        if (!source) return res.status(status).json({ success: false, message });
+        return res.status(200).json({ success: true, motion: await getMotion(source) });
+    } catch (error) {
+        LogError(error as Error, serviceLocation, "Error reading reconstruction motion");
+        return res.status(500).json({ success: false, message: "The motion could not be read." });
+    }
+});
+
+router.post("/motion/:projectId/:reconstructionId", isAuth, isAuthAndNotGuest, async (req: Request, res: Response) => {
+    try {
+        const { source, status, message } = await motionSource(req);
+        if (!source) return res.status(status).json({ success: false, message });
+        if ((req.body as { retry?: unknown } | undefined)?.retry === true) clearFailedMotion(source.reconstructionId);
+        const motion = await startMotion(source);
+        return res.status(motion.status === "processing" ? 202 : 200).json({ success: true, motion });
+    } catch (error) {
+        LogError(error as Error, serviceLocation, "Error starting reconstruction motion");
+        return res.status(500).json({ success: false, message: "The motion could not be started." });
+    }
+});
 
 export default router;

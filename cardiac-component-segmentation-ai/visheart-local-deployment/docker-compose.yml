@@ -322,6 +322,7 @@ services:
       - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
       - ../visheart-inference-gpu/app/classes/file_fetch_handler.py:/app/app/classes/file_fetch_handler.py:ro
       - ../visheart-inference-gpu/app/classes/fourdreconstruction_handler.py:/app/app/classes/fourdreconstruction_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/motion_mesh.py:/app/app/classes/motion_mesh.py:ro
       - ../visheart-inference-gpu/app/classes/medsam_handler.py:/app/app/classes/medsam_handler.py:ro
       - ../visheart-inference-gpu/app/classes/pydantic_schema.py:/app/app/classes/pydantic_schema.py:ro
       - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro
@@ -413,6 +414,7 @@ services:
       - ../visheart-inference-gpu/app/classes/device_runtime.py:/app/app/classes/device_runtime.py:ro
       - ../visheart-inference-gpu/app/classes/file_fetch_handler.py:/app/app/classes/file_fetch_handler.py:ro
       - ../visheart-inference-gpu/app/classes/fourdreconstruction_handler.py:/app/app/classes/fourdreconstruction_handler.py:ro
+      - ../visheart-inference-gpu/app/classes/motion_mesh.py:/app/app/classes/motion_mesh.py:ro
       - ../visheart-inference-gpu/app/classes/medsam_handler.py:/app/app/classes/medsam_handler.py:ro
       - ../visheart-inference-gpu/app/classes/pydantic_schema.py:/app/app/classes/pydantic_schema.py:ro
       - ../visheart-inference-gpu/app/classes/unet_handler.py:/app/app/classes/unet_handler.py:ro

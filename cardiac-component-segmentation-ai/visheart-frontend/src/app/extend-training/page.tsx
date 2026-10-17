@@ -81,7 +81,8 @@ function ExtendTrainingInner() {
   const previousJob = useRef<{ id: string; state: string } | null>(null);
   const autoChecked = useRef(false);
   const knownCases = useRef<string | null>(null);
-  const registered = Boolean(user && user.role !== "guest");
+  // Only admins use Extend Training (the server's guard says the same); users and guests do not see it.
+  const admin = user?.role === "admin";
 
   const setTab = useCallback((next: Tab) => {
     setTabState(next);
@@ -116,7 +117,7 @@ function ExtendTrainingInner() {
 
   // First load: check again when the last check is old, or when coming back from Edit.
   useEffect(() => {
-    if (!registered) return;
+    if (!admin) return;
     let stopped = false;
     void (async () => {
       const data = await refresh();
@@ -130,14 +131,14 @@ function ExtendTrainingInner() {
     return () => {
       stopped = true;
     };
-  }, [registered, refresh, checkCorrections]);
+  }, [admin, refresh, checkCorrections]);
 
   const busy = status?.busy ?? false;
   useEffect(() => {
-    if (!registered) return;
+    if (!admin) return;
     const timer = window.setInterval(() => void refresh(), busy ? POLL_ACTIVE_MS : POLL_IDLE_MS);
     return () => window.clearInterval(timer);
-  }, [registered, busy, refresh]);
+  }, [admin, busy, refresh]);
 
   // Without ?tab=, open Results while a training runs or its new version awaits a decision.
   useEffect(() => {
@@ -183,14 +184,15 @@ function ExtendTrainingInner() {
     );
   }
 
-  if (!registered) {
+  if (!admin) {
     return (
       <div className="container mx-auto max-w-3xl p-6">
         <Alert>
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Sign in to use UNet Extend Training</AlertTitle>
+          <AlertTitle>UNet Extend Training is for admins</AlertTitle>
           <AlertDescription>
-            Training a new version of the model needs a user or admin account. Guest accounts cannot use it.
+            Only an admin can train a new version of the segmentation model. Your projects and their segmentations are
+            on the dashboard.
           </AlertDescription>
         </Alert>
       </div>
@@ -214,8 +216,8 @@ function ExtendTrainingInner() {
             UNet Extend Training
           </h1>
           <p className="max-w-2xl text-muted-foreground">
-            Teach the segmentation model from the corrections you saved. A new version is compared on scans it has never
-            seen, and nothing changes until you choose to use it.
+            Teach the segmentation model from the corrections saved in VisHeart. A new version is compared on scans it
+            has never seen, and nothing changes until you choose to use it.
           </p>
         </div>
         {status && <ModelInUse status={status} />}
@@ -256,6 +258,7 @@ function ExtendTrainingInner() {
           <TabsContent value="prepare">
             <PrepareTab
               status={status}
+              userId={user?._id ?? null}
               selected={selected}
               onSelectedChange={changeSelection}
               checking={checking}

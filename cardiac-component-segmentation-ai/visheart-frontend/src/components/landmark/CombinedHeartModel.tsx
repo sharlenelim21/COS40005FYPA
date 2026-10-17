@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { valueToColor, rvSegmentColor } from "./heartColor";
 import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { findFirstMesh, loadMesh, computeLvAlignment } from "./lvAlignment";
-import { createSegmentBoundaryLines } from "./segmentBoundaryLines";
+import {
+  buildSegmentBoundaryTopology, createSegmentBoundaryLines, segmentBoundaryEdgesAt, type SegmentBoundaryTopology,
+} from "./segmentBoundaryLines";
+import type { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import type { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 
 /**
  * Combined LV+RV 3D view for the Strain tab's "Combined" chamber focus.
@@ -57,6 +61,17 @@ interface CombinedHeartModelProps {
   /** RV segment (0-8, CPD atlas numbering), -1/undefined = none selected. */
   selectedRvSegment?: number;
   onRvSegmentClick?: (segment: number) => void;
+  /** Smooth motion (hooks/useMotionMesh): this frame's vertex positions for the loaded LV / RV mesh, in the mesh
+   * file's own coordinates and vertex order. Each mesh then stays loaded and only its vertices move (the shared
+   * alignment is on the group, so raw positions go straight in); null keeps a mesh as loaded. */
+  lvMotionPositions?: Float32Array | null;
+  rvMotionPositions?: Float32Array | null;
+  /** Called when that chamber's motion does not fit its loaded mesh (different vertex count). */
+  onLvMotionUnusable?: () => void;
+  onRvMotionUnusable?: () => void;
+  /** Smooth motion: ease from the shown positions to new ones over this many ms (the page's frame interval), so
+   * playback moves continuously instead of jumping once per frame. 0 = jump (default). */
+  motionTransitionMs?: number;
 }
 
 function disposeObject(object: THREE.Object3D) {
@@ -113,6 +128,36 @@ function buildSelectionState(
   return { mesh, vertexIndicesBySegment, baseColors: colors.slice(), centroidBySegment };
 }
 
+/** Colour inputs of both chambers; kept apart from loading so new per-frame values recolour the meshes in place. */
+interface ColorInputs {
+  lvValues?: (number | null)[]; lvMin: number; lvMax: number; lvReverseColors: boolean;
+  rvValues?: (number | null)[]; rvMin: number; rvMax: number; rvReverseColors: boolean;
+}
+const lvColorOf = (c: ColorInputs) => (seg: number) => valueToColor(c.lvValues?.[seg - 1], c.lvMin, c.lvMax, c.lvReverseColors);
+// Value-heatmap colouring when real per-segment RV values are available (same fallback convention
+// ReconstructedHeartModel's RV-only view uses) -- identity colours only before any RV strain/FAC is computed.
+const rvColorOf = (c: ColorInputs) => (seg: number) =>
+  c.rvValues ? valueToColor(c.rvValues[seg], c.rvMin, c.rvMax, c.rvReverseColors) : rvSegmentColor(seg);
+
+/** Recolours a loaded mesh in place (base colours too, so the selection pulse restores to the new ones). */
+function recolor(state: MeshSelectionState, colorOf: (segment: number) => THREE.Color) {
+  const colorAttr = state.mesh.geometry.getAttribute("color") as THREE.BufferAttribute | undefined;
+  if (!colorAttr) return;
+  for (const [seg, indices] of state.vertexIndicesBySegment) {
+    const color = colorOf(seg);
+    for (const vi of indices) {
+      state.baseColors[vi * 3] = color.r; state.baseColors[vi * 3 + 1] = color.g; state.baseColors[vi * 3 + 2] = color.b;
+      colorAttr.setXYZ(vi, color.r, color.g, color.b);
+    }
+  }
+  colorAttr.needsUpdate = true;
+}
+
+function writePositions(attr: THREE.BufferAttribute, positions: Float32Array) {
+  for (let i = 0; i < attr.count; i++) attr.setXYZ(i, positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+  attr.needsUpdate = true;
+}
+
 export function CombinedHeartModel({
   lvMeshUrl, lvMeshFormat = "glb", lvSegmentLabels, lvValues, lvMin = -10, lvMax = 45, lvReverseColors = false,
   rvMeshUrl, rvMeshFormat = "glb", rvSegmentLabels, rvValues, rvMin = -10, rvMax = 45, rvReverseColors = false,
@@ -122,6 +167,11 @@ export function CombinedHeartModel({
   onLvSegmentClick,
   selectedRvSegment = -1,
   onRvSegmentClick,
+  lvMotionPositions = null,
+  rvMotionPositions = null,
+  onLvMotionUnusable,
+  onRvMotionUnusable,
+  motionTransitionMs = 0,
 }: CombinedHeartModelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pivotRef = useRef<THREE.Object3D | null>(null);
@@ -141,6 +191,124 @@ export function CombinedHeartModel({
   useEffect(() => { selectedRvSegmentRef.current = selectedRvSegment; }, [selectedRvSegment]);
   useEffect(() => { onLvSegmentClickRef.current = onLvSegmentClick; }, [onLvSegmentClick]);
   useEffect(() => { onRvSegmentClickRef.current = onRvSegmentClick; }, [onRvSegmentClick]);
+
+  // Smooth motion: positions are applied only to meshes loaded from the URLs wanted NOW (until a new file has
+  // loaded, the previous one is still on screen), on load and whenever the frame's positions change.
+  const motionRef = useRef({ lv: lvMotionPositions, rv: rvMotionPositions });
+  const wantedUrlsRef = useRef({ lv: lvMeshUrl ?? null, rv: rvMeshUrl ?? null });
+  const loadedUrlsRef = useRef<{ lv: string | null; rv: string | null }>({ lv: null, rv: null });
+  const onMotionUnusableRef = useRef({ lv: onLvMotionUnusable, rv: onRvMotionUnusable });
+  useEffect(() => { onMotionUnusableRef.current = { lv: onLvMotionUnusable, rv: onRvMotionUnusable }; },
+    [onLvMotionUnusable, onRvMotionUnusable]);
+  // Each chamber's segment outlines (children of its mesh) and labels, so the outlines can follow the motion.
+  const outlinesRef = useRef<{ lv: LineSegments2 | null; rv: LineSegments2 | null }>({ lv: null, rv: null });
+  const outlineLabelsRef = useRef<{ lv: number[] | null; rv: number[] | null }>({ lv: null, rv: null });
+  // Outline topology per chamber, built once per loaded mesh (each frame only re-reads positions).
+  const outlineTopologyRef = useRef<{ lv: SegmentBoundaryTopology | null; rv: SegmentBoundaryTopology | null }>({ lv: null, rv: null });
+  // Easing between frames: what is on screen (raw file coordinates) and the running animation.
+  const motionTransitionMsRef = useRef(motionTransitionMs);
+  useEffect(() => { motionTransitionMsRef.current = motionTransitionMs; }, [motionTransitionMs]);
+  const shownRef = useRef<{ lv: Float32Array | null; rv: Float32Array | null }>({ lv: null, rv: null });
+  const motionAnimationRef = useRef<number | null>(null);
+  const stopMotionAnimation = () => {
+    if (motionAnimationRef.current !== null) cancelAnimationFrame(motionAnimationRef.current);
+    motionAnimationRef.current = null;
+  };
+  useEffect(() => stopMotionAnimation, []);
+
+  const applyMotionRef = useRef<() => void>(() => {});
+  applyMotionRef.current = () => {
+    stopMotionAnimation();
+    const duration = motionTransitionMsRef.current;
+    type Job = {
+      key: "lv" | "rv"; mesh: THREE.Mesh; attr: THREE.BufferAttribute; target: Float32Array; from: Float32Array | null;
+      lineGeometry: LineSegmentsGeometry | null; fromLines: Float32Array | null; targetLines: Float32Array | null;
+      workingLines: Float32Array | null; current: Float32Array;
+    };
+    const jobs: Job[] = [];
+    for (const key of ["lv", "rv"] as const) {
+      const state = key === "lv" ? lvStateRef.current : rvStateRef.current;
+      const target = motionRef.current[key];
+      if (!state || !target || loadedUrlsRef.current[key] !== wantedUrlsRef.current[key]) continue;
+      const attr = state.mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+      if (target.length !== attr.count * 3) {
+        console.warn(`[CombinedHeartModel] ${key.toUpperCase()} motion does not fit the loaded mesh; ignoring it`);
+        onMotionUnusableRef.current[key]?.();
+        continue;
+      }
+      const outline = outlinesRef.current[key];
+      const labels = outlineLabelsRef.current[key];
+      const lineGeometry = outline && labels ? (outline.geometry as LineSegmentsGeometry) : null;
+      const fromLines = lineGeometry
+        ? ((lineGeometry.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute | undefined)?.data.array as
+            Float32Array | undefined)?.slice() ?? null
+        : null;
+      // The new frame's outlines are built once, from the new positions; in between, both are eased.
+      writePositions(attr, target);
+      if (lineGeometry && labels && !outlineTopologyRef.current[key]) {
+        outlineTopologyRef.current[key] = buildSegmentBoundaryTopology(state.mesh, labels);
+      }
+      const topology = outlineTopologyRef.current[key];
+      const targetLines = lineGeometry && topology ? segmentBoundaryEdgesAt(topology, state.mesh) : null;
+      const from = shownRef.current[key];
+      const easeLines = !!(fromLines && targetLines && fromLines.length === targetLines.length);
+      jobs.push({
+        key, mesh: state.mesh, attr, target, from: from && from.length === target.length ? from : null,
+        lineGeometry, fromLines: easeLines ? fromLines : null, targetLines,
+        workingLines: easeLines ? fromLines!.slice() : null, current: new Float32Array(target.length),
+      });
+    }
+    const finish = (job: Job) => {
+      writePositions(job.attr, job.target);
+      shownRef.current[job.key] = job.target;
+      if (job.lineGeometry && job.targetLines) job.lineGeometry.setPositions(job.targetLines);
+      job.mesh.geometry.computeBoundingSphere();
+    };
+    const easing = duration > 0 ? jobs.filter((job) => job.from) : [];
+    jobs.filter((job) => !easing.includes(job)).forEach(finish);
+    if (!easing.length) return;
+    for (const job of easing) if (job.lineGeometry && job.workingLines) job.lineGeometry.setPositions(job.workingLines);
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      if (t >= 1) {
+        easing.forEach(finish);
+        motionAnimationRef.current = null;
+        return;
+      }
+      for (const job of easing) {
+        const from = job.from!;
+        for (let i = 0; i < job.current.length; i++) job.current[i] = from[i] + (job.target[i] - from[i]) * t;
+        writePositions(job.attr, job.current);
+        shownRef.current[job.key] = job.current;
+        if (job.lineGeometry && job.workingLines && job.fromLines && job.targetLines) {
+          for (let i = 0; i < job.workingLines.length; i++) {
+            job.workingLines[i] = job.fromLines[i] + (job.targetLines[i] - job.fromLines[i]) * t;
+          }
+          (job.lineGeometry.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute).data.needsUpdate = true;
+        }
+      }
+      motionAnimationRef.current = requestAnimationFrame(step);
+    };
+    step(start);                                       // same tick: the target is never drawn before the easing starts
+  };
+
+  // Colours follow the values without reloading the meshes (the values change every frame during playback).
+  const colorInputs: ColorInputs = { lvValues, lvMin, lvMax, lvReverseColors, rvValues, rvMin, rvMax, rvReverseColors };
+  const colorInputsRef = useRef(colorInputs);
+  colorInputsRef.current = colorInputs;
+  useLayoutEffect(() => {
+    const inputs = colorInputsRef.current;
+    if (lvStateRef.current) recolor(lvStateRef.current, lvColorOf(inputs));
+    if (rvStateRef.current) recolor(rvStateRef.current, rvColorOf(inputs));
+  }, [lvValues, lvMin, lvMax, lvReverseColors, rvValues, rvMin, rvMax, rvReverseColors]);
+  useLayoutEffect(() => {
+    wantedUrlsRef.current = { lv: lvMeshUrl ?? null, rv: rvMeshUrl ?? null };
+  }, [lvMeshUrl, rvMeshUrl]);
+  useLayoutEffect(() => {
+    motionRef.current = { lv: lvMotionPositions, rv: rvMotionPositions };
+    applyMotionRef.current();
+  }, [lvMotionPositions, rvMotionPositions]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -344,11 +512,7 @@ export function CombinedHeartModel({
 
         const alignment = computeLvAlignment(lvPos, lvSegmentLabels);
 
-        const lvColorOf = (seg: number) => {
-          const value = lvValues?.[seg - 1];
-          return valueToColor(value, lvMin, lvMax, lvReverseColors);
-        };
-        const lvState = buildSelectionState(lvMesh, lvSegmentLabels, alignment, lvColorOf);
+        const lvState = buildSelectionState(lvMesh, lvSegmentLabels, alignment, lvColorOf(colorInputsRef.current));
         const outlineSize = {
           width: containerRef.current?.clientWidth ?? 1,
           height: containerRef.current?.clientHeight ?? 1,
@@ -360,21 +524,13 @@ export function CombinedHeartModel({
 
         let rvObject: THREE.Object3D | null = null;
         let rvState: MeshSelectionState | null = null;
+        let rvLines: LineSegments2 | null = null;
         if (rvMeshUrl && rvSegmentLabels?.length) {
           rvObject = await loadMesh(rvMeshUrl, rvMeshFormat);
           const rvMesh = findFirstMesh(rvObject);
           if (rvMesh) {
-            // Value-heatmap coloring when real per-segment RV values are
-            // available (same fallback convention ReconstructedHeartModel's
-            // RV-only view uses) -- identity colors only before any RV
-            // strain/FAC has been computed for this project.
-            const rvColorOf = (seg: number) => {
-              if (!rvValues) return rvSegmentColor(seg);
-              const value = rvValues[seg];
-              return valueToColor(value, rvMin, rvMax, rvReverseColors);
-            };
-            rvState = buildSelectionState(rvMesh, rvSegmentLabels, alignment, rvColorOf);
-            const rvLines = createSegmentBoundaryLines(rvMesh, rvSegmentLabels, outlineSize);
+            rvState = buildSelectionState(rvMesh, rvSegmentLabels, alignment, rvColorOf(colorInputsRef.current));
+            rvLines = createSegmentBoundaryLines(rvMesh, rvSegmentLabels, outlineSize);
             rvMesh.add(rvLines);
             outlines.push(rvLines);
           }
@@ -401,13 +557,24 @@ export function CombinedHeartModel({
         lineMaterialsRef.current = outlines.map((o) => (o as unknown as { material: LineMaterial }).material);
         lvStateRef.current = lvState;
         rvStateRef.current = rvState;
+        loadedUrlsRef.current = { lv: lvMeshUrl, rv: rvState ? rvMeshUrl ?? null : null };
+        outlinesRef.current = { lv: lvLines, rv: rvLines };
+        outlineLabelsRef.current = { lv: lvSegmentLabels, rv: rvState ? rvSegmentLabels ?? null : null };
+        outlineTopologyRef.current = { lv: null, rv: null };
+        stopMotionAnimation();
+        shownRef.current = { lv: null, rv: null };     // fresh meshes start from their own (ED) positions
+        // Values may have changed while the files were loading.
+        recolor(lvState, lvColorOf(colorInputsRef.current));
+        if (rvState) recolor(rvState, rvColorOf(colorInputsRef.current));
+        applyMotionRef.current();
       } catch (err) {
         console.error("[CombinedHeartModel] Failed to load combined LV+RV mesh:", err);
       }
     })();
 
     return () => { cancelled = true; };
-  }, [lvMeshUrl, lvMeshFormat, lvSegmentLabels, lvValues, lvMin, lvMax, lvReverseColors, rvMeshUrl, rvMeshFormat, rvSegmentLabels, rvValues, rvMin, rvMax, rvReverseColors]);
+    // Colour values are deliberately not dependencies: they change every frame and only recolour (effect above).
+  }, [lvMeshUrl, lvMeshFormat, lvSegmentLabels, rvMeshUrl, rvMeshFormat, rvSegmentLabels]);
 
   return (
     <div ref={containerRef} className={`relative ${className ?? ""}`} aria-label="Combined LV+RV 3D heart model">

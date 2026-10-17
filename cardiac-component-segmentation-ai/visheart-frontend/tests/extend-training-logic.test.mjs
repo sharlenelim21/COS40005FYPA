@@ -26,9 +26,17 @@ test("the summary counts the chosen cases and their slices", () => {
   assert.deepEqual(logic.selectionSummary(cases, new Set(["m1", "m3"])), { cases: 2, slices: 5 });
 });
 
-test("a search matches every word in the project name or the model", () => {
+test("a search matches every word in the project name, the model or the owner's name", () => {
   assert.deepEqual(cases.filter(item => logic.matchesQuery(item, "patient UNET")).map(item => item.maskId), ["m1"]);
   assert.equal(cases.filter(item => logic.matchesQuery(item, "  ")).length, 3);
+  assert.ok(logic.matchesQuery({ ...cases[1], ownerName: "dr_lee" }, "LEE patient"));
+});
+
+test("only a case's owner may edit it, an admin included; everyone may preview it", () => {
+  assert.equal(logic.canEditCase({ ownerId: "u1" }, "u1"), true);
+  assert.equal(logic.canEditCase({ ownerId: "u1" }, "u-admin"), false);
+  assert.equal(logic.canEditCase({ ownerId: null }, "u1"), false);   // an owner the export could not name
+  assert.equal(logic.canEditCase({ ownerId: "u1" }, null), false);
 });
 
 test("the verdict names every dataset, and a lower one is never left out", () => {
@@ -79,6 +87,36 @@ test("saved masks become one label per pixel, their differences and their outlin
   assert.equal(edge[12], 0);
 });
 
+test("where two models disagree, each side shows its own answer, so the two pictures never look the same there", () => {
+  const left = new Uint8Array([0, 1, 2, 2, 0]);
+  const right = new Uint8Array([0, 1, 3, 0, 1]);
+  assert.deepEqual([...logic.disagreementLabels(left, right)], [0, 0, 2, 2, logic.LEFT_OUT]);
+  assert.deepEqual([...logic.disagreementLabels(right, left)], [0, 0, 3, logic.LEFT_OUT, 1]);
+});
+
+test("the zoom box is one square around every labelled pixel, with a margin, kept inside the image", () => {
+  const map = (width, cells) => {
+    const labels = new Uint8Array(width * width);
+    for (const [x, y] of cells) labels[y * width + x] = 1;
+    return labels;
+  };
+  // A 20 x 10 heart at (40..59, 50..59) in a 100 x 100 scan: 20 px + 35% each side = 34 px, at least 30 here.
+  const heart = map(100, [[40, 50], [59, 59]]);
+  assert.deepEqual(logic.heartBox([heart], 100, 100, 0.35, 30), { x: 33, y: 38, size: 34 });
+  // Two slices share one box, so paging does not move the picture; the smallest box is `least`.
+  assert.deepEqual(logic.heartBox([map(100, [[10, 10]]), map(100, [[12, 12]])], 100, 100, 0.35, 30), { x: 0, y: 0, size: 30 });
+  assert.deepEqual(logic.heartBox([map(100, [[99, 99]])], 100, 100, 0.35, 30), { x: 70, y: 70, size: 30 });   // at the edge
+  assert.equal(logic.heartBox([new Uint8Array(100 * 100)], 100, 100), null);
+  assert.equal(logic.countDifferences(new Uint8Array([0, 1, 2]), new Uint8Array([0, 2, 2])), 1);
+});
+
+test("where two models differ, what each side says there is counted by label", () => {
+  const left = new Uint8Array([0, 2, 2, 3, 1]);
+  const right = new Uint8Array([0, 2, 3, 0, 0]);
+  assert.deepEqual(logic.disagreementSummary(left, right), { 2: 1, 3: 1, 1: 1 });
+  assert.deepEqual(logic.disagreementSummary(right, left), { 3: 1, 0: 2 });
+});
+
 test("painting colours only labelled pixels", () => {
   const rgba = new Uint8ClampedArray(8);
   logic.paintLabels(rgba, new Uint8Array([0, 1]), { 1: [34, 197, 94] }, 0.5);
@@ -110,21 +148,18 @@ test("a frozen test patient's cases are listed but never trainable", () => {
   assert.deepEqual(logic.trainableCases(listed).map(item => item.maskId), ["m1", "m2", "m3"]);
 });
 
-test("the finished training says what happened to its version since", () => {
-  const versions = [{ label: "v1", status: "candidate" }, { label: "v2", status: "original" },
-                    { label: "v3", status: "deleted", deleted_because: "replaced by v2" }];
-  assert.deepEqual(logic.jobOutcome("v1", "v2", versions), {
-    title: "v1 is ready for review",
-    text: "Its results are below. Nothing has changed yet: the model in use stays active until you choose.",
+test("the three datasets' whole heart is averaged over every scan, so a bigger dataset counts more", () => {
+  const scores = (rv, myocardium, lv_cavity) => ({ rv, myocardium, lv_cavity, background: 1 });
+  const total = logic.overallAccuracy({
+    acdc: { n: 100, against: scores(0.9, 0.9, 0.9), label: scores(0.8, 0.8, 0.8) },
+    mms2: { n: 300, against: scores(0.7, 0.8, 0.9), label: scores(0.7, 0.8, 0.9) },
   });
-  assert.deepEqual(logic.jobOutcome("v1", "v1", versions), {
-    title: "v1 is in use",
-    text: "You chose to use it. The original model is always kept, and the version history can bring it back.",
-  });
-  assert.deepEqual(logic.jobOutcome("v3", "v2", versions), {
-    title: "v3 was deleted",
-    text: "It was replaced by v2. The model in use is v2.",
-  });
+  assert.equal(total.datasets, 2);
+  assert.equal(total.scans, 400);
+  assert.ok(Math.abs(total.against - 0.825) < 1e-9);   // (100 × 0.9 + 300 × 0.8) / 400
+  assert.ok(Math.abs(total.label - 0.8) < 1e-9);
+  assert.equal(logic.overallAccuracy(null), null);
+  assert.equal(logic.overallAccuracy({ acdc: { n: 0, against: scores(1, 1, 1), label: scores(1, 1, 1) } }), null);
 });
 
 test("a test scan is named by its dataset and case, in words", () => {
@@ -179,9 +214,29 @@ test("the example viewer keeps the model in use on the left and never offers it 
   assert.equal(logic.exampleSides([history[0]], "v1", "v1", null).initial, null);   // nothing else to compare
 });
 
-test("a version the user deleted is described in the user's words", () => {
-  assert.deepEqual(logic.jobOutcome("v3", "v2", [{ label: "v3", status: "deleted", deleted_because: "rejected" }]), {
-    title: "v3 was deleted",
-    text: "You deleted it from the version history. The model in use is v2.",
-  });
+test("versions can be switched unless a training runs or this computer's model files do not match", () => {
+  assert.equal(logic.whyNotSwitch(null, false), null);
+  assert.match(logic.whyNotSwitch("unet.pth is not the registered original any more", false),
+               /cannot be switched on this computer: unet\.pth is not the registered original/);
+  assert.match(logic.whyNotSwitch("anything", true), /training is running/);        // the running job comes first
+});
+
+test("the scan viewer offers to use or delete only the version it compares with the model in use", () => {
+  const candidate = { label: "v3", status: "candidate", is_original: false };
+  const original = { label: "v1", status: "original", is_original: true };
+  assert.deepEqual(logic.decisionFor(candidate, "v1"), { use: true, remove: true });
+  assert.deepEqual(logic.decisionFor(original, "v3"), { use: true, remove: false });   // the original is never deleted
+  assert.equal(logic.decisionFor(candidate, "v3"), null);                              // in use: nothing to compare
+  assert.equal(logic.decisionFor({ ...candidate, status: "deleted" }, "v1"), null);
+});
+
+test("the scan viewer shows the dataset chosen above the table, keeping the kind of scan shown before", () => {
+  const examples = [
+    { n: 0, dataset: "acdc", role: "lowest" }, { n: 1, dataset: "acdc", role: "median" },
+    { n: 3, dataset: "mms2", role: "lowest" }, { n: 4, dataset: "mms2", role: "highest" },
+  ];
+  assert.equal(logic.exampleFor(examples, "mms2", "highest"), 4);
+  assert.equal(logic.exampleFor(examples, "acdc", "highest"), 0);   // ACDC has no highest here: its first scan
+  assert.equal(logic.exampleFor(examples, "mms2", null), 3);
+  assert.equal(logic.exampleFor(examples, "mms1", "lowest"), null);  // no scans from that dataset
 });

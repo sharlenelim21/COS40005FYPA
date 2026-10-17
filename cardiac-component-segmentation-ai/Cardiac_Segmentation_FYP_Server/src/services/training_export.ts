@@ -46,6 +46,8 @@ export interface ExportCase {
     structures: string[];
     shared: number; // slices the project's other model also corrected, differently
     frozen: FrozenMatch | null; // the project is a frozen test patient: every export refuses it
+    ownerId: string | null; // the project's owner: Prepare lists every user's cases, and only the owner edits one
+    ownerName: string | null; // the owner's username, as the page shows it
 }
 
 /**
@@ -129,11 +131,13 @@ export function maskQuery(models: readonly string[], ownedProjectIds: string[] |
 
 /**
  * One row of the Prepare tab. `own` is selectTrainingSlices([mask]).selected[0]; `conflicts` are the project's;
- * `frozen` is the frozen-set guard's match for the project's source volume, when the dry run checked it.
+ * `frozen` is the frozen-set guard's match for the project's source volume, when the dry run checked it; `ownerName`
+ * is the username of the project's owner (`project.userid`).
  */
 export function describeCase<M extends TrackedMask>(
-    project: { _id?: unknown; name?: unknown; dimensions?: { height?: number; width?: number } },
-    own: SelectedMask<M>, conflicts: SliceConflict[], frozen: FrozenMatch | null = null): ExportCase {
+    project: { _id?: unknown; name?: unknown; userid?: unknown; dimensions?: { height?: number; width?: number } },
+    own: SelectedMask<M>, conflicts: SliceConflict[], frozen: FrozenMatch | null = null,
+    ownerName: string | null = null): ExportCase {
     const tracking = own.mask.editTracking ?? {};
     const slices = own.slices.map((slice: TrackedSlice) => ({
         frameindex: Number(slice.frameindex), sliceindex: Number(slice.sliceindex),
@@ -151,5 +155,6 @@ export function describeCase<M extends TrackedMask>(
         slices, pixelsChanged: slices.reduce((sum, slice) => sum + slice.pixelsChanged, 0),
         structures: STRUCTURES.filter(name => slices.some(slice => slice.editedClasses.includes(name))),
         shared, frozen,
+        ownerId: project.userid ? String(project.userid) : null, ownerName,
     };
 }

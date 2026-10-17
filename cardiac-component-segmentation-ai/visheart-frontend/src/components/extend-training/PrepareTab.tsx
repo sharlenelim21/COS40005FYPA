@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CorrectionCase, isActiveJob, MODEL_NAMES, RetrainingStatus } from "@/lib/retraining-api";
 import { LABEL_COLORS } from "@/types/segmentation";
-import { editorHref, matchesQuery, selectionSummary, testScanName, trainableCases } from "@/components/extend-training/logic";
+import { canEditCase, editorHref, matchesQuery, selectionSummary, testScanName, trainableCases } from "@/components/extend-training/logic";
 import { CasePreview, markEdited } from "@/components/extend-training/CasePreview";
 
 /** Edit tracking's classes as short tags, in the editor's colours; the full name shows on hover. */
@@ -31,7 +31,7 @@ function correctedAt(value: string | null): string {
 function Message({ children }: { children: ReactNode }) {
   return (
     <TableRow>
-      <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">{children}</TableCell>
+      <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">{children}</TableCell>
     </TableRow>
   );
 }
@@ -110,8 +110,9 @@ function IconAction({ label, children }: { label: string; children: ReactNode })
   );
 }
 
-export function PrepareTab({ status, selected, onSelectedChange, checking, starting, onCheck, onStart, onShowResults }: {
+export function PrepareTab({ status, userId, selected, onSelectedChange, checking, starting, onCheck, onStart, onShowResults }: {
   status: RetrainingStatus;
+  userId: string | null;   // the signed-in admin, who edits only their own cases
   selected: Set<string>;
   onSelectedChange: (next: Set<string>) => void;
   checking: boolean;
@@ -147,10 +148,10 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
     onSelectedChange(next);
   };
 
-  const reason = checking ? "Checking your saved corrections…"
+  const reason = checking ? "Checking the saved corrections…"
     : running ? "A training is running. The selection stays as it is until it finishes."
-    : !eligible ? "Your corrections have not been checked yet."
-    : trainable.length === 0 ? "None of your corrections can train yet."
+    : !eligible ? "The corrections have not been checked yet."
+    : trainable.length === 0 ? "None of the corrections can train yet."
     : summary.cases === 0 ? "Choose at least one case."
     : null;
   const canStart = reason === null && !starting && status.training.allowed;
@@ -211,10 +212,10 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
 
       <Card>
         <CardHeader>
-          <CardTitle>Your corrected cases</CardTitle>
+          <CardTitle>Corrected cases</CardTitle>
           <CardDescription>
-            A case is one of your projects, corrected in one model. Only the slices you changed train the new version.
-            Preview a case to see what you changed, or open it in the editor.
+            Every user&apos;s saved corrections. A case is one project, corrected in one model; only its changed slices
+            train the new version. You can preview any case; only the user who owns the project can edit it.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -224,8 +225,8 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
               <Input
                 value={query}
                 onChange={event => setQuery(event.target.value)}
-                placeholder="Search your projects"
-                aria-label="Search your corrected cases"
+                placeholder="Search projects or users"
+                aria-label="Search the corrected cases"
                 className="pl-8"
               />
             </div>
@@ -246,6 +247,7 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
                               onCheckedChange={value => toggleShown(value === true)} aria-label="Select every case shown" />
                   </TableHead>
                   <TableHead>Project</TableHead>
+                  <TableHead>Corrected by</TableHead>
                   <TableHead>Model</TableHead>
                   <TableHead>Corrected</TableHead>
                   <TableHead className="text-right">Slices</TableHead>
@@ -258,19 +260,20 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
                 {checking && cases.length === 0 && (
                   <Message>
                     <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
-                    Checking your saved corrections…
+                    Checking the saved corrections…
                   </Message>
                 )}
                 {!checking && eligible && cases.length === 0 && (
                   <Message>
-                    You have no corrections that can train yet. Open one of your projects, correct its segmentation and
-                    save it; only the slices you change count.
+                    No corrections can train yet. Open one of your projects, correct its segmentation and save it; only
+                    the slices you change count.
                   </Message>
                 )}
                 {cases.length > 0 && shown.length === 0 && <Message>No case matches “{query}”.</Message>}
                 {shown.map(item => {
                   const first = item.slices[0];
                   const model = MODEL_NAMES[item.model] ?? item.model;
+                  const mine = canEditCase(item, userId);
                   return (
                     <TableRow key={item.maskId} data-state={selected.has(item.maskId) ? "selected" : undefined}
                               className={item.frozen ? "text-muted-foreground" : undefined}>
@@ -288,6 +291,9 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
                           {item.frozen ? <LockedTestScan item={item} /> : item.shared > 0 && <DuplicateWarning item={item} />}
                         </div>
                       </TableCell>
+                      <TableCell className="whitespace-nowrap text-sm">
+                        {mine ? <span className="font-medium">You</span> : item.ownerName ?? "Another user"}
+                      </TableCell>
                       <TableCell><Badge variant="outline">{model}</Badge></TableCell>
                       <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{correctedAt(item.editedAt)}</TableCell>
                       <TableCell className="text-right tabular-nums">{item.slices.length}</TableCell>
@@ -301,7 +307,7 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
                               <Eye className="h-4 w-4" />
                             </Button>
                           </IconAction>
-                          {first && (
+                          {first && mine && (
                             <IconAction label="Edit in the editor">
                               <Button asChild variant="ghost" size="icon" className="h-8 w-8">
                                 <Link href={editorHref(item.projectId, item.model, first.frameindex, first.sliceindex)}
@@ -330,6 +336,7 @@ export function PrepareTab({ status, selected, onSelectedChange, checking, start
         item={previewing}
         selected={previewing ? selected.has(previewing.maskId) : false}
         locked={running || !!previewing?.frozen}
+        canEdit={previewing ? canEditCase(previewing, userId) : false}
         onSelectedChange={value => { if (previewing) toggle(previewing.maskId, value); }}
         onClose={() => setPreviewing(null)}
       />
