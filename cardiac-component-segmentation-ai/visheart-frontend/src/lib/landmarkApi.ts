@@ -29,6 +29,9 @@ const MASK_WRITE_GRACE_MS = 60_000;
 
 const predictionCache = new Map<string, LandmarkInferenceResponse>();
 
+type LandmarkCompletion = Record<"medsam" | "unet", { uuid: string; createdAt: string } | null>;
+type JobsResponse = { success: boolean; jobs: Array<Record<string, unknown>>; landmarkCompletion?: LandmarkCompletion };
+
 export const landmarkApi = {
   /**
    * Fetch a previously-persisted landmark detection result (if any) from the
@@ -266,9 +269,13 @@ export const landmarkApi = {
   ): Promise<string | null> => {
     if (USE_STUB) return null;
     try {
-      const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
-        `${ENDPOINT}/jobs/${projectId}`,
-      );
+      const response = await api.get<JobsResponse>(`${ENDPOINT}/jobs/${projectId}`);
+      const completion = response.data?.landmarkCompletion;
+      if (completion) {
+        const hit = completion[segmentationModel];
+        const created = hit ? Date.parse(hit.createdAt) : NaN;
+        return hit && Number.isFinite(created) && created >= since ? hit.uuid : null;
+      }
       const job = (response.data?.jobs ?? []).find((j) => {
         if (!/landmark/i.test(String(j.model_used ?? ""))) return false;
         if (String(j.status ?? "").toLowerCase() !== "completed") return false;
@@ -287,7 +294,16 @@ export const landmarkApi = {
     projectId: string,
     maskCreatedAt: Record<"medsam" | "unet", number | null>,
   ): Promise<boolean> => {
-    if (USE_STUB) return false;
+    const byModel = await landmarkApi.segmentationPendingByModel(projectId, maskCreatedAt);
+    return byModel.unet || byModel.medsam;
+  },
+
+  segmentationPendingByModel: async (
+    projectId: string,
+    maskCreatedAt: Record<"medsam" | "unet", number | null>,
+  ): Promise<Record<"medsam" | "unet", boolean>> => {
+    const result: Record<"medsam" | "unet", boolean> = { medsam: false, unet: false };
+    if (USE_STUB) return result;
     try {
       const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
         `${ENDPOINT}/jobs/${projectId}`,
@@ -296,7 +312,7 @@ export const landmarkApi = {
       const seen = new Set<string>();
       for (const j of response.data?.jobs ?? []) {
         const used = String(j.model_used ?? "");
-        if (/landmark|4d_reconstruction/i.test(used)) continue;
+        if (/landmark|4d_reconstruction|strain/i.test(used)) continue;
         const model = String(j.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
         if (seen.has(model)) continue;
         seen.add(model);
@@ -305,17 +321,17 @@ export const landmarkApi = {
         const created = Date.parse(String(j.createdAt ?? ""));
         if (!Number.isFinite(created)) continue;
         if (status === "pending" || status === "in_progress") {
-          if (created >= now - SEG_STALE_MINUTES[model] * 60 * 1000) return true;
+          if (created >= now - SEG_STALE_MINUTES[model] * 60 * 1000) result[model] = true;
         } else if (status === "completed") {
           const mask = maskCreatedAt[model];
           if (mask !== null && mask >= created) continue;
           const finished = Date.parse(String(j.updatedAt ?? ""));
-          if (!Number.isFinite(finished) || finished >= now - MASK_WRITE_GRACE_MS) return true;
+          if (!Number.isFinite(finished) || finished >= now - MASK_WRITE_GRACE_MS) result[model] = true;
         }
       }
-      return false;
+      return result;
     } catch {
-      return false;
+      return result;
     }
   },
 
@@ -324,9 +340,7 @@ export const landmarkApi = {
   ): Promise<{ active: "running" | "queued" | null; hasCompleted: boolean; progress: number | null } | null> => {
     if (USE_STUB) return { active: null, hasCompleted: landmarkApi.hasCached(projectId), progress: null };
     try {
-      const response = await api.get<{ success: boolean; jobs: Array<Record<string, unknown>> }>(
-        `${ENDPOINT}/jobs/${projectId}`,
-      );
+      const response = await api.get<JobsResponse>(`${ENDPOINT}/jobs/${projectId}`);
       const cutoff = Date.now() - 30 * 60 * 1000;
       const landmarkJobs = (response.data?.jobs ?? []).filter((j) => /landmark/i.test(String(j.model_used ?? "")));
       let active: "running" | "queued" | null = null;
@@ -341,7 +355,10 @@ export const landmarkApi = {
           if (typeof j.progress === "number") progress = j.progress;
         } else active ??= "queued";
       }
-      const hasCompleted = landmarkJobs.some((j) => String(j.status ?? "").toLowerCase() === "completed");
+      const completion = response.data?.landmarkCompletion;
+      const hasCompleted = completion
+        ? !!(completion.medsam || completion.unet)
+        : landmarkJobs.some((j) => String(j.status ?? "").toLowerCase() === "completed");
       return { active, hasCompleted, progress };
     } catch {
       return null;

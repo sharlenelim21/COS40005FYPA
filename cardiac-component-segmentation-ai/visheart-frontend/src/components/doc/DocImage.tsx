@@ -7,9 +7,10 @@ interface DocImageProps {
   src: string;
   alt: string;
   className?: string;
+  capAtIntrinsicWidth?: boolean;
 }
 
-export const DocImage: React.FC<DocImageProps> = ({ src, alt, className }) => {
+export const DocImage: React.FC<DocImageProps> = ({ src, alt, className, capAtIntrinsicWidth = false }) => {
   const [errored, setErrored] = useState(false);
 
   if (errored) {
@@ -36,6 +37,7 @@ export const DocImage: React.FC<DocImageProps> = ({ src, alt, className }) => {
       loading="lazy"
       decoding="async"
       className={className}
+      style={capAtIntrinsicWidth && width ? { maxWidth: width } : undefined}
       onError={() => setErrored(true)}
     />
   );

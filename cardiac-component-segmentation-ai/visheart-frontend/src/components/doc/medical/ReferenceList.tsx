@@ -2,6 +2,7 @@ import { ExternalLink } from "lucide-react";
 import { CITED_REFERENCE_IDS, REFERENCES, type Reference } from "@/content/medicalGuide";
 import { referenceAnchorId } from "@/components/doc/medical/Citation";
 import { ContentText } from "@/components/doc/medical/ContentText";
+import { ReferenceBackLink } from "@/components/doc/medical/ReferenceBackLink";
 
 const linkClassName =
   "text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm underline underline-offset-2 focus-visible:ring-2 focus-visible:outline-none";
@@ -40,8 +41,9 @@ export function ReferenceList() {
               <p>
                 <ContentText text={reference.citation} />
               </p>
-              <p className="text-xs">
+              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                 <ReferenceLink reference={reference} />
+                <ReferenceBackLink refId={id} number={index + 1} />
               </p>
             </div>
           </li>

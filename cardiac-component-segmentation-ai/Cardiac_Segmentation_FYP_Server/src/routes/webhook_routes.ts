@@ -39,6 +39,7 @@ import { gpuObjUploadFilter } from "../middleware/uploadmiddleware";
 import { processReconstructionCallback } from "../services/reconstruction_handler";
 import { recomputeBullseyeWithLandmarks } from "../services/segmentation_export";
 import { jobResultRvInsertionSlices } from "../services/rv_insertion_points";
+import { notifyPipelineJobEvent } from "../services/pipeline_orchestrator";
 
 const serviceLocation = "InferenceCallback(Webhook)";
 const router = express.Router();
@@ -129,6 +130,7 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
         status: JobStatus.FAILED,
         message: req.body?.error || `Landmark detection failed with status: ${status || "unknown"}`,
       });
+      notifyPipelineJobEvent(gpuJobId);
       res.status(200).json({ message: "Landmark callback processed as failed." });
       return;
     }
@@ -146,6 +148,7 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
         status: JobStatus.FAILED,
         message: "Landmark callback did not include predictions.",
       });
+      notifyPipelineJobEvent(gpuJobId);
       res.status(200).json({ message: "Landmark callback missing predictions." });
       return;
     }
@@ -181,6 +184,7 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
       );
     }
 
+    notifyPipelineJobEvent(gpuJobId);
     res.status(200).json({ message: "Landmark callback processed." });
   } catch (error) {
     LogError(error as Error, serviceLocation, `Error processing landmark callback ${gpuJobId}`);
@@ -859,6 +863,7 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
       }
     }
 
+    notifyPipelineJobEvent(effectiveJobId);
     return res
       .status(200)
       .json({ message: "Callback processed, job status updated." });
@@ -1009,6 +1014,7 @@ router.post("/gpu-reconstruction-callback", preMulterLogging, gpuObjUploadFilter
     
     // Process reconstruction through service layer
     const result = await processReconstructionCallback(gpuJobId, meshFiles, callbackMetadata);
+    notifyPipelineJobEvent(gpuJobId);
     
     if (result.success) {
       logger.info(`${serviceLocation}: Successfully processed reconstruction callback - Job: ${gpuJobId}, Reconstruction: ${result.reconstructionId}`);

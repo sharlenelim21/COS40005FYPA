@@ -76,7 +76,6 @@ interface ProjectContextType {
   // Optimistic updates
   updateContextMasks: (newMasks: Record<string, Uint8Array>) => void;
 
-  // Active segmentation model (shared so ProjectDashboardBar can read it for export)
   selectedSegmentationModel: "medsam" | "unet";
   setSelectedSegmentationModel: (model: "medsam" | "unet") => void;
 

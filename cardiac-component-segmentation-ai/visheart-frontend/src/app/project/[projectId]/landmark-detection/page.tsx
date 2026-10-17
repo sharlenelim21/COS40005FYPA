@@ -21,8 +21,8 @@ import {
   Save,
 } from "lucide-react";
 
-import { useProject, normalizeReconstructionChamber } from "@/context/ProjectContext";
-import { useProjectResults, type MaskDoc } from "@/hooks/useProjectResults";
+import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
+import { useProjectResults, invalidateProjectResults, type MaskDoc } from "@/hooks/useProjectResults";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import {
@@ -34,7 +34,7 @@ import { Button } from "@/components/ui/button";
 import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
-import { LandmarkSidebar, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
+import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
 import { useMotionMesh } from "@/hooks/useMotionMesh";
@@ -183,6 +183,7 @@ export default function LandmarkDetectionPage() {
     tarCacheReady,
     getReconstructionGLB,
     reconstructionsByModel,
+    reconstructionResults,
     hasReconstructions,
     refreshReconstructions,
   } = useProject();
@@ -469,6 +470,7 @@ export default function LandmarkDetectionPage() {
   }, [fetchBullseye]);
 
   const [segPending, setSegPending] = useState<boolean | null>(null);
+  const [segPendingByModel, setSegPendingByModel] = useState<Record<"medsam" | "unet", boolean>>({ medsam: false, unet: false });
   const [segWaitNonce, setSegWaitNonce] = useState(0);
   const maskCreatedAtRef = useRef<Record<"medsam" | "unet", number | null>>({ medsam: null, unet: null });
   const fetchBullseyeRef = useRef(fetchBullseye);
@@ -490,9 +492,33 @@ export default function LandmarkDetectionPage() {
       maskCreatedAt = { medsam: newest("medsam"), unet: newest("unet") };
     } catch {
     }
-    const pending = await landmarkApi.segmentationPending(projectId, maskCreatedAt);
+    const byModel = await landmarkApi.segmentationPendingByModel(projectId, maskCreatedAt);
     maskCreatedAtRef.current = maskCreatedAt;
-    return pending;
+    setSegPendingByModel(byModel);
+    return byModel.unet || byModel.medsam;
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      const byModel = await landmarkApi.segmentationPendingByModel(projectId, maskCreatedAtRef.current);
+      if (!cancelled) {
+        setSegPendingByModel((prev) =>
+          prev.unet === byModel.unet && prev.medsam === byModel.medsam ? prev : byModel,
+        );
+      }
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [projectId]);
+
+  const segmentationRunningFor = useCallback(async (model: "medsam" | "unet"): Promise<boolean> => {
+    const byModel = await landmarkApi.segmentationPendingByModel(projectId, maskCreatedAtRef.current);
+    setSegPendingByModel(byModel);
+    return byModel[model];
   }, [projectId]);
 
   useEffect(() => {
@@ -642,6 +668,10 @@ export default function LandmarkDetectionPage() {
     : existingSegModels.medsam ? "medsam"
     : activeModel;
 
+  const hasReconForLandmarkModel = (reconstructionResults ?? []).some(
+    (r: { segmentationModel?: unknown }) => normalizeReconstructionModel(r?.segmentationModel) === landmarkSegModel,
+  );
+
   const runDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
     setSavedLandmarkEdits({});
@@ -669,6 +699,7 @@ export default function LandmarkDetectionPage() {
     // without this, a direct/stale navigation to this page could fire a real GPU detection job
     // on the same render the redirect-away effect is still about to run on (reported live, 2026-10).
     if (!reconCheckDone || !hasReconstructions) return;
+    if (!hasReconForLandmarkModel) return;
 
     autoRunStartedRef.current = true;
     const model = landmarkSegModel;
@@ -678,7 +709,7 @@ export default function LandmarkDetectionPage() {
       if (done) handleAttachToJob(done, model);
       else runDetectionAndResetEdits(selectedModel);
     })();
-  }, [loading, projectData, hydrating, segModelsLoaded, segPending, state.status, reconCheckDone, hasReconstructions, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
+  }, [loading, projectData, hydrating, segModelsLoaded, segPending, state.status, reconCheckDone, hasReconstructions, hasReconForLandmarkModel, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
 
   const runUnlessSegmentationPending = useCallback(async (run: () => void) => {
     if (segPending === true) return;
@@ -870,6 +901,7 @@ export default function LandmarkDetectionPage() {
           console.warn("[Landmark] Bullseye recompute did not confirm within ~30s — refreshing with whatever landed.");
         }
         await fetchBullseye(selectedBullseyeModel, false);
+        invalidateProjectResults(projectId);
         setBullseyeRecomputing(false);
       } catch (recomputeErr) {
         console.error("[Landmark] Bullseye recompute after save failed:", recomputeErr);
@@ -1343,6 +1375,10 @@ export default function LandmarkDetectionPage() {
     setIsComputingStrain(true);
     setStrainComputeError(null);
     try {
+      if (await segmentationRunningFor(activeModel)) {
+        setStrainComputeError(SEGMENTATION_RUNNING_STRAIN_MESSAGE);
+        return;
+      }
       const formData = new FormData();
       formData.append("ed_file", edFile);
       formData.append("es_file", esFile);
@@ -1357,6 +1393,7 @@ export default function LandmarkDetectionPage() {
         ...result,
         computedFor: { mode: "upload", model: activeModel, edFrameIndex: -1 },
       });
+      invalidateProjectResults(projectId);
     } catch (err: any) {
       setStrainComputeError(
         err?.response?.data?.message ??
@@ -1365,13 +1402,17 @@ export default function LandmarkDetectionPage() {
     } finally {
       setIsComputingStrain(false);
     }
-  }, [edFile, esFile, state.avgLm1, state.avgLm2, projectId, activeModel]);
+  }, [edFile, esFile, state.avgLm1, state.avgLm2, projectId, activeModel, segmentationRunningFor]);
 
   const handleComputeStrainFromFrames = useCallback(async () => {
     if (edFrameIdx === esFrameIdx) return;
     setStrainComputeError(null);
     setIsComputingStrain(true);
     try {
+      if (await segmentationRunningFor(activeModel)) {
+        setStrainComputeError(SEGMENTATION_RUNNING_STRAIN_MESSAGE);
+        return;
+      }
       const computedFor: StrainComputedFor = {
         mode: "choose-frames",
         model: activeModel,
@@ -1384,6 +1425,9 @@ export default function LandmarkDetectionPage() {
       ]);
       if (lvOutcome.status === "fulfilled") setStrainResult({ ...lvOutcome.value, computedFor });
       if (rvOutcome.status === "fulfilled") setRvStrainResult({ ...rvOutcome.value, computedFor });
+      if (lvOutcome.status === "fulfilled" || rvOutcome.status === "fulfilled") {
+        invalidateProjectResults(projectId);
+      }
 
       if (lvOutcome.status === "rejected" && rvOutcome.status === "rejected") {
         setStrainComputeError("Failed to compute LV and RV strain from frames.");
@@ -1395,7 +1439,7 @@ export default function LandmarkDetectionPage() {
     } finally {
       setIsComputingStrain(false);
     }
-  }, [edFrameIdx, esFrameIdx, projectId, activeModel]);
+  }, [edFrameIdx, esFrameIdx, projectId, activeModel, segmentationRunningFor]);
 
   // Whether the currently-stored strainResult/rvStrainResult actually matches
   // the Quick ED->ES pair/model selected right now (as opposed to a full-cycle
@@ -1459,6 +1503,8 @@ export default function LandmarkDetectionPage() {
     onRvMetricTypeChange: setSelectedRvMetricType,
     onFullCycleBusyChange: setFullCycleBusy,
     onFullCycleProgressChange: setFullCycleProgress,
+    segmentationRunning: segPendingByModel[activeModel],
+    checkSegmentationRunning: () => segmentationRunningFor(activeModel),
   };
   // Whichever compute is relevant to the CURRENT scope — the main panel
   // shows one loading state regardless of which of the two ran.

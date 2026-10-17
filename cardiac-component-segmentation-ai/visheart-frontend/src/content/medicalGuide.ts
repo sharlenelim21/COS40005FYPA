@@ -1,3 +1,6 @@
+import type { DocVideoMode } from "@/components/doc/DocVideo";
+import { SEGMENT_LABELS } from "@/lib/ahaSegments";
+
 export type Reference = {
   citation: string;
 } & (
@@ -55,6 +58,29 @@ export const REFERENCES = {
       "Tokodi M, Staub L, Budai Á, et al. Partitioning the Right Ventricle Into 15 Segments and Decomposing Its Motion Using 3D Echocardiography-Based Models: The Updated ReVISION Method. Front Cardiovasc Med. 2021;8:622118.",
     doi: "10.3389/fcvm.2021.622118",
   },
+  openstaxAP: {
+    citation: "Betts JG, et al. Anatomy and Physiology. OpenStax; 2013.",
+    url: "https://openstax.org/books/anatomy-and-physiology/pages/19-1-heart-anatomy",
+  },
+  munozmoreno2022: {
+    citation:
+      "Muñoz Moreno JM, Holguin Palacios C, Lobato Jeri C, Reyes Villanes S, Peralta Ramos W, Reyes Rocha M. Non-Compaction Cardiomyopathy and Multiple Sclerosis: Associated or Independent Diseases? A Case Report. Front Cardiovasc Med. 2022;9:871350.",
+    doi: "10.3389/fcvm.2022.871350",
+  },
+  cerqueira2002: {
+    citation:
+      "Cerqueira MD, Weissman NJ, Dilsizian V, et al. Standardized myocardial segmentation and nomenclature for tomographic imaging of the heart: a statement for healthcare professionals from the Cardiac Imaging Committee of the Council on Clinical Cardiology of the American Heart Association. Circulation. 2002;105(4):539–542.",
+    doi: "10.1161/hc0402.102975",
+  },
+  hegeman2023: {
+    citation:
+      "Hegeman RRMJJ, et al. Reference Values for Inward Displacement in the Normal Left Ventricle: A Novel Method of Regional Left Ventricular Function Assessment. J Cardiovasc Dev Dis. 2023;10(12):474.",
+    doi: "10.3390/jcdd10120474",
+  },
+  wikimediaCardiacCycle: {
+    citation: "DrJanaOfficial. Cardiac cycle animation. Wikimedia Commons. CC BY-SA 4.0.",
+    url: "https://commons.wikimedia.org/w/index.php?curid=54393545",
+  },
 } as const satisfies Record<string, Reference>;
 
 export type RefId = keyof typeof REFERENCES;
@@ -103,6 +129,18 @@ export interface FigureBlock {
   refs?: RefId[];
 }
 
+export interface VideoBlock {
+  kind: "video";
+  src: string;
+  ariaLabel: string;
+  mode: DocVideoMode;
+  poster?: string;
+  maxWidth?: number;
+  caption: string;
+  attribution?: string;
+  refs?: RefId[];
+}
+
 export interface Condition {
   id: string;
   name: string;
@@ -117,7 +155,7 @@ export interface ConditionsBlock {
   note?: Claim;
 }
 
-export type ContentBlock = CalloutBlock | RangeTableBlock | FigureBlock | ConditionsBlock;
+export type ContentBlock = CalloutBlock | RangeTableBlock | FigureBlock | VideoBlock | ConditionsBlock;
 
 export interface GuideSection {
   id: string;
@@ -170,9 +208,25 @@ export const MEDICAL_GUIDE: MedicalGuide = {
       blocks: [
         {
           kind: "figure",
-          alt: "Diagram of the heart showing the four chambers and the direction of blood flow",
-          caption: "The four chambers of the heart and the direction of blood flow.",
-          attribution: "[PLACEHOLDER: figure source and licence]",
+          src: "/images/doc/heart_blood_flow.png",
+          alt: "Diagram of the heart showing the four chambers, valves and major vessels, with arrows tracing blood flow from the vena cavae through the right heart to the lungs, and from the pulmonary veins through the left heart to the aorta.",
+          caption:
+            "The four chambers of the heart and the path of blood flow through the right heart to the lungs and through the left heart to the body.",
+          attribution:
+            "Adapted from Betts, J. G. et al., Anatomy and Physiology, OpenStax, Figure 19.4, Dual System of the Human Blood Circulation. CC BY 4.0. https://openstax.org/books/anatomy-and-physiology/pages/19-1-heart-anatomy",
+          refs: ["openstaxAP"],
+        },
+        {
+          kind: "video",
+          src: "/videos/doc/cardiac_cycle_heart.mp4",
+          mode: "loop",
+          maxWidth: 600,
+          ariaLabel: "Animated cutaway of the heart beating, showing the chambers and valves.",
+          caption:
+            "The heart contracting (systole) and relaxing (diastole) through one cardiac cycle, showing the four chambers, valves and the septum between the ventricles.",
+          attribution:
+            "Cardiac cycle animation by DrJanaOfficial. CC BY-SA 4.0, via Wikimedia Commons. Cropped and converted to video. https://commons.wikimedia.org/w/index.php?curid=54393545",
+          refs: ["wikimediaCardiacCycle"],
         },
       ],
       subsections: [
@@ -280,9 +334,13 @@ export const MEDICAL_GUIDE: MedicalGuide = {
       blocks: [
         {
           kind: "figure",
-          alt: "Cardiac MRI views of the heart: four-chamber and short-axis, at end-diastole and end-systole",
-          caption: "Standard cine MRI views used to measure the heart.",
-          attribution: "[PLACEHOLDER: figure source and licence]",
+          src: "/images/doc/Cardiac_MRI.png",
+          alt: "Three cardiac MRI images showing short-axis, four-chamber and two-chamber views of the heart, with the ventricles and atria labelled.",
+          caption:
+            "Standard cardiac MRI views: (A) short-axis, (B) four-chamber and (C) two-chamber, shown at end-diastole in a patient with non-compaction cardiomyopathy. Arrows mark wall-layer measurements from the original study. LV/RV: left/right ventricle; LA/RA: left/right atrium.",
+          attribution:
+            "Muñoz Moreno, J. M., Holguin Palacios, C., Lobato Jeri, C., Reyes Villanes, S., Peralta Ramos, W., & Reyes Rocha, M. (2022). Non-Compaction Cardiomyopathy and Multiple Sclerosis: Associated or Independent Diseases? A Case Report. Frontiers in Cardiovascular Medicine, 9, 871350. Fig. 3. CC BY 4.0. https://doi.org/10.3389/fcvm.2022.871350",
+          refs: ["munozmoreno2022"],
         },
       ],
     },
@@ -472,7 +530,7 @@ export const MEDICAL_GUIDE: MedicalGuide = {
       summary: [
         {
           text: "To describe where a problem is in the heart muscle, the left ventricle is divided into 17 standard segments defined by the American Heart Association. The model is widely used in clinical practice, for example to describe wall motion or locate damage from a heart attack.",
-          refs: ["bazhutina2023"],
+          refs: ["cerqueira2002", "bazhutina2023"],
         },
       ],
       detail: [
@@ -501,10 +559,12 @@ export const MEDICAL_GUIDE: MedicalGuide = {
       blocks: [
         {
           kind: "figure",
-          alt: "Bull's-eye plot of the 17 left ventricular segments, numbered 1 to 17",
-          caption: "The AHA 17-segment model shown as a bull's-eye plot.",
-          attribution: "[PLACEHOLDER: figure source and licence]",
-          refs: ["bazhutina2023"],
+          src: "/images/doc/AHA_Bullseye.jpg",
+          alt: "Bull's-eye diagram of the left ventricle divided into 17 numbered segments in three rings and a central apex.",
+          caption: `The American Heart Association 17-segment model of the left ventricle, divided into basal (1–6), mid (7–12) and apical (13–16) rings plus the apex (17). Segment names as used in VisHeart: ${SEGMENT_LABELS.map((label, index) => `${index + 1} ${label}`).join(", ")}.`,
+          attribution:
+            "Adapted from Hegeman, R. R. M. J. J. et al., Reference Values for Inward Displacement in the Normal Left Ventricle: A Novel Method of Regional Left Ventricular Function Assessment, Journal of Cardiovascular Development and Disease, 2023, Figure 3. CC BY 4.0. https://doi.org/10.3390/jcdd10120474",
+          refs: ["cerqueira2002", "bazhutina2023", "hegeman2023"],
         },
       ],
     },
@@ -683,6 +743,7 @@ function blockRefs(block: ContentBlock): RefId[] {
     case "rangeTable":
       return [...block.groups.flatMap((group) => group.rows.flatMap((row) => row.refs)), ...claimRefs(block.footnotes)];
     case "figure":
+    case "video":
       return block.refs ?? [];
     case "conditions":
       return [
@@ -707,4 +768,21 @@ export const CITED_REFERENCE_IDS: RefId[] = [
 
 export function referenceNumber(id: RefId): number {
   return CITED_REFERENCE_IDS.indexOf(id) + 1;
+}
+
+type NumberedBlock = FigureBlock | VideoBlock;
+
+function sectionFigures(section: GuideSection): NumberedBlock[] {
+  return [
+    ...(section.blocks ?? []).filter(
+      (block): block is NumberedBlock => block.kind === "figure" || block.kind === "video",
+    ),
+    ...(section.subsections ?? []).flatMap(sectionFigures),
+  ];
+}
+
+const FIGURES: NumberedBlock[] = MEDICAL_GUIDE.sections.flatMap(sectionFigures);
+
+export function figureNumber(figure: NumberedBlock): number {
+  return FIGURES.indexOf(figure) + 1;
 }

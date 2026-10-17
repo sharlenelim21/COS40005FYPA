@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { jobModel, projectModel, userModel } from '../services/database';
+import { jobModel, projectModel, userModel, JobStatus } from '../services/database';
 import logger from '../services/logger';
 import cronstrue from 'cronstrue';
 
@@ -78,8 +78,16 @@ async function cleanupInferenceJobs(): Promise<void> {
         const thresholdDate = new Date(Date.now() - JOB_AGE_THRESHOLD_MS);
         logger.info(`${serviceLocation}: Deleting jobs updated before: ${thresholdDate.toISOString()}`);
         
+        const keepLandmarkResults = await jobModel.aggregate<{ id: unknown }>([
+            { $match: { model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } } },
+            { $sort: { createdAt: -1 } },
+            { $group: { _id: { projectid: "$projectid", segmentationModel: "$segmentationModel" }, id: { $first: "$_id" } } },
+        ]);
+        logger.info(`${serviceLocation}: Keeping ${keepLandmarkResults.length} latest landmark result job(s) regardless of age`);
+
         const oldJobsResult = await jobModel.deleteMany({
-            updatedAt: { $lt: thresholdDate }
+            updatedAt: { $lt: thresholdDate },
+            _id: { $nin: keepLandmarkResults.map((k) => k.id) },
         });
         
         logger.info(`${serviceLocation}: Deleted ${oldJobsResult.deletedCount} old inference jobs (older than ${JOB_AGE_THRESHOLD_MS / (24 * 60 * 60 * 1000)} days)`);

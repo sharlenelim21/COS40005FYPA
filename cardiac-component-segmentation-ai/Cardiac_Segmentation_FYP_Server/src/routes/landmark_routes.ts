@@ -4,7 +4,7 @@ import axios from "axios";
 import FormData from "form-data";
 import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { startLandmarkInference } from "../services/landmark_inference";
+import { startLandmarkInference, findLandmarkCompletionForCurrentMasks } from "../services/landmark_inference";
 import {
   jobModel,
   readProject,
@@ -189,6 +189,7 @@ router.get(
         .find({
           projectid: projectId,
           userid: req.user?._id?.toString(),
+          model_used: /landmark/i,
           status: JobStatus.COMPLETED,
           result: { $exists: true, $ne: null },
         })
@@ -241,8 +242,12 @@ router.get(
         .sort({ createdAt: -1 })
         .limit(30)
         .lean();
+      const landmarkCompletion = await findLandmarkCompletionForCurrentMasks(
+        projectId,
+        String(req.user?._id ?? ""),
+      );
 
-      res.status(200).json({ success: true, jobs });
+      res.status(200).json({ success: true, jobs, landmarkCompletion });
     } catch (error: any) {
       logger.error(`${serviceLocation}: Error reading landmark jobs`, {
         projectId: req.params.projectId,

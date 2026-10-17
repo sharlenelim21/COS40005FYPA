@@ -691,6 +691,43 @@ export interface GetAllUsersWithProjectsResponse {
   data: UserWithProjects[];
 }
 
+export type PipelineStepDto = {
+  kind: "seg" | "recon" | "landmark";
+  model?: "medsam" | "unet";
+  chamber?: "lv" | "rv";
+  status: "pending" | "starting" | "queued" | "running" | "done" | "failed" | "skipped";
+  jobUuid?: string;
+  note?: string;
+};
+
+export type PipelineDto = {
+  id: string;
+  status: "active" | "finished";
+  steps: PipelineStepDto[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export const pipelineApi = {
+  start: async (
+    projectId: string,
+    body: {
+      segModels: Array<"medsam" | "unet">;
+      combos: Array<{ model: "medsam" | "unet"; chamber: "lv" | "rv"; request: Record<string, unknown> }>;
+      runLandmark: boolean;
+      landmarkModel?: "medsam" | "unet";
+    },
+  ): Promise<{ pipeline: PipelineDto | null }> => {
+    const response = await api.post(`/pipeline/start/${projectId}`, body);
+    return response.data;
+  },
+
+  get: async (projectId: string): Promise<{ pipeline: PipelineDto | null }> => {
+    const response = await api.get(`/pipeline/${projectId}`);
+    return response.data;
+  },
+};
+
 // Admin functions
 export const adminApi = {
   // Get all users with projects (admin only)
