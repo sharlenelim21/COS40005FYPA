@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Zap } from "lucide-react";
+import { DocVideo } from "@/components/doc/DocVideo";
 
 export function GettingStartedSection() {
   return (
@@ -15,6 +16,19 @@ export function GettingStartedSection() {
           with intuitive visualization tools.
         </p>
       </div>
+
+      <figure className="rounded-lg border bg-muted/30 p-2 md:p-4">
+        <DocVideo
+          src="/videos/doc/technical_guide.mp4"
+          mode="walkthrough"
+          ariaLabel="Screen recording of the VisHeart workflow from upload to report."
+          className="rounded-md border shadow-sm"
+        />
+        <figcaption className="mt-2 text-xs text-muted-foreground">
+          A walkthrough of VisHeart: uploading a scan, running segmentation,
+          building the 4D model, detecting landmarks and viewing the report.
+        </figcaption>
+      </figure>
 
       <Card>
         <CardHeader>
