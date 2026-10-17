@@ -464,6 +464,11 @@ function notifyMasksRefreshed(projectId: string, exclude: () => void) {
   }
 }
 
+export function invalidateProjectResults(projectId: string) {
+  masksCache.delete(projectId);
+  notifyMasksRefreshed(projectId, () => {});
+}
+
 export function useProjectResults(
   projectId: string | undefined,
   autoSelect: AutoSelect = "prefer-unet",
@@ -488,6 +493,7 @@ export function useProjectResults(
     projectId ? masksCache.get(projectId) ?? null : null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [hasFreshData, setHasFreshData] = useState(false);
   const [model, setModel] = useState<Model>("unet");
   const [computeState, setComputeState] = useState<ComputeState>("idle");
   const [computeError, setComputeError] = useState<string | null>(null);
@@ -514,6 +520,7 @@ export function useProjectResults(
     // Seed synchronously from cache so a remount never flashes empty.
     const cached = masksCache.get(projectId);
     if (cached) setMasks(cached);
+    setHasFreshData(false);
 
     let cancelled = false;
     (async () => {
@@ -526,6 +533,8 @@ export function useProjectResults(
         setMasks(editable);
       } catch {
         if (!cancelled && !cached) setError("Failed to load results. Ensure the project has been processed.");
+      } finally {
+        if (!cancelled) setHasFreshData(true);
       }
     })();
     return () => { cancelled = true; };
@@ -618,8 +627,8 @@ export function useProjectResults(
     const stamps = [
       m.strainSeries?.computed_at,
       m.strain?.computed_at,
-      m.diseaseSimilarity?.computed_at,
-      m.healthStatus?.computed_at,
+      m.rvStrainSeries?.computed_at,
+      m.rvStrain?.computed_at,
     ]
       .filter(Boolean)
       .map((s) => Date.parse(s as string))
@@ -920,6 +929,7 @@ export function useProjectResults(
     masks,
     error,
     loading: masks === null && !error,
+    hasFreshData,
     /** "computing" while the analysis triggers are running/polling. */
     computeState,
     computeError,

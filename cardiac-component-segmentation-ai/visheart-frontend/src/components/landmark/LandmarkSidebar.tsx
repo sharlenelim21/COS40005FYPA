@@ -55,6 +55,10 @@ import { rvTotalArea } from "@/lib/rvAreaMetrics";
  * sibling of this sidebar. Bundled into one prop instead of ~18 individual
  * ones passed down through LandmarkSidebar -> StrainTab.
  */
+export const SEGMENTATION_RUNNING_STRAIN_MESSAGE =
+  "Segmentation is running for this model. Strain is disabled until it finishes: " +
+  "re-running segmentation replaces this model's masks, and strain stored on the old masks is deleted with them.";
+
 export interface StrainComputeBundle {
   scope: "quick" | "full";
   onScopeChange: (scope: "quick" | "full") => void;
@@ -97,6 +101,8 @@ export interface StrainComputeBundle {
    *  seriesProgress above) — lets the main panel's own "Computing all
    *  frames…" overlay show a real percentage too, not just a spinner. */
   onFullCycleProgressChange?: (progress: number | null) => void;
+  segmentationRunning: boolean;
+  checkSegmentationRunning?: () => Promise<boolean>;
 }
 
 const NAV_ITEMS = [
@@ -1134,7 +1140,7 @@ function ReplacementFileRow({
  */
 function ComputeBusyLabel({ verb, frames, progress }: { verb: string; frames: number; progress?: number | null }) {
   if (typeof progress === "number" && progress > 0) {
-    return <JobProgress progress={progress} status="in_progress" label={`${verb} ${frames} frames`} className="w-full" />;
+    return <JobProgress progress={progress} status="in_progress" label={`${verb} ${frames} frames`} finishingLabel="Saving results…" className="w-full" />;
   }
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -1437,6 +1443,10 @@ function StrainTab({
       realSeries?.edFrameIndex ??
       autoEdFrame ??
       0;
+    if (strainCompute?.segmentationRunning || (await strainCompute?.checkSegmentationRunning?.())) {
+      setSeriesError(SEGMENTATION_RUNNING_STRAIN_MESSAGE);
+      return;
+    }
     setSeriesBusy(true);
     strainCompute?.onFullCycleBusyChange(true);
     setSeriesError(null);
@@ -1750,6 +1760,7 @@ function StrainTab({
             seriesError={seriesError}
             seriesProgress={seriesProgress}
             onRunFullCycle={runStrainSeries}
+            hasFullCycleResult={usingRealSeries || usingRealRvSeries}
           />
         )}
       </div>
@@ -1788,6 +1799,7 @@ function StrainTab({
           seriesError={seriesError}
           seriesProgress={seriesProgress}
           onRunFullCycle={runStrainSeries}
+          hasFullCycleResult={usingRealSeries || usingRealRvSeries}
         />
       )}
 
@@ -1832,7 +1844,8 @@ function StrainTab({
             size="sm"
             variant="outline"
             className="mt-2 h-7 w-full text-[10px]"
-            disabled={seriesBusy}
+            disabled={seriesBusy || !!strainCompute?.segmentationRunning}
+            title={strainCompute?.segmentationRunning ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined}
             onClick={runStrainSeries}
           >
             {seriesBusy
@@ -2045,7 +2058,8 @@ function QuickCombinedStrainView({
             size="sm"
             variant="outline"
             className="mt-2 h-7 w-full text-[10px]"
-            disabled={sc.isComputing}
+            disabled={sc.isComputing || sc.segmentationRunning}
+            title={sc.segmentationRunning ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined}
             onClick={sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames}
           >
             {sc.isComputing ? "Recomputing…" : `Recompute ED → ES with current landmarks (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
@@ -2138,16 +2152,30 @@ function ComputeStrainCard({
   seriesError,
   seriesProgress,
   onRunFullCycle,
+  hasFullCycleResult,
 }: {
   strainCompute: StrainComputeBundle;
   seriesBusy: boolean;
   seriesError: string | null;
   seriesProgress?: number | null;
   onRunFullCycle: () => void;
+  hasFullCycleResult: boolean;
 }) {
   const edRef = React.useRef<HTMLInputElement>(null);
   const esRef = React.useRef<HTMLInputElement>(null);
   const isQuick = sc.scope === "quick";
+  const segBlocked = sc.segmentationRunning;
+  const segTitle = segBlocked ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined;
+  const modelLabel = sc.strainModel === "unet" ? "UNet" : "MedSAM";
+  const hasScopeResult = isQuick ? !!(sc.quickLvResult || sc.quickRvResult) : hasFullCycleResult;
+  const recomputeBusy = isQuick ? sc.isComputing : seriesBusy;
+  const recomputeDisabled =
+    recomputeBusy || segBlocked ||
+    (isQuick && sc.inputMode === "frames" && (sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1)) ||
+    (isQuick && sc.inputMode === "upload" && (!sc.edFile || !sc.esFile));
+  const onRecompute = isQuick
+    ? (sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames)
+    : onRunFullCycle;
 
   // Auto-collapses the config controls right after a compute finishes
   // successfully, so the (already-visible-elsewhere) results get the space
@@ -2186,6 +2214,35 @@ function ComputeStrainCard({
           </button>
         </div>
       </div>
+
+      {segBlocked && (
+        <div className="flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-amber-700 dark:text-amber-400" />
+          <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Segmentation running ({modelLabel}).</span>{" "}
+            Strain is disabled until it finishes — re-running segmentation replaces this model&apos;s
+            masks, and strain stored on the old masks is deleted with them.
+          </p>
+        </div>
+      )}
+
+      {hasScopeResult && (
+        <span title={segTitle} className="block">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 w-full text-[10px]"
+            disabled={recomputeDisabled}
+            onClick={onRecompute}
+          >
+            {recomputeBusy ? (
+              isQuick
+                ? <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Recomputing…</span>
+                : <ComputeBusyLabel verb="Recomputing" frames={sc.frameCount} progress={seriesProgress} />
+            ) : `Recompute strain (${isQuick ? "ED → ES" : "all frames"}, ${modelLabel})`}
+          </Button>
+        </span>
+      )}
 
       {!collapsed && (
       <>
@@ -2304,7 +2361,8 @@ function ComputeStrainCard({
 
               <button
                 type="button"
-                disabled={sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1 || sc.isComputing}
+                title={segTitle}
+                disabled={sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1 || sc.isComputing || segBlocked}
                 onClick={sc.onComputeFrames}
                 className="w-full rounded-md bg-primary px-3 py-1.5 text-[10px] font-semibold text-primary-foreground disabled:opacity-50 transition-colors hover:bg-primary/90"
               >
@@ -2355,11 +2413,12 @@ function ComputeStrainCard({
               )}
               <button
                 type="button"
-                disabled={!sc.edFile || !sc.esFile || sc.isComputing}
+                title={segTitle}
+                disabled={!sc.edFile || !sc.esFile || sc.isComputing || segBlocked}
                 onClick={sc.onComputeUpload}
                 className={cn(
                   "w-full rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
-                  (!sc.edFile || !sc.esFile || sc.isComputing)
+                  (!sc.edFile || !sc.esFile || sc.isComputing || segBlocked)
                     ? "bg-muted text-muted-foreground cursor-not-allowed"
                     : "bg-primary text-primary-foreground hover:bg-primary/90"
                 )}
@@ -2376,9 +2435,11 @@ function ComputeStrainCard({
           <p className="text-[8.5px] leading-relaxed text-muted-foreground">
             Uses the auto-detected ED frame as reference — no frame picker or upload needed for the full cycle.
           </p>
-          <Button size="sm" variant="outline" className="h-7 text-[10px]" disabled={seriesBusy} onClick={onRunFullCycle}>
+          <span title={segTitle} className="block">
+          <Button size="sm" variant="outline" className="h-7 w-full text-[10px]" disabled={seriesBusy || segBlocked} onClick={onRunFullCycle}>
             {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} progress={seriesProgress} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
+          </span>
           {seriesError && <p className="text-[9px] text-destructive">{seriesError}</p>}
         </div>
       )}

@@ -490,7 +490,7 @@ function EmptyState({ computing, error }: { computing?: boolean; error?: string 
     return (
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Computing from segmentation…
+        Calculating metrics from the saved masks…
       </p>
     );
   }

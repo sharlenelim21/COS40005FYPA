@@ -50,6 +50,7 @@ export function StartPipelineDialog({
   const defaultModel: Model = gpuAvailable ? "medsam" : "unet";
   const [segModels, setSegModels] = useState<Set<Model>>(new Set([defaultModel]));
   const [combos, setCombos] = useState<Set<string>>(new Set());
+  const [runLandmark, setRunLandmark] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // Seed the selection once per opening. Depending on `defaultModel` here re-seeded it whenever GPU
@@ -61,6 +62,7 @@ export function StartPipelineDialog({
     if (!open) return;
     setSegModels(new Set([defaultModelRef.current]));
     setCombos(new Set());
+    setRunLandmark(false);
     setSubmitting(false);
   }, [open]);
 
@@ -93,6 +95,13 @@ export function StartPipelineDialog({
     return null;
   };
 
+  const landmarkEligible = (m: Model) =>
+    segModels.has(m) &&
+    !modelDisabled(m) &&
+    (combos.has(comboKey(m, "lv")) || combos.has(comboKey(m, "rv")) || existing.lv.has(m) || existing.rv.has(m));
+  const landmarkModel: Model | null = landmarkEligible("unet") ? "unet" : landmarkEligible("medsam") ? "medsam" : null;
+  const landmarkSelected = runLandmark && landmarkModel !== null;
+
   const hasRunnableModel = [...segModels].some((m) => !modelDisabled(m));
   const canSubmit = hasRunnableModel && !submitting;
 
@@ -103,7 +112,8 @@ export function StartPipelineDialog({
       await onSubmit({
         segModels: SEG_MODEL_ORDER.filter((m) => segModels.has(m) && !modelDisabled(m)),
         combos: RECON_COMBOS.filter(({ model, chamber }) => segModels.has(model) && combos.has(comboKey(model, chamber))),
-        runLandmark: !isGuest,
+        runLandmark: !isGuest && landmarkSelected,
+        landmarkModel: landmarkModel ?? undefined,
       });
       onOpenChange(false);
     } finally {
@@ -117,7 +127,8 @@ export function StartPipelineDialog({
         <DialogHeader>
           <DialogTitle>{isRerun ? "Re-run Segmentation" : "Start Segmentation"}</DialogTitle>
           <DialogDescription>
-            Choose what to run. Steps run one at a time: segmentation, then LV and RV reconstruction, then landmark detection.
+            Choose what to run. Each stage starts once the previous one finishes (segmentation, then LV and RV
+            reconstruction, then landmark detection). Jobs are queued and run as GPU capacity allows.
             {isRerun && " Re-running a model replaces its current masks, including any saved edits."}
           </DialogDescription>
         </DialogHeader>
@@ -202,12 +213,33 @@ export function StartPipelineDialog({
           </section>
 
           {!isGuest && (
-            <section className="flex items-start gap-2 rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-              <Crosshair className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              <p>
-                Landmark detection runs automatically once segmentation finishes
-                {segModels.has("unet") ? ", using the UNet mask" : segModels.has("medsam") ? ", using the MedSAM mask" : ""}.
-              </p>
+            <section className="space-y-2">
+              <h3 className="flex items-center gap-2 text-sm font-semibold">
+                <Crosshair className="h-4 w-4 text-primary" /> Landmark Detection
+                <span className="text-xs font-normal text-muted-foreground">(optional)</span>
+              </h3>
+              <Label
+                htmlFor="pipeline-landmark"
+                className={cn(
+                  "rounded-md border p-3 font-normal",
+                  landmarkModel ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                )}
+              >
+                <Checkbox
+                  id="pipeline-landmark"
+                  checked={landmarkSelected}
+                  disabled={!landmarkModel}
+                  onCheckedChange={(v) => setRunLandmark(v === true)}
+                />
+                <span className="flex-1">
+                  <span className="block font-medium">Run landmark detection last</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {landmarkModel
+                      ? `Uses the ${MODEL_LABEL[landmarkModel]} mask, once its 4D reconstruction is ready.`
+                      : "Needs a 4D reconstruction — select one above, or build one first."}
+                  </span>
+                </span>
+              </Label>
             </section>
           )}
         </div>

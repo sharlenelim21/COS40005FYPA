@@ -24,7 +24,7 @@ import { useProjectResults } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
 import { downloadResultsCsv } from "@/lib/exportResultsCsv";
 import { rvEdEsFac, rvFacSeries, rvGasMeasuredNote, rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
-import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle } from "lucide-react";
+import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle, RefreshCw } from "lucide-react";
 
 // The printed report follows the approved mockup's 9-section structure, but
 // several sections (wall thickness cycle, full-cycle strain values, regional
@@ -51,6 +51,7 @@ export default function ReportPage() {
     computing, computeError, newerMaskAvailable, regionalHealthStatus, rvRegionalHealthStatus, rv, lvVolumes, rvStrain,
     rvStrainSeries, recomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError, doc, byModel,
     rvHealthStatus, recomputeRvHealthStatus, recomputingRvHealthStatus, recomputeRvHealthStatusError,
+    hasFreshData,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // BSA input — optional. Entered here (not persisted server-side) since it's
@@ -110,6 +111,14 @@ export default function ReportPage() {
 
   if (error) return <ErrorProject error={error} />;
   if (loading !== "idle" && loading !== "done") return <LoadingProject loadingStage={loading} />;
+  if (!hasFreshData) {
+    return (
+      <div className="flex h-64 items-center justify-center gap-2 text-sm text-foreground">
+        <RefreshCw className="h-4 w-4 animate-spin" />
+        Loading latest results…
+      </div>
+    );
+  }
 
   const patientLabel = projectData?.name || projectId || "Unknown";
   const totalFrames = projectData?.dimensions?.frames || 9;

@@ -18,8 +18,8 @@ const TOC: TocItem[] = [
   { id: "getting-started", label: "Getting Started" },
   { id: "accounts", label: "Accounts" },
   { id: "how-it-works", label: "How Segmentation Works" },
-  { id: "landmark-detection", label: "How Landmark Detection Works" },
   { id: "reconstruction", label: "How Reconstruction Works" },
+  { id: "landmark-detection", label: "How Landmark Detection Works" },
 ];
 
 export default function TechnicalGuidePage() {
@@ -37,11 +37,11 @@ export default function TechnicalGuidePage() {
       <DocSection id="how-it-works">
         <SegmentationSection />
       </DocSection>
-      <DocSection id="landmark-detection">
-        <LandmarkDetectionSection />
-      </DocSection>
       <DocSection id="reconstruction">
         <ReconstructionSection />
+      </DocSection>
+      <DocSection id="landmark-detection">
+        <LandmarkDetectionSection />
       </DocSection>
     </GuideLayout>
   );
