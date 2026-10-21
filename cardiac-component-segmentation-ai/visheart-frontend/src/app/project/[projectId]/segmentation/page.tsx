@@ -221,6 +221,16 @@ function SegmentationResultsPageInner() {
   // to "stick" on whatever the previous test session wrote.
   const [selectedModel, setSelectedModel] = useState<SegmentationModelId>("medsam");
 
+  // The Doctor already ran a fresh AI segmentation for this model — re-running it here would
+  // directly overwrite their baseline (this is the raw AI-run path, separate from the
+  // Draft/Review protection that only covers a manual brush/eraser edit saved afterward).
+  const segmentationStageLocked = isClinicalAssistant && !viewOnlyLocked && (projectData?.stageLocks?.segmentation[selectedModel] ?? false);
+  const runSegmentationDisabledReason = viewOnlyLocked
+    ? "View-only access — ask the Doctor for Run access to use this."
+    : segmentationStageLocked
+    ? "The Doctor already ran this — it's view-only for you now."
+    : null;
+
   useEffect(() => {
     setSelectedSegmentationModel(selectedModel as "medsam" | "unet");
   }, [selectedModel, setSelectedSegmentationModel]);
@@ -1323,13 +1333,12 @@ function SegmentationResultsPageInner() {
         {/* Run / Re-run Segmentation Button (cache-aware) */}
         <button
           onClick={handleRunSegmentation}
-          disabled={viewOnlyLocked || runSegmentationLoading || Boolean(serverJobRunning)}
+          disabled={viewOnlyLocked || segmentationStageLocked || runSegmentationLoading || Boolean(serverJobRunning)}
           title={
-            viewOnlyLocked
-              ? "View-only access — ask the Doctor for Run access to use this."
-              : serverJobRunning
-              ? `A ${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} job is already running for this project${serverJobElapsedLabel ? `, started ${serverJobElapsedLabel}` : ""}.`
-              : undefined
+            runSegmentationDisabledReason
+              ?? (serverJobRunning
+                ? `A ${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} job is already running for this project${serverJobElapsedLabel ? `, started ${serverJobElapsedLabel}` : ""}.`
+                : undefined)
           }
           className="px-3 py-1.5 text-sm font-medium rounded-md bg-black text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 dark:bg-white dark:text-black dark:hover:bg-white/90"
         >

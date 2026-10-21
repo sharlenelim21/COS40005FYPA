@@ -87,6 +87,27 @@ check("Healthy archetype meets only NOR", () => {
   assert(out.rv_severity === null, "rv_severity should be null when RV gate isn't met");
 });
 
+check("NOR now also requires a normal RV (Bernard et al. 2018) -- a normal LV with an abnormal RV should NOT meet NOR", () => {
+  const out = parse(runPython({
+    lv: { EF: 64, EDV: 137, EDVI: 72, LVMI: 50, MaxWallThicknessMm: 9 },
+    // RVEDVI 130 is well outside NOR's own RV range (Bernard's <100, unioned
+    // up to ~111.4 by this project's own ACDC ground-truth data) -- an
+    // otherwise-perfect LV should not let NOR pass with this RV.
+    rv: { RVEDVI: 130, RVEF: 55, RVEDV: 230, SVI: 45 },
+  }));
+  const nor = gate(out, "NOR");
+  assert(nor.met === false, `NOR should NOT be met when RV is abnormal even though LV is normal, got ${nor.met}`);
+  assert(nor.reasons.some((r) => r.includes("RVEDVI") && r.includes("outside")), "NOR's reasons should explain the RV exclusion");
+});
+
+check("NOR's RV check is a no-op (stays met) when RVEDVI/RVEF are within NOR's own range", () => {
+  const out = parse(runPython({
+    lv: { EF: 64, EDV: 137, EDVI: 72, LVMI: 50, MaxWallThicknessMm: 9 },
+    rv: { RVEDVI: 65, RVEF: 55, RVEDV: 124, SVI: 45 },
+  }));
+  assert(gate(out, "NOR").met === true, "NOR should still be met with a normal RV");
+});
+
 // ── DCM archetype ────────────────────────────────────────────────────────────
 check("DCM archetype meets DCM (EDVI>100 and EF<40)", () => {
   const out = parse(runPython({
@@ -97,8 +118,21 @@ check("DCM archetype meets DCM (EDVI>100 and EF<40)", () => {
   assert(gate(out, "NOR").met === false, "NOR should not be met");
 });
 
+check("DCM's new wall-thickness criterion (Bernard et al. 2018): NOT met when the wall is too thick, even with EDVI+EF both qualifying", () => {
+  const out = parse(runPython({
+    // Same EDVI/EF as the archetype above (both would meet DCM), but wall
+    // 14mm no longer meets the <12mm half the website-only version of this
+    // module never checked.
+    lv: { EF: 25, EDV: 275, EDVI: 145, LVMI: 65, MaxWallThicknessMm: 14 },
+    rv: { RVEDVI: 80, RVEF: 55, RVEDV: 150 },
+  }));
+  const dcm = gate(out, "DCM");
+  assert(dcm.met === false, `DCM should NOT be met -- wall 14mm fails the new <12mm criterion, got ${dcm.met}`);
+  assert(dcm.reasons.some((r) => r.includes("wall") && r.includes("does not meet")), "DCM's reasons should explain the wall-thickness failure");
+});
+
 // ── HCM archetype ────────────────────────────────────────────────────────────
-check("HCM archetype meets HCM (LVMI>110, wall>15mm, EF>=50)", () => {
+check("HCM archetype meets HCM (wall>15mm, EF>55% -- Bernard et al. 2018)", () => {
   const out = parse(runPython({
     lv: { EF: 60, EDV: 110, EDVI: 58, LVMI: 120, MaxWallThicknessMm: 18 },
     rv: { RVEDVI: 70, RVEF: 58, RVEDV: 133 },
@@ -112,6 +146,31 @@ check("HCM gate NOT met when EF is reduced, even with thick wall + high mass", (
     rv: { RVEDVI: 70, RVEF: 55, RVEDV: 133 },
   }));
   assert(gate(out, "HCM").met === false, "HCM should not be met — EF not preserved");
+});
+
+check("HCM's EF threshold is Bernard et al. 2018's own >55% (NOT the previously-borrowed >=50%)", () => {
+  const out = parse(runPython({
+    // EF 52% would have passed the old (borrowed) ">=50%" preserved-EF
+    // convention, but Bernard's own HCM number is ">55%" -- 52 should now
+    // fail it.
+    lv: { EF: 52, EDV: 110, EDVI: 58, LVMI: 120, MaxWallThicknessMm: 18 },
+    rv: { RVEDVI: 70, RVEF: 58, RVEDV: 133 },
+  }));
+  const hcm = gate(out, "HCM");
+  assert(hcm.met === false, `HCM should NOT be met -- EF 52% fails Bernard's own >55% threshold, got ${hcm.met}`);
+  assert(hcm.reasons.some((r) => r.includes("EF") && r.includes("does not meet")), "HCM's reasons should explain the EF failure");
+});
+
+check("HCM's LVMI is informational only (Bernard et al. 2018: 'can present', not a defining criterion) -- met even with LVMI well below 110", () => {
+  const out = parse(runPython({
+    // LVMI 80 is well below the old (now-removed) >110 gating threshold --
+    // wall+EF alone should still be enough to meet HCM.
+    lv: { EF: 60, EDV: 110, EDVI: 58, LVMI: 80, MaxWallThicknessMm: 18 },
+    rv: { RVEDVI: 70, RVEF: 58, RVEDV: 133 },
+  }));
+  const hcm = gate(out, "HCM");
+  assert(hcm.met === true, `HCM should be met from wall+EF alone -- LVMI no longer gates it, got ${hcm.met}`);
+  assert(hcm.reasons.some((r) => r.includes("LVMI") && r.includes("informational")), "HCM's LVMI reason should say it's informational only");
 });
 
 // ── MINF: EF alone isn't enough, needs regional abnormality too ────────────
@@ -148,6 +207,29 @@ check("RV gate met from RVEDVI alone (RVEF normal)", () => {
     rv: { RVEDVI: 120, RVEF: 55, RVEDV: 220 },
   }));
   assert(gate(out, "RV").met === true, "RV should be met from RVEDVI alone");
+});
+
+check("RV's sex-specific RVEDVI threshold (Bernard et al. 2018 ARV): 105 mL/m^2 meets women's >100 but not men's >110", () => {
+  const lvNormal = { EF: 60, EDV: 140, EDVI: 74, LVMI: 55, MaxWallThicknessMm: 9 };
+  const female = parse(runPython({
+    lv: lvNormal,
+    rv: { RVEDVI: 105, RVEF: 55, RVEDV: 220 },
+    sex: "female",
+  }));
+  assert(gate(female, "RV").met === true, `RV should be met for a female patient (105 > 100), got ${gate(female, "RV").met}`);
+
+  const male = parse(runPython({
+    lv: lvNormal,
+    rv: { RVEDVI: 105, RVEF: 55, RVEDV: 220 },
+    sex: "male",
+  }));
+  assert(gate(male, "RV").met === false, `RV should NOT be met for a male patient (105 does not meet >110), got ${gate(male, "RV").met}`);
+
+  const unspecified = parse(runPython({
+    lv: lvNormal,
+    rv: { RVEDVI: 105, RVEF: 55, RVEDV: 220 },
+  }));
+  assert(gate(unspecified, "RV").met === false, `Unspecified sex should fall back to the male (higher/more lenient) threshold, got ${gate(unspecified, "RV").met}`);
 });
 
 check("RV gate met from RVEF alone (RVEDVI normal)", () => {
@@ -247,8 +329,13 @@ check("HCM gate estimates LVMI from LVMassG + sex-specific reference BSA when LV
     sex: "female",
   }));
   const g = gate(out, "HCM");
-  assert(g.met === true, `HCM should be met from the estimated LVMI, got ${g.met}`);
-  assert(g.reasons[0].includes("Estimated"), "HCM's LVMI reason should flag it as estimated");
+  // met now comes from wall (18mm > 15) and EF (60% > 55) alone -- LVMI is
+  // informational only (Bernard et al. 2018: HCM patients "can present"
+  // LVMI > 110, not a defining criterion), so this no longer tests LVMI
+  // gating met-ness, just that the estimate still gets computed and shown.
+  assert(g.met === true, `HCM should be met from wall+EF alone, got ${g.met}`);
+  const lvmiReason = g.reasons.find((r) => r.includes("LVMI"));
+  assert(lvmiReason && lvmiReason.includes("Estimated"), "HCM's LVMI reason should flag it as estimated");
 });
 
 check("Gates do NOT estimate when the real indexed value is already available (no false 'Estimated' flag)", () => {
@@ -384,17 +471,24 @@ check("REGRESSION: implausible LVEDV excludes EDVI/LVMI from NOR/DCM/HCM, but EF
   assert(gate(out, "NOR").met === false, `NOR should resolve from EF alone (48.8 outside 52-75), got ${gate(out, "NOR").met}`);
   assert(gate(out, "NOR").reasons.some((r) => r.includes("unreliable")), "NOR should explain the EDVI/LVMI exclusion");
   // EF 48.8% already fails DCM's <40% half (EDVI being excluded can't change
-  // that) and HCM's >=50%-preserved half (wall 5.4mm also already fails its
-  // own >15mm half, unaffected by the volume guard) -- both ANDs are already
-  // known false from the criteria that ARE available, so both gates should
-  // resolve to "not met" rather than sit pending on an EDVI/LVMI value that
-  // could never have flipped an already-failed AND back to true.
+  // that) -- DCM's AND is already known false from the criteria that ARE
+  // available, so it resolves to "not met" rather than sitting pending on an
+  // EDVI value that could never have flipped an already-failed AND back to
+  // true. DCM's wall (5.4mm) is itself available and passes DCM's own <12mm
+  // half, so only EDVI is the missing one here.
   const dcm = gate(out, "DCM");
   assert(dcm.met === false, `DCM should resolve to not-met from EF alone (EDVI excluded, can't change an already-failed AND), got ${dcm.met}`);
   assert(dcm.resolved_from_partial_data === true, "DCM should flag that this was resolved from partial data");
+  // HCM's gating criteria are wall (>15mm) and EF (>55%) only -- LVMI is
+  // informational, not gating (Bernard et al. 2018: HCM patients "can
+  // present" LVMI > 110, not a defining criterion). Wall 5.4mm and EF 48.8%
+  // are BOTH available and BOTH already fail their own halves, so this is a
+  // complete "not met" from fully-available required data -- LVMI being
+  // excluded by the volume guard is irrelevant to HCM now, so this should
+  // NOT be flagged as a partial-data resolution.
   const hcm = gate(out, "HCM");
-  assert(hcm.met === false, `HCM should resolve to not-met from wall+EF alone (LVMI excluded, can't change an already-failed AND), got ${hcm.met}`);
-  assert(hcm.resolved_from_partial_data === true, "HCM should flag that this was resolved from partial data");
+  assert(hcm.met === false, `HCM should resolve to not-met from wall+EF alone, got ${hcm.met}`);
+  assert(!hcm.resolved_from_partial_data, "HCM should NOT flag partial data -- wall and EF (its only gating criteria) were both fully available");
   assert(out.warnings.some((w) => w.includes("Absolute LV volumes flagged unreliable")), "should carry a top-level LV volume-reliability warning");
 });
 

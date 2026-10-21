@@ -1472,6 +1472,75 @@ const userCanAccessProject = async (
   return { allowed, isOwner, isAssigned, canRun, assignmentMode, project: project as unknown as IProjectDocument };
 };
 
+export interface StageLocks {
+  /** The fresh AI-run path only — a manual mask edit is already protected by Draft/Review
+   *  regardless of this, so it's not represented here. */
+  segmentation: { medsam: boolean; unet: boolean };
+  landmark: { medsam: boolean; unet: boolean };
+  reconstruction: { medsam_lv: boolean; medsam_rv: boolean; unet_lv: boolean; unet_rv: boolean };
+}
+
+/**
+ * Per-stage/per-model "has the project's OWNER already produced a completed result here" check
+ * — the Doctor running part of the pipeline and handing the rest to a Run-mode Clinical
+ * Assistant (e.g. the Doctor does segmentation, the Assistant does landmark + reconstruction).
+ * Unlike segmentation, landmark detection and reconstruction have no Draft/Review protection,
+ * so re-running a stage the Doctor already completed would silently overwrite it — this tells
+ * the caller which stage/model/chamber combos are therefore off-limits to re-run (the Assistant
+ * may still run any combo the Doctor hasn't touched). Jobs are the only record of who ran what
+ * (reconstruction docs themselves carry no creator field), so this reads from jobModel,
+ * `userid: ownerUserId, status: COMPLETED`, scoped by the same model_used/chamber conventions
+ * the trigger routes already use elsewhere in this codebase.
+ */
+const getStageLocks = async (projectId: string, ownerUserId: string): Promise<StageLocks> => {
+  // A fresh AI segmentation run never sets model_used at all (unlike landmark/reconstruction/
+  // strain, which all tag themselves) — that absence is what tells a segmentation job apart
+  // from every other job type sharing this collection.
+  const segmentationQuery = (model: SegmentationModel) => ({
+    projectid: projectId,
+    userid: ownerUserId,
+    model_used: { $exists: false },
+    status: JobStatus.COMPLETED,
+    segmentationModel: model,
+  });
+  const landmarkQuery = (model: SegmentationModel | { $in: (SegmentationModel | null)[] }) => ({
+    projectid: projectId,
+    userid: ownerUserId,
+    model_used: /landmark/i,
+    status: JobStatus.COMPLETED,
+    segmentationModel: model,
+  });
+  const reconQuery = (model: SegmentationModel, chamber: ReconstructionChamber) => ({
+    projectid: projectId,
+    userid: ownerUserId,
+    model_used: "4d_reconstruction",
+    status: JobStatus.COMPLETED,
+    segmentationModel: model,
+    // Absent chamber predates the field and always meant LV.
+    chamber: chamber === ReconstructionChamber.LV ? { $in: [ReconstructionChamber.LV, null] } : chamber,
+  });
+  const [segMedsam, segUnet, landmarkMedsam, landmarkUnet, reconMedsamLv, reconMedsamRv, reconUnetLv, reconUnetRv] = await Promise.all([
+    jobModel.exists(segmentationQuery(SegmentationModel.MEDSAM)),
+    jobModel.exists(segmentationQuery(SegmentationModel.UNET)),
+    jobModel.exists(landmarkQuery({ $in: [SegmentationModel.MEDSAM, null] })),
+    jobModel.exists(landmarkQuery(SegmentationModel.UNET)),
+    jobModel.exists(reconQuery(SegmentationModel.MEDSAM, ReconstructionChamber.LV)),
+    jobModel.exists(reconQuery(SegmentationModel.MEDSAM, ReconstructionChamber.RV)),
+    jobModel.exists(reconQuery(SegmentationModel.UNET, ReconstructionChamber.LV)),
+    jobModel.exists(reconQuery(SegmentationModel.UNET, ReconstructionChamber.RV)),
+  ]);
+  return {
+    segmentation: { medsam: Boolean(segMedsam), unet: Boolean(segUnet) },
+    landmark: { medsam: Boolean(landmarkMedsam), unet: Boolean(landmarkUnet) },
+    reconstruction: {
+      medsam_lv: Boolean(reconMedsamLv),
+      medsam_rv: Boolean(reconMedsamRv),
+      unet_lv: Boolean(reconUnetLv),
+      unet_rv: Boolean(reconUnetRv),
+    },
+  };
+};
+
 // updateProject function
 const updateProject = async (
   // Identifying parameters:
@@ -2919,7 +2988,7 @@ const updateGPUHost = async (updates: Partial<IGPUHost>): Promise<GPUHostCrudRes
 // Using ES modules instead of CommonJS which is module.exports = {connectToDatabase, User};
 // ONLY unit tests should use userModel, fileModel directly, otherwise use the created functions to create users/files.
 export {
-  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, ElevationStatus, RequestedElevationRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, userCanAccessProject, MaskStatus, AssignmentMode, assignAssistantToProject, unassignAssistantFromProject, readProjectsAssignedToAssistant, submitElevationRequest, readPendingElevations, approveElevation, rejectElevation,
+  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, ElevationStatus, RequestedElevationRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, userCanAccessProject, getStageLocks, MaskStatus, AssignmentMode, assignAssistantToProject, unassignAssistantFromProject, readProjectsAssignedToAssistant, submitElevationRequest, readPendingElevations, approveElevation, rejectElevation,
   // Project Reconstruction exports
   IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, projectReconstructionModel, createProjectReconstruction, readProjectReconstruction, updateProjectReconstruction, deleteProjectReconstruction,
   // Job and GPU Host exports

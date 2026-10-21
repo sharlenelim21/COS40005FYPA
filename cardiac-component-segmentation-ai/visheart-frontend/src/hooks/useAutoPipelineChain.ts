@@ -55,6 +55,10 @@ export interface PipelineInputs {
   refreshMasks: () => Promise<void> | void;
   refreshReconstructions: () => Promise<void> | void;
   refreshActiveReconstructionJobs: () => Promise<void> | void;
+  /** A Clinical Assistant's reconstruction/landmark run isn't a "draft" — it's immediately the
+   *  shared project result, with no separate send step. Segmentation already confirms this via
+   *  its own save toast; this is the same confirmation for the two stages that don't have one. */
+  isClinicalAssistant?: boolean;
 }
 
 export const SEG_MODEL_ORDER: Model[] = ["medsam", "unet"];
@@ -116,6 +120,11 @@ export function useAutoPipelineChain(inputs: PipelineInputs) {
       if (kind === "seg" && status === "done") refreshMasks = true;
       if (kind === "recon" && (status === "done" || status === "failed" || status === "skipped")) refreshRecons = true;
       if (announce && status === "failed") toast.error(`${describe()} failed`, note ? { description: note } : undefined);
+      // Segmentation already confirms "sent to the Doctor" via its own save flow — only recon
+      // and landmark need this, since those have no equivalent confirmation anywhere else.
+      if (announce && status === "done" && inp.isClinicalAssistant && (kind === "recon" || kind === "landmark")) {
+        toast.success(`${describe()} saved — visible to the Doctor`);
+      }
     };
     for (const s of next.seg) visit(stepKey("seg", s.model), s.status, () => `${modelLabel(s.model)} segmentation`, s.note, "seg");
     for (const r of next.recon) visit(stepKey("recon", r.model, r.chamber), r.status, () => `${comboLabel(r.model, r.chamber)} reconstruction`, r.note, "recon");

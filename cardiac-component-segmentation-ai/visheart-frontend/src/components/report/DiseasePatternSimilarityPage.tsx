@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { HeartPulse, CheckCircle2, XCircle, HelpCircle } from "lucide-react";
+import { HeartPulse, CheckCircle2, XCircle, HelpCircle, AlertTriangle } from "lucide-react";
 import type { DiseasePatternGates } from "@/hooks/useProjectResults";
 import { ReportPageFrame } from "./ReportPageFrame";
 
@@ -78,10 +78,25 @@ export function DiseasePatternSimilarityPage({
                     <span className="text-[8.5px] font-bold uppercase tracking-wide text-gray-600">
                       {g.met === true ? "Met" : g.met === false ? "Not met" : "Pending"}
                     </span>
+                    {g.resolved_from_partial_data && (
+                      <span
+                        className="flex items-center gap-0.5 rounded-full border border-red-400 bg-red-50 px-1 py-0.5 text-[7.5px] font-semibold text-red-700"
+                        title="This gate's result was decided from only some of its required values — the rest were unavailable, but couldn't have changed the outcome either way."
+                      >
+                        <AlertTriangle className="h-2 w-2" /> Partial data
+                      </span>
+                    )}
                   </span>
                 </div>
                 <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
-                  {g.reasons.map((r, i) => <li key={i} className="text-[9px] text-gray-600">{r}</li>)}
+                  {g.reasons.map((r, i) => {
+                    const isPartialNote = r.startsWith("Resolved as ") || r.startsWith("Cannot resolve to");
+                    return (
+                      <li key={i} className={isPartialNote ? "text-[9px] font-semibold text-red-700" : "text-[9px] text-gray-600"}>
+                        {r}
+                      </li>
+                    );
+                  })}
                 </ul>
                 <p className="mt-0.5 text-[8.5px] italic leading-snug text-gray-500">{g.criterion_text}</p>
               </div>

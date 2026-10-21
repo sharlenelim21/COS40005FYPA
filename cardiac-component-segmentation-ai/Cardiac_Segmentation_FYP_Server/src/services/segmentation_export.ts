@@ -2,7 +2,7 @@
 // Description: Service layer for segmentation NIfTI export functionality - extracted from routes for reuse.
 
 import mongoose from 'mongoose';
-import { IProjectSegmentationMask, IProjectDocument } from "../types/database_types";
+import { IProjectSegmentationMask, IProjectDocument, MaskStatus } from "../types/database_types";
 import { projectSegmentationMaskModel, readProject, readProjectSegmentationMask } from "./database";
 import { generatePresignedGetUrl, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
 import { uploadMaskToS3, extractS3KeyFromUrl } from "./s3_handler";
@@ -1428,8 +1428,29 @@ export const generateAISegmentationForReconstruction = async (
             }
         }
 
-        const editableMask = candidatePool.find(mask => mask.isMedSAMOutput === false);
-        const aiMask = candidatePool.find(mask => mask.isMedSAMOutput === true);
+        // Exclude dead mask versions (rejected, or superseded by a later accepted draft) from
+        // every selection below — neither should ever be used as input again.
+        const liveCandidatePool = candidatePool.filter(
+            m => m.status !== MaskStatus.Rejected && m.status !== MaskStatus.Superseded
+        );
+
+        // Multiple "editable" masks for one model can coexist once a Clinical Assistant's Draft
+        // exists alongside the project's own Final mask. `.find()` previously returned whichever
+        // came first in array order with no regard for status, so a run triggered by the
+        // Assistant could silently use the Doctor's OLD Final mask instead of their own
+        // in-progress edit (or the reverse) depending on insertion order — not a deliberate
+        // choice either way, just whatever the DB happened to return first. The caller's own
+        // Draft (if they have one) wins when THEY are the one running this; every other caller
+        // (the Doctor, Admin, or an Assistant with no draft of their own) always gets the Final.
+        const editableCandidates = liveCandidatePool.filter(m => m.isMedSAMOutput === false);
+        const ownDraft = userId
+            ? editableCandidates.find(
+                  m => m.status === MaskStatus.Draft && String((m as unknown as { createdByUserId?: string }).createdByUserId) === String(userId)
+              )
+            : undefined;
+        const finalEditable = editableCandidates.find(m => m.status === MaskStatus.Final || m.status === undefined);
+        const editableMask = ownDraft ?? finalEditable ?? editableCandidates[0];
+        const aiMask = liveCandidatePool.find(mask => mask.isMedSAMOutput === true);
 
         const maskHasMyocardium = (mask?: IProjectSegmentationMask) =>
             !!mask?.frames?.some(frame =>

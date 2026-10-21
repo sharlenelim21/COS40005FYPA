@@ -11,6 +11,8 @@ import {
   projectSegmentationMaskModel,
   updateJob,
   userCanAccessProject,
+  getStageLocks,
+  UserRole,
 } from "./database";
 import {
   segmentationSource,
@@ -191,6 +193,22 @@ export async function startLandmarkInference(
       ? "unet"
       : "medsam"
   ) as "medsam" | "unet";
+
+  // A Run-mode Assistant may not re-run a stage the Doctor already completed — landmark
+  // detection has no Draft/Review protection the way segmentation does, so this would
+  // otherwise silently overwrite the Doctor's result. The Doctor/Admin are never locked out
+  // of their own project, and an Assistant can still freely run any model the Doctor hasn't
+  // touched yet.
+  if (!access.isOwner && user.role !== UserRole.Admin) {
+    const locks = await getStageLocks(projectId, project.userid);
+    if (locks.landmark[requestedSegModel]) {
+      return {
+        success: false,
+        statusCode: 403,
+        message: `The Doctor already ran ${requestedSegModel === "unet" ? "UNet" : "MedSAM"} landmark detection for this project — it's view-only for you now.`,
+      };
+    }
+  }
 
   const blockingJob = await findBlockingLandmarkJob(projectId, user?._id?.toString(), requestedSegModel);
   if (blockingJob) {

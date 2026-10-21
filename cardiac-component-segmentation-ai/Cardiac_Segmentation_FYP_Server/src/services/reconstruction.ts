@@ -3,7 +3,7 @@
 
 import { IUserSafe, IProjectSegmentationMask, SegmentationModel, ReconstructionChamber } from "../types/database_types";
 import logger from "./logger";
-import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask, userCanAccessProject } from "./database";
+import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask, userCanAccessProject, getStageLocks, UserRole } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
@@ -222,6 +222,25 @@ export const startReconstruction = async (
         }
 
         const projectData = access.project;
+
+        // A Run-mode Assistant may not (re)build a model/chamber combo the Doctor already
+        // completed — reconstruction carries no Draft/Review protection the way segmentation
+        // does, so this would otherwise silently overwrite the Doctor's result. The Doctor/Admin
+        // keep their existing "delete it first" path below; an Assistant can still freely build
+        // any combo the Doctor hasn't touched yet.
+        if (!access.isOwner && user?.role !== UserRole.Admin && requestedModel) {
+            const locks = await getStageLocks(projectId, projectData.userid);
+            const comboKey = `${requestedModel}_${requestedChamber}` as keyof typeof locks.reconstruction;
+            if (locks.reconstruction[comboKey]) {
+                const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
+                const chamberLabel = requestedChamber === "rv" ? "RV" : "LV";
+                return {
+                    success: false,
+                    statusCode: 403,
+                    message: `The Doctor already built the ${modelLabel} ${chamberLabel} reconstruction for this project — it's view-only for you now.`,
+                };
+            }
+        }
 
         if (requestedModel) {
             const existingReconstructions = await readProjectReconstruction(projectId);

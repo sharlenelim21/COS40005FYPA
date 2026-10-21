@@ -76,21 +76,43 @@ export function ReferenceCriteriaPage({
       generatedAt={generatedAt}
     >
       <RefTable
-        caption="Disease Pattern Gates — ACDC Challenge classification criteria"
+        caption="Disease Pattern Gates — ACDC classification criteria"
         columns={["Gate", "Criterion"]}
         rows={[
-          ["NOR", "No criterion stated by ACDC — this project uses the LV normal reference ranges below instead."],
-          ["MINF", "LV ejection fraction < 40% and several myocardial segments with abnormal contraction (operationalised here as ≥1 LV segment at moderate/severe on regional strain — see Methodology)."],
-          ["DCM", "LV end-diastolic volume index > 100 mL/m² and LV ejection fraction < 40%."],
-          ["HCM", "LV mass index > 110 g/m², maximum wall thickness > 15 mm in diastole, and preserved ejection fraction (≥ 50%)."],
-          ["RV", "RV end-diastolic volume index > 110 mL/m² or RV ejection fraction < 40%. ACDC does not attribute a specific disease to this group — the RV severity sub-notes below (ARVC/PAH) are a separate, secondary check."],
+          ["NOR", "EF > 50%, wall thickness in diastole < 12 mm, EDVI < 90 mL/m² (men) / < 80 mL/m² (women), RVEDVI < 100 mL/m², RVEF > 40% — this project widens every bound to the union of these numbers with its own ACDC ground-truth-derived and deployed-model-derived ranges (see tables below)."],
+          ["MINF", "LV ejection fraction < 40% and abnormal myocardial contractions (operationalised here as ≥1 LV segment at moderate/severe on regional strain — see Methodology)."],
+          ["DCM", "LV ejection fraction < 40%, LV end-diastolic volume index > 100 mL/m², and wall thickness in diastole < 12 mm."],
+          ["HCM", "Normal cardiac function (ejection fraction > 55%) with myocardial segments thicker than 15 mm in diastole. LVMI is NOT one of the defining criteria — see the note below."],
+          ["RV (ARV)", "RV end-diastolic volume index > 110 mL/m² (men) / > 100 mL/m² (women), or RV ejection fraction < 40%. No specific disease is named for this group — the RV severity sub-notes below (ARVC/PAH) are a separate, secondary check."],
         ]}
         cite={
           <>
-            ACDC Challenge database documentation, creatis.insa-lyon.fr/Challenge/acdc/databases.html, quoted
-            directly. "Several segments" is ACDC's own wording and is not numerically defined there or in the
-            companion paper (Bernard et al., <em>IEEE Trans Med Imaging</em> 2018); this project does not invent a
-            segment count for it — see Methodology for why.
+            Bernard O, Lalande A, Zotti C, et al. &ldquo;Deep Learning Techniques for Automatic MRI Cardiac
+            Multi-Structures Segmentation and Diagnosis: Is the Problem Solved?&rdquo; <em>IEEE Trans Med
+            Imaging</em>. 2018;37(11):2514–2525, Section II.A.1 &mdash; the paper that created and labelled the ACDC
+            dataset, quoted directly. This project previously read these criteria from the ACDC Challenge website&apos;s
+            own abbreviated summary instead (creatis.insa-lyon.fr/Challenge/acdc/databases.html); checked against the
+            paper directly, two differences mattered enough to fix: the website omits DCM&apos;s wall-thickness bound,
+            and reads HCM&apos;s cardiac-mass figure as a defining criterion when the paper&apos;s own wording (&ldquo;can
+            present&rdquo;) makes it incidental, not required. &ldquo;Abnormal myocardial contractions&rdquo; (MINF) has
+            no numeric definition in either source; this project does not invent one — see Methodology.
+          </>
+        }
+      />
+
+      <RefTable
+        caption="HCM's cardiac-mass index (LVMI) — informational only, not a gating criterion"
+        columns={["Feature", "Value", "Role"]}
+        rows={[
+          ["LVMI", "> 110 g/m²", "Shown for information only when available — never decides whether the HCM gate is met"],
+        ]}
+        cite={
+          <>
+            Bernard et al. 2018 (full citation above): &ldquo;patients can present abnormal cardiac mass indices
+            with values above 110 g/m².&rdquo; &ldquo;Can present&rdquo; is the paper&apos;s own wording for an
+            incidental finding in some patients — the same way it describes DCM patients sometimes also having a
+            dilated RV, or MINF patients sometimes also having a high diastolic LV volume. None of these
+            incidental findings are folded into any gate&apos;s met/not-met decision.
           </>
         }
       />
@@ -128,32 +150,62 @@ export function ReferenceCriteriaPage({
       />
 
       <RefTable
-        caption="LV normal reference ranges — meta-analysis"
+        caption="LV normal reference ranges — meta-analysis (LVMI only — EF/EDVI now use Bernard et al. 2018's own ACDC-specific numbers above)"
         columns={["Measure", "Male", "Female"]}
         rows={[
-          ["EF", "52 – 73%", "54 – 75%"],
-          ["EDVI", "60 – 109 mL/m²", "56 – 96 mL/m²"],
           ["LVMI", "41 – 76 g/m²", "33 – 57 g/m²"],
         ]}
         cite={
           <>
-            Zhan et al., <em>Circ Cardiovasc Imaging</em> 2024;17(2):e016090. The NOR gate on earlier pages does not
-            use these numbers alone — it widens each bound to the union of this table and this project&apos;s own
+            Zhan et al., <em>Circ Cardiovasc Imaging</em> 2024;17(2):e016090. The ACDC dataset&apos;s own defining
+            paper (Bernard et al. 2018, cited above) states no LVMI number for its NOR group, so this general
+            adult-population meta-analysis remains the literature component for LVMI specifically. EF and EDVI no
+            longer draw from this table at all — those two now use Bernard et al. 2018&apos;s own ACDC-specific NOR
+            numbers (first table on this page) instead, which is a strictly better-grounded source for &ldquo;what
+            does ACDC consider normal.&rdquo; Every bound is still widened to the union with this project&apos;s own
             ACDC-derived ranges below, so a genuinely-normal patient is never excluded purely from a difference in
-            measurement convention between this meta-analysis and this project&apos;s own pipeline.
+            measurement convention between a literature source and this project&apos;s own pipeline.
+          </>
+        }
+      />
+
+      <RefTable
+        caption="NOR gate — the actual live reference range (union of all sources, both chambers)"
+        columns={["Measure", "Male", "Female", "BSA: none (absolute equivalent)"]}
+        rows={[
+          ["EF", "50.0 – 72.93%", "50.0 – 72.93%", "N/A — ratio, not indexed"],
+          ["EDVI", "47.54 – 95.35 mL/m²", "47.54 – 95.35 mL/m²", "86.4 – 173.4 mL (male ref) / 77.6 – 155.7 mL (female ref)"],
+          ["LVMI", "36.94 – 76.0 g/m²", "33.0 – 75.0 g/m²", "67.2 – 138.2 g (male ref) / 53.9 – 122.5 g (female ref)"],
+          ["Max wall thickness", "6.22 – 12.0 mm", "6.22 – 12.0 mm", "N/A — already absolute (mm)"],
+          ["RVEDVI", "51.65 – 111.38 mL/m²", "51.65 – 111.38 mL/m²", "93.9 – 202.5 mL (male ref) / 84.3 – 181.9 mL (female ref)"],
+          ["RVEF", "40.0 – 67.6%", "40.0 – 67.6%", "N/A — ratio, not indexed"],
+        ]}
+        cite={
+          <>
+            These are the actual numbers the live NOR gate compares a patient against, after unioning Bernard et al.
+            2018&apos;s own ACDC NOR numbers (first table, this page), this project&apos;s own ACDC ground-truth-derived
+            range (n=20/group), and this project&apos;s own deployed-model-derived range (n=10/group, post-manual-QC)
+            — see compute_disease_pattern_gates.py&apos;s own module docstring for the full source list. EF, wall
+            thickness, RVEDVI and RVEF come out identical for both sexes here: Bernard&apos;s sex split survives the
+            union only where this project&apos;s own (necessarily pooled — ACDC&apos;s metadata carries no patient-sex
+            field) empirical data doesn&apos;t already exceed it, which only holds for EDVI. Absolute-equivalent
+            figures use the same reference-adult BSA this project&apos;s own DCM/HCM fallback already computes
+            (Mosteller formula: male 170cm/70kg → BSA ≈ 1.82 m²; female 160cm/60kg → BSA ≈ 1.63 m²) — shown for
+            reference only, since NOR has no coded absolute-value fallback in the live gate.
           </>
         }
       />
 
       <RefTable
         caption="This project's own pipeline validation — ACDC pilot cohort"
-        columns={["Gate", "Feature", "Ground truth (n=20/group)", "This app's own pipeline, QC'd (n=10/group)", "ACDC cutoff used above"]}
+        columns={["Gate", "Feature", "Ground truth (n=20/group)", "This app's own pipeline, QC'd (n=10/group)", "Criterion used above"]}
         rows={[
-          ["NOR", "EF / EDVI / LVMI", "51.5–72.9% / 48.1–95.4 / 36.9–75.0", "51.8–65.1% / 47.5–84.9 / 37.4–75.0", "— (NOR has none; see note above)"],
+          ["NOR", "EF / EDVI / LVMI / wall / RVEDVI / RVEF", "51.5–72.9 / 48.1–95.4 / 36.9–75.0 / 6.2–11.9 / 51.7–111.4 / 41.6–67.6", "51.8–65.1 / 47.5–84.9 / 37.4–75.0 / 6.6–11.4 / 52.0–108.3 / 43.1–66.8", "— (see live union range table above)"],
           ["MINF", "EF", "31.0%", "28.9%", "< 40%"],
-          ["DCM", "EDVI / EF", "153.3 mL/m² / 18.4%", "155.7 mL/m² / 16.2%", "> 100 mL/m² / < 40%"],
-          ["HCM", "LVMI / wall thickness", "92.2 g/m² / 17.8 mm", "99.7 g/m² / 17.1 mm", "> 110 g/m² / > 15 mm"],
-          ["RV", "RVEDVI / RVEF", "111.9 mL/m² / 31.4%", "110.7 mL/m² / 27.0%", "> 110 mL/m² or < 40%"],
+          ["DCM", "EDVI / EF / wall", "153.3 mL/m² / 18.4% / 10.2 mm", "155.7 mL/m² / 16.2% / 11.2 mm", "> 100 mL/m² / < 40% / < 12 mm"],
+          ["HCM", "wall / EF", "17.8 mm / 67.4%", "17.1 mm / 62.6%", "> 15 mm / > 55%"],
+          ["HCM (informational)", "LVMI", "92.2 g/m²", "99.7 g/m²", "not gating — see note above"],
+          ["RV (ARV)", "RVEDVI / RVEF", "111.9 mL/m² / 31.4%", "110.7 mL/m² / 27.0%", "> 110 (men) / > 100 (women) mL/m² or < 40%"],
         ]}
         cite={
           <>
@@ -163,11 +215,11 @@ export function ReferenceCriteriaPage({
             deployed UNet segmentation model&apos;s output after manual QC/correction in the app, a 50-patient pilot
             subset (scripts/derive_system_reference_ranges.js). Shown as evidence that this app&apos;s own
             measurement pipeline agrees with the official ground truth for each gate&apos;s defining feature(s) —
-            not a new threshold; MINF/DCM/HCM/RV&apos;s cutoffs are ACDC&apos;s own fixed criteria (above) and are
-            not replaced by sample data. HCM&apos;s LVMI group average sits below the &gt;110 g/m² cutoff in both
-            measurements — expected, since ACDC&apos;s HCM label is a clinical diagnosis and not every labelled
-            patient individually clears every numeric ACDC criterion; the HCM gate still evaluates each
-            patient&apos;s own measurements, never the group average.
+            not a new threshold; MINF/DCM/HCM/RV&apos;s cutoffs are Bernard et al. 2018&apos;s own fixed criteria
+            (first table, this page) and are not replaced by sample data. HCM&apos;s wall/EF averages both clear
+            their own cutoffs in both measurements; its LVMI average sits below 110 g/m² in both too, which no
+            longer matters for whether the gate is met (LVMI is informational only — see note above), unlike the
+            earlier (now-corrected) version of this module that required it.
           </>
         }
       />

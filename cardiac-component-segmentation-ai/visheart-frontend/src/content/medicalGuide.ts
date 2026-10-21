@@ -48,6 +48,11 @@ export const REFERENCES = {
       "Zhan Y, Friedrich MG, Dendukuri N, Lu Y, Chetrit M, Schiller I, Joseph L, Shaw JL, Chuang ML, Riffel JH, Manning WJ, Afilalo J. Meta-Analysis of Normal Reference Values for Right and Left Ventricular Quantification by Cardiovascular Magnetic Resonance. Circ Cardiovasc Imaging. 2024;17(2):e016090.",
     doi: "10.1161/CIRCIMAGING.123.016090",
   },
+  bernard2018: {
+    citation:
+      "Bernard O, Lalande A, Zotti C, et al. Deep Learning Techniques for Automatic MRI Cardiac Multi-Structures Segmentation and Diagnosis: Is the Problem Solved? IEEE Trans Med Imaging. 2018;37(11):2514–2525.",
+    doi: "10.1109/TMI.2018.2837502",
+  },
   bazhutina2023: {
     citation:
       "Bazhutina A, Khamzin S, Chmelevsky M, Zubarev S, Sinitca A, Budanova M, Rainer W. An automated algorithm for generating of AHA model based on 3D heart geometry. Computing in Cardiology (CinC). 2023.",
@@ -595,16 +600,16 @@ export const MEDICAL_GUIDE: MedicalGuide = {
           title: "How VisHeart checks its own measurements against this research",
           body: [
             {
-              text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the ACDC Challenge dataset's own published classification rules directly (for example, ejection fraction below 40% for MINF).",
-              refs: [],
+              text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the numbers from the actual research paper that created and labelled the ACDC dataset (for example, ejection fraction below 40% for MINF). This replaces an earlier version of VisHeart that read these numbers from the ACDC Challenge website's own short summary instead, which turned out to differ from the paper in two places: it omits a wall-thickness requirement for DCM, and it treats a cardiac-mass figure as required for HCM when the paper's own wording makes it an incidental finding in some patients, not a requirement.",
+              refs: ["bernard2018"],
             },
             {
               text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the results against the dataset's official hand-labelled ground truth for the same patients. The two agreed closely for every condition, which is evidence the pipeline's own numbers can be trusted, not a new diagnostic range.",
               refs: [],
             },
             {
-              text: "The normal (NOR) group is the one exception: the ACDC Challenge publishes no numeric criterion for it at all. VisHeart instead uses the widest combination of three sources — a published meta-analysis of healthy adults, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group — so a genuinely healthy heart is not wrongly flagged just because of how one single study happened to measure it.",
-              refs: ["zhan2024"],
+              text: "The normal (NOR) group is checked for both the left and right side of the heart, using the paper's own published NOR numbers for each. VisHeart still widens every number to the widest combination of three sources — this paper's own numbers, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group (plus, for the one measurement the paper gives no number for, a published meta-analysis of healthy adults) — so a genuinely healthy heart is not wrongly flagged just because of how one single source happened to measure it.",
+              refs: ["bernard2018", "zhan2024"],
             },
           ],
         },

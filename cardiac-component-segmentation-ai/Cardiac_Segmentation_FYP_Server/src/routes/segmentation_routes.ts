@@ -2842,6 +2842,33 @@ router.post("/mask/:maskId/accept", isAuthAndDoctor, async (req: Request, res: R
         if (!result.success) {
             return res.status(400).json({ success: false, message: result.message });
         }
+
+        // Accepting is the moment a Clinical Assistant's edit becomes the project's official
+        // result — editTracking was never computed at draft-save time (see the Draft branch in
+        // save-manual-segmentation above), so without this, an accepted assistant edit would
+        // never carry the diff-vs-AI data that UNet Extend Training's "corrected cases" scan
+        // requires, and would silently never be eligible for retraining no matter what the
+        // Doctor approved.
+        try {
+            const projectId = draft.projectid?.toString() ?? "";
+            const [projectResult, masksResult] = await Promise.all([
+                readProject(projectId),
+                readProjectSegmentationMask(projectId),
+            ]);
+            const dims = projectResult.success ? projectResult.projects?.[0]?.dimensions : undefined;
+            if (dims?.height && dims?.width && masksResult.success && masksResult.projectsegmentationmasks) {
+                await computeAndStoreEditTracking(
+                    result.projectsegmentationmask as any,
+                    masksResult.projectsegmentationmasks as any[],
+                    { height: dims.height, width: dims.width },
+                    String((draft as any).createdByUserId ?? userId),
+                );
+            }
+        } catch (trackingError) {
+            // Never fail the accept over this — the mask is already promoted to Final either way.
+            LogError(trackingError as Error, serviceLocation, `Error computing editTracking for accepted draft ${maskId}`);
+        }
+
         logger.info(`${serviceLocation}: Doctor ${userId} accepted draft mask ${maskId}, superseding ${draft.parentVersionId}.`);
         return res.status(200).json({ success: true, message: "Draft accepted and promoted to the project's final mask.", segmentation: result.projectsegmentationmask });
     } catch (error) {

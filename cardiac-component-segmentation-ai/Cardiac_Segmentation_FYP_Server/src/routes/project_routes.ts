@@ -18,6 +18,7 @@ import {
   readUser,
   readProjectReconstruction,
   userCanAccessProject,
+  getStageLocks,
   assignAssistantToProject,
   unassignAssistantFromProject,
   readProjectsAssignedToAssistant,
@@ -57,6 +58,9 @@ router.get(
       const access = await userCanAccessProject(projectId, req.user!);
       if (access.allowed && access.project) {
         const project = access.project;
+        // Only a non-owner needs this — stages are never locked against the Doctor/Admin
+        // themselves, so skip the extra queries for the common case.
+        const stageLocks = access.isOwner ? undefined : await getStageLocks(projectId, project.userid);
         return res.status(200).json({
           success: true,
           project: {
@@ -76,6 +80,10 @@ router.get(
             // tell a Run grant from a View-Only one and showed every action as available.
             canRun: access.canRun,
             assignmentMode: access.assignmentMode,
+            // Per-stage "the Doctor already ran this" lock for a Run-mode Assistant — landmark
+            // and reconstruction have no Draft/Review protection like segmentation does, so
+            // re-running a stage the Doctor completed would silently overwrite it.
+            stageLocks,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
           },

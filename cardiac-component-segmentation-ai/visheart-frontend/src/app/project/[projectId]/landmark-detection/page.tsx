@@ -21,6 +21,7 @@ import {
   Save,
 } from "lucide-react";
 
+import { useAuth } from "@/context/auth-context";
 import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
 import { useProjectResults, invalidateProjectResults, type MaskDoc } from "@/hooks/useProjectResults";
 import { LoadingProject } from "@/components/project/LoadingProject";
@@ -191,6 +192,8 @@ export default function LandmarkDetectionPage() {
   // Locks every run/edit/compute action on this page for a Clinical Assistant assigned
   // in View-Only mode. Undefined (still loading, or an owner) must never lock anything.
   const viewOnlyLocked = projectData?.canRun === false;
+  const { user } = useAuth();
+  const isClinicalAssistant = user?.role === "clinical_assistant";
 
   useEffect(() => {
     const name = projectData?.name;
@@ -228,6 +231,20 @@ export default function LandmarkDetectionPage() {
       height: projectData?.dimensions?.height,
     },
   );
+
+  // A Clinical Assistant's landmark run isn't a "draft" the way a segmentation edit is — it's
+  // immediately the project's shared result, visible to the Doctor as soon as it completes.
+  // There's no separate send/share step, but nothing told the Assistant that, so confirm it
+  // explicitly once a run finishes (covers both a fresh run and attaching to one already done).
+  const prevAssistantLandmarkStatus = useRef(state.status);
+  useEffect(() => {
+    if (isClinicalAssistant && state.status === "done" && prevAssistantLandmarkStatus.current !== "done") {
+      toast.success("Saved — visible to the Doctor", {
+        description: "Landmark detection is part of the shared project result now; no separate send step needed.",
+      });
+    }
+    prevAssistantLandmarkStatus.current = state.status;
+  }, [state.status, isClinicalAssistant]);
 
   // GPU availability — mirrors segmentation page pattern (async, false on first render)
   const { processingUnit, isLoading: gpuLoading } = useGpuStatus();
@@ -678,6 +695,16 @@ export default function LandmarkDetectionPage() {
   const hasReconForLandmarkModel = (reconstructionResults ?? []).some(
     (r: { segmentationModel?: unknown }) => normalizeReconstructionModel(r?.segmentationModel) === landmarkSegModel,
   );
+
+  // The Doctor already ran landmark detection for this model — re-running it here would
+  // silently overwrite their result (landmark has no Draft/Review protection the way
+  // segmentation does), so it's locked view-only for a Run-mode Assistant specifically for
+  // this model. A model the Doctor hasn't touched stays fully runnable.
+  const landmarkStageLocked = projectData?.stageLocks?.landmark[landmarkSegModel] ?? false;
+  const landmarkRerunDisabled = viewOnlyLocked || landmarkStageLocked;
+  const landmarkRerunLockedMessage = viewOnlyLocked
+    ? "View-only access — ask the Doctor for Run access to use this."
+    : "The Doctor already ran this — it's view-only for you now.";
 
   const runDetectionAndResetEdits = useCallback((model: ModelId) => {
     setLandmarkEdits({});
@@ -1573,10 +1600,10 @@ export default function LandmarkDetectionPage() {
             <Button
               size="sm"
               className="text-xs gap-1.5"
-              disabled={segmentationBlocksRuns || viewOnlyLocked}
+              disabled={segmentationBlocksRuns || landmarkRerunDisabled}
               title={
-                viewOnlyLocked
-                  ? "View-only access — ask the Doctor for Run access to use this."
+                landmarkRerunDisabled
+                  ? landmarkRerunLockedMessage
                   : segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined
               }
               onClick={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
@@ -1606,10 +1633,10 @@ export default function LandmarkDetectionPage() {
           <button
             type="button"
             className="text-xs underline hover:no-underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
-            disabled={segmentationBlocksRuns || viewOnlyLocked}
+            disabled={segmentationBlocksRuns || landmarkRerunDisabled}
             title={
-              viewOnlyLocked
-                ? "View-only access — ask the Doctor for Run access to use this."
+              landmarkRerunDisabled
+                ? landmarkRerunLockedMessage
                 : segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined
             }
             onClick={() => runUnlessSegmentationPending(() => runDetectionAndResetEdits(selectedModel))}

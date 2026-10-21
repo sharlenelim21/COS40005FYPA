@@ -20,6 +20,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw, XCircle, HelpCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { rvPeakGas as rvPeakGasOf, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 import type { Sex, Measurements, HealthStatus, DiseasePatternGates, Strain, StrainSeries, RegionalHealthStatus, RvRegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
@@ -1719,15 +1720,32 @@ export function InteractiveReport({
                           >
                             {g.met === true ? "Met" : g.met === false ? "Not met" : "Pending"}
                           </span>
+                          {g.resolved_from_partial_data && (
+                            <span
+                              className="flex items-center gap-0.5 rounded-full border border-red-500/50 bg-red-500/15 px-1.5 py-0.5 text-[8.5px] font-semibold text-red-700 dark:text-red-400"
+                              title="This gate's result was decided from only some of its required values — the rest were unavailable, but couldn't have changed the outcome either way."
+                            >
+                              <AlertTriangle className="h-2.5 w-2.5" /> Partial data
+                            </span>
+                          )}
                         </span>
                       </div>
                       <ul className="mt-1 flex flex-col gap-0.5">
-                        {g.reasons.map((r, i) => (
-                          <li key={i} className="flex gap-1 text-[10px] leading-snug text-muted-foreground">
-                            <span className="text-muted-foreground/50">•</span>
-                            <span>{r}</span>
-                          </li>
-                        ))}
+                        {g.reasons.map((r, i) => {
+                          const isPartialNote = r.startsWith("Resolved as ") || r.startsWith("Cannot resolve to");
+                          return (
+                            <li
+                              key={i}
+                              className={cn(
+                                "flex gap-1 text-[10px] leading-snug",
+                                isPartialNote ? "font-medium text-red-700 dark:text-red-400" : "text-muted-foreground",
+                              )}
+                            >
+                              <span className={isPartialNote ? "text-red-500/70" : "text-muted-foreground/50"}>•</span>
+                              <span>{r}</span>
+                            </li>
+                          );
+                        })}
                       </ul>
                       <p className="mt-1 text-[9px] italic leading-snug text-muted-foreground/70">{g.criterion_text}</p>
                     </div>

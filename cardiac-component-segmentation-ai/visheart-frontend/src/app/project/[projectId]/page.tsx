@@ -550,6 +550,7 @@ function ProjectPageInner() {
     refreshMasks: refreshMasksSilently,
     refreshReconstructions,
     refreshActiveReconstructionJobs,
+    isClinicalAssistant: user?.role === "clinical_assistant",
   });
   const [showPipelineDialog, setShowPipelineDialog] = useState(false);
   const [expandedJobGroups, setExpandedJobGroups] = useState<Set<string>>(() => new Set());
@@ -2213,6 +2214,7 @@ function ProjectPageInner() {
         isRerun={hasMasks}
         existing={existingByChamber}
         building={buildingReconstructions}
+        stageLocks={projectData?.stageLocks}
       />
 
       {/* Reconstruction Configuration Dialog */}

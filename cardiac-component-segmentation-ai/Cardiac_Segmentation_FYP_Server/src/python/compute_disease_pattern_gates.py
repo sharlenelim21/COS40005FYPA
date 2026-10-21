@@ -29,70 +29,108 @@ themselves are not mathematically exclusive, so forcing a single "most
 similar" pick would misrepresent a patient who genuinely has two independent
 findings.
 
-Source of the 5 gate criteria — ACDC Challenge, read directly from the
-official page (creatis.insa-lyon.fr/Challenge/acdc/databases.html), verbatim:
-    NOR  : no stated criteria ("30 normal subjects") — see NOR gate below for
-           what this module uses instead, since ACDC itself defines nothing.
+Source of the 5 gate criteria — Bernard et al. 2018, IEEE Trans Med Imaging
+37(11):2514-2525 (doi:10.1109/TMI.2018.2837502), Section II.A.1 "Patient
+selection" — the actual peer-reviewed paper that created and labelled the
+ACDC dataset's 150 patients, quoted/paraphrased directly. This REPLACES an
+earlier version of this module that read criteria from the ACDC Challenge
+website's own abbreviated summary page instead — checked against the paper
+directly, 2026-10, and found to differ in two places that matter (see NOR and
+HCM below):
+    NOR  : "ejection fraction ... greater than 50%", "wall thickness in
+           diastole ... lower than 12 mm", "LV diastolic volume ... below
+           90 mL/m2 for men and 80 mL/m2 for women", RV normal for every
+           patient ("RV volume less than 100 mL/m2 and RV ejection fraction
+           above 40%"). The website's own summary states no NOR criterion at
+           all ("30 normal subjects") — the paper itself does define one, in
+           full, for BOTH chambers. See NOR gate below for how this module
+           uses it.
     MINF : "ejection fraction of the left ventricle lower than 40% and
-           several myocardial segments with abnormal contraction"
-    DCM  : "diastolic left ventricular volume >100 mL/m2 and an ejection
-           fraction of the left ventricle lower than 40%"
-    HCM  : "left ventricular cardiac mass high[er] than 110 g/m2" + "several
-           myocardial segments with a thickness higher than 15 mm in
-           diastole" + "a normal ejection fraction"
-    RV   : "volume of the right ventricular cavity higher than 110 mL/m2 or
-           ejection fraction of the right ventricle lower than 40%" — ACDC
-           does NOT name a specific disease for this group; it is defined
-           ONLY by this volume/function threshold. See the RV gate's own
-           notes for how this module still gives the user something
-           actionable beyond a bare "abnormal" flag.
+           abnormal myocardial contractions."
+    DCM  : "ejection fraction below 40%, a LV volume greater than 100 mL/m2
+           and a wall thickness in diastole smaller than 12 mm." The website
+           summary omits the wall-thickness bound; the paper states it as a
+           defining criterion, not an aside.
+    HCM  : "a normal cardiac function (ejection fraction greater than 55%)
+           but with myocardial segments thicker than 15 mm in diastole."
+           Cardiac mass (LVMI) is explicitly NOT one of the defining
+           criteria here — the paper's own wording is that patients "CAN
+           PRESENT abnormal cardiac mass indices... above 110 g/m2," an
+           incidental finding in some patients, phrased the same way as
+           DCM's/MINF's own incidental co-occurring findings below. The
+           website summary reads this the opposite way (cardiac mass as a
+           defining AND condition) — this module now follows the paper.
+    ARV  : "RV volume greater than 110 mL/m2 for men, and greater than
+           100 mL/m2 for women, or/and a RV ejection fraction below 40%."
+           The paper attributes no specific named disease to this group;
+           it is defined only by this sex-specific volume/function
+           threshold. See the RV gate's own notes for how this module still
+           gives the user something actionable beyond a bare "abnormal"
+           flag.
 
-"Several segments" — MINF and HCM both use this word; ACDC's page (and its
-companion paper, Bernard et al. 2018, IEEE TMI) never defines a number.
-Checked against the actual clinical literature before picking a design here
-(not guessed): a CMR study diagnosing HCM (Int J Cardiovasc Imaging 2021/
-HFpEF-HCM comparison literature) uses a SINGLE maximal wall-thickness value
-(LVMWT >= 15mm, or >=13mm with family history), never a segment count; a
-wall-motion-abnormality detection study explicitly scores a region positive
-from ANY ONE abnormal segment, "irrespective of the number of AHA segments
-involved." Real clinical practice does not appear to use a segment-count
-threshold for either criterion — so this module doesn't invent one either:
-HCM reads off the single existing MaxWallThicknessMm value (already computed
-elsewhere in this pipeline), and MINF reads off whether AT LEAST ONE LV
-segment reaches "moderate" or "severe" on compute_regional_health_status.py's
-existing classification. No fabricated N.
+Three "incidental, not defining" findings the paper explicitly separates from
+each group's actual criteria (worded as "some patients..."/"can present..."
+in the paper itself, never folded into this module's met/not-met logic):
+MINF patients sometimes also have a high diastolic LV volume from
+compensatory remodelling (why MINF+DCM can legitimately co-fire — see
+"Co-firing LV gates" below); DCM patients sometimes also have a dilated RV
+and/or high LV mass; HCM patients sometimes also have LVMI above 110 g/m^2
+(shown in this module as an informational note only, see _gate_hcm).
 
-NOR gate — ACDC gives no criterion, so this module falls back to the union of
-Zhan et al. 2024's published adult normal ranges (same source + same
-sex-specific/pooled logic the old LV module already used for its NOR
-profile), this project's own ACDC-ground-truth-derived ranges, and this
+"Abnormal myocardial contractions" (MINF) and "several myocardial segments"
+(an earlier, now-superseded reading of HCM's criterion) — neither the paper
+nor the Challenge website defines a number. Checked against the actual
+clinical literature before picking a design here (not guessed): a CMR study
+diagnosing HCM (Int J Cardiovasc Imaging 2021/HFpEF-HCM comparison
+literature) uses a SINGLE maximal wall-thickness value (LVMWT >= 15mm, or
+>=13mm with family history), never a segment count; a wall-motion-abnormality
+detection study explicitly scores a region positive from ANY ONE abnormal
+segment, "irrespective of the number of AHA segments involved." Real clinical
+practice does not appear to use a segment-count threshold — so this module
+doesn't invent one either: HCM reads off the single existing
+MaxWallThicknessMm value (already computed elsewhere in this pipeline), and
+MINF reads off whether AT LEAST ONE LV segment reaches "moderate" or "severe"
+on compute_regional_health_status.py's existing classification. No
+fabricated N.
+
+NOR gate — covers BOTH chambers (an earlier version of this gate checked LV
+features only, which could misleadingly read as "the whole heart is normal"
+when the RV was never actually assessed — reported live, 2026-10). Every
+bound is the union of THREE independent sources: Bernard et al. 2018's own
+NOR numbers above (replacing an earlier version of this module that used
+Zhan et al. 2024, a general adult population meta-analysis with no
+ACDC-specific grounding, as its literature source — the dataset's own
+defining paper is strictly better-grounded for "what does ACDC consider
+NOR"), this project's own ACDC-ground-truth-derived ranges, and this
 project's own deployed-model (UNet + manual QC) derived ranges — see
-_ADULT_NORMAL_RANGES below for why all three, checked as a genuine range
-comparison (all of EF/EDVI/LVMI within range), not a single cutoff.
+_ADULT_NORMAL_RANGES/_NOR_RV_RANGES below for the full source list and why
+all three, checked as a genuine range comparison (all of EF/EDVI/LVMI/wall/
+RVEDVI/RVEF within range), not a single cutoff. LVMI has no number in the
+paper, so its literature component is still Zhan et al. 2024.
 
-HCM's "normal ejection fraction" — operationalised as EF >= 50%, citing the
-same preserved-EF convention a real CMR-HCM study uses (Int J Cardiovasc
-Imaging / HFpEF-HCM literature, LVEF >= 50% == "preserved"), distinct from
-the NOR gate's own (stricter, SCMR-based) 55% "healthy" cutoff — these are
-two different clinical questions (is EF preserved enough to not call this
-systolic HCM, vs is EF within the normal population range) and deliberately
-use two different, separately-cited numbers rather than reusing one.
+HCM's "normal cardiac function" — the paper's own number is EF > 55%
+(_HCM_EF_MIN), replacing an earlier version of this module that borrowed a
+">=50%" preserved-EF convention from unrelated CMR-HCM literature instead of
+using ACDC's own defining paper.
 
-DCM/HCM reference-BSA fallback — EDVI (DCM) and LVMI (HCM) normally need the
-patient's own BSA, which needs height+weight the user may not have entered.
-Rather than leaving these two gates permanently "pending" whenever BSA is
-missing, both now fall back to estimating EDVI/LVMI from the (BSA-independent)
-absolute EDV/LVMassG divided by a REFERENCE adult BSA — the same height/weight
-"reference man"/"reference woman" behind the ~1.73 m^2 constant still used to
-normalise clinical indices today (e.g. eGFR, mL/min/1.73m^2; DuBois & DuBois
-1916, Arch Intern Med 17:863-871) — run through this app's own Mosteller
-formula rather than DuBois's, for internal consistency with every other BSA
-figure in this app. Used ONLY as a last resort when the real bsa_m2 wasn't
-supplied; the gate's `reasons` text always says explicitly when a value was
-estimated this way, so a report reader is never left thinking it came from
-the patient's own measurements. "unspecified" sex falls back to the male
-reference (170cm/70kg); the other 3 gates (NOR, MINF, RV) do NOT use this
-fallback — NOR already degrades gracefully per-feature, MINF/RV don't need
+DCM/HCM reference-BSA fallback — EDVI (DCM) and LVMI (HCM, informational
+only — see above) normally need the patient's own BSA, which needs
+height+weight the user may not have entered. Rather than leaving DCM
+permanently "pending" (or LVMI's informational note permanently blank)
+whenever BSA is missing, both now fall back to estimating EDVI/LVMI from the
+(BSA-independent) absolute EDV/LVMassG divided by a REFERENCE adult BSA — the
+same height/weight "reference man"/"reference woman" behind the ~1.73 m^2
+constant still used to normalise clinical indices today (e.g. eGFR,
+mL/min/1.73m^2; DuBois & DuBois 1916, Arch Intern Med 17:863-871) — run
+through this app's own Mosteller formula rather than DuBois's, for internal
+consistency with every other BSA figure in this app. Used ONLY as a last
+resort when the real bsa_m2 wasn't supplied; the gate's `reasons` text always
+says explicitly when a value was estimated this way, so a report reader is
+never left thinking it came from the patient's own measurements.
+"unspecified" sex falls back to the male reference (170cm/70kg) for this
+fallback, and to the male RVEDVI threshold for the RV/ARV gate (see
+_RV_EDVI_MIN_BY_SEX); the other 2 gates (NOR, MINF) do NOT use the BSA
+fallback — NOR already degrades gracefully per-feature, MINF doesn't need
 EDVI/LVMI at all.
 
 Co-firing LV gates (e.g. MINF+DCM) — a patient can legitimately meet more
@@ -258,29 +296,61 @@ from volume_reliability import duplicate_slice_issue, lv_volume_issues, voxel_si
 _RV_CAVITY_CLASS = "rv"
 
 
-# ── ACDC's own thresholds, quoted/paraphrased directly from the official page
-# (see module docstring for the verbatim source text) ───────────────────────
+# ── ACDC's own thresholds — now read from Bernard et al. 2018 (IEEE TMI), the
+# actual peer-reviewed paper that defines the ACDC Challenge dataset and
+# labelled its own 150 patients, rather than paraphrased from the Challenge's
+# own abbreviated website page (which omits several things this paper states
+# explicitly — see below). Full citation: Bernard O, Lalande A, Zotti C, et
+# al. "Deep Learning Techniques for Automatic MRI Cardiac Multi-Structures
+# Segmentation and Diagnosis: Is the Problem Solved?" IEEE Trans Med Imaging.
+# 2018;37(11):2514-2525. doi:10.1109/TMI.2018.2837502, Section II.A.1
+# "Patient selection" — quoted/paraphrased directly from the paper's own
+# per-group definitions. Two corrections this made to the previous (website-
+# only) version of this module, found by checking the paper directly
+# (reported live, 2026-10):
+#   - DCM's definition explicitly includes a wall-thickness upper bound ("a
+#     wall thickness in diastole smaller than 12 mm") that the website
+#     summary omits — added below as _DCM_WALL_MM_MAX.
+#   - HCM's cardiac-mass criterion ("LVMI > 110 g/m^2") is NOT one of HCM's
+#     defining criteria in the paper — the paper's own wording is "patients
+#     CAN PRESENT abnormal cardiac mass indices," an incidental finding in
+#     some patients, not a requirement. The paper's actual HCM definition is
+#     only "normal cardiac function (EF > 55%) but with myocardial segments
+#     thicker than 15mm" — LVMI is demoted to an informational note (see
+#     _gate_hcm) rather than a gating AND condition, and HCM's EF threshold
+#     moves from this module's earlier ">=50%" (a borrowed preserved-EF
+#     clinical convention, not from ACDC at all) to the paper's own ">55%".
 _MINF_EF_MAX = 40.0
 _DCM_EDVI_MIN = 100.0
 _DCM_EF_MAX = 40.0
-_HCM_LVMI_MIN = 110.0
+_DCM_WALL_MM_MAX = 12.0  # Bernard et al. 2018 — distinguishes DCM's thin-ish wall from HCM's thickened one
 _HCM_WALL_MM_MIN = 15.0
-_HCM_EF_PRESERVED_MIN = 50.0  # "normal ejection fraction" -> operationalised as preserved-EF, see module docstring
-_RV_EDVI_MIN = 110.0
+_HCM_EF_MIN = 55.0  # Bernard et al. 2018's own HCM threshold (was a borrowed ">=50%" preserved-EF convention)
+_HCM_LVMI_INFORMATIONAL = 110.0  # NOT gating — see comment above; "can present" values above this, per the paper
+# ARV (abnormal RV) — Bernard et al. 2018's own sex-specific RV volume split,
+# which the previous (website-paraphrased) version of this module did not
+# have at all (one unsplit 110 mL/m^2 for both sexes). "unspecified" sex
+# falls back to the male (more lenient/higher) threshold — same convention
+# the DCM/HCM reference-BSA fallback already uses elsewhere in this module.
+_RV_EDVI_MIN_BY_SEX: dict[str, float] = {"male": 110.0, "female": 100.0}
 _RV_EF_MAX = 40.0
 
-# NOR gate: ACDC states no criterion of its own for this group, so there is
-# no single "ground truth number" to defer to — unlike MINF/DCM/HCM/RV below,
-# which ARE ACDC's own literal published thresholds and are deliberately left
-# untouched by this derivation. Each bound here is the UNION (widest) of
-# THREE independent sources, so a patient only fails NOR if ALL THREE sources
-# would call them abnormal — not just whichever source happens to have the
-# narrowest number on that particular feature:
-#   1. Zhan et al. 2024, Circ Cardiovasc Imaging 2024;17(2):e016090 — general
-#      adult population reference ranges (the pre-existing literature
-#      source). Male EF 52-73%, EDVI 60-109, LVMI 41-76; female EF 54-75%,
-#      EDVI 56-96, LVMI 33-57 (see ReferenceCriteriaPage.tsx's citation table
-#      for the raw numbers this module unions against).
+# NOR gate: unlike MINF/DCM/HCM/RV above, this module's NOR profile is NOT a
+# single threshold — Bernard et al. 2018 DOES define explicit NOR numbers
+# (unlike what this module previously assumed from the Challenge website
+# alone, which states no NOR criterion at all), but every bound in this
+# module is still widened to the UNION of THREE independent sources, so a
+# patient only fails NOR if ALL THREE would call them abnormal:
+#   1. Bernard et al. 2018 (see full citation above), Section II.A.1 — the
+#      ACDC dataset's own defining NOR numbers: EF > 50%, wall thickness in
+#      diastole < 12mm, EDVI < 90 mL/m^2 (men) / < 80 mL/m^2 (women), RVEDVI
+#      < 100 mL/m^2, RVEF > 40%. Replaces Zhan et al. 2024 (a general adult
+#      population meta-analysis with no ACDC-specific grounding) as this
+#      module's literature source for EF/EDVI/wall/RV — the dataset's own
+#      defining paper is a strictly better-grounded source than an unrelated
+#      general-population study for "what does ACDC consider NOR." LVMI is
+#      the one NOR feature this paper does not define a number for, so its
+#      literature component still comes from Zhan et al. 2024 there.
 #   2. Ground-truth-derived: this project's OWN measurement pipeline
 #      (compute_heart_metrics_from_rle.py + compute_bullseye_from_rle.py,
 #      called unmodified) run against the ACDC Challenge training set's own
@@ -293,21 +363,33 @@ _RV_EF_MAX = 40.0
 #      reference_ranges.js, n=10/group (50 of 100 patients) as of 2026-10.
 #      What source #2 can't capture: the model + correction workflow's own
 #      measured output, as a real user would actually get it.
-# Motivation for including source #2: a genuinely-NOR patient (per ACDC's own
-# label) measured EF=51.5% via source #2's pipeline — below Zhan's EF>=52
-# floor purely from a measurement-convention mismatch, not because anything
-# was wrong with the patient (reported live, 2026-10). Source #3 ALONE would
-# NOT catch this (its own EF floor is 51.84, still above Zhan's 52 after
-# union but narrower than source #2's 51.5) — which is why source #2 stays in
-# the union rather than being replaced by source #3; the two answer different
-# questions (measurement convention vs. deployed-pipeline accuracy) and
-# neither alone covers every case the other does.
-# All three ranges are still treated as approximate 95% CIs (+/-2 SD) when
+# A real limitation worth being upfront about: sources #2 and #3 are POOLED
+# (ACDC's own metadata carries no patient-sex field at all — checked live,
+# 2026-10 — so this project's own measurement pipeline can never be split by
+# sex). Wherever the pooled empirical max/min from #2 or #3 is wider than
+# Bernard's sex-specific bound, the union is dominated by the pooled number
+# and the male/female split effectively collapses for that bound (most
+# visibly: NOR's EDVI upper bound comes out identical for both sexes, 95.35,
+# because source #2's own pooled max already exceeds Bernard's narrower
+# female cap of 80). This is an honest consequence of the union design
+# (favour the widest bound, same rule as everywhere else in this module), not
+# a bug — Table in the project's own reference documentation shows exactly
+# which bounds this affects.
+# All three sources are still treated as approximate 95% CIs (+/-2 SD) when
 # the mean/SD form is needed elsewhere — same convention the old module used,
 # see _range_to_mean_sd (kept here for RV's ARVC-note z-scores).
 _ADULT_NORMAL_RANGES: dict[str, dict[str, tuple[float, float]]] = {
-    "male":   {"EF": (51.5, 73.0), "EDVI": (47.54, 109.0), "LVMI": (36.94, 76.0)},
-    "female": {"EF": (51.5, 75.0), "EDVI": (47.54, 96.0),  "LVMI": (33.0, 75.0)},
+    "male":   {"EF": (50.0, 72.93), "EDVI": (47.54, 95.35), "LVMI": (36.94, 76.0), "MaxWallThicknessMm": (6.22, 12.0)},
+    "female": {"EF": (50.0, 72.93), "EDVI": (47.54, 95.35), "LVMI": (33.0, 75.0),  "MaxWallThicknessMm": (6.22, 12.0)},
+}
+# NOR's RV criteria (NEW — the previous version of this gate checked LV
+# features only, which could misleadingly look like "the whole heart is
+# normal" when only the LV half was actually assessed). No sex split in
+# Bernard's own NOR definition (unlike ARV below, which the paper does split
+# by sex) — union of source #1 (Bernard) + #2 (GT) + #3 (system):
+_NOR_RV_RANGES: dict[str, tuple[float, float]] = {
+    "RVEDVI": (51.65, 111.38),  # Bernard's own <100 cap is absorbed here: source #2's pooled NOR-group max (111.38) already exceeds it
+    "RVEF": (40.0, 67.6),
 }
 
 # Pilot pipeline-validation notes for MINF/DCM/HCM/RV (these 4 gates use
@@ -400,15 +482,18 @@ _DISCLAIMER = (
 )
 
 _REFERENCE_SOURCE = (
-    "ACDC Challenge classification criteria (creatis.insa-lyon.fr/Challenge/acdc/"
-    "databases.html), read directly from the official page. NOR gate (ACDC states "
-    "no criterion): union of Zhan et al. 2024, Circulation: Cardiovascular Imaging "
-    "2024;17(2):e016090; this project's own measurement of the ACDC Challenge "
-    "training set's 20 ground-truth NOR patients (scripts/derive_acdc_reference_"
-    "ranges.py); and this project's own deployed segmentation model's output after "
-    "manual QC/correction, 10 NOR patients (scripts/derive_system_reference_"
-    "ranges.js). HCM 'normal EF' operationalisation and RV severity "
-    "secondary note: Kubler et al. 2021, Int J Cardiovasc Imaging 2021;37:2501-2515 "
+    "Bernard O, Lalande A, Zotti C, et al. 'Deep Learning Techniques for Automatic MRI "
+    "Cardiac Multi-Structures Segmentation and Diagnosis: Is the Problem Solved?' IEEE Trans "
+    "Med Imaging. 2018;37(11):2514-2525 (doi:10.1109/TMI.2018.2837502), Section II.A.1 — the "
+    "ACDC dataset's own defining paper, read directly, for MINF/DCM/HCM/ARV's criteria and "
+    "NOR's own published numbers. NOR gate: union of this paper's NOR numbers; this project's "
+    "own measurement of the ACDC Challenge training set's 20 ground-truth NOR patients "
+    "(scripts/derive_acdc_reference_ranges.py); and this project's own deployed segmentation "
+    "model's output after manual QC/correction, 10 NOR patients (scripts/derive_system_"
+    "reference_ranges.js). LVMI has no number in the paper, so its NOR/HCM literature "
+    "component is still Zhan et al. 2024, Circulation: Cardiovascular Imaging "
+    "2024;17(2):e016090 (HCM: informational only, not gating — see module docstring). RV "
+    "severity secondary note: Kubler et al. 2021, Int J Cardiovasc Imaging 2021;37:2501-2515 "
     "(doi:10.1007/s10554-021-02280-6). RV primary severity note: Chen et al. 2025 "
     "'PULSE' (arXiv:2512.03848), Table 1, ACDC ground-truth per-group statistics. "
     "RV PAH secondary note: Humbert et al. 2023, Eur Respir J 2023;61:2200879 "
@@ -443,19 +528,34 @@ def _within_range(v: float, lo: float, hi: float) -> bool:
 
 
 # ── NOR gate ─────────────────────────────────────────────────────────────────
-def _gate_nor(lv: dict, sex: str) -> dict:
-    ef, edvi, lvmi = lv.get("EF"), lv.get("EDVI"), lv.get("LVMI")
-    have = [f for f, v in (("EF", ef), ("EDVI", edvi), ("LVMI", lvmi)) if v is not None]
+# Checks BOTH chambers now (previously LV features only) — Bernard et al.
+# 2018's own NOR definition requires a normal RV too ("The RV is normal for
+# each patient"), and reporting NOR from LV alone could misleadingly read as
+# "the whole heart is normal" when the RV was never actually assessed
+# (reported live, 2026-10).
+_NOR_CRITERION_TEXT = (
+    "Bernard et al. 2018 (ACDC's own defining paper): EF > 50%, wall thickness in diastole < 12mm, "
+    "EDVI < 90 mL/m^2 (men) / < 80 mL/m^2 (women), RVEDVI < 100 mL/m^2, RVEF > 40% — this module widens "
+    "every bound to the union of that paper, this project's own ACDC-ground-truth-derived ranges, and "
+    "this project's own deployed-model (UNet, manually QC'd) derived ranges (LVMI has no number in the "
+    "paper, so its literature component is still Zhan et al. 2024's meta-analysis)."
+)
+
+
+def _gate_nor(lv: dict, rv: dict, sex: str) -> dict:
+    lv_features = (("EF", "EF"), ("EDVI", "EDVI"), ("LVMI", "LVMI"), ("MaxWallThicknessMm", "Wall thickness"))
+    rv_features = (("RVEDVI", "RVEDVI"), ("RVEF", "RVEF"))
+    have = [f for f, _ in lv_features if lv.get(f) is not None] + [f for f, _ in rv_features if rv.get(f) is not None]
     if not have:
         return {"code": "NOR", "label": "NOR (Normal)", "met": None,
-                "reasons": ["No EF, EDVI, or LVMI available to assess."],
-                "criterion_text": "ACDC states no criterion for this group; this module uses the union of Zhan et al. 2024's published adult normal ranges, this project's own ACDC-ground-truth-derived ranges, and this project's own deployed-model (UNet, manually QC'd) derived ranges instead."}
+                "reasons": ["No EF, EDVI, LVMI, wall thickness, RVEDVI, or RVEF available to assess."],
+                "criterion_text": _NOR_CRITERION_TEXT}
 
     table = _ADULT_NORMAL_RANGES.get(sex)
     reasons: list[str] = []
     all_in_range = True
     checked_any = False
-    for feature, label in (("EF", "EF"), ("EDVI", "EDVI"), ("LVMI", "LVMI")):
+    for feature, label in lv_features:
         v = lv.get(feature)
         if v is None:
             continue
@@ -465,11 +565,19 @@ def _gate_nor(lv: dict, sex: str) -> dict:
         all_in_range = all_in_range and in_range
         reasons.append(
             f"{label} {v:.1f} is {'within' if in_range else 'outside'} the normal range "
-            f"({lo:.0f}-{hi:.0f}{', pooled' if not table else ''})."
+            f"({lo:.2f}-{hi:.2f}{', pooled' if not table else ''})."
         )
+    for feature, label in rv_features:
+        v = rv.get(feature)
+        if v is None:
+            continue
+        lo, hi = _NOR_RV_RANGES[feature]
+        checked_any = True
+        in_range = _within_range(v, lo, hi)
+        all_in_range = all_in_range and in_range
+        reasons.append(f"{label} {v:.1f} is {'within' if in_range else 'outside'} the normal range ({lo:.2f}-{hi:.2f}).")
     met = all_in_range if checked_any else None
-    return {"code": "NOR", "label": "NOR (Normal)", "met": met, "reasons": reasons,
-            "criterion_text": "ACDC states no criterion for this group; this module uses the union of Zhan et al. 2024's published adult normal ranges, this project's own ACDC-ground-truth-derived ranges, and this project's own deployed-model (UNet, manually QC'd) derived ranges instead."}
+    return {"code": "NOR", "label": "NOR (Normal)", "met": met, "reasons": reasons, "criterion_text": _NOR_CRITERION_TEXT}
 
 
 # ── MINF gate ────────────────────────────────────────────────────────────────
@@ -528,15 +636,19 @@ def _gate_minf(lv: dict, regional_segments: Optional[list]) -> dict:
 
 # ── DCM gate ─────────────────────────────────────────────────────────────────
 def _gate_dcm(lv: dict, sex: str) -> dict:
-    ef = lv.get("EF")
+    ef, wall = lv.get("EF"), lv.get("MaxWallThicknessMm")
     edvi, edvi_estimated = lv.get("EDVI"), False
     if edvi is None and lv.get("EDV") is not None:
         edvi = lv["EDV"] / _reference_bsa(sex)
         edvi_estimated = True
 
-    criterion_text = f"ACDC: EDVI > {_DCM_EDVI_MIN:.0f} mL/m^2 and EF < {_DCM_EF_MAX:.0f}%."
+    criterion_text = (
+        f"Bernard et al. 2018: EDVI > {_DCM_EDVI_MIN:.0f} mL/m^2, EF < {_DCM_EF_MAX:.0f}%, "
+        f"and wall thickness in diastole < {_DCM_WALL_MM_MAX:.0f} mm."
+    )
     edvi_met = (edvi > _DCM_EDVI_MIN) if edvi is not None else None
     ef_met = (ef < _DCM_EF_MAX) if ef is not None else None
+    wall_met = (wall < _DCM_WALL_MM_MAX) if wall is not None else None
 
     reasons: list[str] = []
     if edvi is not None:
@@ -554,27 +666,36 @@ def _gate_dcm(lv: dict, sex: str) -> dict:
         reasons.append(f"EF {ef:.1f}% {'meets' if ef_met else 'does not meet'} the < {_DCM_EF_MAX:.0f}% criterion.")
     else:
         reasons.append("EF not available.")
+    if wall is not None:
+        reasons.append(f"Max wall thickness {wall:.1f} mm {'meets' if wall_met else 'does not meet'} the < {_DCM_WALL_MM_MAX:.0f} mm criterion.")
+    else:
+        reasons.append("MaxWallThicknessMm not available.")
 
-    # Three-valued AND: see MINF's identical comment above — a criterion that's
-    # already False decides the whole AND regardless of whichever other value
-    # is still missing. Reported live, 2026-10: a mask with EF 56.3% (already
-    # failing DCM's <40% half) still showed DCM as "Pending" because EDVI had
-    # been withheld by the volume-reliability guard, even though no EDVI value
-    # could ever have made this AND true once EF alone had already failed it.
+    # Three-valued AND across all three criteria — see MINF's identical
+    # comment above: any one criterion already False decides the whole AND
+    # regardless of whichever other is still missing. Reported live,
+    # 2026-10: a mask with EF 56.3% (already failing DCM's <40% half) still
+    # showed DCM as "Pending" because EDVI had been withheld by the volume-
+    # reliability guard, even though no EDVI value could ever have made this
+    # AND true once EF alone had already failed it.
+    parts = (edvi_met, ef_met, wall_met)
     resolved_from_partial_data = False
-    if edvi_met is False or ef_met is False:
+    if any(p is False for p in parts):
         met = False
-        if edvi_met is None or ef_met is None:
+        if any(p is None for p in parts):
             resolved_from_partial_data = True
-            reasons.append("Resolved as not met from the available criterion alone — the still-missing one can't change an AND that already fails.")
-    elif edvi_met is None or ef_met is None:
+            reasons.append("Resolved as not met from the available criteria alone — the still-missing one(s) can't change an AND that already fails.")
+    elif any(p is None for p in parts):
         met = None
     else:
         met = True
 
     # Ranking margin uses DCM's DISTINGUISHING criterion only (EDVI excess) —
-    # NOT EF, which MINF shares; see MINF's margin comment above for why
-    # blending in the shared EF term structurally favoured MINF every time.
+    # NOT EF (shared with MINF) and NOT wall thickness (not a distinguishing
+    # strength signal — a thinner wall doesn't make DCM "more" DCM the way a
+    # bigger EDVI excess does); see MINF's margin comment above for why
+    # blending in a shared/non-distinguishing term structurally favoured
+    # MINF every time.
     result = {"code": "DCM", "label": "DCM (Dilated Cardiomyopathy)", "met": met, "reasons": reasons,
               "criterion_text": criterion_text,
               "validation_note": _PILOT_VALIDATION_NOTES["DCM"]}
@@ -594,45 +715,50 @@ def _gate_hcm(lv: dict, sex: str) -> dict:
         lvmi_estimated = True
 
     criterion_text = (
-        f"ACDC: LV mass index > {_HCM_LVMI_MIN:.0f} g/m^2 and maximum wall thickness > {_HCM_WALL_MM_MIN:.0f} mm "
-        f"in diastole and a normal ejection fraction (operationalised here as EF >= {_HCM_EF_PRESERVED_MIN:.0f}%, "
-        "the preserved-EF convention used in CMR HCM studies — see module docstring)."
+        f"Bernard et al. 2018: normal cardiac function (EF > {_HCM_EF_MIN:.0f}%) with myocardial segments "
+        f"thicker than {_HCM_WALL_MM_MIN:.0f} mm in diastole. LVMI is NOT one of the paper's defining "
+        f"criteria — it says patients 'can present' LVMI above {_HCM_LVMI_INFORMATIONAL:.0f} g/m^2, an "
+        "incidental finding in some patients, not a requirement — so it's shown below for information only "
+        "and never decides whether this gate is met."
     )
-    lvmi_met = (lvmi > _HCM_LVMI_MIN) if lvmi is not None else None
     wall_met = (wall > _HCM_WALL_MM_MIN) if wall is not None else None
-    ef_met = (ef >= _HCM_EF_PRESERVED_MIN) if ef is not None else None
+    ef_met = (ef > _HCM_EF_MIN) if ef is not None else None
+    lvmi_high = (lvmi > _HCM_LVMI_INFORMATIONAL) if lvmi is not None else None
 
     reasons: list[str] = []
-    if lvmi is not None:
-        lvmi_reason = f"LVMI {lvmi:.1f} g/m^2 {'meets' if lvmi_met else 'does not meet'} the > {_HCM_LVMI_MIN:.0f} g/m^2 criterion."
-        if lvmi_estimated:
-            lvmi_reason += (
-                f" Estimated from LV mass using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
-                "this patient's own height/weight/BSA was not supplied, so treat this part with extra "
-                "caution and supply BSA for an accurate value."
-            )
-        reasons.append(lvmi_reason)
-    else:
-        reasons.append("LVMI (and LVMassG, to estimate it) not available.")
     if wall is not None:
         reasons.append(f"Max wall thickness {wall:.1f} mm {'meets' if wall_met else 'does not meet'} the > {_HCM_WALL_MM_MIN:.0f} mm criterion.")
     else:
         reasons.append("MaxWallThicknessMm not available.")
     if ef is not None:
-        reasons.append(f"EF {ef:.1f}% {'is' if ef_met else 'is not'} preserved (>= {_HCM_EF_PRESERVED_MIN:.0f}%).")
+        reasons.append(f"EF {ef:.1f}% {'meets' if ef_met else 'does not meet'} the > {_HCM_EF_MIN:.0f}% criterion.")
     else:
         reasons.append("EF not available.")
+    if lvmi is not None:
+        lvmi_reason = (
+            f"LVMI {lvmi:.1f} g/m^2 is {'above' if lvmi_high else 'at or below'} {_HCM_LVMI_INFORMATIONAL:.0f} g/m^2 "
+            "(informational only — not part of this gate's criteria, see above)."
+        )
+        if lvmi_estimated:
+            lvmi_reason += (
+                f" Estimated from LV mass using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
+                "this patient's own height/weight/BSA was not supplied, so treat this part with extra caution."
+            )
+        reasons.append(lvmi_reason)
+    else:
+        reasons.append("LVMI (and LVMassG, to estimate it) not available — informational only, does not affect this gate.")
 
-    # Three-valued AND across all three criteria — same reasoning as MINF/DCM
-    # above: any one of them already being False settles the whole AND, no
-    # matter which of the others is still missing.
-    parts = (lvmi_met, wall_met, ef_met)
+    # Three-valued AND across the two REQUIRED criteria only (wall, EF) — see
+    # MINF's identical comment above for the general rule: any one of them
+    # already being False settles the whole AND, no matter which is missing.
+    # LVMI is deliberately excluded from this decision (see criterion_text).
+    parts = (wall_met, ef_met)
     resolved_from_partial_data = False
     if any(p is False for p in parts):
         met = False
         if any(p is None for p in parts):
             resolved_from_partial_data = True
-            reasons.append("Resolved as not met from the available criteria alone — the still-missing one(s) can't change an AND that already fails.")
+            reasons.append("Resolved as not met from the available criterion alone — the still-missing one can't change an AND that already fails.")
     elif any(p is None for p in parts):
         met = None
     else:
@@ -640,11 +766,14 @@ def _gate_hcm(lv: dict, sex: str) -> dict:
 
     result = {"code": "HCM", "label": "HCM (Hypertrophic Cardiomyopathy)", "met": met, "reasons": reasons,
               "criterion_text": criterion_text, "validation_note": _PILOT_VALIDATION_NOTES["HCM"]}
-    if lvmi is not None and wall is not None and ef is not None:
+    if wall is not None and ef is not None:
+        # Margin uses only the two criteria that actually gate "met" (wall, EF)
+        # — LVMI no longer gates met-ness, so it no longer gates the margin
+        # either; keeping it in would rank patients by a criterion the paper
+        # itself says is incidental, not defining.
         result["_margin"] = min(
-            (lvmi - _HCM_LVMI_MIN) / _HCM_LVMI_MIN,
             (wall - _HCM_WALL_MM_MIN) / _HCM_WALL_MM_MIN,
-            (ef - _HCM_EF_PRESERVED_MIN) / _HCM_EF_PRESERVED_MIN,
+            (ef - _HCM_EF_MIN) / _HCM_EF_MIN,
         )
     if resolved_from_partial_data:
         result["resolved_from_partial_data"] = True
@@ -652,19 +781,25 @@ def _gate_hcm(lv: dict, sex: str) -> dict:
 
 
 # ── RV gate ──────────────────────────────────────────────────────────────────
-def _gate_rv(rv: dict) -> dict:
+def _gate_rv(rv: dict, sex: str) -> dict:
     rvedvi, rvef = rv.get("RVEDVI"), rv.get("RVEF")
-    criterion_text = f"ACDC: RVEDVI > {_RV_EDVI_MIN:.0f} mL/m^2 or RVEF < {_RV_EF_MAX:.0f}%. ACDC does not attribute a specific disease to this group."
+    rv_edvi_min = _RV_EDVI_MIN_BY_SEX.get(sex, _RV_EDVI_MIN_BY_SEX["male"])
+    criterion_text = (
+        f"Bernard et al. 2018 (ARV): RVEDVI > {_RV_EDVI_MIN_BY_SEX['male']:.0f} mL/m^2 (men) / "
+        f"> {_RV_EDVI_MIN_BY_SEX['female']:.0f} mL/m^2 (women) or RVEF < {_RV_EF_MAX:.0f}%. "
+        "The paper attributes no specific named disease to this group."
+    )
     if rvedvi is None and rvef is None:
         return {"code": "RV", "label": "RV (Abnormal Right Ventricle)", "met": None,
                 "reasons": ["RVEDVI and RVEF not available."], "criterion_text": criterion_text,
                 "validation_note": _PILOT_VALIDATION_NOTES["RV"]}
 
-    edvi_met = (rvedvi > _RV_EDVI_MIN) if rvedvi is not None else None
+    edvi_met = (rvedvi > rv_edvi_min) if rvedvi is not None else None
     ef_met = (rvef < _RV_EF_MAX) if rvef is not None else None
     reasons: list[str] = []
     if rvedvi is not None:
-        reasons.append(f"RVEDVI {rvedvi:.1f} mL/m^2 {'meets' if edvi_met else 'does not meet'} the > {_RV_EDVI_MIN:.0f} mL/m^2 criterion.")
+        sex_note = "male/unspecified threshold" if sex != "female" else "female threshold"
+        reasons.append(f"RVEDVI {rvedvi:.1f} mL/m^2 {'meets' if edvi_met else 'does not meet'} the > {rv_edvi_min:.0f} mL/m^2 criterion ({sex_note}).")
     else:
         reasons.append("RVEDVI not available (need BSA).")
     if rvef is not None:
@@ -806,21 +941,23 @@ def compute_gates(
         )
 
     gates = [
-        _gate_nor(lv_for_gates, sex),
+        _gate_nor(lv_for_gates, rv_for_gates, sex),
         _gate_minf(lv_for_gates, regional_lv_segments),
         _gate_dcm(lv_for_gates, sex),
         _gate_hcm(lv_for_gates, sex),
-        _gate_rv(rv_for_gates),
+        _gate_rv(rv_for_gates, sex),
     ]
     if lv_issues:
         note = "Absolute LV volumes for this mask are flagged unreliable (" + "; ".join(lv_issues) + ") — EDVI/LVMI were excluded from this gate rather than compared as if trustworthy."
         for code in ("NOR", "DCM", "HCM"):
             next(g for g in gates if g["code"] == code)["reasons"].append(note)
     if rv_issues:
-        next(g for g in gates if g["code"] == "RV")["reasons"].append(
+        rv_note = (
             "Absolute RV volumes for this mask are flagged unreliable (" + "; ".join(rv_issues) + ") — "
             "RVEDVI was excluded from this gate rather than compared as if trustworthy (RVEF, a ratio, is unaffected)."
         )
+        for code in ("RV", "NOR"):  # NOR also reads RVEDVI now (Bernard et al. 2018's own NOR definition requires a normal RV)
+            next(g for g in gates if g["code"] == code)["reasons"].append(rv_note)
     met_codes = [g["code"] for g in gates if g["met"] is True]
 
     rv_gate = next(g for g in gates if g["code"] == "RV")

@@ -129,6 +129,16 @@ export type DiseasePatternGate = {
    *  by an internal, never-exposed margin — a plain label, not a percentage,
    *  so it can't be misread as a diagnostic confidence. RV never gets one. */
   rank_label: "Primary match" | "Also meets" | null;
+  /** True only when `met` was resolved (true or false) despite one of the
+   *  gate's own required inputs being unavailable — e.g. DCM resolving to
+   *  "not met" from EF alone because EDVI was withheld by the volume-
+   *  reliability guard, with EF already failing DCM's own <40% half on its
+   *  own. Absent/false when every required input was actually available, or
+   *  when the gate is genuinely Pending (the available inputs alone can't
+   *  yet decide it). A UI should call this out distinctly — see the matching
+   *  "Resolved as ..." sentence this module appends to `reasons` whenever
+   *  this is true. */
+  resolved_from_partial_data?: boolean;
 };
 
 export type DiseasePatternGates = {
