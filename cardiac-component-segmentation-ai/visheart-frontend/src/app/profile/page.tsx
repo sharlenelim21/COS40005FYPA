@@ -148,8 +148,12 @@ export default function ProfilePage() {
     switch (role) {
       case "admin":
         return <Shield className="h-5 w-5 text-blue-600" />;
-      case "user":
+      case "doctor":
         return <UserCheck className="h-5 w-5 text-green-600" />;
+      case "clinical_assistant":
+        return <UserCheck className="h-5 w-5 text-purple-600" />;
+      case "educational_user":
+        return <UserCheck className="h-5 w-5 text-teal-600" />;
       case "guest":
         return <User className="h-5 w-5 text-gray-500" />;
       default:

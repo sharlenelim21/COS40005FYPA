@@ -495,20 +495,35 @@ def _gate_minf(lv: dict, regional_segments: Optional[list]) -> dict:
             f"({'meets' if regional_met else 'does not meet'} the 'abnormal regional contraction' part of the criterion)."
         )
 
-    if ef_met is None or regional_met is None:
+    # Three-valued AND: a criterion that's definitely False already decides the
+    # whole AND, regardless of whatever the still-missing one turns out to be —
+    # don't sit on "Pending" when the answer is already known (reported live,
+    # 2026-10: a mask with EF already failing MINF's <40% criterion still showed
+    # "Pending" whenever the regional-segment assessment hadn't been run, even
+    # though no regional result could ever flip an already-failed AND to true).
+    resolved_from_partial_data = False
+    if ef_met is False or regional_met is False:
+        met = False
+        if ef_met is None or regional_met is None:
+            resolved_from_partial_data = True
+            reasons.append("Resolved as not met from the available criterion alone — the still-missing one can't change an AND that already fails.")
+    elif ef_met is None or regional_met is None:
         met = None
     else:
-        met = ef_met and regional_met
+        met = True
     # Ranking margin uses MINF's DISTINGUISHING criterion only (fraction of
     # assessed segments that are abnormal) — NOT EF, which DCM shares. EF
     # being in both gates' margins made DCM's min() structurally incapable of
     # ever beating MINF's margin (DCM's EF term is a hard upper bound on its
     # own score) — see "Co-firing LV gates" above.
     margin = (len(abnormal) / len(regional_segments)) if regional_segments else None
-    return {"code": "MINF", "label": "MINF (Systolic Heart Failure with Infarction)", "met": met, "reasons": reasons,
-            "criterion_text": f"ACDC: EF < {_MINF_EF_MAX:.0f}% and several myocardial segments with abnormal contraction (operationalised here as >=1 segment at moderate/severe — see module docstring for why no fixed count is used).",
-            "validation_note": _PILOT_VALIDATION_NOTES["MINF"],
-            "_margin": margin}
+    result = {"code": "MINF", "label": "MINF (Systolic Heart Failure with Infarction)", "met": met, "reasons": reasons,
+              "criterion_text": f"ACDC: EF < {_MINF_EF_MAX:.0f}% and several myocardial segments with abnormal contraction (operationalised here as >=1 segment at moderate/severe — see module docstring for why no fixed count is used).",
+              "validation_note": _PILOT_VALIDATION_NOTES["MINF"],
+              "_margin": margin}
+    if resolved_from_partial_data:
+        result["resolved_from_partial_data"] = True
+    return result
 
 
 # ── DCM gate ─────────────────────────────────────────────────────────────────
@@ -519,32 +534,55 @@ def _gate_dcm(lv: dict, sex: str) -> dict:
         edvi = lv["EDV"] / _reference_bsa(sex)
         edvi_estimated = True
 
-    if ef is None or edvi is None:
-        missing = [n for n, v in (("EF", ef), ("EDVI (and EDV, to estimate it)", edvi)) if v is None]
-        return {"code": "DCM", "label": "DCM (Dilated Cardiomyopathy)", "met": None,
-                "reasons": [f"{', '.join(missing)} not available."],
-                "criterion_text": f"ACDC: EDVI > {_DCM_EDVI_MIN:.0f} mL/m^2 and EF < {_DCM_EF_MAX:.0f}%.",
-                "validation_note": _PILOT_VALIDATION_NOTES["DCM"]}
-    met = edvi > _DCM_EDVI_MIN and ef < _DCM_EF_MAX
-    edvi_reason = f"EDVI {edvi:.1f} mL/m^2 {'meets' if edvi > _DCM_EDVI_MIN else 'does not meet'} the > {_DCM_EDVI_MIN:.0f} mL/m^2 criterion."
-    if edvi_estimated:
-        edvi_reason += (
-            f" Estimated from EDV using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
-            "this patient's own height/weight/BSA was not supplied, so treat this part with extra "
-            "caution and supply BSA for an accurate value."
-        )
-    reasons = [
-        edvi_reason,
-        f"EF {ef:.1f}% {'meets' if ef < _DCM_EF_MAX else 'does not meet'} the < {_DCM_EF_MAX:.0f}% criterion.",
-    ]
+    criterion_text = f"ACDC: EDVI > {_DCM_EDVI_MIN:.0f} mL/m^2 and EF < {_DCM_EF_MAX:.0f}%."
+    edvi_met = (edvi > _DCM_EDVI_MIN) if edvi is not None else None
+    ef_met = (ef < _DCM_EF_MAX) if ef is not None else None
+
+    reasons: list[str] = []
+    if edvi is not None:
+        edvi_reason = f"EDVI {edvi:.1f} mL/m^2 {'meets' if edvi_met else 'does not meet'} the > {_DCM_EDVI_MIN:.0f} mL/m^2 criterion."
+        if edvi_estimated:
+            edvi_reason += (
+                f" Estimated from EDV using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
+                "this patient's own height/weight/BSA was not supplied, so treat this part with extra "
+                "caution and supply BSA for an accurate value."
+            )
+        reasons.append(edvi_reason)
+    else:
+        reasons.append("EDVI (and EDV, to estimate it) not available.")
+    if ef is not None:
+        reasons.append(f"EF {ef:.1f}% {'meets' if ef_met else 'does not meet'} the < {_DCM_EF_MAX:.0f}% criterion.")
+    else:
+        reasons.append("EF not available.")
+
+    # Three-valued AND: see MINF's identical comment above — a criterion that's
+    # already False decides the whole AND regardless of whichever other value
+    # is still missing. Reported live, 2026-10: a mask with EF 56.3% (already
+    # failing DCM's <40% half) still showed DCM as "Pending" because EDVI had
+    # been withheld by the volume-reliability guard, even though no EDVI value
+    # could ever have made this AND true once EF alone had already failed it.
+    resolved_from_partial_data = False
+    if edvi_met is False or ef_met is False:
+        met = False
+        if edvi_met is None or ef_met is None:
+            resolved_from_partial_data = True
+            reasons.append("Resolved as not met from the available criterion alone — the still-missing one can't change an AND that already fails.")
+    elif edvi_met is None or ef_met is None:
+        met = None
+    else:
+        met = True
+
     # Ranking margin uses DCM's DISTINGUISHING criterion only (EDVI excess) —
     # NOT EF, which MINF shares; see MINF's margin comment above for why
     # blending in the shared EF term structurally favoured MINF every time.
-    margin = (edvi - _DCM_EDVI_MIN) / _DCM_EDVI_MIN
-    return {"code": "DCM", "label": "DCM (Dilated Cardiomyopathy)", "met": met, "reasons": reasons,
-            "criterion_text": f"ACDC: EDVI > {_DCM_EDVI_MIN:.0f} mL/m^2 and EF < {_DCM_EF_MAX:.0f}%.",
-            "validation_note": _PILOT_VALIDATION_NOTES["DCM"],
-            "_margin": margin}
+    result = {"code": "DCM", "label": "DCM (Dilated Cardiomyopathy)", "met": met, "reasons": reasons,
+              "criterion_text": criterion_text,
+              "validation_note": _PILOT_VALIDATION_NOTES["DCM"]}
+    if edvi is not None:
+        result["_margin"] = (edvi - _DCM_EDVI_MIN) / _DCM_EDVI_MIN
+    if resolved_from_partial_data:
+        result["resolved_from_partial_data"] = True
+    return result
 
 
 # ── HCM gate ─────────────────────────────────────────────────────────────────
@@ -555,37 +593,62 @@ def _gate_hcm(lv: dict, sex: str) -> dict:
         lvmi = lv["LVMassG"] / _reference_bsa(sex)
         lvmi_estimated = True
 
-    missing = [n for n, v in (("LVMI (and LVMassG, to estimate it)", lvmi), ("MaxWallThicknessMm", wall), ("EF", ef)) if v is None]
     criterion_text = (
         f"ACDC: LV mass index > {_HCM_LVMI_MIN:.0f} g/m^2 and maximum wall thickness > {_HCM_WALL_MM_MIN:.0f} mm "
         f"in diastole and a normal ejection fraction (operationalised here as EF >= {_HCM_EF_PRESERVED_MIN:.0f}%, "
         "the preserved-EF convention used in CMR HCM studies — see module docstring)."
     )
-    if missing:
-        return {"code": "HCM", "label": "HCM (Hypertrophic Cardiomyopathy)", "met": None,
-                "reasons": [f"{', '.join(missing)} not available."], "criterion_text": criterion_text,
-                "validation_note": _PILOT_VALIDATION_NOTES["HCM"]}
-    met = lvmi > _HCM_LVMI_MIN and wall > _HCM_WALL_MM_MIN and ef >= _HCM_EF_PRESERVED_MIN
-    lvmi_reason = f"LVMI {lvmi:.1f} g/m^2 {'meets' if lvmi > _HCM_LVMI_MIN else 'does not meet'} the > {_HCM_LVMI_MIN:.0f} g/m^2 criterion."
-    if lvmi_estimated:
-        lvmi_reason += (
-            f" Estimated from LV mass using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
-            "this patient's own height/weight/BSA was not supplied, so treat this part with extra "
-            "caution and supply BSA for an accurate value."
+    lvmi_met = (lvmi > _HCM_LVMI_MIN) if lvmi is not None else None
+    wall_met = (wall > _HCM_WALL_MM_MIN) if wall is not None else None
+    ef_met = (ef >= _HCM_EF_PRESERVED_MIN) if ef is not None else None
+
+    reasons: list[str] = []
+    if lvmi is not None:
+        lvmi_reason = f"LVMI {lvmi:.1f} g/m^2 {'meets' if lvmi_met else 'does not meet'} the > {_HCM_LVMI_MIN:.0f} g/m^2 criterion."
+        if lvmi_estimated:
+            lvmi_reason += (
+                f" Estimated from LV mass using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
+                "this patient's own height/weight/BSA was not supplied, so treat this part with extra "
+                "caution and supply BSA for an accurate value."
+            )
+        reasons.append(lvmi_reason)
+    else:
+        reasons.append("LVMI (and LVMassG, to estimate it) not available.")
+    if wall is not None:
+        reasons.append(f"Max wall thickness {wall:.1f} mm {'meets' if wall_met else 'does not meet'} the > {_HCM_WALL_MM_MIN:.0f} mm criterion.")
+    else:
+        reasons.append("MaxWallThicknessMm not available.")
+    if ef is not None:
+        reasons.append(f"EF {ef:.1f}% {'is' if ef_met else 'is not'} preserved (>= {_HCM_EF_PRESERVED_MIN:.0f}%).")
+    else:
+        reasons.append("EF not available.")
+
+    # Three-valued AND across all three criteria — same reasoning as MINF/DCM
+    # above: any one of them already being False settles the whole AND, no
+    # matter which of the others is still missing.
+    parts = (lvmi_met, wall_met, ef_met)
+    resolved_from_partial_data = False
+    if any(p is False for p in parts):
+        met = False
+        if any(p is None for p in parts):
+            resolved_from_partial_data = True
+            reasons.append("Resolved as not met from the available criteria alone — the still-missing one(s) can't change an AND that already fails.")
+    elif any(p is None for p in parts):
+        met = None
+    else:
+        met = True
+
+    result = {"code": "HCM", "label": "HCM (Hypertrophic Cardiomyopathy)", "met": met, "reasons": reasons,
+              "criterion_text": criterion_text, "validation_note": _PILOT_VALIDATION_NOTES["HCM"]}
+    if lvmi is not None and wall is not None and ef is not None:
+        result["_margin"] = min(
+            (lvmi - _HCM_LVMI_MIN) / _HCM_LVMI_MIN,
+            (wall - _HCM_WALL_MM_MIN) / _HCM_WALL_MM_MIN,
+            (ef - _HCM_EF_PRESERVED_MIN) / _HCM_EF_PRESERVED_MIN,
         )
-    reasons = [
-        lvmi_reason,
-        f"Max wall thickness {wall:.1f} mm {'meets' if wall > _HCM_WALL_MM_MIN else 'does not meet'} the > {_HCM_WALL_MM_MIN:.0f} mm criterion.",
-        f"EF {ef:.1f}% {'is' if ef >= _HCM_EF_PRESERVED_MIN else 'is not'} preserved (>= {_HCM_EF_PRESERVED_MIN:.0f}%).",
-    ]
-    margin = min(
-        (lvmi - _HCM_LVMI_MIN) / _HCM_LVMI_MIN,
-        (wall - _HCM_WALL_MM_MIN) / _HCM_WALL_MM_MIN,
-        (ef - _HCM_EF_PRESERVED_MIN) / _HCM_EF_PRESERVED_MIN,
-    )
-    return {"code": "HCM", "label": "HCM (Hypertrophic Cardiomyopathy)", "met": met, "reasons": reasons, "criterion_text": criterion_text,
-            "validation_note": _PILOT_VALIDATION_NOTES["HCM"],
-            "_margin": margin}
+    if resolved_from_partial_data:
+        result["resolved_from_partial_data"] = True
+    return result
 
 
 # ── RV gate ──────────────────────────────────────────────────────────────────
@@ -599,7 +662,6 @@ def _gate_rv(rv: dict) -> dict:
 
     edvi_met = (rvedvi > _RV_EDVI_MIN) if rvedvi is not None else None
     ef_met = (rvef < _RV_EF_MAX) if rvef is not None else None
-    met = bool(edvi_met) or bool(ef_met)
     reasons: list[str] = []
     if rvedvi is not None:
         reasons.append(f"RVEDVI {rvedvi:.1f} mL/m^2 {'meets' if edvi_met else 'does not meet'} the > {_RV_EDVI_MIN:.0f} mL/m^2 criterion.")
@@ -609,8 +671,31 @@ def _gate_rv(rv: dict) -> dict:
         reasons.append(f"RVEF {rvef:.1f}% {'meets' if ef_met else 'does not meet'} the < {_RV_EF_MAX:.0f}% criterion.")
     else:
         reasons.append("RVEF not available.")
-    return {"code": "RV", "label": "RV (Abnormal Right Ventricle)", "met": met, "reasons": reasons, "criterion_text": criterion_text,
-            "validation_note": _PILOT_VALIDATION_NOTES["RV"]}
+
+    # Three-valued OR: `bool(None) or bool(False)` used to collapse to False,
+    # which wrongly resolved "not met" whenever the AVAILABLE criterion failed
+    # but the MISSING one was never actually checked — the missing side could
+    # still have been true, which this module has no way to rule out. An OR
+    # only resolves to False once BOTH sides are confirmed False; with exactly
+    # one side still unknown and the known side False, the honest answer is
+    # Pending, not Not met.
+    resolved_from_partial_data = False
+    if edvi_met is True or ef_met is True:
+        met = True
+        if edvi_met is None or ef_met is None:
+            resolved_from_partial_data = True
+            reasons.append("Resolved as met from the available criterion alone — an OR only needs one side true.")
+    elif edvi_met is None or ef_met is None:
+        met = None
+        reasons.append("Cannot resolve to 'not met' yet — the still-missing value could still meet its own criterion (this is an OR).")
+    else:
+        met = False
+
+    result = {"code": "RV", "label": "RV (Abnormal Right Ventricle)", "met": met, "reasons": reasons, "criterion_text": criterion_text,
+              "validation_note": _PILOT_VALIDATION_NOTES["RV"]}
+    if resolved_from_partial_data:
+        result["resolved_from_partial_data"] = True
+    return result
 
 
 def _rv_severity(rv: dict, lv: dict) -> Optional[dict]:

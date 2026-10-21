@@ -62,6 +62,13 @@ export interface ProjectData {
     affineMatrix?: number[][];
     createdAt?: string;
     updatedAt?: string;
+    /** True for the owning Doctor/Admin; false for an assigned Clinical Assistant. */
+    isOwner?: boolean;
+    /** Whether the current viewer may run/edit/compute anything on this project — false
+     *  for a Clinical Assistant assigned in View-Only mode. Every run/edit/compute action
+     *  across the project's pages must be disabled when this is false. */
+    canRun?: boolean;
+    assignmentMode?: "run" | "view_only" | null;
 }
 
 /**

@@ -9,8 +9,8 @@ import {
   JobStatus,
   jobModel,
   projectSegmentationMaskModel,
-  readProject,
   updateJob,
+  userCanAccessProject,
 } from "./database";
 import {
   segmentationSource,
@@ -76,7 +76,6 @@ export type LandmarkCompletion = Record<"medsam" | "unet", { uuid: string; creat
 
 export const findLandmarkCompletionForCurrentMasks = async (
   projectId: string,
-  userId: string,
 ): Promise<LandmarkCompletion> => {
   const out: LandmarkCompletion = { medsam: null, unet: null };
   for (const model of ["medsam", "unet"] as const) {
@@ -89,7 +88,6 @@ export const findLandmarkCompletionForCurrentMasks = async (
       .findOne(
         {
           projectid: projectId,
-          userid: userId,
           model_used: /landmark/i,
           status: JobStatus.COMPLETED,
           segmentationModel: model === "unet" ? SegmentationModel.UNET : { $in: [SegmentationModel.MEDSAM, null] },
@@ -161,15 +159,13 @@ export async function startLandmarkInference(
     return { success: false, message: "S3 bucket is missing." };
   }
 
-  const projectResult = await readProject(projectId);
-  if (!projectResult.success || !projectResult.projects?.length) {
-    return { success: false, message: `Project with ID ${projectId} not found.` };
-  }
-
-  const project = projectResult.projects[0];
-  if (project.userid?.toString() !== user?._id?.toString()) {
+  // Owner, Admin, or a Run-mode assigned Clinical Assistant may run landmark detection — a
+  // ViewOnly-mode assistant is rejected.
+  const access = await userCanAccessProject(projectId, user);
+  if (!access.canRun || !access.project) {
     return { success: false, message: "Project not found." };
   }
+  const project = access.project;
 
   if (!project.originalfilepath) {
     return { success: false, message: "Project original NIfTI file is missing." };

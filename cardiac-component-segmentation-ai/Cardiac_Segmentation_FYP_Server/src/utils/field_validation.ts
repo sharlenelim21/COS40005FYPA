@@ -21,8 +21,12 @@ const validateFields: ValidationChain[] = [
     .isEmail()
     .withMessage('A valid email address is required.'),
   body('phone')
-    .matches(/^\d{10,15}$/)
-    .withMessage('Phone number must be between 10 and 15 digits.')
+    // Accepts Malaysian formats with optional spaces/dashes (e.g. "012-345 6789",
+    // "+60123456789", "0123456789"), normalises to digits-with-optional-leading-+ before
+    // matching: +60/60/0 prefix, then a mobile/landline area digit, then 6-8 more digits.
+    .customSanitizer((value: string) => (typeof value === 'string' ? value.replace(/[\s-]/g, '') : value))
+    .matches(/^(?:\+?60|0)\d{8,10}$/)
+    .withMessage('Enter a valid Malaysian phone number, e.g. 012-345 6789 or +60123456789.')
 ];
 
 export default validateFields;

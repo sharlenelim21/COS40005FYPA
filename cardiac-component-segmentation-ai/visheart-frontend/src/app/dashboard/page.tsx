@@ -6,7 +6,10 @@ import { useAuth } from "@/context/auth-context";
 import { useGpuStatus, useUserProjects, useUserJobs, useUserStats } from "@/lib/dashboard-hooks";
 import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStatus";
 import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstructionStatus";
-import { ShowForUser, ShowForGuest, ShowForRegisteredUser, ShowForAdmin } from "@/components/RoleGuard";
+import { ShowForGuest, ShowForAdmin, ShowForProjectCreator, ShowForDoctorOrAdmin, ShowForClinicalAssistant } from "@/components/RoleGuard";
+import { ShareToAssistantDialog } from "@/components/ShareToAssistantDialog";
+import { MaskReviewPanel } from "@/components/MaskReviewPanel";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { JobProgress } from "@/components/ui/kinetic-progress";
@@ -41,11 +44,13 @@ import {
   List,
   Edit,
   Trash2,
+  Share2,
+  FileEdit,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { projectApi, segmentationApi } from "@/lib/api";
+import { projectApi } from "@/lib/api";
 import { FileUploadDialog } from "@/components/upload/FileUploadDialog";
 import { SegmentationIndicator } from "@/components/dashboard/SegmentationIndicator";
 import { ReconstructionIndicator } from "@/components/dashboard/ReconstructionIndicator";
@@ -81,13 +86,25 @@ const getStatusDisplay = (status: string) => {
   }
 };
 
+const DASHBOARD_ROLE_LABELS: Record<string, string> = {
+  admin: "Admin",
+  doctor: "Doctor",
+  clinical_assistant: "Clinical Assistant",
+  educational_user: "Educational",
+  guest: "Guest",
+};
+
 // Helper function to get role icon
 const getRoleIcon = (role: string | undefined) => {
   switch (role) {
     case "admin":
       return <Shield className="h-4 w-4 text-blue-600" />;
-    case "user":
+    case "doctor":
       return <UserCheck className="h-4 w-4 text-green-600" />;
+    case "clinical_assistant":
+      return <UserCheck className="h-4 w-4 text-purple-600" />;
+    case "educational_user":
+      return <UserCheck className="h-4 w-4 text-teal-600" />;
     case "guest":
       return <User className="h-4 w-4 text-gray-500" />;
     default:
@@ -103,7 +120,11 @@ function DashboardPage() {
   const [activeTab, setActiveTab] = useState(initialTab);
   useEffect(() => { setActiveTab(searchParams.get("tab") ?? "overview"); }, [searchParams]);
   const isAuthenticated = Boolean(user);
-  const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(isAuthenticated);
+  const isClinicalAssistant = user?.role === "clinical_assistant";
+  const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(
+    isAuthenticated,
+    isClinicalAssistant ? "assigned" : "own",
+  );
   const { recentJobs, isLoading: jobsLoading, refresh: refreshJobs } = useUserJobs(isAuthenticated);
   const { processingUnit, isLoading: gpuLoading, refresh: refreshGpuStatus } = useGpuStatus();
   const userStats = useUserStats(projects, recentJobs);
@@ -171,6 +192,10 @@ function DashboardPage() {
 
   // State for upload dialog
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  // State for the "Share with Clinical Assistant" dialog (Doctor/Admin only)
+  const [shareTarget, setShareTarget] = useState<{ projectId: string; name: string } | null>(null);
+  // State for the Mask Review dialog (Doctor/Admin only) — reviewing a Clinical Assistant's drafts
+  const [reviewTarget, setReviewTarget] = useState<{ projectId: string; name: string } | null>(null);
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
   const [walkthroughStep, setWalkthroughStep] = useState(0);
 
@@ -302,32 +327,6 @@ function DashboardPage() {
 
   // Handle project actions
 
-  const handleExportProject = async (projectId: string) => {
-    try {
-      console.log(`[Export] Starting export for project: ${projectId}`);
-      const exportResult = await segmentationApi.exportProjectData(projectId);
-      console.log(`[Export] Received export result:`, {
-        blobSize: exportResult.blob.size,
-        blobType: exportResult.blob.type,
-        expectedSize: exportResult.fileSizeBytes,
-        filename: exportResult.suggestedFilename,
-      });
-
-      const url = window.URL.createObjectURL(exportResult.blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = exportResult.suggestedFilename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
-      console.log(`[Export] Successfully downloaded export for project: ${projectId} as ${exportResult.suggestedFilename}`);
-    } catch (error) {
-      console.error("Error exporting project:", error);
-    }
-  };
-
   const handleSaveProject = async (projectId: string, isSaved: boolean) => {
     try {
       await projectApi.saveProject(projectId, isSaved);
@@ -437,7 +436,7 @@ function DashboardPage() {
               Welcome back, <span className="font-semibold">{user.role === "guest" ? "Guest User" : user.username}.</span>
             </span>
             <Badge variant="outline" className="ml-2">
-              {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+              {DASHBOARD_ROLE_LABELS[user.role] ?? user.role}
             </Badge>
           </div>
         </div>
@@ -490,11 +489,57 @@ function DashboardPage() {
         </Alert>
       </ShowForGuest>
 
+      {/* Educational User elevation-status banner */}
+      {user.role === "educational_user" && (
+        <>
+          {(user.elevationStatus === "none" || !user.elevationStatus) && (
+            <Alert className="border-teal-200 bg-teal-50 dark:border-teal-800 dark:bg-teal-950/30">
+              <AlertCircle className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+              <AlertDescription className="text-teal-800 dark:text-teal-200">
+                <strong>Educational access</strong> — manage and run your own projects, same as any user.
+                <Link href="/request-access">
+                  <Button variant="link" className="ml-2 h-auto p-0 text-teal-800 dark:text-teal-200 underline hover:text-teal-900 dark:hover:text-teal-100">
+                    Request Clinical Access
+                  </Button>
+                </Link>
+              </AlertDescription>
+            </Alert>
+          )}
+          {user.elevationStatus === "pending" && (
+            <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+              <RefreshCw className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <AlertDescription className="text-amber-800 dark:text-amber-200">
+                Your staff verification is pending Admin review. You keep educational access in the meantime.
+              </AlertDescription>
+            </Alert>
+          )}
+          {user.elevationStatus === "rejected" && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Your clinical access request was rejected.
+                <Link href="/request-access">
+                  <Button variant="link" className="ml-2 h-auto p-0 underline">
+                    Submit a new request
+                  </Button>
+                </Link>
+              </AlertDescription>
+            </Alert>
+          )}
+        </>
+      )}
+
       {/* Main Dashboard Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="projects">Projects</TabsTrigger>
+          <TabsTrigger value="projects">
+            {user?.role === "doctor" || user?.role === "admin"
+              ? "Case History"
+              : isClinicalAssistant
+                ? "Assigned Cases"
+                : "Projects"}
+          </TabsTrigger>
           <TabsTrigger value="jobs">Jobs</TabsTrigger>
         </TabsList>
 
@@ -579,7 +624,7 @@ function DashboardPage() {
               <CardDescription>Common tasks and shortcuts</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <ShowForUser fallback={null}>
+              <ShowForProjectCreator fallback={null}>
                 <Button
                   className="w-full justify-start transition-all duration-300 ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30"
                   onClick={() => setUploadDialogOpen(true)}
@@ -587,34 +632,25 @@ function DashboardPage() {
                   <Upload className="mr-2 h-4 w-4" />
                   New Project
                 </Button>
-              </ShowForUser>
-
-              <Link href="/profile">
-                <Button variant="outline" className="w-full justify-start">
-                  <Settings className="mr-2 h-4 w-4" />
-                  Profile Settings
-                </Button>
-              </Link>
+              </ShowForProjectCreator>
 
               <ShowForAdmin fallback={null}>
-                <Link href="/extend-training">
+                <Link href="/admin">
                   <Button variant="outline" className="w-full justify-start">
-                    <Brain className="mr-2 h-4 w-4" />
-                    UNet Extend Training
+                    <Shield className="mr-2 h-4 w-4" />
+                    Admin Panel
                   </Button>
                 </Link>
               </ShowForAdmin>
 
-              {/* <ShowForUser fallback={null}>
-                {user?.role === "admin" && (
-                  <Link href="/admin">
-                    <Button variant="outline" className="w-full justify-start">
-                      <Shield className="mr-2 h-4 w-4" />
-                      Go to Admin Panel
-                    </Button>
-                  </Link>
-                )}
-              </ShowForUser> */}
+              {user?.role !== "admin" && (
+                <Link href="/profile">
+                  <Button variant="outline" className="w-full justify-start">
+                    <Settings className="mr-2 h-4 w-4" />
+                    Profile Settings
+                  </Button>
+                </Link>
+              )}
             </CardContent>
           </Card>
 
@@ -652,7 +688,7 @@ function DashboardPage() {
                             </p>
                           </div>
                         </div>
-                        <ShowForRegisteredUser fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
+                        <ShowForProjectCreator fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -667,7 +703,7 @@ function DashboardPage() {
                               {project.isSaved ? "Saved" : "Temp"}
                             </Badge>
                           </Button>
-                        </ShowForRegisteredUser>
+                        </ShowForProjectCreator>
                     </div>
                   ))}
                 {projects.length === 0 && <p className="text-muted-foreground py-4 text-center text-sm">No projects yet. Upload your first project to get started.</p>}
@@ -729,8 +765,18 @@ function DashboardPage() {
         <TabsContent value="projects" className="space-y-4">
           <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-2xl font-bold">My Projects</h2>
-              <p className="text-muted-foreground">Manage your cardiac imaging projects</p>
+              <h2 className="text-2xl font-bold">
+                {isClinicalAssistant
+                  ? "Cases Assigned to Me"
+                  : user?.role === "doctor" || user?.role === "admin"
+                    ? "Case History"
+                    : "My Projects"}
+              </h2>
+              <p className="text-muted-foreground">
+                {isClinicalAssistant
+                  ? "View and run AI on the cases a Doctor has shared with you"
+                  : "Manage your cardiac imaging projects"}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={() => window.open("/sample", "_blank")} className="hidden sm:flex">
@@ -740,7 +786,9 @@ function DashboardPage() {
               <Button variant="outline" onClick={() => window.open("/sample", "_blank")} className="sm:hidden">
                 <FileText className="h-4 w-4" />
               </Button>
-              <ShowForUser fallback={null}>
+              {/* Only accounts that own/create projects get an upload entry point — a Clinical
+                  Assistant only ever acts on cases a Doctor has already shared with them. */}
+              <ShowForProjectCreator fallback={null}>
                 <Button onClick={() => setUploadDialogOpen(true)} className="hidden sm:flex">
                   <Upload className="mr-2 h-4 w-4" />
                   Upload New Project
@@ -748,12 +796,28 @@ function DashboardPage() {
                 <Button onClick={() => setUploadDialogOpen(true)} className="sm:hidden">
                   <Upload className="h-4 w-4" />
                 </Button>
-              </ShowForUser>
+              </ShowForProjectCreator>
             </div>
           </div>
 
+          {/* Clinical Assistant scope banner */}
+          <ShowForClinicalAssistant fallback={null}>
+            <Alert>
+              <AlertCircle className="inline h-4 w-4" />
+              <AlertTitle>Assigned cases only</AlertTitle>
+              <AlertDescription>
+                You can only see cases a Doctor has assigned to you. A case marked{" "}
+                <span className="font-medium">Can Run</span> lets you run AI and edit masks — your
+                edits save as a draft for the Doctor to review, never overwriting their original
+                work. A case marked <span className="font-medium">View Only</span> lets you switch
+                between result tabs to see what the Doctor already ran, but nothing can be run or
+                edited.
+              </AlertDescription>
+            </Alert>
+          </ShowForClinicalAssistant>
+
           {/* Project Management Info */}
-          <ShowForRegisteredUser>
+          <ShowForProjectCreator>
             <Alert>
               <AlertCircle className="inline h-4 w-4" />
               <AlertTitle>Project Management:</AlertTitle>
@@ -772,7 +836,7 @@ function DashboardPage() {
                 </span>
               </AlertDescription>
             </Alert>
-          </ShowForRegisteredUser>
+          </ShowForProjectCreator>
 
           <ShowForGuest>
             <Alert className="opacity-60">
@@ -843,16 +907,20 @@ function DashboardPage() {
                 <FolderOpen className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                 <h3 className="text-lg font-semibold mb-2">{searchTerm ? "No projects match your search" : "No projects yet"}</h3>
                 <p className="text-muted-foreground mb-4">
-                  {searchTerm ? "Try adjusting your search terms or clear the search to see all projects." : "Upload your first project to get started with cardiac segmentation."}
+                  {searchTerm
+                    ? "Try adjusting your search terms or clear the search to see all projects."
+                    : isClinicalAssistant
+                      ? "A Doctor hasn't shared any cases with you yet."
+                      : "Upload your first project to get started with cardiac segmentation."}
                 </p>
-                <ShowForUser fallback={null}>
+                <ShowForProjectCreator fallback={null}>
                   {!searchTerm && (
                     <Button onClick={() => setUploadDialogOpen(true)}>
                       <Upload className="mr-2 h-4 w-4" />
                       Upload First Project
                     </Button>
                   )}
-                </ShowForUser>
+                </ShowForProjectCreator>
               </CardContent>
             </Card>
           ) : viewMode === "card" ? (
@@ -864,7 +932,13 @@ function DashboardPage() {
                     onUpdate={refreshProjects}
                     onSave={handleSaveProject}
                     onDelete={handleDeleteProject}
-                    onExport={handleExportProject}
+                    onExport={(projectId) => router.push(`/project/${projectId}/report`)}
+                    onShare={(projectId, name) => setShareTarget({ projectId, name })}
+                    onReview={
+                      (project.assignedAssistants ?? []).some((a) => a.mode === "run")
+                        ? (projectId, name) => setReviewTarget({ projectId, name })
+                        : undefined
+                    }
                     segmentationIndicator={<SegmentationIndicator status={segmentationStatuses[project.projectId]} variant="badge" />}
                     reconstructionIndicator={<ReconstructionIndicator status={reconstructionStatuses[project.projectId]} variant="badge" />}
                     hasMasks={segmentationStatuses[project.projectId]?.hasMasks || false}
@@ -903,7 +977,7 @@ function DashboardPage() {
                         </TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-2">
-                            <ShowForRegisteredUser fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
+                            <ShowForProjectCreator fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -915,10 +989,30 @@ function DashboardPage() {
                                   {project.isSaved ? "Saved" : "Temp"}
                                 </Badge>
                               </Button>
-                            </ShowForRegisteredUser>
+                            </ShowForProjectCreator>
                             <SegmentationIndicator status={segmentationStatuses[project.projectId]} variant="badge" />
                             <ReconstructionIndicator status={reconstructionStatuses[project.projectId]} variant="badge" />
+                            {Boolean(project.assignedAssistants?.length) && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap">
+                                Shared ({project.assignedAssistants!.length})
+                              </Badge>
+                            )}
+                            {isClinicalAssistant && (
+                              <Badge
+                                variant="outline"
+                                className={`text-xs whitespace-nowrap ${project.assignmentMode === "run" ? "border-green-300 text-green-700 dark:border-green-700 dark:text-green-400" : "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"}`}
+                              >
+                                {/* Default to the SAFER label (View Only) whenever the mode is
+                                    missing/unrecognized — never assume the more-permissive state. */}
+                                {project.assignmentMode === "run" ? "Can Run" : "View Only"}
+                              </Badge>
+                            )}
                           </div>
+                          {isClinicalAssistant && project.assignmentInstructions && (
+                            <p className="mt-1 max-w-xs truncate text-xs text-muted-foreground" title={project.assignmentInstructions}>
+                              Note: {project.assignmentInstructions}
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell className="hidden sm:table-cell">{formatFileSize(project.filesize)}</TableCell>
                         <TableCell className="hidden md:table-cell">
@@ -956,13 +1050,41 @@ function DashboardPage() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
-                              onClick={() => handleExportProject(project.projectId)}
+                              onClick={() => router.push(`/project/${project.projectId}/report`)}
                               disabled={!segmentationStatuses[project.projectId]?.hasMasks}
-                              title={segmentationStatuses[project.projectId]?.hasMasks ? "Export segmentation as NIfTI" : "Complete segmentation to enable export"}
+                              title={
+                                segmentationStatuses[project.projectId]?.hasMasks
+                                  ? "Open report — download as CSV or save as PDF"
+                                  : "Complete segmentation to enable the report"
+                              }
                             >
                               <Download className="h-4 w-4" />
                             </Button>
-                            <ShowForRegisteredUser fallback={null}>
+                            <ShowForDoctorOrAdmin fallback={null}>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 w-8 p-0"
+                                onClick={() => setShareTarget({ projectId: project.projectId, name: project.name })}
+                                title="Share with Clinical Assistant"
+                              >
+                                <Share2 className="h-4 w-4" />
+                              </Button>
+                              {/* Nothing to review when every assigned assistant is View-Only — they
+                                  can't edit, so no drafts can exist. */}
+                              {(project.assignedAssistants ?? []).some((a) => a.mode === "run") && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-8 w-8 p-0"
+                                  onClick={() => setReviewTarget({ projectId: project.projectId, name: project.name })}
+                                  title="Review Clinical Assistant drafts"
+                                >
+                                  <FileEdit className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </ShowForDoctorOrAdmin>
+                            <ShowForProjectCreator fallback={null}>
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -972,7 +1094,7 @@ function DashboardPage() {
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
-                            </ShowForRegisteredUser>
+                            </ShowForProjectCreator>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -1182,6 +1304,29 @@ function DashboardPage() {
 
       {/* File Upload Dialog */}
       <FileUploadDialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen} onUploadSuccess={handleUploadSuccess} />
+
+      {/* Share with Clinical Assistant Dialog */}
+      {shareTarget && (
+        <ShareToAssistantDialog
+          projectId={shareTarget.projectId}
+          projectName={shareTarget.name}
+          open={Boolean(shareTarget)}
+          onOpenChange={(open) => { if (!open) setShareTarget(null); }}
+          onShared={refreshProjects}
+        />
+      )}
+
+      {/* Mask Review Dialog — a Clinical Assistant's pending draft edits for one project */}
+      <Dialog open={Boolean(reviewTarget)} onOpenChange={(open) => { if (!open) setReviewTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{reviewTarget?.name}</DialogTitle>
+          </DialogHeader>
+          {reviewTarget && (
+            <MaskReviewPanel projectId={reviewTarget.projectId} onReviewed={refreshProjects} />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* First-run walkthrough */}
       <AlertDialog open={walkthroughOpen} onOpenChange={setWalkthroughOpen}>

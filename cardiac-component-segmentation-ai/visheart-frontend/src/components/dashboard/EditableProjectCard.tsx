@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Edit2, Check, X, Loader2, Edit, Download, Trash2 } from "lucide-react";
+import { Edit2, Check, X, Loader2, Edit, Download, Trash2, Share2, FileEdit } from "lucide-react";
 import { Project } from "@/types/dashboard";
 import { projectApi } from "@/lib/api";
-import { ShowForRegisteredUser } from "@/components/RoleGuard";
+import { ShowForProjectCreator, ShowForDoctorOrAdmin } from "@/components/RoleGuard";
 
 interface EditableProjectCardProps {
   project: Project;
@@ -14,12 +14,14 @@ interface EditableProjectCardProps {
   onSave: (projectId: string, isSaved: boolean) => void;
   onDelete: (projectId: string, projectName: string) => void;
   onExport: (projectId: string) => void;
+  onShare?: (projectId: string, projectName: string) => void;
+  onReview?: (projectId: string, projectName: string) => void;
   segmentationIndicator?: React.ReactNode;
   reconstructionIndicator?: React.ReactNode;
   hasMasks?: boolean; // Add mask availability info
 }
 
-export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExport, segmentationIndicator, reconstructionIndicator, hasMasks = false }: EditableProjectCardProps) {
+export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExport, onShare, onReview, segmentationIndicator, reconstructionIndicator, hasMasks = false }: EditableProjectCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [editedName, setEditedName] = useState(project.name);
@@ -116,11 +118,11 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
                   <p className="text-lg font-semibold truncate" title={project.name}>
                     {project.name}
                   </p>
-                  <ShowForRegisteredUser fallback={null}>
+                  <ShowForProjectCreator fallback={null}>
                     <Button variant="ghost" size="sm" onClick={handleStartEdit} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 h-auto self-end">
                       <Edit2 className="h-3 w-3" />
                     </Button>
-                  </ShowForRegisteredUser>
+                  </ShowForProjectCreator>
                 </div>
                 <p className="text-sm text-muted-foreground truncate overflow-hidden text-ellipsis whitespace-nowrap max-w-[90px] sm:max-w-[140px] md:max-w-[200px] lg:max-w-[260px]" title={project.description || "No description"}>
                   {project.description || "No description"}
@@ -141,20 +143,41 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
               </div>
             ) : (
               <div className="flex flex-col items-end gap-1 md:gap-2">
-                <ShowForRegisteredUser fallback={<Badge variant={project.isSaved ? "default" : "secondary"} className="text-xs whitespace-nowrap">{project.isSaved ? "Saved" : "Temp"}</Badge>}>
+                <ShowForProjectCreator fallback={<Badge variant={project.isSaved ? "default" : "secondary"} className="text-xs whitespace-nowrap">{project.isSaved ? "Saved" : "Temp"}</Badge>}>
                   <Button variant="ghost" size="sm" onClick={() => onSave(project.projectId, !project.isSaved)} className="h-auto p-1">
                     <Badge variant={project.isSaved ? "default" : "secondary"} className="cursor-pointer hover:opacity-80 text-xs whitespace-nowrap">
                       {project.isSaved ? "Saved" : "Temp"}
                     </Badge>
                   </Button>
-                </ShowForRegisteredUser>
+                </ShowForProjectCreator>
                 {segmentationIndicator}
                 {reconstructionIndicator}
+                {Boolean(project.assignedAssistants?.length) && (
+                  <Badge variant="outline" className="text-xs whitespace-nowrap">
+                    Shared ({project.assignedAssistants!.length})
+                  </Badge>
+                )}
+                {project.assignmentMode && (
+                  <Badge
+                    variant="outline"
+                    className={`text-xs whitespace-nowrap ${project.assignmentMode === "view_only" ? "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400" : "border-green-300 text-green-700 dark:border-green-700 dark:text-green-400"}`}
+                  >
+                    {project.assignmentMode === "view_only" ? "View Only" : "Can Run"}
+                  </Badge>
+                )}
               </div>
             )}
           </div>
         </div>
       </CardHeader>
+
+      {project.assignmentMode && project.assignmentInstructions && (
+        <div className="-mt-2 px-6">
+          <p className="truncate text-xs text-muted-foreground" title={project.assignmentInstructions}>
+            Note: {project.assignmentInstructions}
+          </p>
+        </div>
+      )}
 
       <CardContent className="space-y-3">
         <div className="grid grid-cols-2 gap-2 text-sm">
@@ -209,19 +232,43 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
             className="flex-1"
             onClick={() => onExport(project.projectId)}
             disabled={!hasMasks}
-            title={hasMasks ? "Export segmentation as NIfTI" : "Complete segmentation to enable export"}
+            title={hasMasks ? "Open report — download as CSV or save as PDF" : "Complete segmentation to enable the report"}
           >
             <Download className="mr-1 h-3 w-3" />
-            Export
+            Report
           </Button>
+          {onShare && (
+            <ShowForDoctorOrAdmin fallback={null}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onShare(project.projectId, project.name)}
+                title="Share with Clinical Assistant"
+              >
+                <Share2 className="h-3 w-3" />
+              </Button>
+            </ShowForDoctorOrAdmin>
+          )}
+          {onReview && (
+            <ShowForDoctorOrAdmin fallback={null}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onReview(project.projectId, project.name)}
+                title="Review Clinical Assistant drafts"
+              >
+                <FileEdit className="h-3 w-3" />
+              </Button>
+            </ShowForDoctorOrAdmin>
+          )}
         </div>
 
-        <ShowForRegisteredUser fallback={null}>
+        <ShowForProjectCreator fallback={null}>
           <Button size="sm" variant="destructive" className="w-full" onClick={() => onDelete(project.projectId, project.name)}>
             <Trash2 className="mr-1 h-3 w-3" />
             Delete Project
           </Button>
-        </ShowForRegisteredUser>
+        </ShowForProjectCreator>
       </CardContent>
     </Card>
   );

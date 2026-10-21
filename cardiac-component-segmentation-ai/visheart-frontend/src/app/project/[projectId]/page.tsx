@@ -133,14 +133,23 @@ function ProjectPageInner() {
     if (loading !== "done") return;
     if (!requestedBuildChamber) return;
     if (handledBuildParamRef.current) return;
+    if (projectData?.canRun === false) return; // View-only — a deep link can't bypass the lock.
     handledBuildParamRef.current = true;
     if (requestedBuildModel) setSelectedModelForCreation(requestedBuildModel);
     setPresetChamber(requestedBuildChamber);
     setShowReconstructionDialog(true);
-  }, [loading, requestedBuildChamber, requestedBuildModel]);
+  }, [loading, requestedBuildChamber, requestedBuildModel, projectData?.canRun]);
   const { processingUnit } = useGpuStatus();
   const { user } = useAuth();
   const isGuest = user?.role === "guest";
+  // Locks every run/edit/compute entry point for a Clinical Assistant assigned in
+  // View-Only mode. Undefined (still loading, or an owner — the backend only sends this
+  // field at all) must never lock anything, so this only ever turns true once the backend
+  // has explicitly said canRun === false.
+  const viewOnlyLocked = projectData?.canRun === false;
+  // A Clinical Assistant (Run or View-Only) is never the owner — rename/delete stay
+  // owner-only (the backend already enforces this; this just matches the UI to it).
+  const isProjectOwner = projectData?.isOwner !== false;
 
   // Update page title dynamically
   useEffect(() => {
@@ -1032,6 +1041,23 @@ function ProjectPageInner() {
             </div>
           </div>
         </Button>
+      ) : viewOnlyLocked ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Create 4D Reconstruction</p>
+                  <p className="text-xs text-muted-foreground">View-only access</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Ask the Doctor for Run access to build a new reconstruction.</p>
+          </TooltipContent>
+        </Tooltip>
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1162,10 +1188,11 @@ function ProjectPageInner() {
             <span className="shrink-0">
               <Button
                 onClick={handleStartSegmentation}
-                disabled={pipelineBusy}
+                disabled={pipelineBusy || viewOnlyLocked}
                 variant="outline"
                 size="sm"
                 aria-label="Re-run Segmentation"
+                className={viewOnlyLocked ? "opacity-60 cursor-not-allowed" : undefined}
               >
                 <RefreshCw className={`h-4 w-4 ${isStartingSegmentation ? "animate-spin" : ""}`} />
                 <span className="hidden sm:inline">
@@ -1176,7 +1203,9 @@ function ProjectPageInner() {
           </TooltipTrigger>
           <TooltipContent>
             <p>
-              {pipelineBusy && !isStartingSegmentation
+              {viewOnlyLocked
+                ? "View-only access — ask the Doctor for Run access to use this."
+                : pipelineBusy && !isStartingSegmentation
                 ? "Available when the current run finishes"
                 : "Choose models and reconstructions to run again"}
             </p>
@@ -1402,9 +1431,10 @@ function ProjectPageInner() {
               </div>
             </div>
 
-            {/* Edit Controls */}
+            {/* Edit Controls — owner (Doctor/Admin) only; an assigned Clinical Assistant,
+                Run or View-Only, never renames or deletes someone else's project. */}
             <ShowForRegisteredUser>
-              {isEditing ? (
+              {isProjectOwner && (isEditing ? (
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" onClick={handleCancelEdit} disabled={isUpdating}>
                     <X className="h-4 w-4 mr-2" />
@@ -1431,7 +1461,7 @@ function ProjectPageInner() {
                     Delete
                   </Button>
                 </div>
-              )}
+              ))}
             </ShowForRegisteredUser>
           </div>
         </div>
@@ -1850,15 +1880,19 @@ function ProjectPageInner() {
                               variant="outline"
                               size="sm"
                               onClick={() => setRevertDialogOpen(true)}
-                              disabled={isReverting}
-                              className="w-full text-xs"
+                              disabled={isReverting || viewOnlyLocked}
+                              className={`w-full text-xs ${viewOnlyLocked ? "opacity-60 cursor-not-allowed" : ""}`}
                             >
                               <RefreshCw className="h-3.5 w-3.5 mr-2" />
                               Reset Masks
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Reset all edits and restore original AI-generated masks</p>
+                            <p>
+                              {viewOnlyLocked
+                                ? "View-only access — ask the Doctor for Run access to use this."
+                                : "Reset all edits and restore original AI-generated masks"}
+                            </p>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -1967,7 +2001,7 @@ function ProjectPageInner() {
                                     hidden there. RV is for reference/research only — not reliable for
                                     clinical diagnosis.
                                   </p>
-                                  <ShowForRegisteredUser>
+                                  {isProjectOwner && (
                                     <Button
                                       size="sm"
                                       variant="ghost"
@@ -1980,7 +2014,7 @@ function ProjectPageInner() {
                                       <Trash2 className="h-3 w-3 mr-1" />
                                       Delete RV only
                                     </Button>
-                                  </ShowForRegisteredUser>
+                                  )}
                                 </div>
                               </div>
                             )}
@@ -2003,7 +2037,7 @@ function ProjectPageInner() {
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
-                            <ShowForRegisteredUser>
+                            {isProjectOwner && (
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -2016,7 +2050,7 @@ function ProjectPageInner() {
                                 <Trash2 className="h-4 w-4 mr-2" />
                                 Delete
                               </Button>
-                            </ShowForRegisteredUser>
+                            )}
                           </div>
                         </div>
                       </div>

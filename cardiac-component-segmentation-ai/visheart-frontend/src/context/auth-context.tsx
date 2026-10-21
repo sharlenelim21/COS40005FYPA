@@ -29,12 +29,27 @@ import {
 } from "react";
 import { authApi } from "@/lib/api";
 
-interface User {
+// Mirrors the backend's UserRole enum (Cardiac_Segmentation_FYP_Server/src/types/database_types.ts).
+// "educational_user" is the default role every signup starts as (own projects only, original
+// simple project list, demo-friendly) — never part of the Doctor/Clinical Assistant sharing
+// workflow. Elevation to "doctor" or "clinical_assistant" requires Admin approval (see
+// elevationStatus on the User type below) — it is never granted directly at signup.
+export type Role = "educational_user" | "doctor" | "clinical_assistant" | "admin" | "guest";
+export type ElevationStatus = "none" | "pending" | "approved" | "rejected";
+
+export interface User {
   _id: string;
   username: string;
   email: string;
   phone: string;
-  role: string;
+  role: Role;
+  elevationStatus?: ElevationStatus;
+  isMedicalStaff?: boolean;
+  profession?: string;
+  medicalId?: string;
+  requestedRole?: "doctor" | "clinical_assistant";
+  elevationReason?: string;
+  hasStaffIdCard?: boolean;
   createdAt: string;
   updatedAt: string;
 }

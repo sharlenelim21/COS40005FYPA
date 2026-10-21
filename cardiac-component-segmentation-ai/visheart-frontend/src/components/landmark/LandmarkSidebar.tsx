@@ -103,6 +103,9 @@ export interface StrainComputeBundle {
   onFullCycleProgressChange?: (progress: number | null) => void;
   segmentationRunning: boolean;
   checkSegmentationRunning?: () => Promise<boolean>;
+  /** True for a Clinical Assistant assigned in View-Only mode — disables every
+   *  compute/recompute button in this card the same way segmentationRunning does. */
+  locked?: boolean;
 }
 
 const NAV_ITEMS = [
@@ -343,7 +346,13 @@ export function LandmarkSidebar({
         <div className="px-4 py-2 border-b border-[var(--sidebar-border)] flex-shrink-0">
           <p className="text-[10px] leading-snug text-muted-foreground">
             This result only has landmarks for {state.frameIds.length} of {strainFrameCount} frames.{" "}
-            <button type="button" onClick={onRerun} className="font-medium text-primary underline underline-offset-2">
+            <button
+              type="button"
+              onClick={onRerun}
+              disabled={Boolean(strainCompute?.locked)}
+              title={strainCompute?.locked ? "View-only access — ask the Doctor for Run access to use this." : undefined}
+              className="font-medium text-primary underline underline-offset-2 disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
+            >
               Re-run detection
             </button>{" "}
             to detect and edit every frame.
@@ -398,6 +407,7 @@ export function LandmarkSidebar({
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
             onSaveLandmarks={onSaveLandmarks}
+            locked={Boolean(strainCompute?.locked)}
             allPredictions={state.predictions}
             onSliceSelect={onSliderChange}
             prediction={currentPrediction}
@@ -694,10 +704,13 @@ function LandmarksTab({
   onReset,
   summaryStats,
   activeModel,
+  locked,
 }: {
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
   onSaveLandmarks?: () => void;
+  /** True for a Clinical Assistant assigned in View-Only mode. */
+  locked?: boolean;
   allPredictions?: FramePrediction[];
   onSliceSelect?: (slice: number) => void;
   prediction: FramePrediction | null;
@@ -770,10 +783,11 @@ function LandmarksTab({
         <Button
           size="sm"
           onClick={onSaveLandmarks}
-          disabled={!hasUnsavedLandmarkEdits || isSavingLandmarks}
+          disabled={!hasUnsavedLandmarkEdits || isSavingLandmarks || locked}
+          title={locked ? "View-only access — ask the Doctor for Run access to use this." : undefined}
           className={cn(
             "w-full gap-1.5 text-xs transition-all",
-            hasUnsavedLandmarkEdits && !isSavingLandmarks &&
+            hasUnsavedLandmarkEdits && !isSavingLandmarks && !locked &&
               "animate-pulse ring-2 ring-primary/60 ring-offset-1",
           )}
         >
@@ -953,7 +967,10 @@ function LandmarksTab({
               ) : (
                 <span className="text-[10px] text-muted-foreground/40 shrink-0">—</span>
               )}
-              {onHighlightLandmark && (
+              {/* "focus" (an existing coord) is a pure view action and stays available
+                  locked; "place" (no coord yet) starts a new-landmark mutation and is
+                  hidden locked instead. */}
+              {onHighlightLandmark && (hasCoord || !locked) && (
                 <span
                   className={cn(
                     "text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
@@ -974,7 +991,7 @@ function LandmarksTab({
                   {highlightedLandmarkId === def.id ? "clear" : hasCoord ? "focus" : "place"}
                 </span>
               )}
-              {hasCoord && (
+              {hasCoord && !locked && (
                 <span
                   role="button"
                   tabIndex={0}
@@ -1270,6 +1287,11 @@ function StructureTab({
    *  per-frame RV strain series exists); false for the single ED->ES snapshot. */
   isRvPerFrame?: boolean;
 }) {
+  const { projectId } = useParams<{ projectId: string }>();
+  // Same per-model "is there a stored result at all" check the Strain tab's model
+  // toggle already uses — so Structure can't be switched to a model the Doctor never ran.
+  const { available: modelAvailable } = useProjectResults(projectId);
+
   if (!hasPredictions) {
     return (
       <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
@@ -1288,21 +1310,7 @@ function StructureTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-medium text-foreground">Structure</h3>
-        <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-          {(["unet", "medsam"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => onModelChange?.(m)}
-              className={cn(
-                "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
-                activeModel === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
-              {m === "unet" ? "UNet ★" : "MedSAM"}
-            </button>
-          ))}
-        </div>
+        <ModelToggle strainModel={activeModel} setStrainModel={(m) => onModelChange?.(m)} modelAvailable={modelAvailable} />
       </div>
 
       <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
@@ -2103,8 +2111,12 @@ function QuickCombinedStrainView({
             size="sm"
             variant="outline"
             className="mt-2 h-7 w-full text-[10px]"
-            disabled={sc.isComputing || sc.segmentationRunning}
-            title={sc.segmentationRunning ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined}
+            disabled={sc.isComputing || sc.segmentationRunning || Boolean(sc.locked)}
+            title={
+              sc.locked
+                ? "View-only access — ask the Doctor for Run access to use this."
+                : sc.segmentationRunning ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined
+            }
             onClick={sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames}
           >
             {sc.isComputing ? "Recomputing…" : `Recompute ED → ES with current landmarks (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
@@ -2210,12 +2222,15 @@ function ComputeStrainCard({
   const esRef = React.useRef<HTMLInputElement>(null);
   const isQuick = sc.scope === "quick";
   const segBlocked = sc.segmentationRunning;
-  const segTitle = segBlocked ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined;
+  const viewOnlyBlocked = Boolean(sc.locked);
+  const segTitle = viewOnlyBlocked
+    ? "View-only access — ask the Doctor for Run access to use this."
+    : segBlocked ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined;
   const modelLabel = sc.strainModel === "unet" ? "UNet" : "MedSAM";
   const hasScopeResult = isQuick ? !!(sc.quickLvResult || sc.quickRvResult) : hasFullCycleResult;
   const recomputeBusy = isQuick ? sc.isComputing : seriesBusy;
   const recomputeDisabled =
-    recomputeBusy || segBlocked ||
+    recomputeBusy || segBlocked || viewOnlyBlocked ||
     (isQuick && sc.inputMode === "frames" && (sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1)) ||
     (isQuick && sc.inputMode === "upload" && (!sc.edFile || !sc.esFile));
   const onRecompute = isQuick
@@ -2356,6 +2371,7 @@ function ComputeStrainCard({
                   esValue={sc.esFrameIdx}
                   onEdChange={sc.onEdFrameChange}
                   onEsChange={sc.onEsFrameChange}
+                  disabled={viewOnlyBlocked}
                 />
               </div>
 
@@ -2407,7 +2423,7 @@ function ComputeStrainCard({
               <button
                 type="button"
                 title={segTitle}
-                disabled={sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1 || sc.isComputing || segBlocked}
+                disabled={sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1 || sc.isComputing || segBlocked || viewOnlyBlocked}
                 onClick={sc.onComputeFrames}
                 className="w-full rounded-md bg-primary px-3 py-1.5 text-[10px] font-semibold text-primary-foreground disabled:opacity-50 transition-colors hover:bg-primary/90"
               >
@@ -2459,11 +2475,11 @@ function ComputeStrainCard({
               <button
                 type="button"
                 title={segTitle}
-                disabled={!sc.edFile || !sc.esFile || sc.isComputing || segBlocked}
+                disabled={!sc.edFile || !sc.esFile || sc.isComputing || segBlocked || viewOnlyBlocked}
                 onClick={sc.onComputeUpload}
                 className={cn(
                   "w-full rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
-                  (!sc.edFile || !sc.esFile || sc.isComputing || segBlocked)
+                  (!sc.edFile || !sc.esFile || sc.isComputing || segBlocked || viewOnlyBlocked)
                     ? "bg-muted text-muted-foreground cursor-not-allowed"
                     : "bg-primary text-primary-foreground hover:bg-primary/90"
                 )}
@@ -2481,7 +2497,7 @@ function ComputeStrainCard({
             Uses the auto-detected ED frame as reference — no frame picker or upload needed for the full cycle.
           </p>
           <span title={segTitle} className="block">
-          <Button size="sm" variant="outline" className="h-7 w-full text-[10px]" disabled={seriesBusy || segBlocked} onClick={onRunFullCycle}>
+          <Button size="sm" variant="outline" className="h-7 w-full text-[10px]" disabled={seriesBusy || segBlocked || viewOnlyBlocked} onClick={onRunFullCycle}>
             {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} progress={seriesProgress} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           </span>

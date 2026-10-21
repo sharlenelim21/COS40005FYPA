@@ -81,7 +81,84 @@ export function ShowForUser({
   fallback?: React.ReactNode;
 }) {
   return (
-    <RoleGuard allowedRoles={["user", "admin", "guest"]} fallback={fallback}>
+    <RoleGuard allowedRoles={["educational_user", "doctor", "clinical_assistant", "admin", "guest"]} fallback={fallback}>
+      {children}
+    </RoleGuard>
+  );
+}
+
+// Educational "User" role only — the old/original simple project-list experience.
+export function ShowForEducationalUser({
+  children,
+  fallback,
+}: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}) {
+  return (
+    <RoleGuard allowedRoles={["educational_user"]} fallback={fallback}>
+      {children}
+    </RoleGuard>
+  );
+}
+
+// Doctor only — e.g. actions that create/share/delete cases, which a Clinical Assistant cannot do.
+export function ShowForDoctor({
+  children,
+  fallback,
+}: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}) {
+  return (
+    <RoleGuard allowedRoles={["doctor"]} fallback={fallback}>
+      {children}
+    </RoleGuard>
+  );
+}
+
+// Clinical Assistant only.
+export function ShowForClinicalAssistant({
+  children,
+  fallback,
+}: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}) {
+  return (
+    <RoleGuard allowedRoles={["clinical_assistant"]} fallback={fallback}>
+      {children}
+    </RoleGuard>
+  );
+}
+
+// User, Doctor, or Admin — anyone who creates/owns/manages their own projects directly.
+// Excludes Clinical Assistant (acts only on assigned cases, never creates/deletes/toggles-save)
+// and Guest (handled separately via ShowForGuest).
+export function ShowForProjectCreator({
+  children,
+  fallback,
+}: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}) {
+  return (
+    <RoleGuard allowedRoles={["educational_user", "doctor", "admin"]} fallback={fallback}>
+      {children}
+    </RoleGuard>
+  );
+}
+
+// Doctor or Admin — case-management actions (share, delete) that Clinical Assistants cannot do.
+export function ShowForDoctorOrAdmin({
+  children,
+  fallback,
+}: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}) {
+  return (
+    <RoleGuard allowedRoles={["doctor", "admin"]} fallback={fallback}>
       {children}
     </RoleGuard>
   );
@@ -109,13 +186,13 @@ export function HideForGuest({
   fallback?: React.ReactNode;
 }) {
   return (
-    <RoleGuard allowedRoles={["user", "admin"]} fallback={fallback}>
+    <RoleGuard allowedRoles={["educational_user", "doctor", "clinical_assistant", "admin"]} fallback={fallback}>
       {children}
     </RoleGuard>
   );
 }
 
-// New component: Show only for registered users (user, admin) - excludes guests
+// New component: Show only for registered users (user, doctor, clinical_assistant, admin) - excludes guests
 export function ShowForRegisteredUser({
   children,
   fallback,
@@ -124,7 +201,7 @@ export function ShowForRegisteredUser({
   fallback?: React.ReactNode;
 }) {
   return (
-    <RoleGuard allowedRoles={["user", "admin"]} fallback={fallback}>
+    <RoleGuard allowedRoles={["educational_user", "doctor", "clinical_assistant", "admin"]} fallback={fallback}>
       {children}
     </RoleGuard>
   );

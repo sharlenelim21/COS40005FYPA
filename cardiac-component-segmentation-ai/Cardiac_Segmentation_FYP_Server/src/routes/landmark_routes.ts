@@ -7,11 +7,11 @@ import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import { startLandmarkInference, findLandmarkCompletionForCurrentMasks } from "../services/landmark_inference";
 import {
   jobModel,
-  readProject,
   readProjectLandmark,
   createProjectLandmark,
   updateProjectLandmark,
   projectSegmentationMaskModel,
+  userCanAccessProject,
 } from "../services/database";
 import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
@@ -135,25 +135,24 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
-      const projectResult = await readProject(projectId);
-      const project = projectResult.projects?.[0];
-
-      if (
-        !projectResult.success ||
-        !project ||
-        project.userid?.toString() !== req.user?._id?.toString()
-      ) {
+      // Owner, an assigned Clinical Assistant, or Admin may view landmark results.
+      const access = await userCanAccessProject(projectId, req.user!);
+      if (!access.allowed || !access.project) {
         res.status(404).json({ success: false, message: "Project not found.", result: null });
         return;
       }
-
+      // Jobs are recorded under whichever account triggered them — the owning Doctor, or a
+      // Run-mode Clinical Assistant running it themselves — so filtering this lookup by
+      // req.user's own id (the previous behavior) silently found zero jobs for anyone who
+      // didn't personally trigger the run, making the frontend think nothing had been
+      // computed yet and triggering a fresh auto-run. `projectId` is already unique and
+      // access was already verified above, so no userid filter is needed here.
       const jobUuid = typeof req.query.jobUuid === "string" ? req.query.jobUuid : null;
       if (jobUuid) {
         const job = await jobModel
           .findOne({
             uuid: jobUuid,
             projectid: projectId,
-            userid: req.user?._id?.toString(),
           })
           .lean();
 
@@ -188,7 +187,6 @@ router.get(
       const completedJobs = await jobModel
         .find({
           projectid: projectId,
-          userid: req.user?._id?.toString(),
           model_used: /landmark/i,
           status: JobStatus.COMPLETED,
           result: { $exists: true, $ne: null },
@@ -236,16 +234,21 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
+      // This route previously had no access check at all, and scoped jobs by the
+      // requesting user's own id (see /results above for why that's wrong whenever the
+      // viewer didn't personally trigger the job).
+      const access = await userCanAccessProject(projectId, req.user!);
+      if (!access.allowed || !access.project) {
+        res.status(404).json({ success: false, message: "Project not found.", jobs: [] });
+        return;
+      }
       const jobs = await jobModel
-        .find({ projectid: projectId, userid: req.user?._id?.toString() })
+        .find({ projectid: projectId })
         .select({ result: 0 })
         .sort({ createdAt: -1 })
         .limit(30)
         .lean();
-      const landmarkCompletion = await findLandmarkCompletionForCurrentMasks(
-        projectId,
-        String(req.user?._id ?? ""),
-      );
+      const landmarkCompletion = await findLandmarkCompletionForCurrentMasks(projectId);
 
       res.status(200).json({ success: true, jobs, landmarkCompletion });
     } catch (error: any) {

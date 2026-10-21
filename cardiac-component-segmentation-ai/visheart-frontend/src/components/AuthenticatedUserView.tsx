@@ -39,9 +39,17 @@ const RoleBadge = () => {
       icon: <Shield className="inline-flex h-4 w-4 text-blue-600" />,
       colors: "bg-blue-100 text-blue-800 border-blue-200",
     },
-    user: {
+    doctor: {
       icon: <UserCheck className="inline-flex h-4 w-4 text-green-600" />,
       colors: "bg-green-100 text-green-800 border-green-200",
+    },
+    clinical_assistant: {
+      icon: <UserCheck className="inline-flex h-4 w-4 text-purple-600" />,
+      colors: "bg-purple-100 text-purple-800 border-purple-200",
+    },
+    educational_user: {
+      icon: <UserCheck className="inline-flex h-4 w-4 text-teal-600" />,
+      colors: "bg-teal-100 text-teal-800 border-teal-200",
     },
     guest: {
       icon: <User className="inline-flex h-4 w-4 text-gray-500" />,
@@ -51,13 +59,20 @@ const RoleBadge = () => {
 
   const config =
     roleConfig[user.role as keyof typeof roleConfig] || roleConfig.guest;
+  const roleLabels: Record<string, string> = {
+    admin: "Admin",
+    doctor: "Doctor",
+    clinical_assistant: "Clinical Assistant",
+    educational_user: "Educational",
+    guest: "Guest",
+  };
 
   return (
     <span
       className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${config.colors}`}
     >
       {config.icon}
-      <span className="ml-1 capitalize">{user.role}</span>
+      <span className="ml-1">{roleLabels[user.role] ?? user.role}</span>
     </span>
   );
 };
@@ -193,27 +208,30 @@ export const AuthenticatedUserView = () => {
         </ShowForAdmin>
 
         <div className="grid gap-2">
-          <Link href="/dashboard">
-            <Button variant="outline" className="w-full justify-start h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200">
-              <Settings className="mr-2 h-4 w-4 flex-shrink-0" />
-              My Dashboard
-            </Button>
-          </Link>
+          <ShowForAdmin
+            fallback={
+              <Link href="/dashboard">
+                <Button variant="outline" className="w-full justify-start h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200">
+                  <Settings className="mr-2 h-4 w-4 flex-shrink-0" />
+                  My Dashboard
+                </Button>
+              </Link>
+            }
+          >
+            <Link href="/dashboard">
+              <Button variant="outline" className="w-full justify-start h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200">
+                <Settings className="mr-2 h-4 w-4 flex-shrink-0" />
+                VisHeart App
+              </Button>
+            </Link>
+          </ShowForAdmin>
           <ShowForAdmin fallback={null}>
-            {/* Not ready for the demo yet -- kept visible (so it doesn't look
-                missing) but blurred and non-interactive rather than a live
-                link, since the admin panel itself isn't in a state to show. */}
-            <div className="relative" title="Admin Panel — not available yet">
-              <Button
-                variant="outline"
-                disabled
-                aria-disabled="true"
-                className="w-full justify-start h-11 text-sm sm:text-base blur-[1.5px] opacity-60 pointer-events-none select-none"
-              >
+            <Link href="/admin">
+              <Button variant="outline" className="w-full justify-start h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200">
                 <Shield className="mr-2 h-4 w-4 flex-shrink-0" />
                 Admin Panel
               </Button>
-            </div>
+            </Link>
           </ShowForAdmin>
           <ShowForUser fallback={null}>
             <Link href="/profile">

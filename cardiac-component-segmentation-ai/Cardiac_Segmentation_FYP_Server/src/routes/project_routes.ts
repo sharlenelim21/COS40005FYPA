@@ -9,8 +9,21 @@ import {
   isAuth,
   isAuthAndNotGuest,
   isAuthAndAdmin,
+  isAuthAndDoctor,
+  isAuthAndClinicalAssistant,
 } from "../services/passportjs";
-import { readProject, updateProject, readUser, readProjectReconstruction } from "../services/database";
+import {
+  readProject,
+  updateProject,
+  readUser,
+  readProjectReconstruction,
+  userCanAccessProject,
+  assignAssistantToProject,
+  unassignAssistantFromProject,
+  readProjectsAssignedToAssistant,
+  UserRole,
+  AssignmentMode,
+} from "../services/database";
 import { FileType } from "../types/database_types"; // Import FileType enum
 import { extractS3KeyFromUrl, deleteFromS3, getS3FileSize } from "../services/s3_handler"; // Import S3 URL utility
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url"; // Import S3 presigned URL utility
@@ -40,9 +53,10 @@ router.get(
     }
 
     try {
-      const result = await readProject(projectId, userId);
-      if (result.success && result.projects && result.projects.length > 0) {
-        const project = result.projects[0];
+      // Owner, an assigned Clinical Assistant, or Admin may view a project's info.
+      const access = await userCanAccessProject(projectId, req.user!);
+      if (access.allowed && access.project) {
+        const project = access.project;
         return res.status(200).json({
           success: true,
           project: {
@@ -55,6 +69,13 @@ router.get(
             dimensions: project.dimensions,
             voxelsize: project.voxelsize,
             affineMatrix: project.affineMatrix,
+            assignedAssistants: project.assignedAssistants ?? [],
+            isOwner: access.isOwner,
+            // Lets the frontend gate every run/edit/compute button for a View-Only
+            // Clinical Assistant — without this the project detail pages had no way to
+            // tell a Run grant from a View-Only one and showed every action as available.
+            canRun: access.canRun,
+            assignmentMode: access.assignmentMode,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
           },
@@ -218,6 +239,7 @@ router.get(
               dimensions: project.dimensions,
               voxelsize: project.voxelsize,
               affineMatrix: project.affineMatrix,
+              assignedAssistants: project.assignedAssistants ?? [],
               createdAt: project.createdAt,
               updatedAt: project.updatedAt,
               reconstruction: reconstructionMetadata,
@@ -320,6 +342,15 @@ router.patch("/update-project", isAuth, async (req: Request, res: Response) => {
   }
 
   try {
+    // This route had no ownership check at all — any authenticated user who knew or
+    // guessed a projectId could rename or redescribe someone else's project. Only the
+    // owning Doctor/Admin may rename; an assigned Clinical Assistant (Run or View-Only)
+    // can view the project but never edit its identity.
+    const access = await userCanAccessProject(projectId, req.user!);
+    if (!access.isOwner) {
+      return res.status(404).json({ message: "Project not found." });
+    }
+
     const updateFields: { name?: string; description?: string } = {};
     if (name !== undefined) {
       updateFields.name = name;
@@ -456,19 +487,15 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const projectId = req.query.projectId as string;
-      const userId = (req.user as any)?._id;
 
-      const projectResult = await readProject(projectId, userId);
-      if (
-        !projectResult.success ||
-        !projectResult.projects ||
-        projectResult.projects.length === 0
-      ) {
+      // Owner, an assigned Clinical Assistant, or Admin may fetch a project's file.
+      const access = await userCanAccessProject(projectId, req.user!);
+      if (!access.allowed || !access.project) {
         return res
           .status(404)
           .json({ success: false, message: "Project not found" });
       }
-      const project = projectResult.projects[0];
+      const project = access.project;
       const s3HttpsUrlForTar = project.extractedfolderpath;
 
       if (!s3HttpsUrlForTar) {
@@ -794,6 +821,160 @@ router.delete(
         message:
           "An unexpected error occurred while admin was deleting the project.",
       });
+    }
+  }
+);
+
+// Doctor shares a project with one of their Clinical Assistants.
+router.post(
+  "/:projectId/assign-assistant",
+  isAuthAndDoctor,
+  async (req: Request, res: Response) => {
+    const projectId = toSingleString(req.params.projectId);
+    const { assistantUserId, mode, instructions } = req.body as {
+      assistantUserId?: string;
+      mode?: string;
+      instructions?: string;
+    };
+    const userId = req.user?._id;
+
+    if (!projectId) {
+      return res.status(400).json({ success: false, message: "Missing projectId." });
+    }
+    if (!assistantUserId) {
+      return res.status(400).json({ success: false, message: "Missing assistantUserId." });
+    }
+    const assignmentMode: AssignmentMode =
+      mode === AssignmentMode.ViewOnly ? AssignmentMode.ViewOnly : AssignmentMode.Run;
+
+    try {
+      // Only the project's owning Doctor may share it — not just anyone who can view it.
+      const access = await userCanAccessProject(projectId, req.user!);
+      if (!access.isOwner) {
+        return res.status(404).json({ success: false, message: "Project not found or access denied." });
+      }
+
+      const assistantResult = await readUser({ _id: assistantUserId });
+      const assistant = assistantResult.success ? assistantResult.user : undefined;
+      if (!assistant || assistant.role !== UserRole.ClinicalAssistant) {
+        return res.status(400).json({ success: false, message: "Target user is not a Clinical Assistant." });
+      }
+
+      const result = await assignAssistantToProject(projectId, assistantUserId, assignmentMode, userId!, instructions?.trim());
+      if (!result.success) {
+        return res.status(400).json({ success: false, message: result.message });
+      }
+      logger.info(`${serviceLocation}: Doctor ${userId} shared project ${projectId} with Clinical Assistant ${assistantUserId}.`);
+      return res.status(200).json({
+        success: true,
+        message: "Project shared with Clinical Assistant.",
+        assignedAssistants: result.project?.assignedAssistants ?? [],
+      });
+    } catch (error) {
+      LogError(error as Error, serviceLocation, `Error sharing project ${projectId} with assistant ${assistantUserId}`);
+      return res.status(500).json({ success: false, message: "An error occurred while sharing the project." });
+    }
+  }
+);
+
+// Doctor revokes a Clinical Assistant's access to a project.
+router.delete(
+  "/:projectId/assign-assistant/:assistantUserId",
+  isAuthAndDoctor,
+  async (req: Request, res: Response) => {
+    const projectId = toSingleString(req.params.projectId);
+    const assistantUserId = toSingleString(req.params.assistantUserId);
+    const userId = req.user?._id;
+
+    if (!projectId || !assistantUserId) {
+      return res.status(400).json({ success: false, message: "Missing projectId or assistantUserId." });
+    }
+
+    try {
+      const access = await userCanAccessProject(projectId, req.user!);
+      if (!access.isOwner) {
+        return res.status(404).json({ success: false, message: "Project not found or access denied." });
+      }
+
+      const result = await unassignAssistantFromProject(projectId, assistantUserId);
+      if (!result.success) {
+        return res.status(400).json({ success: false, message: result.message });
+      }
+      logger.info(`${serviceLocation}: Doctor ${userId} unshared project ${projectId} from Clinical Assistant ${assistantUserId}.`);
+      return res.status(200).json({
+        success: true,
+        message: "Clinical Assistant's access removed.",
+        assignedAssistants: result.project?.assignedAssistants ?? [],
+      });
+    } catch (error) {
+      LogError(error as Error, serviceLocation, `Error unsharing project ${projectId} from assistant ${assistantUserId}`);
+      return res.status(500).json({ success: false, message: "An error occurred while updating project sharing." });
+    }
+  }
+);
+
+// Clinical Assistant's "projects assigned to me" list — the server-side scoping that backs
+// their Case History tab (mirrors get-projects-list's sanitized shape).
+router.get(
+  "/assigned-to-me",
+  isAuthAndClinicalAssistant,
+  async (req: Request, res: Response) => {
+    const userId = req.user?._id;
+    try {
+      const result = await readProjectsAssignedToAssistant(userId!);
+      if (!result.success) {
+        return res.status(404).json({ message: result.message });
+      }
+
+      const sanitized_results = await Promise.all(
+        (result.projects ?? []).map(async (project) => {
+          let reconstructionMetadata = null;
+          try {
+            const reconResult = await readProjectReconstruction(String(project._id));
+            if (reconResult.success && reconResult.projectreconstructions && reconResult.projectreconstructions.length > 0) {
+              const latestReconstruction = reconResult.projectreconstructions[0];
+              let tarFileSize = null;
+              if (latestReconstruction.reconstructedMesh?.path) {
+                tarFileSize = await getS3FileSize(latestReconstruction.reconstructedMesh.path);
+              }
+              reconstructionMetadata = {
+                edFrame: latestReconstruction.ed_frame,
+                tarFileSize: tarFileSize || latestReconstruction.reconstructedMesh?.filesize || null,
+                meshFormat: latestReconstruction.meshFormat,
+              };
+            }
+          } catch (reconError) {
+            logger.warn(`${serviceLocation}: Error fetching reconstruction for project ${project._id}:`, reconError);
+          }
+
+          // The requesting assistant's own grant on this project — mode + the Doctor's
+          // instructions, if any. Always present since this list is already scoped to "assigned
+          // to me", so the entry is guaranteed to exist.
+          const myAssignment = (project.assignedAssistants ?? []).find((a) => a.userId === userId);
+
+          return {
+            projectId: project._id,
+            name: project.name,
+            description: project.description,
+            isSaved: project.isSaved,
+            filesize: project.filesize,
+            filetype: project.filetype,
+            dimensions: project.dimensions,
+            voxelsize: project.voxelsize,
+            affineMatrix: project.affineMatrix,
+            createdAt: project.createdAt,
+            updatedAt: project.updatedAt,
+            reconstruction: reconstructionMetadata,
+            assignmentMode: myAssignment?.mode ?? AssignmentMode.ViewOnly,
+            assignmentInstructions: myAssignment?.instructions ?? null,
+          };
+        })
+      );
+
+      return res.status(200).json({ projects: sanitized_results });
+    } catch (error: any) {
+      logger.error(`${serviceLocation}: Error reading projects assigned to ${userId} - ${error.message}`);
+      return res.status(500).json({ message: "Failed to retrieve assigned projects." });
     }
   }
 );

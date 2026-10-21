@@ -31,7 +31,7 @@ interface ProtectedRouteProps {
 
 export function ProtectedRoute({
   children,
-  allowedRoles = ["user", "admin"],
+  allowedRoles = ["educational_user", "doctor", "clinical_assistant", "admin"],
   redirectTo = "/login",
   fallback,
   autoRedirect = true, // Default to true to redirect unauthenticated users to login
@@ -127,7 +127,25 @@ export function AdminOnly({ children, fallback }: { children: React.ReactNode; f
 
 export function UserOrAdmin({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) {
   return (
-    <ProtectedRoute allowedRoles={["user", "admin"]} fallback={fallback}>
+    <ProtectedRoute allowedRoles={["educational_user", "doctor", "admin"]} fallback={fallback}>
+      {children}
+    </ProtectedRoute>
+  );
+}
+
+// Doctor only — pages that are doctor-exclusive actions (e.g. sharing a case).
+export function DoctorOnly({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) {
+  return (
+    <ProtectedRoute allowedRoles={["doctor"]} fallback={fallback}>
+      {children}
+    </ProtectedRoute>
+  );
+}
+
+// Clinical Assistant only.
+export function ClinicalAssistantOnly({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) {
+  return (
+    <ProtectedRoute allowedRoles={["clinical_assistant"]} fallback={fallback}>
       {children}
     </ProtectedRoute>
   );
@@ -140,8 +158,10 @@ export function RegistrationOnly({ children, redirectTo = "/dashboard" }: { chil
 
   useEffect(() => {
     if (!loading && user && user.role !== "guest") {
-      // Only redirect non-guest authenticated users (full users and admins)
-      router.push(redirectTo);
+      // Admin's landing page is the Admin Panel (oversight is their primary job here),
+      // not the pipeline dashboard every other role lands on.
+      const target = redirectTo === "/dashboard" && user.role === "admin" ? "/admin" : redirectTo;
+      router.push(target);
     }
   }, [user, loading, router, redirectTo]);
 

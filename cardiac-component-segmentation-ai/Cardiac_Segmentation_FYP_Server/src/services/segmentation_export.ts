@@ -1382,13 +1382,16 @@ export const generateAISegmentationForReconstruction = async (
             return { success: false, message: "No segmentation masks found. Run AI segmentation first for reconstruction." };
         }
 
-        // 2. Read Project Details (including dimensions and original NIfTI path)
-        const projectResult = await readProject(projectId, userId);
+        // 2. Read Project Details (including dimensions and original NIfTI path). Both callers
+        // of this function (reconstruction.ts's startReconstruction, landmark_inference.ts's
+        // startLandmarkInference) already verify owner-or-assigned-or-admin access before
+        // reaching here, so this is a plain existence lookup, not a second ownership filter.
+        const projectResult = await readProject(projectId);
         if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
-            logger.warn(`${serviceLocation}: Project ${projectId} not found or user ${userId} does not have access.`);
+            logger.warn(`${serviceLocation}: Project ${projectId} not found.`);
             return { success: false, message: "Project not found or access denied." };
         }
-        
+
         const project: IProjectDocument = projectResult.projects[0];
 
         if (!project.dimensions || project.dimensions.width == null || project.dimensions.height == null) {

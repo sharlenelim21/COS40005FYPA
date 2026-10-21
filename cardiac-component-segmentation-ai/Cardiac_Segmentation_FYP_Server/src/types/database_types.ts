@@ -26,14 +26,55 @@ export enum ReconstructionChamber {
 /**
  * Defines the possible roles a user can have within the application.
  * @enum {string}
- * @property {string} User - Represents a standard user with basic permissions.
- * @property {string} Admin - Represents an administrator with elevated privileges.
+ * @property {string} EducationalUser - The default role for every new signup: full CRUD on their
+ *   own projects (upload, segmentation, landmark detection, reconstruction), same as Doctor, but
+ *   NOT part of the Doctor/Clinical Assistant sharing workflow and shown the original, simpler
+ *   project-list UI rather than the Doctor's Case History view. Can request elevation to Doctor
+ *   or Clinical Assistant (see ElevationStatus) — that request requires Admin approval.
+ * @property {string} Doctor - Full clinical user: upload, segmentation, landmark detection,
+ *   reconstruction, and sharing cases with a Clinical Assistant. Reached only via Admin-approved
+ *   elevation from EducationalUser — never granted directly at signup.
+ * @property {string} ClinicalAssistant - Can only view/act on projects a Doctor has assigned to
+ *   them. Their segmentation-mask edits are saved as a new draft version linked back to the
+ *   Doctor's original (see IProjectSegmentationMask.status/parentVersionId) rather than
+ *   overwriting it, and must be accepted or discarded by the Doctor. Also reached only via
+ *   Admin-approved elevation.
+ * @property {string} Admin - Represents an administrator with elevated privileges (user
+ *   management, elevation approval, U-Net retraining).
+ * @property {string} Guest - Temporary, unauthenticated-feeling trial user; unrelated to the
+ *   clinical Doctor/ClinicalAssistant workflow.
  */
 export enum UserRole {
-  User = "user",
+  EducationalUser = "educational_user",
+  Doctor = "doctor",
+  ClinicalAssistant = "clinical_assistant",
   Admin = "admin",
   Guest = "guest", // For temporary users
 }
+
+/**
+ * Status of an EducationalUser's request to be elevated to Doctor or Clinical Assistant.
+ * @enum {string}
+ * @property {string} None - Never requested elevation (the default for every new signup).
+ * @property {string} Pending - Submitted a request (profession, medical registration number,
+ *   staff ID card, requested role); awaiting Admin review.
+ * @property {string} Approved - An Admin approved it; `role` has already been changed to the
+ *   approved role. Kept for history/audit even after the role change.
+ * @property {string} Rejected - An Admin rejected it; `role` stays EducationalUser. The user may
+ *   submit a new request afterward (re-submitting resets this back to Pending).
+ */
+export enum ElevationStatus {
+  None = "none",
+  Pending = "pending",
+  Approved = "approved",
+  Rejected = "rejected",
+}
+
+/**
+ * Requested elevated role at signup/request time — intentionally a subset of UserRole (never
+ * Admin or Guest; nobody self-requests those).
+ */
+export type RequestedElevationRole = UserRole.Doctor | UserRole.ClinicalAssistant;
 
 /**
  * Defines the structure for a user object as stored in the database, including sensitive information.
@@ -42,25 +83,39 @@ export enum UserRole {
  * @property {string} password - The user's hashed password.
  * @property {string} email - The user's unique email address.
  * @property {string} phone - The user's unique phone number.
- * @property {UserRole} role - The role assigned to the user (e.g., User, Admin).
+ * @property {UserRole} role - The role assigned to the user. Always server-assigned — never read
+ *   from request bodies — and always starts as EducationalUser at signup.
  */
 export interface IUser {
   username: string;
   password: string;
   email: string;
   phone: string;
-  role: UserRole; // Default to "user" unless specified otherwise
+  role: UserRole; // Default/starting role for every new signup is EducationalUser
+  // Doctor/Clinical Assistant elevation workflow (see ElevationStatus) — all optional since most
+  // accounts (Admin, Guest, and EducationalUsers who never requested elevation) never set these.
+  elevationStatus?: ElevationStatus;
+  isMedicalStaff?: boolean;
+  profession?: string;
+  medicalId?: string;
+  staffIdCardFileKey?: string; // private S3/MinIO object key — never a public/presigned URL
+  requestedRole?: RequestedElevationRole;
+  elevationReason?: string;
+  elevationReviewedByUserId?: string;
+  elevationReviewedAt?: string;
 }
 
 /**
  * Defines the structure for a user object that is safe to expose publicly or send to clients.
- * It omits sensitive information like the password hash.
+ * It omits sensitive information like the password hash, and — deliberately — the raw
+ * `staffIdCardFileKey` (the ID-card viewer route resolves that server-side so the key itself,
+ * an internal storage path, is never sent to any client, including the Admin's).
  * @interface IUserSafe
  * @property {string} _id - The unique MongoDB document ID for the user, represented as a string.
  * @property {string} username - The unique username of the user.
  * @property {string} email - The email address of the user.
  * @property {string} phone - The phone number of the user.
- * @property {UserRole} role - The role of the user (e.g., User, Admin).
+ * @property {UserRole} role - The role of the user (e.g., EducationalUser, Admin).
  * @property {Date} [createdAt] - The date when the user was created (optional).
  * @property {Date} [updatedAt] - The date when the user was last updated (optional).
  */
@@ -69,7 +124,14 @@ export interface IUserSafe {
   username: string;
   email: string;
   phone: string;
-  role: UserRole; // Default to "user" unless specified otherwise
+  role: UserRole;
+  elevationStatus?: ElevationStatus;
+  isMedicalStaff?: boolean;
+  profession?: string;
+  medicalId?: string;
+  requestedRole?: RequestedElevationRole;
+  elevationReason?: string;
+  hasStaffIdCard?: boolean; // derived: whether a card was uploaded, without exposing its key
   createdAt?: Date; // Creation date of the user
   updatedAt?: Date; // Last update date of the user
 }
@@ -152,10 +214,38 @@ export enum FileDataType {
  * @property {number} voxelsize.t - The size in the t-dimension (optional).
  * @property {number[][]} [affineMatrix] - The 4x4 affine transformation matrix from the NIfTI header (optional, added for export functionality).
  */
+/**
+ * How much a Clinical Assistant may do on a project shared with them.
+ * @enum {string}
+ * @property {string} Run - Can run AI (segmentation/landmark/reconstruction), edit masks (as a
+ *   draft — see MaskStatus), export. Equivalent to "request to run this with my instructions".
+ * @property {string} ViewOnly - Can open the project and switch between its result tabs (masks,
+ *   strain, bullseye, 4D reconstruction, report) to see whatever the Doctor already ran — but
+ *   every run/edit/export action is blocked server-side, not just hidden in the UI.
+ */
+export enum AssignmentMode {
+  Run = "run",
+  ViewOnly = "view_only",
+}
+
+/** One Clinical Assistant's share grant on a project — see AssignmentMode. */
+export interface IProjectAssignment {
+  userId: string;
+  mode: AssignmentMode;
+  /** Doctor's free-text note — e.g. what to run/check, or why it's shared. Optional either way. */
+  instructions?: string;
+  assignedByUserId: string;
+  assignedAt: string;
+}
+
 export interface IProject {
   // Identifiers
   // _id:  string; // MongoDB Object ID of the project, commented out if extended with mongoose.Document
-  userid: string; // MongoDB User ID of the user who uploaded the file
+  userid: string; // MongoDB User ID of the user who uploaded the file (the owning Doctor/Admin)
+  /** Clinical Assistants this Doctor has shared the project with, and how much each may do.
+   *  Additive — ownership (`userid`) never changes when a project is assigned. Empty/absent =
+   *  not shared. */
+  assignedAssistants?: IProjectAssignment[];
   // User inputs
   name: string; // Name of the project
   originalfilename: string;
@@ -213,6 +303,19 @@ export enum ComponentBoundingBoxesClass {
 }
 
 /**
+ * Review state for a segmentation-mask document in the Doctor / Clinical Assistant sharing
+ * workflow. Absent/undefined on a mask is treated as Final (back-compat with every mask created
+ * before this field existed — the Doctor-owner-overwrites-in-place behavior that was always the
+ * only behavior).
+ */
+export enum MaskStatus {
+  Final = "final",       // the project's authoritative mask (Doctor/Admin edits land here directly)
+  Draft = "draft",        // a Clinical Assistant's edit, pending the Doctor's review
+  Rejected = "rejected",  // a Draft the Doctor discarded (kept, not deleted, for audit)
+  Superseded = "superseded", // the prior Final mask, kept for audit after a Draft was accepted
+}
+
+/**
  * Defines the structure for a project's segmentation masks.
  * This is a child of IProject and references back to the project it belongs to.
  * Stores the segmentation masks for a project as well as the component bounding boxes used to input into MedSAM for segmentation.
@@ -252,6 +355,28 @@ export interface IProjectSegmentationMask {
   isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (kept for backward compatibility)
   segmentationModel?: SegmentationModel; // Optional model tag for future extensibility
   model_used?: string; // Compatibility field: stores model name as string (e.g., 'medsam' or 'unet')
+
+  /** Doctor/Clinical Assistant sharing workflow — see MaskStatus. Undefined reads as Final. */
+  status?: MaskStatus;
+  /** Set only on a Draft (or its resulting Rejected/superseding) mask: the _id of the mask
+   *  document it was derived from when the Clinical Assistant made this edit. */
+  parentVersionId?: string;
+  /** Set only on a Final mask that was superseded by an accepted Draft: the _id of the Draft
+   *  that replaced it (the inverse pointer of parentVersionId). */
+  supersededBy?: string;
+  /** Who actually produced/edited this specific mask document (may differ from the project's
+   *  owning Doctor once a Clinical Assistant is involved) and their role at the time. */
+  createdByUserId?: string;
+  createdByRole?: UserRole;
+  /** Set when a Doctor accepts or discards a Draft. */
+  reviewedByUserId?: string;
+  reviewedAt?: string;
+  /** "Consider this edit for U-Net retraining" — surfaced to Admin on /admin/flagged-masks,
+   *  independent of the Draft/Final review above (a Final, already-accepted edit can also be
+   *  flagged). */
+  flaggedForRetrain?: boolean;
+  flaggedAt?: string;
+  flaggedByUserId?: string;
   // Properties of the bounding box coordinates used to input into MedSAM for segmentation
   // If the segmentation mask is a single frame, there will be only one entry in the frames array
   frames: {

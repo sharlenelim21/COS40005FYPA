@@ -80,7 +80,28 @@ function SegmentationResultsPageInner() {
     getReconstructionForModel,
     reconstructionResults,
     setSelectedSegmentationModel,
+    maskAvailabilityByModel,
   } = useProject();
+
+  // Locks every run/edit action on this page for a Clinical Assistant assigned in
+  // View-Only mode. Undefined (still loading, or an owner) must never lock anything.
+  const viewOnlyLocked = projectData?.canRun === false;
+  const isClinicalAssistant = user?.role === "clinical_assistant";
+
+  // How many of THIS assistant's own edits are still awaiting the Doctor's Accept/Discard —
+  // the backend scopes /drafts to just their own for a non-owner, so this is never anyone
+  // else's status. Only relevant for a Clinical Assistant; a Doctor has their own review panel.
+  const [myPendingDraftCount, setMyPendingDraftCount] = useState<number | null>(null);
+  const refreshMyDraftStatus = useCallback(async () => {
+    if (!projectId || !isClinicalAssistant) return;
+    try {
+      const reply = await segmentationApi.getProjectDrafts(projectId);
+      setMyPendingDraftCount(Array.isArray(reply?.drafts) ? reply.drafts.length : 0);
+    } catch {
+      // Silent — this is a status indicator, not a blocking read.
+    }
+  }, [projectId, isClinicalAssistant]);
+  useEffect(() => { void refreshMyDraftStatus(); }, [refreshMyDraftStatus]);
 
   // Write the show-condition key whenever masks exist — covers both:
   // (a) user just ran segmentation this session (reload lands here with masks)
@@ -124,6 +145,15 @@ function SegmentationResultsPageInner() {
   // UI state
   const [activeLabel, setActiveLabel] = useState<AnatomicalLabel>("lvc");
   const [tool, setTool] = useState<DrawingTool>("brush");
+
+  // Defense-in-depth: the page defaults to the brush tool on mount, and the Tool
+  // Selection panel only disables brush/eraser/rectangle once it renders — force the
+  // tool back to "select" the moment View-Only is known, so there's no window where a
+  // draw-capable tool is still active underneath the (about to be disabled) buttons.
+  useEffect(() => {
+    if (viewOnlyLocked) setTool("select");
+  }, [viewOnlyLocked]);
+
   const [brushSize, setBrushSize] = useState<number>(10);
   const [opacity, setOpacity] = useState<number>(1);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -1026,7 +1056,16 @@ function SegmentationResultsPageInner() {
         model: selectedModel,
       });
       const et = saved?.editTracking;
-      if (et?.status === "computed") {
+      if (saved?.isDraft) {
+        // A Clinical Assistant's save never overwrites the Doctor's mask — it's sent as a
+        // draft version for the Doctor to Accept or Discard. The backend's own message
+        // already says this; show it instead of the owner-facing edit-tracking summary,
+        // which is never computed for drafts (see editTracking staying null server-side).
+        toast.success("Sent to the Doctor for review", {
+          description: saved?.message ?? "Your edit was saved as a draft awaiting the Doctor's review.",
+        });
+        void refreshMyDraftStatus();
+      } else if (et?.status === "computed") {
         toast.success(et.editedSliceCount === 0
           ? "Saved — no differences from the AI output"
           : `Saved — ${et.editedSliceCount} slice${et.editedSliceCount === 1 ? "" : "s"} changed, ${Number(et.pixelsChanged).toLocaleString()} pixels`);
@@ -1064,7 +1103,7 @@ function SegmentationResultsPageInner() {
     } finally {
       setIsSaving(false);
     }
-  }, [decodedMasks, projectId, isSaving, updateContextMasks, refreshMasks]);
+  }, [decodedMasks, projectId, isSaving, updateContextMasks, refreshMasks, refreshMyDraftStatus]);
 
   const handleRevertToAI = useCallback(async () => {
     if (!projectId || isSaving || !undecodedMasks) return;
@@ -1222,10 +1261,13 @@ function SegmentationResultsPageInner() {
               <SelectItem
                 key={opt.value}
                 value={opt.value}
-                disabled={!isGpuMode && opt.value === "medsam"}
+                disabled={(!isGpuMode && opt.value === "medsam") || (viewOnlyLocked && !maskAvailabilityByModel[opt.value])}
                 className="rounded-lg py-2"
               >
                 {opt.label}
+                {viewOnlyLocked && !maskAvailabilityByModel[opt.value] && (
+                  <span className="ml-1.5 text-xs text-muted-foreground">(not run)</span>
+                )}
               </SelectItem>
             ))}
           </SelectContent>
@@ -1250,6 +1292,19 @@ function SegmentationResultsPageInner() {
           </span>
         )}
 
+        {/* A Clinical Assistant's own pending submissions — saving never overwrites the
+            Doctor's mask directly, so this is the only place that confirms it actually went
+            somewhere and hasn't been reviewed yet. */}
+        {isClinicalAssistant && myPendingDraftCount !== null && myPendingDraftCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 border border-blue-200 dark:border-blue-800"
+            title="Saved edits you've sent are listed here until the Doctor Accepts or Discards them."
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 inline-block" />
+            {myPendingDraftCount} draft{myPendingDraftCount === 1 ? "" : "s"} awaiting Doctor review
+          </span>
+        )}
+
         {/* Confirmation text */}
         <span className="text-xs text-muted-foreground">
           Using: <strong className="text-foreground font-medium">
@@ -1268,9 +1323,11 @@ function SegmentationResultsPageInner() {
         {/* Run / Re-run Segmentation Button (cache-aware) */}
         <button
           onClick={handleRunSegmentation}
-          disabled={runSegmentationLoading || Boolean(serverJobRunning)}
+          disabled={viewOnlyLocked || runSegmentationLoading || Boolean(serverJobRunning)}
           title={
-            serverJobRunning
+            viewOnlyLocked
+              ? "View-only access — ask the Doctor for Run access to use this."
+              : serverJobRunning
               ? `A ${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} job is already running for this project${serverJobElapsedLabel ? `, started ${serverJobElapsedLabel}` : ""}.`
               : undefined
           }
@@ -1397,6 +1454,8 @@ function SegmentationResultsPageInner() {
             onModelChange={handleModelSelect}
             isModelActive={hasMasks}
             isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
+            locked={viewOnlyLocked}
+            isAssistantEdit={isClinicalAssistant}
           />
         </div>
       </div>
@@ -1533,6 +1592,8 @@ function SegmentationResultsPageInner() {
                 onModelChange={handleModelSelect}
                 isModelActive={hasMasks}
                 isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
+                locked={viewOnlyLocked}
+                isAssistantEdit={isClinicalAssistant}
               />
             </div>
           </ResizablePanel>

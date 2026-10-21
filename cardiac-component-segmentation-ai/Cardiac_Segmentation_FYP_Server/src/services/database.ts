@@ -13,8 +13,8 @@ import LogError from "../utils/error_logger"; // Import the error logging utilit
 const serviceLocation = "Database"; // Service location for error logging
 
 // Import Types
-import { IUser, IUserDocument, IUserSafe, UserRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
-import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
+import { IUser, IUserDocument, IUserSafe, UserRole, ElevationStatus, RequestedElevationRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
+import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult, MaskStatus, AssignmentMode, IProjectAssignment } from "../types/database_types"; // Import the project types
 import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, ReconstructionChamber } from "../types/database_types"; // Import the project reconstruction types
 import { IProjectLandmark, IProjectLandmarkDocument, ProjectLandmarkCrudResult } from "../types/database_types"; // Import the project landmark types
 import { JobStatus, IJob, IJobDocument, JobCrudResult, SegmentationModel } from "../types/database_types"; // Import the job types
@@ -89,6 +89,15 @@ function toIUserSafe(user: IUserDocument): IUserSafe {
     email: user.email,
     phone: user.phone,
     role: user.role,
+    elevationStatus: user.elevationStatus,
+    isMedicalStaff: user.isMedicalStaff,
+    profession: user.profession,
+    medicalId: user.medicalId,
+    requestedRole: user.requestedRole,
+    elevationReason: user.elevationReason,
+    // Deliberately a boolean, never the raw staffIdCardFileKey (internal storage path) — see
+    // IUserSafe's doc comment.
+    hasStaffIdCard: Boolean(user.staffIdCardFileKey),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -101,7 +110,18 @@ const userSchema = new Schema<IUserDocument>({
   password: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   phone: { type: String, required: true, unique: true },
-  role: { type: String, required: true, enum: Object.values(UserRole), default: UserRole.User },
+  role: { type: String, required: true, enum: Object.values(UserRole), default: UserRole.EducationalUser },
+  // Doctor / Clinical Assistant elevation workflow (see ElevationStatus) — all optional, only set
+  // once an EducationalUser submits a request via /auth/request-elevation.
+  elevationStatus: { type: String, required: false, enum: Object.values(ElevationStatus), default: ElevationStatus.None },
+  isMedicalStaff: { type: Boolean, required: false },
+  profession: { type: String, required: false },
+  medicalId: { type: String, required: false },
+  staffIdCardFileKey: { type: String, required: false }, // private MinIO/S3 key, never exposed to clients
+  requestedRole: { type: String, required: false, enum: [UserRole.Doctor, UserRole.ClinicalAssistant] },
+  elevationReason: { type: String, required: false },
+  elevationReviewedByUserId: { type: String, required: false },
+  elevationReviewedAt: { type: String, required: false },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 // Hooks for pre-save and pre-delete operations (must be before the model creation)
 // If a user is deleted, delete all their projects, segmentation masks, and reconstructions (especially important for guest accounts)
@@ -200,7 +220,7 @@ const createAdminUser = async (): Promise<void> => {
  * @param {string} user.password - The plain-text password for the new user.
  * @param {string} user.email - The email address for the new user (must be unique).
  * @param {string} user.phone - The phone number for the new user (must be unique).
- * @param {UserRole} [user.role=UserRole.User] - The role to assign to the user. Defaults to `UserRole.User`.
+ * @param {UserRole} [user.role=UserRole.EducationalUser] - The role to assign to the user. Defaults to `UserRole.EducationalUser`.
  * @returns {Promise<UserCrudResult>} A promise that resolves to a `UserCrudResult` object.
  * - On success: `{ success: true, operation: CRUDOperation.CREATE, user: IUserSafe }` containing the sanitized created user.
  * - On validation failure (duplicate username/email/phone): `{ success: false, operation: CRUDOperation.CREATE, message: string }` detailing the conflict.
@@ -469,6 +489,144 @@ const updateUser = async (
 };
 
 /**
+ * Records an EducationalUser's request to be elevated to Doctor or Clinical Assistant. Deliberately
+ * a dedicated function rather than routing through the generic `updateUser` — elevation fields
+ * follow a specific state machine (None -> Pending -> Approved/Rejected) that shouldn't be
+ * reachable through the general-purpose admin user-edit form.
+ *
+ * @async
+ * @function submitElevationRequest
+ * @param {string} userid
+ * @param {object} request
+ * @param {string} request.profession
+ * @param {string} request.medicalId
+ * @param {string} request.staffIdCardFileKey - Private S3/MinIO object key (already uploaded by the caller).
+ * @param {RequestedElevationRole} request.requestedRole
+ * @param {string} [request.reason]
+ * @returns {Promise<UserCrudResult>}
+ */
+const submitElevationRequest = async (
+  userid: string,
+  request: { profession: string; medicalId: string; staffIdCardFileKey: string; requestedRole: RequestedElevationRole; reason?: string },
+): Promise<UserCrudResult> => {
+  const operation = CRUDOperation.UPDATE;
+  try {
+    const user = await userModel.findById(userid);
+    if (!user) {
+      return { success: false, operation, message: `User ${userid} does not exist.` };
+    }
+    if (user.role !== UserRole.EducationalUser) {
+      return { success: false, operation, message: "Only an educational account may request elevation." };
+    }
+    user.isMedicalStaff = true;
+    user.profession = request.profession;
+    user.medicalId = request.medicalId;
+    user.staffIdCardFileKey = request.staffIdCardFileKey;
+    user.requestedRole = request.requestedRole;
+    user.elevationReason = request.reason;
+    user.elevationStatus = ElevationStatus.Pending;
+    // Re-submitting after a rejection should clear the old review stamp.
+    user.elevationReviewedByUserId = undefined;
+    user.elevationReviewedAt = undefined;
+    await user.save();
+    logger.info(`${serviceLocation}: User ${userid} submitted an elevation request for role ${request.requestedRole}.`);
+    return { success: true, operation, user: toIUserSafe(user) };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error submitting elevation request for user ${userid}.`);
+    return { success: false, operation, message: "Error submitting elevation request." };
+  }
+};
+
+/**
+ * Lists every EducationalUser account with a pending elevation request — the Admin's "Staff
+ * Verifications" queue.
+ *
+ * @async
+ * @function readPendingElevations
+ * @returns {Promise<UserCrudResult>}
+ */
+const readPendingElevations = async (): Promise<UserCrudResult> => {
+  try {
+    const users = await userModel.find({ elevationStatus: ElevationStatus.Pending });
+    return { success: true, operation: CRUDOperation.READ, users: users.map(toIUserSafe) };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, "Error reading pending elevations.");
+    return { success: false, operation: CRUDOperation.READ, message: "Error reading pending elevations." };
+  }
+};
+
+/**
+ * Admin approves a pending elevation request — grants the approved role and stamps who reviewed
+ * it. The approved role need not match what the user originally requested (e.g. an Admin may
+ * decide Clinical Assistant is more appropriate than the requested Doctor).
+ *
+ * @async
+ * @function approveElevation
+ * @param {string} userid
+ * @param {RequestedElevationRole} approvedRole
+ * @param {string} adminUserId
+ * @returns {Promise<UserCrudResult>}
+ */
+const approveElevation = async (
+  userid: string,
+  approvedRole: RequestedElevationRole,
+  adminUserId: string,
+): Promise<UserCrudResult> => {
+  const operation = CRUDOperation.UPDATE;
+  try {
+    const user = await userModel.findById(userid);
+    if (!user) {
+      return { success: false, operation, message: `User ${userid} does not exist.` };
+    }
+    if (user.elevationStatus !== ElevationStatus.Pending) {
+      return { success: false, operation, message: "This user has no pending elevation request." };
+    }
+    user.role = approvedRole;
+    user.elevationStatus = ElevationStatus.Approved;
+    user.elevationReviewedByUserId = adminUserId;
+    user.elevationReviewedAt = new Date().toISOString();
+    await user.save();
+    logger.info(`${serviceLocation}: Admin ${adminUserId} approved user ${userid} as ${approvedRole}.`);
+    return { success: true, operation, user: toIUserSafe(user) };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error approving elevation for user ${userid}.`);
+    return { success: false, operation, message: "Error approving elevation." };
+  }
+};
+
+/**
+ * Admin rejects a pending elevation request — the user's role stays EducationalUser. They may
+ * submit a new request afterward (submitElevationRequest resets the status back to Pending).
+ *
+ * @async
+ * @function rejectElevation
+ * @param {string} userid
+ * @param {string} adminUserId
+ * @returns {Promise<UserCrudResult>}
+ */
+const rejectElevation = async (userid: string, adminUserId: string): Promise<UserCrudResult> => {
+  const operation = CRUDOperation.UPDATE;
+  try {
+    const user = await userModel.findById(userid);
+    if (!user) {
+      return { success: false, operation, message: `User ${userid} does not exist.` };
+    }
+    if (user.elevationStatus !== ElevationStatus.Pending) {
+      return { success: false, operation, message: "This user has no pending elevation request." };
+    }
+    user.elevationStatus = ElevationStatus.Rejected;
+    user.elevationReviewedByUserId = adminUserId;
+    user.elevationReviewedAt = new Date().toISOString();
+    await user.save();
+    logger.info(`${serviceLocation}: Admin ${adminUserId} rejected user ${userid}'s elevation request.`);
+    return { success: true, operation, user: toIUserSafe(user) };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error rejecting elevation for user ${userid}.`);
+    return { success: false, operation, message: "Error rejecting elevation." };
+  }
+};
+
+/**
  * Deletes a user from the database by ID and cascade deletes all associated projects and segmentation masks.
  * Includes a safety check to prevent deletion of the last remaining administrator account.
  *
@@ -660,11 +818,21 @@ const projectVoxelsizeSchema = new Schema({
   t: { type: Number, required: false }, // Voxel size in the T dimension (if applicable)
 }, { _id: false }); // Disable automatic creation of an _id field for this subdocument
 
+// Project assignment subdocument — one Clinical Assistant's share grant (Nest Depth: 1)
+const projectAssignmentSchema = new Schema<IProjectAssignment>({
+  userId: { type: String, required: true },
+  mode: { type: String, required: true, enum: Object.values(AssignmentMode), default: AssignmentMode.Run },
+  instructions: { type: String, required: false },
+  assignedByUserId: { type: String, required: true },
+  assignedAt: { type: String, required: true },
+}, { _id: false });
+
 // Project Collection (Nest Depth: 0)
 const projectSchema = new Schema<IProject>({
   // Identifiers
   // _id:  string; // MongoDB Object ID of the project
-  userid: { type: String, required: true }, // MongoDB User ID of the user to whom the project belongs
+  userid: { type: String, required: true }, // MongoDB User ID of the user to whom the project belongs (the owning Doctor/Admin)
+  assignedAssistants: { type: [projectAssignmentSchema], required: false, default: [] }, // Clinical Assistants this project has been shared with, and how much each may do
   // User inputs
   name: { type: String, required: true }, // Name of the project
   originalfilename: { type: String, required: true }, // Original filename of the uploaded file
@@ -728,6 +896,7 @@ const projectModel = model<IProject, Model<IProject>>("Project", projectSchema);
 
 // Add project indexes after model creation
 projectSchema.index({ userid: 1, name: 1 }, { unique: true }); // Unique index on userid and name
+projectSchema.index({ "assignedAssistants.userId": 1 }); // For a Clinical Assistant's "projects assigned to me" query
 
 // Project Segmentation Mask Collection
 // Create segmentation mask content schema for use in project segmentation mask schema (Nest Depth: 3)
@@ -790,6 +959,17 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   rvStrain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES regional RV (cavity-radius) strain — see IProjectSegmentationMask.rvStrain
   rvStrainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame RV strain vs. the fixed ED reference — see IProjectSegmentationMask.rvStrainSeries
   diseasePatternGates: { type: Schema.Types.Mixed, required: false }, // Unified LV+RV ACDC-criteria gate assessment (NOT a diagnosis) — compute_disease_pattern_gates.py. Mixed for the same reason as regionalHealthStatus.
+  // Doctor / Clinical Assistant sharing workflow — see MaskStatus. Must be declared here or Mongoose strict mode silently drops them on save (same pitfall as the slice `excluded` flag above).
+  status: { type: String, required: false, enum: Object.values(MaskStatus) }, // undefined reads as Final
+  parentVersionId: { type: String, required: false },
+  supersededBy: { type: String, required: false },
+  createdByUserId: { type: String, required: false },
+  createdByRole: { type: String, required: false, enum: Object.values(UserRole) },
+  reviewedByUserId: { type: String, required: false },
+  reviewedAt: { type: String, required: false },
+  flaggedForRetrain: { type: Boolean, required: false },
+  flaggedAt: { type: String, required: false },
+  flaggedByUserId: { type: String, required: false },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Create the model with proper typing
@@ -806,6 +986,7 @@ const projectSegmentationMaskModel = model<IProjectSegmentationMask, Model<IProj
 
 // Add segmentation mask indexes after model creation
 projectSegmentationMaskSchema.index({ projectid: 1 }); // Index on project ID for segmentation masks
+projectSegmentationMaskSchema.index({ projectid: 1, status: 1 }); // For "list drafts pending review" / "list flagged for retrain"
 
 // Project Landmark Collection
 // Create landmark point schema (Nest Depth: 2)
@@ -1245,6 +1426,52 @@ const readProject = async (
   }
 }
 
+/**
+ * Resolves whether a user may access a project — as its owning Doctor, as a Clinical Assistant
+ * it has been shared with, or as an Admin (who can access everything). This is deliberately a
+ * direct `findById` + manual OR check rather than an extension of `readProject`'s `$and`-only
+ * query builder, so the existing owner-only callers of `readProject` are left untouched.
+ *
+ * `allowed` alone only means "may view" — it covers both assignment modes (Run and ViewOnly).
+ * Any endpoint that runs AI, edits/saves, or exports must check `canRun` instead, which is
+ * `false` for a ViewOnly-mode assistant (they may open the project and switch between its result
+ * tabs, but every mutating/compute action is blocked here, not just hidden in the UI).
+ *
+ * Destructive/management actions (delete, rename, assign/unassign) must check `isOwner` is
+ * `true` specifically — `canRun` is not sufficient for those either (a Run-mode assistant can
+ * run and edit, but still can't delete or re-share).
+ *
+ * @async
+ * @function userCanAccessProject
+ * @param {string} projectId - The project's MongoDB _id.
+ * @param {{ _id: string; role: UserRole }} user - The requesting user (role + id only needed).
+ * @returns {Promise<{ allowed: boolean; isOwner: boolean; isAssigned: boolean; canRun: boolean; assignmentMode: AssignmentMode | null; project?: IProjectDocument }>}
+ */
+const userCanAccessProject = async (
+  projectId: string,
+  user: { _id: string; role: UserRole },
+): Promise<{
+  allowed: boolean;
+  isOwner: boolean;
+  isAssigned: boolean;
+  canRun: boolean;
+  assignmentMode: AssignmentMode | null;
+  project?: IProjectDocument;
+}> => {
+  const project = await projectModel.findById(projectId);
+  if (!project) {
+    return { allowed: false, isOwner: false, isAssigned: false, canRun: false, assignmentMode: null };
+  }
+  const userIdString = user._id.toString();
+  const isOwner = project.userid === userIdString;
+  const assignment = (project.assignedAssistants ?? []).find((a) => a.userId === userIdString);
+  const isAssigned = Boolean(assignment);
+  const assignmentMode = assignment?.mode ?? null;
+  const allowed = user.role === UserRole.Admin || isOwner || isAssigned;
+  const canRun = user.role === UserRole.Admin || isOwner || assignmentMode === AssignmentMode.Run;
+  return { allowed, isOwner, isAssigned, canRun, assignmentMode, project: project as unknown as IProjectDocument };
+};
+
 // updateProject function
 const updateProject = async (
   // Identifying parameters:
@@ -1348,6 +1575,123 @@ const deleteProject = async (projectid: string): Promise<ProjectCrudResult> => {
     return { success: false, operation, message: "Error deleting project." };
   }
 }
+
+/**
+ * Shares a project with a Clinical Assistant — upserts their assignment (by userId) in the
+ * project's `assignedAssistants` array with the given mode/instructions. Re-sharing with the same
+ * assistant updates their existing grant (e.g. switching Run -> ViewOnly, or editing the
+ * instructions) rather than creating a duplicate entry. Does not change ownership (`userid`) —
+ * assignment is additive, the Doctor stays the owner.
+ *
+ * @async
+ * @function assignAssistantToProject
+ * @param {string} projectid - The project to share.
+ * @param {string} assistantUserId - The Clinical Assistant's user _id to share it with. Caller
+ *   is responsible for having already verified this user exists and has the ClinicalAssistant role.
+ * @param {AssignmentMode} mode - Run (can run AI / edit / export) or ViewOnly (read-only).
+ * @param {string} assignedByUserId - The Doctor/Admin making the grant (for the audit stamp).
+ * @param {string} [instructions] - Doctor's free-text note for the assistant.
+ * @returns {Promise<ProjectCrudResult>}
+ */
+const assignAssistantToProject = async (
+  projectid: string,
+  assistantUserId: string,
+  mode: AssignmentMode,
+  assignedByUserId: string,
+  instructions?: string,
+): Promise<ProjectCrudResult> => {
+  const operation = CRUDOperation.UPDATE;
+  try {
+    const project = await projectModel.findById(projectid);
+    if (!project) {
+      logger.warn(`${serviceLocation}: Project ${projectid} not found.`);
+      return { success: false, operation, message: `Project ${projectid} not found.` };
+    }
+    // Drop any legacy pre-AssignmentMode entries: before this feature shipped,
+    // assignedAssistants held raw userId strings. Casting those against this subdocument
+    // schema leaves a ghost entry (userId undefined, mode defaulted to "run") that never
+    // matches a real userId lookup below, so every re-share would otherwise pile up a
+    // duplicate instead of replacing the stale one.
+    const assignments = (project.assignedAssistants ?? []).filter((a) => Boolean(a?.userId));
+    const existingIndex = assignments.findIndex((a) => a.userId === assistantUserId);
+    const assignment: IProjectAssignment = {
+      userId: assistantUserId,
+      mode,
+      instructions,
+      assignedByUserId,
+      assignedAt: new Date().toISOString(),
+    };
+    if (existingIndex >= 0) {
+      assignments[existingIndex] = assignment;
+    } else {
+      assignments.push(assignment);
+    }
+    project.assignedAssistants = assignments;
+    project.markModified("assignedAssistants");
+    await project.save();
+    logger.info(`${serviceLocation}: Project ${projectid} shared with Clinical Assistant ${assistantUserId} (mode=${mode}).`);
+    return { success: true, operation, project: project as unknown as IProjectDocument };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error assigning assistant ${assistantUserId} to project ${projectid}.`);
+    return { success: false, operation, message: "Error assigning Clinical Assistant to project." };
+  }
+};
+
+/**
+ * Unshares a project from a Clinical Assistant — removes their assignment entry from the
+ * project's `assignedAssistants` array. A no-op (still succeeds) if they weren't assigned.
+ *
+ * @async
+ * @function unassignAssistantFromProject
+ * @param {string} projectid - The project to unshare.
+ * @param {string} assistantUserId - The Clinical Assistant's user _id to remove.
+ * @returns {Promise<ProjectCrudResult>}
+ */
+const unassignAssistantFromProject = async (projectid: string, assistantUserId: string): Promise<ProjectCrudResult> => {
+  const operation = CRUDOperation.UPDATE;
+  try {
+    // Pulls run in two passes because the array can hold a mix of shapes: the current
+    // object-shaped entries, and (on any project shared before the AssignmentMode feature
+    // shipped) leftover raw userId strings that $pull can't match with an object query.
+    // Each pass is a no-op if nothing matches, so this is safe to run unconditionally.
+    await projectModel.updateOne({ _id: projectid }, { $pull: { assignedAssistants: assistantUserId } });
+    const project = await projectModel.findByIdAndUpdate(
+      projectid,
+      { $pull: { assignedAssistants: { userId: assistantUserId } } },
+      { new: true },
+    );
+    if (!project) {
+      logger.warn(`${serviceLocation}: Project ${projectid} not found.`);
+      return { success: false, operation, message: `Project ${projectid} not found.` };
+    }
+    logger.info(`${serviceLocation}: Project ${projectid} unshared from Clinical Assistant ${assistantUserId}.`);
+    return { success: true, operation, project: project as unknown as IProjectDocument };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error unassigning assistant ${assistantUserId} from project ${projectid}.`);
+    return { success: false, operation, message: "Error unassigning Clinical Assistant from project." };
+  }
+};
+
+/**
+ * Lists every project a Clinical Assistant has been assigned to. Separate from `readProject`
+ * (whose query builder only ever ANDs conditions, so it cannot express "assigned to me" as an
+ * alternative to "owned by me") — used by the Clinical Assistant's "assigned to me" view.
+ *
+ * @async
+ * @function readProjectsAssignedToAssistant
+ * @param {string} assistantUserId
+ * @returns {Promise<ProjectCrudResult>}
+ */
+const readProjectsAssignedToAssistant = async (assistantUserId: string): Promise<ProjectCrudResult> => {
+  const operation = CRUDOperation.READ;
+  try {
+    const projects = await projectModel.find({ "assignedAssistants.userId": assistantUserId });
+    return { success: true, operation, projects: projects as unknown as IProjectDocument[] };
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error reading projects assigned to assistant ${assistantUserId}.`);
+    return { success: false, operation, message: "Error reading assigned projects." };
+  }
+};
 
 /* Project Segmentation Mask section */
 
@@ -1563,6 +1907,37 @@ const updateProjectSegmentationMask = async (
       mask.segmentationmaskRLE = maskupdates.segmentationmaskRLE;
     }
 
+    // Doctor / Clinical Assistant sharing workflow fields — see MaskStatus.
+    if (maskupdates.status !== undefined) {
+      mask.status = maskupdates.status;
+    }
+    if (maskupdates.parentVersionId !== undefined) {
+      mask.parentVersionId = maskupdates.parentVersionId;
+    }
+    if (maskupdates.supersededBy !== undefined) {
+      mask.supersededBy = maskupdates.supersededBy;
+    }
+    if (maskupdates.createdByUserId !== undefined) {
+      mask.createdByUserId = maskupdates.createdByUserId;
+    }
+    if (maskupdates.createdByRole !== undefined) {
+      mask.createdByRole = maskupdates.createdByRole;
+    }
+    if (maskupdates.reviewedByUserId !== undefined) {
+      mask.reviewedByUserId = maskupdates.reviewedByUserId;
+    }
+    if (maskupdates.reviewedAt !== undefined) {
+      mask.reviewedAt = maskupdates.reviewedAt;
+    }
+    if (maskupdates.flaggedForRetrain !== undefined) {
+      mask.flaggedForRetrain = maskupdates.flaggedForRetrain;
+    }
+    if (maskupdates.flaggedAt !== undefined) {
+      mask.flaggedAt = maskupdates.flaggedAt;
+    }
+    if (maskupdates.flaggedByUserId !== undefined) {
+      mask.flaggedByUserId = maskupdates.flaggedByUserId;
+    }
 
     if (maskupdates.frames) {
       if (!Array.isArray(maskupdates.frames) || maskupdates.frames.length === 0) {
@@ -2544,7 +2919,7 @@ const updateGPUHost = async (updates: Partial<IGPUHost>): Promise<GPUHostCrudRes
 // Using ES modules instead of CommonJS which is module.exports = {connectToDatabase, User};
 // ONLY unit tests should use userModel, fileModel directly, otherwise use the created functions to create users/files.
 export {
-  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, 
+  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, ElevationStatus, RequestedElevationRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, userCanAccessProject, MaskStatus, AssignmentMode, assignAssistantToProject, unassignAssistantFromProject, readProjectsAssignedToAssistant, submitElevationRequest, readPendingElevations, approveElevation, rejectElevation,
   // Project Reconstruction exports
   IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, projectReconstructionModel, createProjectReconstruction, readProjectReconstruction, updateProjectReconstruction, deleteProjectReconstruction,
   // Job and GPU Host exports

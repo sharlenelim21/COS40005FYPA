@@ -10,7 +10,10 @@ import {
     projectReconstructionModel,
     readProject,
     IProjectDocument,
-    deleteProjectReconstruction
+    deleteProjectReconstruction,
+    userCanAccessProject,
+    readProjectsAssignedToAssistant,
+    UserRole,
 } from "../services/database";
 import { SegmentationModel } from "../types/database_types";
 import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
@@ -111,6 +114,14 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
     }
     logger.info(`${serviceLocation}: Received request to fetch reconstruction results for project ID: ${projectId}`);
     try {
+        // Owner, Admin, or an assigned Clinical Assistant (either mode — this is a view) may
+        // read reconstruction results. Pre-existing gap: this endpoint previously had no
+        // ownership/assignment check at all beyond being logged in.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.allowed) {
+            return res.status(404).json({ success: false, message: "Project not found or access denied." });
+        }
+
         const [result, masksResult] = await Promise.all([
             readProjectReconstruction(projectId),
             readProjectSegmentationMask(projectId),
@@ -346,9 +357,13 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
     }
 
     try {
-        // 1. Verify user owns all requested projects
+        // 1. Verify user owns, or (as a Clinical Assistant) is assigned to, all requested
+        // projects. Admin may check status on any project.
+        // `readProject` returning success with NO `.projects` array just means "owns zero
+        // projects" (e.g. every Clinical Assistant, by design) — that's not a failure, only
+        // `success: false` is. Treating it as a 500 broke this endpoint for every assistant.
         const userProjectsResult = await readProject(undefined, userId.toString());
-        if (!userProjectsResult.success || !userProjectsResult.projects) {
+        if (!userProjectsResult.success) {
             logger.error(`${serviceLocation}: Failed to fetch user projects for batch status check.`);
             return res.status(500).json({
                 success: false,
@@ -356,8 +371,16 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
             });
         }
 
-        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => String(p._id));
-        const unauthorizedProjects = projectIds.filter((id: string) => !userProjectIds.includes(id));
+        const accessibleProjectIds = new Set<string>(
+            (userProjectsResult.projects ?? []).map((p: IProjectDocument) => String(p._id))
+        );
+        if (req.user!.role === UserRole.ClinicalAssistant) {
+            const assignedResult = await readProjectsAssignedToAssistant(userId.toString());
+            for (const p of assignedResult.projects ?? []) accessibleProjectIds.add(String(p._id));
+        }
+        const unauthorizedProjects = req.user!.role === UserRole.Admin
+            ? []
+            : projectIds.filter((id: string) => !accessibleProjectIds.has(id));
 
         if (unauthorizedProjects.length > 0) {
             logger.warn(`${serviceLocation}: User ${userId} attempted to check reconstruction status for unauthorized projects: ${unauthorizedProjects.join(', ')}`);
@@ -449,9 +472,10 @@ router.delete("/delete-project-reconstructions/:projectId",
         }
 
         try {
-            // 1. Verify user owns the project
-            const projectResult = await readProject(projectId, userId);
-            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            // Deleting reconstructions is a destructive/management action — owner or Admin only,
+            // even a Run-mode assigned Clinical Assistant may not delete.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.isOwner && req.user!.role !== UserRole.Admin) {
                 logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
                 return res.status(403).json({
                     success: false,
@@ -556,8 +580,9 @@ router.delete("/delete-reconstruction/:projectId/:reconstructionId",
         }
 
         try {
-            const projectResult = await readProject(projectId, userId);
-            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            // Deleting a reconstruction is a destructive/management action — owner or Admin only.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.isOwner && req.user!.role !== UserRole.Admin) {
                 logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
                 return res.status(403).json({
                     success: false,
@@ -652,9 +677,9 @@ router.delete("/delete-model-reconstruction/:projectId",
         }
 
         try {
-            // 1. Verify user owns the project
-            const projectResult = await readProject(projectId, userId);
-            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            // Deleting a reconstruction is a destructive/management action — owner or Admin only.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.isOwner && req.user!.role !== UserRole.Admin) {
                 logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
                 return res.status(403).json({
                     success: false,
@@ -766,18 +791,18 @@ router.delete("/delete-model-reconstruction/:projectId",
 
 // Smooth heart motion for the landmark page's 3D heart (services/reconstruction_motion.ts): GET says where a
 // reconstruction's motion stands (missing / processing / failed / ready with a link), POST starts building it.
-// Only the project's owner; the motion is built from the reconstruction's own meshes, so nothing else is read.
-async function motionSource(req: Request): Promise<{ source?: MotionSource; status: number; message?: string }> {
+// Owner, Admin, or an assigned Clinical Assistant — GET only needs view access (`allowed`), POST
+// is a run action and needs `requireRun: true` (rejects a ViewOnly-mode assistant).
+async function motionSource(req: Request, requireRun: boolean): Promise<{ source?: MotionSource; status: number; message?: string }> {
     const projectId = String(req.params.projectId);
     const reconstructionId = String(req.params.reconstructionId);
     const userId = (req.user as { _id?: unknown } | undefined)?._id?.toString();
-    if (!userId) return { status: 401, message: "Unauthorized." };
+    if (!userId || !req.user) return { status: 401, message: "Unauthorized." };
     if (!/^[0-9a-f]{24}$/i.test(projectId) || !/^[0-9a-f]{24}$/i.test(reconstructionId)) {
         return { status: 400, message: "Unknown project or reconstruction." };
     }
-    const project = await readProject(projectId, userId);
-    if (!project.success) return { status: 500, message: "The project could not be read." };
-    if (!project.projects?.length) return { status: 404, message: "Project not found." };
+    const access = await userCanAccessProject(projectId, req.user);
+    if (requireRun ? !access.canRun : !access.allowed) return { status: 404, message: "Project not found." };
     const result = await readProjectReconstruction(projectId, reconstructionId);
     // With a reconstruction id the reader returns that one document (projectreconstruction), already scoped to the project.
     const reconstruction = result.projectreconstruction;
@@ -789,7 +814,7 @@ async function motionSource(req: Request): Promise<{ source?: MotionSource; stat
 
 router.get("/motion/:projectId/:reconstructionId", isAuth, async (req: Request, res: Response) => {
     try {
-        const { source, status, message } = await motionSource(req);
+        const { source, status, message } = await motionSource(req, false);
         if (!source) return res.status(status).json({ success: false, message });
         return res.status(200).json({ success: true, motion: await getMotion(source) });
     } catch (error) {
@@ -800,7 +825,7 @@ router.get("/motion/:projectId/:reconstructionId", isAuth, async (req: Request, 
 
 router.post("/motion/:projectId/:reconstructionId", isAuth, isAuthAndNotGuest, async (req: Request, res: Response) => {
     try {
-        const { source, status, message } = await motionSource(req);
+        const { source, status, message } = await motionSource(req, true);
         if (!source) return res.status(status).json({ success: false, message });
         if ((req.body as { retry?: unknown } | undefined)?.retry === true) clearFailedMotion(source.reconstructionId);
         const motion = await startMotion(source);

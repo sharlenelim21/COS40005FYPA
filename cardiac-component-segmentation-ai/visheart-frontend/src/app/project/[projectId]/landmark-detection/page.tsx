@@ -188,6 +188,10 @@ export default function LandmarkDetectionPage() {
     refreshReconstructions,
   } = useProject();
 
+  // Locks every run/edit/compute action on this page for a Clinical Assistant assigned
+  // in View-Only mode. Undefined (still loading, or an owner) must never lock anything.
+  const viewOnlyLocked = projectData?.canRun === false;
+
   useEffect(() => {
     const name = projectData?.name;
     document.title = name
@@ -302,6 +306,9 @@ export default function LandmarkDetectionPage() {
   const [isComputingStrain, setIsComputingStrain] = useState(false);
   const [strainComputeError, setStrainComputeError] = useState<string | null>(null);
   const [editableLandmarks, setEditableLandmarks] = useState(true);
+  // A View-Only Clinical Assistant can never drag/place/delete landmark points,
+  // regardless of the "Move/edit landmarks" toggle's own state.
+  const effectiveEditableLandmarks = editableLandmarks && !viewOnlyLocked;
   const [highlightedLandmarkId, setHighlightedLandmarkId] = useState<string | null>(null);
   const [landmarkEdits, setLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
   // Snapshot of landmarkEdits as of the last successful save (or load) — lets a
@@ -1505,6 +1512,7 @@ export default function LandmarkDetectionPage() {
     onFullCycleProgressChange: setFullCycleProgress,
     segmentationRunning: segPendingByModel[activeModel],
     checkSegmentationRunning: () => segmentationRunningFor(activeModel),
+    locked: viewOnlyLocked,
   };
   // Whichever compute is relevant to the CURRENT scope — the main panel
   // shows one loading state regardless of which of the two ran.
@@ -1565,8 +1573,12 @@ export default function LandmarkDetectionPage() {
             <Button
               size="sm"
               className="text-xs gap-1.5"
-              disabled={segmentationBlocksRuns}
-              title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
+              disabled={segmentationBlocksRuns || viewOnlyLocked}
+              title={
+                viewOnlyLocked
+                  ? "View-only access — ask the Doctor for Run access to use this."
+                  : segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined
+              }
               onClick={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
             >
               <RefreshCw className="h-3.5 w-3.5" />
@@ -1594,8 +1606,12 @@ export default function LandmarkDetectionPage() {
           <button
             type="button"
             className="text-xs underline hover:no-underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
-            disabled={segmentationBlocksRuns}
-            title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
+            disabled={segmentationBlocksRuns || viewOnlyLocked}
+            title={
+              viewOnlyLocked
+                ? "View-only access — ask the Doctor for Run access to use this."
+                : segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined
+            }
             onClick={() => runUnlessSegmentationPending(() => runDetectionAndResetEdits(selectedModel))}
           >
             Try again
@@ -1639,7 +1655,7 @@ export default function LandmarkDetectionPage() {
             maskDimensions={maskDimensions}
             visibleLandmarks={visibleLandmarks}
             showLabels={showLabels}
-            editableLandmarks={editableLandmarks}
+            editableLandmarks={effectiveEditableLandmarks}
             highlightedLandmarkId={highlightedLandmarkId}
             onLandmarkMove={handleLandmarkMove}
             onLandmarkMoveEnd={handleLandmarkMoveEnd}
@@ -1696,8 +1712,8 @@ export default function LandmarkDetectionPage() {
             onClearReplacementFile={handleClearReplacementFile}
             showLabels={showLabels}
             onToggleShowLabels={() => setShowLabels((p) => !p)}
-            editableLandmarks={editableLandmarks}
-            onToggleEditableLandmarks={() => setEditableLandmarks((p) => !p)}
+            editableLandmarks={effectiveEditableLandmarks}
+            onToggleEditableLandmarks={viewOnlyLocked ? undefined : () => setEditableLandmarks((p) => !p)}
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={setHighlightedLandmarkId}
             selectedStrainType={selectedStrainType}
@@ -2033,7 +2049,7 @@ export default function LandmarkDetectionPage() {
                   maskDimensions={maskDimensions}
                   visibleLandmarks={visibleLandmarks}
                   showLabels={showLabels}
-                  editableLandmarks={editableLandmarks}
+                  editableLandmarks={effectiveEditableLandmarks}
                   highlightedLandmarkId={highlightedLandmarkId}
                   onLandmarkMove={handleLandmarkMove}
                   onLandmarkMoveEnd={handleLandmarkMoveEnd}
@@ -2097,8 +2113,8 @@ export default function LandmarkDetectionPage() {
                 onClearReplacementFile={handleClearReplacementFile}
                 showLabels={showLabels}
                 onToggleShowLabels={() => setShowLabels((p) => !p)}
-                editableLandmarks={editableLandmarks}
-                onToggleEditableLandmarks={() => setEditableLandmarks((p) => !p)}
+                editableLandmarks={effectiveEditableLandmarks}
+                onToggleEditableLandmarks={viewOnlyLocked ? undefined : () => setEditableLandmarks((p) => !p)}
                 highlightedLandmarkId={highlightedLandmarkId}
                 onHighlightLandmark={setHighlightedLandmarkId}
                 selectedStrainType={selectedStrainType}

@@ -69,7 +69,7 @@ async function createTestUsers() {
         password: 'User123!',
         email: 'userTest@example.com',
         phone: '4445556666',
-        role: UserRole.User
+        role: UserRole.Doctor
     };
 
     // Create a guest user

@@ -3,15 +3,20 @@
 
 import express, { Request, Response, NextFunction } from "express";
 import passport from "passport";
-import { IUser, IUserSafe, UserRole, createUser, readUser, updateUser, deleteUser, authenticateUser } from "../services/database"; // CRUD + Auth functions for User
-import { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest } from "../services/passportjs"; // Import Passport.js middleware
+import multer from "multer";
+import {
+  IUser, IUserSafe, UserRole, RequestedElevationRole,
+  createUser, readUser, updateUser, deleteUser, authenticateUser, userModel,
+  submitElevationRequest, readPendingElevations, approveElevation, rejectElevation,
+} from "../services/database"; // CRUD + Auth functions for User
+import { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest, isAuthAndDoctor } from "../services/passportjs"; // Import Passport.js middleware
 import logger from "../services/logger"; // Import logger
-// import { extractS3KeyFromUrl, deleteFromS3 } from "../services/s3_handler";
+import { cleanupUserS3Storage, uploadBufferToS3, getS3ObjectStream } from '../services/s3_handler';
 import validateFields from "../utils/field_validation"; // Import reusable validation middleware
 import { body, validationResult } from 'express-validator'; // Import express-validator for input validation
 import { v4 as uuidv4 } from 'uuid'; // Import UUID for generating unique guest IDs
-import { cleanupUserS3Storage } from '../services/s3_handler';
 import { handleUserSaveUnsave } from "../jobs/projectcleanupjob"; // Import project handler for user project management
+import LogError from "../utils/error_logger";
 // express-rate-limit is installed as a production dependency — baked into the Docker image.
 // It will be active after the next docker build. For local volume-mount dev, the backend
 // falls back gracefully if the module is somehow missing (see loginRateLimiter below).
@@ -44,7 +49,44 @@ const loginRateLimiter = rateLimit
     })
   : (_req: Request, _res: Response, next: NextFunction) => next(); // no-op fallback until image rebuild
 
+// Staff ID card upload — memory storage (never touches disk), image/PDF only, 5MB max. The file
+// never gets a public or presigned URL; it's stored under a private key and only ever read back
+// by the admin-only /auth/elevations/:userId/id-card route.
+const ID_CARD_ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
+const idCardUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (ID_CARD_ALLOWED_MIME.has(file.mimetype)) return cb(null, true);
+    cb(new multer.MulterError("LIMIT_UNEXPECTED_FILE", "Only JPEG, PNG, WebP, or PDF files are accepted for the staff ID card."));
+  },
+}).single("staffIdCard");
+
+const ALLOWED_PROFESSIONS = [
+  "MRI Radiographer / Cardiac Imaging Technologist",
+  "Cardiac Physiologist / Cardiovascular Technologist",
+  "Nurse / Medical Assistant",
+  "Doctor (Cardiologist)",
+];
+
+const isRequestedElevationRole = (value: unknown): value is RequestedElevationRole =>
+  value === UserRole.Doctor || value === UserRole.ClinicalAssistant;
+
 router.post("/register",
+  // Multipart so the optional "I am a medical staff member" fields (profession, medical ID,
+  // requested role, reason, and the staff ID card file) can ride along in the same submit. The
+  // file field is optional at the multer level — whether it's actually required is enforced below
+  // once we know isMedicalStaff was checked.
+  (req: Request, res: Response, next: NextFunction): void => {
+    idCardUpload(req, res, (err: unknown) => {
+      if (err) {
+        const message = err instanceof multer.MulterError ? err.message : "Failed to process the uploaded file.";
+        res.status(400).json({ register: false, message });
+        return;
+      }
+      next();
+    });
+  },
   // Use all validation fields for registration
   validateFields,
   (req: Request, res: Response, next: NextFunction): void => {
@@ -58,13 +100,43 @@ router.post("/register",
   },
   async (req: Request, res: Response): Promise<void> => {
     const { username, password, email, phone } = req.body;
+    const isMedicalStaff = req.body.isMedicalStaff === "true" || req.body.isMedicalStaff === true;
+
+    // If the "medical staff" checkbox was ticked, validate those fields BEFORE creating the
+    // account, so a bad staff submission doesn't leave behind a half-registered user.
+    let staffFields: { profession: string; medicalId: string; requestedRole: RequestedElevationRole; reason?: string } | null = null;
+    if (isMedicalStaff) {
+      const { profession, medicalId, requestedRole, reason } = req.body as {
+        profession?: string; medicalId?: string; requestedRole?: string; reason?: string;
+      };
+      if (!profession || !ALLOWED_PROFESSIONS.includes(profession)) {
+        res.status(400).json({ register: false, message: "A valid profession is required." });
+        return;
+      }
+      if (!medicalId || !medicalId.trim()) {
+        res.status(400).json({ register: false, message: "A medical/registration ID is required." });
+        return;
+      }
+      if (!isRequestedElevationRole(requestedRole)) {
+        res.status(400).json({ register: false, message: "Requested role must be Doctor or Clinical Assistant." });
+        return;
+      }
+      if (!req.file) {
+        res.status(400).json({ register: false, message: "A staff ID card (image or PDF, max 5MB) is required." });
+        return;
+      }
+      staffFields = { profession, medicalId: medicalId.trim(), requestedRole, reason: reason?.trim() };
+    }
+
     // Create new IUser object
     const newUser: IUser = {
       username,
       password,
       email,
       phone,
-      role: UserRole.User, // Default role for new users
+      // Every signup starts as EducationalUser — never read from req.body. Elevation to
+      // Doctor/Clinical Assistant only ever happens via Admin-approved review below.
+      role: UserRole.EducationalUser,
     };
     const result = await createUser(newUser);
     if (!result.success) {
@@ -73,10 +145,39 @@ router.post("/register",
     }
     if (result.success && result.user) {
       logger.info(`${serviceLocation}: ${result.user.username} registered successfully.`);
+
+      let finalUser: IUserSafe = result.user;
+      if (staffFields && req.file) {
+        try {
+          const extension = (() => {
+            switch (req.file!.mimetype) {
+              case "application/pdf": return ".pdf";
+              case "image/png": return ".png";
+              case "image/webp": return ".webp";
+              default: return ".jpg";
+            }
+          })();
+          const staffIdCardFileKey = `staff_id_cards/${result.user._id}/${uuidv4()}${extension}`;
+          const uploaded = await uploadBufferToS3(req.file.buffer, staffIdCardFileKey, req.file.mimetype);
+          if (uploaded) {
+            const elevationResult = await submitElevationRequest(result.user._id, { ...staffFields, staffIdCardFileKey });
+            if (elevationResult.success && elevationResult.user) {
+              finalUser = elevationResult.user;
+            } else {
+              logger.warn(`${serviceLocation}: Account ${result.user.username} created, but the elevation request failed: ${elevationResult.message}`);
+            }
+          } else {
+            logger.warn(`${serviceLocation}: Account ${result.user.username} created, but the staff ID card upload failed.`);
+          }
+        } catch (error: unknown) {
+          LogError(error as Error, serviceLocation, `Error submitting elevation request during registration for ${result.user.username}`);
+        }
+      }
+
       res.status(201).json({
         register: true,
         message: "Registration successful.",
-        user: result.user,
+        user: finalUser,
       });
       return;
     }
@@ -106,13 +207,13 @@ router.post("/register-from-guest",
         return;
       }
 
-      // Update the guest entry with new details and change role to User
+      // Update the guest entry with new details — same starting role as any other signup.
       const updateData = {
         username,
         password,
         email,
         phone,
-        role: UserRole.User, // Change role to User
+        role: UserRole.EducationalUser,
       };
       const result = await updateUser(guestUser._id, updateData);
 
@@ -141,6 +242,165 @@ router.post("/register-from-guest",
     }
   }
 )
+
+// ───────────────────────── Doctor/Clinical Assistant elevation workflow ─────────────────────────
+// An EducationalUser submits profession + medical registration number + a staff ID card; an Admin
+// reviews it (approve as Doctor/Clinical Assistant, or reject). The checkbox/fields here only ever
+// FLAG the account — role itself is changed exclusively by the Admin approve endpoint below.
+
+// An already-registered EducationalUser requests elevation to Doctor or Clinical Assistant.
+router.post("/request-elevation",
+  isAuthAndNotGuest,
+  (req: Request, res: Response, next: NextFunction): void => {
+    idCardUpload(req, res, (err: unknown) => {
+      if (err) {
+        const message = err instanceof multer.MulterError ? err.message : "Failed to process the uploaded file.";
+        res.status(400).json({ success: false, message });
+        return;
+      }
+      next();
+    });
+  },
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      if (req.user?.role !== UserRole.EducationalUser) {
+        res.status(403).json({ success: false, message: "Only an educational account may request elevation." });
+        return;
+      }
+
+      const { profession, medicalId, requestedRole, reason } = req.body as {
+        profession?: string; medicalId?: string; requestedRole?: string; reason?: string;
+      };
+
+      if (!profession || !ALLOWED_PROFESSIONS.includes(profession)) {
+        res.status(400).json({ success: false, message: "A valid profession is required." });
+        return;
+      }
+      if (!medicalId || !medicalId.trim()) {
+        res.status(400).json({ success: false, message: "A medical/registration ID is required." });
+        return;
+      }
+      if (!isRequestedElevationRole(requestedRole)) {
+        res.status(400).json({ success: false, message: "requestedRole must be 'doctor' or 'clinical_assistant'." });
+        return;
+      }
+      const file = req.file;
+      if (!file) {
+        res.status(400).json({ success: false, message: "A staff ID card (image or PDF, max 5MB) is required." });
+        return;
+      }
+
+      const userId = req.user._id;
+      const extension = (() => {
+        switch (file.mimetype) {
+          case "application/pdf": return ".pdf";
+          case "image/png": return ".png";
+          case "image/webp": return ".webp";
+          default: return ".jpg";
+        }
+      })();
+      const staffIdCardFileKey = `staff_id_cards/${userId}/${uuidv4()}${extension}`;
+      const uploaded = await uploadBufferToS3(file.buffer, staffIdCardFileKey, file.mimetype);
+      if (!uploaded) {
+        res.status(500).json({ success: false, message: "Failed to upload the staff ID card. Please try again." });
+        return;
+      }
+
+      const result = await submitElevationRequest(userId, {
+        profession,
+        medicalId: medicalId.trim(),
+        staffIdCardFileKey,
+        requestedRole,
+        reason: reason?.trim(),
+      });
+      if (!result.success) {
+        res.status(400).json({ success: false, message: result.message });
+        return;
+      }
+      logger.info(`${serviceLocation}: User ${userId} requested elevation to ${requestedRole}.`);
+      res.status(200).json({ success: true, message: "Your request has been submitted for review.", user: result.user });
+    } catch (error: unknown) {
+      LogError(error as Error, serviceLocation, "Error submitting elevation request");
+      res.status(500).json({ success: false, message: "Internal error submitting the elevation request." });
+    }
+  }
+);
+
+// Admin's "Staff Verifications" queue.
+router.get("/pending-elevations", isAuthAndAdmin, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const result = await readPendingElevations();
+    res.status(200).json({ success: true, users: result.users ?? [] });
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, "Error listing pending elevations");
+    res.status(500).json({ success: false, message: "Internal error listing pending elevations." });
+  }
+});
+
+// Admin approves a pending request as Doctor or Clinical Assistant (not necessarily what was
+// originally requested — the Admin has final judgement).
+router.post("/elevations/:userId/approve", isAuthAndAdmin, async (req: Request, res: Response): Promise<void> => {
+  const { userId } = req.params;
+  const { role } = req.body as { role?: string };
+  if (!isRequestedElevationRole(role)) {
+    res.status(400).json({ success: false, message: "role must be 'doctor' or 'clinical_assistant'." });
+    return;
+  }
+  try {
+    const result = await approveElevation(String(userId), role, req.user!._id);
+    if (!result.success) {
+      res.status(400).json({ success: false, message: result.message });
+      return;
+    }
+    res.status(200).json({ success: true, message: `Approved as ${role}.`, user: result.user });
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error approving elevation for user ${userId}`);
+    res.status(500).json({ success: false, message: "Internal error approving the elevation request." });
+  }
+});
+
+// Admin rejects a pending request — role stays EducationalUser.
+router.post("/elevations/:userId/reject", isAuthAndAdmin, async (req: Request, res: Response): Promise<void> => {
+  const { userId } = req.params;
+  try {
+    const result = await rejectElevation(String(userId), req.user!._id);
+    if (!result.success) {
+      res.status(400).json({ success: false, message: result.message });
+      return;
+    }
+    res.status(200).json({ success: true, message: "Request rejected.", user: result.user });
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error rejecting elevation for user ${userId}`);
+    res.status(500).json({ success: false, message: "Internal error rejecting the elevation request." });
+  }
+});
+
+// Admin-only staff ID card viewer — streams the private object directly; never a public or
+// presigned URL, so the file is reachable only through this role-checked route.
+router.get("/elevations/:userId/id-card", isAuthAndAdmin, async (req: Request, res: Response): Promise<void> => {
+  const { userId } = req.params;
+  try {
+    // staffIdCardFileKey is intentionally absent from IUserSafe — read it directly off the document.
+    const userDoc = await userModel.findById(userId);
+    const fileKey = userDoc?.staffIdCardFileKey;
+    if (!fileKey) {
+      res.status(404).json({ success: false, message: "No staff ID card on file for this user." });
+      return;
+    }
+    const object = await getS3ObjectStream(fileKey);
+    if (!object) {
+      res.status(404).json({ success: false, message: "The staff ID card could not be read." });
+      return;
+    }
+    logger.info(`${serviceLocation}: Admin ${req.user?.username} viewed the staff ID card for user ${userId}.`);
+    res.setHeader("Content-Type", object.contentType || "application/octet-stream");
+    res.setHeader("Content-Disposition", "inline");
+    object.body.pipe(res);
+  } catch (error: unknown) {
+    LogError(error as Error, serviceLocation, `Error streaming staff ID card for user ${userId}`);
+    res.status(500).json({ success: false, message: "Internal error reading the staff ID card." });
+  }
+});
 
 router.post("/login",
   loginRateLimiter,
@@ -651,6 +911,23 @@ router.get("/users", isAuthAndAdmin, async (req: Request, res: Response): Promis
   } catch (error: unknown) {
     logger.error(`${serviceLocation}: Error fetching all users: ${error}`);
     res.status(500).json({ fetch: false, message: "Internal error during user fetch." });
+  }
+});
+
+// Doctor-facing list of Clinical Assistant accounts — backs the Share-with-Clinical-Assistant
+// picker. Deliberately not the full /users list (admin-only, includes every role): this is
+// scoped to just the one role a Doctor is allowed to assign cases to.
+router.get("/clinical-assistants", isAuthAndDoctor, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const result = await readUser({ role: UserRole.ClinicalAssistant });
+    const assistants = result.success ? (result.users ?? (result.user ? [result.user] : [])) : [];
+    res.status(200).json({
+      fetch: true,
+      users: assistants.map((u) => ({ _id: u._id, username: u.username, email: u.email })),
+    });
+  } catch (error: unknown) {
+    logger.error(`${serviceLocation}: Error fetching clinical assistants: ${error}`);
+    res.status(500).json({ fetch: false, message: "Internal error fetching Clinical Assistant accounts." });
   }
 });
 

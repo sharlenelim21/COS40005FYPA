@@ -16,6 +16,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // --- Icon Imports ---
 import {
@@ -30,7 +39,17 @@ import {
   AlertCircle,
   CheckCircle,
   ArrowUp,
+  Stethoscope,
+  Upload,
 } from "lucide-react";
+
+/** Must match ALLOWED_PROFESSIONS in Cardiac_Segmentation_FYP_Server/src/routes/authentication.ts */
+const PROFESSIONS = [
+  "MRI Radiographer / Cardiac Imaging Technologist",
+  "Cardiac Physiologist / Cardiovascular Technologist",
+  "Nurse / Medical Assistant",
+  "Doctor (Cardiologist)",
+] as const;
 
 /**
  * Form data interface for user registration
@@ -42,6 +61,13 @@ interface RegistrationFormData {
   phone: string;
   password: string;
   confirmPassword: string;
+  // Medical staff elevation request fields — only used/validated when isMedicalStaff is checked.
+  // The role itself is never granted here; this only flags the account for Admin review.
+  isMedicalStaff: boolean;
+  profession: string;
+  medicalId: string;
+  requestedRole: "doctor" | "clinical_assistant" | "";
+  reason: string;
 }
 
 /**
@@ -54,6 +80,10 @@ interface FormErrors {
   phone?: string;
   password?: string;
   confirmPassword?: string;
+  profession?: string;
+  medicalId?: string;
+  requestedRole?: string;
+  staffIdCard?: string;
   general?: string;
 }
 
@@ -382,7 +412,13 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
     phone: "",
     password: "",
     confirmPassword: "",
+    isMedicalStaff: false,
+    profession: "",
+    medicalId: "",
+    requestedRole: "",
+    reason: "",
   });
+  const [staffIdCardFile, setStaffIdCardFile] = useState<File | null>(null);
 
   const [errors, setErrors] = useState<FormErrors>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -432,8 +468,28 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
       newErrors.confirmPassword = "Passwords do not match";
     }
 
+    // Medical staff elevation request fields — only required when the checkbox is ticked.
+    if (data.isMedicalStaff) {
+      if (!data.profession) {
+        newErrors.profession = "Select your profession";
+      }
+      if (!data.medicalId.trim()) {
+        newErrors.medicalId = "Your medical/registration ID is required";
+      }
+      if (!data.requestedRole) {
+        newErrors.requestedRole = "Select the access you're requesting";
+      }
+      if (!staffIdCardFile) {
+        newErrors.staffIdCard = "Upload a photo or PDF of your staff ID card";
+      } else if (staffIdCardFile.size > 5 * 1024 * 1024) {
+        newErrors.staffIdCard = "File must be 5MB or smaller";
+      } else if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(staffIdCardFile.type)) {
+        newErrors.staffIdCard = "Only JPEG, PNG, WebP, or PDF files are accepted";
+      }
+    }
+
     return newErrors;
-  }, []);
+  }, [staffIdCardFile]);
 
   // --- Event Handlers ---
 
@@ -441,11 +497,11 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
    * Handles input field changes with real-time validation
    */
   const handleInputChange = useCallback(
-    (field: keyof RegistrationFormData, value: string) => {
+    (field: keyof RegistrationFormData, value: string | boolean) => {
       setFormData((prev) => ({ ...prev, [field]: value }));
 
       // Clear field-specific error when user starts typing
-      if (errors[field]) {
+      if (errors[field as keyof FormErrors]) {
         setErrors((prev) => ({ ...prev, [field]: undefined }));
       }
     },
@@ -470,13 +526,28 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
       setErrors({});
 
       try {
-        // Prepare API request data (exclude confirmPassword)
-        const { confirmPassword, ...apiData } = formData;
-
-        // Choose API endpoint based on whether this is a guest upgrade
-        const response = isActuallyGuestUpgrade
-          ? await authApi.registerFromGuest(apiData)
-          : await authApi.register(apiData);
+        let response;
+        if (isActuallyGuestUpgrade) {
+          // Guest upgrade stays a plain JSON call — always lands as EducationalUser too; a
+          // newly-upgraded account can request elevation afterward from their dashboard.
+          const { username, email, phone, password } = formData;
+          response = await authApi.registerFromGuest({ username, email, phone, password });
+        } else {
+          const apiForm = new FormData();
+          apiForm.set("username", formData.username);
+          apiForm.set("email", formData.email);
+          apiForm.set("phone", formData.phone);
+          apiForm.set("password", formData.password);
+          if (formData.isMedicalStaff) {
+            apiForm.set("isMedicalStaff", "true");
+            apiForm.set("profession", formData.profession);
+            apiForm.set("medicalId", formData.medicalId.trim());
+            apiForm.set("requestedRole", formData.requestedRole);
+            if (formData.reason.trim()) apiForm.set("reason", formData.reason.trim());
+            if (staffIdCardFile) apiForm.set("staffIdCard", staffIdCardFile);
+          }
+          response = await authApi.register(apiForm);
+        }
 
         if (response.register) {
           console.log(
@@ -520,7 +591,7 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
         setIsLoading(false);
       }
     },
-    [formData, validateForm, isActuallyGuestUpgrade, onSuccess],
+    [formData, validateForm, isActuallyGuestUpgrade, onSuccess, staffIdCardFile],
   );
 
   // Show loading state while auth is being determined
@@ -698,6 +769,152 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
                   </p>
                 )}
               </div>
+
+              {/* Medical Staff Elevation Request */}
+              {!isActuallyGuestUpgrade && (
+                <div className="space-y-4 rounded-lg border p-4">
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="isMedicalStaff"
+                      checked={formData.isMedicalStaff}
+                      onCheckedChange={(checked) => handleInputChange("isMedicalStaff", checked === true)}
+                      disabled={isLoading}
+                    />
+                    <Label htmlFor="isMedicalStaff" className="text-sm leading-tight font-normal">
+                      I am a medical staff member and would like to request Doctor or Clinical
+                      Assistant access (reviewed by an Admin — you'll start with Educational
+                      access in the meantime).
+                    </Label>
+                  </div>
+
+                  {formData.isMedicalStaff && (
+                    <div className="space-y-4 border-t pt-4">
+                      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                        <Stethoscope className="h-4 w-4" />
+                        Staff verification details
+                      </div>
+
+                      {/* Profession */}
+                      <div className="space-y-2">
+                        <Label htmlFor="profession" className="text-sm font-medium">
+                          Profession *
+                        </Label>
+                        <Select
+                          value={formData.profession}
+                          onValueChange={(value: string) => handleInputChange("profession", value)}
+                          disabled={isLoading}
+                        >
+                          <SelectTrigger id="profession" className={errors.profession ? "border-destructive" : ""}>
+                            <SelectValue placeholder="Select your profession" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {PROFESSIONS.map((p) => (
+                              <SelectItem key={p} value={p}>{p}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {errors.profession && (
+                          <p className="text-destructive flex items-center gap-1 text-sm">
+                            <AlertCircle className="h-3 w-3" />
+                            {errors.profession}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Medical ID */}
+                      <div className="space-y-2">
+                        <Label htmlFor="medicalId" className="text-sm font-medium">
+                          Medical / Registration ID *
+                        </Label>
+                        <Input
+                          id="medicalId"
+                          type="text"
+                          placeholder="e.g. MMC number, Nursing Board number, MAHPC number"
+                          value={formData.medicalId}
+                          onChange={(e) => handleInputChange("medicalId", e.target.value)}
+                          className={errors.medicalId ? "border-destructive" : ""}
+                          disabled={isLoading}
+                        />
+                        {errors.medicalId && (
+                          <p className="text-destructive flex items-center gap-1 text-sm">
+                            <AlertCircle className="h-3 w-3" />
+                            {errors.medicalId}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Requested role */}
+                      <div className="space-y-2">
+                        <Label htmlFor="requestedRole" className="text-sm font-medium">
+                          Requested Access *
+                        </Label>
+                        <Select
+                          value={formData.requestedRole}
+                          onValueChange={(value: string) => handleInputChange("requestedRole", value as "doctor" | "clinical_assistant")}
+                          disabled={isLoading}
+                        >
+                          <SelectTrigger id="requestedRole" className={errors.requestedRole ? "border-destructive" : ""}>
+                            <SelectValue placeholder="Select the access you need" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="doctor">Doctor</SelectItem>
+                            <SelectItem value="clinical_assistant">Clinical Assistant</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {errors.requestedRole && (
+                          <p className="text-destructive flex items-center gap-1 text-sm">
+                            <AlertCircle className="h-3 w-3" />
+                            {errors.requestedRole}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Staff ID card upload */}
+                      <div className="space-y-2">
+                        <Label htmlFor="staffIdCard" className="text-sm font-medium">
+                          Staff ID Card *
+                        </Label>
+                        <div className="relative">
+                          <Upload className="text-muted-foreground absolute top-3 left-3 h-4 w-4" />
+                          <Input
+                            id="staffIdCard"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,application/pdf"
+                            onChange={(e) => {
+                              setStaffIdCardFile(e.target.files?.[0] ?? null);
+                              if (errors.staffIdCard) setErrors((prev) => ({ ...prev, staffIdCard: undefined }));
+                            }}
+                            className={`pl-10 ${errors.staffIdCard ? "border-destructive" : ""}`}
+                            disabled={isLoading}
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">JPEG, PNG, WebP, or PDF — max 5MB. Kept private, visible only to an Admin reviewing your request.</p>
+                        {errors.staffIdCard && (
+                          <p className="text-destructive flex items-center gap-1 text-sm">
+                            <AlertCircle className="h-3 w-3" />
+                            {errors.staffIdCard}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Reason (optional) */}
+                      <div className="space-y-2">
+                        <Label htmlFor="reason" className="text-sm font-medium">
+                          Reason for access (optional)
+                        </Label>
+                        <Textarea
+                          id="reason"
+                          placeholder="Briefly explain why you need Doctor/Clinical Assistant access"
+                          value={formData.reason}
+                          onChange={(e) => handleInputChange("reason", e.target.value)}
+                          disabled={isLoading}
+                          rows={2}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Password Field */}
               <PasswordInput

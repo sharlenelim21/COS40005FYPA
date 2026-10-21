@@ -3,7 +3,17 @@
 import Link from "next/link";
 import { Heart, Mail, MapPin } from "lucide-react";
 
-export default function Footer() {
+export default function Footer({ minimal = false }: { minimal?: boolean }) {
+  if (minimal) {
+    return (
+      <footer className="w-full bg-background border-t border-border mt-auto">
+        <div className="max-w-7xl mx-auto px-4 py-4 text-center">
+          <p className="text-sm text-muted-foreground">© {new Date().getFullYear()} VisHeart. All rights reserved.</p>
+        </div>
+      </footer>
+    );
+  }
+
   return (
     <footer className="w-full bg-background border-t border-border mt-auto">
       <div className="max-w-7xl mx-auto px-4 py-8">

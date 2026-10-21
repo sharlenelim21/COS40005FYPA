@@ -383,9 +383,43 @@ check("REGRESSION: implausible LVEDV excludes EDVI/LVMI from NOR/DCM/HCM, but EF
   }));
   assert(gate(out, "NOR").met === false, `NOR should resolve from EF alone (48.8 outside 52-75), got ${gate(out, "NOR").met}`);
   assert(gate(out, "NOR").reasons.some((r) => r.includes("unreliable")), "NOR should explain the EDVI/LVMI exclusion");
-  assert(gate(out, "DCM").met === null, `DCM should be pending (EDVI excluded, not usable), got ${gate(out, "DCM").met}`);
-  assert(gate(out, "HCM").met === null, `HCM should be pending (LVMI excluded, not usable), got ${gate(out, "HCM").met}`);
+  // EF 48.8% already fails DCM's <40% half (EDVI being excluded can't change
+  // that) and HCM's >=50%-preserved half (wall 5.4mm also already fails its
+  // own >15mm half, unaffected by the volume guard) -- both ANDs are already
+  // known false from the criteria that ARE available, so both gates should
+  // resolve to "not met" rather than sit pending on an EDVI/LVMI value that
+  // could never have flipped an already-failed AND back to true.
+  const dcm = gate(out, "DCM");
+  assert(dcm.met === false, `DCM should resolve to not-met from EF alone (EDVI excluded, can't change an already-failed AND), got ${dcm.met}`);
+  assert(dcm.resolved_from_partial_data === true, "DCM should flag that this was resolved from partial data");
+  const hcm = gate(out, "HCM");
+  assert(hcm.met === false, `HCM should resolve to not-met from wall+EF alone (LVMI excluded, can't change an already-failed AND), got ${hcm.met}`);
+  assert(hcm.resolved_from_partial_data === true, "HCM should flag that this was resolved from partial data");
   assert(out.warnings.some((w) => w.includes("Absolute LV volumes flagged unreliable")), "should carry a top-level LV volume-reliability warning");
+});
+
+check("Three-valued AND/OR: a gate stays Pending when the available criteria alone can't yet decide it", () => {
+  // voxel_mm3 outside the plausible range triggers voxel_size_issue, which is
+  // shared by BOTH the LV guard (part of lv_volume_issues) and the RV guard --
+  // so this single signal excludes LV's EDVI/LVMI AND RV's RVEDVI/RVESVI/SVI
+  // at once, letting both halves of this test run together.
+  // EF 25% already MEETS DCM's <40% half, so (unlike the test above) DCM
+  // genuinely cannot be resolved without EDVI -- it should still be Pending,
+  // not forced to a wrong answer just because this module now short-circuits
+  // the cases it CAN decide.
+  const out = parse(runPython({
+    lv: { EF: 25, EDV: 150, EDVI: 80, LVMassG: 100, LVMI: 55, MaxWallThicknessMm: 9 },
+    rv: { RVEDV: 150, RVEDVI: 80, RVESVI: 40, RVEF: 55, SVI: 40 },
+    volume_signals: { voxel_mm3: 0.01, duplicate_slices: [] },
+  }));
+  const dcm = gate(out, "DCM");
+  assert(dcm.met === null, `DCM should stay pending -- EF alone already meets its half, EDVI (excluded) could still go either way, got ${dcm.met}`);
+  assert(!dcm.resolved_from_partial_data, "DCM should not claim a partial-data resolution when it's genuinely still pending");
+  // RVEF 55% does not meet RV's <40% half, and RVEDVI is excluded (unavailable)
+  // -- an OR with one known-False side and one unknown side must stay Pending,
+  // since the missing side could still be true.
+  const rv = gate(out, "RV");
+  assert(rv.met === null, `RV should stay pending -- RVEF alone fails its half, RVEDVI (unavailable) could still meet its own half, got ${rv.met}`);
 });
 
 check("Volume-reliability guard also withholds RVEDVI/RVESVI/SVI from the RV gate and severity, but RVEF still works", () => {

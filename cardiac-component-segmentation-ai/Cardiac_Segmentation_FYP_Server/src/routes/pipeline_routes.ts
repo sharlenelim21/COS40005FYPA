@@ -3,7 +3,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import LogError from "../utils/error_logger";
 import { isAuth } from "../services/passportjs";
-import { readProject, UserRole } from "../services/database";
+import { UserRole, userCanAccessProject } from "../services/database";
 import {
     advancePipeline,
     buildPipelineSteps,
@@ -20,12 +20,6 @@ const asModel = (v: unknown): PipelineModelName | null =>
     v === "medsam" || v === "unet" ? v : null;
 const asChamber = (v: unknown): PipelineChamber | null =>
     v === "lv" || v === "rv" ? v : null;
-
-async function ownsProject(projectId: string, userId: string): Promise<boolean> {
-    const result = await readProject(projectId);
-    const project = result.success ? result.projects?.[0] : undefined;
-    return !!project && String(project.userid) === userId;
-}
 
 function toClient(doc: any) {
     if (!doc) return null;
@@ -49,7 +43,14 @@ router.post("/start/:projectId", isAuth, async (req: Request, res: Response) => 
     const projectId = String(req.params.projectId ?? "");
     const userId = String(req.user?._id ?? "");
     try {
-        if (!projectId || !(await ownsProject(projectId, userId))) {
+        // Owner, an assigned Run-mode Clinical Assistant, or Admin may start the pipeline.
+        // This used to check strict ownership only, which made "Run" mode meaningless for the
+        // one-click pipeline — any assigned assistant always got 404 "Project not found."
+        if (!projectId) {
+            return res.status(404).json({ message: "Project not found." });
+        }
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(404).json({ message: "Project not found." });
         }
 
@@ -105,9 +106,14 @@ router.post("/start/:projectId", isAuth, async (req: Request, res: Response) => 
 
 router.get("/:projectId", isAuth, async (req: Request, res: Response) => {
     const projectId = String(req.params.projectId ?? "");
-    const userId = String(req.user?._id ?? "");
     try {
-        if (!projectId || !(await ownsProject(projectId, userId))) {
+        // View-class: owner, ANY assigned Clinical Assistant (Run or View-Only), or Admin may
+        // see the pipeline's status — only starting it is Run-gated (see POST /start above).
+        if (!projectId) {
+            return res.status(404).json({ message: "Project not found." });
+        }
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.allowed || !access.project) {
             return res.status(404).json({ message: "Project not found." });
         }
         const doc = await pipelineModel.findOne({ projectId }).sort({ createdAt: -1 }).lean();

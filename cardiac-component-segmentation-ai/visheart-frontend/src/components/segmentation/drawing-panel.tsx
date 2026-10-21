@@ -44,7 +44,9 @@ export function DrawingPanel({
   zoomLevel = 1,
   setZoomLevel = () => {},
   onReset,
+  locked = false,
 }: DrawingPanelProps) {
+  const DRAW_TOOLS = new Set<DrawingTool>(["brush", "eraser", "rectangle"]);
 
   // Memoized tool selection handler
   const handleToolChange = React.useCallback((value: string) => {
@@ -56,16 +58,18 @@ export function DrawingPanel({
   // Optimized keyboard shortcut handler with cleanup
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (locked) return;
+
       // Handle Delete key for clear action (no modifier keys)
       if (e.key === "Delete" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && canClear) {
         e.preventDefault();
         handleClear();
         return;
       }
-      
+
       // Only handle Ctrl/Cmd shortcuts if no other modifier keys
       if (e.altKey || e.shiftKey) return;
-      
+
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && canUndo) {
         e.preventDefault();
         handleUndo();
@@ -74,10 +78,10 @@ export function DrawingPanel({
         handleRedo();
       }
     };
-    
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear]);
+  }, [canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear, locked]);
 
   return (
     <div className="space-y-4">
@@ -88,19 +92,23 @@ export function DrawingPanel({
           {DRAWING_TOOLS.map((toolKey) => {
             const config = TOOL_CONFIG[toolKey];
             const IconComponent = config.icon;
-            
+            const toolLocked = locked && DRAW_TOOLS.has(toolKey);
+
             return (
               <button
                 key={toolKey}
                 onClick={() => handleToolChange(toolKey)}
+                disabled={toolLocked}
                 aria-label={config.label}
+                title={toolLocked ? "View-only access — ask the Doctor for Run access to use this." : undefined}
                 className={cn(
                   "h-16 flex flex-col items-center justify-center rounded-lg",
                   "border border-border transition-all",
                   "hover:bg-primary/20",
                   "focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring",
-                  tool === toolKey 
-                    ? "bg-primary/10 border-primary/60 text-primary" 
+                  "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent",
+                  tool === toolKey
+                    ? "bg-primary/10 border-primary/60 text-primary"
                     : "text-foreground"
                 )}
               >
@@ -245,7 +253,7 @@ export function DrawingPanel({
                 variant="outline"
                 size="sm"
                 onClick={handleUndo}
-                disabled={!canUndo}
+                disabled={!canUndo || locked}
                 className="w-full justify-start text-xs"
                 aria-label="Undo last action (Ctrl+Z)"
               >
@@ -253,12 +261,12 @@ export function DrawingPanel({
                 Undo
                 <span className="text-xs text-muted-foreground ml-auto">Ctrl+Z</span>
               </Button>
-              
+
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleRedo}
-                disabled={!canRedo}
+                disabled={!canRedo || locked}
                 className="w-full justify-start text-xs"
                 aria-label="Redo last action (Ctrl+Y)"
               >
@@ -266,11 +274,11 @@ export function DrawingPanel({
                 Redo
                 <span className="text-xs text-muted-foreground ml-auto">Ctrl+Y</span>
               </Button>
-              
+
               <Button
                 variant="destructive"
                 onClick={handleClear}
-                disabled={!canClear}
+                disabled={!canClear || locked}
                 className="w-full justify-start text-xs"
                 aria-label="Clear current mask (Delete)"
               >

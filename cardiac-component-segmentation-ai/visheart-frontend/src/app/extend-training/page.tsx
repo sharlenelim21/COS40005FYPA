@@ -18,6 +18,11 @@ import { isActiveJob, RetrainingStatus, retrainingApi } from "@/lib/retraining-a
 
 const POLL_ACTIVE_MS = 5000;
 const POLL_IDLE_MS = 30000;
+// How often to silently re-run the real correction check while this page stays open, so a
+// Doctor's save elsewhere shows up without the admin having to reload or click "Check again".
+// This re-runs the same expensive Docker-backed scan the manual button does (there's no cheap
+// "anything new?" signal), so this is a real cost every 5 minutes, not a free poll.
+const BACKGROUND_RECHECK_MS = 5 * 60 * 1000;
 const CLEARED_KEY = "extend-training-cleared"; // this browser only: the cases the user chose to leave out
 
 type Tab = "prepare" | "results";
@@ -81,6 +86,9 @@ function ExtendTrainingInner() {
   const previousJob = useRef<{ id: string; state: string } | null>(null);
   const autoChecked = useRef(false);
   const knownCases = useRef<string | null>(null);
+  // The case ids seen as of the last check — lets the background re-check notify only about
+  // genuinely NEW corrections instead of toasting every time it reruns and finds the same set.
+  const lastCaseIds = useRef<Set<string> | null>(null);
   // Only admins use Extend Training (the server's guard says the same); users and guests do not see it.
   const admin = user?.role === "admin";
 
@@ -140,6 +148,18 @@ function ExtendTrainingInner() {
     return () => window.clearInterval(timer);
   }, [admin, busy, refresh]);
 
+  // Silently reruns the real correction check on an interval, so a Doctor's save elsewhere
+  // (or another admin's check) surfaces without this admin reloading the page. Skipped while a
+  // training job is running, a check is already in flight, or a train is starting.
+  useEffect(() => {
+    if (!admin) return;
+    const timer = window.setInterval(() => {
+      if (busy || checking || starting) return;
+      void checkCorrections();
+    }, BACKGROUND_RECHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [admin, busy, checking, starting, checkCorrections]);
+
   // Without ?tab=, open Results while a training runs or its new version awaits a decision.
   useEffect(() => {
     if (tab || !status) return;
@@ -157,6 +177,22 @@ function ExtendTrainingInner() {
     knownCases.current = caseKey;
     setSelected(new Set(initialSelection(caseKey ? caseKey.split(",") : [], readCleared())));
   }, [caseKey]);
+
+  // Flags genuinely new corrections (by maskId) found by any check — the initial one, a manual
+  // "Check again", or the silent background recheck — without toasting on first load or when a
+  // recheck just confirms the same set again.
+  useEffect(() => {
+    if (!cases) return;
+    const currentIds = new Set(cases.map(item => item.maskId));
+    const previousIds = lastCaseIds.current;
+    if (previousIds) {
+      const newCount = [...currentIds].filter(id => !previousIds.has(id)).length;
+      if (newCount > 0) {
+        toast.info(`${newCount} new correction${newCount === 1 ? "" : "s"} found.`);
+      }
+    }
+    lastCaseIds.current = currentIds;
+  }, [cases]);
 
   const changeSelection = useCallback((next: Set<string>) => {
     setSelected(next);
@@ -207,9 +243,9 @@ function ExtendTrainingInner() {
     <div className="container mx-auto max-w-6xl space-y-6 p-4 md:p-8">
       <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
-          <Link href="/dashboard" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground">
+          <Link href="/admin" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground">
             <ArrowLeft className="mr-1 h-4 w-4" />
-            Dashboard
+            Admin Panel
           </Link>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <Brain className="h-6 w-6" />

@@ -1,9 +1,9 @@
 // File: src/services/reconstruction.ts
 // Description: Service layer for initiating 4D reconstruction process, including GPU service communication.
 
-import { IUserSafe, ProjectCrudResult, IProjectSegmentationMask, SegmentationModel, ReconstructionChamber } from "../types/database_types";
+import { IUserSafe, IProjectSegmentationMask, SegmentationModel, ReconstructionChamber } from "../types/database_types";
 import logger from "./logger";
-import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask } from "./database";
+import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask, userCanAccessProject } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
@@ -212,19 +212,16 @@ export const startReconstruction = async (
     }
 
     try {
-        // Validate project exists and user has access
-        const projectResult: ProjectCrudResult = await readProject(projectId);
-        if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
-            logger.warn(`${serviceLocation}: Project with ID ${projectId} not found or error reading project.`);
-            return { success: false, message: `Project with ID ${projectId} not found.` };
-        }
-
-        const projectData = projectResult.projects[0];
-
-        if (projectData.userid !== user?._id) {
+        // Validate project exists and the user has access — owner, Admin, or a Run-mode
+        // assigned Clinical Assistant may start a 4D reconstruction; a ViewOnly-mode assistant
+        // may not.
+        const access = await userCanAccessProject(projectId, user!);
+        if (!access.canRun || !access.project) {
             logger.warn(`${serviceLocation}: User ${user?._id} denied access to project ${projectId} for 4D reconstruction.`);
             return { success: false, message: "Access denied to this project" };
         }
+
+        const projectData = access.project;
 
         if (requestedModel) {
             const existingReconstructions = await readProjectReconstruction(projectId);

@@ -27,18 +27,18 @@ console.log(`API base URL: ${process.env.NEXT_PUBLIC_API_URL}`);
 // Authentication functions
 export const authApi = {
   /**
-   * Register a new user account
-   * @param userData - User registration data containing username, password, email, and phone
+   * Register a new user account. Always sent as multipart/form-data — even when the "medical
+   * staff" fields are empty — so the one endpoint handles both the plain signup and the
+   * staff-elevation-request signup without branching on content type.
+   * @param formData - FormData with username, password, email, phone, and optionally
+   *   isMedicalStaff ("true"), profession, medicalId, requestedRole, reason, staffIdCard (File).
    * @returns Promise<ApiResponse> - Registration response with success status and user data
    */
-  register: async (userData: {
-    username: string;
-    password: string;
-    email: string;
-    phone: string;
-  }) => {
+  register: async (formData: FormData) => {
     try {
-      const response = await api.post("/auth/register", userData);
+      const response = await api.post("/auth/register", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
       return response.data;
     } catch (error) {
       // Rethrow the error for handling by the caller
@@ -155,6 +155,65 @@ export const authApi = {
       throw error;
     }
   },
+
+  // Doctor's picker list of Clinical Assistant accounts (for Share With Clinical Assistant)
+  getClinicalAssistants: async () => {
+    try {
+      const response = await api.get("/auth/clinical-assistants");
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // An already-registered EducationalUser requests elevation to Doctor or Clinical Assistant
+  // (the post-signup "Request Clinical Access" flow — same fields as the signup-time checkbox).
+  requestElevation: async (formData: FormData) => {
+    try {
+      const response = await api.post("/auth/request-elevation", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Admin's "Staff Verifications" queue
+  getPendingElevations: async () => {
+    try {
+      const response = await api.get("/auth/pending-elevations");
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Admin approves a pending elevation request as the given role
+  approveElevation: async (userId: string, role: "doctor" | "clinical_assistant") => {
+    try {
+      const response = await api.post(`/auth/elevations/${userId}/approve`, { role });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Admin rejects a pending elevation request
+  rejectElevation: async (userId: string) => {
+    try {
+      const response = await api.post(`/auth/elevations/${userId}/reject`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Admin-only: fetch the staff ID card as a blob (never a public URL) for display in a viewer
+  getStaffIdCardBlob: async (userId: string): Promise<Blob> => {
+    const response = await api.get(`/auth/elevations/${userId}/id-card`, { responseType: "blob" });
+    return response.data;
+  },
 };
 
 // Project management functions
@@ -251,6 +310,46 @@ export const projectApi = {
       const response = await api.get("/project/get-project-presigned-url", {
         params: { projectId },
       });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Clinical Assistant's "assigned to me" case list (replaces getProjects for that role)
+  getAssignedProjects: async () => {
+    try {
+      const response = await api.get("/project/assigned-to-me");
+      return response.data;
+    } catch (error) {
+      const status = (error as AxiosError)?.response?.status;
+      if (status === 404) {
+        return { projects: [] };
+      }
+      throw error;
+    }
+  },
+
+  // Doctor shares a project with a Clinical Assistant. mode: "run" (can run AI/edit/export) or
+  // "view_only" (can only view results across tabs, every run/edit/export action is blocked).
+  assignAssistant: async (
+    projectId: string,
+    assistantUserId: string,
+    mode: "run" | "view_only" = "run",
+    instructions?: string,
+  ) => {
+    try {
+      const response = await api.post(`/project/${projectId}/assign-assistant`, { assistantUserId, mode, instructions });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Doctor revokes a Clinical Assistant's access to a project
+  unassignAssistant: async (projectId: string, assistantUserId: string) => {
+    try {
+      const response = await api.delete(`/project/${projectId}/assign-assistant/${assistantUserId}`);
       return response.data;
     } catch (error) {
       throw error;
@@ -539,6 +638,46 @@ export const segmentationApi = {
       throw error;
     }
   },
+
+  // Flag a mask (own or assigned) as worth considering for U-Net retraining
+  flagMaskForRetrain: async (maskId: string) => {
+    try {
+      const response = await api.patch(`/segmentation/mask/${maskId}/flag-for-retrain`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Doctor's list of a project's Draft masks (Clinical Assistant edits awaiting review)
+  getProjectDrafts: async (projectId: string) => {
+    try {
+      const response = await api.get(`/segmentation/project/${projectId}/drafts`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Doctor accepts a Clinical Assistant's draft mask — it becomes the project's final mask
+  acceptDraftMask: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/mask/${maskId}/accept`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Doctor discards a Clinical Assistant's draft mask — the original is left untouched
+  discardDraftMask: async (maskId: string) => {
+    try {
+      const response = await api.post(`/segmentation/mask/${maskId}/discard`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
 };
 
 // Reconstruction functions
@@ -798,6 +937,16 @@ export const adminApi = {
     try {
       // This endpoint is now GET /auth/users as per the new routes
       const response = await api.get("/auth/users");
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Masks flagged "consider for retraining" across all projects (admin only)
+  getFlaggedMasks: async () => {
+    try {
+      const response = await api.get("/admin/flagged-masks");
       return response.data;
     } catch (error) {
       throw error;
