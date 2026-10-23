@@ -3,13 +3,11 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
+import { cn } from "@/lib/utils";
 import { useGpuStatus, useUserProjects, useUserJobs, useUserStats } from "@/lib/dashboard-hooks";
 import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStatus";
 import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstructionStatus";
-import { ShowForGuest, ShowForAdmin, ShowForProjectCreator, ShowForDoctorOrAdmin, ShowForClinicalAssistant } from "@/components/RoleGuard";
-import { ShareToAssistantDialog } from "@/components/ShareToAssistantDialog";
-import { MaskReviewPanel } from "@/components/MaskReviewPanel";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ShowForGuest, ShowForAdmin, ShowForProjectCreator } from "@/components/RoleGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { JobProgress } from "@/components/ui/kinetic-progress";
@@ -44,8 +42,6 @@ import {
   List,
   Edit,
   Trash2,
-  Share2,
-  FileEdit,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -89,7 +85,6 @@ const getStatusDisplay = (status: string) => {
 const DASHBOARD_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
   doctor: "Doctor",
-  clinical_assistant: "Clinical Assistant",
   educational_user: "Educational",
   guest: "Guest",
 };
@@ -101,8 +96,6 @@ const getRoleIcon = (role: string | undefined) => {
       return <Shield className="h-4 w-4 text-blue-600" />;
     case "doctor":
       return <UserCheck className="h-4 w-4 text-green-600" />;
-    case "clinical_assistant":
-      return <UserCheck className="h-4 w-4 text-purple-600" />;
     case "educational_user":
       return <UserCheck className="h-4 w-4 text-teal-600" />;
     case "guest":
@@ -120,11 +113,8 @@ function DashboardPage() {
   const [activeTab, setActiveTab] = useState(initialTab);
   useEffect(() => { setActiveTab(searchParams.get("tab") ?? "overview"); }, [searchParams]);
   const isAuthenticated = Boolean(user);
-  const isClinicalAssistant = user?.role === "clinical_assistant";
-  const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(
-    isAuthenticated,
-    isClinicalAssistant ? "assigned" : "own",
-  );
+  const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(isAuthenticated);
+
   const { recentJobs, isLoading: jobsLoading, refresh: refreshJobs } = useUserJobs(isAuthenticated);
   const { processingUnit, isLoading: gpuLoading, refresh: refreshGpuStatus } = useGpuStatus();
   const userStats = useUserStats(projects, recentJobs);
@@ -192,10 +182,6 @@ function DashboardPage() {
 
   // State for upload dialog
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  // State for the "Share with Clinical Assistant" dialog (Doctor/Admin only)
-  const [shareTarget, setShareTarget] = useState<{ projectId: string; name: string } | null>(null);
-  // State for the Mask Review dialog (Doctor/Admin only) — reviewing a Clinical Assistant's drafts
-  const [reviewTarget, setReviewTarget] = useState<{ projectId: string; name: string } | null>(null);
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
   const [walkthroughStep, setWalkthroughStep] = useState(0);
 
@@ -533,12 +519,10 @@ function DashboardPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="projects">
+          <TabsTrigger value="projects" className="relative">
             {user?.role === "doctor" || user?.role === "admin"
               ? "Case History"
-              : isClinicalAssistant
-                ? "Assigned Cases"
-                : "Projects"}
+              : "Projects"}
           </TabsTrigger>
           <TabsTrigger value="jobs">Jobs</TabsTrigger>
         </TabsList>
@@ -766,16 +750,12 @@ function DashboardPage() {
           <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-2xl font-bold">
-                {isClinicalAssistant
-                  ? "Cases Assigned to Me"
-                  : user?.role === "doctor" || user?.role === "admin"
-                    ? "Case History"
-                    : "My Projects"}
+                {user?.role === "doctor" || user?.role === "admin"
+                  ? "Case History"
+                  : "My Projects"}
               </h2>
               <p className="text-muted-foreground">
-                {isClinicalAssistant
-                  ? "View and run AI on the cases a Doctor has shared with you"
-                  : "Manage your cardiac imaging projects"}
+                Manage your cardiac imaging projects
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -786,8 +766,6 @@ function DashboardPage() {
               <Button variant="outline" onClick={() => window.open("/sample", "_blank")} className="sm:hidden">
                 <FileText className="h-4 w-4" />
               </Button>
-              {/* Only accounts that own/create projects get an upload entry point — a Clinical
-                  Assistant only ever acts on cases a Doctor has already shared with them. */}
               <ShowForProjectCreator fallback={null}>
                 <Button onClick={() => setUploadDialogOpen(true)} className="hidden sm:flex">
                   <Upload className="mr-2 h-4 w-4" />
@@ -799,22 +777,6 @@ function DashboardPage() {
               </ShowForProjectCreator>
             </div>
           </div>
-
-          {/* Clinical Assistant scope banner */}
-          <ShowForClinicalAssistant fallback={null}>
-            <Alert>
-              <AlertCircle className="inline h-4 w-4" />
-              <AlertTitle>Assigned cases only</AlertTitle>
-              <AlertDescription>
-                You can only see cases a Doctor has assigned to you. A case marked{" "}
-                <span className="font-medium">Can Run</span> lets you run AI and edit masks — your
-                edits save as a draft for the Doctor to review, never overwriting their original
-                work. A case marked <span className="font-medium">View Only</span> lets you switch
-                between result tabs to see what the Doctor already ran, but nothing can be run or
-                edited.
-              </AlertDescription>
-            </Alert>
-          </ShowForClinicalAssistant>
 
           {/* Project Management Info */}
           <ShowForProjectCreator>
@@ -909,9 +871,7 @@ function DashboardPage() {
                 <p className="text-muted-foreground mb-4">
                   {searchTerm
                     ? "Try adjusting your search terms or clear the search to see all projects."
-                    : isClinicalAssistant
-                      ? "A Doctor hasn't shared any cases with you yet."
-                      : "Upload your first project to get started with cardiac segmentation."}
+                    : "Upload your first project to get started with cardiac segmentation."}
                 </p>
                 <ShowForProjectCreator fallback={null}>
                   {!searchTerm && (
@@ -933,12 +893,6 @@ function DashboardPage() {
                     onSave={handleSaveProject}
                     onDelete={handleDeleteProject}
                     onExport={(projectId) => router.push(`/project/${projectId}/report`)}
-                    onShare={(projectId, name) => setShareTarget({ projectId, name })}
-                    onReview={
-                      (project.assignedAssistants ?? []).some((a) => a.mode === "run")
-                        ? (projectId, name) => setReviewTarget({ projectId, name })
-                        : undefined
-                    }
                     segmentationIndicator={<SegmentationIndicator status={segmentationStatuses[project.projectId]} variant="badge" />}
                     reconstructionIndicator={<ReconstructionIndicator status={reconstructionStatuses[project.projectId]} variant="badge" />}
                     hasMasks={segmentationStatuses[project.projectId]?.hasMasks || false}
@@ -992,27 +946,7 @@ function DashboardPage() {
                             </ShowForProjectCreator>
                             <SegmentationIndicator status={segmentationStatuses[project.projectId]} variant="badge" />
                             <ReconstructionIndicator status={reconstructionStatuses[project.projectId]} variant="badge" />
-                            {Boolean(project.assignedAssistants?.length) && (
-                              <Badge variant="outline" className="text-xs whitespace-nowrap">
-                                Shared ({project.assignedAssistants!.length})
-                              </Badge>
-                            )}
-                            {isClinicalAssistant && (
-                              <Badge
-                                variant="outline"
-                                className={`text-xs whitespace-nowrap ${project.assignmentMode === "run" ? "border-green-300 text-green-700 dark:border-green-700 dark:text-green-400" : "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"}`}
-                              >
-                                {/* Default to the SAFER label (View Only) whenever the mode is
-                                    missing/unrecognized — never assume the more-permissive state. */}
-                                {project.assignmentMode === "run" ? "Can Run" : "View Only"}
-                              </Badge>
-                            )}
                           </div>
-                          {isClinicalAssistant && project.assignmentInstructions && (
-                            <p className="mt-1 max-w-xs truncate text-xs text-muted-foreground" title={project.assignmentInstructions}>
-                              Note: {project.assignmentInstructions}
-                            </p>
-                          )}
                         </TableCell>
                         <TableCell className="hidden sm:table-cell">{formatFileSize(project.filesize)}</TableCell>
                         <TableCell className="hidden md:table-cell">
@@ -1060,30 +994,6 @@ function DashboardPage() {
                             >
                               <Download className="h-4 w-4" />
                             </Button>
-                            <ShowForDoctorOrAdmin fallback={null}>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 w-8 p-0"
-                                onClick={() => setShareTarget({ projectId: project.projectId, name: project.name })}
-                                title="Share with Clinical Assistant"
-                              >
-                                <Share2 className="h-4 w-4" />
-                              </Button>
-                              {/* Nothing to review when every assigned assistant is View-Only — they
-                                  can't edit, so no drafts can exist. */}
-                              {(project.assignedAssistants ?? []).some((a) => a.mode === "run") && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 w-8 p-0"
-                                  onClick={() => setReviewTarget({ projectId: project.projectId, name: project.name })}
-                                  title="Review Clinical Assistant drafts"
-                                >
-                                  <FileEdit className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </ShowForDoctorOrAdmin>
                             <ShowForProjectCreator fallback={null}>
                               <Button
                                 size="sm"
@@ -1304,29 +1214,6 @@ function DashboardPage() {
 
       {/* File Upload Dialog */}
       <FileUploadDialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen} onUploadSuccess={handleUploadSuccess} />
-
-      {/* Share with Clinical Assistant Dialog */}
-      {shareTarget && (
-        <ShareToAssistantDialog
-          projectId={shareTarget.projectId}
-          projectName={shareTarget.name}
-          open={Boolean(shareTarget)}
-          onOpenChange={(open) => { if (!open) setShareTarget(null); }}
-          onShared={refreshProjects}
-        />
-      )}
-
-      {/* Mask Review Dialog — a Clinical Assistant's pending draft edits for one project */}
-      <Dialog open={Boolean(reviewTarget)} onOpenChange={(open) => { if (!open) setReviewTarget(null); }}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{reviewTarget?.name}</DialogTitle>
-          </DialogHeader>
-          {reviewTarget && (
-            <MaskReviewPanel projectId={reviewTarget.projectId} onReviewed={refreshProjects} />
-          )}
-        </DialogContent>
-      </Dialog>
 
       {/* First-run walkthrough */}
       <AlertDialog open={walkthroughOpen} onOpenChange={setWalkthroughOpen}>

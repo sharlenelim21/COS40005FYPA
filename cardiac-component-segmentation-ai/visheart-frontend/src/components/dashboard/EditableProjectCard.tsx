@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Edit2, Check, X, Loader2, Edit, Download, Trash2, Share2, FileEdit } from "lucide-react";
+import { Edit2, Check, X, Loader2, Edit, Download, Trash2 } from "lucide-react";
 import { Project } from "@/types/dashboard";
 import { projectApi } from "@/lib/api";
-import { ShowForProjectCreator, ShowForDoctorOrAdmin } from "@/components/RoleGuard";
+import { ShowForProjectCreator } from "@/components/RoleGuard";
 
 interface EditableProjectCardProps {
   project: Project;
@@ -14,14 +14,12 @@ interface EditableProjectCardProps {
   onSave: (projectId: string, isSaved: boolean) => void;
   onDelete: (projectId: string, projectName: string) => void;
   onExport: (projectId: string) => void;
-  onShare?: (projectId: string, projectName: string) => void;
-  onReview?: (projectId: string, projectName: string) => void;
   segmentationIndicator?: React.ReactNode;
   reconstructionIndicator?: React.ReactNode;
   hasMasks?: boolean; // Add mask availability info
 }
 
-export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExport, onShare, onReview, segmentationIndicator, reconstructionIndicator, hasMasks = false }: EditableProjectCardProps) {
+export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExport, segmentationIndicator, reconstructionIndicator, hasMasks = false }: EditableProjectCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [editedName, setEditedName] = useState(project.name);
@@ -152,32 +150,11 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
                 </ShowForProjectCreator>
                 {segmentationIndicator}
                 {reconstructionIndicator}
-                {Boolean(project.assignedAssistants?.length) && (
-                  <Badge variant="outline" className="text-xs whitespace-nowrap">
-                    Shared ({project.assignedAssistants!.length})
-                  </Badge>
-                )}
-                {project.assignmentMode && (
-                  <Badge
-                    variant="outline"
-                    className={`text-xs whitespace-nowrap ${project.assignmentMode === "view_only" ? "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400" : "border-green-300 text-green-700 dark:border-green-700 dark:text-green-400"}`}
-                  >
-                    {project.assignmentMode === "view_only" ? "View Only" : "Can Run"}
-                  </Badge>
-                )}
               </div>
             )}
           </div>
         </div>
       </CardHeader>
-
-      {project.assignmentMode && project.assignmentInstructions && (
-        <div className="-mt-2 px-6">
-          <p className="truncate text-xs text-muted-foreground" title={project.assignmentInstructions}>
-            Note: {project.assignmentInstructions}
-          </p>
-        </div>
-      )}
 
       <CardContent className="space-y-3">
         <div className="grid grid-cols-2 gap-2 text-sm">
@@ -237,30 +214,6 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
             <Download className="mr-1 h-3 w-3" />
             Report
           </Button>
-          {onShare && (
-            <ShowForDoctorOrAdmin fallback={null}>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onShare(project.projectId, project.name)}
-                title="Share with Clinical Assistant"
-              >
-                <Share2 className="h-3 w-3" />
-              </Button>
-            </ShowForDoctorOrAdmin>
-          )}
-          {onReview && (
-            <ShowForDoctorOrAdmin fallback={null}>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onReview(project.projectId, project.name)}
-                title="Review Clinical Assistant drafts"
-              >
-                <FileEdit className="h-3 w-3" />
-              </Button>
-            </ShowForDoctorOrAdmin>
-          )}
         </div>
 
         <ShowForProjectCreator fallback={null}>

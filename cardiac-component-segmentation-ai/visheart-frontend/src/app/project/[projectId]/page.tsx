@@ -142,13 +142,6 @@ function ProjectPageInner() {
   const { processingUnit } = useGpuStatus();
   const { user } = useAuth();
   const isGuest = user?.role === "guest";
-  // Locks every run/edit/compute entry point for a Clinical Assistant assigned in
-  // View-Only mode. Undefined (still loading, or an owner — the backend only sends this
-  // field at all) must never lock anything, so this only ever turns true once the backend
-  // has explicitly said canRun === false.
-  const viewOnlyLocked = projectData?.canRun === false;
-  // A Clinical Assistant (Run or View-Only) is never the owner — rename/delete stay
-  // owner-only (the backend already enforces this; this just matches the UI to it).
   const isProjectOwner = projectData?.isOwner !== false;
 
   // Update page title dynamically
@@ -538,6 +531,7 @@ function ProjectPageInner() {
     () => ({ lv: existing4DModels, rv: existingRvModels }),
     [existing4DModels, existingRvModels],
   );
+
   const refreshMasksSilently = useCallback(() => refreshMasks({ silent: true }), [refreshMasks]);
   const pipeline = useAutoPipelineChain({
     projectId,
@@ -550,7 +544,6 @@ function ProjectPageInner() {
     refreshMasks: refreshMasksSilently,
     refreshReconstructions,
     refreshActiveReconstructionJobs,
-    isClinicalAssistant: user?.role === "clinical_assistant",
   });
   const [showPipelineDialog, setShowPipelineDialog] = useState(false);
   const [expandedJobGroups, setExpandedJobGroups] = useState<Set<string>>(() => new Set());
@@ -1042,23 +1035,6 @@ function ProjectPageInner() {
             </div>
           </div>
         </Button>
-      ) : viewOnlyLocked ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
-              <div className="flex items-center gap-3 w-full">
-                <Lock className="h-5 w-5 text-muted-foreground" />
-                <div className="text-left flex-1">
-                  <p className="font-semibold">Create 4D Reconstruction</p>
-                  <p className="text-xs text-muted-foreground">View-only access</p>
-                </div>
-              </div>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>Ask the Doctor for Run access to build a new reconstruction.</p>
-          </TooltipContent>
-        </Tooltip>
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1189,11 +1165,10 @@ function ProjectPageInner() {
             <span className="shrink-0">
               <Button
                 onClick={handleStartSegmentation}
-                disabled={pipelineBusy || viewOnlyLocked}
+                disabled={pipelineBusy}
                 variant="outline"
                 size="sm"
                 aria-label="Re-run Segmentation"
-                className={viewOnlyLocked ? "opacity-60 cursor-not-allowed" : undefined}
               >
                 <RefreshCw className={`h-4 w-4 ${isStartingSegmentation ? "animate-spin" : ""}`} />
                 <span className="hidden sm:inline">
@@ -1204,9 +1179,7 @@ function ProjectPageInner() {
           </TooltipTrigger>
           <TooltipContent>
             <p>
-              {viewOnlyLocked
-                ? "View-only access — ask the Doctor for Run access to use this."
-                : pipelineBusy && !isStartingSegmentation
+              {pipelineBusy && !isStartingSegmentation
                 ? "Available when the current run finishes"
                 : "Choose models and reconstructions to run again"}
             </p>
@@ -1403,9 +1376,11 @@ function ProjectPageInner() {
                     )}
                   </div>
                 ) : (
-                  <h1 className="text-4xl font-bold tracking-tight">{currentProjectName}</h1>
+                  <div className="flex items-center gap-3">
+                    <h1 className="text-4xl font-bold tracking-tight">{currentProjectName}</h1>
+                  </div>
                 )}
-                
+
                 {isEditing ? (
                   <Textarea 
                     value={editedDescription} 
@@ -1432,8 +1407,7 @@ function ProjectPageInner() {
               </div>
             </div>
 
-            {/* Edit Controls — owner (Doctor/Admin) only; an assigned Clinical Assistant,
-                Run or View-Only, never renames or deletes someone else's project. */}
+            {/* Edit Controls — owner (Doctor/Admin) only. */}
             <ShowForRegisteredUser>
               {isProjectOwner && (isEditing ? (
                 <div className="flex items-center gap-2">
@@ -1881,19 +1855,15 @@ function ProjectPageInner() {
                               variant="outline"
                               size="sm"
                               onClick={() => setRevertDialogOpen(true)}
-                              disabled={isReverting || viewOnlyLocked}
-                              className={`w-full text-xs ${viewOnlyLocked ? "opacity-60 cursor-not-allowed" : ""}`}
+                              disabled={isReverting}
+                              className="w-full text-xs"
                             >
                               <RefreshCw className="h-3.5 w-3.5 mr-2" />
                               Reset Masks
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>
-                              {viewOnlyLocked
-                                ? "View-only access — ask the Doctor for Run access to use this."
-                                : "Reset all edits and restore original AI-generated masks"}
-                            </p>
+                            <p>Reset all edits and restore original AI-generated masks</p>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -2214,7 +2184,6 @@ function ProjectPageInner() {
         isRerun={hasMasks}
         existing={existingByChamber}
         building={buildingReconstructions}
-        stageLocks={projectData?.stageLocks}
       />
 
       {/* Reconstruction Configuration Dialog */}

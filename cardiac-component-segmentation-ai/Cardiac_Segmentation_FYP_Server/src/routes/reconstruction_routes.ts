@@ -11,8 +11,8 @@ import {
     readProject,
     IProjectDocument,
     deleteProjectReconstruction,
+    updateProjectReconstruction,
     userCanAccessProject,
-    readProjectsAssignedToAssistant,
     UserRole,
 } from "../services/database";
 import { SegmentationModel } from "../types/database_types";
@@ -114,9 +114,8 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
     }
     logger.info(`${serviceLocation}: Received request to fetch reconstruction results for project ID: ${projectId}`);
     try {
-        // Owner, Admin, or an assigned Clinical Assistant (either mode — this is a view) may
-        // read reconstruction results. Pre-existing gap: this endpoint previously had no
-        // ownership/assignment check at all beyond being logged in.
+        // Owner or Admin may read reconstruction results. Pre-existing gap: this endpoint
+        // previously had no ownership check at all beyond being logged in.
         const access = await userCanAccessProject(projectId, req.user!);
         if (!access.allowed) {
             return res.status(404).json({ success: false, message: "Project not found or access denied." });
@@ -135,7 +134,9 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
             logger.error(`${serviceLocation}: Error reading reconstruction results for project ${projectId}: ${result.message}`);
             return res.status(500).json({ success: false, message: result.message || "Error reading reconstruction results." });
         }
-        if (!result.projectreconstructions || result.projectreconstructions.length === 0) {
+        const visibleReconstructions = result.projectreconstructions ?? [];
+
+        if (visibleReconstructions.length === 0) {
             logger.info(`${serviceLocation}: No reconstruction results found for project ID ${projectId}.`);
             return res.status(200).json({
                 message: "No reconstruction results found for this project.",
@@ -154,11 +155,11 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
 
         logger.info(
             `${serviceLocation}: Loaded reconstruction metadata for project ${projectId} in ${Date.now() - requestStart}ms ` +
-            `(reconstructions=${result.projectreconstructions.length}, masks=${masksById.size})`
+            `(reconstructions=${visibleReconstructions.length}, masks=${masksById.size})`
         );
 
         const reconstructionsWithUrls = await Promise.all(
-            result.projectreconstructions.map(async (recon) => {
+            visibleReconstructions.map(async (recon) => {
                 let downloadUrl = null;
                 const outputKey = recon.reconstructedMesh?.path
                     ? extractS3KeyFromUrl(recon.reconstructedMesh.path)
@@ -240,7 +241,7 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
         );
 
         logger.info(
-            `${serviceLocation}: Successfully fetched ${result.projectreconstructions.length} reconstruction(s) for project ID ${projectId} in ${Date.now() - requestStart}ms.`
+            `${serviceLocation}: Successfully fetched ${visibleReconstructions.length} reconstruction(s) for project ID ${projectId} in ${Date.now() - requestStart}ms.`
         );
         return res.status(200).json({ success: true, reconstructions: reconstructionsWithUrls });
     } catch (error) {
@@ -357,11 +358,7 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
     }
 
     try {
-        // 1. Verify user owns, or (as a Clinical Assistant) is assigned to, all requested
-        // projects. Admin may check status on any project.
-        // `readProject` returning success with NO `.projects` array just means "owns zero
-        // projects" (e.g. every Clinical Assistant, by design) — that's not a failure, only
-        // `success: false` is. Treating it as a 500 broke this endpoint for every assistant.
+        // 1. Verify user owns all requested projects. Admin may check status on any project.
         const userProjectsResult = await readProject(undefined, userId.toString());
         if (!userProjectsResult.success) {
             logger.error(`${serviceLocation}: Failed to fetch user projects for batch status check.`);
@@ -374,10 +371,6 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
         const accessibleProjectIds = new Set<string>(
             (userProjectsResult.projects ?? []).map((p: IProjectDocument) => String(p._id))
         );
-        if (req.user!.role === UserRole.ClinicalAssistant) {
-            const assignedResult = await readProjectsAssignedToAssistant(userId.toString());
-            for (const p of assignedResult.projects ?? []) accessibleProjectIds.add(String(p._id));
-        }
         const unauthorizedProjects = req.user!.role === UserRole.Admin
             ? []
             : projectIds.filter((id: string) => !accessibleProjectIds.has(id));
@@ -472,8 +465,7 @@ router.delete("/delete-project-reconstructions/:projectId",
         }
 
         try {
-            // Deleting reconstructions is a destructive/management action — owner or Admin only,
-            // even a Run-mode assigned Clinical Assistant may not delete.
+            // Deleting reconstructions is a destructive/management action — owner or Admin only.
             const access = await userCanAccessProject(projectId, req.user!);
             if (!access.isOwner && req.user!.role !== UserRole.Admin) {
                 logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
@@ -791,8 +783,7 @@ router.delete("/delete-model-reconstruction/:projectId",
 
 // Smooth heart motion for the landmark page's 3D heart (services/reconstruction_motion.ts): GET says where a
 // reconstruction's motion stands (missing / processing / failed / ready with a link), POST starts building it.
-// Owner, Admin, or an assigned Clinical Assistant — GET only needs view access (`allowed`), POST
-// is a run action and needs `requireRun: true` (rejects a ViewOnly-mode assistant).
+// Owner or Admin only.
 async function motionSource(req: Request, requireRun: boolean): Promise<{ source?: MotionSource; status: number; message?: string }> {
     const projectId = String(req.params.projectId);
     const reconstructionId = String(req.params.reconstructionId);

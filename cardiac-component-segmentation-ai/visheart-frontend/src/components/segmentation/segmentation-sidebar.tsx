@@ -46,7 +46,6 @@ const ToolsAndMasksPanel = React.memo(({
   zoomLevel,
   setZoomLevel,
   onReset,
-  locked,
 }: {
   decodedMasks: Record<string, Uint8Array>;
   currentFrame: number;
@@ -70,7 +69,6 @@ const ToolsAndMasksPanel = React.memo(({
   zoomLevel?: number;
   setZoomLevel?: (level: number) => void;
   onReset?: () => void;
-  locked?: boolean;
 }) => {
   // Memoized current masks calculation - ALWAYS show all labels in consistent order
   const currentMasks = useMemo(() => {
@@ -207,7 +205,6 @@ const ToolsAndMasksPanel = React.memo(({
         zoomLevel={zoomLevel}
         setZoomLevel={setZoomLevel}
         onReset={onReset}
-        locked={locked}
       />
     </div>
   );
@@ -444,16 +441,11 @@ export function SegmentationSidebar({
   onModelChange,
   isModelActive = false,
   isModelRunning = false,
-  locked = false,
-  isAssistantEdit = false,
 }: SegmentationSidebarProps & {
   selectedModel?: SegmentationModelId;
   onModelChange?: (value: SegmentationModelId) => void;
   isModelActive?: boolean;
   isModelRunning?: boolean;
-  /** True for a Clinical Assistant (any mode) — saving creates a Draft for the Doctor to
-   *  review rather than saving final, so the Save button and toast say so. */
-  isAssistantEdit?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('tools');
 
@@ -462,17 +454,15 @@ export function SegmentationSidebar({
     setActiveTab(tabKey);
   }, []);
 
-  // Memoized save button state. A Clinical Assistant's save is never final — it's sent to the
-  // Doctor as a draft for review — so the button says that plainly instead of just "Save Changes".
   const saveButtonConfig = useMemo(() => ({
     variant: (hasUnsavedChanges && !isSaving) ? "default" as const : "secondary" as const,
     text: isSaving
-      ? (isAssistantEdit ? "Sending…" : "Saving...")
+      ? "Saving..."
       : hasUnsavedChanges
-      ? (isAssistantEdit ? "Save & Send to Doctor" : "Save Changes")
+      ? "Save Changes"
       : "No Changes",
     disabled: !hasUnsavedChanges || isSaving
-  }), [hasUnsavedChanges, isSaving, isAssistantEdit]);
+  }), [hasUnsavedChanges, isSaving]);
 
   return (
     <div className="flex flex-col h-full bg-[var(--sidebar)] rounded-r-xl border border-[var(--sidebar-border)] shadow-sm">
@@ -528,14 +518,13 @@ export function SegmentationSidebar({
         </span>
       </div>
 
-      {/* Save Button - Moved to top for better accessibility */}
+      {/* Save Button - Moved to top for better accessibility. */}
       <div className="p-4 border-b border-[var(--sidebar-border)]">
         <div className="flex gap-2">
           {/* Save Button - Left */}
           <Button
             onClick={onSave}
-            disabled={saveButtonConfig.disabled || locked}
-            title={locked ? "View-only access — ask the Doctor for Run access to use this." : undefined}
+            disabled={saveButtonConfig.disabled}
             className="flex-1 transition-colors justify-start text-xs"
             variant={saveButtonConfig.variant}
             aria-label={`${saveButtonConfig.text} - ${hasUnsavedChanges ? 'Click to save your changes' : 'All changes are saved'}`}
@@ -556,7 +545,7 @@ export function SegmentationSidebar({
                 <TooltipTrigger asChild>
                   <Button
                     onClick={onRevert}
-                    disabled={isSaving || locked}
+                    disabled={isSaving}
                     className="transition-colors text-xs px-3"
                     variant="outline"
                     aria-label="Reset all edits to original AI-generated segmentation"
@@ -565,7 +554,7 @@ export function SegmentationSidebar({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>{locked ? "View-only access — ask the Doctor for Run access to use this." : "Reset to AI Segmentation"}</p>
+                  <p>Reset to AI Segmentation</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -599,7 +588,6 @@ export function SegmentationSidebar({
             zoomLevel={zoomLevel}
             setZoomLevel={setZoomLevel}
             onReset={onReset}
-            locked={locked}
           />
         )}
 

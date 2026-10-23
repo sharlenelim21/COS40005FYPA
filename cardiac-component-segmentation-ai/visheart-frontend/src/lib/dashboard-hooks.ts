@@ -135,7 +135,7 @@ export function useGpuStatus() {
   return { processingUnit, isLoading, refresh: fetchGpuStatus };
 }
 
-export function useUserProjects(enabled = true, scope: "own" | "assigned" = "own") {
+export function useUserProjects(enabled = true) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -148,9 +148,7 @@ export function useUserProjects(enabled = true, scope: "own" | "assigned" = "own
 
     setIsLoading(true);
     try {
-      // Clinical Assistants see only cases a Doctor has assigned to them — server-scoped via
-      // /project/assigned-to-me, not just a client-side filter of /get-projects-list.
-      const response = scope === "assigned" ? await projectApi.getAssignedProjects() : await projectApi.getProjects();
+      const response = await projectApi.getProjects();
       setProjects(Array.isArray(response?.projects) ? response.projects : []);
     } catch (error: any) {
       const isUnauthorized = error?.response?.status === 401;
@@ -161,27 +159,26 @@ export function useUserProjects(enabled = true, scope: "own" | "assigned" = "own
     } finally {
       setIsLoading(false);
     }
-  }, [enabled, scope]);
+  }, [enabled]);
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
-  // Background polling so a newly-shared/unshared case (or a Doctor's save) shows up for a
-  // Clinical Assistant without a manual page reload — silent (no loading flicker), and
-  // skipped while disabled.
+  // Background polling so a Doctor's save shows up without a manual page reload — silent (no
+  // loading flicker), and skipped while disabled.
   useEffect(() => {
     if (!enabled) return;
     const interval = setInterval(() => {
       projectApi
-        [scope === "assigned" ? "getAssignedProjects" : "getProjects"]()
+        .getProjects()
         .then((response) => setProjects(Array.isArray(response?.projects) ? response.projects : []))
         .catch(() => {
           // Silent — this is a background refresh; the next manual refresh or poll will retry.
         });
     }, 20000);
     return () => clearInterval(interval);
-  }, [enabled, scope]);
+  }, [enabled]);
 
   return { projects, isLoading, refresh: fetchProjects };
 }

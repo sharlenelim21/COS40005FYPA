@@ -23,18 +23,16 @@ interface Stats {
   totalUsers: number | null;
   admins: number | null;
   doctors: number | null;
-  clinicalAssistants: number | null;
   educationalUsers: number | null;
   pendingVerifications: number | null;
   flaggedMasks: number | null;
 }
 
 // Fixed categorical slot order (never cycled/reassigned by data) — colors come from
-// VisHeart's validated default palette (dataviz skill, references/palette.md), slots 1-4,
-// which pass the adjacent-pair CVD/contrast checks in both themes for a 4-slice donut.
+// VisHeart's validated default palette (dataviz skill, references/palette.md), slots 1-3,
+// which pass the adjacent-pair CVD/contrast checks in both themes for a 3-slice donut.
 const ROLE_BREAKDOWN = [
   { key: "doctors" as const, label: "Doctors", light: "#2a78d6", dark: "#3987e5" },
-  { key: "clinicalAssistants" as const, label: "Clinical Assistants", light: "#eb6834", dark: "#d95926" },
   { key: "educationalUsers" as const, label: "Educational Users", light: "#1baf7a", dark: "#199e70" },
   { key: "admins" as const, label: "Admins", light: "#eda100", dark: "#c98500" },
 ];
@@ -62,15 +60,13 @@ function RoleBreakdownDonut({ stats }: { stats: Stats }) {
       <style>{`
         .role-breakdown-donut {
           --role-doctors: ${ROLE_BREAKDOWN[0].light};
-          --role-clinicalAssistants: ${ROLE_BREAKDOWN[1].light};
-          --role-educationalUsers: ${ROLE_BREAKDOWN[2].light};
-          --role-admins: ${ROLE_BREAKDOWN[3].light};
+          --role-educationalUsers: ${ROLE_BREAKDOWN[1].light};
+          --role-admins: ${ROLE_BREAKDOWN[2].light};
         }
         .dark .role-breakdown-donut {
           --role-doctors: ${ROLE_BREAKDOWN[0].dark};
-          --role-clinicalAssistants: ${ROLE_BREAKDOWN[1].dark};
-          --role-educationalUsers: ${ROLE_BREAKDOWN[2].dark};
-          --role-admins: ${ROLE_BREAKDOWN[3].dark};
+          --role-educationalUsers: ${ROLE_BREAKDOWN[1].dark};
+          --role-admins: ${ROLE_BREAKDOWN[2].dark};
         }
       `}</style>
       <CardHeader className="pb-3">
@@ -124,7 +120,7 @@ const quickLinks = [
   },
   {
     title: "Staff Verifications",
-    description: "Review pending Doctor/Clinical Assistant requests",
+    description: "Review pending Doctor access requests",
     href: "/admin/staff-verifications",
     icon: FileCheck,
     color: "text-amber-600 bg-amber-100 dark:bg-amber-950/40 dark:text-amber-400",
@@ -167,7 +163,6 @@ export default function AdminPageHome() {
     totalUsers: null,
     admins: null,
     doctors: null,
-    clinicalAssistants: null,
     educationalUsers: null,
     pendingVerifications: null,
     flaggedMasks: null,
@@ -192,7 +187,6 @@ export default function AdminPageHome() {
           next.totalUsers = users.length;
           next.admins = users.filter((u) => u.role === "admin").length;
           next.doctors = users.filter((u) => u.role === "doctor").length;
-          next.clinicalAssistants = users.filter((u) => u.role === "clinical_assistant").length;
           next.educationalUsers = users.filter((u) => u.role === "educational_user").length;
         }
         if (pendingRes.status === "fulfilled") {

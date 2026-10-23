@@ -63,14 +63,11 @@ const idCardUpload = multer({
 }).single("staffIdCard");
 
 const ALLOWED_PROFESSIONS = [
-  "MRI Radiographer / Cardiac Imaging Technologist",
-  "Cardiac Physiologist / Cardiovascular Technologist",
-  "Nurse / Medical Assistant",
   "Doctor (Cardiologist)",
 ];
 
 const isRequestedElevationRole = (value: unknown): value is RequestedElevationRole =>
-  value === UserRole.Doctor || value === UserRole.ClinicalAssistant;
+  value === UserRole.Doctor;
 
 router.post("/register",
   // Multipart so the optional "I am a medical staff member" fields (profession, medical ID,
@@ -118,7 +115,7 @@ router.post("/register",
         return;
       }
       if (!isRequestedElevationRole(requestedRole)) {
-        res.status(400).json({ register: false, message: "Requested role must be Doctor or Clinical Assistant." });
+        res.status(400).json({ register: false, message: "Requested role must be Doctor." });
         return;
       }
       if (!req.file) {
@@ -281,7 +278,7 @@ router.post("/request-elevation",
         return;
       }
       if (!isRequestedElevationRole(requestedRole)) {
-        res.status(400).json({ success: false, message: "requestedRole must be 'doctor' or 'clinical_assistant'." });
+        res.status(400).json({ success: false, message: "requestedRole must be 'doctor'." });
         return;
       }
       const file = req.file;
@@ -337,13 +334,12 @@ router.get("/pending-elevations", isAuthAndAdmin, async (req: Request, res: Resp
   }
 });
 
-// Admin approves a pending request as Doctor or Clinical Assistant (not necessarily what was
-// originally requested — the Admin has final judgement).
+// Admin approves a pending request as Doctor — the only elevation outcome.
 router.post("/elevations/:userId/approve", isAuthAndAdmin, async (req: Request, res: Response): Promise<void> => {
   const { userId } = req.params;
   const { role } = req.body as { role?: string };
   if (!isRequestedElevationRole(role)) {
-    res.status(400).json({ success: false, message: "role must be 'doctor' or 'clinical_assistant'." });
+    res.status(400).json({ success: false, message: "role must be 'doctor'." });
     return;
   }
   try {
@@ -911,23 +907,6 @@ router.get("/users", isAuthAndAdmin, async (req: Request, res: Response): Promis
   } catch (error: unknown) {
     logger.error(`${serviceLocation}: Error fetching all users: ${error}`);
     res.status(500).json({ fetch: false, message: "Internal error during user fetch." });
-  }
-});
-
-// Doctor-facing list of Clinical Assistant accounts — backs the Share-with-Clinical-Assistant
-// picker. Deliberately not the full /users list (admin-only, includes every role): this is
-// scoped to just the one role a Doctor is allowed to assign cases to.
-router.get("/clinical-assistants", isAuthAndDoctor, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const result = await readUser({ role: UserRole.ClinicalAssistant });
-    const assistants = result.success ? (result.users ?? (result.user ? [result.user] : [])) : [];
-    res.status(200).json({
-      fetch: true,
-      users: assistants.map((u) => ({ _id: u._id, username: u.username, email: u.email })),
-    });
-  } catch (error: unknown) {
-    logger.error(`${serviceLocation}: Error fetching clinical assistants: ${error}`);
-    res.status(500).json({ fetch: false, message: "Internal error fetching Clinical Assistant accounts." });
   }
 });
 

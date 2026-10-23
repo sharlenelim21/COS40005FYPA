@@ -22,9 +22,6 @@ import { AlertCircle, CheckCircle, Clock, Loader2, Stethoscope, Upload, XCircle 
 
 /** Must match ALLOWED_PROFESSIONS in Cardiac_Segmentation_FYP_Server/src/routes/authentication.ts */
 const PROFESSIONS = [
-  "MRI Radiographer / Cardiac Imaging Technologist",
-  "Cardiac Physiologist / Cardiovascular Technologist",
-  "Nurse / Medical Assistant",
   "Doctor (Cardiologist)",
 ] as const;
 
@@ -34,7 +31,7 @@ function RequestAccessInner() {
 
   const [profession, setProfession] = useState("");
   const [medicalId, setMedicalId] = useState("");
-  const [requestedRole, setRequestedRole] = useState<"doctor" | "clinical_assistant" | "">("");
+  const [requestedRole, setRequestedRole] = useState<"doctor" | "">("");
   const [reason, setReason] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +88,7 @@ function RequestAccessInner() {
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Not applicable</AlertTitle>
           <AlertDescription>
-            Your account already has {user.role === "doctor" ? "Doctor" : user.role === "clinical_assistant" ? "Clinical Assistant" : "elevated"} access.
+            Your account already has {user.role === "doctor" ? "Doctor" : "elevated"} access.
           </AlertDescription>
         </Alert>
         <Button variant="outline" className="mt-4" onClick={() => router.push("/dashboard")}>Back to Dashboard</Button>
@@ -125,7 +122,7 @@ function RequestAccessInner() {
           </CardTitle>
           <CardDescription>
             Submit your profession, medical registration number, and a staff ID card. An Admin
-            reviews every request before granting Doctor or Clinical Assistant access.
+            reviews every request before granting Doctor access.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -172,13 +169,12 @@ function RequestAccessInner() {
 
             <div className="space-y-2">
               <Label htmlFor="requestedRole">Requested Access *</Label>
-              <Select value={requestedRole} onValueChange={(v: string) => setRequestedRole(v as "doctor" | "clinical_assistant")} disabled={submitting}>
+              <Select value={requestedRole} onValueChange={(v: string) => setRequestedRole(v as "doctor")} disabled={submitting}>
                 <SelectTrigger id="requestedRole">
                   <SelectValue placeholder="Select the access you need" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="doctor">Doctor</SelectItem>
-                  <SelectItem value="clinical_assistant">Clinical Assistant</SelectItem>
                 </SelectContent>
               </Select>
             </div>

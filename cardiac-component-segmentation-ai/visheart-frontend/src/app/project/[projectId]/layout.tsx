@@ -8,7 +8,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
   const { projectId } = useParams<{ projectId: string }>();
 
   return (
-    <ProtectedRoute allowedRoles={["guest", "educational_user", "doctor", "clinical_assistant", "admin"]}>
+    <ProtectedRoute allowedRoles={["guest", "educational_user", "doctor", "admin"]}>
       {projectId && (
         <ProjectProvider projectId={projectId}>
           <div className="min-h-screen w-full bg-background">

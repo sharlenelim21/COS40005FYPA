@@ -44,10 +44,7 @@ export function DrawingPanel({
   zoomLevel = 1,
   setZoomLevel = () => {},
   onReset,
-  locked = false,
 }: DrawingPanelProps) {
-  const DRAW_TOOLS = new Set<DrawingTool>(["brush", "eraser", "rectangle"]);
-
   // Memoized tool selection handler
   const handleToolChange = React.useCallback((value: string) => {
     if (value && DRAWING_TOOLS.includes(value as DrawingTool)) {
@@ -58,8 +55,6 @@ export function DrawingPanel({
   // Optimized keyboard shortcut handler with cleanup
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (locked) return;
-
       // Handle Delete key for clear action (no modifier keys)
       if (e.key === "Delete" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && canClear) {
         e.preventDefault();
@@ -81,7 +76,7 @@ export function DrawingPanel({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear, locked]);
+  }, [canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear]);
 
   return (
     <div className="space-y-4">
@@ -92,15 +87,12 @@ export function DrawingPanel({
           {DRAWING_TOOLS.map((toolKey) => {
             const config = TOOL_CONFIG[toolKey];
             const IconComponent = config.icon;
-            const toolLocked = locked && DRAW_TOOLS.has(toolKey);
 
             return (
               <button
                 key={toolKey}
                 onClick={() => handleToolChange(toolKey)}
-                disabled={toolLocked}
                 aria-label={config.label}
-                title={toolLocked ? "View-only access — ask the Doctor for Run access to use this." : undefined}
                 className={cn(
                   "h-16 flex flex-col items-center justify-center rounded-lg",
                   "border border-border transition-all",
@@ -242,7 +234,7 @@ export function DrawingPanel({
 
       {/* Collapsible Sections using Accordion */}
       <Accordion type="single" collapsible className="w-full">
-        {/* Actions - Open by default */}
+        {/* Actions - Open by default. */}
         <AccordionItem value="actions" className="border-none">
           <AccordionTrigger className="py-2 hover:no-underline [&[data-state=open]>svg]:rotate-180">
             <h3 className="text-sm font-medium text-foreground">Actions</h3>
@@ -253,7 +245,7 @@ export function DrawingPanel({
                 variant="outline"
                 size="sm"
                 onClick={handleUndo}
-                disabled={!canUndo || locked}
+                disabled={!canUndo}
                 className="w-full justify-start text-xs"
                 aria-label="Undo last action (Ctrl+Z)"
               >
@@ -266,7 +258,7 @@ export function DrawingPanel({
                 variant="outline"
                 size="sm"
                 onClick={handleRedo}
-                disabled={!canRedo || locked}
+                disabled={!canRedo}
                 className="w-full justify-start text-xs"
                 aria-label="Redo last action (Ctrl+Y)"
               >
@@ -278,7 +270,7 @@ export function DrawingPanel({
               <Button
                 variant="destructive"
                 onClick={handleClear}
-                disabled={!canClear || locked}
+                disabled={!canClear}
                 className="w-full justify-start text-xs"
                 aria-label="Clear current mask (Delete)"
               >

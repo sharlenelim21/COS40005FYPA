@@ -17,12 +17,11 @@ import {
     createJob,
     updateJob,
     projectSegmentationMaskModel,
-    readProjectsAssignedToAssistant,
     UserRole,
 } from "../services/database";
-import { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthAndDoctor } from "../services/passportjs";
+import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
 import LogError from "../utils/error_logger";
-import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument, SegmentationModel, MaskStatus } from "../types/database_types";
+import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument, SegmentationModel } from "../types/database_types";
 import fs from 'fs-extra'; // Use fs-extra for easier directory handling and tar extraction
 import path from 'path';
 import { exec } from 'child_process';
@@ -35,10 +34,8 @@ import { loadRvInsertionSlicesByFrame, resolveRvInsertionPoints, resolveRvInsert
 
 const router = Router();
 
-// A project's owning Doctor (or an Admin) saves its segmentation directly. A Clinical Assistant
-// the project has been shared with may also save an edit, but /save-manual-segmentation routes
-// their save to a new Draft mask version (see MaskStatus) instead of overwriting the Doctor's —
-// see the role branch inside that handler. Every other write still requires owner/admin access.
+// A project's owning Doctor (or an Admin) saves its segmentation directly. Every write requires
+// owner/admin access.
 const NOT_OWNER_MESSAGE = "Only the project's owner can save its segmentation.";
 const serviceLocation = "SegmentationRoutes";
 
@@ -167,6 +164,13 @@ router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res:
     }
     logger.info(`${serviceLocation}: Received request to fetch segmentation masks for project ID: ${projectId}`);
     try {
+        // This previously had no access check at all — any authenticated user who knew a
+        // projectId could read its masks. Owner or Admin may read.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.allowed) {
+            return res.status(404).json({ success: false, message: "Project not found or access denied." });
+        }
+
         const result = await readProjectSegmentationMask(projectId);
         if (!result.success) {
             if (result.message?.includes("does not exist")) {
@@ -176,7 +180,10 @@ router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res:
             logger.error(`${serviceLocation}: Error reading segmentation masks for project ${projectId}: ${result.message}`);
             return res.status(500).json({ success: false, message: result.message || "Error reading segmentation masks." });
         }
-        if (!result.projectsegmentationmasks || result.projectsegmentationmasks.length === 0) {
+
+        const visibleMasks = result.projectsegmentationmasks ?? [];
+
+        if (visibleMasks.length === 0) {
             logger.info(`${serviceLocation}: No segmentation masks found for project ID ${projectId}.`);
             return res.status(200).json({
                 message: "No segmentation masks found for this project.",
@@ -184,8 +191,8 @@ router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res:
                 segmentations: []
             });
         }
-        logger.info(`${serviceLocation}: Successfully fetched ${result.projectsegmentationmasks.length} segmentation mask(s) for project ID ${projectId}.`);
-        return res.status(200).json({ success: true, segmentations: result.projectsegmentationmasks });
+        logger.info(`${serviceLocation}: Successfully fetched ${visibleMasks.length} segmentation mask(s) for project ID ${projectId}.`);
+        return res.status(200).json({ success: true, segmentations: visibleMasks });
     } catch (error) {
         LogError(error as Error, serviceLocation, `Unexpected error fetching segmentation masks for project ${projectId}`);
         return res.status(500).json({ message: "An unexpected error occurred while fetching segmentation masks." });
@@ -617,17 +624,12 @@ router.put("/save-manual-segmentation/:projectId",
         }
 
         try {
-            // Owner (Doctor), Admin, or a Run-mode assigned Clinical Assistant may save here —
-            // a ViewOnly-mode assistant is rejected outright. What differs by role for the
-            // ones who CAN save is what happens below: the assistant's edit becomes a new Draft
-            // version instead of overwriting the owner's mask in place (see the role branch
-            // further down, after the editable mask is located).
+            // Owner (Doctor) or Admin may save here.
             const access = await userCanAccessProject(projectId, req.user!);
             if (!access.canRun) {
                 logger.warn(`${serviceLocation}: User ${userId} tried to save the segmentation of project ${projectId}, which they cannot edit.`);
                 return res.status(403).json({ success: false, message: NOT_OWNER_MESSAGE });
             }
-            const isAssistantEdit = req.user!.role === UserRole.ClinicalAssistant;
 
             const masksResult = await readProjectSegmentationMask(projectId);
 
@@ -707,106 +709,55 @@ router.put("/save-manual-segmentation/:projectId",
                 updatePayload.frames = editableMask.frames;
             }
 
-            // Doctor/Admin overwrite the editable mask in place, as before. A Clinical
-            // Assistant's edit never overwrites it — it's saved as a new (or their own
-            // existing) Draft version linked back to editableMask via parentVersionId, for
-            // the project's Doctor to Accept (promotes it to Final) or Discard.
-            let segmentationDbUpdateResult: Awaited<ReturnType<typeof updateProjectSegmentationMask>>;
-
-            if (isAssistantEdit) {
-                const existingDraft = await projectSegmentationMaskModel.findOne({
-                    projectid: projectId,
-                    parentVersionId: editableMask._id.toString(),
-                    createdByUserId: userId.toString(),
-                    status: MaskStatus.Draft,
-                });
-
-                if (existingDraft) {
-                    // Keep the draft's own (already-unique) name — don't let updatePayload's
-                    // default (the original mask's name) collide with editableMask's name.
-                    segmentationDbUpdateResult = await updateProjectSegmentationMask(
-                        existingDraft._id.toString(),
-                        { ...updatePayload, name: existingDraft.name } as Partial<IProjectSegmentationMaskDocument>
-                    );
-                } else {
-                    const draftMask: IProjectSegmentationMask = {
-                        projectid: projectId,
-                        name: `${updatePayload.name ?? editableMask.name} (draft by ${req.user!.username})`,
-                        description: updatePayload.description,
-                        isSaved: true,
-                        segmentationmaskRLE: editableMask.segmentationmaskRLE,
-                        isMedSAMOutput: false,
-                        segmentationModel: editableMask.segmentationModel,
-                        model_used: editableMask.model_used,
-                        frames: updatePayload.frames!,
-                        status: MaskStatus.Draft,
-                        parentVersionId: editableMask._id.toString(),
-                        createdByUserId: userId.toString(),
-                        createdByRole: UserRole.ClinicalAssistant,
-                    };
-                    segmentationDbUpdateResult = await createProjectSegmentationMask(draftMask);
-                }
-            } else {
-                updatePayload.status = MaskStatus.Final;
-                updatePayload.createdByUserId = userId.toString();
-                updatePayload.createdByRole = req.user!.role;
-                segmentationDbUpdateResult = await updateProjectSegmentationMask(
-                    editableMask._id.toString(),
-                    updatePayload as Partial<IProjectSegmentationMaskDocument>
-                );
-            }
+            const segmentationDbUpdateResult = await updateProjectSegmentationMask(
+                editableMask._id.toString(),
+                updatePayload as Partial<IProjectSegmentationMaskDocument>
+            );
 
             if (!segmentationDbUpdateResult.success || !segmentationDbUpdateResult.projectsegmentationmask) {
                 logger.error(`${serviceLocation}: Failed to save manual segmentation for mask ${editableMask._id} in database. Message: ${segmentationDbUpdateResult.message}`);
                 return res.status(500).json({ success: false, message: segmentationDbUpdateResult.message || "Failed to save segmentation mask." });
             }
 
-            logger.info(`${serviceLocation}: Successfully saved manual segmentation (${isAssistantEdit ? "draft" : "final"}) based on mask ${editableMask._id} for project ${projectId}.`);
+            logger.info(`${serviceLocation}: Successfully saved manual segmentation based on mask ${editableMask._id} for project ${projectId}.`);
 
-            // Project-level isSaved sync + AI-baseline edit tracking only apply to the
-            // canonical (Final) mask — a Draft isn't the project's official result yet.
-            let editTracking = null;
-            if (!isAssistantEdit) {
-                const projectResult = await readProject(projectId, userId.toString());
-                if (projectResult.success && projectResult.projects && projectResult.projects.length > 0) {
-                    const project = projectResult.projects[0];
-                    if (!project.isSaved) {
-                        logger.info(`${serviceLocation}: Parent project ${projectId} is not saved. Updating its status to saved.`);
-                        const updateProjectResult = await updateProject(projectId, { isSaved: true });
-                        if (!updateProjectResult.success) {
-                            logger.warn(`${serviceLocation}: Failed to update project ${projectId} save status. Message: ${updateProjectResult.message}`);
-                        } else {
-                            logger.info(`${serviceLocation}: Parent project ${projectId} save status successfully updated to true.`);
-                        }
+            const projectResult = await readProject(projectId, userId.toString());
+            if (projectResult.success && projectResult.projects && projectResult.projects.length > 0) {
+                const project = projectResult.projects[0];
+                if (!project.isSaved) {
+                    logger.info(`${serviceLocation}: Parent project ${projectId} is not saved. Updating its status to saved.`);
+                    const updateProjectResult = await updateProject(projectId, { isSaved: true });
+                    if (!updateProjectResult.success) {
+                        logger.warn(`${serviceLocation}: Failed to update project ${projectId} save status. Message: ${updateProjectResult.message}`);
                     } else {
-                        logger.info(`${serviceLocation}: Parent project ${projectId} was already saved.`);
+                        logger.info(`${serviceLocation}: Parent project ${projectId} save status successfully updated to true.`);
                     }
                 } else {
-                    logger.warn(`${serviceLocation}: Could not find project ${projectId} to check/update save status after updating manual segmentation.`);
+                    logger.info(`${serviceLocation}: Parent project ${projectId} was already saved.`);
                 }
+            } else {
+                logger.warn(`${serviceLocation}: Could not find project ${projectId} to check/update save status after updating manual segmentation.`);
+            }
 
-                // Record which slices now differ from this model's preserved AI output. Never fails the save.
-                // Frames come from the saved document, not the pre-update editableMask; the RLE plane uses
-                // project.dimensions, the same values the NIfTI export passes.
-                const savedMask = segmentationDbUpdateResult.projectsegmentationmask as any;
-                const dims = projectResult.success ? projectResult.projects?.[0]?.dimensions : undefined;
-                if (dims?.height && dims?.width) {
-                    editTracking = await computeAndStoreEditTracking(
-                        typeof savedMask.toObject === "function" ? savedMask.toObject() : savedMask,
-                        masksResult.projectsegmentationmasks as any[],
-                        { height: dims.height, width: dims.width },
-                        userId.toString(),
-                    );
-                }
+            // AI-baseline edit tracking. Never fails the save either way. Frames come from the
+            // saved document, not the pre-update editableMask; the RLE plane uses
+            // project.dimensions, the same values the NIfTI export passes.
+            let editTracking = null;
+            const savedMask = segmentationDbUpdateResult.projectsegmentationmask as any;
+            const dims = projectResult.success ? projectResult.projects?.[0]?.dimensions : undefined;
+            if (dims?.height && dims?.width) {
+                editTracking = await computeAndStoreEditTracking(
+                    typeof savedMask.toObject === "function" ? savedMask.toObject() : savedMask,
+                    masksResult.projectsegmentationmasks as any[],
+                    { height: dims.height, width: dims.width },
+                    userId.toString(),
+                );
             }
 
             return res.status(200).json({
                 success: true,
-                message: isAssistantEdit
-                    ? "Your edit was saved as a draft for the project's Doctor to review."
-                    : "Manual segmentation updated and saved successfully.",
+                message: "Manual segmentation updated and saved successfully.",
                 segmentation: segmentationDbUpdateResult.projectsegmentationmask,
-                isDraft: isAssistantEdit,
                 editTracking,
             });
 
@@ -851,7 +802,7 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
         await fs.ensureDir(baseTempDir);
 
         // 1. Read Project Details (including dimensions and original NIfTI path)
-        // Owner, an assigned Clinical Assistant, or Admin may export.
+        // Owner or Admin may export.
         const access = await userCanAccessProject(projectId, req.user!);
         if (!access.canRun || !access.project) {
             logger.warn(`${serviceLocationExport}: Project ${projectId} not found or user ${userId} does not have access.`);
@@ -881,8 +832,8 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
             mask => mask.isMedSAMOutput === false
         );
 
-        const modelMatchedMask = requestedExportModel
-            ? editableMasks.find(mask => {
+        const modelMatchedMasks = requestedExportModel
+            ? editableMasks.filter(mask => {
                   const tag = (
                       (mask as any).segmentationModel ||
                       (mask as any).model_used ||
@@ -890,14 +841,17 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
                   ).toString().toLowerCase();
                   return tag === requestedExportModel;
               })
-            : undefined;
+            : editableMasks;
 
-        const chosenMask = modelMatchedMask ?? editableMasks[0] ?? segmentationMasksResult.projectsegmentationmasks![0];
+        const chosenMask =
+            modelMatchedMasks[0] ??
+            editableMasks[0] ??
+            segmentationMasksResult.projectsegmentationmasks![0];
 
         logger.info(
             `${serviceLocationExport}: Exporting mask for project ${projectId} ` +
             `(requestedModel=${requestedExportModel ?? "<none>"}, ` +
-            `matchedByModel=${!!modelMatchedMask}, ` +
+            `matchedByModel=${!requestedExportModel || modelMatchedMasks.length > 0}, ` +
             `maskId=${(chosenMask as any)?._id ?? "<unknown>"}).`
         );
         segmentationsToProcess = [chosenMask];
@@ -1078,11 +1032,7 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
     }
 
     try {
-        // 1. Verify user owns, or (as a Clinical Assistant) is assigned to, all requested
-        // projects. Admin may check status on any project.
-        // `readProject` returning success with NO `.projects` array just means "owns zero
-        // projects" (e.g. every Clinical Assistant, by design) — that's not a failure, only
-        // `success: false` is. Treating it as a 500 broke this endpoint for every assistant.
+        // 1. Verify user owns all requested projects. Admin may check status on any project.
         const userProjectsResult = await readProject(undefined, userId.toString());
         if (!userProjectsResult.success) {
             logger.error(`${serviceLocation}: Failed to fetch user projects for batch status check.`);
@@ -1095,10 +1045,6 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
         const accessibleProjectIds = new Set<string>(
             (userProjectsResult.projects ?? []).map((p: IProjectDocument) => String(p._id))
         );
-        if (req.user!.role === UserRole.ClinicalAssistant) {
-            const assignedResult = await readProjectsAssignedToAssistant(userId.toString());
-            for (const p of assignedResult.projects ?? []) accessibleProjectIds.add(String(p._id));
-        }
         const unauthorizedProjects = req.user!.role === UserRole.Admin
             ? []
             : projectIds.filter((id: string) => !accessibleProjectIds.has(id));
@@ -1115,7 +1061,7 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
         const segmentationResults = await projectSegmentationMaskModel.aggregate([
             {
                 $match: {
-                    projectid: { $in: projectIds }
+                    projectid: { $in: projectIds },
                 }
             },
             {
@@ -1178,7 +1124,7 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
 
     try {
         // 1. Verify project access
-        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        // Owner or Admin may run this computation.
         const access = await userCanAccessProject(projectId, req.user!);
         if (!access.canRun || !access.project) {
             return res.status(403).json({ error: "Project not found or access denied." });
@@ -1467,7 +1413,7 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
 
     try {
         // 1. Verify project access
-        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        // Owner or Admin may run this computation.
         const access = await userCanAccessProject(projectId, req.user!);
         if (!access.canRun || !access.project) {
             return res.status(403).json({ error: "Project not found or access denied." });
@@ -2741,9 +2687,8 @@ router.post("/resolve-duplicate-slice/:maskId", isAuthAndNotGuest, async (req: R
     }
 });
 
-// Flag a mask (Draft or Final) as worth considering for U-Net retraining — surfaced to Admin
-// on /admin/flagged-masks. Independent of the Draft/Final Doctor-review workflow below: a
-// Final, already-accepted edit can also be flagged.
+// Flag a mask as worth considering for U-Net retraining — surfaced to Admin on
+// /admin/flagged-masks.
 router.patch("/mask/:maskId/flag-for-retrain", isAuthAndNotGuest, async (req: Request, res: Response) => {
     const maskId = toSingleString(req.params.maskId);
     const userId = req.user?._id;
@@ -2771,142 +2716,6 @@ router.patch("/mask/:maskId/flag-for-retrain", isAuthAndNotGuest, async (req: Re
         return res.status(200).json({ success: true, message: "Mask flagged for retraining consideration.", segmentation: result.projectsegmentationmask });
     } catch (error) {
         LogError(error as Error, serviceLocation, `Error flagging mask ${maskId} for retraining`);
-        return res.status(500).json({ success: false, message: "An unexpected error occurred." });
-    }
-});
-
-// List a project's Draft mask versions (Clinical Assistant edits awaiting review) — backs the
-// Doctor's Mask Review panel. Admin may also list any project's drafts. A Clinical Assistant
-// who is assigned to the project may also call this, but only ever sees their OWN drafts'
-// status (submitted/pending) — never anyone else's, and never Doctor-only context.
-router.get("/project/:projectId/drafts", isAuth, async (req: Request, res: Response) => {
-    const projectId = toSingleString(req.params.projectId);
-    if (!projectId) {
-        return res.status(400).json({ success: false, message: "Missing projectId." });
-    }
-    try {
-        const access = await userCanAccessProject(projectId, req.user!);
-        const isReviewer = access.isOwner || req.user!.role === UserRole.Admin;
-        if (!isReviewer && !access.allowed) {
-            return res.status(403).json({ success: false, message: "You do not have access to this project." });
-        }
-        const draftQuery: Record<string, unknown> = { projectid: projectId, status: MaskStatus.Draft };
-        if (!isReviewer) {
-            draftQuery.createdByUserId = req.user!._id.toString();
-        }
-        const drafts = await projectSegmentationMaskModel.find(draftQuery).lean();
-        const creatorIds = [...new Set(drafts.map((d) => (d as any).createdByUserId).filter(Boolean))];
-        const creators = await userModel.find({ _id: { $in: creatorIds } }).select("username").lean();
-        const usernameById = new Map(creators.map((c) => [String(c._id), c.username]));
-        const draftsWithCreator = drafts.map((d) => ({
-            ...d,
-            createdByUsername: usernameById.get(String((d as any).createdByUserId)) ?? null,
-        }));
-        return res.status(200).json({ success: true, drafts: draftsWithCreator });
-    } catch (error) {
-        LogError(error as Error, serviceLocation, `Error listing drafts for project ${projectId}`);
-        return res.status(500).json({ success: false, message: "An unexpected error occurred." });
-    }
-});
-
-// Doctor accepts a Clinical Assistant's draft: it becomes the project's Final mask for that
-// model, and the mask it was derived from is marked Superseded (kept, not deleted, for audit).
-router.post("/mask/:maskId/accept", isAuthAndDoctor, async (req: Request, res: Response) => {
-    const maskId = toSingleString(req.params.maskId);
-    const userId = req.user?._id;
-    if (!maskId) {
-        return res.status(400).json({ success: false, message: "Missing maskId." });
-    }
-    try {
-        const draft = await projectSegmentationMaskModel.findById(maskId);
-        if (!draft || draft.status !== MaskStatus.Draft) {
-            return res.status(404).json({ success: false, message: "Draft mask not found." });
-        }
-        const access = await userCanAccessProject(draft.projectid?.toString() ?? "", req.user!);
-        if (!access.isOwner) {
-            return res.status(403).json({ success: false, message: "Only the project's Doctor may accept a draft." });
-        }
-
-        const nowIso = new Date().toISOString();
-        if (draft.parentVersionId) {
-            await updateProjectSegmentationMask(draft.parentVersionId, {
-                status: MaskStatus.Superseded,
-                supersededBy: maskId,
-            } as Partial<IProjectSegmentationMaskDocument>);
-        }
-        const result = await updateProjectSegmentationMask(maskId, {
-            status: MaskStatus.Final,
-            reviewedByUserId: userId,
-            reviewedAt: nowIso,
-        } as Partial<IProjectSegmentationMaskDocument>);
-        if (!result.success) {
-            return res.status(400).json({ success: false, message: result.message });
-        }
-
-        // Accepting is the moment a Clinical Assistant's edit becomes the project's official
-        // result — editTracking was never computed at draft-save time (see the Draft branch in
-        // save-manual-segmentation above), so without this, an accepted assistant edit would
-        // never carry the diff-vs-AI data that UNet Extend Training's "corrected cases" scan
-        // requires, and would silently never be eligible for retraining no matter what the
-        // Doctor approved.
-        try {
-            const projectId = draft.projectid?.toString() ?? "";
-            const [projectResult, masksResult] = await Promise.all([
-                readProject(projectId),
-                readProjectSegmentationMask(projectId),
-            ]);
-            const dims = projectResult.success ? projectResult.projects?.[0]?.dimensions : undefined;
-            if (dims?.height && dims?.width && masksResult.success && masksResult.projectsegmentationmasks) {
-                await computeAndStoreEditTracking(
-                    result.projectsegmentationmask as any,
-                    masksResult.projectsegmentationmasks as any[],
-                    { height: dims.height, width: dims.width },
-                    String((draft as any).createdByUserId ?? userId),
-                );
-            }
-        } catch (trackingError) {
-            // Never fail the accept over this — the mask is already promoted to Final either way.
-            LogError(trackingError as Error, serviceLocation, `Error computing editTracking for accepted draft ${maskId}`);
-        }
-
-        logger.info(`${serviceLocation}: Doctor ${userId} accepted draft mask ${maskId}, superseding ${draft.parentVersionId}.`);
-        return res.status(200).json({ success: true, message: "Draft accepted and promoted to the project's final mask.", segmentation: result.projectsegmentationmask });
-    } catch (error) {
-        LogError(error as Error, serviceLocation, `Error accepting draft mask ${maskId}`);
-        return res.status(500).json({ success: false, message: "An unexpected error occurred." });
-    }
-});
-
-// Doctor discards a Clinical Assistant's draft: it's marked Rejected (kept for audit, not
-// deleted) and the original mask it was derived from is left untouched.
-router.post("/mask/:maskId/discard", isAuthAndDoctor, async (req: Request, res: Response) => {
-    const maskId = toSingleString(req.params.maskId);
-    const userId = req.user?._id;
-    if (!maskId) {
-        return res.status(400).json({ success: false, message: "Missing maskId." });
-    }
-    try {
-        const draft = await projectSegmentationMaskModel.findById(maskId);
-        if (!draft || draft.status !== MaskStatus.Draft) {
-            return res.status(404).json({ success: false, message: "Draft mask not found." });
-        }
-        const access = await userCanAccessProject(draft.projectid?.toString() ?? "", req.user!);
-        if (!access.isOwner) {
-            return res.status(403).json({ success: false, message: "Only the project's Doctor may discard a draft." });
-        }
-
-        const result = await updateProjectSegmentationMask(maskId, {
-            status: MaskStatus.Rejected,
-            reviewedByUserId: userId,
-            reviewedAt: new Date().toISOString(),
-        } as Partial<IProjectSegmentationMaskDocument>);
-        if (!result.success) {
-            return res.status(400).json({ success: false, message: result.message });
-        }
-        logger.info(`${serviceLocation}: Doctor ${userId} discarded draft mask ${maskId}.`);
-        return res.status(200).json({ success: true, message: "Draft discarded.", segmentation: result.projectsegmentationmask });
-    } catch (error) {
-        LogError(error as Error, serviceLocation, `Error discarding draft mask ${maskId}`);
         return res.status(500).json({ success: false, message: "An unexpected error occurred." });
     }
 });

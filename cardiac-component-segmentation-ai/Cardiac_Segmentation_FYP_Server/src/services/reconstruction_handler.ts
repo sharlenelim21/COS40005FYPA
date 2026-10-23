@@ -282,7 +282,7 @@ export async function processReconstructionCallback(
           reconstructionFileS3Url,
           reconstructionObjectKey,
           maskId,
-          segmentationModel
+          segmentationModel,
         );
 
         if (!reconstructionResult.success) {

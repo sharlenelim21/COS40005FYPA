@@ -43,10 +43,6 @@ const RoleBadge = () => {
       icon: <UserCheck className="inline-flex h-4 w-4 text-green-600" />,
       colors: "bg-green-100 text-green-800 border-green-200",
     },
-    clinical_assistant: {
-      icon: <UserCheck className="inline-flex h-4 w-4 text-purple-600" />,
-      colors: "bg-purple-100 text-purple-800 border-purple-200",
-    },
     educational_user: {
       icon: <UserCheck className="inline-flex h-4 w-4 text-teal-600" />,
       colors: "bg-teal-100 text-teal-800 border-teal-200",
@@ -62,7 +58,6 @@ const RoleBadge = () => {
   const roleLabels: Record<string, string> = {
     admin: "Admin",
     doctor: "Doctor",
-    clinical_assistant: "Clinical Assistant",
     educational_user: "Educational",
     guest: "Guest",
   };

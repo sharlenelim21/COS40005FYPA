@@ -2,7 +2,7 @@
 // Admin's queue of segmentation masks flagged "consider for retraining" — feeds the existing
 // /extend-training (retraining_routes.ts) workflow. Kept separate from retraining_routes.ts,
 // which runs the actual retraining job; this is just the lightweight flagging scaffold that
-// surfaces what's waiting for Admin's attention (see MaskStatus.flaggedForRetrain).
+// surfaces what's waiting for Admin's attention (see flaggedForRetrain).
 
 import { Request, Response, Router } from "express";
 import { isAuthAndAdmin } from "../services/passportjs";
@@ -31,13 +31,10 @@ router.get("/flagged-masks", isAuthAndAdmin, async (req: Request, res: Response)
             return {
                 maskId: mask._id,
                 maskName: mask.name,
-                status: mask.status ?? "final",
                 projectId: mask.projectid,
                 projectName: project?.name ?? "(project not found)",
                 flaggedAt: (mask as any).flaggedAt,
                 flaggedByUserId: (mask as any).flaggedByUserId,
-                createdByUserId: (mask as any).createdByUserId,
-                createdByRole: (mask as any).createdByRole,
             };
         });
 

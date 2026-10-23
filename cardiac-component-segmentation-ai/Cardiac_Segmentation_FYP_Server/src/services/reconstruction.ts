@@ -3,7 +3,7 @@
 
 import { IUserSafe, IProjectSegmentationMask, SegmentationModel, ReconstructionChamber } from "../types/database_types";
 import logger from "./logger";
-import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask, userCanAccessProject, getStageLocks, UserRole } from "./database";
+import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask, userCanAccessProject, UserRole } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
@@ -212,9 +212,8 @@ export const startReconstruction = async (
     }
 
     try {
-        // Validate project exists and the user has access — owner, Admin, or a Run-mode
-        // assigned Clinical Assistant may start a 4D reconstruction; a ViewOnly-mode assistant
-        // may not.
+        // Validate project exists and the user has access — owner or Admin may start a 4D
+        // reconstruction.
         const access = await userCanAccessProject(projectId, user!);
         if (!access.canRun || !access.project) {
             logger.warn(`${serviceLocation}: User ${user?._id} denied access to project ${projectId} for 4D reconstruction.`);
@@ -223,25 +222,6 @@ export const startReconstruction = async (
 
         const projectData = access.project;
 
-        // A Run-mode Assistant may not (re)build a model/chamber combo the Doctor already
-        // completed — reconstruction carries no Draft/Review protection the way segmentation
-        // does, so this would otherwise silently overwrite the Doctor's result. The Doctor/Admin
-        // keep their existing "delete it first" path below; an Assistant can still freely build
-        // any combo the Doctor hasn't touched yet.
-        if (!access.isOwner && user?.role !== UserRole.Admin && requestedModel) {
-            const locks = await getStageLocks(projectId, projectData.userid);
-            const comboKey = `${requestedModel}_${requestedChamber}` as keyof typeof locks.reconstruction;
-            if (locks.reconstruction[comboKey]) {
-                const modelLabel = requestedModel === "medsam" ? "MedSAM" : "UNet";
-                const chamberLabel = requestedChamber === "rv" ? "RV" : "LV";
-                return {
-                    success: false,
-                    statusCode: 403,
-                    message: `The Doctor already built the ${modelLabel} ${chamberLabel} reconstruction for this project — it's view-only for you now.`,
-                };
-            }
-        }
-
         if (requestedModel) {
             const existingReconstructions = await readProjectReconstruction(projectId);
             if (existingReconstructions.success && existingReconstructions.projectreconstructions) {
@@ -249,9 +229,10 @@ export const startReconstruction = async (
                 // same scan, so an existing RV must not block building the clinical LV result --
                 // and vice versa. Records with no chamber predate the field and are LV.
                 const matchingReconstruction = existingReconstructions.projectreconstructions.find(
-                    (reconstruction) =>
-                        normalizeStoredModel(reconstruction.segmentationModel) === requestedModel &&
-                        normalizeStoredChamber((reconstruction as { chamber?: string }).chamber) === requestedChamber,
+                    (reconstruction) => {
+                        if (normalizeStoredModel(reconstruction.segmentationModel) !== requestedModel) return false;
+                        return normalizeStoredChamber((reconstruction as { chamber?: string }).chamber) === requestedChamber;
+                    },
                 );
 
                 if (matchingReconstruction) {
@@ -272,12 +253,15 @@ export const startReconstruction = async (
             // Same per-(model, chamber) rule for jobs still in flight. Jobs created before the
             // chamber field have none, so "chamber missing" is matched as LV rather than as
             // "matches anything" -- otherwise an old stuck LV job would block RV forever.
+            // Scoped per-caller (userid) so a Run-mode Assistant's in-flight build never blocks
+            // the Doctor's own build of the same combo, and vice versa.
             const chamberJobFilter = requestedChamber === "rv"
                 ? { chamber: ReconstructionChamber.RV }
                 : { chamber: { $in: [ReconstructionChamber.LV, null] } };
 
             const blockingJob = await jobModel.findOne({
                 projectid: projectId,
+                userid: user?._id?.toString(),
                 segmentationModel: requestedModel === "medsam"
                     ? SegmentationModel.MEDSAM
                     : SegmentationModel.UNET,

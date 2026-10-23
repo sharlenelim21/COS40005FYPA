@@ -62,24 +62,9 @@ export interface ProjectData {
     affineMatrix?: number[][];
     createdAt?: string;
     updatedAt?: string;
-    /** True for the owning Doctor/Admin; false for an assigned Clinical Assistant. */
+    /** True for the owning Doctor/Admin. */
     isOwner?: boolean;
-    /** Whether the current viewer may run/edit/compute anything on this project — false
-     *  for a Clinical Assistant assigned in View-Only mode. Every run/edit/compute action
-     *  across the project's pages must be disabled when this is false. */
     canRun?: boolean;
-    assignmentMode?: "run" | "view_only" | null;
-    /** Per-stage "the Doctor already ran this" lock for a Run-mode Clinical Assistant — only
-     *  ever present for a non-owner. Landmark/reconstruction have no Draft/Review protection
-     *  like segmentation does, so a stage the Doctor already completed is locked (view-only)
-     *  for the Assistant; anything the Doctor hasn't touched stays fully runnable. */
-    stageLocks?: {
-        /** The fresh AI-run path only — a manual mask edit is already protected by Draft/Review
-         *  regardless of this, so it's not represented here. */
-        segmentation: { medsam: boolean; unet: boolean };
-        landmark: { medsam: boolean; unet: boolean };
-        reconstruction: { medsam_lv: boolean; medsam_rv: boolean; unet_lv: boolean; unet_rv: boolean };
-    };
 }
 
 /**

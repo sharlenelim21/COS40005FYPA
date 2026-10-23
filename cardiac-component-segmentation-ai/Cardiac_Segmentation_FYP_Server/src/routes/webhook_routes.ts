@@ -18,7 +18,6 @@ import {
   readJob,
   createProjectSegmentationMask,
   createProjectReconstruction,
-  readProject,
   projectSegmentationMaskModel,
   jobModel,
 } from "../services/database"; // Import database function to update job status
@@ -814,7 +813,7 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
                   aiCreationResult.projectsegmentationmask._id,
                   manualCreationResult.projectsegmentationmask._id,
                 ];
-                const supersededFilter = {
+                const supersededFilter: Record<string, unknown> = {
                   projectid: projectId,
                   _id: { $nin: keepIds },
                   $or: [

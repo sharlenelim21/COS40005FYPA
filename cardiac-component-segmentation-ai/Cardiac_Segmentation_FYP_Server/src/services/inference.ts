@@ -3,7 +3,7 @@
 
 import { IUserSafe, ProjectCrudResult, segmentationSource, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
-import { createJob, IJob, jobModel, JobStatus, readProject, updateJob, userCanAccessProject, getStageLocks, UserRole } from "./database";
+import { createJob, IJob, jobModel, JobStatus, readProject, updateJob, userCanAccessProject, UserRole } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
@@ -276,18 +276,9 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
             return { success: false, message: "Project not found or access denied." };
         }
 
-        // A Run-mode Assistant may not re-run a model the Doctor already completed —
-        // segmentation's Draft/Review protection only covers manual mask edits, not a fresh
-        // AI run, which otherwise directly overwrites the Doctor's existing baseline.
-        if (!access.isOwner && user.role !== UserRole.Admin) {
-            const locks = await getStageLocks(projectId, access.project.userid);
-            if (locks.segmentation?.medsam) {
-                return {
-                    success: false,
-                    message: "The Doctor already ran MedSAM segmentation for this project — it's view-only for you now.",
-                };
-            }
-        }
+        // A Run-mode Assistant is never blocked from (re-)running MedSAM, even if the Doctor
+        // already has a result — the gpu-callback webhook isolates their run as their own
+        // Draft pair instead of overwriting the Doctor's Final (see the run-mode isolation plan).
 
         const projectResult: ProjectCrudResult = await readProject(projectId);
         if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
@@ -512,8 +503,9 @@ export async function startModel2Inference(
     try {
         // Same gap as startInference above: this previously had no owner/assignment check at
         // all. Owner, Admin, or a Run-mode assigned Clinical Assistant may run it; a ViewOnly
-        // assistant may not, and a Run-mode Assistant may not re-run a model the Doctor already
-        // completed (segmentation's Draft/Review protection only covers manual mask edits).
+        // assistant may not. A Run-mode Assistant is never blocked from (re-)running UNet, even
+        // if the Doctor already has a result — the gpu-callback webhook isolates their run as
+        // their own Draft pair instead of overwriting the Doctor's Final.
         if (!user) {
             return { success: false, message: "Unauthorized." };
         }
@@ -521,15 +513,6 @@ export async function startModel2Inference(
         if (!access.canRun || !access.project) {
             logger.warn(`${serviceLocation}: User ${user?._id} denied access to project ${projectId} for UNET inference.`);
             return { success: false, message: "Project not found or access denied." };
-        }
-        if (!access.isOwner && user.role !== UserRole.Admin) {
-            const locks = await getStageLocks(projectId, access.project.userid);
-            if (locks.segmentation?.unet) {
-                return {
-                    success: false,
-                    message: "The Doctor already ran UNet segmentation for this project — it's view-only for you now.",
-                };
-            }
         }
 
         const projectResult = await readProject(projectId);

@@ -50,7 +50,7 @@ export const LoginForm = () => {
       </div>
 
       {/* Main Login Card */}
-      <div className="bg-card border-border mx-4 overflow-hidden rounded-2xl border sm:my-3 sm:h-[610px] sm:w-[500px] mb-10">
+      <div className="bg-card border-border mx-4 overflow-hidden rounded-2xl border sm:my-3 sm:min-h-[610px] sm:w-[500px] mb-10">
         <CardHeader className="from-muted/50 to-muted/30 border-border/50 border-b bg-gradient-to-r pt-6">
           <CardTitle className="flex items-center gap-2 text-xl font-semibold">
             <Shield className="text-primary h-5 w-5" />

@@ -156,17 +156,7 @@ export const authApi = {
     }
   },
 
-  // Doctor's picker list of Clinical Assistant accounts (for Share With Clinical Assistant)
-  getClinicalAssistants: async () => {
-    try {
-      const response = await api.get("/auth/clinical-assistants");
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // An already-registered EducationalUser requests elevation to Doctor or Clinical Assistant
+  // An already-registered EducationalUser requests elevation to Doctor
   // (the post-signup "Request Clinical Access" flow — same fields as the signup-time checkbox).
   requestElevation: async (formData: FormData) => {
     try {
@@ -189,8 +179,8 @@ export const authApi = {
     }
   },
 
-  // Admin approves a pending elevation request as the given role
-  approveElevation: async (userId: string, role: "doctor" | "clinical_assistant") => {
+  // Admin approves a pending elevation request as Doctor
+  approveElevation: async (userId: string, role: "doctor") => {
     try {
       const response = await api.post(`/auth/elevations/${userId}/approve`, { role });
       return response.data;
@@ -316,45 +306,6 @@ export const projectApi = {
     }
   },
 
-  // Clinical Assistant's "assigned to me" case list (replaces getProjects for that role)
-  getAssignedProjects: async () => {
-    try {
-      const response = await api.get("/project/assigned-to-me");
-      return response.data;
-    } catch (error) {
-      const status = (error as AxiosError)?.response?.status;
-      if (status === 404) {
-        return { projects: [] };
-      }
-      throw error;
-    }
-  },
-
-  // Doctor shares a project with a Clinical Assistant. mode: "run" (can run AI/edit/export) or
-  // "view_only" (can only view results across tabs, every run/edit/export action is blocked).
-  assignAssistant: async (
-    projectId: string,
-    assistantUserId: string,
-    mode: "run" | "view_only" = "run",
-    instructions?: string,
-  ) => {
-    try {
-      const response = await api.post(`/project/${projectId}/assign-assistant`, { assistantUserId, mode, instructions });
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Doctor revokes a Clinical Assistant's access to a project
-  unassignAssistant: async (projectId: string, assistantUserId: string) => {
-    try {
-      const response = await api.delete(`/project/${projectId}/assign-assistant/${assistantUserId}`);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
 };
 
 // Segmentation functions
@@ -643,36 +594,6 @@ export const segmentationApi = {
   flagMaskForRetrain: async (maskId: string) => {
     try {
       const response = await api.patch(`/segmentation/mask/${maskId}/flag-for-retrain`);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Doctor's list of a project's Draft masks (Clinical Assistant edits awaiting review)
-  getProjectDrafts: async (projectId: string) => {
-    try {
-      const response = await api.get(`/segmentation/project/${projectId}/drafts`);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Doctor accepts a Clinical Assistant's draft mask — it becomes the project's final mask
-  acceptDraftMask: async (maskId: string) => {
-    try {
-      const response = await api.post(`/segmentation/mask/${maskId}/accept`);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Doctor discards a Clinical Assistant's draft mask — the original is left untouched
-  discardDraftMask: async (maskId: string) => {
-    try {
-      const response = await api.post(`/segmentation/mask/${maskId}/discard`);
       return response.data;
     } catch (error) {
       throw error;

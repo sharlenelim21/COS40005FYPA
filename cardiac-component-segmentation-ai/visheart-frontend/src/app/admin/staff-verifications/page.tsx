@@ -22,7 +22,7 @@ interface PendingUser {
   phone: string;
   profession?: string;
   medicalId?: string;
-  requestedRole?: "doctor" | "clinical_assistant";
+  requestedRole?: "doctor";
   elevationReason?: string;
   hasStaffIdCard?: boolean;
 }
@@ -85,11 +85,11 @@ export default function StaffVerificationsPage() {
     setViewerOpen(false);
   };
 
-  const approve = async (userId: string, role: "doctor" | "clinical_assistant") => {
+  const approve = async (userId: string) => {
     setWorkingId(userId);
     try {
-      await authApi.approveElevation(userId, role);
-      toast.success(`Approved as ${role === "doctor" ? "Doctor" : "Clinical Assistant"}.`);
+      await authApi.approveElevation(userId, "doctor");
+      toast.success("Approved as Doctor.");
       await load(true);
     } catch (error) {
       const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -119,7 +119,7 @@ export default function StaffVerificationsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Staff Verifications</h1>
           <p className="text-muted-foreground">
-            Review educational accounts requesting Doctor or Clinical Assistant access.
+            Review educational accounts requesting Doctor access.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
@@ -153,9 +153,7 @@ export default function StaffVerificationsPage() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold">{u.username}</span>
-                        <Badge variant="secondary">
-                          Requested: {u.requestedRole === "doctor" ? "Doctor" : "Clinical Assistant"}
-                        </Badge>
+                        <Badge variant="secondary">Requested: Doctor</Badge>
                       </div>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
                         <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{u.email}</span>
@@ -182,29 +180,14 @@ export default function StaffVerificationsPage() {
                         <X className="mr-1 h-3 w-3" />
                         Reject
                       </Button>
-                      {/* The profession they declared decides which single role they can be
-                          approved as — a cardiologist can only be approved as Doctor, every
-                          other listed profession only as Clinical Assistant. */}
-                      {u.profession === "Doctor (Cardiologist)" ? (
-                        <Button
-                          size="sm"
-                          disabled={workingId === u._id}
-                          onClick={() => void approve(u._id, "doctor")}
-                        >
-                          <Check className="mr-1 h-3 w-3" />
-                          Approve as Doctor
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          disabled={workingId === u._id}
-                          onClick={() => void approve(u._id, "clinical_assistant")}
-                        >
-                          <Check className="mr-1 h-3 w-3" />
-                          Approve as Assistant
-                        </Button>
-                      )}
+                      <Button
+                        size="sm"
+                        disabled={workingId === u._id}
+                        onClick={() => void approve(u._id)}
+                      >
+                        <Check className="mr-1 h-3 w-3" />
+                        Approve as Doctor
+                      </Button>
                     </div>
                   </div>
                 </div>

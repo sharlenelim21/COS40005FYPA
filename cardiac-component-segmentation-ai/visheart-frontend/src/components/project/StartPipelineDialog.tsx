@@ -33,18 +33,12 @@ interface StartPipelineDialogProps {
   gpuAvailable: boolean;
   isGuest: boolean;
   isRerun: boolean;
+  /** For a Run-mode Clinical Assistant, these maps are already scoped to their OWN existing
+   *  work (never the Doctor's) — see useAutoPipelineChain/ProjectContext. A Run-mode Assistant
+   *  is never blocked from (re-)running any stage: their result lands as their own isolated
+   *  Draft, reviewed by the Doctor separately, never overwriting the Doctor's existing result. */
   existing: Record<Chamber, Set<Model>>;
   building: Record<Chamber, Set<Model>>;
-  /** A Run-mode Clinical Assistant's per-stage locks — the Doctor already has a result for
-   *  these, so re-running them here would silently overwrite it. Undefined/omitted for the
-   *  Doctor/Admin themselves, who are never locked out of their own project. Segmentation is
-   *  deliberately not covered — the Assistant's edits there go through Draft/Review instead of
-   *  overwriting, so re-running it is always safe. */
-  stageLocks?: {
-    segmentation: { medsam: boolean; unet: boolean };
-    landmark: { medsam: boolean; unet: boolean };
-    reconstruction: { medsam_lv: boolean; medsam_rv: boolean; unet_lv: boolean; unet_rv: boolean };
-  };
 }
 
 export function StartPipelineDialog({
@@ -56,7 +50,6 @@ export function StartPipelineDialog({
   isRerun,
   existing,
   building,
-  stageLocks,
 }: StartPipelineDialogProps) {
   const defaultModel: Model = gpuAvailable ? "medsam" : "unet";
   const [segModels, setSegModels] = useState<Set<Model>>(new Set([defaultModel]));
@@ -77,8 +70,7 @@ export function StartPipelineDialog({
     setSubmitting(false);
   }, [open]);
 
-  const segLocked = (m: Model) => stageLocks?.segmentation[m] ?? false;
-  const modelDisabled = (m: Model) => (m === "medsam" && !gpuAvailable) || segLocked(m);
+  const modelDisabled = (m: Model) => m === "medsam" && !gpuAvailable;
 
   const toggleModel = (m: Model, checked: boolean) => {
     setSegModels((prev) => {
@@ -101,21 +93,15 @@ export function StartPipelineDialog({
     });
   };
 
-  const comboLocked = (m: Model, c: Chamber) => stageLocks?.reconstruction[`${m}_${c}` as keyof NonNullable<typeof stageLocks>["reconstruction"]] ?? false;
-
   const comboNote = (m: Model, c: Chamber): string | null => {
-    if (comboLocked(m, c)) return "Already run by the Doctor — view-only for you";
     if (existing[c].has(m)) return "Already built — delete it on the project page to re-run";
     if (building[c].has(m)) return "Already building — will be followed";
     return null;
   };
 
-  const landmarkLocked = (m: Model) => stageLocks?.landmark[m] ?? false;
-
   const landmarkEligible = (m: Model) =>
     segModels.has(m) &&
     !modelDisabled(m) &&
-    !landmarkLocked(m) &&
     (combos.has(comboKey(m, "lv")) || combos.has(comboKey(m, "rv")) || existing.lv.has(m) || existing.rv.has(m));
   const landmarkModel: Model | null = landmarkEligible("unet") ? "unet" : landmarkEligible("medsam") ? "medsam" : null;
   const landmarkSelected = runLandmark && landmarkModel !== null;
@@ -177,9 +163,7 @@ export function StartPipelineDialog({
                     />
                     <span className="flex-1">
                       <span className="block font-medium">{MODEL_LABEL[m]}</span>
-                      {segLocked(m) ? (
-                        <span className="block text-xs text-muted-foreground">Already run by the Doctor — view-only for you</span>
-                      ) : disabled ? (
+                      {disabled ? (
                         <span className="block text-xs text-muted-foreground">Needs GPU</span>
                       ) : null}
                     </span>
@@ -209,7 +193,7 @@ export function StartPipelineDialog({
                   // re-running one would just be skipped/followed server-side anyway (see comboNote),
                   // so letting the checkbox look interactive was confusing. The note below points at
                   // the project page's existing delete button to free the combo back up.
-                  const enabled = segOk && !existing[chamber].has(model) && !building[chamber].has(model) && !comboLocked(model, chamber);
+                  const enabled = segOk && !existing[chamber].has(model) && !building[chamber].has(model);
                   const note = !segOk ? `Select ${MODEL_LABEL[model]} segmentation` : comboNote(model, chamber);
                   return (
                     <Label

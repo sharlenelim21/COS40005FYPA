@@ -21,9 +21,8 @@ export const findPairedAiMask = (editable: MaskDoc, masks: MaskDoc[]): MaskDoc |
     if (!tag) return null;
     const time = (m: MaskDoc) => (m.createdAt ? new Date(m.createdAt).getTime() : 0);
     const limit = editable.createdAt ? time(editable) : Infinity;
-    return masks
-        .filter(m => m.isMedSAMOutput === true && modelTag(m) === tag && time(m) <= limit)
-        .sort((a, b) => time(b) - time(a))[0] ?? null;
+    const candidates = masks.filter(m => m.isMedSAMOutput === true && modelTag(m) === tag && time(m) <= limit);
+    return candidates.sort((a, b) => time(b) - time(a))[0] ?? null;
 };
 
 export const runEditTrackingScript = (payload: object): Promise<any | null> => new Promise(resolve => {

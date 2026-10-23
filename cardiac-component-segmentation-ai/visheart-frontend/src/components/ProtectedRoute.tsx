@@ -31,7 +31,7 @@ interface ProtectedRouteProps {
 
 export function ProtectedRoute({
   children,
-  allowedRoles = ["educational_user", "doctor", "clinical_assistant", "admin"],
+  allowedRoles = ["educational_user", "doctor", "admin"],
   redirectTo = "/login",
   fallback,
   autoRedirect = true, // Default to true to redirect unauthenticated users to login
@@ -133,19 +133,10 @@ export function UserOrAdmin({ children, fallback }: { children: React.ReactNode;
   );
 }
 
-// Doctor only — pages that are doctor-exclusive actions (e.g. sharing a case).
+// Doctor only — pages that are doctor-exclusive actions.
 export function DoctorOnly({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) {
   return (
     <ProtectedRoute allowedRoles={["doctor"]} fallback={fallback}>
-      {children}
-    </ProtectedRoute>
-  );
-}
-
-// Clinical Assistant only.
-export function ClinicalAssistantOnly({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) {
-  return (
-    <ProtectedRoute allowedRoles={["clinical_assistant"]} fallback={fallback}>
       {children}
     </ProtectedRoute>
   );

@@ -147,14 +147,4 @@ const isAuthAndDoctor = (req: Request, res: Response, next: NextFunction): void 
   res.status(403).json({ message: "Forbidden. Doctor access required." });
 };
 
-/**
- * Middleware to check if the user is authenticated and has the Clinical Assistant role
- */
-const isAuthAndClinicalAssistant = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.isAuthenticated() && req.user.role === UserRole.ClinicalAssistant) {
-    return next();
-  }
-  res.status(403).json({ message: "Forbidden. Clinical Assistant access required." });
-};
-
-export { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest, isAuthAndDoctor, isAuthAndClinicalAssistant };
+export { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest, isAuthAndDoctor };

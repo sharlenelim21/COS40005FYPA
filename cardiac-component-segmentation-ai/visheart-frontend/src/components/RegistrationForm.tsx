@@ -45,9 +45,6 @@ import {
 
 /** Must match ALLOWED_PROFESSIONS in Cardiac_Segmentation_FYP_Server/src/routes/authentication.ts */
 const PROFESSIONS = [
-  "MRI Radiographer / Cardiac Imaging Technologist",
-  "Cardiac Physiologist / Cardiovascular Technologist",
-  "Nurse / Medical Assistant",
   "Doctor (Cardiologist)",
 ] as const;
 
@@ -66,7 +63,7 @@ interface RegistrationFormData {
   isMedicalStaff: boolean;
   profession: string;
   medicalId: string;
-  requestedRole: "doctor" | "clinical_assistant" | "";
+  requestedRole: "doctor" | "";
   reason: string;
 }
 
@@ -850,7 +847,7 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
                         </Label>
                         <Select
                           value={formData.requestedRole}
-                          onValueChange={(value: string) => handleInputChange("requestedRole", value as "doctor" | "clinical_assistant")}
+                          onValueChange={(value: string) => handleInputChange("requestedRole", value as "doctor")}
                           disabled={isLoading}
                         >
                           <SelectTrigger id="requestedRole" className={errors.requestedRole ? "border-destructive" : ""}>
@@ -858,7 +855,6 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="doctor">Doctor</SelectItem>
-                            <SelectItem value="clinical_assistant">Clinical Assistant</SelectItem>
                           </SelectContent>
                         </Select>
                         {errors.requestedRole && (
@@ -904,7 +900,7 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
                         </Label>
                         <Textarea
                           id="reason"
-                          placeholder="Briefly explain why you need Doctor/Clinical Assistant access"
+                          placeholder="Briefly explain why you need Doctor access"
                           value={formData.reason}
                           onChange={(e) => handleInputChange("reason", e.target.value)}
                           disabled={isLoading}

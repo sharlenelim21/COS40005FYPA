@@ -60,10 +60,6 @@ export interface DrawingPanelProps {
   zoomLevel?: number;
   setZoomLevel?: (level: number) => void;
   onReset?: () => void;
-  /** True for a Clinical Assistant assigned in View-Only mode — disables every tool/action
-   *  that would draw, erase, or otherwise mutate the mask. Select/Zoom/Pan and the undo
-   *  history stay available since those never touch the mask data. */
-  locked?: boolean;
 }
 
 export interface ImageCanvasProps {
@@ -146,9 +142,6 @@ export interface SegmentationSidebarProps {
   zoomLevel?: number;
   setZoomLevel?: (level: number) => void;
   onReset?: () => void;
-  /** True for a Clinical Assistant assigned in View-Only mode — disables Save, Reset, and
-   *  every drawing tool/action in the Tools & Masks panel. */
-  locked?: boolean;
 }
 
 export const PERFORMANCE_CONSTANTS = {
