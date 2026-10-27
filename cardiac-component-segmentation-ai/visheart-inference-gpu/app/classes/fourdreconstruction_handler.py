@@ -290,6 +290,21 @@ class FourDReconstructionHandler:
             safe_synchronize(self.device)
             safe_empty_cache(self.device)
             gc.collect()  # Force garbage collection
+
+    def _light_gpu_sync(self):
+        """A pure timing/consistency barrier -- synchronize only, no memory reclaim.
+        For the per-epoch checkpoint inside the optimization loop (see its own call
+        site): that loop already gets a full _force_gpu_sync() at its start and end
+        (once per frame), so the actual GPU memory peak this function's caller is
+        defending against is already bounded there. Verified live (2026-10, MedSAM
+        batching investigation on this same install): torch.cuda.empty_cache() +
+        gc.collect() are measurably expensive under GPU memory pressure (cuDNN's
+        allocator does real defragmentation work, not just bookkeeping), so calling
+        them every 20 epochs inside a loop that can run hundreds of iterations adds
+        real wall-clock cost for no additional memory safety over doing it once per
+        frame."""
+        if is_gpu_available():
+            safe_synchronize(self.device)
     
     def _create_isolated_tensor(self, data, requires_grad=False):
         """Create completely isolated tensor to prevent graph connections"""
@@ -738,9 +753,13 @@ class FourDReconstructionHandler:
                         if var_name in locals():
                             del locals()[var_name]
                     
-                    # Force GPU sync every few iterations to prevent accumulation
+                    # Sync every few iterations to prevent async CUDA queue buildup -- a plain
+                    # synchronize barrier, not a full memory reclaim: _optimize_latent_codes_sync
+                    # already gets _force_gpu_sync() at its own start/end (once per frame), which
+                    # already bounds peak memory; see _light_gpu_sync's own docstring for why the
+                    # heavier empty_cache()+gc.collect() pair isn't needed at every checkpoint too.
                     if epoch % 20 == 0:
-                        self._force_gpu_sync()
+                        self._light_gpu_sync()
             
             # AUTOGRAD FIX: Return properly detached tensors and clear GPU cache
             result_c_s = c_s.detach().clone()

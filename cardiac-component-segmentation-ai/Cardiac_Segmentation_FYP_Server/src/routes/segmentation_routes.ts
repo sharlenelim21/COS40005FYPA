@@ -24,7 +24,7 @@ import LogError from "../utils/error_logger";
 import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument, SegmentationModel } from "../types/database_types";
 import fs from 'fs-extra'; // Use fs-extra for easier directory handling and tar extraction
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import axios from 'axios'; // Simplified Axios import
 import { v4 as uuidv4 } from 'uuid';
 import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
@@ -862,7 +862,7 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
         // 4. Call Python script to create the segmentation NIfTI
         // Check if we have stored affine matrix to avoid downloading original file
         let pythonScriptPath: string;
-        let pythonCommand: string;
+        let pythonArgs: string[];
 
         if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
             // Use stored affine matrix approach (no download needed)
@@ -879,7 +879,7 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
 
             const datatype = project.datatype || 'uint8';
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "${datatype}" "${planeHeightForRLE}" "${planeWidthForRLE}"`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, localOutputSegmentationNiftiPath, affineMatrixFile, dimensionsFile, datatype, String(planeHeightForRLE), String(planeWidthForRLE)];
         } else {
             // Fallback to original approach (download and extract from file)
             logger.info(`${serviceLocationExport}: No stored affine matrix found for project ${projectId}. Using original file download approach.`);
@@ -902,12 +902,12 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
             await downloadFromS3(s3BucketName, originalNiftiS3Key, tempOriginalNiftiPath);
 
             pythonScriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${tempOriginalNiftiPath}" "${localOutputSegmentationNiftiPath}" "${planeHeightForRLE}" "${planeWidthForRLE}"`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, tempOriginalNiftiPath, localOutputSegmentationNiftiPath, String(planeHeightForRLE), String(planeWidthForRLE)];
         }
 
-        logger.info(`${serviceLocationExport}: Executing Python script: ${pythonCommand}`);
+        logger.info(`${serviceLocationExport}: Executing Python script: python ${pythonArgs.join(' ')}`);
         await new Promise<void>((resolve, reject) => {
-            exec(pythonCommand, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+            execFile('python', pythonArgs, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
                 if (error) {
                     logger.error(`${serviceLocationExport}: Python script error for project ${projectId}: ${stderr || error.message}`);
                     return reject(new Error(`NIfTI creation failed: ${stderr || error.message}`));
@@ -1198,7 +1198,7 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
@@ -1206,16 +1206,16 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 logger.info(`${serviceLocation}: compute-strain-from-frames [${label}] seg JSON frames=${singleFrameMaskDoc.frames.length} frameindex=${singleFrameDoc.frameindex} dimsFrames=1`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, stdout, stderr) => {
                     if (stdout) logger.info(`${serviceLocation}: Python [${label}] stdout: ${stdout.trim()}`);
                     if (stderr) logger.warn(`${serviceLocation}: Python [${label}] stderr: ${stderr.trim()}`);
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
@@ -1473,23 +1473,23 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, stdout, stderr) => {
                     if (stdout) logger.info(`${serviceLocation}: Python [${label}] stdout: ${stdout.trim()}`);
                     if (stderr) logger.warn(`${serviceLocation}: Python [${label}] stderr: ${stderr.trim()}`);
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
@@ -1691,23 +1691,23 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, _stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
                     else resolve();
                 });
@@ -1949,23 +1949,23 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, _stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
                     else resolve();
                 });

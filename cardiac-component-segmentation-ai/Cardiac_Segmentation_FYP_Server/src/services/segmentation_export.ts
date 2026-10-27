@@ -11,7 +11,7 @@ import FormData from 'form-data';
 import logger from "./logger";
 import fs from 'fs-extra';
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
 import { findSavedLandmarkDoc, findLatestLandmarkJobResult, loadRvInsertionSlicesByFrame, meanSavedRvInsertionPoints, resolveRvInsertionSlices, type RvInsertionSlice } from "./rv_insertion_points";
@@ -49,7 +49,7 @@ const runBullseyeRleScript = (
     });
 
     return new Promise<any | null>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [Bullseye] Python script failed for ${logTag}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [Bullseye] stderr: ${stderr.substring(0, 500)}`);
@@ -97,7 +97,7 @@ const runRvBullseyeRleScript = (
     const input = JSON.stringify({ frames, width, height });
 
     return new Promise<any | null>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RvBullseye] Python script failed for ${logTag}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RvBullseye] stderr: ${stderr.substring(0, 500)}`);
@@ -143,14 +143,20 @@ export const computeFrameRvAreaSeries = async (
     const frameIndices = Array.from(new Set(frames.map((f: any) => f.frameindex))).sort((a, b) => a - b);
     if (frameIndices.length <= 1) return; // nothing to animate with only one frame
 
-    const results: { frameIndex: number; regions: { region: number; area: number | null }[] }[] = [];
-    for (const frameIndex of frameIndices) {
-        const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runRvBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`);
-        if (result) {
-            results.push({ frameIndex, regions: result.regions });
-        }
-    }
+    // Every frame's RV area is independent of every other frame's (no ED-vs-ES or
+    // alignment-reference dependency between them -- see this function's own docstring),
+    // so all of them can run as separate python3 subprocesses concurrently instead of
+    // waiting on each other one at a time.
+    const settled = await Promise.all(
+        frameIndices.map(async (frameIndex) => {
+            const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
+            const result = await runRvBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`);
+            return result ? { frameIndex, regions: result.regions } : null;
+        }),
+    );
+    const results = settled
+        .filter((r): r is { frameIndex: number; regions: { region: number; area: number | null }[] } => r !== null)
+        .sort((a, b) => a.frameIndex - b.frameIndex);
     if (!results.length) {
         logger.warn(`${serviceLocation}: [FrameRvArea] No frames produced a result for mask ${maskId} — not storing.`);
         return;
@@ -236,27 +242,50 @@ export const computeFrameWallThicknessSeries = async (
         projectId && refSlices.length ? await loadRvInsertionSlicesByFrame(projectId) : () => [];
     let anteriorPoints: { slice: number; point: number[] }[] | undefined;
 
-    const results: { frameIndex: number; segment_values: (number | null)[]; stats: any }[] = [];
-    for (const frameIndex of frameIndices) {
-        const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runBullseyeRleScript(
-            framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint,
-            anteriorPoints ? { anteriorPoints, rvSlices: rvSlicesForFrame(frameIndex) } : { rvSlices: refSlices },
+    type FrameResult = { frameIndex: number; segment_values: (number | null)[]; stats: any };
+    const results: FrameResult[] = [];
+
+    // Phase 1: frame 0 (the reference frame) alone -- it may be the one call that actually
+    // RESOLVES alignPoint/anteriorPoints/rvSlicesForFrame (when neither was already known from
+    // the project's landmarks), which every later frame then depends on. Must finish, and its
+    // resolution must be applied, before any other frame starts.
+    const [firstFrameIndex, ...restFrameIndices] = frameIndices;
+    const firstFrames = frames.filter((f: any) => f.frameindex === firstFrameIndex);
+    const firstResult = await runBullseyeRleScript(
+        firstFrames, width, height, `mask ${maskId} frame ${firstFrameIndex}`, alignPoint,
+        { rvSlices: refSlices },
+    );
+    if (refSlices.length && firstResult) {
+        if (Array.isArray(firstResult.anterior_points) && firstResult.anterior_points.length) {
+            anteriorPoints = firstResult.anterior_points;
+        } else {
+            // no usable slice on the reference frame — keep the single point for every frame
+            rvSlicesForFrame = () => [];
+        }
+    }
+    if (!alignPoint && firstResult?.alignment_source === "rv-mask" && Array.isArray(firstResult.alignment_point)) {
+        alignPoint = firstResult.alignment_point;
+    }
+    if (firstResult) {
+        results.push({ frameIndex: firstFrameIndex, segment_values: firstResult.segment_values, stats: firstResult.stats });
+    }
+
+    // Phase 2: every other frame, now that alignPoint/anteriorPoints/rvSlicesForFrame are fully
+    // resolved and stable (read-only from here on) -- safe to run all of them concurrently
+    // instead of one at a time, since none of them write back to that shared state.
+    if (restFrameIndices.length) {
+        const settled = await Promise.all(
+            restFrameIndices.map(async (frameIndex) => {
+                const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
+                const result = await runBullseyeRleScript(
+                    framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint,
+                    anteriorPoints ? { anteriorPoints, rvSlices: rvSlicesForFrame(frameIndex) } : { rvSlices: refSlices },
+                );
+                return result ? { frameIndex, segment_values: result.segment_values, stats: result.stats } : null;
+            }),
         );
-        if (!anteriorPoints && refSlices.length && result) {
-            if (Array.isArray(result.anterior_points) && result.anterior_points.length) {
-                anteriorPoints = result.anterior_points;
-            } else {
-                // no usable slice on the reference frame — keep the single point for every frame
-                rvSlicesForFrame = () => [];
-            }
-        }
-        if (!alignPoint && result?.alignment_source === "rv-mask" && Array.isArray(result.alignment_point)) {
-            alignPoint = result.alignment_point;
-        }
-        if (result) {
-            results.push({ frameIndex, segment_values: result.segment_values, stats: result.stats });
-        }
+        for (const r of settled) if (r) results.push(r);
+        results.sort((a, b) => a.frameIndex - b.frameIndex);
     }
     if (!results.length) {
         logger.warn(`${serviceLocation}: [FrameWallThickness] No frames produced a result for mask ${maskId} — not storing.`);
@@ -292,7 +321,7 @@ export const computeHeartMetricsFromMaskDoc = async (
     const input = JSON.stringify({ frames, width, height, affine });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [HeartMetrics] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [HeartMetrics] stderr: ${stderr.substring(0, 500)}`);
@@ -408,7 +437,7 @@ export const computeHealthStatusFromMetrics = async (
     });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [HealthStatus] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [HealthStatus] stderr: ${stderr.substring(0, 500)}`);
@@ -499,7 +528,7 @@ export const computeRvHealthStatusFromMetrics = async (
     });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RvHealthStatus] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RvHealthStatus] stderr: ${stderr.substring(0, 500)}`);
@@ -646,7 +675,7 @@ export const computeRegionalHealthStatusFromStrain = async (
     );
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RegionalHealth] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RegionalHealth] stderr: ${stderr.substring(0, 500)}`);
@@ -793,7 +822,7 @@ export const computeRvRegionalHealthStatusFromStrain = async (
     );
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RvRegionalHealth] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RvRegionalHealth] stderr: ${stderr.substring(0, 500)}`);
@@ -880,7 +909,7 @@ export const computeDiseasePatternGatesFromMetrics = async (
     });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [DiseasePatternGates] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [DiseasePatternGates] stderr: ${stderr.substring(0, 500)}`);
@@ -1117,14 +1146,14 @@ export const generateNiftiAndComputeBullseye = async (
         await fs.ensureDir(baseTempDir);
         await fs.writeJson(segJsonPath, [edFrameOnly(maskDoc)], { spaces: 2 });
 
-        let pythonCommand: string;
+        let pythonArgs: string[];
         if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
             const affineFile = path.join(baseTempDir, `affine_${maskId}.json`);
             const dimsFile   = path.join(baseTempDir, `dims_${maskId}.json`);
             await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
             await fs.writeJson(dimsFile,   project.dimensions,   { spaces: 2 });
             const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-            pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+            pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
         } else {
             const s3Url = (project as any).extractedfolderpath;
             if (!s3Url) {
@@ -1132,11 +1161,11 @@ export const generateNiftiAndComputeBullseye = async (
                 return;
             }
             const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-            pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+            pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
         }
 
         const pythonOk = await new Promise<boolean>((resolve) => {
-            exec(pythonCommand, (error, _stdout, stderr) => {
+            execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                 if (error) {
                     logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI generation failed for mask ${maskId}: ${stderr || error.message}`);
                     resolve(false);
@@ -1250,14 +1279,14 @@ export async function recomputeBullseyeWithLandmarks(
                 // 4a. Generate NIfTI from RLE frames
                 await fs.writeJson(segJsonPath, [edFrameOnly(mask)], { spaces: 2 });
 
-                let pythonCommand: string;
+                let pythonArgs: string[];
                 if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                     const affineFile = path.join(baseTempDir, `affine_${maskId}.json`);
                     const dimsFile   = path.join(baseTempDir, `dims_${maskId}.json`);
                     await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                     await fs.writeJson(dimsFile,   project.dimensions,   { spaces: 2 });
                     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                    pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                    pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
                 } else {
                     const s3Url = project.extractedfolderpath;
                     if (!s3Url) {
@@ -1265,11 +1294,11 @@ export async function recomputeBullseyeWithLandmarks(
                         continue;
                     }
                     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                    pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                    pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
                 }
 
                 const pythonOk = await new Promise<boolean>((resolve) => {
-                    exec(pythonCommand, (error, _stdout, stderr) => {
+                    execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                         if (error) {
                             logger.warn(`${serviceLocation}: [BullseyeLM] NIfTI generation failed for mask ${maskId}: ${stderr || error.message}`);
                             resolve(false);
@@ -1520,7 +1549,7 @@ export const generateAISegmentationForReconstruction = async (
 
         // 4. Generate NIfTI using Python script
         let pythonScriptPath: string;
-        let pythonCommand: string;
+        let pythonArgs: string[];
 
         if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
             // Use stored affine matrix approach (faster, no S3 download required)
@@ -1544,7 +1573,7 @@ export const generateAISegmentationForReconstruction = async (
             };
             logger.info(`${serviceLocation}: NIfTI generation parameters for project ${projectId}: ${JSON.stringify(niftiParams)}`);
 
-            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, localOutputSegmentationNiftiPath, affineMatrixFile, dimensionsFile, 'uint8', String(planeHeightForRLE), String(planeWidthForRLE)];
         } else {
             // Use download and extract approach (legacy)
             logger.info(`${serviceLocation}: No stored affine matrix found for reconstruction of project ${projectId}. Using download approach.`);
@@ -1556,14 +1585,14 @@ export const generateAISegmentationForReconstruction = async (
                 return { success: false, message: "Project has no associated S3 file path." };
             }
 
-            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, localOutputSegmentationNiftiPath, String(planeWidthForRLE), String(planeHeightForRLE), s3Url];
         }
 
         logger.info(`${serviceLocation}: Saving output - executing Python script for reconstruction NIfTI generation of project ${projectId}`);
-        logger.debug(`${serviceLocation}: Python command: ${pythonCommand}`);
+        logger.debug(`${serviceLocation}: Python command: python3 ${pythonArgs.join(' ')}`);
 
         const pythonResult = await new Promise<{ success: boolean; stdout?: string; stderr?: string; error?: string }>((resolve) => {
-            exec(pythonCommand, (error, stdout, stderr) => {
+            execFile('python3', pythonArgs, (error, stdout, stderr) => {
                 if (error) {
                     logger.error(`${serviceLocation}: Python script execution failed for reconstruction of project ${projectId}: ${error.message}`);
                     logger.error(`${serviceLocation}: Python stderr: ${stderr}`);
