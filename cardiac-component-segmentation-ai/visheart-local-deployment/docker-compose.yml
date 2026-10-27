@@ -118,7 +118,7 @@ services:
       SMTP_PORT: "465"
       SMTP_SECURE: "true"
       SMTP_USER: "meiqiliew334@gmail.com"
-      SMTP_PASS: "ekqd vdiq bvwg kldk"
+      SMTP_PASS: "ysyy fkyn xsoz jhvf"
     depends_on:
       mongodb:
         condition: service_healthy

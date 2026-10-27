@@ -1,8 +1,9 @@
 import { figureNumber, type ContentBlock, type GuideSection } from "@/content/medicalGuide";
 import { Callout } from "@/components/doc/medical/Callout";
-import { ClaimParagraphs } from "@/components/doc/medical/Citation";
+import { ClaimParagraphs, ClaimText } from "@/components/doc/medical/Citation";
 import { ConditionGrid } from "@/components/doc/medical/ConditionCard";
 import { ContentText } from "@/components/doc/medical/ContentText";
+import { DiseasePatternTable } from "@/components/doc/medical/DiseasePatternTable";
 import { FigureSlot } from "@/components/doc/medical/FigureSlot";
 import { ReferenceRangeTable } from "@/components/doc/medical/ReferenceRangeTable";
 import { TwoLayerSection } from "@/components/doc/medical/TwoLayerSection";
@@ -14,6 +15,15 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
       return (
         <Callout variant={block.variant} title={<ContentText text={block.title} />}>
           <ClaimParagraphs claims={block.body} />
+          {block.list && block.list.length > 0 && (
+            <ul className="list-disc space-y-1 pl-4">
+              {block.list.map((claim, index) => (
+                <li key={index}>
+                  <ClaimText claim={claim} />
+                </li>
+              ))}
+            </ul>
+          )}
         </Callout>
       );
     case "rangeTable":
@@ -24,6 +34,8 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
       return <VideoSlot {...block} number={figureNumber(block)} />;
     case "conditions":
       return <ConditionGrid conditions={block.conditions} note={block.note} />;
+    case "patternTable":
+      return <DiseasePatternTable {...block} />;
   }
 }
 
