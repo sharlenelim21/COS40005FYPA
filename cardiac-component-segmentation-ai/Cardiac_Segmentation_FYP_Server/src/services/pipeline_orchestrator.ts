@@ -220,8 +220,11 @@ async function refreshInFlightStep(projectId: string, step: IPipelineStep): Prom
     const staleMinutes = step.kind === "seg" ? STALE_MINUTES.seg[step.model ?? "medsam"]
         : step.kind === "recon" ? STALE_MINUTES.recon
         : STALE_MINUTES.landmark;
-    if (ageMs(startedAt) > staleMinutes * 60_000) {
-        return { status: "failed", note: `No completion received for ${what} within ${staleMinutes} min (GPU callback lost?).` };
+    // Measure from the job's last update, not the step start: the GPU reports per-frame progress,
+    // which bumps updatedAt, and a CPU-only 4D reconstruction takes ~2.5 h while still progressing.
+    const lastActivity = job.updatedAt && startedAt && new Date(job.updatedAt) > startedAt ? job.updatedAt : startedAt;
+    if (ageMs(lastActivity) > staleMinutes * 60_000) {
+        return { status: "failed", note: `No progress received for ${what} in ${staleMinutes} min (GPU callback lost?).` };
     }
     if (status && status !== step.status) return { status };
     return null;

@@ -301,8 +301,15 @@ export const saveFileAndPushToS3 = async (req: Request, res: Response) => {
             LogError(new Error("TAR file is empty"), serviceLocation, "TAR file is empty.");
             tarFileS3Url = "";
           } else {
+            // Destroy the stream whatever happens: if uploadToS3 throws before reading it, the finally
+            // below deletes the TAR, the lazy open fails with ENOENT, and that unhandled error kills Node.
             const tarFile = fs.createReadStream(actualTarFilePath);
-            tarFileS3Url = await uploadToS3(tarFile, userId, filehash, '.tar', s3KeyPrefix); // Upload TAR to the user's folder
+            tarFile.on('error', (streamError) => LogError(streamError, serviceLocation, "TAR read stream error."));
+            try {
+              tarFileS3Url = await uploadToS3(tarFile, userId, filehash, '.tar', s3KeyPrefix); // Upload TAR to the user's folder
+            } finally {
+              tarFile.destroy();
+            }
           }
         }
       } catch (error: unknown) {

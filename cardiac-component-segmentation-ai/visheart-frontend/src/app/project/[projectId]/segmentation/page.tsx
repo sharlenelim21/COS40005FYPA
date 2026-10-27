@@ -124,6 +124,12 @@ function SegmentationResultsPageInner() {
   // UI state
   const [activeLabel, setActiveLabel] = useState<AnatomicalLabel>("lvc");
   const [tool, setTool] = useState<DrawingTool>("brush");
+  // Bounding Box always calls MedSAM (medsam-inference-manual), whatever model is selected, and the
+  // CPU inference service skips loading MedSAM -- so the tool only works in NVIDIA GPU mode.
+  const boundingBoxDisabled = !gpuStatusLoading && !isGpuMode;
+  useEffect(() => {
+    if (boundingBoxDisabled && tool === "rectangle") setTool("brush");
+  }, [boundingBoxDisabled, tool]);
   const [brushSize, setBrushSize] = useState<number>(10);
   const [opacity, setOpacity] = useState<number>(1);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -1397,6 +1403,7 @@ function SegmentationResultsPageInner() {
             onModelChange={handleModelSelect}
             isModelActive={hasMasks}
             isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
+            boundingBoxDisabled={boundingBoxDisabled}
           />
         </div>
       </div>
@@ -1533,6 +1540,7 @@ function SegmentationResultsPageInner() {
                 onModelChange={handleModelSelect}
                 isModelActive={hasMasks}
                 isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
+                boundingBoxDisabled={boundingBoxDisabled}
               />
             </div>
           </ResizablePanel>
