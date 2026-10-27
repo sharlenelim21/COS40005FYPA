@@ -54,7 +54,16 @@ export function DiseasePatternSimilarityPage({
             </span>
           </div>
           <div className="flex flex-col gap-1.5">
-            {patternGates.gates.map((g) => {
+            {/* RV NOR and RV (Abnormal) are the same chamber's two sides of one question —
+                once one is conclusively met, hide the other rather than showing a
+                contradictory-looking pair; show both when neither is conclusively met yet. */}
+            {patternGates.gates
+              .filter((g) => {
+                if (g.code === "RV" && patternGates.gates.find((x) => x.code === "NOR_RV")?.met === true) return false;
+                if (g.code === "NOR_RV" && patternGates.gates.find((x) => x.code === "RV")?.met === true) return false;
+                return true;
+              })
+              .map((g) => {
               const isSecondaryMet = g.met === true && g.rank_label === "Also meets";
               return (
               <div key={g.code} className="rounded border border-gray-200 p-1.5">
@@ -90,7 +99,7 @@ export function DiseasePatternSimilarityPage({
                 </div>
                 <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
                   {g.reasons.map((r, i) => {
-                    const isPartialNote = r.startsWith("Resolved as ") || r.startsWith("Cannot resolve to");
+                    const isPartialNote = r.startsWith("Resolved from ") || r.startsWith("Pending — the missing");
                     return (
                       <li key={i} className={isPartialNote ? "text-[9px] font-semibold text-red-700" : "text-[9px] text-gray-600"}>
                         {r}

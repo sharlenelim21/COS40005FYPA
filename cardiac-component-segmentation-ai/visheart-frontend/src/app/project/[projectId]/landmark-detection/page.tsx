@@ -147,9 +147,10 @@ export default function LandmarkDetectionPage() {
   const activeModel: "unet" | "medsam" =
     modelParam === "medsam" ? "medsam"
     : modelParam === "unet" ? "unet"
-    // No explicit choice in the URL: prefer UNet, but only when it's actually available —
-    // fall back to MedSAM if UNet has no mask for this project yet. Before existingSegModels
-    // has loaded (both false), this still reads as "unet", matching the old hardcoded default.
+    // No explicit choice in the URL yet: this initial synchronous value still prefers UNet
+    // (matching the old hardcoded default) for the first render only — autoPickedMaskModel
+    // below corrects it to whichever model's mask is actually most recent as soon as that
+    // data loads, and writes the result back into the URL so this branch is skipped after.
     : existingSegModels.unet ? "unet"
     : existingSegModels.medsam ? "medsam"
     : "unet";
@@ -1129,6 +1130,35 @@ export default function LandmarkDetectionPage() {
     }
   }, [activeModel, resultsByModel]);
 
+  // On first load with NO model in the URL, before any strain series exists yet for
+  // either model (so autoPickedSeriesModel below has nothing to go on), default to
+  // whichever model's editable mask was most recently created — e.g. the model that
+  // was just run via the one-click pipeline — rather than a hardcoded UNet preference.
+  // Without this, running MedSAM's landmark detection but landing here with no ?model=
+  // silently showed UNet's (older) mask/results instead whenever a UNet mask also
+  // existed for the project (reported live, 2026-10). Mongo ObjectIds are monotonic by
+  // creation time, so a plain string compare orders them without needing a timestamp
+  // field on the wire — same technique useProjectResults' own newerMaskAvailable uses.
+  // Superseded by autoPickedSeriesModel below once strain data exists for one model, a
+  // stronger signal of current interest than raw mask recency.
+  const autoPickedMaskModel = useRef(false);
+  useEffect(() => {
+    if (autoPickedMaskModel.current) return;
+    if (searchParams.get("model")) { autoPickedMaskModel.current = true; return; }
+    const unetId = resultsByModel?.unet?._id;
+    const medsamId = resultsByModel?.medsam?._id;
+    if (!unetId && !medsamId) return;
+    const preferred: "unet" | "medsam" =
+      unetId && medsamId
+        ? (String(medsamId) > String(unetId) ? "medsam" : "unet")
+        : unetId ? "unet" : "medsam";
+    autoPickedMaskModel.current = true;
+    if (preferred !== activeModel) {
+      setActiveModel(preferred);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultsByModel?.unet?._id, resultsByModel?.medsam?._id]);
+
   // On first load with NO model in the URL, land on a model that actually has
   // per-frame data (or the most recently computed when both do). When the URL
   // already names a model — e.g. after a reload — that choice wins and this is
@@ -1191,6 +1221,14 @@ export default function LandmarkDetectionPage() {
   // keeps the RV view's orientation stable across frames instead of
   // wobbling as LV's own per-frame alignment shifts.
   const lvAlignmentReconstruction = reconstructionsByModel?.[activeModel] ?? null;
+
+  // Warm the LV reconstruction's motion build as soon as the page loads, the same way
+  // structureRvMesh above does for RV. Without this, LV's motion only starts building
+  // once AhaBullseyePanel itself mounts (i.e. once the user opens the Structure tab),
+  // so on that tab's first visit LV is never ready yet while RV (already warm from
+  // page load) usually is — reported live, 2026-10-26.
+  useMotionMesh(lvAlignmentReconstruction, activeModel, strainPlaybackFrame);
+
   const [structureLvAlignmentMeshUrl, setStructureLvAlignmentMeshUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;

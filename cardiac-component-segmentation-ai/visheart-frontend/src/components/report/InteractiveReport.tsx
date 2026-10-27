@@ -1419,16 +1419,10 @@ export function InteractiveReport({
                       </tbody>
                     </table>
                     <p className="mt-2 text-[9px] leading-snug text-muted-foreground">
-                      RVEF, RVEDVI and RVESVI are compared with sex-specific SCMR 2025 reference ranges
-                      (papillary muscles and trabeculations counted as blood pool) — within or outside the
-                      range, not a severity grade; hover a verdict for the full reason. With no sex selected
-                      each value is checked against both sexes: green and amber mean both agree, grey means the
-                      verdict depends on sex. Indexing needs height and weight above. The ARVC criteria in the
-                      RV patterns card below overlap this normal range in men (RVEDVI ≥ 110 mL/m² lies inside
-                      47–116) and apply only with a regional RV wall-motion abnormality. Peak GCS and Peak GAS
-                      both come from the 9-segment RV bullseye, but neither has a clinically validated
-                      RV-specific reference range yet.
-                      RV SV {fmt(rv?.RV_SV)} mL. Advisory only — RV findings never affect the LV grade above.
+                      RVEF, RVEDVI and RVESVI are compared with sex-specific reference ranges — within or
+                      outside range, not a severity grade. With no sex selected, values are checked against
+                      both sexes. Peak GCS and Peak GAS have no validated RV-specific reference range yet.
+                      RV SV {fmt(rv?.RV_SV)} mL. Advisory only — does not affect the LV grade above.
                     </p>
                     {rvCurrent && rvCurrent.warnings.length > 0 && (
                       <p className="mt-1 text-[9px] leading-snug text-muted-foreground">{rvCurrent.warnings.join(" ")}</p>
@@ -1677,7 +1671,20 @@ export function InteractiveReport({
                   </span>
                 </div>
                 <div className="flex flex-col gap-2">
-                  {patternGates.gates.map((g) => {
+                  {/* RV NOR and RV (Abnormal) are the same chamber's two sides of one
+                      question — once one of them is conclusively resolved (met), showing
+                      the other too just repeats the same verdict with a contradictory-
+                      looking badge (e.g. a green "Met" NOR next to an amber "Pending"
+                      Abnormal). Hide whichever one the other has already settled; when
+                      neither is conclusively met yet, show both so no partial evidence is
+                      lost. */}
+                  {patternGates.gates
+                    .filter((g) => {
+                      if (g.code === "RV" && patternGates.gates.find((x) => x.code === "NOR_RV")?.met === true) return false;
+                      if (g.code === "NOR_RV" && patternGates.gates.find((x) => x.code === "RV")?.met === true) return false;
+                      return true;
+                    })
+                    .map((g) => {
                     const isSecondaryMet = g.met === true && g.rank_label === "Also meets";
                     return (
                     <div key={g.code} className="rounded-md border border-border p-2">
@@ -1732,7 +1739,7 @@ export function InteractiveReport({
                       </div>
                       <ul className="mt-1 flex flex-col gap-0.5">
                         {g.reasons.map((r, i) => {
-                          const isPartialNote = r.startsWith("Resolved as ") || r.startsWith("Cannot resolve to");
+                          const isPartialNote = r.startsWith("Resolved from ") || r.startsWith("Pending — the missing");
                           return (
                             <li
                               key={i}
@@ -1764,18 +1771,18 @@ export function InteractiveReport({
                       RV gate met — severity context
                     </p>
                     <ul className="flex flex-col gap-1">
-                      <li className="flex gap-1 text-[10.5px] leading-snug text-foreground">
+                      <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
                         <span className="text-muted-foreground/50">•</span>
                         <span>{patternGates.rv_severity.ratio_note}</span>
                       </li>
                       {patternGates.rv_severity.arvc_note && (
-                        <li className="flex gap-1 text-[10.5px] leading-snug text-foreground">
+                        <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
                           <span className="text-muted-foreground/50">•</span>
                           <span>{patternGates.rv_severity.arvc_note}</span>
                         </li>
                       )}
                       {patternGates.rv_severity.pah_note && (
-                        <li className="flex gap-1 text-[10.5px] leading-snug text-foreground">
+                        <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
                           <span className="text-muted-foreground/50">•</span>
                           <span>{patternGates.rv_severity.pah_note}</span>
                         </li>

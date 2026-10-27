@@ -1038,7 +1038,7 @@ export const computeBullseyeAndStore = async (
                 logger.warn(`${serviceLocation}: [Bullseye] Keeping stored bullseye for mask ${maskId} — local fallback is not landmark-aligned.`);
                 return;
             }
-            const frames = (maskDoc as any)?.frames ?? [];
+            const frames = edFrameOnly(maskDoc as any)?.frames ?? [];
             if (!frames.length) {
                 logger.warn(`${serviceLocation}: [Bullseye] No frame data on mask ${maskId} — cannot fall back to local computation.`);
                 return;
@@ -1057,6 +1057,30 @@ export const computeBullseyeAndStore = async (
         }
     }
 };
+
+/**
+ * A mask doc with `frames` restricted to its own ED frame. The GPU's
+ * /bullseye/analyze route collapses a 4-D NIfTI by taking the MAX label per
+ * voxel across every frame on its frame axis, rather than selecting one
+ * (bullseye_route.py's _load_nifti_bytes: "arr = arr.max(axis=-1)") — so a
+ * NIfTI built from a mask's full cardiac cycle (as both call sites below
+ * used to send, via `fs.writeJson(segJsonPath, [maskDoc], ...)` with no
+ * frame filtering) is analysed as the UNION of every frame's myocardium
+ * position, not the single end-diastole frame DCM/HCM's wall-thickness gates
+ * need — the ring appears to sweep through its whole range of motion, well
+ * past its true ED thickness. Reported live, 2026-10: patient005's MedSAM
+ * mask read 12.9mm wall thickness this way vs 7.7mm measured from its ED
+ * frame alone. Restricting to ED before the NIfTI is built keeps the file
+ * 3-D in practice (one frame), so the GPU's max-across-frames collapse is a
+ * no-op instead of a silent motion blur.
+ */
+function edFrameOnly(maskDoc: any): any {
+    const edFrame = typeof maskDoc?.heartMetrics?.ed_frame === "number" ? maskDoc.heartMetrics.ed_frame : null;
+    if (edFrame === null) return maskDoc;
+    const frames = (maskDoc.frames ?? []).filter((f: any) => f.frameindex === edFrame);
+    if (!frames.length) return maskDoc;
+    return { ...maskDoc, frames };
+}
 
 /**
  * Live-route entry point for the plain Bullseye tab: generates a temporary
@@ -1091,7 +1115,7 @@ export const generateNiftiAndComputeBullseye = async (
         }
 
         await fs.ensureDir(baseTempDir);
-        await fs.writeJson(segJsonPath, [maskDoc], { spaces: 2 });
+        await fs.writeJson(segJsonPath, [edFrameOnly(maskDoc)], { spaces: 2 });
 
         let pythonCommand: string;
         if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
@@ -1124,7 +1148,7 @@ export const generateNiftiAndComputeBullseye = async (
 
         if (!pythonOk || !(await fs.pathExists(niftiPath))) {
             logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI not produced for mask ${maskId} — falling back to subprocess RLE path`);
-            const frames = (maskDoc as any).frames ?? [];
+            const frames = edFrameOnly(maskDoc as any).frames ?? [];
             if (frames.length) {
                 await computeBullseyeFromMaskDoc(maskId, frames, W, H, projectId);
             }
@@ -1224,7 +1248,7 @@ export async function recomputeBullseyeWithLandmarks(
 
             try {
                 // 4a. Generate NIfTI from RLE frames
-                await fs.writeJson(segJsonPath, [mask], { spaces: 2 });
+                await fs.writeJson(segJsonPath, [edFrameOnly(mask)], { spaces: 2 });
 
                 let pythonCommand: string;
                 if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
@@ -1610,10 +1634,12 @@ export const generateAISegmentationForReconstruction = async (
                 continue;
             }
 
-            // Use each mask's own RLE frame data (not the shared reconstruction NIfTI)
+            // Use each mask's own RLE frame data (not the shared reconstruction NIfTI). Bullseye wants
+            // the ED frame only (edFrameOnly) -- heartMetrics below still gets the full maskFrames, which
+            // it needs for EDV/ESV/EF across the cycle.
             (hasLandmarkAlignment
                 ? generateNiftiAndComputeBullseye(editableMaskForBullseye, project, bullseyeMaskId)
-                : computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE)
+                : computeBullseyeFromMaskDoc(bullseyeMaskId, edFrameOnly(editableMaskForBullseye).frames ?? maskFrames, planeWidthForRLE, planeHeightForRLE)
             ).catch((err: any) => {
                 logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
             });

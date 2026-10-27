@@ -616,15 +616,17 @@ export interface IProjectSegmentationMask {
   /**
    * Unified LV+RV Disease Pattern Similarity Assessment — NOT a diagnosis.
    * Produced by compute_disease_pattern_gates.py. Each of ACDC's 5 diagnostic
-   * groups (NOR/MINF/DCM/HCM/RV) is its own independent gate (met/not-met/
-   * pending), since RV uses a different feature space than the 4 LV groups
-   * and can't honestly share one ranked score with them. A patient can meet
-   * zero, one, or more than one gate — see the Python module's own docstring
-   * for full method/citation detail.
+   * groups is its own independent gate (met/not-met/pending) — NOR is split
+   * into NOR_LV and NOR_RV (so a report can tell which chamber actually
+   * failed), giving 6 gates total (NOR_LV/NOR_RV/MINF/DCM/HCM/RV). RV uses a
+   * different feature space than the 4 LV groups and can't honestly share
+   * one ranked score with them. A patient can meet zero, one, or more than
+   * one gate — see the Python module's own docstring for full method/
+   * citation detail.
    */
   diseasePatternGates?: {
     gates: {
-      code: "NOR" | "MINF" | "DCM" | "HCM" | "RV";
+      code: "NOR_LV" | "NOR_RV" | "MINF" | "DCM" | "HCM" | "RV";
       label: string;
       met: boolean | null;     // null = not enough data to decide (pending) — never treat as false
       reasons: string[];       // plain-language per-criterion explanation

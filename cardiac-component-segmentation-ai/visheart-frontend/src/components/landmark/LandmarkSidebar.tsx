@@ -1804,6 +1804,7 @@ function StrainTab({
             seriesProgress={seriesProgress}
             onRunFullCycle={runStrainSeries}
             hasFullCycleResult={usingRealSeries || usingRealRvSeries}
+            strainIsStale={strainIsStale}
           />
         )}
       </div>
@@ -1843,6 +1844,7 @@ function StrainTab({
           seriesProgress={seriesProgress}
           onRunFullCycle={runStrainSeries}
           hasFullCycleResult={usingRealSeries || usingRealRvSeries}
+          strainIsStale={strainIsStale}
         />
       )}
 
@@ -1876,26 +1878,16 @@ function StrainTab({
       <>
       {/* Landmarks define the AHA segment alignment, so editing them invalidates
           previously-computed strain. The backend stamps `staleSince` on save
-          rather than auto-recomputing (the series is one GPU pass per frame). */}
+          rather than auto-recomputing (the series is one GPU pass per frame).
+          The action itself lives on ComputeStrainCard's single recompute button
+          (below) — this is just the indication, so the card isn't duplicated
+          with a second button that does the exact same thing. */}
       {strainIsStale && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
           <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
             <span className="font-semibold">Landmarks edited</span> since this strain was computed —
-            the segment alignment has changed, so these values are out of date.
+            the segment alignment has changed, so these values are out of date. Use Recompute above.
           </p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="mt-2 h-7 w-full text-[10px]"
-            disabled={seriesBusy || !!strainCompute?.segmentationRunning}
-            title={strainCompute?.segmentationRunning ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined}
-            onClick={runStrainSeries}
-          >
-            {seriesBusy
-              ? <ComputeBusyLabel verb="Recomputing" frames={frameCount} progress={seriesProgress} />
-              : `Recompute all frames with current landmarks (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
-          </Button>
-          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
         </div>
       )}
 
@@ -2196,6 +2188,7 @@ function ComputeStrainCard({
   seriesProgress,
   onRunFullCycle,
   hasFullCycleResult,
+  strainIsStale,
 }: {
   strainCompute: StrainComputeBundle;
   seriesBusy: boolean;
@@ -2203,6 +2196,8 @@ function ComputeStrainCard({
   seriesProgress?: number | null;
   onRunFullCycle: () => void;
   hasFullCycleResult: boolean;
+  /** Landmarks edited since the full-cycle result was computed — same button, just a note above it. */
+  strainIsStale?: boolean;
 }) {
   const edRef = React.useRef<HTMLInputElement>(null);
   const esRef = React.useRef<HTMLInputElement>(null);
@@ -2269,7 +2264,11 @@ function ComputeStrainCard({
         </div>
       )}
 
-      {hasScopeResult && (
+      {/* Full-cycle's own recompute lives on the single button below (Compute/Recompute all
+          frames) — showing it here too for "full" scope just duplicated the same action under
+          a second label. Quick keeps this one since its own compute button only appears once
+          "Choose frames"/"Upload masks" is picked below, not as a persistent top-level action. */}
+      {hasScopeResult && isQuick && (
         <span title={segTitle} className="block">
           <Button
             size="sm"
@@ -2279,10 +2278,8 @@ function ComputeStrainCard({
             onClick={onRecompute}
           >
             {recomputeBusy ? (
-              isQuick
-                ? <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Recomputing…</span>
-                : <ComputeBusyLabel verb="Recomputing" frames={sc.frameCount} progress={seriesProgress} />
-            ) : `Recompute strain (${isQuick ? "ED → ES" : "all frames"}, ${modelLabel})`}
+              <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Recomputing…</span>
+            ) : `Recompute strain (ED → ES, ${modelLabel})`}
           </Button>
         </span>
       )}
@@ -2480,9 +2477,19 @@ function ComputeStrainCard({
           <p className="text-[8.5px] leading-relaxed text-muted-foreground">
             Uses the auto-detected ED frame as reference — no frame picker or upload needed for the full cycle.
           </p>
+          {/* Landmarks edited since the last full-cycle compute: same button below handles it,
+              this is just the indication (see the parent's strainIsStale note for why there's no
+              second button here). */}
+          {strainIsStale && hasFullCycleResult && (
+            <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
+              <span className="font-semibold">Landmarks edited</span> since this was computed — recompute to realign.
+            </p>
+          )}
           <span title={segTitle} className="block">
           <Button size="sm" variant="outline" className="h-7 w-full text-[10px]" disabled={seriesBusy || segBlocked} onClick={onRunFullCycle}>
-            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} progress={seriesProgress} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
+            {seriesBusy
+              ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} />
+              : `${hasFullCycleResult ? "Recompute" : "Compute"} all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
           </span>
           {seriesError && <p className="text-[9px] text-destructive">{seriesError}</p>}

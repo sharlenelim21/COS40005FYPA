@@ -50,7 +50,12 @@ HCM below):
     DCM  : "ejection fraction below 40%, a LV volume greater than 100 mL/m2
            and a wall thickness in diastole smaller than 12 mm." The website
            summary omits the wall-thickness bound; the paper states it as a
-           defining criterion, not an aside.
+           defining criterion, not an aside. This module widens that <12mm
+           bound to a union with this project's own ACDC-ground-truth- and
+           system-derived DCM-group wall-thickness maxima (12.02mm/12.28mm,
+           2026-10, re-derived after fixing a wall-thickness ray-casting
+           centroid bug — see _DCM_WALL_MM_MAX below), the same union rule
+           NOR's ranges already use.
     HCM  : "a normal cardiac function (ejection fraction greater than 55%)
            but with myocardial segments thicker than 15 mm in diastole."
            Cardiac mass (LVMI) is explicitly NOT one of the defining
@@ -254,11 +259,11 @@ Output (stdout JSON):
     gates — [{code, label, met: true|false|null, reasons: list[str],
                criterion_text: str, validation_note: str|None, rank_label:
                "Primary match"|"Also meets"|null}], one entry per ACDC group,
-               IN ORDER NOR, MINF, DCM, HCM, RV. met is None/null when there
+               IN ORDER NOR_LV, NOR_RV, MINF, DCM, HCM, RV. met is None/null when there
                isn't enough data to decide (pending) — a caller MUST NOT
                treat null as False. validation_note is present on MINF/DCM/
-               HCM/RV (null/absent on NOR, whose own criterion_text already
-               names its 3 sources) — a static, dataset-level pipeline-
+               HCM/RV (null/absent on NOR_LV/NOR_RV, whose own criterion_text
+               already names its 3 sources) — a static, dataset-level pipeline-
                accuracy note (ground-truth-derived vs. this app's own
                deployed-model-derived stats for that gate's feature(s), see
                _PILOT_VALIDATION_NOTES), NOT derived from this one patient
@@ -323,7 +328,31 @@ _RV_CAVITY_CLASS = "rv"
 _MINF_EF_MAX = 40.0
 _DCM_EDVI_MIN = 100.0
 _DCM_EF_MAX = 40.0
-_DCM_WALL_MM_MAX = 12.0  # Bernard et al. 2018 — distinguishes DCM's thin-ish wall from HCM's thickened one
+# Widened to the union of THREE sources, same rule as NOR's ranges (see _NOR_LV_CRITERION_TEXT
+# above) — reported live, 2026-10: a real ACDC ground-truth-labelled DCM patient (wall 12.02mm
+# by this project's own measurement pipeline) and a system-derived UNet+QC DCM patient (wall
+# 12.28mm) both narrowly exceed Bernard et al. 2018's own literal <12mm, even though both are
+# genuinely DCM by ACDC's own label — the same "measurement-convention mismatch, not a wrong
+# patient" reasoning NOR's own union already documents, now confirmed for DCM's wall-thickness
+# criterion specifically (its validation note previously only checked EDVI/EF, never wall):
+#   1. Bernard et al. 2018 (see citation above): < 12.0 mm.
+#   2. Ground-truth-derived: this project's own measurement pipeline run against the ACDC
+#      Challenge training set's 20 ground-truth-labelled DCM patients (n=20) —
+#      scripts/derive_acdc_reference_ranges.py — max 12.02 mm.
+#   3. System-derived: this project's own deployed segmentation model (UNet) output after
+#      manual QC/correction (n=10 of those 20) — scripts/derive_system_reference_ranges.js —
+#      max 12.28 mm.
+# Union (widest) = 12.28 mm, from source #3.
+#
+# Both numbers moved down from an earlier pass (12.11mm/12.54mm, also 2026-10) after fixing
+# compute_bullseye_from_rle.py's compute_centroid: it centred each slice's wall-thickness rays
+# on the MYOCARDIUM's own centroid, which the GPU's own bullseye_analysis.py (this script's
+# reference implementation) deliberately avoids doing, by its own documented design — a
+# myocardium mask can carry small disconnected mislabeled blobs the LV cavity mask is far less
+# prone to, and an all-myocardium-pixel centroid gets pulled toward them, which then measures
+# the ring at a tangent on one side and foreshortened on the other instead of radially. Fixed to
+# match the GPU's own default (LV cavity, class 3) and re-ran both derivation scripts.
+_DCM_WALL_MM_MAX = 12.28
 _HCM_WALL_MM_MIN = 15.0
 _HCM_EF_MIN = 55.0  # Bernard et al. 2018's own HCM threshold (was a borrowed ">=50%" preserved-EF convention)
 _HCM_LVMI_INFORMATIONAL = 110.0  # NOT gating — see comment above; "can present" values above this, per the paper
@@ -416,7 +445,11 @@ _PILOT_VALIDATION_NOTES: dict[str, str] = {
         "Pipeline validation: ACDC's own 20 ground-truth-labelled DCM patients averaged EDVI 153.3 mL/m^2 "
         "and EF 18.4% (ground-truth masks) vs 155.7 mL/m^2 and 16.2% measured by this app's own "
         "segmentation model after manual QC/correction (n=10 of those 20) — both clearly past the "
-        ">100 mL/m^2 / <40% cutoffs above, confirming agreement with the official ground truth."
+        ">100 mL/m^2 / <40% cutoffs above, confirming agreement with the official ground truth. Wall "
+        "thickness averaged 10.0mm (ground-truth masks, max 12.02mm) vs 11.0mm (system-derived, max "
+        "12.28mm) — both close to, and at the high end slightly past, Bernard's own <12mm bound, which "
+        "is exactly why this gate's wall-thickness criterion above is widened to the union of all three "
+        "sources rather than used as the paper's literal number alone (see _DCM_WALL_MM_MAX)."
     ),
     "HCM": (
         "Pipeline validation: ACDC's own 20 ground-truth-labelled HCM patients averaged LVMI 92.2 g/m^2 "
@@ -490,7 +523,10 @@ _REFERENCE_SOURCE = (
     "own measurement of the ACDC Challenge training set's 20 ground-truth NOR patients "
     "(scripts/derive_acdc_reference_ranges.py); and this project's own deployed segmentation "
     "model's output after manual QC/correction, 10 NOR patients (scripts/derive_system_"
-    "reference_ranges.js). LVMI has no number in the paper, so its NOR/HCM literature "
+    "reference_ranges.js). DCM gate: same union rule applied to its wall-thickness bound only "
+    "(EDVI/EF stay at the paper's own numbers) — the paper's <12mm widened to this project's own "
+    "ACDC ground-truth DCM-group max (12.02mm) and system-derived DCM-group max (12.28mm), same "
+    "two scripts as NOR. LVMI has no number in the paper, so its NOR/HCM literature "
     "component is still Zhan et al. 2024, Circulation: Cardiovascular Imaging "
     "2024;17(2):e016090 (HCM: informational only, not gating — see module docstring). RV "
     "severity secondary note: Kubler et al. 2021, Int J Cardiovasc Imaging 2021;37:2501-2515 "
@@ -527,29 +563,27 @@ def _within_range(v: float, lo: float, hi: float) -> bool:
     return lo <= v <= hi
 
 
-# ── NOR gate ─────────────────────────────────────────────────────────────────
-# Checks BOTH chambers now (previously LV features only) — Bernard et al.
-# 2018's own NOR definition requires a normal RV too ("The RV is normal for
-# each patient"), and reporting NOR from LV alone could misleadingly read as
-# "the whole heart is normal" when the RV was never actually assessed
-# (reported live, 2026-10).
-_NOR_CRITERION_TEXT = (
-    "Bernard et al. 2018 (ACDC's own defining paper): EF > 50%, wall thickness in diastole < 12mm, "
-    "EDVI < 90 mL/m^2 (men) / < 80 mL/m^2 (women), RVEDVI < 100 mL/m^2, RVEF > 40% — this module widens "
-    "every bound to the union of that paper, this project's own ACDC-ground-truth-derived ranges, and "
-    "this project's own deployed-model (UNet, manually QC'd) derived ranges (LVMI has no number in the "
-    "paper, so its literature component is still Zhan et al. 2024's meta-analysis)."
-)
+# ── NOR gates ────────────────────────────────────────────────────────────────
+# Split into two independent per-chamber gates (NOR_LV, NOR_RV) — an earlier
+# version of this module reported a single combined "NOR" gate covering both
+# chambers' features at once, which meant a patient whose LV alone failed
+# (the RV being genuinely normal) and a patient whose RV alone failed looked
+# identical in the output: one "NOR: Not met" entry with no way to tell, at a
+# glance, which chamber was actually the problem without reading every reason
+# line. Bernard et al. 2018's own NOR definition requires a normal RV too
+# ("The RV is normal for each patient"), so NOR_RV is still exactly that same
+# RV criterion (not a new one) — just reported as its own gate instead of
+# folded into NOR_LV's verdict (reported live, 2026-10).
+_NOR_LV_CRITERION_TEXT = "EF > 50%, wall thickness < 12mm, EDVI < 90 mL/m² (men) / 80 mL/m² (women)."
+_NOR_RV_CRITERION_TEXT = "RVEDVI < 100 mL/m², RVEF > 40%."
 
 
-def _gate_nor(lv: dict, rv: dict, sex: str) -> dict:
+def _gate_nor_lv(lv: dict, sex: str) -> dict:
     lv_features = (("EF", "EF"), ("EDVI", "EDVI"), ("LVMI", "LVMI"), ("MaxWallThicknessMm", "Wall thickness"))
-    rv_features = (("RVEDVI", "RVEDVI"), ("RVEF", "RVEF"))
-    have = [f for f, _ in lv_features if lv.get(f) is not None] + [f for f, _ in rv_features if rv.get(f) is not None]
-    if not have:
-        return {"code": "NOR", "label": "NOR (Normal)", "met": None,
-                "reasons": ["No EF, EDVI, LVMI, wall thickness, RVEDVI, or RVEF available to assess."],
-                "criterion_text": _NOR_CRITERION_TEXT}
+    if not any(lv.get(f) is not None for f, _ in lv_features):
+        return {"code": "NOR_LV", "label": "LV NOR (Normal)", "met": None,
+                "reasons": ["No EF, EDVI, LVMI, or wall thickness available to assess."],
+                "criterion_text": _NOR_LV_CRITERION_TEXT}
 
     table = _ADULT_NORMAL_RANGES.get(sex)
     reasons: list[str] = []
@@ -567,6 +601,20 @@ def _gate_nor(lv: dict, rv: dict, sex: str) -> dict:
             f"{label} {v:.1f} is {'within' if in_range else 'outside'} the normal range "
             f"({lo:.2f}-{hi:.2f}{', pooled' if not table else ''})."
         )
+    met = all_in_range if checked_any else None
+    return {"code": "NOR_LV", "label": "LV NOR (Normal)", "met": met, "reasons": reasons, "criterion_text": _NOR_LV_CRITERION_TEXT}
+
+
+def _gate_nor_rv(rv: dict) -> dict:
+    rv_features = (("RVEDVI", "RVEDVI"), ("RVEF", "RVEF"))
+    if not any(rv.get(f) is not None for f, _ in rv_features):
+        return {"code": "NOR_RV", "label": "RV NOR (Normal)", "met": None,
+                "reasons": ["No RVEDVI or RVEF available to assess."],
+                "criterion_text": _NOR_RV_CRITERION_TEXT}
+
+    reasons: list[str] = []
+    all_in_range = True
+    checked_any = False
     for feature, label in rv_features:
         v = rv.get(feature)
         if v is None:
@@ -577,11 +625,11 @@ def _gate_nor(lv: dict, rv: dict, sex: str) -> dict:
         all_in_range = all_in_range and in_range
         reasons.append(f"{label} {v:.1f} is {'within' if in_range else 'outside'} the normal range ({lo:.2f}-{hi:.2f}).")
     met = all_in_range if checked_any else None
-    return {"code": "NOR", "label": "NOR (Normal)", "met": met, "reasons": reasons, "criterion_text": _NOR_CRITERION_TEXT}
+    return {"code": "NOR_RV", "label": "RV NOR (Normal)", "met": met, "reasons": reasons, "criterion_text": _NOR_RV_CRITERION_TEXT}
 
 
 # ── MINF gate ────────────────────────────────────────────────────────────────
-def _gate_minf(lv: dict, regional_segments: Optional[list]) -> dict:
+def _gate_minf(lv: dict, regional_segments: Optional[list], sex: str) -> dict:
     ef = lv.get("EF")
     reasons: list[str] = []
 
@@ -594,14 +642,28 @@ def _gate_minf(lv: dict, regional_segments: Optional[list]) -> dict:
 
     if regional_segments is None:
         regional_met: Optional[bool] = None
-        reasons.append("No regional (per-segment) contraction assessment available — run the regional health status check to assess this part of the criterion.")
+        reasons.append("Regional contraction assessment not available.")
     else:
         abnormal = [s for s in regional_segments if s.get("level") in ("moderate", "severe")]
         regional_met = len(abnormal) >= 1
-        reasons.append(
-            f"{len(abnormal)} of {len(regional_segments)} LV segment(s) show moderate/severe contraction abnormality "
-            f"({'meets' if regional_met else 'does not meet'} the 'abnormal regional contraction' part of the criterion)."
-        )
+        reasons.append(f"{len(abnormal)} of {len(regional_segments)} LV segment(s) show moderate/severe contraction abnormality.")
+
+    # Informational only, not gating — Bernard et al. 2018: "Some [MINF] subjects have a
+    # high diastolic LV volume due to a remodeling of the LV to compensate for the
+    # myocardial infarction." Same pattern as HCM's LVMI note below: shown when available,
+    # never decides met/not-met. Reuses DCM's own EDVI>100 threshold as the "high" cutoff
+    # since the paper gives MINF no number of its own.
+    edvi, edvi_estimated = lv.get("EDVI"), False
+    if edvi is None and lv.get("EDV") is not None:
+        edvi = lv["EDV"] / _reference_bsa(sex)
+        edvi_estimated = True
+    if edvi is not None:
+        edvi_reason = f"EDVI {edvi:.1f} mL/m^2 is {'above' if edvi > _DCM_EDVI_MIN else 'at or below'} {_DCM_EDVI_MIN:.0f} mL/m^2 (informational only)."
+        if edvi_estimated:
+            edvi_reason += " (Estimated — no BSA on file)."
+        reasons.append(edvi_reason)
+    else:
+        reasons.append("EDVI not available (informational only).")
 
     # Three-valued AND: a criterion that's definitely False already decides the
     # whole AND, regardless of whatever the still-missing one turns out to be —
@@ -614,7 +676,7 @@ def _gate_minf(lv: dict, regional_segments: Optional[list]) -> dict:
         met = False
         if ef_met is None or regional_met is None:
             resolved_from_partial_data = True
-            reasons.append("Resolved as not met from the available criterion alone — the still-missing one can't change an AND that already fails.")
+            reasons.append("Resolved from the available criterion alone.")
     elif ef_met is None or regional_met is None:
         met = None
     else:
@@ -626,7 +688,7 @@ def _gate_minf(lv: dict, regional_segments: Optional[list]) -> dict:
     # own score) — see "Co-firing LV gates" above.
     margin = (len(abnormal) / len(regional_segments)) if regional_segments else None
     result = {"code": "MINF", "label": "MINF (Systolic Heart Failure with Infarction)", "met": met, "reasons": reasons,
-              "criterion_text": f"ACDC: EF < {_MINF_EF_MAX:.0f}% and several myocardial segments with abnormal contraction (operationalised here as >=1 segment at moderate/severe — see module docstring for why no fixed count is used).",
+              "criterion_text": f"EF < {_MINF_EF_MAX:.0f}% and ≥1 LV segment with moderate/severe contraction abnormality. (EDVI shown below is informational only.)",
               "validation_note": _PILOT_VALIDATION_NOTES["MINF"],
               "_margin": margin}
     if resolved_from_partial_data:
@@ -642,10 +704,7 @@ def _gate_dcm(lv: dict, sex: str) -> dict:
         edvi = lv["EDV"] / _reference_bsa(sex)
         edvi_estimated = True
 
-    criterion_text = (
-        f"Bernard et al. 2018: EDVI > {_DCM_EDVI_MIN:.0f} mL/m^2, EF < {_DCM_EF_MAX:.0f}%, "
-        f"and wall thickness in diastole < {_DCM_WALL_MM_MAX:.0f} mm."
-    )
+    criterion_text = f"EDVI > {_DCM_EDVI_MIN:.0f} mL/m², EF < {_DCM_EF_MAX:.0f}%, wall thickness < {_DCM_WALL_MM_MAX:.2f} mm."
     edvi_met = (edvi > _DCM_EDVI_MIN) if edvi is not None else None
     ef_met = (ef < _DCM_EF_MAX) if ef is not None else None
     wall_met = (wall < _DCM_WALL_MM_MAX) if wall is not None else None
@@ -654,11 +713,7 @@ def _gate_dcm(lv: dict, sex: str) -> dict:
     if edvi is not None:
         edvi_reason = f"EDVI {edvi:.1f} mL/m^2 {'meets' if edvi_met else 'does not meet'} the > {_DCM_EDVI_MIN:.0f} mL/m^2 criterion."
         if edvi_estimated:
-            edvi_reason += (
-                f" Estimated from EDV using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
-                "this patient's own height/weight/BSA was not supplied, so treat this part with extra "
-                "caution and supply BSA for an accurate value."
-            )
+            edvi_reason += " (Estimated — no BSA on file)."
         reasons.append(edvi_reason)
     else:
         reasons.append("EDVI (and EDV, to estimate it) not available.")
@@ -667,7 +722,7 @@ def _gate_dcm(lv: dict, sex: str) -> dict:
     else:
         reasons.append("EF not available.")
     if wall is not None:
-        reasons.append(f"Max wall thickness {wall:.1f} mm {'meets' if wall_met else 'does not meet'} the < {_DCM_WALL_MM_MAX:.0f} mm criterion.")
+        reasons.append(f"Max wall thickness {wall:.1f} mm {'meets' if wall_met else 'does not meet'} the < {_DCM_WALL_MM_MAX:.2f} mm criterion.")
     else:
         reasons.append("MaxWallThicknessMm not available.")
 
@@ -684,7 +739,7 @@ def _gate_dcm(lv: dict, sex: str) -> dict:
         met = False
         if any(p is None for p in parts):
             resolved_from_partial_data = True
-            reasons.append("Resolved as not met from the available criteria alone — the still-missing one(s) can't change an AND that already fails.")
+            reasons.append("Resolved from the available criteria alone.")
     elif any(p is None for p in parts):
         met = None
     else:
@@ -714,13 +769,7 @@ def _gate_hcm(lv: dict, sex: str) -> dict:
         lvmi = lv["LVMassG"] / _reference_bsa(sex)
         lvmi_estimated = True
 
-    criterion_text = (
-        f"Bernard et al. 2018: normal cardiac function (EF > {_HCM_EF_MIN:.0f}%) with myocardial segments "
-        f"thicker than {_HCM_WALL_MM_MIN:.0f} mm in diastole. LVMI is NOT one of the paper's defining "
-        f"criteria — it says patients 'can present' LVMI above {_HCM_LVMI_INFORMATIONAL:.0f} g/m^2, an "
-        "incidental finding in some patients, not a requirement — so it's shown below for information only "
-        "and never decides whether this gate is met."
-    )
+    criterion_text = f"EF > {_HCM_EF_MIN:.0f}%, wall thickness > {_HCM_WALL_MM_MIN:.0f} mm. (LVMI shown below is informational only.)"
     wall_met = (wall > _HCM_WALL_MM_MIN) if wall is not None else None
     ef_met = (ef > _HCM_EF_MIN) if ef is not None else None
     lvmi_high = (lvmi > _HCM_LVMI_INFORMATIONAL) if lvmi is not None else None
@@ -735,18 +784,12 @@ def _gate_hcm(lv: dict, sex: str) -> dict:
     else:
         reasons.append("EF not available.")
     if lvmi is not None:
-        lvmi_reason = (
-            f"LVMI {lvmi:.1f} g/m^2 is {'above' if lvmi_high else 'at or below'} {_HCM_LVMI_INFORMATIONAL:.0f} g/m^2 "
-            "(informational only — not part of this gate's criteria, see above)."
-        )
+        lvmi_reason = f"LVMI {lvmi:.1f} g/m^2 is {'above' if lvmi_high else 'at or below'} {_HCM_LVMI_INFORMATIONAL:.0f} g/m^2 (informational only)."
         if lvmi_estimated:
-            lvmi_reason += (
-                f" Estimated from LV mass using a reference adult BSA ({_reference_bsa(sex):.2f} m^2) — "
-                "this patient's own height/weight/BSA was not supplied, so treat this part with extra caution."
-            )
+            lvmi_reason += " (Estimated — no BSA on file)."
         reasons.append(lvmi_reason)
     else:
-        reasons.append("LVMI (and LVMassG, to estimate it) not available — informational only, does not affect this gate.")
+        reasons.append("LVMI not available (informational only).")
 
     # Three-valued AND across the two REQUIRED criteria only (wall, EF) — see
     # MINF's identical comment above for the general rule: any one of them
@@ -758,7 +801,7 @@ def _gate_hcm(lv: dict, sex: str) -> dict:
         met = False
         if any(p is None for p in parts):
             resolved_from_partial_data = True
-            reasons.append("Resolved as not met from the available criterion alone — the still-missing one can't change an AND that already fails.")
+            reasons.append("Resolved from the available criterion alone.")
     elif any(p is None for p in parts):
         met = None
     else:
@@ -785,9 +828,8 @@ def _gate_rv(rv: dict, sex: str) -> dict:
     rvedvi, rvef = rv.get("RVEDVI"), rv.get("RVEF")
     rv_edvi_min = _RV_EDVI_MIN_BY_SEX.get(sex, _RV_EDVI_MIN_BY_SEX["male"])
     criterion_text = (
-        f"Bernard et al. 2018 (ARV): RVEDVI > {_RV_EDVI_MIN_BY_SEX['male']:.0f} mL/m^2 (men) / "
-        f"> {_RV_EDVI_MIN_BY_SEX['female']:.0f} mL/m^2 (women) or RVEF < {_RV_EF_MAX:.0f}%. "
-        "The paper attributes no specific named disease to this group."
+        f"RVEDVI > {_RV_EDVI_MIN_BY_SEX['male']:.0f} mL/m² (men) / {_RV_EDVI_MIN_BY_SEX['female']:.0f} mL/m² (women), "
+        f"or RVEF < {_RV_EF_MAX:.0f}%."
     )
     if rvedvi is None and rvef is None:
         return {"code": "RV", "label": "RV (Abnormal Right Ventricle)", "met": None,
@@ -819,10 +861,10 @@ def _gate_rv(rv: dict, sex: str) -> dict:
         met = True
         if edvi_met is None or ef_met is None:
             resolved_from_partial_data = True
-            reasons.append("Resolved as met from the available criterion alone — an OR only needs one side true.")
+            reasons.append("Resolved from the available criterion alone.")
     elif edvi_met is None or ef_met is None:
         met = None
-        reasons.append("Cannot resolve to 'not met' yet — the still-missing value could still meet its own criterion (this is an OR).")
+        reasons.append("Pending — the missing value could still meet its own half.")
     else:
         met = False
 
@@ -843,15 +885,12 @@ def _rv_severity(rv: dict, lv: dict) -> Optional[dict]:
         ratio = rv_edv / lv_edv
         acdc_mu, acdc_sd = _ACDC_RV_LV_RATIO
         nor_mu, _ = _ACDC_NOR_RV_LV_RATIO
-        z = (ratio - acdc_mu) / acdc_sd if acdc_sd > 1e-6 else 0.0
         ratio_note = (
-            f"RV/LV volume ratio {ratio:.2f} — "
-            f"{'above' if ratio > nor_mu else 'at or below'} ACDC's own normal-group average ({nor_mu:.2f}), "
-            f"and {'within' if abs(z) <= 1.0 else 'outside'} one SD of ACDC's own abnormal-RV-group average "
-            f"({acdc_mu:.2f} +/- {acdc_sd:.2f}) — this is a disease-agnostic volumetric comparison, not tied to any named condition."
+            f"RV/LV volume ratio {ratio:.2f} (ACDC normal-group average {nor_mu:.2f}, "
+            f"abnormal-group average {acdc_mu:.2f} ± {acdc_sd:.2f})."
         )
     else:
-        ratio_note = "RV/LV volume ratio not available (need both RV and LV end-diastolic volumes)."
+        ratio_note = "RV/LV volume ratio not available."
 
     arvc_note: Optional[str] = None
     rvedvi, rvesvi, rvef = rv.get("RVEDVI"), rv.get("RVESVI"), rv.get("RVEF")
@@ -862,12 +901,7 @@ def _rv_severity(rv: dict, lv: dict) -> Optional[dict]:
     if zs:
         mean_abs_z = sum(abs(z) for z in zs) / len(zs)
         if mean_abs_z <= _ARVC_NOTE_MAX_MEAN_ABS_Z:
-            arvc_note = (
-                "RV measurements sit close to a published ARVC cohort's own range "
-                f"(Kubler et al. 2021: RVEDVI {_ARVC_RVEDVI[0]:.0f}+/-{_ARVC_RVEDVI[1]:.0f}, "
-                f"RVESVI {_ARVC_RVESVI[0]:.0f}+/-{_ARVC_RVESVI[1]:.0f} mL/m^2, "
-                f"RVEF {_ARVC_RVEF[0]:.0f}+/-{_ARVC_RVEF[1]:.0f}%) — may be worth looking into ARVC specifically."
-            )
+            arvc_note = "RV measurements are close to a published ARVC cohort's range (Kubler et al. 2021) — may be worth investigating ARVC."
 
     pah_note: Optional[str] = None
     svi = rv.get("SVI")
@@ -880,14 +914,13 @@ def _rv_severity(rv: dict, lv: dict) -> Optional[dict]:
         high_risk_hits.append(f"RVESVI {rvesvi:.1f} mL/m^2 (>54)")
     if high_risk_hits:
         pah_note = (
-            "One or more values fall in the higher-risk band of the ESC/ERS 2022 PAH cMRI risk-stratification model "
-            f"(Humbert et al. 2023): {', '.join(high_risk_hits)} — may be worth looking into PAH-associated RV dysfunction. "
-            "Note: this is a prognostic risk band for already-diagnosed PAH, not a way to diagnose PAH from imaging alone."
+            f"{', '.join(high_risk_hits)} fall in the ESC/ERS 2022 PAH higher-risk band (Humbert et al. 2023) "
+            "— may be worth investigating PAH-associated RV dysfunction."
         )
 
     generic_note: Optional[str] = None
     if arvc_note is None and pah_note is None:
-        generic_note = "Does not specifically match the ARVC or PAH reference patterns above — ACDC does not attribute a specific disease to this group."
+        generic_note = "No specific pattern (ARVC/PAH) matched."
 
     return {"ratio_note": ratio_note, "arvc_note": arvc_note, "pah_note": pah_note, "generic_note": generic_note}
 
@@ -941,22 +974,23 @@ def compute_gates(
         )
 
     gates = [
-        _gate_nor(lv_for_gates, rv_for_gates, sex),
-        _gate_minf(lv_for_gates, regional_lv_segments),
+        _gate_nor_lv(lv_for_gates, sex),
+        _gate_nor_rv(rv_for_gates),
+        _gate_minf(lv_for_gates, regional_lv_segments, sex),
         _gate_dcm(lv_for_gates, sex),
         _gate_hcm(lv_for_gates, sex),
         _gate_rv(rv_for_gates, sex),
     ]
     if lv_issues:
         note = "Absolute LV volumes for this mask are flagged unreliable (" + "; ".join(lv_issues) + ") — EDVI/LVMI were excluded from this gate rather than compared as if trustworthy."
-        for code in ("NOR", "DCM", "HCM"):
+        for code in ("NOR_LV", "DCM", "HCM"):
             next(g for g in gates if g["code"] == code)["reasons"].append(note)
     if rv_issues:
         rv_note = (
             "Absolute RV volumes for this mask are flagged unreliable (" + "; ".join(rv_issues) + ") — "
             "RVEDVI was excluded from this gate rather than compared as if trustworthy (RVEF, a ratio, is unaffected)."
         )
-        for code in ("RV", "NOR"):  # NOR also reads RVEDVI now (Bernard et al. 2018's own NOR definition requires a normal RV)
+        for code in ("RV", "NOR_RV"):
             next(g for g in gates if g["code"] == code)["reasons"].append(rv_note)
     met_codes = [g["code"] for g in gates if g["met"] is True]
 
@@ -977,7 +1011,7 @@ def compute_gates(
     # raw number — only a plain rank label — so this can't be misread as a
     # diagnostic confidence/probability, which was the whole reason the old
     # single-score design was dropped.
-    lv_met = [g for g in gates if g["code"] != "RV" and g["met"] is True]
+    lv_met = [g for g in gates if g["code"] not in ("RV", "NOR_RV") and g["met"] is True]
     if len(lv_met) >= 2:
         ranked = sorted(lv_met, key=lambda g: g.get("_margin") if g.get("_margin") is not None else -1.0, reverse=True)
         for i, g in enumerate(ranked):

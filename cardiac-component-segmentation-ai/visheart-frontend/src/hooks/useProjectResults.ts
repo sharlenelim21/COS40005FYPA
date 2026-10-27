@@ -110,14 +110,14 @@ export type Sex = "male" | "female" | "unspecified";
  * detail. A patient can meet zero, one, or more than one gate.
  */
 export type DiseasePatternGate = {
-  code: "NOR" | "MINF" | "DCM" | "HCM" | "RV";
+  code: "NOR_LV" | "NOR_RV" | "MINF" | "DCM" | "HCM" | "RV";
   label: string;
   /** null = not enough data to decide (pending) — never treat as false. */
   met: boolean | null;
   reasons: string[];
   /** The gate's own criterion, in plain text, for display next to it. */
   criterion_text: string;
-  /** Present on MINF/DCM/HCM/RV (null on NOR, whose criterion_text already
+  /** Present on MINF/DCM/HCM/RV (null on NOR_LV/NOR_RV, whose criterion_text already
    *  names its sources): a static, dataset-level note comparing this
    *  project's ACDC ground-truth-derived stats against this app's own
    *  deployed-model (UNet + manual QC) derived stats for that gate's

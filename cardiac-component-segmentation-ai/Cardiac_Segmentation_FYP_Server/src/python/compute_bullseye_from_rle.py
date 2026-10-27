@@ -186,13 +186,30 @@ def classify_slices(mask_3d: np.ndarray) -> list[str]:
     return labels
 
 
-def compute_centroid(slice_mask: np.ndarray) -> tuple[Optional[float], Optional[float]]:
-    """Pure-numpy centroid of myocardium pixels (replaces cv2.moments)."""
-    myo = (slice_mask == _MYO_CLASS).astype(np.float64)
-    total = myo.sum()
+def compute_centroid(
+    slice_mask: np.ndarray, class_label: int = _LV_CAVITY_CLASS,
+) -> tuple[Optional[float], Optional[float]]:
+    """Pure-numpy centroid of the given mask class (replaces cv2.moments) — mirrors the
+    GPU's bullseye_analysis.compute_centroid exactly, including its default.
+
+    Defaults to the LV cavity (class 3), not the myocardium ring: the GPU code's own
+    docstring explains why — the cavity is a stable reference that doesn't drift the way
+    the ring does. The ring can carry small mislabeled blobs disconnected from the real
+    wall (segmentation noise), and an ALL-myocardium-pixel centroid gets pulled toward
+    them; rays cast from that shifted point then cut the real wall at a tangent on one
+    side and foreshorten it on the other, instead of measuring it radially. Reported live,
+    2026-10-26: patient005's MedSAM apical-septal segment read 12.85mm against this same
+    patient's ground-truth 9.94mm for that segment, traced to a slice whose myocardium
+    label had 14 disconnected components (one a 163px blob) pulling the myo-centroid ~6px
+    off the true ring centre — while the LV-cavity centroid for that slice was undisturbed
+    by it, cavity pixels being a single compact region far less prone to this kind of
+    stray mislabeling.
+    """
+    region = (slice_mask == class_label).astype(np.float64)
+    total = region.sum()
     if total == 0:
         return None, None
-    ys, xs = np.where(myo)
+    ys, xs = np.where(region)
     cx = float(xs.sum() / total)
     cy = float(ys.sum() / total)
     return cx, cy

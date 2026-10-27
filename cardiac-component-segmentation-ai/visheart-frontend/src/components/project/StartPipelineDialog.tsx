@@ -103,7 +103,21 @@ export function StartPipelineDialog({
     segModels.has(m) &&
     !modelDisabled(m) &&
     (combos.has(comboKey(m, "lv")) || combos.has(comboKey(m, "rv")) || existing.lv.has(m) || existing.rv.has(m));
-  const landmarkModel: Model | null = landmarkEligible("unet") ? "unet" : landmarkEligible("medsam") ? "medsam" : null;
+  // Whether the user is actively (re)building a reconstruction for this model THIS run,
+  // as opposed to merely having an older already-built one sitting there from before.
+  const landmarkFreshlySelected = (m: Model) =>
+    segModels.has(m) && !modelDisabled(m) && (combos.has(comboKey(m, "lv")) || combos.has(comboKey(m, "rv")));
+  // When the user picks a combo for only ONE model this run (even if the other model also
+  // happens to be eligible via an older already-built combo), use the one they're actually
+  // working with — don't silently default to UNet over their explicit choice of MedSAM.
+  // Falls back to the UNet-first/MedSAM tiebreak only when neither (or both) have a fresh
+  // combo this run, e.g. landmark-only off an already-built reconstruction.
+  const landmarkModel: Model | null =
+    landmarkFreshlySelected("medsam") && !landmarkFreshlySelected("unet") ? "medsam"
+    : landmarkFreshlySelected("unet") && !landmarkFreshlySelected("medsam") ? "unet"
+    : landmarkEligible("unet") ? "unet"
+    : landmarkEligible("medsam") ? "medsam"
+    : null;
   const landmarkSelected = runLandmark && landmarkModel !== null;
 
   const hasRunnableModel = [...segModels].some((m) => !modelDisabled(m));
