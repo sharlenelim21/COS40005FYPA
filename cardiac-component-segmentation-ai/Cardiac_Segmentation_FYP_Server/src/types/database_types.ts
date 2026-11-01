@@ -26,47 +26,17 @@ export enum ReconstructionChamber {
 /**
  * Defines the possible roles a user can have within the application.
  * @enum {string}
- * @property {string} EducationalUser - The default role for every new signup: full CRUD on their
- *   own projects (upload, segmentation, landmark detection, reconstruction), same as Doctor, but
- *   shown the original, simpler project-list UI rather than the Doctor's Case History view. Can
- *   request elevation to Doctor (see ElevationStatus) — that request requires Admin approval.
- * @property {string} Doctor - Full clinical user: upload, segmentation, landmark detection,
- *   reconstruction. Reached only via Admin-approved elevation from EducationalUser — never
- *   granted directly at signup.
+ * @property {string} User - Full clinical user: upload, segmentation, landmark detection,
+ *   reconstruction. Assigned directly at signup.
  * @property {string} Admin - Represents an administrator with elevated privileges (user
- *   management, elevation approval, U-Net retraining).
+ *   management, U-Net retraining).
  * @property {string} Guest - Temporary, unauthenticated-feeling trial user.
  */
 export enum UserRole {
-  EducationalUser = "educational_user",
-  Doctor = "doctor",
+  User = "user",
   Admin = "admin",
   Guest = "guest", // For temporary users
 }
-
-/**
- * Status of an EducationalUser's request to be elevated to Doctor.
- * @enum {string}
- * @property {string} None - Never requested elevation (the default for every new signup).
- * @property {string} Pending - Submitted a request (profession, medical registration number,
- *   staff ID card, requested role); awaiting Admin review.
- * @property {string} Approved - An Admin approved it; `role` has already been changed to the
- *   approved role. Kept for history/audit even after the role change.
- * @property {string} Rejected - An Admin rejected it; `role` stays EducationalUser. The user may
- *   submit a new request afterward (re-submitting resets this back to Pending).
- */
-export enum ElevationStatus {
-  None = "none",
-  Pending = "pending",
-  Approved = "approved",
-  Rejected = "rejected",
-}
-
-/**
- * Requested elevated role at signup/request time. Doctor is the only elevation outcome —
- * nobody self-requests Admin or Guest.
- */
-export type RequestedElevationRole = UserRole.Doctor;
 
 /**
  * Defines the structure for a user object as stored in the database, including sensitive information.
@@ -76,38 +46,25 @@ export type RequestedElevationRole = UserRole.Doctor;
  * @property {string} email - The user's unique email address.
  * @property {string} phone - The user's unique phone number.
  * @property {UserRole} role - The role assigned to the user. Always server-assigned — never read
- *   from request bodies — and always starts as EducationalUser at signup.
+ *   from request bodies — and always starts as User at signup.
  */
 export interface IUser {
   username: string;
   password: string;
   email: string;
   phone: string;
-  role: UserRole; // Default/starting role for every new signup is EducationalUser
-  // Doctor elevation workflow (see ElevationStatus) — all optional since most
-  // accounts (Admin, Guest, and EducationalUsers who never requested elevation) never set these.
-  elevationStatus?: ElevationStatus;
-  isMedicalStaff?: boolean;
-  profession?: string;
-  medicalId?: string;
-  staffIdCardFileKey?: string; // private S3/MinIO object key — never a public/presigned URL
-  requestedRole?: RequestedElevationRole;
-  elevationReason?: string;
-  elevationReviewedByUserId?: string;
-  elevationReviewedAt?: string;
+  role: UserRole; // Default/starting role for every new signup is User
 }
 
 /**
  * Defines the structure for a user object that is safe to expose publicly or send to clients.
- * It omits sensitive information like the password hash, and — deliberately — the raw
- * `staffIdCardFileKey` (the ID-card viewer route resolves that server-side so the key itself,
- * an internal storage path, is never sent to any client, including the Admin's).
+ * It omits sensitive information like the password hash.
  * @interface IUserSafe
  * @property {string} _id - The unique MongoDB document ID for the user, represented as a string.
  * @property {string} username - The unique username of the user.
  * @property {string} email - The email address of the user.
  * @property {string} phone - The phone number of the user.
- * @property {UserRole} role - The role of the user (e.g., EducationalUser, Admin).
+ * @property {UserRole} role - The role of the user (e.g., User, Admin).
  * @property {Date} [createdAt] - The date when the user was created (optional).
  * @property {Date} [updatedAt] - The date when the user was last updated (optional).
  */
@@ -117,13 +74,6 @@ export interface IUserSafe {
   email: string;
   phone: string;
   role: UserRole;
-  elevationStatus?: ElevationStatus;
-  isMedicalStaff?: boolean;
-  profession?: string;
-  medicalId?: string;
-  requestedRole?: RequestedElevationRole;
-  elevationReason?: string;
-  hasStaffIdCard?: boolean; // derived: whether a card was uploaded, without exposing its key
   createdAt?: Date; // Creation date of the user
   updatedAt?: Date; // Last update date of the user
 }
@@ -346,6 +296,13 @@ export interface IProjectSegmentationMask {
      *  HCM gate) must multiply by heartMetrics.spacing_mm[0] themselves —
      *  this field was previously read as mm with no conversion at all. */
     segment_values: number[];
+    /** True-peak (not mean) wall thickness per AHA segment, same pixel units/ordering as
+     *  segment_values -- see bullseye_analysis.group_sectors_max. Added 2026-10; absent on masks
+     *  computed before this field existed, so consumers (assembleDiseasePatternGateInputs,
+     *  useProjectResults.ts) must fall back to segment_values when it's missing/empty, not
+     *  require it. Only meant for MaxWallThicknessMm (the HCM gate); the bullseye display keeps
+     *  reading segment_values. */
+    segment_values_max?: number[];
     segment_metadata: { idx: number; name: string; ring: string; value: number }[];
     stats: { min: number; max: number; mean: number; n_nan: number };
     computed_at: string;
@@ -634,13 +591,12 @@ export interface IProjectSegmentationMask {
     }[];
     met_codes: string[];       // codes with met === true, gates-array order preserved
     // Advisory layering shown only when the RV gate is met — see module
-    // docstring "RV gate severity layering" for why these 3 notes are kept
+    // docstring "RV gate severity layering" for why these 2 notes are kept
     // independent rather than combined into one score.
     rv_severity: {
-      ratio_note: string;        // primary, disease-agnostic — RV/LV volume ratio vs ACDC's own RV/NOR group stats
-      arvc_note: string | null;  // secondary — only set when close to the Kubler et al. 2021 ARVC cohort range
-      pah_note: string | null;   // secondary — only set when in the ESC/ERS 2022 PAH higher-risk band
-      generic_note: string | null; // set only when neither secondary note fired
+      arvc_note: string | null;  // only set when close to the Kubler et al. 2021 ARVC cohort range
+      pah_note: string | null;   // only set when in the ESC/ERS 2022 PAH higher-risk band
+      generic_note: string | null; // set only when neither note fired
     } | null;
     sex: "male" | "female" | "unspecified";
     disclaimer: string;        // fixed non-diagnostic disclaimer

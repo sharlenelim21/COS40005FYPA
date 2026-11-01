@@ -13,7 +13,7 @@ import LogError from "../utils/error_logger"; // Import the error logging utilit
 const serviceLocation = "Database"; // Service location for error logging
 
 // Import Types
-import { IUser, IUserDocument, IUserSafe, UserRole, ElevationStatus, RequestedElevationRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
+import { IUser, IUserDocument, IUserSafe, UserRole, CRUDOperation, UserCrudResult, IProjectDocument, IProjectSegmentationMaskDocument, segmentationSource } from "../types/database_types"; // Import the user types
 import { FileType, FileDataType, ComponentBoundingBoxesClass, IProject, IProjectSegmentationMask, ProjectCrudResult, ProjectSegmentationMaskCrudResult } from "../types/database_types"; // Import the project types
 import { IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, ReconstructionChamber } from "../types/database_types"; // Import the project reconstruction types
 import { IProjectLandmark, IProjectLandmarkDocument, ProjectLandmarkCrudResult } from "../types/database_types"; // Import the project landmark types
@@ -89,15 +89,6 @@ function toIUserSafe(user: IUserDocument): IUserSafe {
     email: user.email,
     phone: user.phone,
     role: user.role,
-    elevationStatus: user.elevationStatus,
-    isMedicalStaff: user.isMedicalStaff,
-    profession: user.profession,
-    medicalId: user.medicalId,
-    requestedRole: user.requestedRole,
-    elevationReason: user.elevationReason,
-    // Deliberately a boolean, never the raw staffIdCardFileKey (internal storage path) — see
-    // IUserSafe's doc comment.
-    hasStaffIdCard: Boolean(user.staffIdCardFileKey),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -110,18 +101,7 @@ const userSchema = new Schema<IUserDocument>({
   password: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   phone: { type: String, required: true, unique: true },
-  role: { type: String, required: true, enum: Object.values(UserRole), default: UserRole.EducationalUser },
-  // Doctor elevation workflow (see ElevationStatus) — all optional, only set
-  // once an EducationalUser submits a request via /auth/request-elevation.
-  elevationStatus: { type: String, required: false, enum: Object.values(ElevationStatus), default: ElevationStatus.None },
-  isMedicalStaff: { type: Boolean, required: false },
-  profession: { type: String, required: false },
-  medicalId: { type: String, required: false },
-  staffIdCardFileKey: { type: String, required: false }, // private MinIO/S3 key, never exposed to clients
-  requestedRole: { type: String, required: false, enum: [UserRole.Doctor] },
-  elevationReason: { type: String, required: false },
-  elevationReviewedByUserId: { type: String, required: false },
-  elevationReviewedAt: { type: String, required: false },
+  role: { type: String, required: true, enum: Object.values(UserRole), default: UserRole.User },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 // Hooks for pre-save and pre-delete operations (must be before the model creation)
 // If a user is deleted, delete all their projects, segmentation masks, and reconstructions (especially important for guest accounts)
@@ -220,7 +200,7 @@ const createAdminUser = async (): Promise<void> => {
  * @param {string} user.password - The plain-text password for the new user.
  * @param {string} user.email - The email address for the new user (must be unique).
  * @param {string} user.phone - The phone number for the new user (must be unique).
- * @param {UserRole} [user.role=UserRole.EducationalUser] - The role to assign to the user. Defaults to `UserRole.EducationalUser`.
+ * @param {UserRole} [user.role=UserRole.User] - The role to assign to the user. Defaults to `UserRole.User`.
  * @returns {Promise<UserCrudResult>} A promise that resolves to a `UserCrudResult` object.
  * - On success: `{ success: true, operation: CRUDOperation.CREATE, user: IUserSafe }` containing the sanitized created user.
  * - On validation failure (duplicate username/email/phone): `{ success: false, operation: CRUDOperation.CREATE, message: string }` detailing the conflict.
@@ -485,143 +465,6 @@ const updateUser = async (
   } catch (error: unknown) {
     LogError(error as Error, serviceLocation, `Error updating user ${userid}.`);
     return { success: false, operation: CRUDOperation.UPDATE, message: "Error updating user." };
-  }
-};
-
-/**
- * Records an EducationalUser's request to be elevated to Doctor. Deliberately
- * a dedicated function rather than routing through the generic `updateUser` — elevation fields
- * follow a specific state machine (None -> Pending -> Approved/Rejected) that shouldn't be
- * reachable through the general-purpose admin user-edit form.
- *
- * @async
- * @function submitElevationRequest
- * @param {string} userid
- * @param {object} request
- * @param {string} request.profession
- * @param {string} request.medicalId
- * @param {string} request.staffIdCardFileKey - Private S3/MinIO object key (already uploaded by the caller).
- * @param {RequestedElevationRole} request.requestedRole
- * @param {string} [request.reason]
- * @returns {Promise<UserCrudResult>}
- */
-const submitElevationRequest = async (
-  userid: string,
-  request: { profession: string; medicalId: string; staffIdCardFileKey: string; requestedRole: RequestedElevationRole; reason?: string },
-): Promise<UserCrudResult> => {
-  const operation = CRUDOperation.UPDATE;
-  try {
-    const user = await userModel.findById(userid);
-    if (!user) {
-      return { success: false, operation, message: `User ${userid} does not exist.` };
-    }
-    if (user.role !== UserRole.EducationalUser) {
-      return { success: false, operation, message: "Only an educational account may request elevation." };
-    }
-    user.isMedicalStaff = true;
-    user.profession = request.profession;
-    user.medicalId = request.medicalId;
-    user.staffIdCardFileKey = request.staffIdCardFileKey;
-    user.requestedRole = request.requestedRole;
-    user.elevationReason = request.reason;
-    user.elevationStatus = ElevationStatus.Pending;
-    // Re-submitting after a rejection should clear the old review stamp.
-    user.elevationReviewedByUserId = undefined;
-    user.elevationReviewedAt = undefined;
-    await user.save();
-    logger.info(`${serviceLocation}: User ${userid} submitted an elevation request for role ${request.requestedRole}.`);
-    return { success: true, operation, user: toIUserSafe(user) };
-  } catch (error: unknown) {
-    LogError(error as Error, serviceLocation, `Error submitting elevation request for user ${userid}.`);
-    return { success: false, operation, message: "Error submitting elevation request." };
-  }
-};
-
-/**
- * Lists every EducationalUser account with a pending elevation request — the Admin's "Staff
- * Verifications" queue.
- *
- * @async
- * @function readPendingElevations
- * @returns {Promise<UserCrudResult>}
- */
-const readPendingElevations = async (): Promise<UserCrudResult> => {
-  try {
-    const users = await userModel.find({ elevationStatus: ElevationStatus.Pending });
-    return { success: true, operation: CRUDOperation.READ, users: users.map(toIUserSafe) };
-  } catch (error: unknown) {
-    LogError(error as Error, serviceLocation, "Error reading pending elevations.");
-    return { success: false, operation: CRUDOperation.READ, message: "Error reading pending elevations." };
-  }
-};
-
-/**
- * Admin approves a pending elevation request — grants the approved role (Doctor) and stamps who
- * reviewed it.
- *
- * @async
- * @function approveElevation
- * @param {string} userid
- * @param {RequestedElevationRole} approvedRole
- * @param {string} adminUserId
- * @returns {Promise<UserCrudResult>}
- */
-const approveElevation = async (
-  userid: string,
-  approvedRole: RequestedElevationRole,
-  adminUserId: string,
-): Promise<UserCrudResult> => {
-  const operation = CRUDOperation.UPDATE;
-  try {
-    const user = await userModel.findById(userid);
-    if (!user) {
-      return { success: false, operation, message: `User ${userid} does not exist.` };
-    }
-    if (user.elevationStatus !== ElevationStatus.Pending) {
-      return { success: false, operation, message: "This user has no pending elevation request." };
-    }
-    user.role = approvedRole;
-    user.elevationStatus = ElevationStatus.Approved;
-    user.elevationReviewedByUserId = adminUserId;
-    user.elevationReviewedAt = new Date().toISOString();
-    await user.save();
-    logger.info(`${serviceLocation}: Admin ${adminUserId} approved user ${userid} as ${approvedRole}.`);
-    return { success: true, operation, user: toIUserSafe(user) };
-  } catch (error: unknown) {
-    LogError(error as Error, serviceLocation, `Error approving elevation for user ${userid}.`);
-    return { success: false, operation, message: "Error approving elevation." };
-  }
-};
-
-/**
- * Admin rejects a pending elevation request — the user's role stays EducationalUser. They may
- * submit a new request afterward (submitElevationRequest resets the status back to Pending).
- *
- * @async
- * @function rejectElevation
- * @param {string} userid
- * @param {string} adminUserId
- * @returns {Promise<UserCrudResult>}
- */
-const rejectElevation = async (userid: string, adminUserId: string): Promise<UserCrudResult> => {
-  const operation = CRUDOperation.UPDATE;
-  try {
-    const user = await userModel.findById(userid);
-    if (!user) {
-      return { success: false, operation, message: `User ${userid} does not exist.` };
-    }
-    if (user.elevationStatus !== ElevationStatus.Pending) {
-      return { success: false, operation, message: "This user has no pending elevation request." };
-    }
-    user.elevationStatus = ElevationStatus.Rejected;
-    user.elevationReviewedByUserId = adminUserId;
-    user.elevationReviewedAt = new Date().toISOString();
-    await user.save();
-    logger.info(`${serviceLocation}: Admin ${adminUserId} rejected user ${userid}'s elevation request.`);
-    return { success: true, operation, user: toIUserSafe(user) };
-  } catch (error: unknown) {
-    LogError(error as Error, serviceLocation, `Error rejecting elevation for user ${userid}.`);
-    return { success: false, operation, message: "Error rejecting elevation." };
   }
 };
 
@@ -2748,7 +2591,7 @@ const updateGPUHost = async (updates: Partial<IGPUHost>): Promise<GPUHostCrudRes
 // Using ES modules instead of CommonJS which is module.exports = {connectToDatabase, User};
 // ONLY unit tests should use userModel, fileModel directly, otherwise use the created functions to create users/files.
 export {
-  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, ElevationStatus, RequestedElevationRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, userCanAccessProject, submitElevationRequest, readPendingElevations, approveElevation, rejectElevation,
+  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, userCanAccessProject,
   // Project Reconstruction exports
   IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, projectReconstructionModel, createProjectReconstruction, readProjectReconstruction, updateProjectReconstruction, deleteProjectReconstruction,
   // Job and GPU Host exports

@@ -39,13 +39,9 @@ const RoleBadge = () => {
       icon: <Shield className="inline-flex h-4 w-4 text-blue-600" />,
       colors: "bg-blue-100 text-blue-800 border-blue-200",
     },
-    doctor: {
+    user: {
       icon: <UserCheck className="inline-flex h-4 w-4 text-green-600" />,
       colors: "bg-green-100 text-green-800 border-green-200",
-    },
-    educational_user: {
-      icon: <UserCheck className="inline-flex h-4 w-4 text-teal-600" />,
-      colors: "bg-teal-100 text-teal-800 border-teal-200",
     },
     guest: {
       icon: <User className="inline-flex h-4 w-4 text-gray-500" />,
@@ -57,8 +53,7 @@ const RoleBadge = () => {
     roleConfig[user.role as keyof typeof roleConfig] || roleConfig.guest;
   const roleLabels: Record<string, string> = {
     admin: "Admin",
-    doctor: "Doctor",
-    educational_user: "Educational",
+    user: "User",
     guest: "Guest",
   };
 

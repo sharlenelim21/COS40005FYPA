@@ -19,6 +19,7 @@ import { generateMaskKey } from "@/types/segmentation";
 import type * as ProjectTypes from "@/types/project";
 import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
 import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { GuidancePanel } from "@/components/GuidancePanel";
 import { Box } from "lucide-react";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
@@ -129,6 +130,7 @@ function SegmentationResultsPageInner() {
   const [brushSize, setBrushSize] = useState<number>(10);
   const [opacity, setOpacity] = useState<number>(1);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const { pendingNavigation, setPendingNavigation, navigateWithUnsavedGuard } = useUnsavedChangesGuard(hasUnsavedChanges);
   const [isSaving, setIsSaving] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [currentSlice, setCurrentSlice] = useState(0);
@@ -1160,7 +1162,7 @@ function SegmentationResultsPageInner() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => {
+          onClick={() => navigateWithUnsavedGuard(() => {
             let highlight = "";
             try {
               if (hasMasks) {
@@ -1172,7 +1174,7 @@ function SegmentationResultsPageInner() {
               }
             } catch {}
             router.push(`/project/${projectId}${highlight ? `?highlight=${highlight}` : ""}`);
-          }}
+          })}
           className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -1182,7 +1184,7 @@ function SegmentationResultsPageInner() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push("/extend-training?tab=prepare")}
+            onClick={() => navigateWithUnsavedGuard(() => router.push("/extend-training?tab=prepare"))}
             className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1335,7 +1337,7 @@ function SegmentationResultsPageInner() {
       {/* Main segmentation layout */}
       <div className="flex-1 min-h-0 overflow-hidden">
       {/* Mobile: Stack vertically */}
-      <div className="lg:hidden w-full h-full p-4 flex flex-col gap-4">
+      <div className="sm:hidden w-full h-full p-4 flex flex-col gap-4">
         <div className="flex-1 relative bg-muted/40 rounded-xl border shadow-sm p-4 flex items-center justify-center overflow-hidden">
           <ImageCanvas
             projectData={projectData}
@@ -1404,7 +1406,7 @@ function SegmentationResultsPageInner() {
       </div>
 
       {/* Desktop: Resizable panels */}
-      <div className="hidden lg:block w-full h-full p-3">
+      <div className="hidden sm:block w-full h-full p-3">
         <ResizablePanelGroup 
           direction="horizontal" 
           className="h-full w-full rounded-xl border shadow-sm"
@@ -1626,6 +1628,30 @@ function SegmentationResultsPageInner() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
+            <AlertDialogDescription>
+              Leaving now will lose your edits to this mask. Save first, or leave anyway?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Go back and save</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = pendingNavigation;
+                setPendingNavigation(null);
+                action?.();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Leave anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       </div>
 
       {hasMasks && !isGuest && (
@@ -1633,13 +1659,13 @@ function SegmentationResultsPageInner() {
           storageKey={`seg-guidance-${projectId}`}
           icon="✅"
           title="Segmentation masks ready!"
-          subtitle="What would you like to do next?"
+          subtitle={hasReconstructions ? "What would you like to do next?" : "Want to run 4D Reconstruction next?"}
           actions={[
             {
-              label: "Create 4D Reconstruction",
+              label: hasReconstructions ? "View Reconstructed Model" : "Run 4D Reconstruction",
               icon: <Box size={13} />,
               primary: true,
-              onClick: () => router.push(`/project/${projectId}?highlight=reconstruction`),
+              onClick: () => navigateWithUnsavedGuard(() => router.push(`/project/${projectId}?highlight=reconstruction`)),
             },
           ]}
           onDismissWithoutAction={() => {

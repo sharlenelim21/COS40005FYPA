@@ -54,12 +54,14 @@ interface ModelProps {
   url: string;
   settings: ViewerSettings;
   /**
-   * Fired when real geometry is in the scene graph -- NOT when the component mounts.
-   * <Center> measures its children exactly once and never re-measures (children are not in its
-   * effect deps), so it must be told when there is something real to measure. Before this fired,
-   * it was measuring the 1x1x1 placeholder below and keeping that offset forever.
+   * Fired with the url of the mesh that just became real geometry in the scene graph -- NOT when
+   * the component mounts. <Center> measures its children exactly once and never re-measures
+   * (children are not in its effect deps), so it must be told when there is something real to
+   * measure. Before this fired, it was measuring the 1x1x1 placeholder below and keeping that
+   * offset forever. The url argument lets callers remember exactly which frames have already
+   * loaded this session -- see lvReadyUrls/rvReadyUrls below.
    */
-  onReady?: () => void;
+  onReady?: (url: string) => void;
 }
 
 function Model({ url, settings, onReady }: ModelProps) {
@@ -119,8 +121,8 @@ function GLBModel({ url, settings, onReady }: ModelProps) {
 
   // useGLTF suspends until the file is parsed, so reaching here means `scene` is real geometry.
   useEffect(() => {
-    onReady?.();
-  }, [scene, onReady]);
+    onReady?.(url);
+  }, [scene, onReady, url]);
 
   useEffect(() => { 
     console.log("[GLBViewer] GLB/GLTF Model loaded");
@@ -236,7 +238,7 @@ function OBJModel({ url, settings, onReady }: ModelProps) {
         
         setObj(loadedObj);
         setError(null);
-        onReady?.();
+        onReady?.(url);
       },
       (progress) => {
         console.log("[OBJViewer] Loading progress:", (progress.loaded / progress.total * 100).toFixed(2) + "%");
@@ -484,9 +486,24 @@ export function ReconstructionGLBViewer({
   // and when a chamber is added or removed.
   const [lvReady, setLvReady] = useState(false);
   const [rvReady, setRvReady] = useState(false);
+  // Every url each chamber's mesh has EVER been ready for -- separate from lvReady/rvReady, which
+  // deliberately latch true forever once centering has happened once (see the Center comment
+  // below) and must not flip back on a frame change. This tracks "has this exact frame's mesh
+  // already loaded before", which is what the loading overlay needs: it must re-arm for a frame
+  // that's genuinely new (never fetched this session), but NOT for a frame revisited on a second
+  // playback loop -- that one's already cached by useGLTF/the browser and paints instantly, so
+  // flashing a spinner for it every single frame read as "constantly loading" rather than smooth.
+  const [lvReadyUrls, setLvReadyUrls] = useState<Set<string>>(() => new Set());
+  const [rvReadyUrls, setRvReadyUrls] = useState<Set<string>>(() => new Set());
 
-  const handleLvReady = useCallback(() => setLvReady(true), []);
-  const handleRvReady = useCallback(() => setRvReady(true), []);
+  const handleLvReady = useCallback((url: string) => {
+    setLvReady(true);
+    setLvReadyUrls((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
+  }, []);
+  const handleRvReady = useCallback((url: string) => {
+    setRvReady(true);
+    setRvReadyUrls((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
+  }, []);
 
   // Radius of the centred content, reported by <Center> when it measures. Drives both the camera
   // framing and the ground grid, so neither is hardcoded to one particular mesh size.
@@ -535,13 +552,16 @@ export function ReconstructionGLBViewer({
     }
   };
 
-  // True until every REQUESTED chamber has produced real geometry at least once. Before that, the
-  // scene only has the Suspense fallback (a 1x1 placeholder cube) sitting at the un-framed default
-  // camera distance -- which reads as an empty canvas with a stray dot, not as "loading". Once a
-  // chamber goes ready it stays ready (see the lvReady/rvReady effects above), so this only covers
-  // the genuine first-load gap, not every per-frame mesh swap during playback.
-  const lvPending = !!modelUrl && !lvReady;
-  const rvPending = !!secondaryModelUrl && !rvReady;
+  // True whenever the currently REQUESTED mesh (this exact frame's url) hasn't produced real
+  // geometry yet. Before that, the scene only has the Suspense fallback (a 1x1 placeholder cube)
+  // sitting at the un-framed default camera distance -- which reads as an empty canvas with a
+  // stray dot, not as "loading". Deliberately keyed off lvReadyUrls/rvReadyUrls (which track every
+  // url ever loaded this session) rather than lvReady/rvReady (which latches true forever for
+  // <Center>'s benefit, see above) -- so this re-arms for a genuinely new frame, but a frame
+  // revisited on a later playback loop is already cached and skips the spinner, exactly as before
+  // the per-frame fix below was needed only for frames truly new to this session.
+  const lvPending = !!modelUrl && !lvReadyUrls.has(modelUrl);
+  const rvPending = !!secondaryModelUrl && !rvReadyUrls.has(secondaryModelUrl);
   const showLoadingOverlay = lvPending || rvPending;
 
   // Either chamber alone is a valid view -- hiding LV to inspect RV on its own must still render.
@@ -558,9 +578,9 @@ export function ReconstructionGLBViewer({
   }
 
   return (
-    <div 
-      ref={containerRef} 
-      className={"relative rounded-lg border overflow-hidden " + getBackgroundClass() + " " + className}
+    <div
+      ref={containerRef}
+      className={"@container relative rounded-lg border overflow-hidden " + getBackgroundClass() + " " + className}
     >
       {/* Loading overlay -- hides the tiny un-framed placeholder cube while the first real mesh is
           still in flight, so the viewer reads as "loading" instead of "broken/empty". */}
@@ -585,7 +605,7 @@ export function ReconstructionGLBViewer({
           mesh on screen, which is exactly when saying so matters most. The research-only marker
           travels with the legend so the warning is on the image itself, not only beside it. */}
       {secondaryModelUrl && (
-        <div className="absolute bottom-14 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-[11px] space-y-1.5 max-w-[240px]">
+        <div className="absolute bottom-14 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-[11px] space-y-1.5 max-w-[140px] @sm:max-w-[240px]">
           {modelUrl && (
             <div className="flex items-center gap-2">
               <span
@@ -605,9 +625,10 @@ export function ReconstructionGLBViewer({
           {secondaryIsResearchOnly && (
             <div className="flex items-start gap-1.5 pt-1 mt-1 border-t border-white/20 max-w-[210px] text-amber-300">
               <AlertTriangle className="h-3 w-3 mt-[1px] shrink-0" />
-              <span className="leading-snug">
+              <span className="hidden @sm:inline leading-snug">
                 {secondaryLabel} is research/reference only — not for clinical diagnosis.
               </span>
+              <span className="@sm:hidden leading-snug">Research only</span>
             </div>
           )}
         </div>
@@ -620,20 +641,20 @@ export function ReconstructionGLBViewer({
             size="sm"
             variant="secondary"
             onClick={() => setShowPresets(!showPresets)}
-            className="bg-black/70 hover:bg-black/90 text-white text-xs"
+            className="bg-black/70 hover:bg-black/90 text-white text-xs px-2 @xs:px-3"
           >
-            <AlertCircle className="h-3 w-3 mr-1" />
-            Views
+            <AlertCircle className="h-3 w-3 @xs:mr-1" />
+            <span className="hidden @xs:inline">Views</span>
           </Button>
-          
+
           <Button
             size="sm"
             variant="secondary"
             onClick={() => setShowSettings(!showSettings)}
-            className="bg-black/70 hover:bg-black/90 text-white text-xs"
+            className="bg-black/70 hover:bg-black/90 text-white text-xs px-2 @xs:px-3"
           >
-            <Settings className="h-3 w-3 mr-1" />
-            Settings
+            <Settings className="h-3 w-3 @xs:mr-1" />
+            <span className="hidden @xs:inline">Settings</span>
           </Button>
         </div>
         
@@ -908,8 +929,9 @@ export function ReconstructionGLBViewer({
         </Suspense>
       </Canvas>
       
-      {/* Controls Info */}
-      <div className="absolute bottom-3 right-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-xs">
+      {/* Controls Info -- a nice-to-have hint, not essential; hidden on a narrow panel where it
+          would otherwise collide with the chamber legend on the opposite corner. */}
+      <div className="absolute bottom-3 right-3 z-10 hidden @sm:block px-3 py-2 rounded-md bg-black/70 text-white text-xs">
         <p className="font-semibold">Controls:</p>
         <p>Left Click+Drag: Rotate</p>
         <p>Right Click+Drag: Pan</p>

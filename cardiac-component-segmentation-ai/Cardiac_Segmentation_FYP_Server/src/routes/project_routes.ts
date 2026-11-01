@@ -3,6 +3,8 @@
 // This module defines the routes for uploading files, including a POST route for handling file uploads and a GET route to inform about the expected HTTP method.
 
 import express, { Request, Response } from "express";
+import fs from "fs";
+import path from "path";
 import { projectUploadFilter } from "../middleware/uploadmiddleware";
 import { saveFileAndPushToS3 } from "../services/project_handler";
 import {
@@ -88,6 +90,17 @@ router.get(
 router.put(
   "/upload-new-project",
   isAuth,
+  async (req: Request, res: Response, next) => {
+    // Guests get a fixed demo case via /create-demo instead of arbitrary uploads -- enforced
+    // here, not just hidden in the UI, matching every other Guest restriction in this app.
+    if (req.user?.role === UserRole.Guest) {
+      return res.status(403).json({
+        success: false,
+        message: "Guest accounts explore a demo case instead of uploading files. Use the demo project option.",
+      });
+    }
+    next();
+  },
   projectUploadFilter,
   async (req: Request, res: Response) => {
     try {
@@ -129,6 +142,72 @@ router.put(
         success: false,
         message: "An error occurred while processing the upload.",
       });
+    }
+  }
+);
+
+// Sample case backing the Guest demo project. Reuses the existing public/sample_nifti catalog
+// (also served for download at /sample-nifti) rather than a separate copy of the file.
+const DEMO_SAMPLE_DIR = path.join(__dirname, "../../public/sample_nifti");
+const DEMO_SAMPLE_FILENAME = "sample_2_frames.nii.gz";
+
+// Creates a project from the fixed demo case instead of an arbitrary upload -- the only way
+// a Guest gets a project (direct upload is blocked above). Builds the same Express.Multer.File
+// shape projectUploadFilter would produce and hands it to saveFileAndPushToS3, so the demo goes
+// through identical hashing/metadata/S3 handling as a real upload rather than a separate path.
+router.post(
+  "/create-demo",
+  isAuth,
+  async (req: Request, res: Response) => {
+    const userId = (req.user as any)?._id;
+    const sourcePath = path.join(DEMO_SAMPLE_DIR, DEMO_SAMPLE_FILENAME);
+
+    if (!fs.existsSync(sourcePath)) {
+      LogError(new Error(`Demo sample file missing at ${sourcePath}`), serviceLocation, "Demo project source missing.");
+      return res.status(500).json({ success: false, message: "The demo sample case is not available." });
+    }
+
+    try {
+      const tempUploadDir = path.join(__dirname, "../temp_upload");
+      fs.mkdirSync(tempUploadDir, { recursive: true });
+
+      // A copy, never the catalog original: saveFileAndPushToS3 renames and ultimately deletes
+      // whatever path it's given.
+      const tempFilename = `demo-${userId}-${Date.now()}.nii.gz`;
+      const tempFilePath = path.join(tempUploadDir, tempFilename);
+      fs.copyFileSync(sourcePath, tempFilePath);
+
+      const demoFile = {
+        fieldname: "files",
+        originalname: DEMO_SAMPLE_FILENAME,
+        encoding: "7bit",
+        mimetype: "application/gzip",
+        destination: tempUploadDir,
+        filename: tempFilename,
+        path: tempFilePath,
+        size: fs.statSync(tempFilePath).size,
+      } as Express.Multer.File;
+
+      req.files = { files: [demoFile] };
+      req.body = { name: "Demo Case", description: "A sample case for exploring VisHeart." };
+
+      logger.info(`${serviceLocation}: Creating demo project for user ${req.user?.username}`);
+      await saveFileAndPushToS3(req, res);
+
+      if (!res.headersSent) {
+        return res.status(500).json({
+          success: false,
+          message: "Demo project processed but no response generated",
+        });
+      }
+    } catch (error) {
+      LogError(error as Error, serviceLocation, "Error creating demo project");
+      if (!res.headersSent) {
+        return res.status(500).json({
+          success: false,
+          message: "An error occurred while creating the demo project.",
+        });
+      }
     }
   }
 );

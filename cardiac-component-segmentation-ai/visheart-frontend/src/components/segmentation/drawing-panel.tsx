@@ -83,7 +83,7 @@ export function DrawingPanel({
       {/* Tool Selection */}
       <div>
         <h3 className="text-sm font-medium text-foreground mb-3">Tool Selection</h3>
-        <div className="grid grid-cols-6 gap-2">
+        <div className="grid grid-cols-3 @sm:grid-cols-6 gap-2">
           {DRAWING_TOOLS.map((toolKey) => {
             const config = TOOL_CONFIG[toolKey];
             const IconComponent = config.icon;
@@ -105,7 +105,7 @@ export function DrawingPanel({
                 )}
               >
                 <IconComponent className="w-4 h-4 mb-1" />
-                <span className="text-xs font-medium">{config.label}</span>
+                <span className="hidden @xs:block text-xs font-medium">{config.label}</span>
               </button>
             );
           })}

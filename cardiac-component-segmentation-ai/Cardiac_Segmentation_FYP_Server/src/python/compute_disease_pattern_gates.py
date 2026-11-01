@@ -171,34 +171,28 @@ built to avoid (see "Why this replaces the old design" above) — RV simply
 has no rank_label, ever.
 
 RV gate severity layering (NOT part of the met/not-met call, advisory only,
-added only when the gate IS met) — three independent pieces, deliberately
-kept separate rather than blended into one number, so none of them can bias
-the others:
-  1. PRIMARY, disease-agnostic: RV/LV volume ratio (RVEDV/LVEDV, absolute
-     volumes — BSA cancels out of a ratio, so this works even without a
-     patient BSA) against ACDC's OWN RV-group statistics, computed directly
-     from the ACDC dataset's real group labels by Chen et al. 2025 ("PULSE":
-     arXiv:2512.03848, Table 1, "ACDC dataset cohort characteristics derived
-     from ground truth segmentation masks"): RV group ratio 2.00 +/- 0.69,
-     NOR group ratio 1.17 +/- 0.11 (same population the RV gate's own
-     criterion is drawn from, not any single named disease's cohort).
-  2. SECONDARY, named-pattern note: Kubler et al. 2021's ARVC cohort (n=18)
-     RV measurements (Int J Cardiovasc Imaging 2021;37:2501-2515, Table 3) —
-     RVEDVI 103+/-26 mL/m2, RVESVI 56+/-23 mL/m2, RVEF 46+/-10%. The SAME
-     paper already used for this module's HCM/DCM gates, now also covering
-     the RV side, so the methodology section only needs to defend one
-     reference instead of hunting for a second, unrelated RV-specific paper.
-  3. SECONDARY, named-pattern note: PAH risk-stratification bands (Humbert
-     et al. 2023, 2022 ESC/ERS PH Guidelines, Eur Respir J 2023;61:2200879,
-     Table 16, cMRI row) — ported directly from the old rvDiseasePattern.ts,
-     unchanged thresholds.
+added only when the gate IS met) — two independent named-pattern notes,
+deliberately kept separate rather than blended into one number, so neither
+can bias the other:
+  1. Kubler et al. 2021's ARVC cohort (n=18) RV measurements (Int J
+     Cardiovasc Imaging 2021;37:2501-2515, Table 3) — RVEDVI 103+/-26 mL/m2,
+     RVESVI 56+/-23 mL/m2, RVEF 46+/-10%. The SAME paper already used for
+     this module's HCM/DCM gates, now also covering the RV side, so the
+     methodology section only needs to defend one reference instead of
+     hunting for a second, unrelated RV-specific paper.
+  2. PAH risk-stratification bands (Humbert et al. 2023, 2022 ESC/ERS PH
+     Guidelines, Eur Respir J 2023;61:2200879, Table 16, cMRI row) — ported
+     directly from the old rvDiseasePattern.ts, unchanged thresholds.
   Deliberately NOT blended into the gate's met/not-met decision or into each
-  other — a patient's RV gate can be met with NEITHER secondary note firing
-  (plain "abnormal RV, unspecified pattern" — ACDC itself attributes no
-  disease to this group), and the primary ratio read is always shown
-  regardless of whether either secondary note fires, so a user is never
-  pushed toward reading "abnormal RV" as "probably ARVC" just because that
-  happens to be the only secondary reference available.
+  other — a patient's RV gate can be met with NEITHER note firing, in which
+  case `generic_note` reads plainly "No specific pattern (ARVC/PAH)
+  matched." rather than implying a diagnosis the numbers don't support.
+  An earlier version of this layer also always showed a third, disease-
+  agnostic RV/LV volume-ratio note (vs. ACDC's own RV-group stats, Chen et
+  al. 2025 "PULSE") even when neither named pattern matched — dropped
+  2026-10 at the project owner's request: it wasn't clinically actionable on
+  its own, and the two named-pattern notes already say exactly what to look
+  into when they do fire.
 
 Volume-reliability guard — every other grader in this directory
 (compute_health_status.py, compute_rv_health_status.py) already withholds
@@ -275,7 +269,7 @@ Output (stdout JSON):
                underlying percentage to surface.
     met_codes — list[str], the codes with met == true (order preserved)
     rv_severity — null when the RV gate isn't met; otherwise
-        {ratio_note: str, arvc_note: str|null, pah_note: str|null,
+        {arvc_note: str|null, pah_note: str|null,
          generic_note: str|null} — see "RV gate severity layering" above.
     disclaimer — fixed non-diagnostic disclaimer string
     method — short method identifier for audit
@@ -494,8 +488,6 @@ def _reference_bsa(sex: str) -> float:
 
 # RV gate severity references — see module docstring "RV gate severity
 # layering" for full provenance.
-_ACDC_RV_LV_RATIO = (2.00, 0.69)   # PULSE (arXiv:2512.03848) Table 1, RV group, n=30
-_ACDC_NOR_RV_LV_RATIO = (1.17, 0.11)  # same table, NOR group, n=30
 _ARVC_RVEDVI = (103.0, 26.0)       # Kubler et al. 2021, Table 3, ARVC n=18
 _ARVC_RVESVI = (56.0, 23.0)
 _ARVC_RVEF = (46.0, 10.0)
@@ -529,10 +521,9 @@ _REFERENCE_SOURCE = (
     "two scripts as NOR. LVMI has no number in the paper, so its NOR/HCM literature "
     "component is still Zhan et al. 2024, Circulation: Cardiovascular Imaging "
     "2024;17(2):e016090 (HCM: informational only, not gating — see module docstring). RV "
-    "severity secondary note: Kubler et al. 2021, Int J Cardiovasc Imaging 2021;37:2501-2515 "
-    "(doi:10.1007/s10554-021-02280-6). RV primary severity note: Chen et al. 2025 "
-    "'PULSE' (arXiv:2512.03848), Table 1, ACDC ground-truth per-group statistics. "
-    "RV PAH secondary note: Humbert et al. 2023, Eur Respir J 2023;61:2200879 "
+    "severity note: Kubler et al. 2021, Int J Cardiovasc Imaging 2021;37:2501-2515 "
+    "(doi:10.1007/s10554-021-02280-6). "
+    "RV PAH severity note: Humbert et al. 2023, Eur Respir J 2023;61:2200879 "
     "(2022 ESC/ERS PH Guidelines, Table 16, cMRI row). DCM/HCM reference-BSA "
     "fallback (used only when the patient's own BSA is missing): DuBois & "
     "DuBois 1916, Arch Intern Med 17:863-871."
@@ -875,23 +866,11 @@ def _gate_rv(rv: dict, sex: str) -> dict:
     return result
 
 
-def _rv_severity(rv: dict, lv: dict) -> Optional[dict]:
+def _rv_severity(rv: dict) -> Optional[dict]:
     """Advisory-only layering for the RV gate, built ONLY when that gate is
-    met — see module docstring 'RV gate severity layering' for why these three
-    notes are kept independent rather than combined into one score."""
-    rv_edv, lv_edv = rv.get("RVEDV"), lv.get("EDV")
-    ratio_note: str
-    if rv_edv is not None and lv_edv not in (None, 0):
-        ratio = rv_edv / lv_edv
-        acdc_mu, acdc_sd = _ACDC_RV_LV_RATIO
-        nor_mu, _ = _ACDC_NOR_RV_LV_RATIO
-        ratio_note = (
-            f"RV/LV volume ratio {ratio:.2f} (ACDC normal-group average {nor_mu:.2f}, "
-            f"abnormal-group average {acdc_mu:.2f} ± {acdc_sd:.2f})."
-        )
-    else:
-        ratio_note = "RV/LV volume ratio not available."
-
+    met — see module docstring 'RV gate severity layering' for why the two
+    named-pattern notes are kept independent rather than combined into one
+    score."""
     arvc_note: Optional[str] = None
     rvedvi, rvesvi, rvef = rv.get("RVEDVI"), rv.get("RVESVI"), rv.get("RVEF")
     zs = []
@@ -922,7 +901,7 @@ def _rv_severity(rv: dict, lv: dict) -> Optional[dict]:
     if arvc_note is None and pah_note is None:
         generic_note = "No specific pattern (ARVC/PAH) matched."
 
-    return {"ratio_note": ratio_note, "arvc_note": arvc_note, "pah_note": pah_note, "generic_note": generic_note}
+    return {"arvc_note": arvc_note, "pah_note": pah_note, "generic_note": generic_note}
 
 
 def compute_gates(
@@ -995,7 +974,7 @@ def compute_gates(
     met_codes = [g["code"] for g in gates if g["met"] is True]
 
     rv_gate = next(g for g in gates if g["code"] == "RV")
-    rv_severity = _rv_severity(rv_for_gates, lv_for_gates) if rv_gate["met"] is True else None
+    rv_severity = _rv_severity(rv_for_gates) if rv_gate["met"] is True else None
 
     if all(g["met"] is None for g in gates):
         warnings.append("No usable measurements provided — every gate is pending.")

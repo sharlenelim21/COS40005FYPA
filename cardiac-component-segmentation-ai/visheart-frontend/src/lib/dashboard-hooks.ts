@@ -165,7 +165,7 @@ export function useUserProjects(enabled = true) {
     fetchProjects();
   }, [fetchProjects]);
 
-  // Background polling so a Doctor's save shows up without a manual page reload — silent (no
+  // Background polling so a User's save shows up without a manual page reload — silent (no
   // loading flicker), and skipped while disabled.
   useEffect(() => {
     if (!enabled) return;

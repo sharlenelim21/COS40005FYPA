@@ -118,7 +118,7 @@ const ToolsAndMasksPanel = React.memo(({
           </div>
         </div>
         
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 @xs:grid-cols-2 @sm:grid-cols-3 gap-2">
           {currentMasks.map(([maskKey, maskData]) => {
             const label = maskKey.split('_').pop() || 'unknown';
             const anatomicalLabel = label as AnatomicalLabel;
@@ -465,7 +465,7 @@ export function SegmentationSidebar({
   }), [hasUnsavedChanges, isSaving]);
 
   return (
-    <div className="flex flex-col h-full bg-[var(--sidebar)] rounded-r-xl border border-[var(--sidebar-border)] shadow-sm">
+    <div className="@container flex flex-col h-full bg-[var(--sidebar)] rounded-r-xl border border-[var(--sidebar-border)] shadow-sm">
       {/* Top Navigation Bar - Compact horizontal layout */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--sidebar-border)] bg-[var(--sidebar-primary)] rounded-tr-xl">
         {NAV_ITEMS.map(({ key, icon: Icon, label }) => (
@@ -483,7 +483,7 @@ export function SegmentationSidebar({
             type="button"
           >
             <Icon className="w-4 h-4 flex-shrink-0" />
-            <span className="text-xs font-medium">{label}</span>
+            <span className="hidden @xs:inline text-xs font-medium">{label}</span>
           </button>
         ))}
       </div>
@@ -494,7 +494,7 @@ export function SegmentationSidebar({
       ──────────────────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--sidebar-border)] bg-[var(--sidebar-primary)]/50">
         <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <span className="text-[11px] text-muted-foreground">Model:</span>
+        <span className="hidden @xs:inline text-[11px] text-muted-foreground">Model:</span>
         <span className="text-[11px] font-semibold text-foreground truncate">
           {selectedModel === "medsam" ? "MedSAM" : "UNet"}
         </span>
@@ -514,7 +514,7 @@ export function SegmentationSidebar({
               isModelActive ? "bg-green-500" : isModelRunning ? "bg-blue-500 animate-pulse" : "bg-amber-500",
             )}
           />
-          {isModelActive ? "Active" : isModelRunning ? "Running" : "Pending"}
+          <span className="hidden @xs:inline">{isModelActive ? "Active" : isModelRunning ? "Running" : "Pending"}</span>
         </span>
       </div>
 
@@ -534,8 +534,8 @@ export function SegmentationSidebar({
             ) : (
               <Save className="h-4 w-4 mr-2" />
             )}
-            {saveButtonConfig.text}
-            {!isSaving && <span className="text-xs text-muted-foreground ml-auto">Ctrl+S</span>}
+            <span className="hidden @xs:inline">{saveButtonConfig.text}</span>
+            {!isSaving && <span className="hidden @sm:inline text-xs text-muted-foreground ml-auto">Ctrl+S</span>}
           </Button>
 
           {/* Reset Masks Button - Right */}

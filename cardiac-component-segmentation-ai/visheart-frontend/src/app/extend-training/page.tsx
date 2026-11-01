@@ -1,10 +1,9 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { AlertCircle, ArrowLeft, Brain, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, Brain, Loader2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,12 +13,12 @@ import { clearedCases, initialSelection, reviewLabel, trainableCases } from "@/c
 import { PrepareTab } from "@/components/extend-training/PrepareTab";
 import { ResultsTab } from "@/components/extend-training/ResultsTab";
 import { SwitchDialog, SwitchTarget } from "@/components/extend-training/SwitchDialog";
-import { isActiveJob, RetrainingStatus, retrainingApi } from "@/lib/retraining-api";
+import { RetrainingStatus, retrainingApi } from "@/lib/retraining-api";
 
 const POLL_ACTIVE_MS = 5000;
 const POLL_IDLE_MS = 30000;
 // How often to silently re-run the real correction check while this page stays open, so a
-// Doctor's save elsewhere shows up without the admin having to reload or click "Check again".
+// User's save elsewhere shows up without the admin having to reload or click "Check again".
 // This re-runs the same expensive Docker-backed scan the manual button does (there's no cheap
 // "anything new?" signal), so this is a real cost every 5 minutes, not a free poll.
 const BACKGROUND_RECHECK_MS = 5 * 60 * 1000;
@@ -148,7 +147,7 @@ function ExtendTrainingInner() {
     return () => window.clearInterval(timer);
   }, [admin, busy, refresh]);
 
-  // Silently reruns the real correction check on an interval, so a Doctor's save elsewhere
+  // Silently reruns the real correction check on an interval, so a User's save elsewhere
   // (or another admin's check) surfaces without this admin reloading the page. Skipped while a
   // training job is running, a check is already in flight, or a train is starting.
   useEffect(() => {
@@ -160,13 +159,11 @@ function ExtendTrainingInner() {
     return () => window.clearInterval(timer);
   }, [admin, busy, checking, starting, checkCorrections]);
 
-  // Without ?tab=, open Results while a training runs or its new version awaits a decision.
+  // Without ?tab=, always default to Prepare — Results is one click away, and still shows
+  // the spinner badge when a job is running.
   useEffect(() => {
     if (tab || !status) return;
-    const job = status.job;
-    const waiting = job?.state === "succeeded"
-      && status.versions.some(version => version.label === job.result?.label && version.status === "candidate");
-    setTabState(isActiveJob(job) || waiting ? "results" : "prepare");
+    setTabState("prepare");
   }, [tab, status]);
 
   // Every case that can train starts selected, except those this browser remembers the user clearing.
@@ -240,13 +237,9 @@ function ExtendTrainingInner() {
     : status ? reviewLabel(status.versions, status.job?.result?.label) : null;
 
   return (
-    <div className="container mx-auto max-w-6xl space-y-6 p-4 md:p-8">
+    <div className="space-y-6">
       <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
-          <Link href="/admin" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="mr-1 h-4 w-4" />
-            Admin Panel
-          </Link>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <Brain className="h-6 w-6" />
             UNet Extend Training

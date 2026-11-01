@@ -37,6 +37,41 @@ const normalizeSegmentationModel = (value: unknown): "medsam" | "unet" | null =>
 };
 
 /**
+ * Fails any pending/in-progress landmark-detection jobs that depend on a reconstruction being
+ * deleted. Without this, the job-processing side panel keeps reporting "in progress" until the
+ * unrelated stale-job sweep (jobs/stalelandmarkjobsweep.ts) eventually times it out, since
+ * landmarkApi.jobSummary on the frontend just mirrors the raw Job status (reported live, 2026-10).
+ *
+ * `segmentationModel` scopes the cleanup to jobs for that one model, using the same UNet-exact /
+ * MedSAM-or-null matching already used for landmark job queries at
+ * services/landmark_inference.ts:89-93 (MedSAM-sourced landmark jobs can have a null
+ * segmentationModel for backward compatibility). Omit it to clear every in-progress landmark job
+ * for the project -- used when every reconstruction (every model) is being deleted at once.
+ */
+async function clearDependentLandmarkJobs(projectId: string, segmentationModel?: "medsam" | "unet"): Promise<number> {
+    const query: Record<string, unknown> = {
+        projectid: projectId,
+        model_used: /landmark/i,
+        status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
+    };
+    if (segmentationModel) {
+        query.segmentationModel = segmentationModel === "unet"
+            ? SegmentationModel.UNET
+            : { $in: [SegmentationModel.MEDSAM, null] };
+    }
+    const result = await jobModel.updateMany(query, {
+        $set: {
+            status: JobStatus.FAILED,
+            message: "Landmark detection cancelled: its 4D reconstruction was deleted before the job completed.",
+        },
+    });
+    if (result.modifiedCount > 0) {
+        logger.info(`${serviceLocation}: Cleared ${result.modifiedCount} pending/in-progress landmark job(s) for project ${projectId}${segmentationModel ? ` (model: ${segmentationModel})` : ""}.`);
+    }
+    return result.modifiedCount;
+}
+
+/**
  * Start 4D cardiac reconstruction job
  * Follows the same pattern as segmentation routes - delegates to service layer
  *
@@ -528,10 +563,15 @@ router.delete("/delete-project-reconstructions/:projectId",
 
             logger.info(`${serviceLocation}: Successfully deleted ${deletedCount} reconstruction(s) for project ${projectId}.`);
 
+            // Every reconstruction (every model) is gone, so clear every in-progress landmark job
+            // for the project -- see clearDependentLandmarkJobs' own docstring for why.
+            const clearedLandmarkJobCount = await clearDependentLandmarkJobs(projectId);
+
             return res.status(200).json({
                 success: true,
                 message: `Successfully deleted ${deletedCount} reconstruction(s).`,
-                deletedCount
+                deletedCount,
+                clearedJobCount: clearedLandmarkJobCount
             });
 
         } catch (error: unknown) {
@@ -612,10 +652,14 @@ router.delete("/delete-reconstruction/:projectId/:reconstructionId",
                 });
             }
 
+            const deletedModel = normalizeSegmentationModel(reconstruction.segmentationModel) ?? undefined;
+            const clearedLandmarkJobCount = await clearDependentLandmarkJobs(projectId, deletedModel);
+
             return res.status(200).json({
                 success: true,
                 message: "Reconstruction deleted successfully.",
-                deletedCount: 1
+                deletedCount: 1,
+                clearedJobCount: clearedLandmarkJobCount
             });
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, `Error deleting reconstruction ${reconstructionId} for project ${projectId}`);
@@ -764,12 +808,13 @@ router.delete("/delete-model-reconstruction/:projectId",
             if (clearedJobsResult.modifiedCount > 0) {
                 logger.info(`${serviceLocation}: Cleared ${clearedJobsResult.modifiedCount} pending/in-progress ${segmentationModel} job(s) for project ${projectId}.`);
             }
+            const clearedLandmarkJobCount = await clearDependentLandmarkJobs(projectId, segmentationModel);
 
             return res.status(200).json({
                 success: true,
                 message: `Successfully deleted ${deletedCount} ${segmentationModel} reconstruction(s).`,
                 deletedCount,
-                clearedJobCount: clearedJobsResult.modifiedCount
+                clearedJobCount: clearedJobsResult.modifiedCount + clearedLandmarkJobCount
             });
 
         } catch (error: unknown) {

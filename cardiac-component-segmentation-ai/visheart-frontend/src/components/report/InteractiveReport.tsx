@@ -931,7 +931,7 @@ export function InteractiveReport({
           the Regional Findings entry point, so it needs the width. Cardiac
           Measurements and Disease Similarity are both compact and stack in the
           left column instead of squeezing the table into a third of the row. */}
-      <section className="mb-5 grid grid-cols-1 rounded-xl border border-border bg-card lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+      <section className="mb-5 grid grid-cols-1 rounded-xl border border-border bg-card sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         {/* Explicit placement rather than reordering the JSX: Measurements and
             Disease stack in column 1, Health Status owns column 2 across both
             rows. Keeps the DOM order (and the print/screen-reader order)
@@ -1760,10 +1760,9 @@ export function InteractiveReport({
                 </div>
 
                 {/* RV severity layering — shown only when the RV gate is met.
-                    ratio_note is always present then (disease-agnostic,
-                    primary); arvc_note/pah_note are secondary and optional;
-                    generic_note fires only when neither secondary note did.
-                    Kept as three visually distinct lines, never blended into
+                    arvc_note/pah_note are independent and optional;
+                    generic_note fires only when neither note did.
+                    Kept as visually distinct lines, never blended into
                     one score — see the Python module's own docstring for why. */}
                 {patternGates.rv_severity && (
                   <div className="mt-3 rounded-md border border-dashed border-border p-2">
@@ -1771,10 +1770,6 @@ export function InteractiveReport({
                       RV gate met — severity context
                     </p>
                     <ul className="flex flex-col gap-1">
-                      <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
-                        <span className="text-muted-foreground/50">•</span>
-                        <span>{patternGates.rv_severity.ratio_note}</span>
-                      </li>
                       {patternGates.rv_severity.arvc_note && (
                         <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
                           <span className="text-muted-foreground/50">•</span>
@@ -1909,7 +1904,7 @@ export function InteractiveReport({
             {/* Clicking anywhere in the chart area that isn't a wedge, a curve
                 or a control clears the selection. */}
             <div
-              className="grid grid-cols-1 gap-6 md:grid-cols-[260px_1fr]"
+              className="grid grid-cols-1 gap-6 sm:grid-cols-[260px_1fr]"
               onClick={() => setSelectedSeg(null)}
             >
               <div>
@@ -2085,7 +2080,7 @@ export function InteractiveReport({
               : "No RV regional strain computed for this model yet — run RV strain from the Landmark Detection page."}
           </p>
         ) : (
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-[420px_1fr]">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-[420px_1fr]">
             {/* Same crescent shape the Strain/Structure tabs draw RV with —
                 reused (not reimplemented) so no view can ever disagree, and
                 the two rings of real data (basal, mid) plus the honest

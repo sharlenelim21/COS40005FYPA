@@ -74,6 +74,19 @@ export function useActiveReconstructionJobs(projectId?: string) {
 
   const anyBuilding = building.lv.size > 0 || building.rv.size > 0;
 
+  // Live progress needs a live refresh: the mount-time effect above fetches once, but nothing
+  // was re-fetching after that, so `buildingProgress` (the "Building... X%" bar) just sat at
+  // whatever it read on mount until something else remounted this hook (e.g. a page reload) --
+  // reported live as "progress stops, needs a reload to update" (2026-10). Every other polling
+  // hook in the app (useAutoPipelineChain, extend-training, AdminAlertNotifier) already has an
+  // interval; this one didn't. Gated on `anyBuilding` so it's a no-op once nothing is building,
+  // same pattern useAutoPipelineChain uses for its own interval.
+  useEffect(() => {
+    if (!anyBuilding) return;
+    const timer = setInterval(() => void refresh(), 5000);
+    return () => clearInterval(timer);
+  }, [anyBuilding, refresh]);
+
   /**
    * Real tracked progress per chamber (0-100), averaged across that chamber's
    * live in-flight jobs — same live/stale filtering as `building` above, and

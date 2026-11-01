@@ -116,7 +116,6 @@ export function DiseasePatternSimilarityPage({
             <div className="mt-2 border-t border-dashed border-gray-300 pt-2 text-[9px] text-gray-600">
               <span className="font-semibold text-gray-900">RV gate met — severity context:</span>
               <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                <li>{patternGates.rv_severity.ratio_note}</li>
                 {patternGates.rv_severity.arvc_note && <li>{patternGates.rv_severity.arvc_note}</li>}
                 {patternGates.rv_severity.pah_note && <li>{patternGates.rv_severity.pah_note}</li>}
                 {patternGates.rv_severity.generic_note && <li>{patternGates.rv_severity.generic_note}</li>}

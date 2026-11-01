@@ -84,8 +84,7 @@ const getStatusDisplay = (status: string) => {
 
 const DASHBOARD_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
-  doctor: "Doctor",
-  educational_user: "Educational",
+  user: "User",
   guest: "Guest",
 };
 
@@ -94,10 +93,8 @@ const getRoleIcon = (role: string | undefined) => {
   switch (role) {
     case "admin":
       return <Shield className="h-4 w-4 text-blue-600" />;
-    case "doctor":
+    case "user":
       return <UserCheck className="h-4 w-4 text-green-600" />;
-    case "educational_user":
-      return <UserCheck className="h-4 w-4 text-teal-600" />;
     case "guest":
       return <User className="h-4 w-4 text-gray-500" />;
     default:
@@ -475,52 +472,12 @@ function DashboardPage() {
         </Alert>
       </ShowForGuest>
 
-      {/* Educational User elevation-status banner */}
-      {user.role === "educational_user" && (
-        <>
-          {(user.elevationStatus === "none" || !user.elevationStatus) && (
-            <Alert className="border-teal-200 bg-teal-50 dark:border-teal-800 dark:bg-teal-950/30">
-              <AlertCircle className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-              <AlertDescription className="text-teal-800 dark:text-teal-200">
-                <strong>Educational access</strong> — manage and run your own projects, same as any user.
-                <Link href="/request-access">
-                  <Button variant="link" className="ml-2 h-auto p-0 text-teal-800 dark:text-teal-200 underline hover:text-teal-900 dark:hover:text-teal-100">
-                    Request Clinical Access
-                  </Button>
-                </Link>
-              </AlertDescription>
-            </Alert>
-          )}
-          {user.elevationStatus === "pending" && (
-            <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
-              <RefreshCw className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-              <AlertDescription className="text-amber-800 dark:text-amber-200">
-                Your staff verification is pending Admin review. You keep educational access in the meantime.
-              </AlertDescription>
-            </Alert>
-          )}
-          {user.elevationStatus === "rejected" && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                Your clinical access request was rejected.
-                <Link href="/request-access">
-                  <Button variant="link" className="ml-2 h-auto p-0 underline">
-                    Submit a new request
-                  </Button>
-                </Link>
-              </AlertDescription>
-            </Alert>
-          )}
-        </>
-      )}
-
       {/* Main Dashboard Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="projects" className="relative">
-            {user?.role === "doctor" || user?.role === "admin"
+            {user?.role === "user" || user?.role === "admin"
               ? "Case History"
               : "Projects"}
           </TabsTrigger>
@@ -750,7 +707,7 @@ function DashboardPage() {
           <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-2xl font-bold">
-                {user?.role === "doctor" || user?.role === "admin"
+                {user?.role === "user" || user?.role === "admin"
                   ? "Case History"
                   : "My Projects"}
               </h2>
@@ -775,6 +732,17 @@ function DashboardPage() {
                   <Upload className="h-4 w-4" />
                 </Button>
               </ShowForProjectCreator>
+              {/* Guests don't upload arbitrary files -- this opens the same dialog, which shows
+                  the demo-case flow instead when the signed-in user is a Guest. */}
+              <ShowForGuest fallback={null}>
+                <Button onClick={() => setUploadDialogOpen(true)} className="hidden sm:flex">
+                  <Upload className="mr-2 h-4 w-4" />
+                  Start Demo Project
+                </Button>
+                <Button onClick={() => setUploadDialogOpen(true)} className="sm:hidden">
+                  <Upload className="h-4 w-4" />
+                </Button>
+              </ShowForGuest>
             </div>
           </div>
 
@@ -881,6 +849,14 @@ function DashboardPage() {
                     </Button>
                   )}
                 </ShowForProjectCreator>
+                <ShowForGuest fallback={null}>
+                  {!searchTerm && (
+                    <Button onClick={() => setUploadDialogOpen(true)}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      Start Demo Project
+                    </Button>
+                  )}
+                </ShowForGuest>
               </CardContent>
             </Card>
           ) : viewMode === "card" ? (

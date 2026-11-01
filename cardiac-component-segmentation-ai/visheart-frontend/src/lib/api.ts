@@ -27,18 +27,14 @@ console.log(`API base URL: ${process.env.NEXT_PUBLIC_API_URL}`);
 // Authentication functions
 export const authApi = {
   /**
-   * Register a new user account. Always sent as multipart/form-data — even when the "medical
-   * staff" fields are empty — so the one endpoint handles both the plain signup and the
-   * staff-elevation-request signup without branching on content type.
-   * @param formData - FormData with username, password, email, phone, and optionally
-   *   isMedicalStaff ("true"), profession, medicalId, requestedRole, reason, staffIdCard (File).
+   * Register a new user account. Plain JSON — no staff-verification fields or file upload
+   * anymore, every new account is a User directly (see authentication.ts's /register).
+   * @param userData - username, password, email, phone
    * @returns Promise<ApiResponse> - Registration response with success status and user data
    */
-  register: async (formData: FormData) => {
+  register: async (userData: { username: string; password: string; email: string; phone: string }) => {
     try {
-      const response = await api.post("/auth/register", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const response = await api.post("/auth/register", userData);
       return response.data;
     } catch (error) {
       // Rethrow the error for handling by the caller
@@ -156,54 +152,6 @@ export const authApi = {
     }
   },
 
-  // An already-registered EducationalUser requests elevation to Doctor
-  // (the post-signup "Request Clinical Access" flow — same fields as the signup-time checkbox).
-  requestElevation: async (formData: FormData) => {
-    try {
-      const response = await api.post("/auth/request-elevation", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Admin's "Staff Verifications" queue
-  getPendingElevations: async () => {
-    try {
-      const response = await api.get("/auth/pending-elevations");
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Admin approves a pending elevation request as Doctor
-  approveElevation: async (userId: string, role: "doctor") => {
-    try {
-      const response = await api.post(`/auth/elevations/${userId}/approve`, { role });
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Admin rejects a pending elevation request
-  rejectElevation: async (userId: string) => {
-    try {
-      const response = await api.post(`/auth/elevations/${userId}/reject`);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  // Admin-only: fetch the staff ID card as a blob (never a public URL) for display in a viewer
-  getStaffIdCardBlob: async (userId: string): Promise<Blob> => {
-    const response = await api.get(`/auth/elevations/${userId}/id-card`, { responseType: "blob" });
-    return response.data;
-  },
 };
 
 // Project management functions
@@ -245,6 +193,16 @@ export const projectApi = {
         },
         timeout: 300000,
       });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Create a project from the fixed Guest demo case (Guest accounts can't upload arbitrary files)
+  createDemoProject: async () => {
+    try {
+      const response = await api.post("/project/create-demo", {}, { timeout: 300000 });
       return response.data;
     } catch (error) {
       throw error;

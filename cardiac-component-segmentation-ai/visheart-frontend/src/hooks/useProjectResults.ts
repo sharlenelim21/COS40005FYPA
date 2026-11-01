@@ -146,16 +146,14 @@ export type DiseasePatternGates = {
   /** codes with met === true, `gates` array order preserved. */
   met_codes: string[];
   /** Advisory layering shown only when the RV gate is met — see the Python
-   *  module's "RV gate severity layering" docstring section for why these 3
+   *  module's "RV gate severity layering" docstring section for why these 2
    *  notes are kept independent rather than combined into one score. */
   rv_severity: {
-    /** Primary, disease-agnostic — RV/LV volume ratio vs ACDC's own RV/NOR group stats. */
-    ratio_note: string;
-    /** Secondary — only set when close to the Kubler et al. 2021 ARVC cohort range. */
+    /** Only set when close to the Kubler et al. 2021 ARVC cohort range. */
     arvc_note: string | null;
-    /** Secondary — only set when in the ESC/ERS 2022 PAH higher-risk band. */
+    /** Only set when in the ESC/ERS 2022 PAH higher-risk band. */
     pah_note: string | null;
-    /** Set only when neither secondary note fired. */
+    /** Set only when neither note fired. */
     generic_note: string | null;
   } | null;
   sex: "male" | "female" | "unspecified";
@@ -395,7 +393,7 @@ export type MaskDoc = {
    *  (segmentation_routes.ts) computes server-side for Disease Pattern
    *  Similarity's HCM gate. Surfaced here too so the report can show it as an
    *  actual metric, not just feed it silently into that one downstream score. */
-  bullseye?: { segment_values?: (number | null)[]; computed_at?: string };
+  bullseye?: { segment_values?: (number | null)[]; segment_values_max?: (number | null)[]; computed_at?: string };
 };
 
 export type Model = "unet" | "medsam";
@@ -1016,13 +1014,21 @@ export function useProjectResults(
           // does server-side for the disease pattern gates' HCM gate (see
           // segmentation_routes.ts) — duplicated here client-side so the report
           // can show the number itself, not just its downstream effect on a score.
-          // bullseye.segment_values is in PIXELS (see compute_bullseye_from_rle.py);
+          // bullseye.segment_values{,_max} is in PIXELS (see compute_bullseye_from_rle.py);
           // spacing_mm[0] (in-plane dx) converts the max to real mm — without a
           // known spacing this must read as null, never a raw pixel count mislabeled mm.
+          // Prefers segment_values_max (true per-ray peak, not sector-mean) when present, same
+          // fallback-to-segment_values reasoning as the server-side version (not every mask has
+          // been recomputed since this field was added).
           MaxWallThicknessMm: (() => {
-            const vals = (doc.bullseye?.segment_values ?? []).filter(
+            const maxVals = (doc.bullseye?.segment_values_max ?? []).filter(
               (v): v is number => typeof v === "number" && Number.isFinite(v),
             );
+            const vals = maxVals.length
+              ? maxVals
+              : (doc.bullseye?.segment_values ?? []).filter(
+                  (v): v is number => typeof v === "number" && Number.isFinite(v),
+                );
             const dx = doc.heartMetrics?.spacing_mm?.[0];
             return vals.length && typeof dx === "number" ? Math.max(...vals) * dx : null;
           })(),

@@ -71,6 +71,7 @@ DECODE_VOLUME_SIZE_WIDE = 4.5
 DECODE_TIGHT_HEADROOM = 0.95
 
 
+
 def _classify_rv_mesh(
     mesh_file: str, lv_reference_points: Optional[np.ndarray] = None,
     nifti_path: Optional[str] = None, frame_idx: int = 0,
@@ -294,14 +295,18 @@ class FourDReconstructionHandler:
     def _light_gpu_sync(self):
         """A pure timing/consistency barrier -- synchronize only, no memory reclaim.
         For the per-epoch checkpoint inside the optimization loop (see its own call
-        site): that loop already gets a full _force_gpu_sync() at its start and end
-        (once per frame), so the actual GPU memory peak this function's caller is
-        defending against is already bounded there. Verified live (2026-10, MedSAM
-        batching investigation on this same install): torch.cuda.empty_cache() +
-        gc.collect() are measurably expensive under GPU memory pressure (cuDNN's
-        allocator does real defragmentation work, not just bookkeeping), so calling
-        them every 20 epochs inside a loop that can run hundreds of iterations adds
-        real wall-clock cost for no additional memory safety over doing it once per
+        site): every frame still gets exactly one full _force_gpu_sync() per frame
+        boundary (_complete_model_reset(), called at the top of each frame in the
+        4D loop), so the actual GPU memory peak this function's caller is defending
+        against is already bounded there -- the end-of-frame cleanup now uses this
+        lighter sync too (2026-10), since that _force_gpu_sync() one iteration later
+        already does the real reclaim and paying for it twice at one frame boundary
+        bought nothing. Verified live (2026-10, MedSAM batching investigation on
+        this same install): torch.cuda.empty_cache() + gc.collect() are measurably
+        expensive under GPU memory pressure (cuDNN's allocator does real
+        defragmentation work, not just bookkeeping), so calling them every 20
+        epochs inside a loop that can run hundreds of iterations adds real
+        wall-clock cost for no additional memory safety over doing it once per
         frame."""
         if is_gpu_available():
             safe_synchronize(self.device)
@@ -620,12 +625,12 @@ class FourDReconstructionHandler:
             lr: Learning rate
             code_reg_lambda: L2 regularization weight for latent codes (default 1e-4, set to 0 to disable)
             verbose_logging: If True, log detailed optimization progress
-            seed: Seed for latent code initialisation. Latent fitting is non-convex and the codes
-                start from a random draw, so an unseeded fit lands in a different local optimum on
-                every call -- measured spread on the same case is a median of 0.82 mm and up to
-                2.84 mm Chamfer, which is larger than the difference between 200 and 1000
-                iterations. Pass a seed to make a reconstruction reproducible; leave None for the
-                previous (non-deterministic) behaviour.
+            seed: Seed for latent code initialisation. Latent fitting is non-convex and a
+                cold-started fit starts from a random draw, so an unseeded fit lands in a
+                different local optimum on every call -- measured spread on the same case is a
+                median of 0.82 mm and up to 2.84 mm Chamfer, which is larger than the difference
+                between 200 and 1000 iterations. Pass a seed to make a reconstruction
+                reproducible; leave None for the previous (non-deterministic) behaviour.
 
         Returns:
             Optimized shape (c_s) and motion (c_m) codes
@@ -633,20 +638,20 @@ class FourDReconstructionHandler:
         try:
             # AUTOGRAD FIX: Force complete GPU synchronization and cleanup
             self._force_gpu_sync()
-            
+
             # Ensure decoder parameters don't accumulate gradients
             if self.decoder is not None:
                 for param in self.decoder.parameters():
                     param.grad = None
                 self.decoder.eval()
-            
+
             # For single frame reconstruction
             frame_num = 1
-            
+
             # Initialize latent codes using isolated tensor creation
             c_s = self._create_isolated_tensor(torch.zeros(1, self.Cs_size), requires_grad=True)
             c_m = self._create_isolated_tensor(torch.zeros(frame_num, self.Cm_size), requires_grad=True)
-            
+
             # Initialize with proper distributions - completely isolated
             # Seed immediately before the draw, so the seed governs exactly these two tensors and
             # nothing else in the process is affected for longer than it takes to fill them.
@@ -657,7 +662,7 @@ class FourDReconstructionHandler:
             with torch.no_grad():
                 c_s.normal_(mean=0, std=0.1)
                 c_m.normal_(mean=0, std=1.0 / np.sqrt(self.Cm_size))
-            
+
             # Create fresh optimizer instance
             optimizer = torch.optim.Adam([c_s, c_m], lr=lr)
             
@@ -835,20 +840,23 @@ class FourDReconstructionHandler:
                 # Force another GPU sync before mesh generation
                 safe_synchronize(self.device)
                 
-                # Create a dummy motion filename (not used for single frame)
                 # Get base name without extension for flexibility
                 base_name = os.path.splitext(output_file)[0]
-                motion_filename = base_name + '_motion'
-                
+
                 # The create_mesh_4dsdf function automatically adds .ply extension
                 # So we need to provide the filename without extension
                 ply_base_name = base_name
-                
+
                 # Pick the smallest bound that contains this shape -- see the constants above.
                 volume_size = self._decode_volume_size(sdf_data)
                 aha_labels, new_warp_state = deep_sdf.mesh.create_mesh_4dsdf(
                     self.decoder, c_s_vec, c_m_vec, phase_t,
-                    ply_base_name, motion_filename,
+                    # motion_filename=None: nothing reads this sidecar -- it's never
+                    # uploaded (mesh_files only ever collects the .obj/.glb path) and
+                    # the backend's validateObjFiles would hard-reject the callback if
+                    # it ever were. Skipping it avoids writing+gzip-compressing a
+                    # [N,N,N,3] float volume every frame for no consumer.
+                    ply_base_name, None,
                     N=resolution, max_batch=self.max_batch,
                     offset=offset, scale=scale, Ti=Ti,
                     classify_aha=classify_aha, cpd_warp_state=cpd_warp_state,
@@ -1023,6 +1031,10 @@ class FourDReconstructionHandler:
 
         Falls back to the wide bound if the extent cannot be read -- being clipped is a worse
         failure than being coarse.
+
+        (2026-10-31: a per-frame box-tightening variant of this was tried and reverted after a
+        reported quality drop on real cases -- see the Phase 3.3 section of the plan file. Back to
+        this simple per-case binary choice.)
         """
         try:
             canonical = np.asarray(sdf_data["pcd"], dtype=float)[:, :3]
@@ -1087,7 +1099,8 @@ class FourDReconstructionHandler:
                            num_iterations: int = 50, code_reg_lambda: float = 1e-4,
                            verbose_logging: bool = False, num_candidates: int = 1,
                            seed: Optional[int] = None, classify_aha: bool = False,
-                           cpd_warp_state: Optional[dict] = None
+                           cpd_warp_state: Optional[dict] = None,
+                           stage_times: Optional[Dict[str, float]] = None,
                            ) -> Tuple[str, torch.Tensor, torch.Tensor, Dict, Optional[List[int]], Optional[dict]]:
         """Fit the latent codes and decode the mesh, optionally best-of-N across random seeds.
 
@@ -1113,14 +1126,24 @@ class FourDReconstructionHandler:
             records what was tried and chosen.
         """
         if num_candidates <= 1:
+            _t0 = time.time()
             c_s, c_m = self._optimize_latent_codes_sync(
                 sdf_data, num_iterations, code_reg_lambda=code_reg_lambda,
-                verbose_logging=verbose_logging, seed=seed
+                verbose_logging=verbose_logging, seed=seed,
             )
+            if stage_times is not None:
+                stage_times["optimization"] = stage_times.get("optimization", 0.0) + (time.time() - _t0)
+            _t0 = time.time()
             mesh_file, aha_labels, warp_state = self._generate_mesh_sync(
                 c_s, c_m, sdf_data, output_file, resolution, export_format,
                 classify_aha=classify_aha, cpd_warp_state=cpd_warp_state,
             )
+            if stage_times is not None:
+                # Includes CPD registration on whichever frame first successfully classifies AHA
+                # (cpd_warp_state is None) -- every later frame's CPD cost is a cheap nearest-
+                # neighbor lookup (see cpd_aha_segmentation.register_cpd_warp's docstring), so this
+                # bucket is not purely "mesh generation" on that one frame, but is on every other.
+                stage_times["mesh_generation"] = stage_times.get("mesh_generation", 0.0) + (time.time() - _t0)
             return mesh_file, c_s, c_m, {"num_candidates": 1, "seed": seed,
                                          "selected_seed": seed, "selection": "single-fit"}, aha_labels, warp_state
 
@@ -1365,7 +1388,11 @@ class FourDReconstructionHandler:
             4D reconstruction results dictionary
         """
         start_time = time.time()
-        
+        # Per-stage wall-clock breakdown, summed across every frame -- see the summary
+        # logged near the end of this function. Lets a change like warm-starting the
+        # optimizer be justified (or not) with a real number instead of a guess.
+        stage_times: Dict[str, float] = {}
+
         try:
             # AUTOGRAD FIX: Complete request isolation for 4D sequence processing
             self._isolate_request_context()
@@ -1501,13 +1528,15 @@ class FourDReconstructionHandler:
                         
                         # Extract contour for this frame
                         try:
+                            _t0 = time.time()
                             frame_point_cloud = self._extract_contour_from_nifti_sync(frame_path, chamber)
-                            
+                            stage_times["contour_extraction"] = stage_times.get("contour_extraction", 0.0) + (time.time() - _t0)
+
                             # Check if we got any points
                             if len(frame_point_cloud) == 0:
                                 print(f"[WARN] Frame {original_frame_idx} has no contour points (likely apex/base slice). Skipping...")
                                 continue
-                                
+
                         except Exception as contour_error:
                             # Check if this is expected (no LVM in frame)
                             if "No LVM" in str(contour_error) or "apex or base" in str(contour_error):
@@ -1518,9 +1547,11 @@ class FourDReconstructionHandler:
                                 raise contour_error
                         
                         # Transform to canonical space (using ED frame transformation)
+                        _t0 = time.time()
                         frame_sdf_data = self._transform_to_canonical_in_memory(
                             frame_point_cloud, T, offset, scale, test_sampling=True
                         )
+                        stage_times["canonical_transform"] = stage_times.get("canonical_transform", 0.0) + (time.time() - _t0)
                         
                         # Generate mesh for this frame with correct extension
                         # Chamber goes BEFORE the frame number: it groups a sequence by chamber,
@@ -1540,6 +1571,15 @@ class FourDReconstructionHandler:
                         frame_seed = None if seed is None else int(seed) + original_frame_idx * 1000
                         is_ed_frame = original_frame_idx == ed_frame_index
                         is_rv = chamber == "rv"
+                        # REVERTED (2026-10-31): both the non-ED resolution cap and the
+                        # warm-start iteration reduction below caused a visible quality
+                        # regression on a live test case -- a jagged/faceted mesh and the RV
+                        # cavity visibly clipping into the LV myocardium on non-ED frames. Most
+                        # likely cause: at 64^3 the marching-cubes grid is too coarse to resolve
+                        # the thin septal wall separating the two chambers, so adjacent
+                        # (different-chamber) regions of the two meshes bridge together. Back to
+                        # full requested resolution and full iteration count for every frame
+                        # until this is revisited with a proper before/after quality comparison.
                         # AHA-17 (deep_sdf.mesh's classify_aha) is LV-atlas-specific, so it's
                         # always off for RV here -- RV gets its own classifier just below
                         # (_classify_rv_mesh), which needs no cross-frame warp state to reuse.
@@ -1548,6 +1588,7 @@ class FourDReconstructionHandler:
                             num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
                             verbose_logging=verbose_logging, num_candidates=num_candidates,
                             seed=frame_seed, classify_aha=not is_rv, cpd_warp_state=cpd_warp_state,
+                            stage_times=stage_times,
                         )
                         if is_rv:
                             # Same NIfTI frame file this frame's own RV contour
@@ -1561,11 +1602,13 @@ class FourDReconstructionHandler:
                             # 4D/temporal MESH reconstruction itself, not label
                             # tracking (see git history for the motion-tracked
                             # version, _classify_rv_mesh_motion_tracked).
+                            _t0 = time.time()
                             frame_lv_reference_points = self._extract_contour_from_nifti_sync(frame_path, "lv")
                             frame_aha_labels = _classify_rv_mesh(
                                 frame_mesh_file, lv_reference_points=frame_lv_reference_points,
                                 nifti_path=frame_path, frame_idx=0,
                             )
+                            stage_times["rv_classification"] = stage_times.get("rv_classification", 0.0) + (time.time() - _t0)
                         print(f"Completed optimization for frame {original_frame_idx}")
                         frame_selections[original_frame_idx] = frame_selection
                         mesh_files.append(frame_mesh_file)
@@ -1575,10 +1618,17 @@ class FourDReconstructionHandler:
                             ed_aha_vertex_labels = frame_aha_labels
                         
                         print(f"[OK] Successfully generated mesh for frame {original_frame_idx}: {os.path.basename(frame_mesh_file)}")
-                        
-                        # AUTOGRAD FIX: Aggressive cleanup after frame processing
+
+                        # AUTOGRAD FIX: Aggressive cleanup after frame processing. A light sync
+                        # (barrier only, no empty_cache()/gc.collect()) is enough here: the NEXT
+                        # frame's _complete_model_reset() call, right at the top of this loop,
+                        # already does a full _force_gpu_sync() before that frame does anything
+                        # else -- so every frame still gets exactly one heavy reclaim, just not
+                        # two back-to-back (this frame's end + the next frame's start), which was
+                        # paying empty_cache()'s real defragmentation cost twice for one frame
+                        # boundary (see _light_gpu_sync's docstring on why that call is expensive).
                         del frame_c_s, frame_c_m, frame_sdf_data, frame_point_cloud
-                        self._force_gpu_sync()
+                        self._light_gpu_sync()
                         print(f"GPU memory after frame processing: {safe_memory_stats(self.device)['allocated_bytes'] / 1024**2:.1f} MB")
                         
                     except Exception as e:
@@ -1615,8 +1665,10 @@ class FourDReconstructionHandler:
                 
                 # Extract and process ED frame only
                 try:
+                    _t0 = time.time()
                     ed_point_cloud = self._extract_contour_from_nifti_sync(ed_frame_path, chamber)
-                    
+                    stage_times["contour_extraction"] = stage_times.get("contour_extraction", 0.0) + (time.time() - _t0)
+
                     # Check if we got any points
                     if len(ed_point_cloud) == 0:
                         raise ValueError(
@@ -1637,9 +1689,11 @@ class FourDReconstructionHandler:
                         # Unexpected error, re-raise
                         raise contour_error
                 
+                _t0 = time.time()
                 sdf_data = self._transform_to_canonical_in_memory(
                     ed_point_cloud, T, offset, scale, test_sampling=True
                 )
+                stage_times["canonical_transform"] = stage_times.get("canonical_transform", 0.0) + (time.time() - _t0)
                 
                 # Generate mesh with correct extension
                 os.makedirs(output_dir, exist_ok=True)
@@ -1656,14 +1710,16 @@ class FourDReconstructionHandler:
                     sdf_data, ed_point_cloud, output_file, resolution, export_format,
                     num_iterations=num_iterations, code_reg_lambda=code_reg_lambda,
                     verbose_logging=verbose_logging, num_candidates=num_candidates, seed=ed_seed,
-                    classify_aha=not is_rv,
+                    classify_aha=not is_rv, stage_times=stage_times,
                 )
                 if is_rv:
+                    _t0 = time.time()
                     ed_lv_reference_points = self._extract_contour_from_nifti_sync(ed_frame_path, "lv")
                     ed_aha_vertex_labels = _classify_rv_mesh(
                         primary_mesh_file, lv_reference_points=ed_lv_reference_points,
                         nifti_path=ed_frame_path, frame_idx=0,
                     )
+                    stage_times["rv_classification"] = stage_times.get("rv_classification", 0.0) + (time.time() - _t0)
                 frame_selections[ed_frame_index] = ed_selection
                 print(f"[4D Reconstruction] Reconstruction completed: {primary_mesh_file}")
                 mesh_files = [primary_mesh_file]
@@ -1679,13 +1735,25 @@ class FourDReconstructionHandler:
             self._clear_gpu_memory()
             
             reconstruction_time = time.time() - start_time
-            
+
+            # Per-stage breakdown -- see stage_times' own comment near the top of this function.
+            # Logged at info level (not the print()s used elsewhere in this file for routine
+            # progress) specifically so it's easy to filter for when judging whether a given
+            # optimization actually helped.
+            stage_times["other"] = max(0.0, reconstruction_time - sum(stage_times.values()))
+            logging.getLogger("visheart").info(
+                "[4D Reconstruction] stage breakdown (s): "
+                + ", ".join(f"{k}={v:.2f}" for k, v in stage_times.items())
+                + f", total={reconstruction_time:.2f}"
+            )
+
             return {
                 "success": True,
                 "input_file": nifti_file_path,
                 "mesh_file": primary_mesh_file,  # Primary mesh (ED frame or first available)
                 "mesh_files": mesh_files,  # All generated mesh files
                 "aha_vertex_labels": ed_aha_vertex_labels,
+                "stage_times_sec": stage_times,
                 # Per-frame labels keyed by original frame index (as strings - JSON
                 # object keys). Lets the viewer color whichever frame's mesh geometry
                 # is currently loaded, not just the ED frame's. Frames skipped as

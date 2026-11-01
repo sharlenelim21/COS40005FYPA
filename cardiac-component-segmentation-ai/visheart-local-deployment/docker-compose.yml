@@ -15,7 +15,13 @@ x-gpu-environment: &gpu-env
   SERVER_USERNAME: visheart-gpu-inference
   ALLOWED_NODE_USERNAME: visheart-node-server
   ENV_TYPE: development
-  GPU_SEMAPHORE_COUNT: 3
+  # 1 concurrent GPU job at a time -- the GPU service's own documented safe default
+  # (visheart-inference-gpu/.env.template, README.md). This install's GPU has only 4GB
+  # VRAM and already OOMs under far lighter load than 3 concurrent jobs (confirmed live,
+  # 2026-10); reported crashes running multiple projects at once traced to this being set
+  # above that safe default. The semaphore queues excess requests rather than rejecting
+  # them, so this alone gives "second project's job waits instead of crashing" for free.
+  GPU_SEMAPHORE_COUNT: 1
   RECONSTRUCTION_USE_FIXED_SEED: "true"
   RECONSTRUCTION_RANDOM_SEED: "42"
   LANDMARK_REPO_PATH: /app/UNETRESNET34

@@ -30,11 +30,8 @@ import {
 import { authApi } from "@/lib/api";
 
 // Mirrors the backend's UserRole enum (Cardiac_Segmentation_FYP_Server/src/types/database_types.ts).
-// "educational_user" is the default role every signup starts as (own projects only, original
-// simple project list, demo-friendly). Elevation to "doctor" requires Admin approval (see
-// elevationStatus on the User type below) — it is never granted directly at signup.
-export type Role = "educational_user" | "doctor" | "admin" | "guest";
-export type ElevationStatus = "none" | "pending" | "approved" | "rejected";
+// "user" is assigned directly at signup — full clinical access, no approval step.
+export type Role = "user" | "admin" | "guest";
 
 export interface User {
   _id: string;
@@ -42,13 +39,6 @@ export interface User {
   email: string;
   phone: string;
   role: Role;
-  elevationStatus?: ElevationStatus;
-  isMedicalStaff?: boolean;
-  profession?: string;
-  medicalId?: string;
-  requestedRole?: "doctor";
-  elevationReason?: string;
-  hasStaffIdCard?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,8 +47,8 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   error: string | null;
-  login: (username: string, password: string) => Promise<void>;
-  guestLogin: () => Promise<void>;
+  login: (username: string, password: string) => Promise<User>;
+  guestLogin: () => Promise<User>;
   logout: () => Promise<void>;
   checkAuthStatus: () => Promise<User | null>;
 }
@@ -121,6 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           "Login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
         );
       }
+      return authenticatedUser;
     } catch (err: any) {
       const status = err.response?.status;
       const data = err.response?.data;
@@ -143,7 +134,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await authApi.guestLogin();
-      await fetchUserData();
+      const authenticatedUser = await fetchUserData();
+      if (!authenticatedUser) {
+        throw new Error(
+          "Guest login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
+        );
+      }
+      return authenticatedUser;
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || "Guest login failed";
       setError(errorMessage);

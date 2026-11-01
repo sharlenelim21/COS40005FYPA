@@ -16,7 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { elapsed, isActiveJob, retrainingApi, StepState, TrainingJob } from "@/lib/retraining-api";
+import { elapsed, isActiveJob, retrainingApi, trainingJobPercent, StepState, TrainingJob } from "@/lib/retraining-api";
 
 function StepIcon({ state }: { state: StepState }) {
   if (state === "done") return <CheckCircle className="h-5 w-5 shrink-0 text-green-600 dark:text-green-400" />;
@@ -44,7 +44,7 @@ function StepDetail({ job, stepKey }: { job: TrainingJob; stepKey: string }) {
     return (
       <div className="space-y-1">
         <p className="text-sm text-muted-foreground">Epoch {epoch} of {progress.epochs}</p>
-        <Progress value={(epoch / progress.epochs) * 100} />
+        <Progress value={trainingJobPercent(job) ?? 0} />
       </div>
     );
   }
@@ -56,7 +56,7 @@ function StepDetail({ job, stepKey }: { job: TrainingJob; stepKey: string }) {
           {scored} of {progress.total} scans the model has never seen are scored
           {progress.scoring_active_first ? " (the model in use is scored first)" : ""}
         </p>
-        <Progress value={(scored / progress.total) * 100} />
+        <Progress value={trainingJobPercent(job) ?? 0} />
       </div>
     );
   }

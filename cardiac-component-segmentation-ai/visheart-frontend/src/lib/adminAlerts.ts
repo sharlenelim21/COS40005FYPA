@@ -1,9 +1,9 @@
-// Tracks which pending staff-verification requests / flagged masks an admin has already
-// seen (by visiting the relevant page) vs. already been alerted about in this browser, so
-// the background AdminAlertNotifier only chimes once per genuinely new item instead of
-// repeating every poll cycle for the same unvisited backlog.
+// Tracks which flagged masks an admin has already seen (by visiting the relevant page) vs.
+// already been alerted about in this browser, so the background AdminAlertNotifier only
+// chimes once per genuinely new item instead of repeating every poll cycle for the same
+// unvisited backlog.
 
-export type AdminAlertCategory = "elevations" | "flagged-masks";
+export type AdminAlertCategory = "new-corrections";
 
 const SEEN_PREFIX = "visheart_admin_seen_";
 const ALERTED_PREFIX = "visheart_admin_alerted_";
@@ -40,6 +40,30 @@ export const adminAlertStore = {
   },
   markAlerted(category: AdminAlertCategory, ids: Set<string>) {
     writeIds(ALERTED_PREFIX + category, ids);
+  },
+};
+
+// Retraining is a single current job (state machine: queued -> running -> succeeded/failed/
+// cancelled/interrupted), not a growing list of distinct pending items like elevations/flagged
+// masks were — "new" here means "this exact job id reached a terminal state I haven't already
+// toasted for", so it gets its own tiny tracker instead of reusing the id-set abstraction above.
+const RETRAINING_ALERTED_KEY = "visheart_admin_retraining_alerted_job";
+
+export const retrainingAlertStore = {
+  /** The job id (if any) a terminal-state toast has already fired for. */
+  getAlertedJobId(): string | null {
+    try {
+      return localStorage.getItem(RETRAINING_ALERTED_KEY);
+    } catch {
+      return null;
+    }
+  },
+  markAlertedJobId(jobId: string) {
+    try {
+      localStorage.setItem(RETRAINING_ALERTED_KEY, jobId);
+    } catch {
+      // Private browsing / storage disabled — next poll just re-toasts once more, harmless.
+    }
   },
 };
 

@@ -3,16 +3,18 @@
 import { useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
-import { authApi, adminApi } from "@/lib/api";
-import { adminAlertStore, playAdminAlertChime, type AdminAlertCategory } from "@/lib/adminAlerts";
+import { retrainingApi, RetrainingStatus } from "@/lib/retraining-api";
+import { trainableCases } from "@/components/extend-training/logic";
+import { adminAlertStore, retrainingAlertStore, playAdminAlertChime, type AdminAlertCategory } from "@/lib/adminAlerts";
 import { toast } from "sonner";
 
 const POLL_MS = 15000;
+const RETRAINING_TERMINAL_STATES = new Set(["succeeded", "failed"]);
 
 /**
- * Mounted globally (root layout) so an admin gets chimed + toasted about new staff
- * verification requests or newly-flagged masks no matter which page they're on — not just
- * while sitting on /admin/staff-verifications or /admin/flagged-masks. No-op for non-admins.
+ * Mounted globally (root layout) so an admin gets chimed + toasted about new corrections
+ * ready for training, or a finished retraining run, no matter which page they're on — not
+ * just while sitting on /extend-training. No-op for non-admins.
  */
 export function AdminAlertNotifier() {
   const { user } = useAuth();
@@ -36,31 +38,43 @@ export function AdminAlertNotifier() {
     [router],
   );
 
-  const check = useCallback(async () => {
-    const [elevationsData, flaggedData] = await Promise.all([
-      authApi.getPendingElevations().catch(() => null),
-      adminApi.getFlaggedMasks().catch(() => null),
-    ]);
+  // Retraining is a single job, not a growing list — "new" means "this job id just reached a
+  // terminal state (succeeded/failed) I haven't already toasted for" — tracked separately via
+  // retrainingAlertStore rather than checkCategory's id-set approach (see its own docstring).
+  const checkRetraining = useCallback((data: RetrainingStatus | null) => {
+    const job = data?.job;
+    if (!job || !RETRAINING_TERMINAL_STATES.has(job.state)) return;
+    if (retrainingAlertStore.getAlertedJobId() === job.id) return;
 
-    if (elevationsData) {
-      const ids = ((elevationsData.users ?? []) as { _id: string }[]).map((u) => u._id);
+    playAdminAlertChime();
+    if (job.state === "succeeded") {
+      toast.success("Retraining finished — a new version is ready for review.", {
+        action: { label: "Review", onClick: () => router.push("/extend-training") },
+      });
+    } else {
+      toast.error("Retraining failed.", {
+        description: job.error ?? undefined,
+        action: { label: "View", onClick: () => router.push("/extend-training") },
+      });
+    }
+    retrainingAlertStore.markAlertedJobId(job.id);
+  }, [router]);
+
+  const check = useCallback(async () => {
+    const { data } = await retrainingApi.status().catch(() => ({ data: null }));
+    checkRetraining(data);
+
+    const cases = data?.eligible?.cases;
+    if (cases) {
+      const ids = trainableCases(cases).map((c) => c.maskId);
       checkCategory(
-        "elevations",
+        "new-corrections",
         ids,
-        (n) => `${n} new staff verification request${n === 1 ? "" : "s"} awaiting review.`,
-        "/admin/staff-verifications",
+        (n) => `${n} new correction${n === 1 ? "" : "s"} ready for training.`,
+        "/extend-training?tab=prepare",
       );
     }
-    if (flaggedData) {
-      const ids = ((flaggedData.flaggedMasks ?? []) as { maskId: string }[]).map((m) => m.maskId);
-      checkCategory(
-        "flagged-masks",
-        ids,
-        (n) => `${n} mask${n === 1 ? "" : "s"} newly flagged for retraining.`,
-        "/admin/flagged-masks",
-      );
-    }
-  }, [checkCategory]);
+  }, [checkCategory, checkRetraining]);
 
   useEffect(() => {
     if (!isAdmin) return;

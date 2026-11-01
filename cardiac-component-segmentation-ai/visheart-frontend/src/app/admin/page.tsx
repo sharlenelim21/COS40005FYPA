@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "@/context/auth-context";
-import { adminApi, authApi } from "@/lib/api";
+import { adminApi } from "@/lib/api";
+import { elapsed, isActiveJob, trainingJobPercent, RetrainingStatus, retrainingApi } from "@/lib/retraining-api";
+import { trainableCases } from "@/components/extend-training/logic";
 import Link from "next/link";
 import {
   Card,
@@ -11,29 +13,74 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import {
   Users,
-  FileCheck,
   Brain,
   Activity,
   ArrowRight,
+  RefreshCw,
 } from "lucide-react";
 
 interface Stats {
   totalUsers: number | null;
   admins: number | null;
-  doctors: number | null;
-  educationalUsers: number | null;
-  pendingVerifications: number | null;
-  flaggedMasks: number | null;
+  users: number | null;
+  newCorrections: number | null;
+}
+
+const POLL_ACTIVE_MS = 5000;
+const POLL_IDLE_MS = 30000;
+
+function RetrainingCard() {
+  const [status, setStatus] = useState<RetrainingStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const reply = await retrainingApi.status();
+      if (!cancelled && reply.success) setStatus(reply.data);
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), isActiveJob(status?.job) ? POLL_ACTIVE_MS : POLL_IDLE_MS);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [status?.job?.state]);
+
+  const job = status?.job;
+  const running = isActiveJob(job);
+  const percent = job ? trainingJobPercent(job) : null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <RefreshCw className={`h-4 w-4 ${running ? "animate-spin" : ""}`} />
+          UNet Retraining
+        </CardTitle>
+        <CardDescription>
+          {job
+            ? `Started by ${job.requested_by}${job.started_at ? ` · ${elapsed(job.started_at, running ? null : job.finished_at)} ${running ? "so far" : "total"}` : ""}`
+            : "No retraining has been run yet."}
+        </CardDescription>
+      </CardHeader>
+      {job && (
+        <CardContent className="space-y-2">
+          <p className="text-sm font-medium capitalize">{job.state}</p>
+          {percent !== null && <Progress value={percent} />}
+          <Link href="/extend-training" className="text-sm text-blue-600 underline hover:text-blue-700 dark:text-blue-400">
+            {running ? "View progress" : "Review in UNet Extend Training"}
+          </Link>
+        </CardContent>
+      )}
+    </Card>
+  );
 }
 
 // Fixed categorical slot order (never cycled/reassigned by data) — colors come from
 // VisHeart's validated default palette (dataviz skill, references/palette.md), slots 1-3,
 // which pass the adjacent-pair CVD/contrast checks in both themes for a 3-slice donut.
 const ROLE_BREAKDOWN = [
-  { key: "doctors" as const, label: "Doctors", light: "#2a78d6", dark: "#3987e5" },
-  { key: "educationalUsers" as const, label: "Educational Users", light: "#1baf7a", dark: "#199e70" },
+  { key: "users" as const, label: "Users", light: "#2a78d6", dark: "#3987e5" },
   { key: "admins" as const, label: "Admins", light: "#eda100", dark: "#c98500" },
 ];
 
@@ -56,24 +103,22 @@ function RoleBreakdownDonut({ stats }: { stats: Stats }) {
     .join(", ");
 
   return (
-    <Card className="role-breakdown-donut">
+    <Card className="role-breakdown-donut flex h-full flex-col">
       <style>{`
         .role-breakdown-donut {
-          --role-doctors: ${ROLE_BREAKDOWN[0].light};
-          --role-educationalUsers: ${ROLE_BREAKDOWN[1].light};
-          --role-admins: ${ROLE_BREAKDOWN[2].light};
+          --role-users: ${ROLE_BREAKDOWN[0].light};
+          --role-admins: ${ROLE_BREAKDOWN[1].light};
         }
         .dark .role-breakdown-donut {
-          --role-doctors: ${ROLE_BREAKDOWN[0].dark};
-          --role-educationalUsers: ${ROLE_BREAKDOWN[1].dark};
-          --role-admins: ${ROLE_BREAKDOWN[2].dark};
+          --role-users: ${ROLE_BREAKDOWN[0].dark};
+          --role-admins: ${ROLE_BREAKDOWN[1].dark};
         }
       `}</style>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">User Roles</CardTitle>
         <CardDescription>Every account, by role</CardDescription>
       </CardHeader>
-      <CardContent className="flex h-full flex-col items-center gap-8 pb-8 sm:flex-row sm:items-center sm:gap-10">
+      <CardContent className="flex flex-1 flex-col items-center justify-center gap-8 pb-8 sm:flex-row sm:items-center sm:gap-10">
         <div
           className="relative h-40 w-40 shrink-0 rounded-full"
           style={total > 0 ? { background: `conic-gradient(${gradientStops})` } : undefined}
@@ -119,13 +164,6 @@ const quickLinks = [
     color: "text-blue-600 bg-blue-100 dark:bg-blue-950/40 dark:text-blue-400",
   },
   {
-    title: "Staff Verifications",
-    description: "Review pending Doctor access requests",
-    href: "/admin/staff-verifications",
-    icon: FileCheck,
-    color: "text-amber-600 bg-amber-100 dark:bg-amber-950/40 dark:text-amber-400",
-  },
-  {
     title: "UNet Extend Training",
     description: "Teach the segmentation model from saved corrections",
     href: "/extend-training",
@@ -162,20 +200,17 @@ export default function AdminPageHome() {
   const [stats, setStats] = useState<Stats>({
     totalUsers: null,
     admins: null,
-    doctors: null,
-    educationalUsers: null,
-    pendingVerifications: null,
-    flaggedMasks: null,
+    users: null,
+    newCorrections: null,
   });
 
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
-      const [usersRes, pendingRes, flaggedRes] = await Promise.allSettled([
+    const refresh = async () => {
+      const [usersRes, retrainingRes] = await Promise.allSettled([
         adminApi.getAllUsers(),
-        authApi.getPendingElevations(),
-        adminApi.getFlaggedMasks(),
+        retrainingApi.status(),
       ]);
 
       if (cancelled) return;
@@ -186,20 +221,19 @@ export default function AdminPageHome() {
           const users: { role: string }[] = usersRes.value?.users ?? [];
           next.totalUsers = users.length;
           next.admins = users.filter((u) => u.role === "admin").length;
-          next.doctors = users.filter((u) => u.role === "doctor").length;
-          next.educationalUsers = users.filter((u) => u.role === "educational_user").length;
+          next.users = users.filter((u) => u.role === "user").length;
         }
-        if (pendingRes.status === "fulfilled") {
-          next.pendingVerifications = (pendingRes.value?.users ?? []).length;
-        }
-        if (flaggedRes.status === "fulfilled") {
-          next.flaggedMasks = (flaggedRes.value?.flaggedMasks ?? []).length;
+        if (retrainingRes.status === "fulfilled" && retrainingRes.value.success) {
+          const cases = retrainingRes.value.data?.eligible?.cases;
+          next.newCorrections = cases ? trainableCases(cases).length : 0;
         }
         return next;
       });
-    })();
+    };
 
-    return () => { cancelled = true; };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), POLL_IDLE_MS);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
   return (
@@ -216,9 +250,11 @@ export default function AdminPageHome() {
           <div className="lg:col-span-2">
             <RoleBreakdownDonut stats={stats} />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1 lg:grid-rows-2">
-            <StatCard className="h-full" icon={FileCheck} label="Pending Verifications" value={stats.pendingVerifications} color="text-amber-600 bg-amber-100 dark:bg-amber-950/40 dark:text-amber-400" />
-            <StatCard className="h-full" icon={Brain} label="Flagged Masks Pending" value={stats.flaggedMasks} color="text-purple-600 bg-purple-100 dark:bg-purple-950/40 dark:text-purple-400" />
+          <div className="grid gap-4">
+            <Link href="/extend-training?tab=prepare">
+              <StatCard className="h-full transition-all hover:-translate-y-0.5 hover:shadow-md" icon={Brain} label="New Corrections to Review" value={stats.newCorrections} color="text-purple-600 bg-purple-100 dark:bg-purple-950/40 dark:text-purple-400" />
+            </Link>
+            <RetrainingCard />
           </div>
         </div>
       </div>
@@ -231,7 +267,7 @@ export default function AdminPageHome() {
             const Icon = link.icon;
             return (
               <Link key={link.href} href={link.href}>
-                <Card className="group h-full transition-all hover:shadow-md">
+                <Card className="group h-full transition-all hover:-translate-y-0.5 hover:shadow-md">
                   <CardContent className="flex items-start gap-4 p-5">
                     <div className={`rounded-lg p-2.5 ${link.color}`}>
                       <Icon className="h-5 w-5" />
@@ -251,21 +287,6 @@ export default function AdminPageHome() {
         </div>
       </div>
 
-      {stats.pendingVerifications !== null && stats.pendingVerifications > 0 && (
-        <Card className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base text-amber-900 dark:text-amber-200">
-              <FileCheck className="h-4 w-4" />
-              {stats.pendingVerifications} staff verification{stats.pendingVerifications === 1 ? "" : "s"} awaiting review
-            </CardTitle>
-            <CardDescription className="text-amber-700 dark:text-amber-300">
-              <Link href="/admin/staff-verifications" className="underline hover:text-amber-900 dark:hover:text-amber-100">
-                Review now
-              </Link>
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      )}
     </div>
   );
 }

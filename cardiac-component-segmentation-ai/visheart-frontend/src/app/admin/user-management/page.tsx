@@ -71,7 +71,7 @@ interface AdminUser {
   username: string;
   email: string;
   phone?: string;
-  role: "educational_user" | "doctor" | "admin" | "guest";
+  role: "user" | "admin" | "guest";
 }
 
 // Define sort configuration
@@ -87,14 +87,12 @@ interface SortConfig {
 const ROLE_STYLES = {
   admin: "bg-blue-100 text-blue-800",
   guest: "bg-yellow-100 text-yellow-800",
-  doctor: "bg-green-100 text-green-800",
-  educational_user: "bg-teal-100 text-teal-800",
+  user: "bg-green-100 text-green-800",
 } as const;
 
 const ROLE_LABELS: Record<AdminUser["role"], string> = {
   admin: "Admin",
-  doctor: "Doctor",
-  educational_user: "Educational",
+  user: "User",
   guest: "Guest",
 };
 
@@ -120,7 +118,7 @@ const UserStatistics = React.memo(
   ({
     userStats,
   }: {
-    userStats: { total: number; admin: number; doctor: number; educational_user: number; guest: number };
+    userStats: { total: number; admin: number; user: number; guest: number };
   }) => (
     <Card className="mb-6">
       <CardHeader>
@@ -128,7 +126,7 @@ const UserStatistics = React.memo(
         <CardDescription>Overview of users in the system</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border p-4">
             <div className="text-2xl font-bold">{userStats.total}</div>
             <div className="text-muted-foreground text-sm">Total Users</div>
@@ -141,15 +139,9 @@ const UserStatistics = React.memo(
           </div>
           <div className="rounded-lg border p-4">
             <div className="text-2xl font-bold text-green-600">
-              {userStats.doctor}
+              {userStats.user}
             </div>
-            <div className="text-muted-foreground text-sm">Doctors</div>
-          </div>
-          <div className="rounded-lg border p-4">
-            <div className="text-2xl font-bold text-teal-600">
-              {userStats.educational_user}
-            </div>
-            <div className="text-muted-foreground text-sm">Educational Users</div>
+            <div className="text-muted-foreground text-sm">Users</div>
           </div>
           <div className="rounded-lg border p-4">
             <div className="text-2xl font-bold text-yellow-600">
@@ -274,7 +266,7 @@ export default function AdminPageUserManagement() {
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState<
-    "all" | "educational_user" | "doctor" | "admin" | "guest"
+    "all" | "user" | "admin" | "guest"
   >("all");
   const [sortConfig, setSortConfig] = useState<SortConfig>({
     key: "username",
@@ -315,8 +307,7 @@ export default function AdminPageUserManagement() {
     () => ({
       total: users.length,
       admin: users.filter((u) => u.role === "admin").length,
-      doctor: users.filter((u) => u.role === "doctor").length,
-      educational_user: users.filter((u) => u.role === "educational_user").length,
+      user: users.filter((u) => u.role === "user").length,
       guest: users.filter((u) => u.role === "guest").length,
     }),
     [users],
@@ -394,7 +385,7 @@ export default function AdminPageUserManagement() {
 
   // Role filter handler (memoized)
   const handleRoleFilterChange = useCallback(
-    (value: "all" | "educational_user" | "doctor" | "admin" | "guest") => {
+    (value: "all" | "user" | "admin" | "guest") => {
       setRoleFilter(value);
     },
     [],
@@ -633,8 +624,7 @@ export default function AdminPageUserManagement() {
                       <SelectContent>
                         <SelectItem value="all">All Roles</SelectItem>
                         <SelectItem value="admin">Admin</SelectItem>
-                        <SelectItem value="doctor">Doctor</SelectItem>
-                        <SelectItem value="educational_user">Educational</SelectItem>
+                        <SelectItem value="user">User</SelectItem>
                         <SelectItem value="guest">Guest</SelectItem>
                       </SelectContent>
                     </Select>
@@ -790,7 +780,7 @@ export default function AdminPageUserManagement() {
                 <Label htmlFor="role">Role</Label>
                 <Select
                   value={editingUser.role}
-                  onValueChange={(value: "educational_user" | "doctor" | "admin") =>
+                  onValueChange={(value: "user" | "admin") =>
                     setEditingUser({ ...editingUser, role: value })
                   }
                 >
@@ -798,8 +788,7 @@ export default function AdminPageUserManagement() {
                     <SelectValue placeholder="Select a role" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="doctor">Doctor</SelectItem>
-                    <SelectItem value="educational_user">Educational</SelectItem>
+                    <SelectItem value="user">User</SelectItem>
                     <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>
                 </Select>

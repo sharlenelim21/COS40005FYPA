@@ -93,14 +93,12 @@ export interface StrainComputeBundle {
    *  9-segment RV bullseye (never combined). */
   rvMetricType: "GCS" | "GAS";
   onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
-  /** Reports Full cycle's busy state up to the page, so the main panel can
-   *  show a loading state too while "Compute/Recompute all frames" runs
-   *  (StrainTab's own seriesBusy is local and the page can't see it otherwise). */
-  onFullCycleBusyChange: (busy: boolean) => void;
-  /** Same idea as onFullCycleBusyChange, but the real 0-100 reading (see
-   *  seriesProgress above) — lets the main panel's own "Computing all
-   *  frames…" overlay show a real percentage too, not just a spinner. */
-  onFullCycleProgressChange?: (progress: number | null) => void;
+  /** Reports the job IDs a just-started full-cycle compute is tracked under, so the PAGE can own
+   *  busy/progress polling itself (durable across the tab-switch remount this sidebar lives
+   *  behind) instead of StrainTab's own closure, which a tab switch can leave mid-flight with
+   *  nobody watching it update the page. Called once, right when the IDs are generated, before
+   *  the compute calls themselves are fired. */
+  onFullCycleJobsStarted: (lvJobId: string, rvJobId: string) => void;
   segmentationRunning: boolean;
   checkSegmentationRunning?: () => Promise<boolean>;
 }
@@ -575,7 +573,7 @@ function PlaybackBar({
         <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           Speed
         </span>
-        <div className={cn("grid gap-1 rounded-lg border border-border bg-background p-1", realTimeFps ? "grid-cols-5" : "grid-cols-4")}>
+        <div className="flex flex-wrap gap-1 rounded-lg border border-border bg-background p-1">
           {realTimeFps ? (
             <button
               type="button"
@@ -1279,7 +1277,7 @@ function StructureTab({
 }) {
   const { projectId } = useParams<{ projectId: string }>();
   // Same per-model "is there a stored result at all" check the Strain tab's model
-  // toggle already uses — so Structure can't be switched to a model the Doctor never ran.
+  // toggle already uses — so Structure can't be switched to a model the User never ran.
   const { available: modelAvailable } = useProjectResults(projectId);
 
   if (!hasPredictions) {
@@ -1491,12 +1489,16 @@ function StrainTab({
       return;
     }
     setSeriesBusy(true);
-    strainCompute?.onFullCycleBusyChange(true);
     setSeriesError(null);
     setSeriesProgress(null);
 
     const lvJobId = crypto.randomUUID();
     const rvJobId = crypto.randomUUID();
+    // Hands the page these IDs so IT can own busy/progress for the main panel from here (see
+    // onFullCycleJobsStarted's own doc comment) -- the local poll below is only for this tab's
+    // own inline display (seriesBusy/seriesProgress), which is fine to lose on unmount since the
+    // button it drives disappears with it.
+    strainCompute?.onFullCycleJobsStarted(lvJobId, rvJobId);
     const pollTimer = setInterval(async () => {
       try {
         const { jobs } = await segmentationApi.getUserJobs();
@@ -1509,7 +1511,6 @@ function StrainTab({
         if (readings.length) {
           const avg = Math.round(readings.reduce((a, b) => a + b, 0) / readings.length);
           setSeriesProgress(avg);
-          strainCompute?.onFullCycleProgressChange?.(avg);
         }
       } catch {
         // Keep the previous reading — a dropped poll is not evidence of anything.
@@ -1549,8 +1550,6 @@ function StrainTab({
       clearInterval(pollTimer);
       setSeriesBusy(false);
       setSeriesProgress(null);
-      strainCompute?.onFullCycleBusyChange(false);
-      strainCompute?.onFullCycleProgressChange?.(null);
     }
   }, [projectId, realStrain, realSeries, strainModel, autoEdFrame, strainCompute, refreshResults]);
 

@@ -138,13 +138,13 @@ const isAuthandGuest = (req: Request, res: Response, next: NextFunction): void =
 }
 
 /**
- * Middleware to check if the user is authenticated and has the Doctor role
+ * Middleware to check if the user is authenticated and has the User role
  */
-const isAuthAndDoctor = (req: Request, res: Response, next: NextFunction): void => {
-  if (req.isAuthenticated() && req.user.role === UserRole.Doctor) {
+const isAuthAndUser = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.isAuthenticated() && req.user.role === UserRole.User) {
     return next();
   }
-  res.status(403).json({ message: "Forbidden. Doctor access required." });
+  res.status(403).json({ message: "Forbidden. User access required." });
 };
 
-export { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest, isAuthAndDoctor };
+export { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest, isAuthAndUser };

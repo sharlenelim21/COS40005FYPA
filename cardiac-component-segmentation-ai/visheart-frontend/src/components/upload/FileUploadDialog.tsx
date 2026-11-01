@@ -14,8 +14,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Upload, File, X, AlertCircle, Loader2 } from "lucide-react";
+import { Upload, File, X, AlertCircle, Loader2, Sparkles } from "lucide-react";
 import { projectApi } from "@/lib/api";
+import { useAuth } from "@/context/auth-context";
 
 interface FileUploadDialogProps {
   open: boolean;
@@ -55,6 +56,8 @@ export function FileUploadDialog({
   onOpenChange,
   onUploadSuccess,
 }: FileUploadDialogProps) {
+  const { user } = useAuth();
+  const isGuest = user?.role === "guest";
   const [selectedFiles, setSelectedFiles] = useState<FileDetails[]>([]);
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
@@ -63,6 +66,75 @@ export function FileUploadDialog({
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCreateDemo = async () => {
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      const result = await projectApi.createDemoProject();
+      onOpenChange(false);
+      onUploadSuccess?.(result);
+    } catch (error: any) {
+      if (error.response?.status === 409) {
+        setUploadError("You already have a demo project — find it in your project list.");
+      } else {
+        setUploadError(getUploadErrorMessage(error));
+      }
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  if (isGuest) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Start Demo Project</DialogTitle>
+            <DialogDescription>
+              Guest accounts explore VisHeart with a fixed sample case — segment it, edit the masks, and
+              see how the tools work. Register for a full account to upload your own files.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-center gap-3 rounded-lg border bg-muted/40 p-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100">
+              <Sparkles className="h-5 w-5 text-blue-600" />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              A sample cardiac MRI case, ready to segment — no upload needed.
+            </p>
+          </div>
+
+          {uploadError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{uploadError}</AlertDescription>
+            </Alert>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isUploading}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateDemo} disabled={isUploading}>
+              {isUploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Starting…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Start Demo Project
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 Bytes";

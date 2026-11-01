@@ -523,15 +523,23 @@ def _find_best_rigid_rotation(
     a worse one just because it's closer to the preferred angle, so passing
     a poor or absent anchor degrades gracefully to the original heuristic,
     never worse.
+
+    The atlas tree is built ONCE, not once per candidate (same fix as LV's
+    cpd_aha_segmentation._find_best_rigid_rotation; see its docstring for the
+    orthogonal-rotation identity this relies on -- querying one fixed atlas tree
+    with the target rotated by R instead of rotating+rebuilding the atlas by R
+    finds the identical nearest neighbor for every candidate, so `populated` and
+    the returned `best_rotation` are unchanged from the original per-candidate
+    rebuild version).
     """
     n_segments = len(np.unique(dense_labels))
     candidates: list[tuple[float, np.ndarray, int]] = []
     best_populated = -1
+    atlas_tree = cKDTree(dense_points)
     for angle_deg in np.linspace(0, 360, n_candidates, endpoint=False):
         rotation = _rotation_matrix_z(angle_deg)
-        rotated_dense = dense_points @ rotation.T
-        tree = cKDTree(rotated_dense)
-        _, nearest_idx = tree.query(target_points)
+        rotated_target = target_points @ rotation
+        _, nearest_idx = atlas_tree.query(rotated_target)
         labels = dense_labels[nearest_idx]
         populated = len(np.unique(labels))
         candidates.append((angle_deg, rotation, populated))

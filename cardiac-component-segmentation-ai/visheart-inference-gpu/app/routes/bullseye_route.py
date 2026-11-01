@@ -196,6 +196,7 @@ def _run_analysis(
         anterior_by_slice=anterior_by_slice,
     )
     values: np.ndarray = analysis["values"]
+    values_max: np.ndarray = analysis["values_max"]
     lv_centroid: Optional[List[float]] = analysis["lv_centroid"]
     slice_labels: list[str] = classify_slices(mask_3d)
 
@@ -205,6 +206,9 @@ def _run_analysis(
     # is invalid (e.g. too little myocardium in every slice).
     segment_values: List[Optional[float]] = [
         None if np.isnan(v) else float(v) for v in values
+    ]
+    segment_values_max: List[Optional[float]] = [
+        None if np.isnan(v) else float(v) for v in values_max
     ]
     n_nan = int(np.sum(np.isnan(values)))
     valid_values = values[~np.isnan(values)]
@@ -229,6 +233,7 @@ def _run_analysis(
     return BullseyeAnalysisResult(
         request_id=request_id,
         segment_values=segment_values,
+        segment_values_max=segment_values_max,
         segment_metadata=segment_metadata,
         stats=stats,
         input_shape=list(mask_3d.shape),

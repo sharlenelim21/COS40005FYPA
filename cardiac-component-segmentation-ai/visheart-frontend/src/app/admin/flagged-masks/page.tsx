@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RefreshCw, FileEdit, ExternalLink } from "lucide-react";
-import { adminAlertStore } from "@/lib/adminAlerts";
 
 interface FlaggedMask {
   maskId: string;
@@ -40,9 +39,6 @@ export default function FlaggedMasksPage() {
       const data = await adminApi.getFlaggedMasks();
       const list = data?.flaggedMasks ?? [];
       setMasks(list);
-      // Visiting this page counts as reviewing the current queue — stops the global
-      // notifier from re-chiming about masks already visible here.
-      adminAlertStore.markSeen("flagged-masks", list.map((m: FlaggedMask) => m.maskId));
       if (!silent) setError(null);
     } catch {
       if (!silent) setError("Failed to load flagged masks.");

@@ -10,6 +10,7 @@ import { execSync } from "child_process";
 import mongoose from "mongoose";
 import logger from "./logger";
 import { uploadToS3 } from "./s3_handler";
+import { startMotion } from "./reconstruction_motion";
 import {
   updateJob,
   createProjectReconstruction,
@@ -342,6 +343,26 @@ export async function processReconstructionCallback(
 
     // Cleanup temporary files
     await cleanupTempFiles(processedFiles, tarResult.tarPath!);
+
+    // Kick off motion-build now instead of waiting for the frontend to lazily request it when
+    // the Structure/Strain tab opens -- motion-build is CPU-only with its own semaphore (see
+    // reconstruction_motion.ts), so this runs for free alongside whatever the GPU is doing next
+    // (the other chamber's reconstruction, most often). startMotion itself is cheap and
+    // idempotent (it only ever starts one build per reconstruction, checking S3/in-memory state
+    // first), so it's safe to fire-and-forget here even though the frontend may also call it
+    // later -- that later call just sees "processing" or "ready" and returns immediately.
+    const reconstructionChamberForMotion: ReconstructionChamber =
+      String(gpuResult?.chamber ?? "").toLowerCase() === "rv"
+        ? ReconstructionChamber.RV
+        : ReconstructionChamber.LV;
+    startMotion({
+      reconstructionId: dbResult.reconstructionId!,
+      tarUrl: reconstructionFileS3Url,
+      chamber: reconstructionChamberForMotion,
+      userId,
+    }).catch((motionError) => {
+      logger.warn(`${serviceLocation}: Early motion-build trigger failed for reconstruction ${dbResult.reconstructionId}: ${(motionError as Error).message}`);
+    });
 
     logger.info(`${serviceLocation}: Reconstruction completed successfully - Job: ${gpuJobId}, ID: ${dbResult.reconstructionId}`);
     return {

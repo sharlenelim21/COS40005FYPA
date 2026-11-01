@@ -2257,10 +2257,22 @@ function assembleDiseasePatternGateInputs(
     // since scaling is linear. Previously this was taken as mm with no
     // conversion at all, silently comparing a pixel count against the HCM
     // gate's 15mm clinical threshold (reported live, 2026-10).
+    // Prefer segment_values_max (true per-ray peak -- see bullseye_analysis.group_sectors_max)
+    // over segment_values (sector-mean), since a sector average dilutes focal/asymmetric
+    // hypertrophy and can understate true max wall thickness for exactly the HCM pattern this
+    // gate checks for (reported live, 2026-10: a known-HCM patient measured 13.8mm against the
+    // 15mm cutoff on the mean-based value). Falls back to segment_values on any mask computed
+    // before segment_values_max existed -- not backfilled, so this field may be absent/empty.
+    const bullseyeValuesMax: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values_max;
     const bullseyeValues: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values;
-    const finiteSegmentValues = (bullseyeValues ?? []).filter(
+    const finiteMaxValues = (bullseyeValuesMax ?? []).filter(
         (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
     );
+    const finiteSegmentValues = finiteMaxValues.length
+        ? finiteMaxValues
+        : (bullseyeValues ?? []).filter(
+            (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
+        );
     const inPlaneSpacingMm: number | null = maskDoc?.heartMetrics?.spacing_mm?.[0] ?? null;
     const maxWallThicknessMm: number | null = finiteSegmentValues.length && inPlaneSpacingMm
         ? Math.max(...finiteSegmentValues) * inPlaneSpacingMm

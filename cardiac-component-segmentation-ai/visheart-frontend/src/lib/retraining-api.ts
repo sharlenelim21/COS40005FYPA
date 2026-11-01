@@ -273,3 +273,12 @@ export function elapsed(from: string | null, to: string | null = null): string {
 export function isActiveJob(job: TrainingJob | null | undefined): boolean {
   return job != null && (job.state === "queued" || job.state === "running");
 }
+
+/** The live percent of whichever step is actually running, or null when there's nothing to show (e.g. the "prepare"/"examples" steps have no count, or no step is running). */
+export function trainingJobPercent(job: TrainingJob): number | null {
+  const runningStep = job.steps.find((s) => s.state === "running")?.key;
+  const p = job.progress;
+  if (runningStep === "train" && p.epochs) return ((p.epoch ?? 0) / p.epochs) * 100;
+  if (runningStep === "evaluate" && p.total) return ((p.scored ?? 0) / p.total) * 100;
+  return null;
+}
