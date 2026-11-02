@@ -689,7 +689,18 @@ def _gate_minf(lv: dict, regional_segments: Optional[list], sex: str) -> dict:
 
 # ── DCM gate ─────────────────────────────────────────────────────────────────
 def _gate_dcm(lv: dict, sex: str) -> dict:
-    ef, wall = lv.get("EF"), lv.get("MaxWallThicknessMm")
+    # DCM's wall-thickness criterion is an UPPER bound (dilated/stretched myocardium stays
+    # thin) -- the opposite question from HCM's lower bound (is there a pathologically thick
+    # spot anywhere). MaxWallThicknessMm is the true per-ray PEAK (see _gate_hcm / the
+    # assembler that builds this dict) -- correct for HCM, but wrong here: peak >= mean always,
+    # so using the same peak value for a "stays thin" check makes it systematically HARDER to
+    # pass, and a single locally-thicker patch doesn't contradict an otherwise dilated, thin
+    # heart. DcmWallThicknessMm (when the caller provides it) is the older sector-MEAN-based
+    # statistic DCM's _DCM_WALL_MM_MAX threshold was actually calibrated against (see that
+    # constant's own derivation comment, referencing 12.02/12.28mm measured with this same
+    # mean-based method) -- falls back to MaxWallThicknessMm for any caller that predates this
+    # field (e.g. check_disease_pattern_gates.js's fixtures), reported live, 2026-10.
+    ef, wall = lv.get("EF"), lv.get("DcmWallThicknessMm", lv.get("MaxWallThicknessMm"))
     edvi, edvi_estimated = lv.get("EDVI"), False
     if edvi is None and lv.get("EDV") is not None:
         edvi = lv["EDV"] / _reference_bsa(sex)
@@ -713,9 +724,12 @@ def _gate_dcm(lv: dict, sex: str) -> dict:
     else:
         reasons.append("EF not available.")
     if wall is not None:
-        reasons.append(f"Max wall thickness {wall:.1f} mm {'meets' if wall_met else 'does not meet'} the < {_DCM_WALL_MM_MAX:.2f} mm criterion.")
+        # "Typical" (not "Max") deliberately -- this reads the sector-mean statistic, not the
+        # true peak HCM's own reasons[] reports under the same patient; see this function's
+        # docstring comment above for why DCM needs the other one.
+        reasons.append(f"Typical wall thickness {wall:.1f} mm {'meets' if wall_met else 'does not meet'} the < {_DCM_WALL_MM_MAX:.2f} mm criterion.")
     else:
-        reasons.append("MaxWallThicknessMm not available.")
+        reasons.append("Wall thickness not available.")
 
     # Three-valued AND across all three criteria — see MINF's identical
     # comment above: any one criterion already False decides the whole AND

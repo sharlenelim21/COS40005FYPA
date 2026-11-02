@@ -2231,7 +2231,7 @@ function assembleDiseasePatternGateInputs(
     maskDoc: any,
     body?: { bsa_m2?: number | null; sex?: "male" | "female" | "unspecified" },
 ): {
-    lv: { EF: number | null; EDV: number | null; EDVI: number | null; LVMassG: number | null; LVMI: number | null; MaxWallThicknessMm: number | null };
+    lv: { EF: number | null; EDV: number | null; EDVI: number | null; LVMassG: number | null; LVMI: number | null; MaxWallThicknessMm: number | null; DcmWallThicknessMm: number | null };
     rv: { RVEDV: number | null; RVEDVI: number | null; RVESVI: number | null; RVEF: number | null; SVI: number | null };
     regionalLvSegments: { segment: number; level: string }[] | null;
     sex: "male" | "female" | "unspecified";
@@ -2277,6 +2277,23 @@ function assembleDiseasePatternGateInputs(
     const maxWallThicknessMm: number | null = finiteSegmentValues.length && inPlaneSpacingMm
         ? Math.max(...finiteSegmentValues) * inPlaneSpacingMm
         : null;
+    // DCM's wall-thickness criterion is an upper bound ("stays thin" -- dilated/stretched
+    // myocardium), the opposite question from HCM's lower bound ("is there a pathologically
+    // thick spot anywhere"). Reusing maxWallThicknessMm's true-peak value here would make DCM
+    // systematically harder to meet (peak >= mean always) for a criterion that was never about
+    // avoiding one thick patch -- reported live, 2026-10: a ground-truth-DCM patient whose EDVI
+    // and EF both qualified now failed DCM purely because the new peak value (13.3mm) exceeded
+    // 12.28mm, even though the heart's TYPICAL wall thickness (the old sector-mean value,
+    // 11.5mm here) was still comfortably thin. DCM's _DCM_WALL_MM_MAX threshold was calibrated
+    // against this mean-based statistic specifically (see that constant's own derivation
+    // comment in compute_disease_pattern_gates.py) -- always uses segment_values (sector-mean),
+    // never segment_values_max, regardless of which is available.
+    const finiteMeanValues = (bullseyeValues ?? []).filter(
+        (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
+    );
+    const dcmWallThicknessMm: number | null = finiteMeanValues.length && inPlaneSpacingMm
+        ? Math.max(...finiteMeanValues) * inPlaneSpacingMm
+        : null;
 
     const hmTop = maskDoc?.heartMetrics;
     const rvEdv: number | null = hmTop?.RVEDV ?? null;
@@ -2297,6 +2314,7 @@ function assembleDiseasePatternGateInputs(
             LVMassG: lvMassG,
             LVMI: indexed(lvMassG),
             MaxWallThicknessMm: maxWallThicknessMm,
+            DcmWallThicknessMm: dcmWallThicknessMm,
         },
         rv: {
             RVEDV: rvEdv,
