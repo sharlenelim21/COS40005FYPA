@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import type { HistoryEntry, AnatomicalLabel } from '@/types/segmentation';
-import { generateFrameSliceKey } from '@/types/segmentation';
+import { generateFrameSliceKey, generateFrameSlicePrefix } from '@/types/segmentation';
 
 interface UseSegmentationHistoryProps {
   currentFrame: number;
@@ -48,10 +48,21 @@ export function useSegmentationHistory({
       timestamp: Date.now(),
       frameSlice: `Frame ${currentFrame + 1}, Slice ${currentSlice + 1}`,
       maskChanges,
-      // Deep clone masks to prevent references
-      masksSnapshot: Object.fromEntries(
-        Object.entries(masksSnapshot).map(([key, data]) => [key, new Uint8Array(data)])
-      ),
+      // Deep clone ONLY this frame/slice's editable masks. History is kept per
+      // frame/slice and restoreMasksFromHistory (segmentation/page.tsx) only
+      // ever restores keys with this prefix. Cloning every mask instead copied
+      // the whole study on each stroke — ~490 MB for a 512×440, 28-frame,
+      // 13-slice scan — which ran the browser out of memory after a few edits
+      // ("Array buffer allocation failed"); the failed copy also made strokes
+      // silently not apply.
+      masksSnapshot: (() => {
+        const prefix = generateFrameSlicePrefix(currentFrame, currentSlice);
+        return Object.fromEntries(
+          Object.entries(masksSnapshot)
+            .filter(([key]) => key.startsWith(prefix))
+            .map(([key, data]) => [key, new Uint8Array(data)])
+        );
+      })(),
       componentLabel,
     };
   }, [currentFrame, currentSlice]);

@@ -687,6 +687,9 @@ const projectSchema = new Schema<IProject>({
   voxelsize: { type: projectVoxelsizeSchema, required: false }, // Voxel size of the image (e.g., x, y, z, t dimensions) - check for errors in the future (stored in nifti as pixdim = [?, 0.5, 0.5, 1.0, 2.0, 0, 0, 0])
   // Affine transformation matrix (4x4) from NIfTI header for export functionality
   affineMatrix: { type: [[Number]], required: false }, // 4x4 affine transformation matrix from NIfTI header (optional, for avoiding re-downloads during export)
+  // Template hearts: read-only reference projects every logged-in user can view (see IProject.isTemplate)
+  isTemplate: { type: Boolean, required: false, default: false, index: true },
+  templateInfo: { type: Schema.Types.Mixed, required: false }, // ITemplateInfo — category, sex, subject details, card order
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 // Hooks for pre-save and pre-delete operations (must be before the model creation)
 // Add validation to ensure userid exists before saving the project

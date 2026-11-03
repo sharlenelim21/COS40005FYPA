@@ -17,8 +17,10 @@ import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
 import { extractS3KeyFromUrl, deleteFromS3 } from "../services/s3_handler";
 import { generatePresignedGetUrl } from "../utils/s3_presigned_url";
 import LogError from "../utils/error_logger";
+import { applyTemplateGuard } from "../middleware/template_guard";
 
 const router = Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 const serviceLocation = "ReconstructionRoutes";
 
 const toSingleString = (value: string | string[] | undefined): string | undefined =>

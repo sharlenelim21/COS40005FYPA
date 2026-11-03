@@ -125,8 +125,14 @@ const ToolsAndMasksPanel = React.memo(({
             const color = LABEL_COLORS[anatomicalLabel] || '#gray';
             const labelName = LABEL_NAMES[anatomicalLabel] || label.toUpperCase();
             
-            // Handle null maskData (mask doesn't exist yet)
-            const filledPixels = maskData ? maskData.filter(pixel => pixel > 0).length : 0;
+            // Handle null maskData (mask doesn't exist yet). Counted in place —
+            // Uint8Array.filter() would allocate a full copy of the mask on every render.
+            let filledPixels = 0;
+            if (maskData) {
+              for (let i = 0; i < maskData.length; i++) {
+                if (maskData[i] > 0) filledPixels++;
+              }
+            }
             const maskExists = maskData !== null;
             
             const isActive = activeLabel === label;

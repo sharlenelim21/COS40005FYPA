@@ -177,6 +177,11 @@ export function ProjectDashboardBar() {
   // Get reconstruction info
   const reconstructionFrameCount = reconstructionMetadata?.frameCount || projectData.dimensions?.frames || 0;
 
+  // Template hearts are results-only: their landmark page has its own header
+  // (with "Back to Templates"), and none of this bar's actions — export,
+  // segmentation, other project pages — apply to them.
+  if (projectData.isTemplate) return null;
+
   return (
     <>
       {/* Collapsible Dashboard Bar */}

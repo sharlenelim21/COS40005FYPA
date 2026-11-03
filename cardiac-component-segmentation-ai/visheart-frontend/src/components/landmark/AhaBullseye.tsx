@@ -6,15 +6,16 @@
  * the two look and behave identically. Replaces the page's old
  * AhaBullseyeChart/BullseyeSegment and the Strain tab's separate LV drawing.
  *
- * Colours are per-view min→max (red → yellow → green), the same rdYlGn ramp
- * the 3D heart uses. `reverse` flips it for measures where MORE NEGATIVE is
- * more deformation (GCS, RV GAS), so green always means "more".
+ * Colours are per-view min→max (yellow → green → blue), the same
+ * strainRamp the 3D heart uses. `reverse` flips it for measures where MORE
+ * NEGATIVE is more deformation (GCS, RV GAS), so blue always means "more".
  *
  * BullseyeScaleBar is the matching bar + Min / Mean / Max row shown under it.
  */
 
 import React from "react";
-import { rdYlGn, polarPoint, annularSectorPath } from "./StrainVisualization";
+import { strainRamp, polarPoint, annularSectorPath } from "./StrainVisualization";
+import { strainRampCss } from "@/lib/strainColorScale";
 
 export type BullseyeHover = { x: number; y: number; name: string; value: number; pct: number };
 
@@ -23,7 +24,7 @@ export function bullseyeColor(value: number | null | undefined, min: number, max
   // Missing or exactly 0 (no measurement at this frame) -> grey, same as the 3D model.
   if (value == null || !Number.isFinite(value) || value === 0) return "#444444";
   const t = max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5;
-  return rdYlGn(reverse ? 1 - t : t);
+  return strainRamp(reverse ? 1 - t : t);
 }
 
 /** Position of a value along the min→max bar, as a whole percent (0 = min, 100 = max). */
@@ -146,11 +147,9 @@ export function AhaBullseye({
   );
 }
 
-/** CSS gradient matching bullseyeColor exactly (rdYlGn is linear red→yellow→green). */
+/** CSS gradient matching bullseyeColor exactly (same strainRamp stops). */
 export function bullseyeGradientCss(reverse = false): string {
-  return reverse
-    ? "linear-gradient(to right, #00ff00, #ffff00, #ff0000)"
-    : "linear-gradient(to right, #ff0000, #ffff00, #00ff00)";
+  return strainRampCss(reverse);
 }
 
 /**

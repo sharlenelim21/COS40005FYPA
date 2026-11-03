@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { jobModel, projectModel, userModel } from '../services/database';
+import { JobStatus } from '../types/database_types';
 import logger from '../services/logger';
 import cronstrue from 'cronstrue';
 
@@ -77,9 +78,33 @@ async function cleanupInferenceJobs(): Promise<void> {
         
         const thresholdDate = new Date(Date.now() - JOB_AGE_THRESHOLD_MS);
         logger.info(`${serviceLocation}: Deleting jobs updated before: ${thresholdDate.toISOString()}`);
-        
+
+        // Template projects ("template hearts") are permanent, read-only showcases:
+        // their landmark page reads the landmark model's result from the job
+        // document, so deleting their jobs would leave every template blank.
+        const templateProjectIds = (await projectModel.find({ isTemplate: true }).select('_id').lean())
+            .map((p) => p._id.toString());
+        if (templateProjectIds.length > 0) {
+            logger.info(`${serviceLocation}: Keeping the jobs of ${templateProjectIds.length} template project(s)`);
+        }
+
+        // Each project's newest completed landmark job is kept too: the landmark
+        // page (GET /landmark-detection/results) and the bullseye's RV insertion
+        // points (rv_insertion_points.ts) read the detection result from it, so
+        // deleting it made the page re-run the whole detection after 3 days.
+        const keptLandmarkJobIds = (await jobModel.aggregate<{ _id: string; jobId: unknown }>([
+            { $match: { model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } } },
+            { $sort: { updatedAt: -1, createdAt: -1 } },
+            { $group: { _id: '$projectid', jobId: { $first: '$_id' } } },
+        ])).map((g) => g.jobId);
+        if (keptLandmarkJobIds.length > 0) {
+            logger.info(`${serviceLocation}: Keeping the latest landmark result of ${keptLandmarkJobIds.length} project(s)`);
+        }
+
         const oldJobsResult = await jobModel.deleteMany({
-            updatedAt: { $lt: thresholdDate }
+            updatedAt: { $lt: thresholdDate },
+            projectid: { $nin: templateProjectIds },
+            _id: { $nin: keptLandmarkJobIds },
         });
         
         logger.info(`${serviceLocation}: Deleted ${oldJobsResult.deletedCount} old inference jobs (older than ${JOB_AGE_THRESHOLD_MS / (24 * 60 * 60 * 1000)} days)`);

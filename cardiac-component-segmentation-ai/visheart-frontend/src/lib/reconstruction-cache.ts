@@ -579,19 +579,24 @@ export class ReconstructionCache {
         };
       }
 
-      const tarBlob = await tarResponse.blob();
+      // Read the body straight into memory. Going through response.blob() first
+      // lets the browser park the download in its on-disk blob store, and
+      // reading it back failed with "Blob conversion failed: The requested file
+      // could not be read…" when that store was unavailable (e.g. after the tab
+      // ran low on memory) — even though the download itself had succeeded.
+      const tarBuffer = await tarResponse.arrayBuffer();
       const downloadTime = ((performance.now() - downloadStartTime) / 1000).toFixed(2);
-      
+
       this.debugInfo.tarFileFetched = true;
-      this.debugInfo.tarFileSize = tarBlob.size;
+      this.debugInfo.tarFileSize = tarBuffer.byteLength;
       console.log(`[ReconstructionCache] ✅ TAR file downloaded successfully`);
-      console.log(`[ReconstructionCache] 📦 File size: ${(tarBlob.size / 1024 / 1024).toFixed(2)} MB`);
+      console.log(`[ReconstructionCache] 📦 File size: ${(tarBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
       console.log(`[ReconstructionCache] ⚡ Download time: ${downloadTime}s`);
-      console.log(`[ReconstructionCache] 📊 Download speed: ${((tarBlob.size / 1024 / 1024) / parseFloat(downloadTime)).toFixed(2)} MB/s`);
+      console.log(`[ReconstructionCache] 📊 Download speed: ${((tarBuffer.byteLength / 1024 / 1024) / parseFloat(downloadTime)).toFixed(2)} MB/s`);
 
       // Step 3: Extract and store models
       console.log(`[ReconstructionCache] 📂 Starting TAR extraction and model caching...`);
-      const extractionResult = await this.extractAndStoreModels(projectId, reconstructionId, tarBlob, segmentationModel);
+      const extractionResult = await this.extractAndStoreModels(projectId, reconstructionId, tarBuffer, segmentationModel);
 
       this.debugInfo.processingTime = performance.now() - startTime;
       const totalTime = (this.debugInfo.processingTime / 1000).toFixed(2);
@@ -614,7 +619,7 @@ export class ReconstructionCache {
     }
   }
 
-  private async extractAndStoreModels(projectId: string, reconstructionId: string, tarBlob: Blob, segmentationModel?: string): Promise<TarExtractionResult> {
+  private async extractAndStoreModels(projectId: string, reconstructionId: string, arrayBuffer: ArrayBuffer, segmentationModel?: string): Promise<TarExtractionResult> {
     this.debugInfo.extractionStarted = true;
     const extractionStartTime = performance.now();
 
@@ -623,21 +628,7 @@ export class ReconstructionCache {
       console.log(`[ReconstructionCache] 🗑️ Clearing existing cached models for reconstruction ${reconstructionId}...`);
       await this.db.clearReconstruction(reconstructionId);
       console.log(`[ReconstructionCache] ✅ Cache cleared`);
-
-      // Convert blob to array buffer for js-untar
-      console.log(`[ReconstructionCache] 🔄 Converting blob to array buffer...`);
-      console.log(`[ReconstructionCache] 📦 Blob size: ${(tarBlob.size / 1024 / 1024).toFixed(2)} MB`);
-      console.log(`[ReconstructionCache] 📦 Blob type: ${tarBlob.type || 'unknown'}`);
-      
-      let arrayBuffer;
-      try {
-        arrayBuffer = await tarBlob.arrayBuffer();
-        console.log(`[ReconstructionCache] ✅ Array buffer ready: ${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
-      } catch (conversionError) {
-        const errorMsg = conversionError instanceof Error ? conversionError.message : 'Unknown conversion error';
-        console.error(`[ReconstructionCache] ❌ Failed to convert blob to array buffer:`, conversionError);
-        throw new Error(`Blob conversion failed: ${errorMsg}`);
-      }
+      console.log(`[ReconstructionCache] 📦 TAR in memory: ${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
 
       // See load-untar.ts: js-untar must stay a runtime import (it's
       // browser-only, touches `window` at module scope, and this module is

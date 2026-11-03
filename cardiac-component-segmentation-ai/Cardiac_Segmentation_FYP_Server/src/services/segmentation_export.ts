@@ -19,6 +19,60 @@ import { findSavedLandmarkDoc, findLatestLandmarkJobResult, loadRvInsertionSlice
 const serviceLocation = 'SegmentationExport';
 
 /**
+ * In-plane pixel size of a project in mm: voxelsize.x, else the length of the
+ * stored affine's first column. null when neither is known.
+ */
+export const mmPerPixel = (project: any): number | null => {
+    const vx = project?.voxelsize?.x;
+    if (typeof vx === "number" && vx > 0) return vx;
+    const a = project?.affineMatrix;
+    if (Array.isArray(a) && a.length >= 3) {
+        const n = Math.hypot(Number(a[0]?.[0]) || 0, Number(a[1]?.[0]) || 0, Number(a[2]?.[0]) || 0);
+        if (n > 0) return n;
+    }
+    return null;
+};
+
+/**
+ * Wall-thickness bullseye results (GPU /bullseye/analyze and
+ * compute_bullseye_from_rle.py) come out in PIXELS, but every consumer reads
+ * them as mm — the Structure tab, the report and the MaxWallThicknessMm check
+ * against the 12 / 15 mm cut-offs. Scales segment_values, the segment_metadata
+ * values and stats to mm and tags unit: "mm". Without a known pixel size the
+ * values stay in pixels, tagged unit: "px".
+ */
+export const bullseyeToMm = <T extends Record<string, any>>(result: T, mmPx: number | null): T => {
+    if (!result || result.unit === "mm") return result;
+    if (!mmPx) return { ...result, unit: "px" };
+    const mm = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v * mmPx : v);
+    return {
+        ...result,
+        segment_values: Array.isArray(result.segment_values) ? result.segment_values.map(mm) : result.segment_values,
+        segment_metadata: Array.isArray(result.segment_metadata)
+            ? result.segment_metadata.map((s: any) => ({ ...s, value: mm(s?.value) }))
+            : result.segment_metadata,
+        stats: result.stats ? { ...result.stats, min: mm(result.stats.min), max: mm(result.stats.max), mean: mm(result.stats.mean) } : result.stats,
+        unit: "mm",
+        mm_per_px: mmPx,
+    };
+};
+
+/** mmPerPixel of a mask's own project (looked up by mask id). */
+const mmPerPixelOfMask = async (maskId: string, projectId?: string): Promise<number | null> => {
+    try {
+        let pid = projectId;
+        if (!pid) {
+            const m: any = await projectSegmentationMaskModel.findById(maskId).select({ projectid: 1 }).lean();
+            pid = m?.projectid ? String(m.projectid) : undefined;
+        }
+        const r = pid ? await readProject(pid) : null;
+        return mmPerPixel(r?.success ? r.projects?.[0] : null);
+    } catch {
+        return null;
+    }
+};
+
+/**
  * Run compute_bullseye_from_rle.py on an arbitrary frames[] subset and return
  * its parsed result (or null on any failure/reported error). Pure stdin/stdout
  * subprocess call — no GPU, no NIfTI file, no network round-trip. Shared by
@@ -92,9 +146,17 @@ const runRvBullseyeRleScript = (
     width: number,
     height: number,
     logTag: string,
+    // The reference frame (the layout is made on it and reused for `frames`)
+    // and the alignment inputs — see the script's docstring. All optional.
+    opts: { referenceFrames?: any[]; rvSlices?: RvInsertionSlice[]; rvInsertion1?: number[] | null } = {},
 ): Promise<any | null> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_rv_bullseye_from_rle.py');
-    const input = JSON.stringify({ frames, width, height });
+    const input = JSON.stringify({
+        frames, width, height,
+        reference_frames: opts.referenceFrames ?? null,
+        rv_insertion_slices: opts.rvSlices ?? null,
+        rv_insertion_1: opts.rvInsertion1 ?? null,
+    });
 
     return new Promise<any | null>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
@@ -133,20 +195,41 @@ const runRvBullseyeRleScript = (
  * can animate per-frame without waiting on a manual "Compute all frames"
  * (which stays landmark-aligned GCS/GAS-only). Stores the result under
  * `rvFrameAreas` on the mask document.
+ *
+ * The reference frame (the frontend measures FAC against it) is the mask's
+ * detected ED frame (heartMetrics.ed_frame) when known, else the FIRST frame:
+ * its slice → ring assignment and ray → section wedges are reused for every
+ * frame, as the GPU reuses the ED layout, so a segment covers the same slices
+ * and angles all through the cycle. Pass `projectId` so the wedges are
+ * oriented by the reference frame's RV insertion landmarks, the same way the
+ * GPU RV strain is; without it the point is estimated from the RV in the mask.
  */
 export const computeFrameRvAreaSeries = async (
     maskId: string,
     frames: any[],
     width: number,
     height: number,
+    projectId?: string,
 ): Promise<void> => {
     const frameIndices = Array.from(new Set(frames.map((f: any) => f.frameindex))).sort((a, b) => a - b);
     if (frameIndices.length <= 1) return; // nothing to animate with only one frame
 
+    // ED is not always the first frame (some scanners start the cine elsewhere
+    // in the cycle), so prefer the detected ED frame when heart metrics exist.
+    const storedMask: any = await projectSegmentationMaskModel.findById(maskId).select({ "heartMetrics.ed_frame": 1 }).lean();
+    const detectedEd = storedMask?.heartMetrics?.ed_frame;
+    const referenceFrame = typeof detectedEd === "number" && frameIndices.includes(detectedEd) ? detectedEd : frameIndices[0];
+    const referenceFrames = frames.filter((f: any) => f.frameindex === referenceFrame);
+    const rvSlices: RvInsertionSlice[] = projectId ? await resolveRvInsertionSlices(projectId, referenceFrame) : [];
+    const rvInsertion1 = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
+
     const results: { frameIndex: number; regions: { region: number; area: number | null }[] }[] = [];
     for (const frameIndex of frameIndices) {
         const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runRvBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`);
+        const result = await runRvBullseyeRleScript(
+            framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`,
+            { referenceFrames, rvSlices, rvInsertion1 },
+        );
         if (result) {
             results.push({ frameIndex, regions: result.regions });
         }
@@ -157,7 +240,7 @@ export const computeFrameRvAreaSeries = async (
     }
     const writeResult = await projectSegmentationMaskModel.collection.updateOne(
         { _id: new mongoose.Types.ObjectId(maskId) },
-        { $set: { rvFrameAreas: { frames: results, computed_at: new Date().toISOString() }, updatedAt: new Date() } },
+        { $set: { rvFrameAreas: { frames: results, reference_frame: referenceFrame, computed_at: new Date().toISOString() }, updatedAt: new Date() } },
     );
     logger.info(`${serviceLocation}: [FrameRvArea] Stored ${results.length}/${frameIndices.length} frame(s) for mask ${maskId} | matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`);
 };
@@ -187,8 +270,9 @@ export const computeBullseyeFromMaskDoc = async (
 ): Promise<void> => {
     const rv1 = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
     const rvSlices = projectId ? await resolveRvInsertionSlices(projectId, 0) : [];
-    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1, { rvSlices });
-    if (!result) return;
+    const raw = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1, { rvSlices });
+    if (!raw) return;
+    const result = bullseyeToMm(raw, await mmPerPixelOfMask(maskId, projectId));
     result.computed_at = new Date().toISOString();
     const writeResult = await projectSegmentationMaskModel.collection.updateOne(
         { _id: new mongoose.Types.ObjectId(maskId) },
@@ -235,8 +319,9 @@ export const computeFrameWallThicknessSeries = async (
     let rvSlicesForFrame: (frameIndex: number) => RvInsertionSlice[] =
         projectId && refSlices.length ? await loadRvInsertionSlicesByFrame(projectId) : () => [];
     let anteriorPoints: { slice: number; point: number[] }[] | undefined;
+    const mmPx = await mmPerPixelOfMask(maskId, projectId);
 
-    const results: { frameIndex: number; segment_values: (number | null)[]; stats: any }[] = [];
+    const results: { frameIndex: number; segment_values: (number | null)[]; stats: any; unit?: string }[] = [];
     for (const frameIndex of frameIndices) {
         const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
         const result = await runBullseyeRleScript(
@@ -255,7 +340,8 @@ export const computeFrameWallThicknessSeries = async (
             alignPoint = result.alignment_point;
         }
         if (result) {
-            results.push({ frameIndex, segment_values: result.segment_values, stats: result.stats });
+            const inMm = bullseyeToMm(result, mmPx);
+            results.push({ frameIndex, segment_values: inMm.segment_values, stats: inMm.stats, unit: inMm.unit });
         }
     }
     if (!results.length) {
@@ -289,7 +375,28 @@ export const computeHeartMetricsFromMaskDoc = async (
     affine: number[][],
 ): Promise<void> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_heart_metrics_from_rle.py');
-    const input = JSON.stringify({ frames, width, height, affine });
+
+    // Template hearts: use the dataset's expert ED/ES frames — their ED/ES
+    // masks ARE the experts' — and the subject's body surface area (Mosteller,
+    // from templateInfo height/weight) for indexed values. Applied whenever
+    // templateInfo exists, not only while published: an unpublished template
+    // being edited otherwise fell back to auto-detection, which picked an
+    // AI-segmented frame as ED (frame 2 instead of the experts' 28 for A5Q1W8).
+    const templateExtras: { ed_frame?: number; es_frame?: number; bsa_m2?: number } = {};
+    try {
+        const maskDoc: any = await projectSegmentationMaskModel.findById(maskId).select({ projectid: 1 }).lean();
+        const projectResult = maskDoc?.projectid ? await readProject(String(maskDoc.projectid)) : null;
+        const project: any = projectResult?.success ? projectResult.projects?.[0] : null;
+        const info = project?.templateInfo ?? null;
+        if (info) {
+            if (Number.isInteger(info.edFrame)) templateExtras.ed_frame = info.edFrame;
+            if (Number.isInteger(info.esFrame)) templateExtras.es_frame = info.esFrame;
+            if (info.heightCm > 0 && info.weightKg > 0) templateExtras.bsa_m2 = Math.sqrt((info.heightCm * info.weightKg) / 3600);
+        }
+    } catch (err: any) {
+        logger.warn(`${serviceLocation}: [HeartMetrics] template lookup failed for mask ${maskId}: ${err?.message}`);
+    }
+    const input = JSON.stringify({ frames, width, height, affine, ...templateExtras });
 
     return new Promise<void>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
@@ -1013,7 +1120,7 @@ export const computeBullseyeAndStore = async (
             return;
         }
 
-        const bullseyeData = response.data;
+        const bullseyeData = bullseyeToMm(response.data, await mmPerPixelOfMask(maskId, projectId));
         bullseyeData.computed_at = new Date().toISOString();
 
         const gpuWriteResult = await projectSegmentationMaskModel.collection.updateOne(
@@ -1277,7 +1384,7 @@ export async function recomputeBullseyeWithLandmarks(
 
                 // 4c. Overwrite bullseye on the mask document
                 const bullseyeData = {
-                    ...response.data,
+                    ...bullseyeToMm(response.data, mmPerPixel(project)),
                     computed_at: new Date().toISOString(),
                 };
                 const writeResult = await projectSegmentationMaskModel.collection.updateOne(

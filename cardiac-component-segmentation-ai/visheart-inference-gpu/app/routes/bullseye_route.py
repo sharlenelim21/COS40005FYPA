@@ -74,6 +74,7 @@ from bullseye_analysis import (
     mask_to_17_segments,
     mask_to_rv_regions,
     select_anterior_insertions,
+    stack_runs_apex_first,
 )
 
 router = APIRouter()
@@ -369,8 +370,9 @@ def _compute_strain_sync(
     GRS = % change in wall thickness, ED → ES.
     GCS = mean of the % changes in the outer, mid-wall and inner boundary lengths.
 
-    ED and ES are each analysed on their own (ES gets its own slice
-    classification) — unlike the RV route, which reuses ED's layout at ES.
+    ES reuses ED's slice → ring layout (as the RV route does), so each ring
+    compares the same slices; a slice with no LV at ES drops out of its ring
+    (a segment with no slice left at ES has no strain).
 
     rv_slices    : per-slice landmarks of the ED frame (aligns the ED mask).
     rv_slices_es : per-slice landmarks of the ES frame (aligns the ES mask), so
@@ -407,10 +409,21 @@ def _compute_strain_sync(
         align_pt = estimate_anterior_rv_insertion(mask_ed)
         estimated_from_mask = align_pt is not None
 
+    # Slice order (base or apex first) is decided once, on the ED mask, so the
+    # two frames' rings are counted from the same end of the stack.
+    apex_first = stack_runs_apex_first(mask_ed)
+
+    # ES reuses ED's slice → ring layout. Classifying ES on its own lets a ring
+    # compare different slices: when ES has one LV slice fewer, its "apical"
+    # ring loses the small slice ED's still has and its "apex" is a bigger
+    # slice, which read as circumferential lengthening (positive GCS).
+    # Two stacks with different slice counts can't share a layout.
     res_ed = mask_to_17_segments(mask_ed, rv_insertion_1=align_pt, rv_insertion_2=rv2,
-                                 anterior_by_slice=anterior_by_slice or None)
+                                 anterior_by_slice=anterior_by_slice or None, apex_first=apex_first)
+    same_stack = mask_es.shape[2] == mask_ed.shape[2]
     res_es = mask_to_17_segments(mask_es, rv_insertion_1=align_pt, rv_insertion_2=rv2,
-                                 anterior_by_slice=anterior_by_slice_es or None)
+                                 anterior_by_slice=anterior_by_slice_es or None, apex_first=apex_first,
+                                 slice_labels=res_ed["slice_labels"] if same_stack else None)
 
     wt_ed   = np.array(res_ed["values"],      dtype=float)
     wt_es   = np.array(res_es["values"],      dtype=float)
@@ -604,6 +617,7 @@ def _compute_rv_strain_sync(
     es_fname: str,
     rv1: Optional[tuple[float, float]],
     rv2: Optional[tuple[float, float]],
+    rv_slices: Optional[dict] = None,
 ) -> dict:
     """CPU-bound: load both NIfTIs, run mask_to_rv_regions on each, compute per-region strain.
 
@@ -611,6 +625,10 @@ def _compute_rv_strain_sync(
                                GAS = % change in cavity area.
     Per ring (3):              septal GCS = % change in septal-side length.
     All ED → ES; negative = shortening / shrinking.
+
+    rv_slices : per-slice landmarks of the ED frame. They orient each slice's
+                RV arc (which end is Seg3, anterior). Only the ED frame's
+                landmarks are needed: ES reuses the ED layout.
     """
 
     # The voxel size is taken from the ED file and used for both frames.
@@ -622,10 +640,19 @@ def _compute_rv_strain_sync(
     if not np.any(mask_es == 1):
         raise ValueError("ES mask contains no RV (class 1) pixels.")
 
+    # Per-slice landmarks → the anterior point of each slice, chosen on the ED
+    # mask by geometry (the same choice the LV route makes), so swapped labels
+    # do no harm. A slice without a usable point of its own uses the default
+    # end (see mask_to_rv_regions); with no usable slice at all, rv1 (or the
+    # mask estimate) is used, as before.
+    anterior_by_slice = select_anterior_insertions(mask_ed, rv_slices) if rv_slices else {}
+
     # ES reuses ED's slice→ring assignment and ray→section wedges, so each of
     # the 9 segments compares the same anatomical slices and angles.
-    res_ed = mask_to_rv_regions(mask_ed, rv_insertion_1=rv1, rv_insertion_2=rv2)
-    res_es = mask_to_rv_regions(mask_es, rv_insertion_1=rv1, rv_insertion_2=rv2, layout=res_ed["layout"])
+    res_ed = mask_to_rv_regions(mask_ed, rv_insertion_1=rv1, rv_insertion_2=rv2,
+                                anterior_by_slice=anterior_by_slice or None)
+    res_es = mask_to_rv_regions(mask_es, rv_insertion_1=rv1, rv_insertion_2=rv2, layout=res_ed["layout"],
+                                anterior_by_slice=anterior_by_slice or None)
 
     # NaN → None (a measurement that could not be made).
     def _opt(arr: np.ndarray, i: int) -> float | None:
@@ -729,6 +756,7 @@ async def compute_rv_strain(
     rv_insertion_1_y: Optional[float] = Form(default=None),
     rv_insertion_2_x: Optional[float] = Form(default=None),
     rv_insertion_2_y: Optional[float] = Form(default=None),
+    rv_insertion_slices: Optional[str] = Form(default=None),
 ):
     """
     Upload segmentation masks for ED and ES frames. Returns, per RV segment
@@ -742,6 +770,12 @@ async def compute_rv_strain(
     Each mask should hold one cardiac frame: 3-D (H × W × N_slices), or 4-D
     with a single frame, with class values:
     0=background, 1=RV, 2=myocardium, 3=LV cavity.
+
+    Optional form field rv_insertion_slices (JSON, see
+    _parse_rv_insertion_slices): both RV insertion points of every slice of
+    the ED frame. When it holds usable slices, each slice's RV arc is
+    oriented by its own anterior point (chosen on the ED mask, as the LV
+    route does) instead of rv_insertion_1.
     """
     for f, label in ((ed_file, "ed_file"), (es_file, "es_file")):
         fname = f.filename or ""
@@ -753,6 +787,7 @@ async def compute_rv_strain(
 
     rv1 = (rv_insertion_1_x, rv_insertion_1_y) if rv_insertion_1_x is not None and rv_insertion_1_y is not None else None
     rv2 = (rv_insertion_2_x, rv_insertion_2_y) if rv_insertion_2_x is not None and rv_insertion_2_y is not None else None
+    rv_slices = _parse_rv_insertion_slices(rv_insertion_slices)
 
     ed_bytes = await ed_file.read()
     es_bytes = await es_file.read()
@@ -763,7 +798,7 @@ async def compute_rv_strain(
             ed_bytes, es_bytes,
             ed_file.filename or "ed.nii.gz",
             es_file.filename or "es.nii.gz",
-            rv1, rv2,
+            rv1, rv2, rv_slices,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

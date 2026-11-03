@@ -18,9 +18,12 @@ import { deleteProject } from "../services/database"; // Import deleteProject fu
 
 import logger from "../services/logger"; // Import Winston Logger
 import LogError from "../utils/error_logger"; // Import error logging utility
+import { applyTemplateGuard } from "../middleware/template_guard";
+import { findViewableProject, listTemplateProjects } from "../services/template_access";
 
 const serviceLocation = "API(Upload)";
 const router = express.Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 
 const toSingleString = (value: string | string[] | undefined): string | undefined =>
   Array.isArray(value) ? value[0] : value;
@@ -40,9 +43,10 @@ router.get(
     }
 
     try {
-      const result = await readProject(projectId, userId);
-      if (result.success && result.projects && result.projects.length > 0) {
-        const project = result.projects[0];
+      // The viewer's own project, or a template (viewable by everyone, read-only).
+      const viewable = await findViewableProject(projectId, req.user);
+      if (viewable) {
+        const project = viewable.project;
         return res.status(200).json({
           success: true,
           project: {
@@ -57,6 +61,11 @@ router.get(
             affineMatrix: project.affineMatrix,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
+            isTemplate: !!project.isTemplate,
+            templateInfo: project.templateInfo ?? null,
+            // Templates are shown read-only to everyone, including their owner;
+            // the owner can still change them through the API (to rebuild them).
+            readOnly: !!project.isTemplate,
           },
         });
       } else {
@@ -70,6 +79,21 @@ router.get(
         success: false,
         message: "An error occurred while fetching the project information.",
       });
+    }
+  }
+);
+
+// Template hearts for the dashboard's Templates tab — every logged-in user.
+router.get(
+  "/get-template-projects",
+  isAuth,
+  async (_req: Request, res: Response) => {
+    try {
+      const templates = await listTemplateProjects();
+      return res.status(200).json({ success: true, templates });
+    } catch (error) {
+      LogError(error as Error, serviceLocation, "Error listing template projects");
+      return res.status(500).json({ success: false, message: "Failed to load templates.", templates: [] });
     }
   }
 );
@@ -456,19 +480,15 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const projectId = req.query.projectId as string;
-      const userId = (req.user as any)?._id;
 
-      const projectResult = await readProject(projectId, userId);
-      if (
-        !projectResult.success ||
-        !projectResult.projects ||
-        projectResult.projects.length === 0
-      ) {
+      // The viewer's own project, or a template (its MRI is viewable by everyone).
+      const viewable = await findViewableProject(projectId, req.user);
+      if (!viewable) {
         return res
           .status(404)
           .json({ success: false, message: "Project not found" });
       }
-      const project = projectResult.projects[0];
+      const project = viewable.project;
       const s3HttpsUrlForTar = project.extractedfolderpath;
 
       if (!s3HttpsUrlForTar) {

@@ -488,13 +488,18 @@ export class TarImageCache {
         };
       }
 
-      const tarBlob = await tarResponse.blob();
+      // Read the body straight into memory. Going through response.blob() first
+      // lets the browser park a large download in its on-disk blob store, and
+      // reading it back can fail with "NotReadableError: The requested file
+      // could not be read" when that store is unavailable (e.g. after the tab
+      // ran low on memory) — even though the download itself succeeded.
+      const tarBuffer = await tarResponse.arrayBuffer();
       this.debugInfo.tarFileFetched = true;
-      this.debugInfo.tarFileSize = tarBlob.size;
+      this.debugInfo.tarFileSize = tarBuffer.byteLength;
 
       // Step 3: Extract and store images
-      console.log(`[TarImageCache] Extracting tar file (${tarBlob.size} bytes)`);
-      const extractionResult = await this.extractAndStoreImages(projectId, tarBlob);
+      console.log(`[TarImageCache] Extracting tar file (${tarBuffer.byteLength} bytes)`);
+      const extractionResult = await this.extractAndStoreImages(projectId, tarBuffer);
 
       this.debugInfo.processingTime = performance.now() - startTime;
 
@@ -515,15 +520,12 @@ export class TarImageCache {
     }
   }
 
-  private async extractAndStoreImages(projectId: string, tarBlob: Blob): Promise<TarExtractionResult> {
+  private async extractAndStoreImages(projectId: string, arrayBuffer: ArrayBuffer): Promise<TarExtractionResult> {
     this.debugInfo.extractionStarted = true;
 
     try {
       // Clear existing images for this project
       await this.db.clearProject(projectId);
-
-      // Convert blob to array buffer for js-untar
-      const arrayBuffer = await tarBlob.arrayBuffer();
 
       // js-untar is browser-only (touches `window` at module scope), so it
       // has to stay a runtime import rather than a static one — this file

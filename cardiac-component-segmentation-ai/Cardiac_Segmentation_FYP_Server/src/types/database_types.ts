@@ -189,9 +189,29 @@ export interface IProject {
    * Added for export functionality to avoid re-downloading files. */
   affineMatrix?: number[][];
 
+  /** Read-only reference project ("template heart") that every logged-in user
+   *  can view on the landmark page. Only its owner (the template account) can
+   *  change it — see middleware/template_guard.ts and services/template_access.ts. */
+  isTemplate?: boolean;
+  /** Shown on the dashboard's Templates tab. */
+  templateInfo?: ITemplateInfo;
+
   // Based on mongoose timestamp
   createdAt?: Date; // Creation date of the project
   updatedAt?: Date; // Last update date of the project
+}
+
+export interface ITemplateInfo {
+  category: "NOR" | "HCM" | "DCM"; // normal heart / hypertrophic / dilated cardiomyopathy
+  sex: "female" | "male";
+  subjectCode?: string;          // source dataset subject (M&Ms external code)
+  age?: number;
+  heightCm?: number;
+  weightKg?: number;
+  edFrame?: number;              // 0-based, from the dataset
+  esFrame?: number;
+  order?: number;                // card order on the Templates tab
+  landmarkNote?: string;         // how the masks / landmarks were made, shown on the read-only Landmarks tab
 }
 // Project Model Interface (single project document in the database)
 export interface IProjectDocument extends IProject, Document {}
@@ -301,16 +321,20 @@ export interface IProjectSegmentationMask {
   };
   /**
    * Per-cardiac-cycle-frame RV cavity area, per 9-segment RV bullseye region
-   * — RV analogue of `frameBullseye` above, same "pure RLE, no GPU, no
-   * landmark data" auto-run design (see computeFrameRvAreaSeries). `area` is
+   * — RV analogue of `frameBullseye` above, same "pure RLE, no GPU" auto-run
+   * design (see computeFrameRvAreaSeries). The wedges are made on
+   * `reference_frame` (the first frame) and reused for every frame, oriented
+   * by the RV insertion landmarks when the project has them. `area` is
    * in raw pixel units (no voxel spacing passed to the script) — only
-   * ratios of it (e.g. frontend FAC = (area_ED - area_frame) / area_ED) are
+   * ratios of it (e.g. frontend FAC = (area_ref - area_frame) / area_ref) are
    * meaningful, not the absolute number. Lets the Structure/Strain tabs' RV
    * FAC animate across the cycle without a manual "Compute all frames"
    * (which remains the landmark-aligned GCS/GAS pipeline).
    */
   rvFrameAreas?: {
     frames: { frameIndex: number; regions: { region: number; area: number | null }[] }[];
+    /** Frame the wedges were made on and FAC is measured against (absent on results stored before 2026-10-19). */
+    reference_frame?: number;
     computed_at: string;
   };
   /**

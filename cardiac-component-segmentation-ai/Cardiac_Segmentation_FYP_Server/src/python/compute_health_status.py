@@ -47,6 +47,12 @@ by vendor / software (see docs §2 for citations and caveats).
                from the same EDV) are considered unreliable.
     Peak GCS : "ok" if PeakGCS <= -17 %  (more negative = better contraction)
     Peak GRS : "ok" if PeakGRS >= 25 %   (approximate soft threshold)
+    Wall thickness : maximal LV wall thickness at ED (measurements.
+               MaxWallThicknessMm, from compute_heart_metrics_from_rle.py),
+               against the ACDC challenge criteria (Bernard et al. 2018, IEEE
+               TMI 37(11)): NOR < 12 mm; HCM = a segment > 15 mm in diastole.
+               "ok" below 12 mm, "warn" from 12 mm. Not part of the downgrade
+               count — it has its own rule, below.
     (Strain peaks are only emitted when the strain module ran at the
      auto-detected ED/ES frames — otherwise they arrive null from
      heartMetrics.measurements and are listed in features_missing.)
@@ -60,7 +66,10 @@ Downgrade rule (project heuristic — NOT a clinical guideline)
     3. If that count >= 2 AND grade_from_ef in {Healthy, Mild, Moderate},
        downgrade one step (Healthy -> Mild, Mild -> Moderate,
        Moderate -> Severe). Severe stays Severe (it is the floor).
-    4. Final `status` = the (possibly downgraded) grade.
+    4. Wall-thickness rule: a maximal wall thickness >= 15 mm (the ACDC HCM
+       criterion) means the heart is not graded "Healthy" even with a normal
+       EF — HCM typically pumps normally — so "Healthy" becomes "Mild".
+    5. Final `status` = the (possibly downgraded) grade.
 
 Defensive behaviour
 -------------------
@@ -135,12 +144,18 @@ EDVI_MIN_MAX = (60.0, 100.0)
 PEAK_GCS_HEALTHY_MAX = -17.0   # more negative = better; "ok" if PeakGCS <= this
 PEAK_GRS_HEALTHY_MIN =  25.0   # "ok" if PeakGRS >= this
 
+# Maximal LV wall thickness at ED (mm) — ACDC challenge class criteria
+# (Bernard et al. 2018, IEEE TMI 37(11)): normal hearts < 12 mm in diastole,
+# HCM = myocardial segments thicker than 15 mm in diastole.
+WALL_THICKNESS_NORMAL_MAX_MM = 12.0
+WALL_THICKNESS_HCM_MIN_MM    = 15.0
+
 GRADES = ("Healthy", "Mild", "Moderate", "Severe")
 
 DISCLAIMER = (
     "Rule-based assessment using ASE/EACVI 2015 LV systolic-function grading "
-    "thresholds. NOT a diagnosis — interpretation by a qualified clinician is "
-    "required."
+    "thresholds and the ACDC wall-thickness criteria. NOT a diagnosis — "
+    "interpretation by a qualified clinician is required."
 )
 
 METHOD = "rule-based-ase-lvef-grading"
@@ -194,6 +209,7 @@ def compute(measurements: dict, hm_warnings: list, volume_signals: Optional[dict
     edvi    = _num(measurements.get("EDVI"))
     peakGCS = _num(measurements.get("PeakGCS"))
     peakGRS = _num(measurements.get("PeakGRS"))
+    max_wt  = _num(measurements.get("MaxWallThicknessMm"))
 
     hm_warnings = list(hm_warnings) if isinstance(hm_warnings, list) else []
     if isinstance(volume_signals, dict):
@@ -369,6 +385,39 @@ def compute(measurements: dict, hm_warnings: list, volume_signals: Optional[dict
             })
             grs_warn_counts = True
 
+    # ── Wall-thickness evidence (skip silently when null — older heart
+    #    metrics have no MaxWallThicknessMm).
+    if max_wt is None:
+        features_missing.append("MaxWallThicknessMm")
+    else:
+        features_used.append("MaxWallThicknessMm")
+        if max_wt < WALL_THICKNESS_NORMAL_MAX_MM:
+            evidence.append({
+                "label":  "Wall Thickness",
+                "level":  "ok",
+                "detail": f"Maximal LV wall thickness {max_wt:.1f} mm at end-diastole — "
+                          f"below {WALL_THICKNESS_NORMAL_MAX_MM:.0f} mm, the normal limit of "
+                          "the ACDC criteria.",
+            })
+        elif max_wt < WALL_THICKNESS_HCM_MIN_MM:
+            evidence.append({
+                "label":  "Wall Thickness",
+                "level":  "warn",
+                "detail": f"Maximal LV wall thickness {max_wt:.1f} mm at end-diastole — "
+                          f"above the {WALL_THICKNESS_NORMAL_MAX_MM:.0f} mm normal limit but "
+                          f"below the {WALL_THICKNESS_HCM_MIN_MM:.0f} mm HCM threshold (ACDC "
+                          "criteria).",
+            })
+        else:
+            evidence.append({
+                "label":  "Wall Thickness",
+                "level":  "warn",
+                "detail": f"Maximal LV wall thickness {max_wt:.1f} mm at end-diastole — "
+                          f"at or above {WALL_THICKNESS_HCM_MIN_MM:.0f} mm, the HCM criterion "
+                          "of the ACDC challenge (a myocardial segment thicker than 15 mm "
+                          "in diastole). Suggests hypertrophy even with a normal EF.",
+            })
+
     # ── Downgrade rule (project heuristic).
     supporting_warn_count = sum([edv_warn_counts, gcs_warn_counts, grs_warn_counts])
     if grade_from_ef == "Indeterminate":
@@ -381,6 +430,14 @@ def compute(measurements: dict, hm_warnings: list, volume_signals: Optional[dict
         )
     else:
         status = grade_from_ef
+
+    # ── Wall-thickness rule: hypertrophy at the ACDC HCM level is not "Healthy".
+    if status == "Healthy" and max_wt is not None and max_wt >= WALL_THICKNESS_HCM_MIN_MM:
+        status = "Mild"
+        warnings_out.append(
+            f"Maximal wall thickness {max_wt:.1f} mm >= {WALL_THICKNESS_HCM_MIN_MM:.0f} mm "
+            "(ACDC HCM criterion) — graded Mild instead of Healthy despite the normal EF."
+        )
 
     # ── Confidence: "low" whenever EF is missing OR volume evidence was
     #    suppressed. "normal" otherwise (even with null strain — missing

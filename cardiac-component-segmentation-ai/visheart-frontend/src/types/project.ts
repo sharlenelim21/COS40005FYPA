@@ -62,6 +62,42 @@ export interface ProjectData {
     affineMatrix?: number[][];
     createdAt?: string;
     updatedAt?: string;
+    /** Template heart: a pre-computed reference project every user can view
+     *  but nobody can change (the server blocks writes; the UI hides editing). */
+    isTemplate?: boolean;
+    templateInfo?: TemplateInfo | null;
+    /** True for templates — the landmark page shows results only. */
+    readOnly?: boolean;
+}
+
+export interface TemplateInfo {
+    category: "NOR" | "HCM" | "DCM";
+    sex: "female" | "male";
+    subjectCode?: string;
+    age?: number;
+    heightCm?: number;
+    weightKg?: number;
+    edFrame?: number;
+    esFrame?: number;
+    order?: number;
+    /** How the template's masks / RV insertion points were made — shown on its read-only Landmarks tab. */
+    landmarkNote?: string;
+}
+
+/** One card on the dashboard's Templates tab (GET /project/get-template-projects). */
+export interface TemplateProjectSummary {
+    projectId: string;
+    name: string;
+    description?: string;
+    templateInfo: TemplateInfo | null;
+    dimensions?: { width: number; height: number; slices?: number; frames?: number };
+    metrics: {
+        lvef: number | null;
+        lvedv: number | null;
+        lvesv: number | null;
+        lvMass: number | null;
+        rvef: number | null;
+    };
 }
 
 /**

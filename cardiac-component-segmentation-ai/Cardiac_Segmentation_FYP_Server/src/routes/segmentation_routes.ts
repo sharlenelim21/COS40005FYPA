@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import logger from "../services/logger";
 import { startInference, startModel2Inference, findBlockingSegmentationJob } from "../services/inference";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
+import { mmPerPixel, computeBullseyeFromMaskDoc, computeFrameWallThicknessSeries, computeFrameRvAreaSeries, computeHeartMetricsFromMaskDoc, computeHealthStatusFromMetrics, generateNiftiAndComputeBullseye, computeDiseaseSimilarityFromMetrics, computeRegionalHealthStatusFromStrain, computeRvRegionalHealthStatusFromStrain, computeRvHealthStatusFromMetrics } from "../services/segmentation_export";
 import { computeAndStoreEditTracking } from "../services/edit_tracking";
 import {
     readProjectSegmentationMask,
@@ -28,8 +28,10 @@ import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalSe
 import { extractS3KeyFromUrl, downloadFromS3, uploadMaskToS3 } from "../services/s3_handler";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client"; // Import fresh GPU server address function
 import { loadRvInsertionSlicesByFrame, resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
+import { applyTemplateGuard } from "../middleware/template_guard";
 
 const router = Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 const serviceLocation = "SegmentationRoutes";
 
 const resolveMedsamServerBaseUrl = async (): Promise<string | null> => {
@@ -1292,7 +1294,7 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             // a user-initiated trigger, so there's no bsa_m2/sex to read. Runs in
             // non-indexed mode; a caller wanting indexed-mode similarity should
             // use the manual trigger-disease-similarity route with bsa_m2/sex set.
-            const simMeasurements = assembleSimilarityMeasurements(updatedMask);
+            const simMeasurements = assembleSimilarityMeasurements(updatedMask, undefined, mmPerPixel(project));
             if (simMeasurements) {
                 const { sex: autoSex, ...autoMeasurementsOnly } = simMeasurements;
                 computeDiseaseSimilarityFromMetrics(maskDoc._id.toString(), autoMeasurementsOnly, autoSex).catch((simErr: any) => {
@@ -1463,6 +1465,11 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
         // 5. Look up RV insertion landmarks (same lookup as LV strain — shared,
         // model-independent alignment points)
         const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
+        // Both insertion points of every slice of the ED frame: the GPU picks
+        // the anterior one per slice (as for the LV) and uses it to decide
+        // which end of that slice's RV arc is anterior. ES reuses the ED
+        // layout, so the ES frame's landmarks are not needed.
+        const rvSlices = await resolveRvInsertionSlices(projectId, edFrameIndex);
 
         // 6. POST both NIfTI files to GPU
         const FormDataNode = require("form-data");
@@ -1477,6 +1484,7 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
             form.append("rv_insertion_2_x", String(lm2.x));
             form.append("rv_insertion_2_y", String(lm2.y));
         }
+        if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
 
         const gpuRes = await axios.post(`${gpuBaseUrl}/bullseye/compute-rv-strain`, form, {
             headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
@@ -1925,6 +1933,9 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
         };
 
         const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
+        // ED frame's per-slice landmarks — orient every slice's RV arc (see
+        // compute-rv-strain-from-frames). Every frame reuses the ED layout.
+        const rvSlices = await resolveRvInsertionSlices(projectId, edFrameIndex);
 
         const edPath = await buildNIfTI(edFrame, "ed");
         const FormDataNode = require("form-data");
@@ -1938,6 +1949,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                 form.append("es_file", fs.createReadStream(framePath), { filename: `${label}.nii.gz`, contentType: "application/gzip" });
                 if (lm1) { form.append("rv_insertion_1_x", String(lm1.x)); form.append("rv_insertion_1_y", String(lm1.y)); }
                 if (lm2) { form.append("rv_insertion_2_x", String(lm2.x)); form.append("rv_insertion_2_y", String(lm2.y)); }
+                if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
 
                 const r = await axios.post(`${gpuBaseUrl}/bullseye/compute-rv-strain`, form, {
                     headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
@@ -2100,9 +2112,11 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
             logger.warn(`SegmentationRoutes: trigger-bullseye frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 
-        // Per-frame RV cavity area — RLE-only, no GPU, no landmark data, same
-        // reasoning as the LV frame series above. See computeFrameRvAreaSeries.
-        computeFrameRvAreaSeries(maskId, frames, W, H).catch((err: any) => {
+        // Per-frame RV cavity area — RLE-only, no GPU, same reasoning as the
+        // LV frame series above. The project id lets it orient the RV wedges
+        // by the RV insertion landmarks, as the GPU RV strain does. See
+        // computeFrameRvAreaSeries.
+        computeFrameRvAreaSeries(maskId, frames, W, H, maskDoc.projectid?.toString()).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-bullseye RV frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 
@@ -2186,6 +2200,9 @@ function assembleSimilarityMeasurements(
         bsa_m2?: number | null;
         sex?: "male" | "female" | "unspecified";
     },
+    // The project's in-plane pixel size (mmPerPixel), to convert a bullseye
+    // stored in pixels (before bullseyeToMm existed) to mm.
+    mmPx?: number | null,
 ): {
     EF: number | null; EDV: number | null; ESV: number | null;
     EDVI?: number | null; ESVI?: number | null;
@@ -2212,17 +2229,28 @@ function assembleSimilarityMeasurements(
     const indexed = (v: number | null): number | null => (bsaM2 && v != null ? v / bsaM2 : null);
 
     // Maximum ED wall thickness — the one morphology feature that needs NO
-    // client input at all: it's max() over the AHA segment values already
-    // stored on this mask's own bullseye (see compute_bullseye_from_rle.py),
-    // computed at the ED frame. Real, server-side, always available once the
-    // bullseye has been computed for this mask.
-    const bullseyeValues: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values;
+    // client input at all (used as the HCM >= 15 mm gate). Fallback value:
+    // max() over the AHA segment values stored on this mask's own bullseye
+    // (see compute_bullseye_from_rle.py). Stored in mm (unit "mm",
+    // bullseyeToMm); an older bullseye stored in pixels is converted with the
+    // project's pixel size, and gives no value when that is unknown.
+    const bullseye = maskDoc?.bullseye;
+    const bullseyeValues: (number | null)[] | undefined = bullseye?.segment_values;
     const finiteSegmentValues = (bullseyeValues ?? []).filter(
         (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
     );
-    const maxWallThicknessMm: number | null = finiteSegmentValues.length
-        ? Math.max(...finiteSegmentValues)
+    const toMm = bullseye?.unit === "mm" ? 1 : mmPx ?? null;
+    const maxSegmentAverageMm: number | null = finiteSegmentValues.length && toMm
+        ? Math.max(...finiteSegmentValues) * toMm
         : null;
+    // Preferred: the maximal wall thickness heart metrics measure on the ED
+    // frame itself (compute_heart_metrics_from_rle.py :: max_wall_thickness_px).
+    // The bullseye above averages each segment — which dilutes a local HCM
+    // thickening — and is built from all frames merged, not ED, so it is only
+    // the fallback for heart metrics computed before that field existed.
+    const hmMaxWt = maskDoc?.heartMetrics?.max_wall_thickness_mm;
+    const maxWallThicknessMm: number | null =
+        typeof hmMaxWt === "number" && Number.isFinite(hmMaxWt) ? hmMaxWt : maxSegmentAverageMm;
 
     const strain = maskDoc?.strain;
     const bodyGRS = typeof body?.PeakGRS === "number" ? body.PeakGRS : null;
@@ -2292,7 +2320,7 @@ router.post("/trigger-disease-similarity/:maskId", isAuth, async (req: Request, 
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
 
-        const measurements = assembleSimilarityMeasurements(maskDoc, req.body);
+        const measurements = assembleSimilarityMeasurements(maskDoc, req.body, mmPerPixel(projectResult.projects[0]));
         if (!measurements) {
             return res.status(400).json({
                 success: false,

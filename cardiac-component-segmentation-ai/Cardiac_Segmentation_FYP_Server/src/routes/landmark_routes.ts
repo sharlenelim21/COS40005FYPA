@@ -18,10 +18,13 @@ import logger from "../services/logger";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
 import { resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
 import { normalizeLandmarkFrames, normalizeLandmarkJobResult } from "../utils/landmark_order";
+import { applyTemplateGuard } from "../middleware/template_guard";
+import { findViewableProject } from "../services/template_access";
 
 const memUpload = multer({ storage: multer.memoryStorage() });
 
 const router = express.Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 const serviceLocation = "LandmarkRoutes";
 
 const parseCompletedLandmarkJobResult = (job: any) => {
@@ -135,17 +138,14 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
-      const projectResult = await readProject(projectId);
-      const project = projectResult.projects?.[0];
-
-      if (
-        !projectResult.success ||
-        !project ||
-        project.userid?.toString() !== req.user?._id?.toString()
-      ) {
+      // The viewer's own project, or a template (read-only). Jobs belong to
+      // the project's owner, so they are looked up by ownerId.
+      const viewable = await findViewableProject(projectId, req.user);
+      if (!viewable) {
         res.status(404).json({ success: false, message: "Project not found.", result: null });
         return;
       }
+      const ownerId = viewable.ownerId;
 
       const jobUuid = typeof req.query.jobUuid === "string" ? req.query.jobUuid : null;
       if (jobUuid) {
@@ -153,7 +153,7 @@ router.get(
           .findOne({
             uuid: jobUuid,
             projectid: projectId,
-            userid: req.user?._id?.toString(),
+            userid: ownerId,
           })
           .lean();
 
@@ -185,10 +185,14 @@ router.get(
         return;
       }
 
+      // Landmark jobs only: without the model filter, 10 newer completed jobs
+      // of any other kind pushed the saved landmark result out of this window
+      // and the page re-ran detection.
       const completedJobs = await jobModel
         .find({
           projectid: projectId,
-          userid: req.user?._id?.toString(),
+          userid: ownerId,
+          model_used: /landmark/i,
           status: JobStatus.COMPLETED,
           result: { $exists: true, $ne: null },
         })
@@ -235,8 +239,14 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
+      // The viewer's own project, or a template — jobs are the owner's.
+      const viewable = await findViewableProject(projectId, req.user);
+      if (!viewable) {
+        res.status(200).json({ success: true, jobs: [] });
+        return;
+      }
       const jobs = await jobModel
-        .find({ projectid: projectId, userid: req.user?._id?.toString() })
+        .find({ projectid: projectId, userid: viewable.ownerId })
         .select({ result: 0 })
         .sort({ createdAt: -1 })
         .limit(30)
