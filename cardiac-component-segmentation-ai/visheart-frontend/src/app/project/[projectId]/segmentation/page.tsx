@@ -459,7 +459,7 @@ function SegmentationResultsPageInner() {
 
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
     if (!isGpuMode && value === "medsam") {
-      setRunSegmentationError("MEDSAM model is only available with NVIDIA GPU.");
+      setRunSegmentationError("MedSAM model is only available with NVIDIA GPU.");
       return;
     }
 
@@ -713,7 +713,7 @@ function SegmentationResultsPageInner() {
       const effectiveModel: SegmentationModelId = selectedModel;
 
       if (!isGpuMode && effectiveModel === "medsam") {
-        setRunSegmentationError("MedSam requires NVIDIA GPU mode. Select Unet or start the GPU service first.");
+        setRunSegmentationError("MedSAM requires NVIDIA GPU mode. Select UNet or start the GPU service first.");
         return;
       }
 
