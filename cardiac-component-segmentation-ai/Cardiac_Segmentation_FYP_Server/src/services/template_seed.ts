@@ -18,6 +18,7 @@ import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 import { S3Client, PutObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import logger from "./logger";
+import { ensureLocalBucket } from "./s3_handler";
 
 const serviceLocation = "TemplateSeed";
 const { EJSON, ObjectId } = mongoose.mongo.BSON;
@@ -185,6 +186,7 @@ export async function loadTemplateSeed(): Promise<void> {
             logger.warn(`${serviceLocation}: object storage is not configured (STORAGE_MODE=s3) — templates not loaded.`);
             return;
         }
+        await ensureLocalBucket(); // a fresh install's bucket may not exist yet
         if (!(await ensureTemplateAccount(dir, manifest))) return;
         logger.info(`${serviceLocation}: loading ${todo.length} template(s) from ${dir} ...`);
         for (const t of todo) {

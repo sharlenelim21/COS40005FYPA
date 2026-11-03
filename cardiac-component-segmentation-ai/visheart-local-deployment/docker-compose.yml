@@ -278,24 +278,9 @@ services:
       retries: 5
       start_period: 20s
 
-  # ============================================
-  # MinIO Bucket Setup
-  # ============================================
-  minio-setup:
-    image: minio/mc:latest
-    container_name: visheart-minio-setup
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set myminio http://minio:9000 minioadmin minioadmin123;
-      mc mb myminio/visheart-bucket --ignore-existing;
-      mc anonymous set download myminio/visheart-bucket;
-      exit 0;
-      "
-    networks:
-      - visheart-network
+  # The bucket (visheart-bucket, anonymous read) is created by the backend on start-up
+  # (s3_handler.ts ensureLocalBucket). It used to be a minio-setup service running the
+  # minio/mc image, which Docker Hub no longer serves, so `docker compose up` failed.
 
   # ============================================
   # GPU Inference Service (PROFILE: CPU)
