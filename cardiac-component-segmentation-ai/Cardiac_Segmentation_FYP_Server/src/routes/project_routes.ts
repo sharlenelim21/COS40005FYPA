@@ -109,6 +109,21 @@ router.get(
   }
 );
 
+// The same template summaries for the Medical Guide's "Reference hearts", which is
+// public: no sign-in, numbers only (opening a template itself still needs sign-in).
+router.get(
+  "/template-summaries",
+  async (_req: Request, res: Response) => {
+    try {
+      const templates = await listTemplateProjects();
+      return res.status(200).json({ success: true, templates });
+    } catch (error) {
+      LogError(error as Error, serviceLocation, "Error listing template summaries");
+      return res.status(500).json({ success: false, message: "Failed to load templates.", templates: [] });
+    }
+  }
+);
+
 // Upload route with PUT method
 router.put(
   "/upload-new-project",

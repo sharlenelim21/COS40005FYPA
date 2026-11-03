@@ -5,6 +5,7 @@ import { ConditionGrid } from "@/components/doc/medical/ConditionCard";
 import { ContentText } from "@/components/doc/medical/ContentText";
 import { DiseasePatternTable } from "@/components/doc/medical/DiseasePatternTable";
 import { FigureSlot } from "@/components/doc/medical/FigureSlot";
+import { ReferenceHearts } from "@/components/doc/medical/ReferenceHearts";
 import { ReferenceRangeTable } from "@/components/doc/medical/ReferenceRangeTable";
 import { TwoLayerSection } from "@/components/doc/medical/TwoLayerSection";
 import { VideoSlot } from "@/components/doc/medical/VideoSlot";
@@ -36,6 +37,8 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
       return <ConditionGrid conditions={block.conditions} note={block.note} />;
     case "patternTable":
       return <DiseasePatternTable {...block} />;
+    case "referenceHearts":
+      return <ReferenceHearts note={block.note} />;
   }
 }
 

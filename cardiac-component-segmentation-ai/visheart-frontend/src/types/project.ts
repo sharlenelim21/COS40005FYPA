@@ -100,7 +100,20 @@ export interface TemplateProjectSummary {
         lvesv: number | null;
         lvMass: number | null;
         rvef: number | null;
+        /** Indexed to the subject's body surface area. */
+        lvedvi?: number | null;
+        lvmi?: number | null;
+        rvedvi?: number | null;
+        /** Thickest LV wall on the end-diastole frame (mm). */
+        maxWallThicknessMm?: number | null;
+        grs?: number | null;
+        gcs?: number | null;
     };
+    /** LV radial strain (GRS, %) per AHA segment 1–17; null where not measured. */
+    strainSegments?: (number | null)[] | null;
+    healthStatus?: string | null;
+    /** Disease pattern gates met (ACDC groups): NOR_LV, NOR_RV, MINF, DCM, HCM, RV. */
+    patternGates?: string[];
 }
 
 /**

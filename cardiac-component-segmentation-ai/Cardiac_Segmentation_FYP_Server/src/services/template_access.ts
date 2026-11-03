@@ -42,8 +42,10 @@ export const findViewableProject = async (projectId: string | undefined, user: a
 };
 
 /**
- * Template projects for the dashboard's Templates tab, with a few headline
- * numbers from each one's editable segmentation (heart metrics).
+ * Template projects for the dashboard's Templates tab and the Medical Guide's
+ * reference hearts: headline numbers from each one's editable segmentation
+ * (heart metrics, strain, health status, disease pattern gates). Numbers only —
+ * no images or masks — so the guide may show them to signed-out readers.
  */
 export const listTemplateProjects = async () => {
     const projects = await projectModel
@@ -54,9 +56,11 @@ export const listTemplateProjects = async () => {
     const withMetrics = await Promise.all(projects.map(async (p: any) => {
         const mask: any = await projectSegmentationMaskModel
             .findOne({ projectid: String(p._id), isMedSAMOutput: false })
-            .select({ heartMetrics: 1 })
+            .select({ heartMetrics: 1, "strain.global_grs": 1, "strain.global_gcs": 1, "strain.segments.grs": 1,
+                      "healthStatus.status": 1, "diseasePatternGates.met_codes": 1 })
             .lean();
         const hm = mask?.heartMetrics ?? {};
+        const hmIndexed = hm.measurements ?? {};
         const num = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v : null);
         return {
             projectId: String(p._id),
@@ -70,7 +74,20 @@ export const listTemplateProjects = async () => {
                 lvesv: num(hm.LVESV),
                 lvMass: num(hm.LV_mass_g),
                 rvef: num(hm.RVEF),
+                // Indexed with the template's BSA (templateInfo height/weight).
+                lvedvi: num(hmIndexed.EDVI),
+                lvmi: num(hmIndexed.LVMI),
+                rvedvi: num(hm.RVEDVI),
+                maxWallThicknessMm: num(hm.max_wall_thickness_mm),
+                grs: num(mask?.strain?.global_grs),
+                gcs: num(mask?.strain?.global_gcs),
             },
+            /** LV radial strain (GRS, %) per AHA segment 1–17, null where it could not be measured. */
+            strainSegments: Array.isArray(mask?.strain?.segments)
+                ? mask.strain.segments.map((s: any) => num(s?.grs))
+                : null,
+            healthStatus: typeof mask?.healthStatus?.status === "string" ? mask.healthStatus.status : null,
+            patternGates: Array.isArray(mask?.diseasePatternGates?.met_codes) ? mask.diseasePatternGates.met_codes : [],
         };
     }));
 

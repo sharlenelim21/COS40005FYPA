@@ -191,6 +191,12 @@ export const projectApi = {
     return response.data;
   },
 
+  // The same template summaries without sign-in (numbers only), for the public Medical Guide
+  getTemplateSummaries: async (): Promise<{ success: boolean; templates: TemplateProjectSummary[] }> => {
+    const response = await api.get("/project/template-summaries");
+    return response.data;
+  },
+
   // Upload new project
   uploadProject: async (formData: FormData) => {
     try {
