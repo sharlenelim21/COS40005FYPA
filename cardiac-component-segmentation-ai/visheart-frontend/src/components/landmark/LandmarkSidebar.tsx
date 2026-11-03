@@ -55,6 +55,10 @@ import { rvTotalArea } from "@/lib/rvAreaMetrics";
  * sibling of this sidebar. Bundled into one prop instead of ~18 individual
  * ones passed down through LandmarkSidebar -> StrainTab.
  */
+export const SEGMENTATION_RUNNING_STRAIN_MESSAGE =
+  "Segmentation is running for this model. Strain is disabled until it finishes: " +
+  "re-running segmentation replaces this model's masks, and strain stored on the old masks is deleted with them.";
+
 export interface StrainComputeBundle {
   scope: "quick" | "full";
   onScopeChange: (scope: "quick" | "full") => void;
@@ -89,14 +93,14 @@ export interface StrainComputeBundle {
    *  9-segment RV bullseye (never combined). */
   rvMetricType: "GCS" | "GAS";
   onRvMetricTypeChange: (type: "GCS" | "GAS") => void;
-  /** Reports Full cycle's busy state up to the page, so the main panel can
-   *  show a loading state too while "Compute/Recompute all frames" runs
-   *  (StrainTab's own seriesBusy is local and the page can't see it otherwise). */
-  onFullCycleBusyChange: (busy: boolean) => void;
-  /** Same idea as onFullCycleBusyChange, but the real 0-100 reading (see
-   *  seriesProgress above) — lets the main panel's own "Computing all
-   *  frames…" overlay show a real percentage too, not just a spinner. */
-  onFullCycleProgressChange?: (progress: number | null) => void;
+  /** Reports the job IDs a just-started full-cycle compute is tracked under, so the PAGE can own
+   *  busy/progress polling itself (durable across the tab-switch remount this sidebar lives
+   *  behind) instead of StrainTab's own closure, which a tab switch can leave mid-flight with
+   *  nobody watching it update the page. Called once, right when the IDs are generated, before
+   *  the compute calls themselves are fired. */
+  onFullCycleJobsStarted: (lvJobId: string, rvJobId: string) => void;
+  segmentationRunning: boolean;
+  checkSegmentationRunning?: () => Promise<boolean>;
 }
 
 const NAV_ITEMS = [
@@ -144,6 +148,8 @@ export interface LandmarkSidebarProps {
   replacementFileError: string | null;
   confidentCount?: number;
   onStrainFrameChange?: (frame: number) => void;
+  /** The cardiac-cycle playback speed (frames per second), reported so the page's 3D hearts ease at the same pace. */
+  onStrainFpsChange?: (fps: number) => void;
   onTabChange?: (tab: "landmarks" | "structure" | "strain") => void;
   activeTab?: "landmarks" | "structure" | "strain";
   activeModel?: "unet" | "medsam";
@@ -203,6 +209,7 @@ export function LandmarkSidebar({
   replacementFileError,
   confidentCount,
   onStrainFrameChange,
+  onStrainFpsChange,
   onTabChange,
   activeTab: activeTabProp,
   activeModel,
@@ -265,6 +272,15 @@ export function LandmarkSidebar({
   const [strainPlaying, setStrainPlaying] = useState(false);
   useEffect(() => { onStrainFrameChange?.(strainFrame); }, [strainFrame, onStrainFrameChange]);
 
+  // The cardiac cycle has its own speed (the slice playback keeps state.playbackFps). Default 4 fps: slow enough to
+  // follow the walls (Jy, 2026-10-16: real time looked too fast to read). "Real time" = one cycle per heartbeat at
+  // REAL_TIME_BPM, since the scans carry no heart rate of their own (pixdim t is a placeholder 1); null selects it,
+  // so it follows the project's frame count.
+  const realTimeFps = (strainFrameCount * REAL_TIME_BPM) / 60;
+  const [strainFps, setStrainFps] = useState<number | null>(DEFAULT_CYCLE_FPS);
+  const strainPlaybackFps = strainFps ?? realTimeFps;
+  useEffect(() => { onStrainFpsChange?.(strainPlaybackFps); }, [strainPlaybackFps, onStrainFpsChange]);
+
   // Landmark and strain playback are independent loops (slices vs. frames).
   // Switching tabs pauses BOTH, so a loop started in one tab can't keep running
   // while the user thinks the playback bar in the other tab is what's moving.
@@ -281,10 +297,10 @@ export function LandmarkSidebar({
     if (!strainPlaying || strainFrameCount < 2) return;
     const id = setInterval(
       () => setStrainFrame((f) => (f + 1) % strainFrameCount),
-      1000 / Math.max(state.playbackFps || 2, 0.5),
+      1000 / Math.max(strainPlaybackFps, 0.5),
     );
     return () => clearInterval(id);
-  }, [strainPlaying, strainFrameCount, state.playbackFps]);
+  }, [strainPlaying, strainFrameCount, strainPlaybackFps]);
   // Keep the index valid if the project's frame count arrives late or changes.
   useEffect(() => {
     setStrainFrame((f) => Math.min(f, strainFrameCount - 1));
@@ -332,7 +348,11 @@ export function LandmarkSidebar({
         <div className="px-4 py-2 border-b border-[var(--sidebar-border)] flex-shrink-0">
           <p className="text-[10px] leading-snug text-muted-foreground">
             This result only has landmarks for {state.frameIds.length} of {strainFrameCount} frames.{" "}
-            <button type="button" onClick={onRerun} className="font-medium text-primary underline underline-offset-2">
+            <button
+              type="button"
+              onClick={onRerun}
+              className="font-medium text-primary underline underline-offset-2"
+            >
               Re-run detection
             </button>{" "}
             to detect and edit every frame.
@@ -368,13 +388,16 @@ export function LandmarkSidebar({
               currentFrame={strainFrame}
               totalFrames={strainFrameCount}
               isPlaying={strainPlaying}
-              playbackFps={state.playbackFps}
+              playbackFps={strainPlaybackFps}
+              realTimeFps={realTimeFps}
+              isRealTime={strainFps === null}
+              onRealTime={() => setStrainFps(null)}
               confidentCount={confidentCount ?? 0}
               onTogglePlay={() => setStrainPlaying((p) => !p)}
               onNextFrame={() => setStrainFrame((f) => Math.min(f + 1, strainFrameCount - 1))}
               onPrevFrame={() => setStrainFrame((f) => Math.max(f - 1, 0))}
               onSliderChange={(f) => setStrainFrame(Math.max(0, Math.min(f, strainFrameCount - 1)))}
-              onPlaybackSpeedChange={onPlaybackSpeedChange}
+              onPlaybackSpeedChange={setStrainFps}
             />
           </div>
         )}
@@ -471,6 +494,9 @@ function PlaybackBar({
   onSliderChange,
   onPlaybackSpeedChange,
   axisLabel = "Frame",
+  realTimeFps,
+  isRealTime = false,
+  onRealTime,
 }: {
   currentFrame: number;
   totalFrames: number;
@@ -484,8 +510,16 @@ function PlaybackBar({
   onPrevFrame: () => void;
   onSliderChange: (f: number) => void;
   onPlaybackSpeedChange: (fps: number) => void;
+  /** Cardiac cycle only: offer "Real time" (one cycle per heartbeat at REAL_TIME_BPM) before the fixed speeds. */
+  realTimeFps?: number;
+  isRealTime?: boolean;
+  onRealTime?: () => void;
 }) {
   const speedOptions = [0.5, 1, 2, 4];
+  const realTimeTip = realTimeFps
+    ? `Real heart-rate speed: one cardiac cycle per heartbeat at ${REAL_TIME_BPM} bpm (a normal resting heart rate), ` +
+      `${Math.round(realTimeFps)} frames per second. The scan does not record the patient's own heart rate.`
+    : "";
 
   return (
     <div className="px-4 py-3 border-b border-[var(--sidebar-border)] space-y-2 flex-shrink-0">
@@ -549,7 +583,21 @@ function PlaybackBar({
         <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           Speed
         </span>
-        <div className="grid grid-cols-4 gap-1 rounded-lg border border-border bg-background p-1">
+        <div className="flex flex-wrap gap-1 rounded-lg border border-border bg-background p-1">
+          {realTimeFps ? (
+            <button
+              type="button"
+              onClick={onRealTime}
+              className={cn(
+                "min-w-10 rounded-md px-1.5 py-1 text-[10px] font-medium transition-colors",
+                isRealTime ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              title={realTimeTip}
+              aria-label={realTimeTip}
+            >
+              Real-time
+            </button>
+          ) : null}
           {speedOptions.map((fps) => (
             <button
               key={fps}
@@ -557,7 +605,7 @@ function PlaybackBar({
               onClick={() => onPlaybackSpeedChange(fps)}
               className={cn(
                 "min-w-10 rounded-md px-1.5 py-1 text-[10px] font-medium tabular-nums transition-colors",
-                stateSpeedClass(fps, playbackFps),
+                stateSpeedClass(fps, isRealTime ? undefined : playbackFps),
               )}
               aria-label={`Set playback speed to ${fps} frames per second`}
             >
@@ -569,6 +617,11 @@ function PlaybackBar({
     </div>
   );
 }
+
+/** "Real time" for the cardiac cycle: one cycle per heartbeat at this rate (a normal resting heart rate). */
+const REAL_TIME_BPM = 60;
+/** Default cardiac-cycle playback speed (frames per second). */
+const DEFAULT_CYCLE_FPS = 4;
 
 function stateSpeedClass(fps: number, currentFps?: number) {
   return currentFps === fps
@@ -1087,13 +1140,16 @@ function DetectionSettingsPanel({
         {scope === "strain" ? "Display Settings" : "Detection Settings"}
       </h3>
       <div className="space-y-2">
-        {settings.map((setting) => (
+        {/* "Move/edit landmarks" is the one mutating toggle here (its handler is passed as
+            undefined for a View-Only viewer — see onToggleEditableLandmarks in the page) —
+            hide that row entirely rather than show a dead switch; every other setting here is
+            a pure view toggle and always has a handler. */}
+        {settings.filter((setting) => setting.onCheckedChange).map((setting) => (
           <div key={setting.label} className="flex items-center justify-between gap-3">
             <span className="text-xs text-foreground">{setting.label}</span>
             <Switch
               checked={setting.checked}
               onCheckedChange={setting.onCheckedChange}
-              disabled={!setting.onCheckedChange}
               aria-label={setting.label}
             />
           </div>
@@ -1174,7 +1230,7 @@ function ReplacementFileRow({
  */
 function ComputeBusyLabel({ verb, frames, progress }: { verb: string; frames: number; progress?: number | null }) {
   if (typeof progress === "number" && progress > 0) {
-    return <JobProgress progress={progress} status="in_progress" label={`${verb} ${frames} frames`} className="w-full" />;
+    return <JobProgress progress={progress} status="in_progress" label={`${verb} ${frames} frames`} finishingLabel="Saving results…" className="w-full" />;
   }
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -1259,6 +1315,11 @@ function StructureTab({
    *  per-frame RV strain series exists); false for the single ED->ES snapshot. */
   isRvPerFrame?: boolean;
 }) {
+  const { projectId } = useParams<{ projectId: string }>();
+  // Same per-model "is there a stored result at all" check the Strain tab's model
+  // toggle already uses — so Structure can't be switched to a model the User never ran.
+  const { available: modelAvailable } = useProjectResults(projectId);
+
   if (!hasPredictions) {
     return (
       <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
@@ -1277,21 +1338,7 @@ function StructureTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-medium text-foreground">Structure</h3>
-        <div className="inline-flex rounded-md border border-border bg-background p-0.5">
-          {(["unet", "medsam"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => onModelChange?.(m)}
-              className={cn(
-                "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
-                activeModel === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
-              )}
-            >
-              {m === "unet" ? "UNet ★" : "MedSAM"}
-            </button>
-          ))}
-        </div>
+        <ModelToggle strainModel={activeModel} setStrainModel={(m) => onModelChange?.(m)} modelAvailable={modelAvailable} />
       </div>
 
       <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
@@ -1480,13 +1527,21 @@ function StrainTab({
       realSeries?.edFrameIndex ??
       autoEdFrame ??
       0;
+    if (strainCompute?.segmentationRunning || (await strainCompute?.checkSegmentationRunning?.())) {
+      setSeriesError(SEGMENTATION_RUNNING_STRAIN_MESSAGE);
+      return;
+    }
     setSeriesBusy(true);
-    strainCompute?.onFullCycleBusyChange(true);
     setSeriesError(null);
     setSeriesProgress(null);
 
     const lvJobId = crypto.randomUUID();
     const rvJobId = crypto.randomUUID();
+    // Hands the page these IDs so IT can own busy/progress for the main panel from here (see
+    // onFullCycleJobsStarted's own doc comment) -- the local poll below is only for this tab's
+    // own inline display (seriesBusy/seriesProgress), which is fine to lose on unmount since the
+    // button it drives disappears with it.
+    strainCompute?.onFullCycleJobsStarted(lvJobId, rvJobId);
     const pollTimer = setInterval(async () => {
       try {
         const { jobs } = await segmentationApi.getUserJobs();
@@ -1499,7 +1554,6 @@ function StrainTab({
         if (readings.length) {
           const avg = Math.round(readings.reduce((a, b) => a + b, 0) / readings.length);
           setSeriesProgress(avg);
-          strainCompute?.onFullCycleProgressChange?.(avg);
         }
       } catch {
         // Keep the previous reading — a dropped poll is not evidence of anything.
@@ -1539,8 +1593,6 @@ function StrainTab({
       clearInterval(pollTimer);
       setSeriesBusy(false);
       setSeriesProgress(null);
-      strainCompute?.onFullCycleBusyChange(false);
-      strainCompute?.onFullCycleProgressChange?.(null);
     }
   }, [projectId, realStrain, realSeries, strainModel, autoEdFrame, strainCompute, refreshResults]);
 
@@ -1679,8 +1731,8 @@ function StrainTab({
   /**
    * "Peak" = the extreme over the whole cycle. Prefer measured values:
    *   1. strainSeries — the true peak across every computed frame
-   *   2. strain       — the single ED→ES global peak (what disease similarity
-   *                     and health status consume, so the panels agree)
+   *   2. strain       — the single ED→ES global peak (what health status
+   *                     consumes, so the panels agree)
    *   3. the dummy curve, when nothing has been computed
    * GRS peaks positive (thickening), GCS negative (shortening).
    */
@@ -1794,6 +1846,8 @@ function StrainTab({
             seriesProgress={seriesProgress}
             onRunFullCycle={runStrainSeries}
             readOnly={readOnly}
+            hasFullCycleResult={usingRealSeries || usingRealRvSeries}
+            strainIsStale={strainIsStale}
           />
         )}
       </div>
@@ -1833,6 +1887,8 @@ function StrainTab({
           seriesProgress={seriesProgress}
           onRunFullCycle={runStrainSeries}
           readOnly={readOnly}
+          hasFullCycleResult={usingRealSeries || usingRealRvSeries}
+          strainIsStale={strainIsStale}
         />
       )}
 
@@ -1866,25 +1922,16 @@ function StrainTab({
       <>
       {/* Landmarks define the AHA segment alignment, so editing them invalidates
           previously-computed strain. The backend stamps `staleSince` on save
-          rather than auto-recomputing (the series is one GPU pass per frame). */}
+          rather than auto-recomputing (the series is one GPU pass per frame).
+          The action itself lives on ComputeStrainCard's single recompute button
+          (below) — this is just the indication, so the card isn't duplicated
+          with a second button that does the exact same thing. */}
       {strainIsStale && !readOnly && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
           <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
             <span className="font-semibold">Landmarks edited</span> since this strain was computed —
-            the segment alignment has changed, so these values are out of date.
+            the segment alignment has changed, so these values are out of date. Use Recompute above.
           </p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="mt-2 h-7 w-full text-[10px]"
-            disabled={seriesBusy}
-            onClick={runStrainSeries}
-          >
-            {seriesBusy
-              ? <ComputeBusyLabel verb="Recomputing" frames={frameCount} progress={seriesProgress} />
-              : `Recompute all frames with current landmarks (${strainModel === "unet" ? "UNet" : "MedSAM"})`}
-          </Button>
-          {seriesError && <p className="mt-1 text-[9px] text-destructive">{seriesError}</p>}
         </div>
       )}
 
@@ -2090,7 +2137,8 @@ function QuickCombinedStrainView({
             size="sm"
             variant="outline"
             className="mt-2 h-7 w-full text-[10px]"
-            disabled={sc.isComputing}
+            disabled={sc.isComputing || sc.segmentationRunning}
+            title={sc.segmentationRunning ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined}
             onClick={sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames}
           >
             {sc.isComputing ? "Recomputing…" : `Recompute ED → ES with current landmarks (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
@@ -2184,6 +2232,8 @@ function ComputeStrainCard({
   seriesProgress,
   onRunFullCycle,
   readOnly = false,
+  hasFullCycleResult,
+  strainIsStale,
 }: {
   strainCompute: StrainComputeBundle;
   seriesBusy: boolean;
@@ -2192,10 +2242,25 @@ function ComputeStrainCard({
   onRunFullCycle: () => void;
   /** Template heart: only the Quick ED→ES / Full cycle view switch is shown. */
   readOnly?: boolean;
+  hasFullCycleResult: boolean;
+  /** Landmarks edited since the full-cycle result was computed — same button, just a note above it. */
+  strainIsStale?: boolean;
 }) {
   const edRef = React.useRef<HTMLInputElement>(null);
   const esRef = React.useRef<HTMLInputElement>(null);
   const isQuick = sc.scope === "quick";
+  const segBlocked = sc.segmentationRunning;
+  const segTitle = segBlocked ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined;
+  const modelLabel = sc.strainModel === "unet" ? "UNet" : "MedSAM";
+  const hasScopeResult = isQuick ? !!(sc.quickLvResult || sc.quickRvResult) : hasFullCycleResult;
+  const recomputeBusy = isQuick ? sc.isComputing : seriesBusy;
+  const recomputeDisabled =
+    recomputeBusy || segBlocked ||
+    (isQuick && sc.inputMode === "frames" && (sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1)) ||
+    (isQuick && sc.inputMode === "upload" && (!sc.edFile || !sc.esFile));
+  const onRecompute = isQuick
+    ? (sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames)
+    : onRunFullCycle;
 
   // Auto-collapses the config controls right after a compute finishes
   // successfully, so the (already-visible-elsewhere) results get the space
@@ -2267,9 +2332,42 @@ function ComputeStrainCard({
         </div>
       </div>
 
+      {segBlocked && (
+        <div className="flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-amber-700 dark:text-amber-400" />
+          <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Segmentation running ({modelLabel}).</span>{" "}
+            Strain is disabled until it finishes — re-running segmentation replaces this model&apos;s
+            masks, and strain stored on the old masks is deleted with them.
+          </p>
+        </div>
+      )}
+
+      {/* Full-cycle's own recompute lives on the single button below (Compute/Recompute all
+          frames) — showing it here too for "full" scope just duplicated the same action under
+          a second label. Quick keeps this one since its own compute button only appears once
+          "Choose frames"/"Upload masks" is picked below, not as a persistent top-level action. */}
+      {hasScopeResult && isQuick && (
+        <span title={segTitle} className="block">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 w-full text-[10px]"
+            disabled={recomputeDisabled}
+            onClick={onRecompute}
+          >
+            {recomputeBusy ? (
+              <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Recomputing…</span>
+            ) : `Recompute strain (ED → ES, ${modelLabel})`}
+          </Button>
+        </span>
+      )}
+
       {!collapsed && (
       <>
-      {/* Scope toggle — Quick ED→ES (single pair) vs Full cycle (every frame) */}
+      {/* Scope toggle — Quick ED→ES (single pair) vs Full cycle (every frame). This is how the
+          viewer picks which already-computed result to look at, so it's a view control and
+          stays for a View-Only viewer — only the compute/upload controls below it are hidden. */}
       <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
         {(["quick", "full"] as const).map((scope) => (
           <button
@@ -2288,7 +2386,7 @@ function ComputeStrainCard({
         ))}
       </div>
 
-      {isQuick ? (
+      {(isQuick ? (
         <>
           {/* Choose frames / Upload masks sub-toggle */}
           <div className="inline-flex w-fit rounded-lg border border-border bg-muted/20 p-0.5 text-[10px]">
@@ -2344,8 +2442,8 @@ function ComputeStrainCard({
               {/* Peak strain is only physiologically meaningful between the TRUE
                   end-diastole and end-systole. When the picker is moved off the
                   auto-detected pair the backend deliberately withholds the peaks
-                  from heartMetrics (and therefore from disease similarity and
-                  health status) — surface that here so the omission isn't silent. */}
+                  from heartMetrics (and therefore from health status) —
+                  surface that here so the omission isn't silent. */}
               {sc.autoFrames && (sc.edFrameIdx !== sc.autoFrames.ed || sc.esFrameIdx !== sc.autoFrames.es) && (
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
                   <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
@@ -2384,7 +2482,8 @@ function ComputeStrainCard({
 
               <button
                 type="button"
-                disabled={sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1 || sc.isComputing}
+                title={segTitle}
+                disabled={sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1 || sc.isComputing || segBlocked}
                 onClick={sc.onComputeFrames}
                 className="w-full rounded-md bg-primary px-3 py-1.5 text-[10px] font-semibold text-primary-foreground disabled:opacity-50 transition-colors hover:bg-primary/90"
               >
@@ -2435,11 +2534,12 @@ function ComputeStrainCard({
               )}
               <button
                 type="button"
-                disabled={!sc.edFile || !sc.esFile || sc.isComputing}
+                title={segTitle}
+                disabled={!sc.edFile || !sc.esFile || sc.isComputing || segBlocked}
                 onClick={sc.onComputeUpload}
                 className={cn(
                   "w-full rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors",
-                  (!sc.edFile || !sc.esFile || sc.isComputing)
+                  (!sc.edFile || !sc.esFile || sc.isComputing || segBlocked)
                     ? "bg-muted text-muted-foreground cursor-not-allowed"
                     : "bg-primary text-primary-foreground hover:bg-primary/90"
                 )}
@@ -2456,12 +2556,24 @@ function ComputeStrainCard({
           <p className="text-[8.5px] leading-relaxed text-muted-foreground">
             Uses the auto-detected ED frame as reference — no frame picker or upload needed for the full cycle.
           </p>
-          <Button size="sm" variant="outline" className="h-7 text-[10px]" disabled={seriesBusy} onClick={onRunFullCycle}>
-            {seriesBusy ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} progress={seriesProgress} /> : `Compute all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
+          {/* Landmarks edited since the last full-cycle compute: same button below handles it,
+              this is just the indication (see the parent's strainIsStale note for why there's no
+              second button here). */}
+          {strainIsStale && hasFullCycleResult && (
+            <p className="text-[9px] leading-relaxed text-amber-700 dark:text-amber-400">
+              <span className="font-semibold">Landmarks edited</span> since this was computed — recompute to realign.
+            </p>
+          )}
+          <span title={segTitle} className="block">
+          <Button size="sm" variant="outline" className="h-7 w-full text-[10px]" disabled={seriesBusy || segBlocked} onClick={onRunFullCycle}>
+            {seriesBusy
+              ? <ComputeBusyLabel verb="Computing" frames={sc.frameCount} />
+              : `${hasFullCycleResult ? "Recompute" : "Compute"} all frames (${sc.strainModel === "unet" ? "UNet" : "MedSAM"})`}
           </Button>
+          </span>
           {seriesError && <p className="text-[9px] text-destructive">{seriesError}</p>}
         </div>
-      )}
+      ))}
       </>
       )}
     </div>

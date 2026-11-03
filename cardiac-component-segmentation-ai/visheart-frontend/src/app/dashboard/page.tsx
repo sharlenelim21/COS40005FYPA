@@ -3,10 +3,11 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
+import { cn } from "@/lib/utils";
 import { useGpuStatus, useUserProjects, useUserJobs, useUserStats } from "@/lib/dashboard-hooks";
 import { useProjectSegmentationStatus } from "@/hooks/useProjectSegmentationStatus";
 import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstructionStatus";
-import { ShowForUser, ShowForGuest, ShowForRegisteredUser } from "@/components/RoleGuard";
+import { ShowForGuest, ShowForAdmin, ShowForProjectCreator } from "@/components/RoleGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { JobProgress } from "@/components/ui/kinetic-progress";
@@ -45,7 +46,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { projectApi, segmentationApi } from "@/lib/api";
+import { projectApi } from "@/lib/api";
 import { FileUploadDialog } from "@/components/upload/FileUploadDialog";
 import { SegmentationIndicator } from "@/components/dashboard/SegmentationIndicator";
 import { ReconstructionIndicator } from "@/components/dashboard/ReconstructionIndicator";
@@ -82,6 +83,12 @@ const getStatusDisplay = (status: string) => {
   }
 };
 
+const DASHBOARD_ROLE_LABELS: Record<string, string> = {
+  admin: "Admin",
+  user: "User",
+  guest: "Guest",
+};
+
 // Helper function to get role icon
 const getRoleIcon = (role: string | undefined) => {
   switch (role) {
@@ -105,6 +112,7 @@ function DashboardPage() {
   useEffect(() => { setActiveTab(searchParams.get("tab") ?? "overview"); }, [searchParams]);
   const isAuthenticated = Boolean(user);
   const { projects, isLoading: projectsLoading, refresh: refreshProjects } = useUserProjects(isAuthenticated);
+
   const { recentJobs, isLoading: jobsLoading, refresh: refreshJobs } = useUserJobs(isAuthenticated);
   const { processingUnit, isLoading: gpuLoading, refresh: refreshGpuStatus } = useGpuStatus();
   const userStats = useUserStats(projects, recentJobs);
@@ -275,14 +283,14 @@ function DashboardPage() {
       action: () => setWalkthroughStep((step) => Math.min(step + 1, walkthroughSteps.length - 1)),
     },
     {
-      title: "Open the analysis tools",
-      body: "After segmentation, use Edit Segmentation Masks for refinements and Landmark Detection for automatic landmark and strain review.",
+      title: "Refine and create 4D",
+      body: "After segmentation, use Edit Segmentation Masks for refinements, then Create 4D Reconstruction (choose the MedSAM or UNet source) and click View 4D once it is ready.",
       actionLabel: "Next",
       action: () => setWalkthroughStep((step) => Math.min(step + 1, walkthroughSteps.length - 1)),
     },
     {
-      title: "Create and view 4D",
-      body: "Use Create 4D Reconstruction, choose the MedSAM or UNet source, then click View 4D once reconstruction is ready.",
+      title: "Run landmark detection",
+      body: "Once a 4D reconstruction exists, open Landmark Detection for automatic landmark and strain review and the printable report.",
       actionLabel: "Open Project",
       action: () => {
         setWalkthroughOpen(false);
@@ -302,32 +310,6 @@ function DashboardPage() {
   };
 
   // Handle project actions
-
-  const handleExportProject = async (projectId: string) => {
-    try {
-      console.log(`[Export] Starting export for project: ${projectId}`);
-      const exportResult = await segmentationApi.exportProjectData(projectId);
-      console.log(`[Export] Received export result:`, {
-        blobSize: exportResult.blob.size,
-        blobType: exportResult.blob.type,
-        expectedSize: exportResult.fileSizeBytes,
-        filename: exportResult.suggestedFilename,
-      });
-
-      const url = window.URL.createObjectURL(exportResult.blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = exportResult.suggestedFilename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
-      console.log(`[Export] Successfully downloaded export for project: ${projectId} as ${exportResult.suggestedFilename}`);
-    } catch (error) {
-      console.error("Error exporting project:", error);
-    }
-  };
 
   const handleSaveProject = async (projectId: string, isSaved: boolean) => {
     try {
@@ -438,7 +420,7 @@ function DashboardPage() {
               Welcome back, <span className="font-semibold">{user.role === "guest" ? "Guest User" : user.username}.</span>
             </span>
             <Badge variant="outline" className="ml-2">
-              {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+              {DASHBOARD_ROLE_LABELS[user.role] ?? user.role}
             </Badge>
           </div>
         </div>
@@ -495,7 +477,11 @@ function DashboardPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="projects">Projects</TabsTrigger>
+          <TabsTrigger value="projects" className="relative">
+            {user?.role === "user" || user?.role === "admin"
+              ? "Case History"
+              : "Projects"}
+          </TabsTrigger>
           <TabsTrigger value="jobs">Jobs</TabsTrigger>
           <TabsTrigger value="templates">Templates</TabsTrigger>
         </TabsList>
@@ -581,7 +567,7 @@ function DashboardPage() {
               <CardDescription>Common tasks and shortcuts</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <ShowForUser fallback={null}>
+              <ShowForProjectCreator fallback={null}>
                 <Button
                   className="w-full justify-start transition-all duration-300 ring-2 ring-primary ring-offset-2 animate-pulse shadow-lg shadow-primary/30"
                   onClick={() => setUploadDialogOpen(true)}
@@ -589,34 +575,25 @@ function DashboardPage() {
                   <Upload className="mr-2 h-4 w-4" />
                   New Project
                 </Button>
-              </ShowForUser>
+              </ShowForProjectCreator>
 
-              <Link href="/profile">
-                <Button variant="outline" className="w-full justify-start">
-                  <Settings className="mr-2 h-4 w-4" />
-                  Profile Settings
-                </Button>
-              </Link>
-
-              <ShowForRegisteredUser fallback={null}>
-                <Link href="/extend-training">
+              <ShowForAdmin fallback={null}>
+                <Link href="/admin">
                   <Button variant="outline" className="w-full justify-start">
-                    <Brain className="mr-2 h-4 w-4" />
-                    UNet Extend Training
+                    <Shield className="mr-2 h-4 w-4" />
+                    Admin Panel
                   </Button>
                 </Link>
-              </ShowForRegisteredUser>
+              </ShowForAdmin>
 
-              {/* <ShowForUser fallback={null}>
-                {user?.role === "admin" && (
-                  <Link href="/admin">
-                    <Button variant="outline" className="w-full justify-start">
-                      <Shield className="mr-2 h-4 w-4" />
-                      Go to Admin Panel
-                    </Button>
-                  </Link>
-                )}
-              </ShowForUser> */}
+              {user?.role !== "admin" && (
+                <Link href="/profile">
+                  <Button variant="outline" className="w-full justify-start">
+                    <Settings className="mr-2 h-4 w-4" />
+                    Profile Settings
+                  </Button>
+                </Link>
+              )}
             </CardContent>
           </Card>
 
@@ -654,7 +631,7 @@ function DashboardPage() {
                             </p>
                           </div>
                         </div>
-                        <ShowForRegisteredUser fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
+                        <ShowForProjectCreator fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -669,7 +646,7 @@ function DashboardPage() {
                               {project.isSaved ? "Saved" : "Temp"}
                             </Badge>
                           </Button>
-                        </ShowForRegisteredUser>
+                        </ShowForProjectCreator>
                     </div>
                   ))}
                 {projects.length === 0 && <p className="text-muted-foreground py-4 text-center text-sm">No projects yet. Upload your first project to get started.</p>}
@@ -731,8 +708,14 @@ function DashboardPage() {
         <TabsContent value="projects" className="space-y-4">
           <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-2xl font-bold">My Projects</h2>
-              <p className="text-muted-foreground">Manage your cardiac imaging projects</p>
+              <h2 className="text-2xl font-bold">
+                {user?.role === "user" || user?.role === "admin"
+                  ? "Case History"
+                  : "My Projects"}
+              </h2>
+              <p className="text-muted-foreground">
+                Manage your cardiac imaging projects
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={() => window.open("/sample", "_blank")} className="hidden sm:flex">
@@ -742,7 +725,7 @@ function DashboardPage() {
               <Button variant="outline" onClick={() => window.open("/sample", "_blank")} className="sm:hidden">
                 <FileText className="h-4 w-4" />
               </Button>
-              <ShowForUser fallback={null}>
+              <ShowForProjectCreator fallback={null}>
                 <Button onClick={() => setUploadDialogOpen(true)} className="hidden sm:flex">
                   <Upload className="mr-2 h-4 w-4" />
                   Upload New Project
@@ -750,12 +733,23 @@ function DashboardPage() {
                 <Button onClick={() => setUploadDialogOpen(true)} className="sm:hidden">
                   <Upload className="h-4 w-4" />
                 </Button>
-              </ShowForUser>
+              </ShowForProjectCreator>
+              {/* Guests don't upload arbitrary files -- this opens the same dialog, which shows
+                  the demo-case flow instead when the signed-in user is a Guest. */}
+              <ShowForGuest fallback={null}>
+                <Button onClick={() => setUploadDialogOpen(true)} className="hidden sm:flex">
+                  <Upload className="mr-2 h-4 w-4" />
+                  Start Demo Project
+                </Button>
+                <Button onClick={() => setUploadDialogOpen(true)} className="sm:hidden">
+                  <Upload className="h-4 w-4" />
+                </Button>
+              </ShowForGuest>
             </div>
           </div>
 
           {/* Project Management Info */}
-          <ShowForRegisteredUser>
+          <ShowForProjectCreator>
             <Alert>
               <AlertCircle className="inline h-4 w-4" />
               <AlertTitle>Project Management:</AlertTitle>
@@ -774,7 +768,7 @@ function DashboardPage() {
                 </span>
               </AlertDescription>
             </Alert>
-          </ShowForRegisteredUser>
+          </ShowForProjectCreator>
 
           <ShowForGuest>
             <Alert className="opacity-60">
@@ -845,16 +839,26 @@ function DashboardPage() {
                 <FolderOpen className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                 <h3 className="text-lg font-semibold mb-2">{searchTerm ? "No projects match your search" : "No projects yet"}</h3>
                 <p className="text-muted-foreground mb-4">
-                  {searchTerm ? "Try adjusting your search terms or clear the search to see all projects." : "Upload your first project to get started with cardiac segmentation."}
+                  {searchTerm
+                    ? "Try adjusting your search terms or clear the search to see all projects."
+                    : "Upload your first project to get started with cardiac segmentation."}
                 </p>
-                <ShowForUser fallback={null}>
+                <ShowForProjectCreator fallback={null}>
                   {!searchTerm && (
                     <Button onClick={() => setUploadDialogOpen(true)}>
                       <Upload className="mr-2 h-4 w-4" />
                       Upload First Project
                     </Button>
                   )}
-                </ShowForUser>
+                </ShowForProjectCreator>
+                <ShowForGuest fallback={null}>
+                  {!searchTerm && (
+                    <Button onClick={() => setUploadDialogOpen(true)}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      Start Demo Project
+                    </Button>
+                  )}
+                </ShowForGuest>
               </CardContent>
             </Card>
           ) : viewMode === "card" ? (
@@ -866,7 +870,7 @@ function DashboardPage() {
                     onUpdate={refreshProjects}
                     onSave={handleSaveProject}
                     onDelete={handleDeleteProject}
-                    onExport={handleExportProject}
+                    onExport={(projectId) => router.push(`/project/${projectId}/report`)}
                     segmentationIndicator={<SegmentationIndicator status={segmentationStatuses[project.projectId]} variant="badge" />}
                     reconstructionIndicator={<ReconstructionIndicator status={reconstructionStatuses[project.projectId]} variant="badge" />}
                     hasMasks={segmentationStatuses[project.projectId]?.hasMasks || false}
@@ -905,7 +909,7 @@ function DashboardPage() {
                         </TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-2">
-                            <ShowForRegisteredUser fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
+                            <ShowForProjectCreator fallback={<Badge variant={project.isSaved ? "default" : "secondary"}>{project.isSaved ? "Saved" : "Temp"}</Badge>}>
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -917,7 +921,7 @@ function DashboardPage() {
                                   {project.isSaved ? "Saved" : "Temp"}
                                 </Badge>
                               </Button>
-                            </ShowForRegisteredUser>
+                            </ShowForProjectCreator>
                             <SegmentationIndicator status={segmentationStatuses[project.projectId]} variant="badge" />
                             <ReconstructionIndicator status={reconstructionStatuses[project.projectId]} variant="badge" />
                           </div>
@@ -958,13 +962,17 @@ function DashboardPage() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
-                              onClick={() => handleExportProject(project.projectId)}
+                              onClick={() => router.push(`/project/${project.projectId}/report`)}
                               disabled={!segmentationStatuses[project.projectId]?.hasMasks}
-                              title={segmentationStatuses[project.projectId]?.hasMasks ? "Export segmentation as NIfTI" : "Complete segmentation to enable export"}
+                              title={
+                                segmentationStatuses[project.projectId]?.hasMasks
+                                  ? "Open report — download as CSV or save as PDF"
+                                  : "Complete segmentation to enable the report"
+                              }
                             >
                               <Download className="h-4 w-4" />
                             </Button>
-                            <ShowForRegisteredUser fallback={null}>
+                            <ShowForProjectCreator fallback={null}>
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -974,7 +982,7 @@ function DashboardPage() {
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
-                            </ShowForRegisteredUser>
+                            </ShowForProjectCreator>
                           </div>
                         </TableCell>
                       </TableRow>

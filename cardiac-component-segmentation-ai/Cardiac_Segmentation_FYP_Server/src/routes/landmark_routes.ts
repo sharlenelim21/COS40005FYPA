@@ -4,14 +4,17 @@ import axios from "axios";
 import FormData from "form-data";
 import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { startLandmarkInference } from "../services/landmark_inference";
+import { startLandmarkInference, findLandmarkCompletionForCurrentMasks } from "../services/landmark_inference";
 import {
   jobModel,
-  readProject,
   readProjectLandmark,
   createProjectLandmark,
   updateProjectLandmark,
+  projectLandmarkModel,
   projectSegmentationMaskModel,
+  userCanAccessProject,
+  userModel,
+  UserRole,
 } from "../services/database";
 import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
@@ -138,22 +141,19 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
-      // The viewer's own project, or a template (read-only). Jobs belong to
-      // the project's owner, so they are looked up by ownerId.
+      // Owner or Admin may view landmark results; anyone may view a template's (read-only).
+      // Jobs are looked up by project only — the viewer may not be who triggered them.
       const viewable = await findViewableProject(projectId, req.user);
       if (!viewable) {
         res.status(404).json({ success: false, message: "Project not found.", result: null });
         return;
       }
-      const ownerId = viewable.ownerId;
-
       const jobUuid = typeof req.query.jobUuid === "string" ? req.query.jobUuid : null;
       if (jobUuid) {
         const job = await jobModel
           .findOne({
             uuid: jobUuid,
             projectid: projectId,
-            userid: ownerId,
           })
           .lean();
 
@@ -191,7 +191,6 @@ router.get(
       const completedJobs = await jobModel
         .find({
           projectid: projectId,
-          userid: ownerId,
           model_used: /landmark/i,
           status: JobStatus.COMPLETED,
           result: { $exists: true, $ne: null },
@@ -239,20 +238,22 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
-      // The viewer's own project, or a template — jobs are the owner's.
+      // Owner, Admin, or anyone for a template. Jobs are scoped by project, not by
+      // the requesting user (see /results above for why).
       const viewable = await findViewableProject(projectId, req.user);
       if (!viewable) {
-        res.status(200).json({ success: true, jobs: [] });
+        res.status(404).json({ success: false, message: "Project not found.", jobs: [] });
         return;
       }
       const jobs = await jobModel
-        .find({ projectid: projectId, userid: viewable.ownerId })
+        .find({ projectid: projectId })
         .select({ result: 0 })
         .sort({ createdAt: -1 })
         .limit(30)
         .lean();
+      const landmarkCompletion = await findLandmarkCompletionForCurrentMasks(projectId);
 
-      res.status(200).json({ success: true, jobs });
+      res.status(200).json({ success: true, jobs, landmarkCompletion });
     } catch (error: any) {
       logger.error(`${serviceLocation}: Error reading landmark jobs`, {
         projectId: req.params.projectId,
@@ -406,17 +407,27 @@ function mergeLandmarkFramesData(
 async function markStrainStaleAfterLandmarkEdit(projectId: string): Promise<void> {
   try {
     const stamp = new Date().toISOString();
-    const result = await projectSegmentationMaskModel.updateMany(
-      {
-        projectid: projectId,
-        isMedSAMOutput: false,
-        $or: [{ strain: { $exists: true } }, { strainSeries: { $exists: true } }],
-      },
-      { $set: { "strain.staleSince": stamp, "strainSeries.staleSince": stamp } },
-    );
-    if (result.modifiedCount > 0) {
+    // Two separate, separately-scoped updates — not one `$or`-matched update setting both dot
+    // paths unconditionally. The old single-update version matched a doc that had EITHER field
+    // via `$or`, then set `strain.staleSince` AND `strainSeries.staleSince` on it regardless —
+    // Mongo's dot notation creates the parent object if it's missing, so a mask with only
+    // `strainSeries` (e.g. from "Compute all frames") got a brand-new `strain: { staleSince }`
+    // with no `segments`, which crashed every reader that assumed a present `strain` object is
+    // always a real computed result (reported live, 2026-10, right after a Doctor Accept).
+    const [strainResult, seriesResult] = await Promise.all([
+      projectSegmentationMaskModel.updateMany(
+        { projectid: projectId, isMedSAMOutput: false, strain: { $exists: true } },
+        { $set: { "strain.staleSince": stamp } },
+      ),
+      projectSegmentationMaskModel.updateMany(
+        { projectid: projectId, isMedSAMOutput: false, strainSeries: { $exists: true } },
+        { $set: { "strainSeries.staleSince": stamp } },
+      ),
+    ]);
+    const modifiedCount = strainResult.modifiedCount + seriesResult.modifiedCount;
+    if (modifiedCount > 0) {
       logger.info(
-        `${serviceLocation}: Landmark edit for project ${projectId} marked strain stale on ${result.modifiedCount} mask(s).`,
+        `${serviceLocation}: Landmark edit for project ${projectId} marked strain stale on ${modifiedCount} mask field(s).`,
       );
     }
   } catch (err: any) {
@@ -455,6 +466,15 @@ router.put(
     const orderedFrames = normalizeLandmarkFrames(framesFromBody);
 
     try {
+      // Owner (Doctor) or Admin may save here. This endpoint previously had NO ownership
+      // check at all, letting any authenticated non-guest edit any project's landmarks.
+      const access = await userCanAccessProject(projectId, req.user!);
+      if (!access.canRun) {
+        logger.warn(`${serviceLocation}: User ${userId} tried to save landmarks for project ${projectId}, which they cannot edit.`);
+        res.status(403).json({ success: false, message: "Access denied to this project." });
+        return;
+      }
+
       const landmarksResult = await readProjectLandmark(projectId);
 
       if (!landmarksResult.success && landmarksResult.message?.includes("does not exist")) {
@@ -462,17 +482,13 @@ router.put(
         return;
       }
 
-      // Landmark edits are shared across segmentation models — one editable doc
-      // per project. A manually-corrected RV insertion point is an anatomical
-      // location on the image, not a per-model value, so we always target the
-      // single existing editable doc regardless of which model is active. The
-      // segmentationModel is still stored (informational: which model was active
-      // at save time) but is not used to pick or partition the doc.
+      // Landmark edits are shared across segmentation models — one editable SLOT per project.
+      // A manually-corrected RV insertion point is an anatomical location on the image, not a
+      // per-model value, so this is never partitioned by segmentationModel.
       const candidateDocs = (landmarksResult.projectlandmarks ?? []).filter(doc => !doc.isModelOutput);
       const editableDoc = candidateDocs[0];
 
       if (!editableDoc || !editableDoc._id) {
-        // No editable doc for this project yet — create the single shared one.
         const created = await createProjectLandmark({
           projectid: projectId,
           name: name || `Manual Landmarks - ${new Date().toISOString()}`,

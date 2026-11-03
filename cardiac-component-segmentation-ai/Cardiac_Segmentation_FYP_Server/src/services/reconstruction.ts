@@ -1,9 +1,9 @@
 // File: src/services/reconstruction.ts
 // Description: Service layer for initiating 4D reconstruction process, including GPU service communication.
 
-import { IUserSafe, ProjectCrudResult, IProjectSegmentationMask, SegmentationModel, ReconstructionChamber } from "../types/database_types";
+import { IUserSafe, IProjectSegmentationMask, SegmentationModel, ReconstructionChamber } from "../types/database_types";
 import logger from "./logger";
-import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask } from "./database";
+import { jobModel, readProject, readProjectReconstruction, readProjectSegmentationMask, userCanAccessProject, UserRole } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import { createJob, IJob, JobStatus, updateJob } from "../services/database";
 import axios from 'axios';
@@ -212,19 +212,15 @@ export const startReconstruction = async (
     }
 
     try {
-        // Validate project exists and user has access
-        const projectResult: ProjectCrudResult = await readProject(projectId);
-        if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
-            logger.warn(`${serviceLocation}: Project with ID ${projectId} not found or error reading project.`);
-            return { success: false, message: `Project with ID ${projectId} not found.` };
-        }
-
-        const projectData = projectResult.projects[0];
-
-        if (projectData.userid !== user?._id) {
+        // Validate project exists and the user has access — owner or Admin may start a 4D
+        // reconstruction.
+        const access = await userCanAccessProject(projectId, user!);
+        if (!access.canRun || !access.project) {
             logger.warn(`${serviceLocation}: User ${user?._id} denied access to project ${projectId} for 4D reconstruction.`);
             return { success: false, message: "Access denied to this project" };
         }
+
+        const projectData = access.project;
 
         if (requestedModel) {
             const existingReconstructions = await readProjectReconstruction(projectId);
@@ -233,9 +229,10 @@ export const startReconstruction = async (
                 // same scan, so an existing RV must not block building the clinical LV result --
                 // and vice versa. Records with no chamber predate the field and are LV.
                 const matchingReconstruction = existingReconstructions.projectreconstructions.find(
-                    (reconstruction) =>
-                        normalizeStoredModel(reconstruction.segmentationModel) === requestedModel &&
-                        normalizeStoredChamber((reconstruction as { chamber?: string }).chamber) === requestedChamber,
+                    (reconstruction) => {
+                        if (normalizeStoredModel(reconstruction.segmentationModel) !== requestedModel) return false;
+                        return normalizeStoredChamber((reconstruction as { chamber?: string }).chamber) === requestedChamber;
+                    },
                 );
 
                 if (matchingReconstruction) {
@@ -256,12 +253,15 @@ export const startReconstruction = async (
             // Same per-(model, chamber) rule for jobs still in flight. Jobs created before the
             // chamber field have none, so "chamber missing" is matched as LV rather than as
             // "matches anything" -- otherwise an old stuck LV job would block RV forever.
+            // Scoped per-caller (userid) so a Run-mode Assistant's in-flight build never blocks
+            // the Doctor's own build of the same combo, and vice versa.
             const chamberJobFilter = requestedChamber === "rv"
                 ? { chamber: ReconstructionChamber.RV }
                 : { chamber: { $in: [ReconstructionChamber.LV, null] } };
 
             const blockingJob = await jobModel.findOne({
                 projectid: projectId,
+                userid: user?._id?.toString(),
                 segmentationModel: requestedModel === "medsam"
                     ? SegmentationModel.MEDSAM
                     : SegmentationModel.UNET,

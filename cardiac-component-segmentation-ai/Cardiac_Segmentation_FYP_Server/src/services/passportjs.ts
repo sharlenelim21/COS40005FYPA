@@ -137,4 +137,14 @@ const isAuthandGuest = (req: Request, res: Response, next: NextFunction): void =
   res.status(403).json({ message: "Forbidden. Only Guest role allowed." });
 }
 
-export { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest };
+/**
+ * Middleware to check if the user is authenticated and has the User role
+ */
+const isAuthAndUser = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.isAuthenticated() && req.user.role === UserRole.User) {
+    return next();
+  }
+  res.status(403).json({ message: "Forbidden. User access required." });
+};
+
+export { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest, isAuthAndUser };

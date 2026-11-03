@@ -369,8 +369,8 @@ def recompute_analyses(api: Api, project: str, model: str, ed: int, es: int,
                        step=lambda name: True, mark=lambda name: None, strict: bool = True) -> None:
     """Recompute every analysis of the project's editable mask through the app's
     API: volumes/EF (+ maximal wall thickness), the wall-thickness bullseye, LV
-    and RV strain (ED → ES and the full cycle) and the health / similarity
-    checks. ED/ES are 0-based. `step`/`mark` let finalize resume a run. Heart
+    and RV strain (ED → ES and the full cycle), the health checks and the
+    disease pattern gates. ED/ES are 0-based. `step`/`mark` let finalize resume a run. Heart
     metrics pick their own ED/ES (the template's, else auto-detected); a
     mismatch with `ed`/`es` stops the run when `strict`, else only warns."""
     m = api.editable_mask(project, model)
@@ -418,16 +418,45 @@ def recompute_analyses(api: Api, project: str, model: str, ed: int, es: int,
         log(f"{field} done ({time.time() - t0:.0f}s)")
         mark(field)
 
-    for field, path in (("healthStatus", "trigger-health-status"), ("rvHealthStatus", "trigger-rv-health-status"),
-                        ("diseaseSimilarity", "trigger-disease-similarity"),
-                        ("regionalHealthStatus", "trigger-regional-health-status"),
-                        ("rvRegionalHealthStatus", "trigger-rv-regional-health-status")):
+    # The disease pattern gates are ACDC's criteria, which are BSA-indexed and sex-specific:
+    # give them the subject's BSA (Mosteller) and sex from templateInfo. They run last,
+    # because the MINF gate reads the regional health status.
+    info = api.project(project).get("templateInfo") or {}
+    gate_body = {}
+    if info.get("heightCm") and info.get("weightKg"):
+        gate_body["bsa_m2"] = (info["heightCm"] * info["weightKg"] / 3600.0) ** 0.5
+    if info.get("sex") in ("female", "male"):
+        gate_body["sex"] = info["sex"]
+    for field, path, body in (("healthStatus", "trigger-health-status", None),
+                              ("rvHealthStatus", "trigger-rv-health-status", None),
+                              ("regionalHealthStatus", "trigger-regional-health-status", None),
+                              ("rvRegionalHealthStatus", "trigger-rv-regional-health-status", None),
+                              ("diseasePatternGates", "trigger-disease-pattern-gates", gate_body)):
         if not step(field):
             continue
         before = ((api.editable_mask(project, model) or {}).get(field) or {}).get("computed_at")
-        api.call("POST", f"/segmentation/{path}/{mid}")
+        api.call("POST", f"/segmentation/{path}/{mid}", json=body)
         changed(field, before, limit=300)
         mark(field)
+
+
+def build_motion(api: Api, project: str, model: str) -> None:
+    """Build (or confirm) the smooth motion of every 3D model of this project."""
+    code, body = api.call("GET", f"/reconstruction/reconstruction-results/{project}")
+    recons = [r for r in body.get("reconstructions", []) if r.get("segmentationModel") == model] if code == 200 else []
+    for r in recons:
+        rid, chamber = r.get("reconstructionId") or r.get("_id"), str(r.get("chamber") or "lv").upper()
+        code, b = api.call("POST", f"/reconstruction/motion/{project}/{rid}", json={})
+        if code not in (200, 202):
+            log(f"WARNING: {chamber} motion did not start ({code}): {b.get('message')} — the page keeps per-frame meshes")
+            continue
+
+        def status(rid=rid):
+            _, s_ = api.call("GET", f"/reconstruction/motion/{project}/{rid}")
+            st = (s_.get("motion") or {}).get("status")
+            return st if st in ("ready", "failed", "missing") else None
+        result = api.wait(f"{chamber} motion", status, every=5, limit=1800)
+        log(f"{chamber} motion {result}")
 
 
 # ── recompute: refresh every result without publishing ────────────────────────
@@ -467,13 +496,13 @@ print(JSON.stringify({{ ok: true }}));
 
     m = api.editable_mask(a.project, a.model)
     hm, st = m.get("heartMetrics") or {}, m.get("strain") or {}
-    hs, ds = m.get("healthStatus") or {}, m.get("diseaseSimilarity") or {}
+    hs, gates = m.get("healthStatus") or {}, m.get("diseasePatternGates") or {}
     num = lambda v, f: format(v, f) if isinstance(v, (int, float)) else "—"
     print(f"\n==== Recomputed: {p['name']} ({a.project})")
     print(f"  LVEF {num(hm.get('LVEF'), '.1f')}%   RVEF {num(hm.get('RVEF'), '.1f')}%   LVEDV {num(hm.get('LVEDV'), '.0f')} mL   "
           f"LV mass {num(hm.get('LV_mass_g'), '.0f')} g   max wall thickness {num(hm.get('max_wall_thickness_mm'), '.1f')} mm")
     print(f"  strain: GRS {num(st.get('global_grs'), '+.1f')}%   GCS {num(st.get('global_gcs'), '.1f')}%")
-    print(f"  health: {hs.get('status')}   most similar: {ds.get('most_similar')} — {ds.get('phenotype_headline')}")
+    print(f"  health: {hs.get('status')}   ACDC pattern gates met: {', '.join(gates.get('met_codes') or []) or 'none'}")
 
 
 def cmd_finalize(a):
@@ -603,14 +632,21 @@ print(JSON.stringify({{ ok: true, jobsMoved: jobs.modifiedCount }}));
         log(f"{chamber.upper()} 3D model ready")
         mark(f"reconstruction_{chamber}")
 
+    # Smooth heart motion for the landmark page's 3D heart: built once per 3D model by
+    # the template account (viewers can only read it); without it the page swaps
+    # per-frame meshes. Stored beside each model in storage, so `export` ships it.
+    if step("motion"):
+        build_motion(api, a.project, a.model)
+        mark("motion")
+
     # 4. Report
     m = api.editable_mask(a.project, a.model)
     hm = m.get("heartMetrics") or {}
-    hs, ds = m.get("healthStatus") or {}, m.get("diseaseSimilarity") or {}
+    hs, gates = m.get("healthStatus") or {}, m.get("diseasePatternGates") or {}
     print("\n==== Template ready:", p["name"], f"({a.project})")
     print(f"  LVEF {hm.get('LVEF', float('nan')):.1f}%   RVEF {hm.get('RVEF', float('nan')):.1f}%   "
           f"LVEDV {hm.get('LVEDV', float('nan')):.0f} mL   LVESV {hm.get('LVESV', float('nan')):.0f} mL   LV mass {hm.get('LV_mass_g', float('nan')):.0f} g")
-    print(f"  health: {hs.get('status')}   most similar: {ds.get('most_similar')} — {ds.get('phenotype_headline')}")
+    print(f"  health: {hs.get('status')}   ACDC pattern gates met: {', '.join(gates.get('met_codes') or []) or 'none'}")
     if a.gt_dir:
         import nibabel as nib
         lab = dict(LABELS[a.labels])
@@ -789,7 +825,16 @@ for (const o of owners) {{
             keys: set = set()
             for d in docs:
                 bucket_keys(d["d"], prefixes, keys)
-            keys = sorted(k for k in keys if not k.endswith(".nii.gz"))
+            keys = {k for k in keys if not k.endswith(".nii.gz")}
+            # Each 3D model's smooth-motion file lies beside its tar, named after it
+            # (reconstruction_motion.ts: "<tar name>.motion.<method>.bin"); no document points at it.
+            for k in [k for k in keys if k.startswith("reconstructions/") and k.endswith(".tar")]:
+                ls = minio("ls", "--json", f"visheart_seed/{a.bucket}/{os.path.dirname(k)}/")
+                for row in ls.stdout.splitlines() if ls.returncode == 0 else []:
+                    name = json.loads(row).get("key", "")
+                    if name.startswith(os.path.basename(k)[:-len(".tar")] + ".motion."):
+                        keys.add(f"{os.path.dirname(k)}/{name}")
+            keys = sorted(keys)
             log(f"{project['name']}: {len(docs)} documents, {len(keys)} file paths")
             objects = [o for o in pool.map(export_object, keys) if o]
             for o in objects:

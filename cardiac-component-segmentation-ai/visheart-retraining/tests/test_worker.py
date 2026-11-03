@@ -193,6 +193,26 @@ class Worker(unittest.TestCase):
             json.dumps({**empty, "checked_at": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
         self.assertTrue(app.status("u1")["training"]["allowed"])    # an old count never blocks: the job checks again
 
+    def test_the_page_checks_and_lists_everyones_corrections_whoever_asks(self):
+        app = self.make_app(self.waiting())
+        cases = [{"maskId": "m1", "projectId": "p1", "projectName": "Patient 012", "model": "unet", "slices": [{}],
+                  "ownerId": "u1", "ownerName": "dr-lee"},
+                 {"maskId": "m2", "projectId": "p2", "projectName": "Patient 007", "model": "unet", "slices": [{}],
+                  "ownerId": "u2", "ownerName": "dr-tan"}]
+        checked = {"checked_at": jobs.now(), "projects": 2, "slices": 2, "conflicts": 0, "cases": cases}
+        port = self.serve(app)
+        with mock.patch.object(pipeline, "check_corrections", return_value=checked) as check:
+            status, body = self.request(port, "POST", "/eligible/check", body={"requestedBy": "dr-tan", "requestedById": "u2"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(check.call_args.args[1])                         # no owner: every user's corrections
+        status, body = self.request(port, "GET", "/status?owner=u1")
+        self.assertEqual([case["ownerName"] for case in body["data"]["eligible"]["cases"]], ["dr-lee", "dr-tan"])
+        with mock.patch.object(app.runner, "start", side_effect=lambda kind, by, params: params):
+            status, body = self.request(port, "POST", "/jobs/train",
+                                        body={"requestedBy": "admin", "requestedById": "u9", "selection": ["m1", "m2"]})
+        self.assertEqual(status, 200)
+        self.assertEqual([case["maskId"] for case in body["data"]["cases"]], ["m1", "m2"])   # anyone's case trains
+
     def test_a_training_takes_only_cases_from_that_users_latest_check(self):
         app = self.make_app(self.waiting())
         cases = [{"maskId": "m1", "projectId": "p1", "projectName": "Patient 012", "model": "unet", "slices": [{}, {}]},
@@ -257,6 +277,64 @@ class Worker(unittest.TestCase):
         with self.assertRaises(jobs.JobError) as missing:
             app.example("cand", 5)
         self.assertEqual(missing.exception.status, 404)
+
+    def test_only_versions_whose_model_file_is_on_this_computer_are_listed(self):
+        self.add_candidate("cand", b"candidate weights", warn=False)
+        self.add_candidate("other", b"other weights", warn=False)
+        self.add_candidate("gone", b"gone weights", warn=False)
+        data = self.registry_data()
+        data["versions"]["gone"]["status"] = "deleted"
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+        folder = self.registry.parent
+        (folder / "cand.pth").unlink()                                  # e.g. a copy of the data without it
+        (folder / "other.pth").write_bytes(b"something else")           # or a different file under its name
+        (folder / "orig.pth").unlink()                                  # the original serves from models/unet.pth
+        app = self.make_app()
+        listed = {version["label"]: version["on_disk"] for version in app.status()["versions"]}
+        self.assertEqual(listed, {"orig": False, "other": True, "gone": False})   # the deleted entry is history
+        self.assertIn("not on this computer", app.preview("cand", "activate")["refusal"])   # asked for directly
+        self.assertIn("not the registered", app.preview("other", "activate")["refusal"])
+
+    def test_the_status_says_why_versions_cannot_be_switched_on_this_computer(self):
+        app = self.make_app()
+        self.assertIsNone(app.status()["problem"])
+        original = Path(self.registry_data()["original_file"])
+        kept = original.read_bytes()
+        original.write_bytes(b"a different model")
+        self.assertIn("is not the registered original", app.status()["problem"])
+        original.write_bytes(kept)
+        self.assertIsNone(app.status()["problem"])
+
+    def test_a_version_without_example_scans_gets_them_when_it_is_first_compared(self):
+        self.add_candidate("cand", b"candidate weights", warn=False)   # made before the page: no example scans
+        self.add_candidate("gone", b"gone weights", warn=False)
+        data = self.registry_data()
+        data["versions"]["gone"]["status"] = "deleted"
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+        app = self.make_app()
+        made = []
+
+        def fake_examples(config, label, out):
+            made.append(label)
+            (out / "0").mkdir(parents=True)
+            for name in ("image_0", "truth_0", "against_0", "label_0"):
+                (out / "0" / f"{name}.png").write_bytes(b"\x89PNG " + name.encode("ascii"))
+            (out / "index.json").write_text(json.dumps({"label": label, "against": "orig", "size": 256, "examples": [
+                {"n": 0, "dataset": "acdc", "case": "c1.nii.gz", "role": "lowest", "delta": -0.1, "scores": {},
+                 "slices": 1}]}), encoding="utf-8")
+
+        with mock.patch.object(worker, "render_examples_for", side_effect=fake_examples), \
+                mock.patch.object(worker, "render_comparison") as comparison:
+            view = app.compare_examples("cand", "orig")       # the model in use is the one it was trained against
+            again = app.compare_examples("cand", "orig")
+            with self.assertRaises(jobs.JobError) as refused:
+                app.compare_examples("gone", "orig")
+        self.assertEqual(made, ["cand"])                       # made once, and never for a deleted version
+        comparison.assert_not_called()
+        self.assertEqual((view["rendered"], again["rendered"]), (True, False))
+        self.assertEqual(view["index"]["examples"][0]["case"], "c1.nii.gz")   # the page can show them at once
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual(app.example("cand", 0)["right_label"], "cand")
 
     def test_the_example_scans_can_be_compared_with_another_version_that_still_exists(self):
         self.add_candidate("cand", b"candidate weights", warn=False)
@@ -375,7 +453,7 @@ class Worker(unittest.TestCase):
         self.assertEqual((status, body["ok"]), (415, False))
         self.assertEqual(self.request(port, "GET", "/no/such/endpoint")[0], 404)
         self.assertEqual(self.request(port, "GET", "/versions/..%2Fregistry/preview")[0], 404)
-        self.assertEqual(self.request(port, "GET", "/status?owner=..%2Fjobs")[0], 400)   # a user id is a safe name
+        self.assertEqual(self.request(port, "GET", "/status?owner=..%2Fjobs")[0], 200)   # no owner is read
         status, body = self.request(port, "POST", "/jobs/train", body={})        # no requestedBy: nothing starts
         self.assertEqual((status, body["ok"]), (400, False))
 

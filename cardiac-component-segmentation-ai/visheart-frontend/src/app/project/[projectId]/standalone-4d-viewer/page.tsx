@@ -21,6 +21,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
+import { landmarkApi } from "@/lib/landmarkApi";
 import { JobProgress } from "@/components/ui/kinetic-progress";
 import {
   ArrowLeft,
@@ -90,11 +91,27 @@ export default function Standalone4DViewerPage() {
     } else {
       document.title = "VisHeart | 4D Reconstruction Viewer";
     }
-    
+
     return () => {
       document.title = "VisHeart";
     };
   }, [projectData?.name]);
+
+  // Whether landmark detection has already been run for this project, so the "reconstruction
+  // ready" guidance panel below can say "run" vs "view" accurately instead of always claiming
+  // there are results to view. ProjectContext has no landmark fields, so this is its own fetch --
+  // a one-time check (not polled), since the panel itself only needs today's completion state,
+  // not live progress. null (fetch failed, or not checked yet) is treated as "not completed" so
+  // the panel never claims results exist when it doesn't actually know.
+  const [landmarksDone, setLandmarksDone] = useState(false);
+  useEffect(() => {
+    if (!hasReconstructions || isGuest) return;
+    let cancelled = false;
+    landmarkApi.jobSummary(projectId).then((summary) => {
+      if (!cancelled && summary?.hasCompleted) setLandmarksDone(true);
+    });
+    return () => { cancelled = true; };
+  }, [hasReconstructions, isGuest, projectId]);
 
   // LV and RV are separate records of the same scan, so the viewer resolves one of each rather
   // than treating either as "the" reconstruction with the other bolted on. Both are drawn in the
@@ -858,10 +875,10 @@ export default function Standalone4DViewerPage() {
           storageKey={`recon-guidance-${projectId}`}
           icon="🫀"
           title="4D reconstruction ready!"
-          subtitle="Want to run Landmark Detection next?"
+          subtitle={landmarksDone ? "Want to view Landmark Results next?" : "Want to run Landmark Detection next?"}
           actions={[
             {
-              label: "Run Landmark Detection",
+              label: landmarksDone ? "View Landmark Results" : "Run Landmark Detection",
               icon: <Crosshair size={13} />,
               primary: true,
               onClick: () => router.push(`/project/${projectId}?highlight=landmark`),

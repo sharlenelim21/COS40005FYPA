@@ -6,6 +6,7 @@ import { useState, useCallback, useRef, useMemo, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { ExportMasksButton } from "@/components/project/ExportMasksButton";
 
 // Backend integration
 import { segmentationApi } from "@/lib/api";
@@ -18,8 +19,9 @@ import { generateMaskKey } from "@/types/segmentation";
 import type * as ProjectTypes from "@/types/project";
 import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
 import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { GuidancePanel } from "@/components/GuidancePanel";
-import { Box, Crosshair } from "lucide-react";
+import { Box } from "lucide-react";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -50,7 +52,6 @@ function SegmentationResultsPageInner() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const fromViewer = searchParams.get("from") === "4d";
   // A link from UNet Extend Training's Prepare tab names the exact mask to open (plan WS13 R1).
   const fromExtendTraining = searchParams.get("from") === "extend-training";
   const linkedModel = searchParams.get("model");
@@ -80,6 +81,7 @@ function SegmentationResultsPageInner() {
     getReconstructionForModel,
     reconstructionResults,
     setSelectedSegmentationModel,
+    maskAvailabilityByModel,
   } = useProject();
 
   // Write the show-condition key whenever masks exist — covers both:
@@ -124,9 +126,11 @@ function SegmentationResultsPageInner() {
   // UI state
   const [activeLabel, setActiveLabel] = useState<AnatomicalLabel>("lvc");
   const [tool, setTool] = useState<DrawingTool>("brush");
+
   const [brushSize, setBrushSize] = useState<number>(10);
   const [opacity, setOpacity] = useState<number>(1);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const { pendingNavigation, setPendingNavigation, navigateWithUnsavedGuard } = useUnsavedChangesGuard(hasUnsavedChanges);
   const [isSaving, setIsSaving] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [currentSlice, setCurrentSlice] = useState(0);
@@ -191,7 +195,6 @@ function SegmentationResultsPageInner() {
   // to "stick" on whatever the previous test session wrote.
   const [selectedModel, setSelectedModel] = useState<SegmentationModelId>("medsam");
 
-  // Keep ProjectContext in sync so ProjectDashboardBar can read the active model for export.
   useEffect(() => {
     setSelectedSegmentationModel(selectedModel as "medsam" | "unet");
   }, [selectedModel, setSelectedSegmentationModel]);
@@ -991,8 +994,8 @@ function SegmentationResultsPageInner() {
     updateMasksWithHistory(decodedMasks, "checkpoint", `Manual checkpoint #${nextCheckpointNum} created`);
   }, [decodedMasks, currentHistory, updateMasksWithHistory]);
 
-  const handleSave = useCallback(async () => {
-    if (!decodedMasks || !projectId || isSaving) return;
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (!decodedMasks || !projectId || isSaving) return false;
     
     setIsSaving(true);
     try {
@@ -1058,8 +1061,10 @@ function SegmentationResultsPageInner() {
       }
 
       console.log("[Segmentation] Successfully saved and reconciled masks with backend");
+      return true;
     } catch (err) {
       console.error("Failed to save editable masks:", err);
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -1157,29 +1162,19 @@ function SegmentationResultsPageInner() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => {
+          onClick={() => navigateWithUnsavedGuard(() => {
             let highlight = "";
             try {
               if (hasMasks) {
-                if (fromViewer) {
-                  // Came from 4D viewer — next step is landmark detection
-                  const actedKey = `seg-from4d-guidance-${projectId}-acted`;
-                  const dismissedKey = `seg-from4d-guidance-${projectId}-dismissed`;
-                  const acted = sessionStorage.getItem(actedKey);
-                  const dismissed = sessionStorage.getItem(dismissedKey);
-                  if (!acted && !dismissed) highlight = "landmark";
-                } else {
-                  // Normal flow — next step is 4D reconstruction
-                  const actedKey = `seg-guidance-${projectId}-acted`;
-                  const dismissedKey = `seg-guidance-${projectId}-dismissed`;
-                  const acted = sessionStorage.getItem(actedKey);
-                  const dismissed = sessionStorage.getItem(dismissedKey);
-                  if (!acted && !dismissed) highlight = "reconstruction";
-                }
+                const actedKey = `seg-guidance-${projectId}-acted`;
+                const dismissedKey = `seg-guidance-${projectId}-dismissed`;
+                const acted = sessionStorage.getItem(actedKey);
+                const dismissed = sessionStorage.getItem(dismissedKey);
+                if (!acted && !dismissed) highlight = "reconstruction";
               }
             } catch {}
             router.push(`/project/${projectId}${highlight ? `?highlight=${highlight}` : ""}`);
-          }}
+          })}
           className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -1189,7 +1184,7 @@ function SegmentationResultsPageInner() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push("/extend-training?tab=prepare")}
+            onClick={() => navigateWithUnsavedGuard(() => router.push("/extend-training?tab=prepare"))}
             className="gap-2 rounded-lg border-border/50 bg-background/50 hover:bg-accent/50 hover:border-border text-foreground/70 hover:text-foreground transition-all duration-200 shadow-sm hover:shadow-md"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1266,6 +1261,14 @@ function SegmentationResultsPageInner() {
           </strong>
         </span>
 
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <ExportMasksButton
+            defaultModel={selectedModel}
+            hasUnsavedChanges={hasUnsavedChanges}
+            isSaving={isSaving}
+            onSave={handleSave}
+          />
+
         {/* Run / Re-run Segmentation Button (cache-aware) */}
         <button
           onClick={handleRunSegmentation}
@@ -1275,7 +1278,7 @@ function SegmentationResultsPageInner() {
               ? `A ${MODEL_OPTIONS.find((o) => o.value === selectedModel)?.label} job is already running for this project${serverJobElapsedLabel ? `, started ${serverJobElapsedLabel}` : ""}.`
               : undefined
           }
-          className="ml-auto px-3 py-1.5 text-sm font-medium rounded-md bg-black text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 dark:bg-white dark:text-black dark:hover:bg-white/90"
+          className="px-3 py-1.5 text-sm font-medium rounded-md bg-black text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 dark:bg-white dark:text-black dark:hover:bg-white/90"
         >
           {runSegmentationLoading || serverJobRunning ? (
             <>
@@ -1299,6 +1302,7 @@ function SegmentationResultsPageInner() {
             </>
           )}
         </button>
+        </div>
 
         {/* A job the server says is running, that this page did not start -- typically because the
             user reloaded while it was still going. Without this the disabled button looks broken:
@@ -1333,7 +1337,7 @@ function SegmentationResultsPageInner() {
       {/* Main segmentation layout */}
       <div className="flex-1 min-h-0 overflow-hidden">
       {/* Mobile: Stack vertically */}
-      <div className="lg:hidden w-full h-full p-4 flex flex-col gap-4">
+      <div className="sm:hidden w-full h-full p-4 flex flex-col gap-4">
         <div className="flex-1 relative bg-muted/40 rounded-xl border shadow-sm p-4 flex items-center justify-center overflow-hidden">
           <ImageCanvas
             projectData={projectData}
@@ -1402,7 +1406,7 @@ function SegmentationResultsPageInner() {
       </div>
 
       {/* Desktop: Resizable panels */}
-      <div className="hidden lg:block w-full h-full p-3">
+      <div className="hidden sm:block w-full h-full p-3">
         <ResizablePanelGroup 
           direction="horizontal" 
           className="h-full w-full rounded-xl border shadow-sm"
@@ -1624,44 +1628,50 @@ function SegmentationResultsPageInner() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
+            <AlertDialogDescription>
+              Leaving now will lose your edits to this mask. Save first, or leave anyway?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Go back and save</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = pendingNavigation;
+                setPendingNavigation(null);
+                action?.();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Leave anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       </div>
 
-      {/* Guidance panel — hidden for guests; content depends on whether user came from 4D viewer */}
       {hasMasks && !isGuest && (
-        fromViewer ? (
-          <GuidancePanel
-            storageKey={`seg-from4d-guidance-${projectId}`}
-            icon="🫀"
-            title="Want to run Landmark Detection next?"
-            subtitle="Detect landmarks, preview strain, export reports"
-            actions={[
-              {
-                label: "Run Landmark Detection",
-                icon: <Crosshair size={13} />,
-                primary: true,
-                onClick: () => router.push(`/project/${projectId}?highlight=landmark`),
-              },
-            ]}
-          />
-        ) : (
-          <GuidancePanel
-            storageKey={`seg-guidance-${projectId}`}
-            icon="✅"
-            title="Segmentation masks ready!"
-            subtitle="What would you like to do next?"
-            actions={[
-              {
-                label: "Create 4D Reconstruction",
-                icon: <Box size={13} />,
-                primary: true,
-                onClick: () => router.push(`/project/${projectId}?highlight=reconstruction`),
-              },
-            ]}
-            onDismissWithoutAction={() => {
-              try { sessionStorage.setItem(`seg-guidance-${projectId}-no-action`, "1"); } catch {}
-            }}
-          />
-        )
+        <GuidancePanel
+          storageKey={`seg-guidance-${projectId}`}
+          icon="✅"
+          title="Segmentation masks ready!"
+          subtitle={hasReconstructions ? "What would you like to do next?" : "Want to run 4D Reconstruction next?"}
+          actions={[
+            {
+              label: hasReconstructions ? "View Reconstructed Model" : "Run 4D Reconstruction",
+              icon: <Box size={13} />,
+              primary: true,
+              onClick: () => navigateWithUnsavedGuard(() => router.push(`/project/${projectId}?highlight=reconstruction`)),
+            },
+          ]}
+          onDismissWithoutAction={() => {
+            try { sessionStorage.setItem(`seg-guidance-${projectId}-no-action`, "1"); } catch {}
+          }}
+        />
       )}
     </div>
   );

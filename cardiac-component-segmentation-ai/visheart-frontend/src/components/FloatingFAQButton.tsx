@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { HelpCircle, Loader2, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +9,15 @@ import { Textarea } from "@/components/ui/textarea";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
+interface FaqItem {
+  question: string;
+  answer: string;
+}
+
 export function FloatingFAQButton() {
+  const pathname = usePathname();
+  const isDocPage = pathname?.startsWith("/doc") ?? false;
+
   const [open, setOpen] = useState(false);
   const [senderName, setSenderName] = useState("");
   const [senderEmail, setSenderEmail] = useState("");
@@ -16,6 +25,36 @@ export function FloatingFAQButton() {
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [faqItems, setFaqItems] = useState<FaqItem[] | null>(null);
+  const [faqSearch, setFaqSearch] = useState("");
+
+  useEffect(() => {
+    if (!open || !isDocPage || faqItems !== null) return;
+    let cancelled = false;
+
+    async function loadFaqs() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/support/faq`, { credentials: "include" });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "FAQ loading failed.");
+        }
+        if (!cancelled) setFaqItems(Array.isArray(data.faqs) ? data.faqs : []);
+      } catch {
+        if (!cancelled) setFaqItems([]);
+      }
+    }
+
+    loadFaqs();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, isDocPage, faqItems]);
+
+  const filteredFAQ = (faqItems ?? []).filter((item) =>
+    item.question.toLowerCase().includes(faqSearch.toLowerCase()) ||
+    item.answer.toLowerCase().includes(faqSearch.toLowerCase())
+  );
 
   const resetFeedback = () => {
     setSendStatus(null);
@@ -83,13 +122,40 @@ export function FloatingFAQButton() {
             <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-6 py-4">
               <div>
                 <h2 className="text-xl font-bold">FAQ</h2>
-                <p className="text-sm text-muted-foreground">Send a question directly to the admin.</p>
+                <p className="text-sm text-muted-foreground">
+                  {isDocPage ? "Search answers or send a question to the admin." : "Send a question directly to the admin."}
+                </p>
               </div>
               <Button variant="ghost" size="icon" onClick={closeModal} aria-label="Close FAQ">
                 <X className="h-4 w-4" />
               </Button>
             </div>
             <div className="space-y-5 p-6">
+              {isDocPage && (
+                <>
+                  <Input
+                    placeholder="Search FAQ."
+                    aria-label="Search FAQ"
+                    value={faqSearch}
+                    onChange={(e) => setFaqSearch(e.target.value)}
+                  />
+                  <div className="space-y-3">
+                    {faqItems === null ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label="Loading FAQ" />
+                    ) : filteredFAQ.length > 0 ? (
+                      filteredFAQ.map((item, index) => (
+                        <div key={index}>
+                          <p className="font-medium">{item.question}</p>
+                          <p className="text-sm text-muted-foreground">{item.answer}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No matching FAQ found.</p>
+                    )}
+                  </div>
+                </>
+              )}
+
               <form className="space-y-3 rounded-lg border bg-muted/20 p-4" onSubmit={handleSubmit}>
                 <div>
                   <h3 className="text-sm font-semibold">Ask the admin</h3>
@@ -138,9 +204,11 @@ export function FloatingFAQButton() {
                   </div>
                 )}
                 <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                  <Button asChild type="button" variant="outline">
-                    <a href="/doc">Open User Guide</a>
-                  </Button>
+                  {!isDocPage && (
+                    <Button asChild type="button" variant="outline">
+                      <a href="/doc">Open User Guide</a>
+                    </Button>
+                  )}
                   <Button type="submit" disabled={sending || message.trim().length < 5} className="gap-1.5">
                     {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     Send

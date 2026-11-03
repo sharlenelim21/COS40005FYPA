@@ -445,7 +445,7 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
       setFormData((prev) => ({ ...prev, [field]: value }));
 
       // Clear field-specific error when user starts typing
-      if (errors[field]) {
+      if (errors[field as keyof FormErrors]) {
         setErrors((prev) => ({ ...prev, [field]: undefined }));
       }
     },
@@ -470,13 +470,11 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
       setErrors({});
 
       try {
-        // Prepare API request data (exclude confirmPassword)
-        const { confirmPassword, ...apiData } = formData;
-
-        // Choose API endpoint based on whether this is a guest upgrade
+        const { username, email, phone, password } = formData;
+        // Both land as User directly — no staff verification step anymore.
         const response = isActuallyGuestUpgrade
-          ? await authApi.registerFromGuest(apiData)
-          : await authApi.register(apiData);
+          ? await authApi.registerFromGuest({ username, email, phone, password })
+          : await authApi.register({ username, email, phone, password });
 
         if (response.register) {
           console.log(

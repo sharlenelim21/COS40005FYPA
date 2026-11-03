@@ -582,6 +582,37 @@ def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
     return result
 
 
+def group_sectors_max(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
+    """Max thickness per AHA sector -- same ray grouping as group_sectors, but the single
+    thickest ray in each sector rather than their average. The mean version is right for the
+    bullseye heatmap (a smooth regional value), but it dilutes a focal hypertrophic spot with the
+    thinner myocardium around it in the same sector -- understating true peak wall thickness for
+    exactly the asymmetric/focal HCM pattern that criterion exists to catch (reported live,
+    2026-10, on a clinically-known HCM patient whose measured 13.8mm fell just under the 15mm
+    ACDC cutoff). Used only to derive MaxWallThicknessMm for the HCM gate; the heatmap display
+    keeps reading group_sectors' mean values, unaffected by this. Mirrors the identical function
+    in the local CPU-fallback script, compute_bullseye_from_rle.py."""
+    if ring_type == "apex":
+        return np.array([np.nanmax(thicknesses)])
+
+    if ring_type in ("basal", "mid"):
+        n_sectors = 6
+    elif ring_type == "apical":
+        n_sectors = 4
+    else:
+        raise ValueError(f"Unknown ring_type: {ring_type!r}")
+
+    n_rays = len(thicknesses)
+    rays_per_sector = n_rays // n_sectors
+
+    result = np.array([
+        np.nanmax(thicknesses[s * rays_per_sector : (s + 1) * rays_per_sector])
+        for s in range(n_sectors)
+    ])
+
+    return result
+
+
 def group_inner_radii(inner_radii: np.ndarray, ring_type: str) -> np.ndarray:
     """
     Average per-ray inner radii into AHA sectors, same sector ordering as group_sectors.
@@ -1228,6 +1259,9 @@ def mask_to_17_segments(
     dict with keys (all lengths in PIXELS — the route converts to mm):
         "values"               : ndarray, shape (17,) — mean wall thickness per AHA segment;
                                  used for the wall-thickness bullseye and for GRS
+        "values_max"           : ndarray, shape (17,) — max (not mean) wall thickness per AHA
+                                 segment; see group_sectors_max. Only consumed by the HCM gate's
+                                 MaxWallThicknessMm, never by the bullseye display.
         "circ_values"          : ndarray, shape (17,) — 2π × mean inner radius per segment;
                                  LEGACY, no longer used for GCS
         "outer_circ_chord"      : ndarray, shape (17,) — summed outer-boundary chord length per segment
@@ -1266,6 +1300,9 @@ def mask_to_17_segments(
         "apex":   1,
     }
     ring_results: dict[str, np.ndarray] = {}
+    # True-peak companion to ring_results -- see group_sectors_max's own docstring for why this
+    # needs its own nanmax aggregation all the way through, not just at the sector-grouping step.
+    ring_results_max: dict[str, np.ndarray] = {}
     ring_inner_results: dict[str, np.ndarray] = {}
     ring_outer_chord_results: dict[str, np.ndarray] = {}
     ring_mid_chord_results: dict[str, np.ndarray] = {}
@@ -1278,6 +1315,7 @@ def mask_to_17_segments(
 
         if not ring_slices:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
+            ring_results_max[ring_type] = np.full(n_sectors, np.nan)
             ring_inner_results[ring_type] = np.full(n_sectors, np.nan)
             ring_outer_chord_results[ring_type] = np.full(n_sectors, np.nan)
             ring_mid_chord_results[ring_type] = np.full(n_sectors, np.nan)
@@ -1314,6 +1352,7 @@ def mask_to_17_segments(
             start_angle = start_angle_by_ring[ring_type]
 
         per_slice: list[np.ndarray] = []
+        per_slice_max: list[np.ndarray] = []
         per_slice_inner: list[np.ndarray] = []
         per_slice_outer_chord: list[np.ndarray] = []
         per_slice_mid_chord: list[np.ndarray] = []
@@ -1332,6 +1371,9 @@ def mask_to_17_segments(
             if not np.all(np.isnan(sectors)):
                 per_slice.append(sectors)
                 per_slice_inner.append(inner_secs)
+            sectors_max = group_sectors_max(thick, ring_type)
+            if not np.all(np.isnan(sectors_max)):
+                per_slice_max.append(sectors_max)
 
             # Notebook-style (alignment_17seg_update.ipynb) circumferential
             # measure: sum consecutive-ray chord lengths at the outer, mid,
@@ -1350,6 +1392,11 @@ def mask_to_17_segments(
         else:
             ring_results[ring_type]       = np.full(n_sectors, np.nan)
             ring_inner_results[ring_type] = np.full(n_sectors, np.nan)
+        # nanmax, not nanmean -- averaging across slices would dilute the peak right back out
+        # after group_sectors_max already preserved it within each slice.
+        ring_results_max[ring_type] = (
+            np.nanmax(per_slice_max, axis=0) if per_slice_max else np.full(n_sectors, np.nan)
+        )
 
         ring_outer_chord_results[ring_type] = (
             np.nanmean(per_slice_outer_chord, axis=0) if per_slice_outer_chord else np.full(n_sectors, np.nan)
@@ -1366,6 +1413,12 @@ def mask_to_17_segments(
         ring_results["mid"],
         ring_results["apical"],
         ring_results["apex"],
+    ])
+    values_max = np.concatenate([
+        ring_results_max["basal"],
+        ring_results_max["mid"],
+        ring_results_max["apical"],
+        ring_results_max["apex"],
     ])
     # circ_values: LV inner circumference per AHA segment = 2π × mean_inner_radius.
     # LEGACY: still returned, but the strain route no longer uses it — GCS is
@@ -1392,6 +1445,10 @@ def mask_to_17_segments(
     )
     return {
         "values": values,
+        # True-peak sibling to "values" (see group_sectors_max) -- same pixel units, same
+        # length/ordering. Only consumed by the HCM gate's MaxWallThicknessMm; the bullseye
+        # heatmap display keeps reading "values", unaffected by this.
+        "values_max": values_max,
         "circ_values": circ_values,
         # Notebook-style (alignment_17seg_update.ipynb) per-segment summed
         # chord length at each myocardium boundary — used for GCS as the

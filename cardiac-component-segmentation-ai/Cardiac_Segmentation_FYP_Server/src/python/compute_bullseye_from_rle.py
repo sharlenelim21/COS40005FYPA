@@ -202,13 +202,30 @@ def classify_slices(mask_3d: np.ndarray) -> list[str]:
     return labels
 
 
-def compute_centroid(slice_mask: np.ndarray) -> tuple[Optional[float], Optional[float]]:
-    """Pure-numpy centroid of myocardium pixels (replaces cv2.moments)."""
-    myo = (slice_mask == _MYO_CLASS).astype(np.float64)
-    total = myo.sum()
+def compute_centroid(
+    slice_mask: np.ndarray, class_label: int = _LV_CAVITY_CLASS,
+) -> tuple[Optional[float], Optional[float]]:
+    """Pure-numpy centroid of the given mask class (replaces cv2.moments) — mirrors the
+    GPU's bullseye_analysis.compute_centroid exactly, including its default.
+
+    Defaults to the LV cavity (class 3), not the myocardium ring: the GPU code's own
+    docstring explains why — the cavity is a stable reference that doesn't drift the way
+    the ring does. The ring can carry small mislabeled blobs disconnected from the real
+    wall (segmentation noise), and an ALL-myocardium-pixel centroid gets pulled toward
+    them; rays cast from that shifted point then cut the real wall at a tangent on one
+    side and foreshorten it on the other, instead of measuring it radially. Reported live,
+    2026-10-26: patient005's MedSAM apical-septal segment read 12.85mm against this same
+    patient's ground-truth 9.94mm for that segment, traced to a slice whose myocardium
+    label had 14 disconnected components (one a 163px blob) pulling the myo-centroid ~6px
+    off the true ring centre — while the LV-cavity centroid for that slice was undisturbed
+    by it, cavity pixels being a single compact region far less prone to this kind of
+    stray mislabeling.
+    """
+    region = (slice_mask == class_label).astype(np.float64)
+    total = region.sum()
     if total == 0:
         return None, None
-    ys, xs = np.where(myo)
+    ys, xs = np.where(region)
     cx = float(xs.sum() / total)
     cy = float(ys.sum() / total)
     return cx, cy
@@ -392,6 +409,32 @@ def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
     return result
 
 
+def group_sectors_max(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
+    """Max thickness per AHA sector -- same ray grouping as group_sectors, but the single
+    thickest ray in each sector rather than their average. The mean version is right for the
+    bullseye heatmap (a smooth regional value), but it dilutes a focal hypertrophic spot with
+    the thinner myocardium around it in the same sector -- understating true peak wall thickness
+    for exactly the asymmetric/focal HCM pattern that criterion exists to catch (reported live,
+    2026-10, on a clinically-known HCM patient whose measured 13.8mm fell just under the 15mm
+    ACDC cutoff). Used only to derive MaxWallThicknessMm for the HCM gate; the heatmap display
+    keeps reading group_sectors' mean values, unaffected by this."""
+    if ring_type == "apex":
+        return np.array([np.nanmax(thicknesses)])
+    if ring_type in ("basal", "mid"):
+        n_sectors = 6
+    elif ring_type == "apical":
+        n_sectors = 4
+    else:
+        raise ValueError(f"Unknown ring_type: {ring_type!r}")
+    rays_per_sector = len(thicknesses) // n_sectors
+    result = np.full(n_sectors, np.nan, dtype=np.float64)
+    for s in range(n_sectors):
+        vals = thicknesses[s * rays_per_sector : (s + 1) * rays_per_sector]
+        if vals.size and not np.all(np.isnan(vals)):
+            result[s] = float(np.nanmax(vals))
+    return result
+
+
 def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None, anterior_by_slice=None) -> dict:
     """
     17 AHA wall-thickness values (pixels), standard AHA numbering.
@@ -414,12 +457,16 @@ def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None, anterior_by_sl
     final_alignment_point = None
     ring_configs = {"basal": 6, "mid": 6, "apical": 4, "apex": 1}
     ring_results = {}
+    # True-peak companion to ring_results -- see group_sectors_max's own docstring for why this
+    # needs its own nanmax aggregation all the way through, not just at the sector-grouping step.
+    ring_results_max = {}
     lv_centroids: list[list[float]] = []
     final_alignment_deg: Optional[float] = None
     for ring_type, n_sectors in ring_configs.items():
         ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring_type]
         if not ring_slices:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
+            ring_results_max[ring_type] = np.full(n_sectors, np.nan)
             continue
 
         # Start angle of this ring: from the landmark (measured from the first
@@ -441,6 +488,7 @@ def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None, anterior_by_sl
         start_rad = math.radians(start_deg)
 
         per_slice = []
+        per_slice_max = []
         for sl_idx in ring_slices:
             sl = mask_3d[:, :, sl_idx]
             cx, cy = compute_centroid(sl)
@@ -452,15 +500,30 @@ def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None, anterior_by_sl
             sectors = group_sectors(thick, ring_type)
             if not np.all(np.isnan(sectors)):
                 per_slice.append(sectors)
+            sectors_max = group_sectors_max(thick, ring_type)
+            if not np.all(np.isnan(sectors_max)):
+                per_slice_max.append(sectors_max)
         if per_slice:
             ring_results[ring_type] = np.nanmean(per_slice, axis=0)
         else:
             ring_results[ring_type] = np.full(n_sectors, np.nan)
+        if per_slice_max:
+            # nanmax, not nanmean -- averaging across slices would dilute the peak right back
+            # out after group_sectors_max already preserved it within each slice.
+            ring_results_max[ring_type] = np.nanmax(per_slice_max, axis=0)
+        else:
+            ring_results_max[ring_type] = np.full(n_sectors, np.nan)
     values = np.concatenate([
         ring_results["basal"],
         ring_results["mid"],
         ring_results["apical"],
         ring_results["apex"],
+    ])
+    values_max = np.concatenate([
+        ring_results_max["basal"],
+        ring_results_max["mid"],
+        ring_results_max["apical"],
+        ring_results_max["apex"],
     ])
     lv_centroid = (
         [float(np.mean([c[0] for c in lv_centroids])),
@@ -469,6 +532,7 @@ def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None, anterior_by_sl
     )
     return {
         "values": values,
+        "values_max": values_max,
         "lv_centroid": lv_centroid,
         "alignment_angle_deg": final_alignment_deg,
         "alignment_source": alignment_source if final_alignment_deg is not None else "fixed-angle",
@@ -552,6 +616,10 @@ def main():
     segment_values = [_safe_float(v) for v in values]
     finite_vals = [v for v in segment_values if v is not None]
     n_nan = len(segment_values) - len(finite_vals)
+    # True-peak sibling to segment_values (see group_sectors_max) -- same pixel units, same
+    # length/ordering, same None-for-NaN handling. Only consumed by the HCM gate's
+    # MaxWallThicknessMm; the heatmap display keeps reading segment_values, unaffected.
+    segment_values_max = [_safe_float(v) for v in analysis["values_max"]]
 
     stats = {
         "min":   _safe_float(min(finite_vals)) if finite_vals else None,
@@ -573,6 +641,7 @@ def main():
     result = {
         "request_id":       None,
         "segment_values":   segment_values,
+        "segment_values_max": segment_values_max,
         "segment_metadata": segment_metadata,
         "stats":            stats,
         "input_shape":      list(mask_3d.shape),

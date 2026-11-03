@@ -257,6 +257,7 @@ class BullseyeAnalysisResult(BaseModel):
     """Response model for AHA 17-segment wall-thickness analysis."""
     request_id: Optional[str] = Field(None, description="Echo of the client-provided request_id, if any")
     segment_values: List[Optional[float]] = Field(..., description="Wall thickness per AHA segment, index 0 = segment 1; None where the segment had no valid myocardium")
+    segment_values_max: Optional[List[Optional[float]]] = Field(None, description="True-peak (not mean) wall thickness per AHA segment -- see bullseye_analysis.group_sectors_max. Only consumed by the HCM gate's MaxWallThicknessMm; the bullseye display keeps reading segment_values.")
     segment_metadata: List[Dict[str, Any]] = Field(..., description="Per-segment name, ring, and value")
     stats: Dict[str, Any] = Field(..., description="min / max / mean / n_nan across all segments")
     input_shape: List[int] = Field(..., description="Shape of the input mask [H, W, N_slices]")

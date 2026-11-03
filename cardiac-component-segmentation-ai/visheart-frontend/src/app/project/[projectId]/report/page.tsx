@@ -19,12 +19,11 @@ import { DiseasePatternSimilarityPage } from "@/components/report/DiseasePattern
 import { ReferenceCriteriaPage } from "@/components/report/ReferenceCriteriaPage";
 import { MethodologyPage } from "@/components/report/MethodologyPage";
 import { MriOverlayPage, mriOverlayPageCount } from "@/components/report/MriOverlayPage";
-import type { RvDiseasePatternInputs, Sex } from "@/lib/rvDiseasePattern";
-import { useProjectResults } from "@/hooks/useProjectResults";
+import { useProjectResults, type Sex } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
 import { downloadResultsCsv } from "@/lib/exportResultsCsv";
 import { rvEdEsFac, rvFacSeries, rvGasMeasuredNote, rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
-import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle } from "lucide-react";
+import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle, RefreshCw } from "lucide-react";
 
 // The printed report follows the approved mockup's 9-section structure, but
 // several sections (wall thickness cycle, full-cycle strain values, regional
@@ -47,10 +46,12 @@ export default function ReportPage() {
   // hook runs when a mask has no stored metrics yet, so the summary cards can
   // show progress instead of a permanent "not computed" dead end.
   const {
-    model, measurements, healthStatus, similarity, strain, strainSeries,
+    model, measurements, healthStatus, patternGates, strain, strainSeries,
     computing, computeError, newerMaskAvailable, regionalHealthStatus, rvRegionalHealthStatus, rv, lvVolumes, rvStrain,
-    rvStrainSeries, recomputeSimilarityWithBsa, recomputingSimilarity, recomputeSimilarityError, doc, byModel,
+    rvStrainSeries, doc, byModel,
+    recomputePatternGatesWithBsa, recomputingPatternGates, recomputePatternGatesError,
     rvHealthStatus, recomputeRvHealthStatus, recomputingRvHealthStatus, recomputeRvHealthStatusError,
+    hasFreshData,
   } = useProjectResults(projectId, "recent");
   const [showScrollTop, setShowScrollTop] = useState(false);
   // BSA input — optional. Entered here (not persisted server-side) since it's
@@ -73,9 +74,6 @@ export default function ReportPage() {
     Number.isFinite(heightNum) && Number.isFinite(weightNum) && heightNum > 0 && weightNum > 0
       ? Math.sqrt((heightNum * weightNum) / 3600)
       : null;
-  // The toolbar's sticky *top* offset (not padding — see below), kept in sync
-  // with the real bottom edge of whatever's fixed above it (site header +
-  // ProjectDashboardBar's floating pill, whichever is currently taller).
   const [clearance, setClearance] = useState(64);
 
   const generatedAt = useMemo(
@@ -89,19 +87,12 @@ export default function ReportPage() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // `top` on a sticky element is a no-op until the element would otherwise
-  // scroll past it — unlike padding, it can't double-count against normal
-  // document flow while ProjectDashboardBar (expanded or collapsed) still
-  // reserves its own space above. So this only needs the real, current
-  // geometry of what's fixed on screen, not a guess about *why*.
   useEffect(() => {
     let rafId: number;
     const measure = () => {
       const globalHeader = document.querySelector("header");
-      const reopenPill = document.querySelector('[aria-label="Show dashboard"]');
       const headerBottom = globalHeader?.getBoundingClientRect().bottom ?? 0;
-      const pillBottom = reopenPill?.getBoundingClientRect().bottom ?? 0;
-      setClearance(Math.max(headerBottom, pillBottom, 0));
+      setClearance(Math.max(headerBottom, 0));
       rafId = requestAnimationFrame(measure);
     };
     rafId = requestAnimationFrame(measure);
@@ -110,6 +101,14 @@ export default function ReportPage() {
 
   if (error) return <ErrorProject error={error} />;
   if (loading !== "idle" && loading !== "done") return <LoadingProject loadingStage={loading} />;
+  if (!hasFreshData) {
+    return (
+      <div className="flex h-64 items-center justify-center gap-2 text-sm text-foreground">
+        <RefreshCw className="h-4 w-4 animate-spin" />
+        Loading latest results…
+      </div>
+    );
+  }
 
   const patientLabel = projectData?.name || projectId || "Unknown";
   const totalFrames = projectData?.dimensions?.frames || 9;
@@ -145,7 +144,16 @@ export default function ReportPage() {
   const handleDownloadCsv = () => {
     downloadResultsCsv(patientLabel, byModel, { bsaM2, heightCm: bsaM2 != null ? heightNum : null, weightKg: bsaM2 != null ? weightNum : null, sex: patientSex });
   };
-  const hasRealData = !!(measurements || healthStatus || similarity);
+  const hasRealData = !!(measurements || healthStatus || patternGates);
+  // Short summary line for ExecutiveSummaryPage — the gates module has no
+  // single "most similar" pick (a patient can meet zero, one, or more than
+  // one gate independently), so this joins whichever gate labels are
+  // actually met instead of one headline string.
+  const patternGatesHeadline = !patternGates
+    ? null
+    : patternGates.met_codes.length
+    ? patternGates.gates.filter((g) => patternGates.met_codes.includes(g.code)).map((g) => g.label).join(", ")
+    : "No ACDC pattern criteria met";
   const scanSummary = [
     "Cine MRI",
     projectData?.dimensions?.slices ? `${projectData.dimensions.slices} slices` : null,
@@ -214,23 +222,6 @@ export default function ReportPage() {
     rvGas: rvByFrameIndex.get(frameIndex)?.global_rv_gas ?? null,
     rvSeptalGcs: rvByFrameIndex.get(frameIndex)?.global_rv_septal_gcs ?? null,
   }));
-
-  // ── RV disease-pattern inputs (page 7) ──────────────────────────────────────
-  // Sex now comes from the toggle in the Cardiac Measurements header
-  // (patientSex state above), shared with the on-screen RV patterns card —
-  // the sex-specific ARVC RVEDVI cutoffs only render as "pending" when the
-  // user genuinely hasn't picked one, not unconditionally.
-  const rvInputs: RvDiseasePatternInputs = {
-    rvedvi: bsaM2 && rv?.RVEDV != null ? rv.RVEDV / bsaM2 : null,
-    rvesvi: bsaM2 && rv?.RVESV != null ? rv.RVESV / bsaM2 : null,
-    rvef: rv?.RVEF ?? null,
-    svi: bsaM2 && rv?.RV_SV != null ? rv.RV_SV / bsaM2 : null,
-    sex: patientSex,
-    // Measured but no validated cutoff — unscored; value shown in the text.
-    regionalContractionAbnormal: null,
-    gasAbnormal: null,
-    rvGasMeasured: rvGasMeasuredNote(rvStrain, rvStrainSeries),
-  };
 
   // A stored RV health status result is shown only when it was graded for the
   // sex/BSA now selected on this page and after the latest heart-metrics
@@ -343,7 +334,7 @@ export default function ReportPage() {
           generatedAt={generatedAt}
           measurements={measurements}
           healthStatus={healthStatus}
-          similarity={similarity}
+          patternGates={patternGates}
           strain={strain}
           strainSeries={strainSeries}
           regionalHealthStatus={regionalHealthStatus}
@@ -359,9 +350,9 @@ export default function ReportPage() {
           weightKg={weightKg}
           onHeightCmChange={setHeightCm}
           onWeightKgChange={setWeightKg}
-          onRecomputeSimilarityWithBsa={recomputeSimilarityWithBsa}
-          recomputingSimilarity={recomputingSimilarity}
-          recomputeSimilarityError={recomputeSimilarityError}
+          onRecomputePatternGatesWithBsa={recomputePatternGatesWithBsa}
+          recomputingPatternGates={recomputingPatternGates}
+          recomputePatternGatesError={recomputePatternGatesError}
           patientSex={patientSex}
           onPatientSexChange={setPatientSex}
           rvHealthStatus={rvHealthStatus}
@@ -415,7 +406,7 @@ export default function ReportPage() {
               rvFac={rvPeakFacValue}
               healthStatusText={healthStatus?.status ?? null}
               rvHealthStatusText={rvHealthCurrent?.status ?? null}
-              phenotypeHeadline={similarity?.phenotype_headline ?? null}
+              phenotypeHeadline={patternGatesHeadline}
               isRealData
             />
             <HeartMetricsPage
@@ -506,8 +497,7 @@ export default function ReportPage() {
               pageNumber={diseasePatternPageNumber}
               totalPages={totalPages}
               generatedAt={generatedAt}
-              similarity={similarity}
-              rvInputs={rvInputs}
+              patternGates={patternGates}
             />
             <ReferenceCriteriaPage
               patientLabel={patientLabel}

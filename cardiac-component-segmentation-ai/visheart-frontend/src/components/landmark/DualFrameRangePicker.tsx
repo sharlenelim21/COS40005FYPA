@@ -11,6 +11,7 @@ export function DualFrameRangePicker({
   esValue,
   onEdChange,
   onEsChange,
+  disabled = false,
 }: {
   min: number;
   max: number;
@@ -18,6 +19,7 @@ export function DualFrameRangePicker({
   esValue: number;
   onEdChange: (value: number) => void;
   onEsChange: (value: number) => void;
+  disabled?: boolean;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const draggingHandle = useRef<"ed" | "es" | null>(null);
@@ -79,6 +81,7 @@ export function DualFrameRangePicker({
   }, [edValue, esValue]);
 
   const startDrag = (handle: "ed" | "es") => (e: React.PointerEvent) => {
+    if (disabled) return;
     e.preventDefault();
     draggingHandle.current = handle;
     document.body.style.cursor = "grabbing";
@@ -96,6 +99,7 @@ export function DualFrameRangePicker({
   };
 
   const onKeyDown = (handle: "ed" | "es") => (e: React.KeyboardEvent) => {
+    if (disabled) return;
     let delta = 0;
     if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -1;
     else if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = 1;
@@ -114,7 +118,7 @@ export function DualFrameRangePicker({
   const rangeWidthPct = Math.abs(esPct - edPct);
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className={`flex flex-col gap-2 ${disabled ? "opacity-50" : ""}`}>
       <div
         ref={trackRef}
         className="relative h-1.5 w-full rounded-full bg-muted"
@@ -127,27 +131,27 @@ export function DualFrameRangePicker({
         {/* ED handle — hollow/outlined */}
         <div
           role="slider"
-          tabIndex={0}
+          tabIndex={disabled ? -1 : 0}
           aria-label={`End-diastole frame, ${edValue + 1} of ${max - min + 1}`}
           aria-valuemin={min}
           aria-valuemax={max}
           aria-valuenow={edValue}
           onPointerDown={startDrag("ed")}
           onKeyDown={onKeyDown("ed")}
-          className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-background shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring active:cursor-grabbing"
+          className={`absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-background shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring ${disabled ? "cursor-not-allowed" : "cursor-grab active:cursor-grabbing"}`}
           style={{ left: `${edPct}%` }}
         />
         {/* ES handle — filled */}
         <div
           role="slider"
-          tabIndex={0}
+          tabIndex={disabled ? -1 : 0}
           aria-label={`End-systole frame, ${esValue + 1} of ${max - min + 1}`}
           aria-valuemin={min}
           aria-valuemax={max}
           aria-valuenow={esValue}
           onPointerDown={startDrag("es")}
           onKeyDown={onKeyDown("es")}
-          className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-primary shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring active:cursor-grabbing"
+          className={`absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-primary shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring ${disabled ? "cursor-not-allowed" : "cursor-grab active:cursor-grabbing"}`}
           style={{ left: `${esPct}%` }}
         />
       </div>

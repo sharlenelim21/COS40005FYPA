@@ -13,9 +13,8 @@
  * each section reads as its own small table.
  */
 
-import type { MaskDoc, Model } from "@/hooks/useProjectResults";
-import { computeRvDiseasePatterns, type Sex } from "@/lib/rvDiseasePattern";
-import { rvGasMeasuredNote, rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
+import type { MaskDoc, Model, Sex } from "@/hooks/useProjectResults";
+import { rvPeakFac, rvPeakGas, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 
 /** BSA/sex entered on the report screen — never persisted server-side, so
  *  this is the only way the export can know them. Optional: omit entirely
@@ -49,14 +48,21 @@ function notComputedRow(modelLabel: string, totalColumns: number): string {
 const MODELS: Model[] = ["unet", "medsam"];
 const MODEL_LABEL: Record<Model, string> = { unet: "UNet", medsam: "MedSAM" };
 
-/** Max across the 17 AHA-segment ED wall-thickness values — same computation
- *  assembleSimilarityMeasurements does server-side for the HCM gate, and
- *  useProjectResults.ts duplicates client-side for the report's display. */
+/** Maximal ED wall thickness — the value assembleDiseasePatternGateInputs uses
+ *  server-side for the HCM gate, and useProjectResults.ts duplicates
+ *  client-side for the report's display: heart metrics' ED-frame measurement
+ *  when present, otherwise the max across the 17 AHA-segment values.
+ *  bullseye.segment_values is in mm (unit "mm") or, on an older bullseye, in
+ *  PIXELS, which spacing_mm[0] (in-plane dx) converts — without a known
+ *  spacing this must read as null, never a raw pixel count mislabeled mm. */
 function maxWallThicknessMm(d: MaskDoc): number | null {
+  const edMax = d.heartMetrics?.max_wall_thickness_mm;
+  if (typeof edMax === "number" && Number.isFinite(edMax)) return edMax;
   const vals = (d.bullseye?.segment_values ?? []).filter(
     (v): v is number => typeof v === "number" && Number.isFinite(v),
   );
-  return vals.length ? Math.max(...vals) : null;
+  const toMm = d.bullseye?.unit === "mm" ? 1 : d.heartMetrics?.spacing_mm?.[0];
+  return vals.length && typeof toMm === "number" ? Math.max(...vals) * toMm : null;
 }
 
 export function buildResultsCsv(
@@ -172,37 +178,6 @@ export function buildResultsCsv(
   }
   lines.push("");
 
-  // ── Disease pattern similarity ──────────────────────────────────────────
-  lines.push(row("DISEASE PATTERN SIMILARITY (similarity comparison — not a diagnosis)"));
-  lines.push(row("Model", "Headline", "Confidence", "Mode", "Gate", "Notes"));
-  for (const m of present) {
-    const ds = byModel[m]!.diseaseSimilarity;
-    if (!ds) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
-    lines.push(row(
-      MODEL_LABEL[m],
-      ds.phenotype_headline ?? "",
-      typeof ds.confidence === "number" ? ds.confidence.toFixed(2) : "",
-      ds.mode ?? "",
-      ds.gate?.reason ?? "",
-      (ds.notes ?? []).join(" | "),
-    ));
-  }
-  lines.push("");
-  lines.push(row("Model", "Pattern", "Similarity %", "Reasoning"));
-  for (const m of present) {
-    const ds = byModel[m]!.diseaseSimilarity;
-    if (!ds) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
-    for (const s of ds.similarities ?? []) {
-      lines.push(row(
-        MODEL_LABEL[m],
-        `${s.label}${s.code === ds.most_similar ? " (most similar)" : ""}`,
-        s.percent.toFixed(1),
-        (s.reasons ?? []).join(" | "),
-      ));
-    }
-  }
-  lines.push("");
-
   // ── Regional health status (advisory, never changes the overall grade) ──
   lines.push(row("REGIONAL HEALTH STATUS (advisory — per-segment, doesn't change overall grade)"));
   lines.push(row("Model", "Status", "Reduced segment count", "Summary"));
@@ -213,32 +188,28 @@ export function buildResultsCsv(
   }
   lines.push("");
 
-  // ── RV disease-pattern analysis (prototype scoring, not a diagnosis) ────
-  // Entirely client-side (see rvDiseasePattern.ts) — never stored server-side
-  // — so this recomputes it fresh from whatever's in `byModel` plus the
-  // BSA/sex passed in, the same way InteractiveReport.tsx and the printed
-  // report's DiseasePatternSimilarityPage do.
-  lines.push(row("RV DISEASE PATTERN ANALYSIS — PROTOTYPE (rule-based similarity scoring, not a diagnosis)"));
-  lines.push(row("Model", "Pattern", "Score /100", "Contributing factors"));
+  // ── Unified LV+RV Disease Pattern Gates (ACDC-based) ─────────────────────
+  // See compute_disease_pattern_gates.py for the full method.
+  lines.push(row("DISEASE PATTERN GATES — ACDC-based (not a diagnosis)"));
+  lines.push(row("Model", "Gate", "Met", "Rank (when 2+ gates co-fire)", "Reasons", "Criterion"));
   for (const m of present) {
-    const d = byModel[m]!;
-    const rvedvi = idx(d.heartMetrics?.RVEDV);
-    const rvesvi = idx(d.heartMetrics?.RVESV);
-    const svi = idx(d.heartMetrics?.RV_SV);
-    const patterns = computeRvDiseasePatterns({
-      rvedvi, rvesvi, rvef: d.heartMetrics?.RVEF ?? null, svi,
-      sex: sex ?? "unspecified",
-      // Measured, but no validated cutoff — left unscored (null), same as the
-      // on-screen card and printed report; the measured value goes in the text.
-      regionalContractionAbnormal: null,
-      gasAbnormal: null,
-      rvGasMeasured: rvGasMeasuredNote(d.rvStrain, d.rvStrainSeries),
-    });
-    for (const p of patterns) {
-      const factors = p.factors
-        .map((f) => `${f.detail}${f.status === "pending" ? " (PROTOTYPE — not scored)" : ""}`)
+    const pg = byModel[m]!.diseasePatternGates;
+    if (!pg) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
+    for (const g of pg.gates) {
+      lines.push(row(
+        MODEL_LABEL[m],
+        g.label,
+        g.met === true ? "Met" : g.met === false ? "Not met" : "Pending",
+        g.rank_label ?? "",
+        g.reasons.join(" | "),
+        g.criterion_text,
+      ));
+    }
+    if (pg.rv_severity) {
+      const notes = [pg.rv_severity.arvc_note, pg.rv_severity.pah_note, pg.rv_severity.generic_note]
+        .filter((n): n is string => !!n)
         .join(" | ");
-      lines.push(row(MODEL_LABEL[m], p.label, p.score, factors));
+      lines.push(row(MODEL_LABEL[m], "RV severity context", "", notes, ""));
     }
   }
   lines.push("");
@@ -282,12 +253,14 @@ export function buildResultsCsv(
   // label, so GCS = free-wall chord % change and GAS = cavity area % change.
   // See bullseye_analysis.mask_to_rv_regions for the full rationale.
   lines.push(row("REGIONAL RV STRAIN — ED→ES (9 segments)"));
-  lines.push(row("Model", "Region", "Label", "RV GCS %", "RV GAS %", "Chord ED (mm)", "Chord ES (mm)", "Area ED (mm²)", "Area ES (mm²)"));
+  lines.push(row("Model", "Region", "Label", "RV GCS %", "RV GAS %", "RV FAC %", "Chord ED (mm)", "Chord ES (mm)", "Area ED (mm²)", "Area ES (mm²)"));
   for (const m of present) {
     const regions = byModel[m]!.rvStrain?.regions;
-    if (!regions?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 9)); continue; }
+    if (!regions?.length) { lines.push(notComputedRow(MODEL_LABEL[m], 10)); continue; }
     for (const r of regions) {
-      lines.push(row(MODEL_LABEL[m], r.region, r.label, r.gcs ?? r.strain, r.gas ?? null,
+      const gas = r.gas ?? null;
+      const fac = gas == null ? null : -gas;
+      lines.push(row(MODEL_LABEL[m], r.region, r.label, r.gcs ?? r.strain, gas, fac,
         r.chord_ed_mm ?? null, r.chord_es_mm ?? null, r.area_ed_mm2 ?? null, r.area_es_mm2 ?? null));
     }
   }
@@ -307,17 +280,34 @@ export function buildResultsCsv(
   lines.push("");
 
   // ── Per-frame RV strain series ──────────────────────────────────────────
-  lines.push(row("PER-FRAME RV STRAIN SERIES (global + per region)"));
-  lines.push(row("Model", "Frame", "Global RV Strain %", "Region", "Label", "RV Strain %", "Radius (mm)"));
+  // FAC = −GAS (short-axis MRI cavity-area convention, same rule
+  // rvAreaMetrics.ts uses everywhere else) — derived here rather than
+  // recomputed from area_mm2/area_ed_mm2 so this always agrees with the
+  // on-screen report and never drifts from it.
+  lines.push(row("PER-FRAME RV STRAIN SERIES (global + per region, GCS/GAS/FAC)"));
+  lines.push(row(
+    "Model", "Frame",
+    "Global RV GCS %", "Global RV GAS %", "Global RV FAC %",
+    "Region", "Label", "RV GCS %", "RV GAS %", "RV FAC %",
+    "Area ED (mm²)", "Area (mm²)", "Radius (mm)",
+  ));
   let anyRvSeries = false;
   for (const m of present) {
     const rvs = byModel[m]!.rvStrainSeries;
     if (!rvs?.frames?.length) continue;
     anyRvSeries = true;
     for (const f of rvs.frames) {
+      const globalGas = f.global_rv_gas ?? null;
+      const globalFac = globalGas == null ? null : -globalGas;
       for (const r of f.regions ?? []) {
-        lines.push(row(MODEL_LABEL[m], f.frameIndex, f.global_rv_strain,
-          r.region, r.label, r.strain, r.radius_mm ?? null));
+        const regionGas = r.gas ?? null;
+        const regionFac = regionGas == null ? null : -regionGas;
+        lines.push(row(
+          MODEL_LABEL[m], f.frameIndex,
+          f.global_rv_strain, globalGas, globalFac,
+          r.region, r.label, r.strain, regionGas, regionFac,
+          r.area_ed_mm2 ?? null, r.area_mm2 ?? null, r.radius_mm ?? null,
+        ));
       }
     }
   }

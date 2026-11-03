@@ -351,8 +351,15 @@ def training_steps(config, job):
 
 def check_corrections(config, owner=None, run=None):
     """The export dry run, read-only: the cases that would train now, one user's when an owner is given. It checks
-    each project against the frozen set too, so the page can lock a frozen test patient's cases."""
-    run = run or run_quiet
+    each project against the frozen set too, so the page can lock a frozen test patient's cases.
+
+    Each corrected case's NIfTI is pulled from S3/MinIO one at a time (~10s each observed on a
+    resource-constrained local Docker Desktop VM); run_quiet's normal 170s default is tuned for
+    short admin commands and is nowhere near enough once there are more than ~15 cases to scan.
+    Nothing here is waited on synchronously by a person (the page polls /status separately), so
+    a generous ceiling costs nothing but worst-case wall-clock time.
+    """
+    run = run or (lambda command: run_quiet(command, timeout=600))
     name = f"check-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     staged = config.temp_exports / name
     try:

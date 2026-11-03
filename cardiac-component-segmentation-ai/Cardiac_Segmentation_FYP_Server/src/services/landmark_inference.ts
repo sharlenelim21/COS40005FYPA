@@ -8,8 +8,9 @@ import {
   IJob,
   JobStatus,
   jobModel,
-  readProject,
+  projectSegmentationMaskModel,
   updateJob,
+  userCanAccessProject,
 } from "./database";
 import {
   segmentationSource,
@@ -69,7 +70,37 @@ const buildCallbackUrl = (): string | null => {
   return `${configuredCallbackUrl.replace(/\/$/, "")}/webhook/landmark-callback`;
 };
 
-const STALE_LANDMARK_JOB_MINUTES = 30;
+export const STALE_LANDMARK_JOB_MINUTES = 30;
+
+export type LandmarkCompletion = Record<"medsam" | "unet", { uuid: string; createdAt: Date } | null>;
+
+export const findLandmarkCompletionForCurrentMasks = async (
+  projectId: string,
+): Promise<LandmarkCompletion> => {
+  const out: LandmarkCompletion = { medsam: null, unet: null };
+  for (const model of ["medsam", "unet"] as const) {
+    const mask = await projectSegmentationMaskModel
+      .findOne({ projectid: projectId, isMedSAMOutput: false, segmentationModel: model }, { createdAt: 1 })
+      .sort({ createdAt: -1 })
+      .lean<{ createdAt?: Date }>();
+    if (!mask?.createdAt) continue;
+    const job = await jobModel
+      .findOne(
+        {
+          projectid: projectId,
+          model_used: /landmark/i,
+          status: JobStatus.COMPLETED,
+          segmentationModel: model === "unet" ? SegmentationModel.UNET : { $in: [SegmentationModel.MEDSAM, null] },
+          createdAt: { $gte: mask.createdAt },
+        },
+        { uuid: 1, createdAt: 1 },
+      )
+      .sort({ createdAt: -1 })
+      .lean<{ uuid: string; createdAt: Date }>();
+    if (job) out[model] = { uuid: job.uuid, createdAt: job.createdAt };
+  }
+  return out;
+};
 
 export const findBlockingLandmarkJob = async (
   projectId: string,
@@ -128,15 +159,13 @@ export async function startLandmarkInference(
     return { success: false, message: "S3 bucket is missing." };
   }
 
-  const projectResult = await readProject(projectId);
-  if (!projectResult.success || !projectResult.projects?.length) {
-    return { success: false, message: `Project with ID ${projectId} not found.` };
-  }
-
-  const project = projectResult.projects[0];
-  if (project.userid?.toString() !== user?._id?.toString()) {
+  // Owner, Admin, or a Run-mode assigned Clinical Assistant may run landmark detection — a
+  // ViewOnly-mode assistant is rejected.
+  const access = await userCanAccessProject(projectId, user);
+  if (!access.canRun || !access.project) {
     return { success: false, message: "Project not found." };
   }
+  const project = access.project;
 
   if (!project.originalfilepath) {
     return { success: false, message: "Project original NIfTI file is missing." };
@@ -162,6 +191,11 @@ export async function startLandmarkInference(
       ? "unet"
       : "medsam"
   ) as "medsam" | "unet";
+
+  // A Run-mode Assistant is never blocked from (re-)running landmark detection, even if the
+  // Doctor already has a result — their run only seeds frames on their own screen, saved as
+  // their own isolated Draft once they save it (see /save-landmarks in landmark_routes.ts and
+  // the run-mode isolation plan); it never overwrites the Doctor's existing result.
 
   const blockingJob = await findBlockingLandmarkJob(projectId, user?._id?.toString(), requestedSegModel);
   if (blockingJob) {

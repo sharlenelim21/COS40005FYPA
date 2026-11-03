@@ -15,6 +15,21 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 // adjacent flat-colored triangles. Don't re-investigate "why is it still
 // jagged" against this function - it's expected.
 export function buildSegmentBoundaryEdges(mesh: THREE.Mesh, labels: number[]): Float32Array {
+  const topology = buildSegmentBoundaryTopology(mesh, labels);
+  return topology ? segmentBoundaryEdgesAt(topology, mesh) : new Float32Array(0);
+}
+
+/**
+ * Which vertices the segment outlines run through: the chains of boundary points, each point named by one mesh
+ * vertex at that position. It depends only on the mesh's triangles and labels, not on where the vertices are, so a
+ * moving mesh (smooth 4D motion) builds it once and redraws its outlines with segmentBoundaryEdgesAt every frame.
+ */
+export interface SegmentBoundaryTopology {
+  chains: number[][];
+  vertexCount: number;
+}
+
+export function buildSegmentBoundaryTopology(mesh: THREE.Mesh, labels: number[]): SegmentBoundaryTopology | null {
   const geometry = mesh.geometry;
   const posAttr = geometry.getAttribute("position");
   const index = geometry.getIndex();
@@ -33,7 +48,7 @@ export function buildSegmentBoundaryEdges(mesh: THREE.Mesh, labels: number[]): F
       `labels has ${labels.length} — skipping boundary lines for this mesh instead of drawing ` +
       `them from a mismatched array.`,
     );
-    return new Float32Array(0);
+    return null;
   }
 
   const cornerIndex = (t: number, corner: number) =>
@@ -47,14 +62,14 @@ export function buildSegmentBoundaryEdges(mesh: THREE.Mesh, labels: number[]): F
 
   const keyOf = (i: number) => `${posAttr.getX(i).toFixed(4)},${posAttr.getY(i).toFixed(4)},${posAttr.getZ(i).toFixed(4)}`;
   const groupIndexByKey = new Map<string, number>();
-  const groupPosition = new Map<number, THREE.Vector3>();
+  const groupVertex: number[] = [];          // one vertex standing for each group of coincident vertices
   const groupOf = (i: number) => {
     const k = keyOf(i);
     let g = groupIndexByKey.get(k);
     if (g === undefined) {
       g = groupIndexByKey.size;
       groupIndexByKey.set(k, g);
-      groupPosition.set(g, new THREE.Vector3(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)));
+      groupVertex.push(i);
     }
     return g;
   };
@@ -135,9 +150,16 @@ export function buildSegmentBoundaryEdges(mesh: THREE.Mesh, labels: number[]): F
     }
   }
 
+  return { chains: chains.map((chain) => chain.map((g) => groupVertex[g])), vertexCount: posAttr.count };
+}
+
+/** The outline segments (pairs of points) for the mesh's CURRENT vertex positions. */
+export function segmentBoundaryEdgesAt(topology: SegmentBoundaryTopology, mesh: THREE.Mesh): Float32Array {
+  const posAttr = mesh.geometry.getAttribute("position");
+  if (posAttr.count !== topology.vertexCount) return new Float32Array(0);
   const segmentPoints: number[] = [];
-  for (const chain of chains) {
-    const points = chain.map((g) => groupPosition.get(g)!);
+  for (const chain of topology.chains) {
+    const points = chain.map((v) => new THREE.Vector3(posAttr.getX(v), posAttr.getY(v), posAttr.getZ(v)));
     if (points.length < 3) {
       for (let i = 0; i < points.length - 1; i++) {
         segmentPoints.push(points[i].x, points[i].y, points[i].z, points[i + 1].x, points[i + 1].y, points[i + 1].z);

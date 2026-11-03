@@ -7,7 +7,7 @@ import { loadEnvFromKnownLocations } from '../utils/env';
 loadEnvFromKnownLocations(__dirname);          // before database.ts reads MONGODB_URI (see backfill_edit_tracking.ts)
 
 import mongoose from 'mongoose';
-import { projectSegmentationMaskModel, projectModel } from '../services/database';
+import { projectSegmentationMaskModel, projectModel, userModel } from '../services/database';
 import { extractS3KeyFromUrl, downloadFromS3 } from '../services/s3_handler';
 import { runEditTrackingScript } from '../services/edit_tracking';
 import { selectTrainingSlices, sliceKey, TRAINING_MODELS } from '../services/training_selection';
@@ -103,6 +103,18 @@ async function main() {
     }
     let exportedProjects = 0;
 
+    // Prepare lists every user's cases by owner: each owner's username, looked up once.
+    const ownerNames = new Map<string, string | null>();
+    const ownerName = async (userid: unknown): Promise<string | null> => {
+        if (!userid) return null;
+        const id = String(userid);
+        if (!ownerNames.has(id)) {
+            const user = await userModel.findById(id).select('username').lean() as { username?: string } | null;
+            ownerNames.set(id, user?.username ?? null);
+        }
+        return ownerNames.get(id) ?? null;
+    };
+
     // The project's source volume, downloaded once to a temporary folder that is always removed.
     const withSourceVolume = async <T>(project: any, use: (local: string) => Promise<T>): Promise<T> => {
         const key = extractS3KeyFromUrl(project.originalfilepath);
@@ -167,7 +179,7 @@ async function main() {
             }
             for (const mask of projectMasks) {
                 const own = selectTrainingSlices([mask], minPixels).selected[0];
-                if (own) caseRows.push(describeCase(project, own, selection.conflicts, frozen));
+                if (own) caseRows.push(describeCase(project, own, selection.conflicts, frozen, await ownerName(project.userid)));
             }
             if (frozen) {
                 skip('frozen_test_patient');

@@ -1,6 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useAuth } from "@/context/auth-context";
+import { adminApi } from "@/lib/api";
+import { elapsed, isActiveJob, trainingJobPercent, RetrainingStatus, retrainingApi } from "@/lib/retraining-api";
+import { trainableCases } from "@/components/extend-training/logic";
 import Link from "next/link";
 import {
   Card,
@@ -9,261 +13,280 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   Users,
+  Brain,
   Activity,
-  TrendingUp,
-  Clock,
-  CheckCircle2,
-  AlertTriangle,
-  Info,
+  ArrowRight,
+  RefreshCw,
 } from "lucide-react";
 
-// Mock data - replace with real API calls
-const systemStats = {
-  totalUsers: 156,
-  activeUsers: 89,
-  adminUsers: 4,
-  systemHealth: "Excellent",
-  uptime: "99.9%",
-  lastUpdate: "2 hours ago",
-};
+interface Stats {
+  totalUsers: number | null;
+  admins: number | null;
+  users: number | null;
+  newCorrections: number | null;
+}
 
-const recentActivities = [
-  {
-    id: 1,
-    action: "User registration",
-    user: "john.doe@example.com",
-    timestamp: "5 minutes ago",
-    type: "info" as const,
-  },
-  {
-    id: 2,
-    action: "Admin login",
-    user: "admin@visheart.com",
-    timestamp: "15 minutes ago",
-    type: "success" as const,
-  },
-  {
-    id: 3,
-    action: "System backup completed",
-    user: "System",
-    timestamp: "1 hour ago",
-    type: "success" as const,
-  },
-  {
-    id: 4,
-    action: "High CPU usage detected",
-    user: "System Monitor",
-    timestamp: "2 hours ago",
-    type: "warning" as const,
-  },
+const POLL_ACTIVE_MS = 5000;
+const POLL_IDLE_MS = 30000;
+
+function RetrainingCard() {
+  const [status, setStatus] = useState<RetrainingStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const reply = await retrainingApi.status();
+      if (!cancelled && reply.success) setStatus(reply.data);
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), isActiveJob(status?.job) ? POLL_ACTIVE_MS : POLL_IDLE_MS);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [status?.job?.state]);
+
+  const job = status?.job;
+  const running = isActiveJob(job);
+  const percent = job ? trainingJobPercent(job) : null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <RefreshCw className={`h-4 w-4 ${running ? "animate-spin" : ""}`} />
+          UNet Retraining
+        </CardTitle>
+        <CardDescription>
+          {job
+            ? `Started by ${job.requested_by}${job.started_at ? ` · ${elapsed(job.started_at, running ? null : job.finished_at)} ${running ? "so far" : "total"}` : ""}`
+            : "No retraining has been run yet."}
+        </CardDescription>
+      </CardHeader>
+      {job && (
+        <CardContent className="space-y-2">
+          <p className="text-sm font-medium capitalize">{job.state}</p>
+          {percent !== null && <Progress value={percent} />}
+          <Link href="/extend-training" className="text-sm text-blue-600 underline hover:text-blue-700 dark:text-blue-400">
+            {running ? "View progress" : "Review in UNet Extend Training"}
+          </Link>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// Fixed categorical slot order (never cycled/reassigned by data) — colors come from
+// VisHeart's validated default palette (dataviz skill, references/palette.md), slots 1-3,
+// which pass the adjacent-pair CVD/contrast checks in both themes for a 3-slice donut.
+const ROLE_BREAKDOWN = [
+  { key: "users" as const, label: "Users", light: "#2a78d6", dark: "#3987e5" },
+  { key: "admins" as const, label: "Admins", light: "#eda100", dark: "#c98500" },
 ];
 
-const quickActions = [
+function RoleBreakdownDonut({ stats }: { stats: Stats }) {
+  const segments = ROLE_BREAKDOWN.map((role) => ({ ...role, value: stats[role.key] ?? 0 }));
+  const total = stats.totalUsers ?? segments.reduce((sum, s) => sum + s.value, 0);
+
+  let cursor = 0;
+  const stops = segments.map((segment) => {
+    const pct = total > 0 ? (segment.value / total) * 100 : 0;
+    const start = cursor;
+    cursor += pct;
+    return { ...segment, start, end: cursor, pct };
+  });
+  // A 1.5-degree surface gap between slices (the skill's "surface gap" spacer, in
+  // percentage-of-circle terms) so touching slices read as distinct without a border.
+  const gapPct = total > 0 ? 0.4 : 0;
+  const gradientStops = stops
+    .map((s) => `var(--role-${s.key}) ${s.start}% ${Math.max(s.start, s.end - gapPct)}%`)
+    .join(", ");
+
+  return (
+    <Card className="role-breakdown-donut flex h-full flex-col">
+      <style>{`
+        .role-breakdown-donut {
+          --role-users: ${ROLE_BREAKDOWN[0].light};
+          --role-admins: ${ROLE_BREAKDOWN[1].light};
+        }
+        .dark .role-breakdown-donut {
+          --role-users: ${ROLE_BREAKDOWN[0].dark};
+          --role-admins: ${ROLE_BREAKDOWN[1].dark};
+        }
+      `}</style>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">User Roles</CardTitle>
+        <CardDescription>Every account, by role</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col items-center justify-center gap-8 pb-8 sm:flex-row sm:items-center sm:gap-10">
+        <div
+          className="relative h-40 w-40 shrink-0 rounded-full"
+          style={total > 0 ? { background: `conic-gradient(${gradientStops})` } : undefined}
+        >
+          <div className="absolute inset-[16px] flex flex-col items-center justify-center rounded-full bg-card">
+            <span className="text-3xl font-bold leading-none tabular-nums">{stats.totalUsers === null ? "—" : stats.totalUsers}</span>
+            <span className="mt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Total Users</span>
+          </div>
+          {total === 0 && (
+            <div className="absolute inset-0 rounded-full border-2 border-dashed border-muted" />
+          )}
+        </div>
+        <ul className="w-full max-w-xs space-y-3.5 sm:max-w-none">
+          {stops.map((s) => (
+            <li key={s.key} className="flex items-center justify-between gap-4 border-b border-border/50 pb-3.5 text-sm last:border-0 last:pb-0">
+              <span className="flex items-center gap-2.5 text-muted-foreground">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: `var(--role-${s.key})` }}
+                />
+                {s.label}
+              </span>
+              <span className="font-semibold tabular-nums">
+                {s.value}
+                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                  {total > 0 ? Math.round(s.pct) : 0}%
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+const quickLinks = [
   {
     title: "User Management",
-    description: "Manage users, roles, and permissions",
+    description: "View, edit, and manage every account and role",
     href: "/admin/user-management",
     icon: Users,
-    variant: "default" as const,
-    section: "core" as const,
+    color: "text-blue-600 bg-blue-100 dark:bg-blue-950/40 dark:text-blue-400",
   },
   {
-    title: "System Monitor & Configuration",
-    description: "Monitor system health, performance, and configure settings",
+    title: "UNet Extend Training",
+    description: "Teach the segmentation model from saved corrections",
+    href: "/extend-training",
+    icon: Brain,
+    color: "text-purple-600 bg-purple-100 dark:bg-purple-950/40 dark:text-purple-400",
+  },
+  {
+    title: "System Monitor",
+    description: "Health, performance, and GPU configuration",
     href: "/admin/system-monitor",
     icon: Activity,
-    variant: "default" as const,
-    section: "core" as const,
+    color: "text-green-600 bg-green-100 dark:bg-green-950/40 dark:text-green-400",
   },
-  // Hidden for current client scope. Restore when AWS analytics is needed.
-  // {
-  //   title: "AWS Analytics",
-  //   description: "View AWS metrics and reports",
-  //   href: "/admin/analytics",
-  //   icon: TrendingUp,
-  //   variant: "secondary" as const,
-  //   disabled: true,
-  //   section: "advanced" as const,
-  // },
-  // Hidden for current client scope. Restore when database tools are needed.
-  // {
-  //   title: "Database Management",
-  //   description: "Manage database operations and backups",
-  //   href: "/admin/database",
-  //   icon: Shield,
-  //   variant: "secondary" as const,
-  //   disabled: true,
-  //   section: "advanced" as const,
-  // },
 ];
 
-/**
- * Admin Dashboard Home Page
- *
- * Provides an overview of system status, quick actions, and recent activities.
- * This is the landing page when users navigate to /admin.
- */
+function StatCard({ icon: Icon, label, value, color, className }: { icon: React.ComponentType<{ className?: string }>; label: string; value: number | null; color: string; className?: string }) {
+  return (
+    <Card className={className}>
+      <CardContent className="flex h-full items-center gap-4 p-5">
+        <div className={`rounded-lg p-2.5 ${color}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div>
+          <div className="text-2xl font-bold tabular-nums">{value === null ? "—" : value}</div>
+          <div className="text-sm text-muted-foreground">{label}</div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AdminPageHome() {
   const { user } = useAuth();
+  const [stats, setStats] = useState<Stats>({
+    totalUsers: null,
+    admins: null,
+    users: null,
+    newCorrections: null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refresh = async () => {
+      const [usersRes, retrainingRes] = await Promise.allSettled([
+        adminApi.getAllUsers(),
+        retrainingApi.status(),
+      ]);
+
+      if (cancelled) return;
+
+      setStats((prev) => {
+        const next = { ...prev };
+        if (usersRes.status === "fulfilled") {
+          const users: { role: string }[] = usersRes.value?.users ?? [];
+          next.totalUsers = users.length;
+          next.admins = users.filter((u) => u.role === "admin").length;
+          next.users = users.filter((u) => u.role === "user").length;
+        }
+        if (retrainingRes.status === "fulfilled" && retrainingRes.value.success) {
+          const cases = retrainingRes.value.data?.eligible?.cases;
+          next.newCorrections = cases ? trainableCases(cases).length : 0;
+        }
+        return next;
+      });
+    };
+
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), POLL_IDLE_MS);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, []);
 
   return (
     <div className="space-y-8">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight">
-          Welcome back, {user?.username}
-        </h1>
-        <p className="text-muted-foreground">
-          Here&apos;s an overview of your VisHeart system.
-        </p>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Welcome back, {user?.username}</h1>
+        <p className="text-muted-foreground">Here&apos;s what&apos;s happening across VisHeart.</p>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Users</CardTitle>
-            <Users className="text-muted-foreground h-4 w-4" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{systemStats.totalUsers}</div>
-            <p className="text-muted-foreground text-xs">
-              +12% from last month
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Users</CardTitle>
-            <Activity className="text-muted-foreground h-4 w-4" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{systemStats.activeUsers}</div>
-            <p className="text-muted-foreground text-xs">Currently online</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">System Health</CardTitle>
-            <CheckCircle2 className="h-4 w-4 text-green-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {systemStats.systemHealth}
-            </div>
-            <p className="text-muted-foreground text-xs">
-              All systems operational
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Uptime</CardTitle>
-            <TrendingUp className="text-muted-foreground h-4 w-4" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{systemStats.uptime}</div>
-            <p className="text-muted-foreground text-xs">Last 30 days</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="h-5 w-5" />
-              Recent Activities
-            </CardTitle>
-            <CardDescription>
-              Latest system events and user activities
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {recentActivities.map((activity) => (
-                <div key={activity.id} className="flex items-start space-x-3">
-                  <div className="mt-1 flex-shrink-0">
-                    {activity.type === "success" && (
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    )}
-                    {activity.type === "warning" && (
-                      <AlertTriangle className="h-4 w-4 text-yellow-600" />
-                    )}
-                    {activity.type === "info" && (
-                      <Info className="h-4 w-4 text-blue-600" />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-foreground text-sm font-medium">
-                      {activity.action}
-                    </p>
-                    <p className="text-muted-foreground text-sm">
-                      {activity.user}
-                    </p>
-                  </div>
-                  <div className="flex-shrink-0">
-                    <span className="text-muted-foreground text-xs">
-                      {activity.timestamp}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Common administrative tasks</CardDescription>
-          </CardHeader>
-
-          <CardContent>
-            <div className="space-y-3">
-              {quickActions.map((action) => {
-                const Icon = action.icon;
-
-                return (
-                  <Link
-                    key={action.title}
-                    href={action.href}
-                    className="flex min-h-[88px] items-center justify-between rounded-lg border p-3 transition-colors hover:bg-muted/50"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="flex-shrink-0">
-                        <Icon className="text-muted-foreground h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">{action.title}</p>
-                        <p className="text-muted-foreground text-xs">
-                          {action.description}
-                        </p>
-                      </div>
-                    </div>
-
-                  </Link>
-                );
-              })}
-            </div>
-
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardContent className="pt-6">
-          <div className="text-muted-foreground flex items-center justify-between text-sm">
-            <span>VisHeart Admin Panel v1.0.0</span>
-            <span>Last updated: {systemStats.lastUpdate}</span>
+      {/* Stats */}
+      <div>
+        <h2 className="mb-4 text-lg font-semibold">Overview</h2>
+        <div className="grid items-stretch gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <RoleBreakdownDonut stats={stats} />
           </div>
-        </CardContent>
-      </Card>
+          <div className="grid gap-4">
+            <Link href="/extend-training?tab=prepare">
+              <StatCard className="h-full transition-all hover:-translate-y-0.5 hover:shadow-md" icon={Brain} label="New Corrections to Review" value={stats.newCorrections} color="text-purple-600 bg-purple-100 dark:bg-purple-950/40 dark:text-purple-400" />
+            </Link>
+            <RetrainingCard />
+          </div>
+        </div>
+      </div>
+
+      {/* Quick links */}
+      <div>
+        <h2 className="mb-4 text-lg font-semibold">Quick Access</h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {quickLinks.map((link) => {
+            const Icon = link.icon;
+            return (
+              <Link key={link.href} href={link.href}>
+                <Card className="group h-full transition-all hover:-translate-y-0.5 hover:shadow-md">
+                  <CardContent className="flex items-start gap-4 p-5">
+                    <div className={`rounded-lg p-2.5 ${link.color}`}>
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-semibold group-hover:text-blue-600">{link.title}</h3>
+                        <ArrowRight className="h-4 w-4 flex-shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">{link.description}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Edit2, Check, X, Loader2, Edit, Download, Trash2 } from "lucide-react";
 import { Project } from "@/types/dashboard";
 import { projectApi } from "@/lib/api";
-import { ShowForRegisteredUser } from "@/components/RoleGuard";
+import { ShowForProjectCreator } from "@/components/RoleGuard";
 
 interface EditableProjectCardProps {
   project: Project;
@@ -116,11 +116,11 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
                   <p className="text-lg font-semibold truncate" title={project.name}>
                     {project.name}
                   </p>
-                  <ShowForRegisteredUser fallback={null}>
+                  <ShowForProjectCreator fallback={null}>
                     <Button variant="ghost" size="sm" onClick={handleStartEdit} className="opacity-0 group-hover:opacity-100 transition-opacity p-1 h-auto self-end">
                       <Edit2 className="h-3 w-3" />
                     </Button>
-                  </ShowForRegisteredUser>
+                  </ShowForProjectCreator>
                 </div>
                 <p className="text-sm text-muted-foreground truncate overflow-hidden text-ellipsis whitespace-nowrap max-w-[90px] sm:max-w-[140px] md:max-w-[200px] lg:max-w-[260px]" title={project.description || "No description"}>
                   {project.description || "No description"}
@@ -141,13 +141,13 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
               </div>
             ) : (
               <div className="flex flex-col items-end gap-1 md:gap-2">
-                <ShowForRegisteredUser fallback={<Badge variant={project.isSaved ? "default" : "secondary"} className="text-xs whitespace-nowrap">{project.isSaved ? "Saved" : "Temp"}</Badge>}>
+                <ShowForProjectCreator fallback={<Badge variant={project.isSaved ? "default" : "secondary"} className="text-xs whitespace-nowrap">{project.isSaved ? "Saved" : "Temp"}</Badge>}>
                   <Button variant="ghost" size="sm" onClick={() => onSave(project.projectId, !project.isSaved)} className="h-auto p-1">
                     <Badge variant={project.isSaved ? "default" : "secondary"} className="cursor-pointer hover:opacity-80 text-xs whitespace-nowrap">
                       {project.isSaved ? "Saved" : "Temp"}
                     </Badge>
                   </Button>
-                </ShowForRegisteredUser>
+                </ShowForProjectCreator>
                 {segmentationIndicator}
                 {reconstructionIndicator}
               </div>
@@ -209,19 +209,19 @@ export function EditableProjectCard({ project, onUpdate, onSave, onDelete, onExp
             className="flex-1"
             onClick={() => onExport(project.projectId)}
             disabled={!hasMasks}
-            title={hasMasks ? "Export segmentation as NIfTI" : "Complete segmentation to enable export"}
+            title={hasMasks ? "Open report — download as CSV or save as PDF" : "Complete segmentation to enable the report"}
           >
             <Download className="mr-1 h-3 w-3" />
-            Export
+            Report
           </Button>
         </div>
 
-        <ShowForRegisteredUser fallback={null}>
+        <ShowForProjectCreator fallback={null}>
           <Button size="sm" variant="destructive" className="w-full" onClick={() => onDelete(project.projectId, project.name)}>
             <Trash2 className="mr-1 h-3 w-3" />
             Delete Project
           </Button>
-        </ShowForRegisteredUser>
+        </ShowForProjectCreator>
       </CardContent>
     </Card>
   );

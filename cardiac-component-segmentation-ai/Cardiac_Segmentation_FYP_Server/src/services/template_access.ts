@@ -7,7 +7,7 @@
 // findViewableProject (used by the read routes the landmark page needs);
 // changing is blocked by middleware/template_guard.ts.
 
-import { projectModel, projectSegmentationMaskModel, readProject } from "./database";
+import { projectModel, projectSegmentationMaskModel, readProject, UserRole } from "./database";
 
 // NOTE: mask/reconstruction READ routes (/segmentation/segmentation-results,
 // /reconstruction/reconstruction-results) do not check ownership at all, so
@@ -24,7 +24,8 @@ export type ViewableProject = {
 };
 
 /**
- * The project, if `user` may view it: their own project, or any template.
+ * The project, if `user` may view it: their own project, any project for an
+ * Admin (as userCanAccessProject), or any template.
  * Returns null otherwise (callers answer 404, as for a missing project).
  */
 export const findViewableProject = async (projectId: string | undefined, user: any): Promise<ViewableProject | null> => {
@@ -34,8 +35,10 @@ export const findViewableProject = async (projectId: string | undefined, user: a
     if (!project) return null;
     const ownerId = String(project.userid ?? "");
     const isOwner = !!user?._id && ownerId === String(user._id);
-    if (!isOwner && !project.isTemplate) return null;
-    return { project, ownerId, isOwner, readOnly: !isOwner };
+    const isAdmin = user?.role === UserRole.Admin;
+    if (!isOwner && !isAdmin && !project.isTemplate) return null;
+    // Templates stay read-only for everyone but their owner (template_guard.ts).
+    return { project, ownerId, isOwner, readOnly: !isOwner && (!!project.isTemplate || !isAdmin) };
 };
 
 /**

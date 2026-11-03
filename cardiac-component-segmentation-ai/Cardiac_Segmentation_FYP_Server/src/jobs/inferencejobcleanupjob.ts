@@ -88,23 +88,20 @@ async function cleanupInferenceJobs(): Promise<void> {
             logger.info(`${serviceLocation}: Keeping the jobs of ${templateProjectIds.length} template project(s)`);
         }
 
-        // Each project's newest completed landmark job is kept too: the landmark
-        // page (GET /landmark-detection/results) and the bullseye's RV insertion
-        // points (rv_insertion_points.ts) read the detection result from it, so
+        // Each project's newest completed landmark job (per segmentation model) is
+        // kept too: the landmark page reads the detection result from it, so
         // deleting it made the page re-run the whole detection after 3 days.
-        const keptLandmarkJobIds = (await jobModel.aggregate<{ _id: string; jobId: unknown }>([
+        const keepLandmarkResults = await jobModel.aggregate<{ id: unknown }>([
             { $match: { model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } } },
-            { $sort: { updatedAt: -1, createdAt: -1 } },
-            { $group: { _id: '$projectid', jobId: { $first: '$_id' } } },
-        ])).map((g) => g.jobId);
-        if (keptLandmarkJobIds.length > 0) {
-            logger.info(`${serviceLocation}: Keeping the latest landmark result of ${keptLandmarkJobIds.length} project(s)`);
-        }
+            { $sort: { createdAt: -1 } },
+            { $group: { _id: { projectid: "$projectid", segmentationModel: "$segmentationModel" }, id: { $first: "$_id" } } },
+        ]);
+        logger.info(`${serviceLocation}: Keeping ${keepLandmarkResults.length} latest landmark result job(s) regardless of age`);
 
         const oldJobsResult = await jobModel.deleteMany({
             updatedAt: { $lt: thresholdDate },
             projectid: { $nin: templateProjectIds },
-            _id: { $nin: keptLandmarkJobIds },
+            _id: { $nin: keepLandmarkResults.map((k) => k.id) },
         });
         
         logger.info(`${serviceLocation}: Deleted ${oldJobsResult.deletedCount} old inference jobs (older than ${JOB_AGE_THRESHOLD_MS / (24 * 60 * 60 * 1000)} days)`);

@@ -27,7 +27,7 @@ Frame numbers are **1-based**, exactly as the app shows them (`Frame 28`).
 | 3 | App → Segmentation | Check and edit the masks on **every frame and slice** (ED and ES start from the experts' masks). Clear masks on slices above the base / beyond the apex. **Save.** |
 | 4 | `landmarks` *(optional)* | Places the RV insertion points on every frame and slice from your corrected masks. Skip it to start from the landmark model's points (press **Re-run** on the landmark page after editing the masks, so detection uses them). |
 | 5 | App → Landmark page | Check and adjust the two RV insertion points on **every frame and slice** (drag; *place* missing ones; delete points on slices without a septum–RV junction). **Save.** |
-| 6 | `finalize` | Moves the project to the template account and publishes it (locked), recomputes volumes/EF, wall thickness, LV and RV strain (ED→ES and full cycle), the health and similarity checks, and rebuilds the LV and RV 3D models from the ED frame (~20–25 min). Prints the results next to the experts'. |
+| 6 | `finalize` | Moves the project to the template account and publishes it (locked), recomputes volumes/EF, wall thickness, LV and RV strain (ED→ES and full cycle), the health checks and the ACDC disease pattern gates (with the subject's BSA and sex), rebuilds the LV and RV 3D models from the ED frame and their smooth motion (~20–25 min). Prints the results next to the experts'. |
 
 ```bash
 # 2 — experts' masks into ED / ES
@@ -45,7 +45,7 @@ python template_tool.py finalize --user <you> --project <ID> \
 ```
 
 To check your edits before publishing, `recompute` refreshes every result (volumes/EF, wall thickness,
-LV/RV strain, health and similarity) of a project that is still yours, without publishing it or
+LV/RV strain, health checks and disease pattern gates) of a project that is still yours, without publishing it or
 rebuilding the 3D models (~5–10 min; asks for your password):
 
 ```bash
@@ -73,9 +73,7 @@ Values from `patient_data_filled_all.xlsx` (ED/ES converted to the app's 1-based
 | DCM heart (female) | `DCM/FEMALE_DCM_A4B5U4` | `DCM female` | `54 160 45` | `1 11` | `A4B5U4 5` |
 | DCM heart (male) | `DCM/MALE_DCM_A6D5F9` | `DCM male` | `44 180 90` | `1 12` | `A6D5F9 6` |
 
-A4B5U4 is an end-stage heart (experts' LVEF 5%, EDVI 262 mL/m²). It is so far beyond the app's DCM
-reference profile that the similarity headline reads "Indeterminate", even though the DCM check passes
-and the DCM bar shows 100%.
+A4B5U4 is an end-stage heart (experts' LVEF 5%, EDVI 262 mL/m²).
 
 The expert masks in this dataset (M&Ms) use 1 = LV, 2 = myocardium, 3 = RV; the tool converts them
 (`--labels acdc` for ACDC-style files).

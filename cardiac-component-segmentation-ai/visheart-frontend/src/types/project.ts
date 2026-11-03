@@ -62,6 +62,9 @@ export interface ProjectData {
     affineMatrix?: number[][];
     createdAt?: string;
     updatedAt?: string;
+    /** True for the owning User/Admin. */
+    isOwner?: boolean;
+    canRun?: boolean;
     /** Template heart: a pre-computed reference project every user can view
      *  but nobody can change (the server blocks writes; the UI hides editing). */
     isTemplate?: boolean;

@@ -67,7 +67,7 @@ import trimesh
 from pycpd import DeformableRegistration
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components, dijkstra
-from scipy.spatial import cKDTree, ConvexHull
+from scipy.spatial import cKDTree
 
 import cpd_gpu
 
@@ -523,15 +523,23 @@ def _find_best_rigid_rotation(
     a worse one just because it's closer to the preferred angle, so passing
     a poor or absent anchor degrades gracefully to the original heuristic,
     never worse.
+
+    The atlas tree is built ONCE, not once per candidate (same fix as LV's
+    cpd_aha_segmentation._find_best_rigid_rotation; see its docstring for the
+    orthogonal-rotation identity this relies on -- querying one fixed atlas tree
+    with the target rotated by R instead of rotating+rebuilding the atlas by R
+    finds the identical nearest neighbor for every candidate, so `populated` and
+    the returned `best_rotation` are unchanged from the original per-candidate
+    rebuild version).
     """
     n_segments = len(np.unique(dense_labels))
     candidates: list[tuple[float, np.ndarray, int]] = []
     best_populated = -1
+    atlas_tree = cKDTree(dense_points)
     for angle_deg in np.linspace(0, 360, n_candidates, endpoint=False):
         rotation = _rotation_matrix_z(angle_deg)
-        rotated_dense = dense_points @ rotation.T
-        tree = cKDTree(rotated_dense)
-        _, nearest_idx = tree.query(target_points)
+        rotated_target = target_points @ rotation
+        _, nearest_idx = atlas_tree.query(rotated_target)
         labels = dense_labels[nearest_idx]
         populated = len(np.unique(labels))
         candidates.append((angle_deg, rotation, populated))
@@ -774,7 +782,7 @@ def _smooth_labels_by_face_adjacency(
 
 
 def _reassign_stray_islands(labels: np.ndarray, faces: np.ndarray, n_segments: int,
-                             max_iterations: int = 30) -> np.ndarray:
+                             max_iterations: int = 30, min_component_vertices: int = 0) -> np.ndarray:
     """
     Per-vertex majority-vote smoothing only looks at each vertex's immediate
     neighbours, so it has no way to notice that a self-consistent patch of
@@ -786,14 +794,26 @@ def _reassign_stray_islands(labels: np.ndarray, faces: np.ndarray, n_segments: i
     each other. That's what shows up as an island of one colour stranded
     inside another.
 
-    Fixed by keeping only each segment's LARGEST connected component as
-    confirmed, then growing the confirmed regions outward one adjacency-ring
-    at a time: an unconfirmed vertex adjacent to at least one confirmed
-    neighbour takes the majority label among those confirmed neighbours and
-    becomes confirmed itself for the next round. Islands are small (single
-    digits to a couple hundred vertices, measured), so this converges in a
-    handful of rounds -- max_iterations is just a safety bound, not expected
-    to bind in practice.
+    min_component_vertices (default 0, i.e. the OLD "keep only the single
+    largest piece" behaviour): a component is reassigned only if it has
+    FEWER than this many vertices; a component at or above the threshold is
+    kept as-is, even if it isn't the largest for its segment. 2026-10, per
+    Sharlene: the unconditional (threshold=0) version was confirmed live to
+    delete REAL anatomy, not just noise -- a segment's raw 2D source could be
+    one whole, connected region on every contributing slice, yet still split
+    into two substantial pieces (thousands of faces each) once fused onto
+    the DeepSDF-reconstructed mesh, because that mesh doesn't always rigidly
+    match the raw segmentation. Measured directly across all 30 frames of a
+    real patient: genuine secondary regions start at ~80 vertices (~164
+    faces) and run into the thousands, while actual noise islands (stray
+    tie-break artifacts from refine_mesh_for_smooth_boundaries' own boundary
+    subdivision) are 1-14 faces (a handful of vertices) -- a >10x gap with
+    nothing in between, so a vertex-count threshold cleanly separates the
+    two without needing anything geodesic/distance-based (tried once,
+    separately: it didn't meaningfully help and introduced new fragmentation
+    elsewhere). `refine_mesh_for_smooth_boundaries` calls this with a
+    nonzero threshold; a caller wanting the old all-or-nothing behavior back
+    can still pass 0 explicitly.
     """
     n = labels.shape[0]
     edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], axis=0)
@@ -817,8 +837,14 @@ def _reassign_stray_islands(labels: np.ndarray, faces: np.ndarray, n_segments: i
         if n_comp <= 1:
             confirmed[idx] = True
             continue
-        largest = np.argmax(np.bincount(comp_of))
-        confirmed[idx[comp_of == largest]] = True
+        comp_sizes = np.bincount(comp_of)
+        largest = np.argmax(comp_sizes)
+        # Keep the largest component, PLUS any other component that already
+        # meets the size threshold on its own -- only genuinely small
+        # (likely-noise) components get sent through reassignment below.
+        keep_component = comp_sizes >= max(min_component_vertices, 1)
+        keep_component[largest] = True
+        confirmed[idx[keep_component[comp_of]]] = True
 
     needs_fix = ~confirmed
     for _ in range(max_iterations):
@@ -1346,6 +1372,13 @@ def label_with_warp(
 # boundaries' own docstring for why this is the real fix, not a cosmetic one.
 _BOUNDARY_SUBDIVISION_ITERATIONS = 1
 
+# Vertex-count floor _reassign_stray_islands uses to tell a genuine secondary
+# region apart from a stray noise island -- see that function's own docstring
+# and refine_mesh_for_smooth_boundaries' call site for the measured face-count
+# gap (noise <=14 faces, real secondary regions >=164 faces, nothing between)
+# this was picked from, on real patient005 data across all 30 frames.
+_MIN_ISLAND_VERTICES_TO_KEEP = 30
+
 
 def refine_mesh_for_smooth_boundaries(
     vertices: np.ndarray, faces: np.ndarray, labels: np.ndarray, n_segments: int = 9,
@@ -1436,13 +1469,36 @@ def refine_mesh_for_smooth_boundaries(
             current_labels = np.concatenate([current_labels, new_labels])
             current_vertices, current_faces = new_vertices, new_faces
 
-        # The disagreeing-parent branch above is the same raw nearest-
-        # neighbor decision that can strand an island (see
-        # _reassign_stray_islands) -- just scoped to new boundary-adjacent
-        # vertices instead of the whole mesh. Run it again here rather than
-        # assume label_with_warp's earlier pass still holds after subdivision.
-        current_labels = _reassign_stray_islands(current_labels, current_faces, n_segments)
-
+        # 2026-10, per Sharlene: calls _reassign_stray_islands with a size
+        # THRESHOLD now, not unconditionally (and not skipped entirely either --
+        # see git history for both of those earlier states). Unconditional
+        # erasure was confirmed live to delete REAL anatomy, not noise: a
+        # segment's raw 2D source data (label_cpd9_from_raw_slices' own per-slice
+        # masks) was a single whole, connected region on every contributing
+        # slice, yet still came out as 2 disconnected pieces on the
+        # RECONSTRUCTED mesh -- because the DeepSDF reconstruction doesn't
+        # always align rigidly enough with the raw segmentation in every
+        # region, not because of a labeling bug (one measured case: the two
+        # mesh pieces sat ~100mm apart along the actual surface despite only
+        # ~20-30mm apart in straight-line distance). Simply never erasing
+        # anything (this function's own state for a while) traded that away
+        # for the opposite problem: tiny genuine noise islands (stray
+        # boundary-subdivision tie-break artifacts, 1-14 faces) were left
+        # in place too, visible as small flecks of the wrong colour.
+        #
+        # Measured directly across all 30 frames of a real patient
+        # (patient005): every GENUINE secondary region is >=164 faces
+        # (several hundred to several thousand), while every actual noise
+        # island is <=14 faces -- a clean >10x gap with nothing in between.
+        # _MIN_ISLAND_VERTICES_TO_KEEP (30, comfortably inside that gap once
+        # converted from faces to vertices) lets _reassign_stray_islands tell
+        # the two apart: a component at or above the threshold is kept even
+        # if it isn't the largest piece of its segment; only genuinely small
+        # components get reassigned to a neighbouring label.
+        current_labels = _reassign_stray_islands(
+            current_labels, current_faces, n_segments,
+            min_component_vertices=_MIN_ISLAND_VERTICES_TO_KEEP,
+        )
         return current_vertices, current_faces, current_labels
 
     except Exception as exc:
@@ -1489,6 +1545,27 @@ def classify_vertices_to_rv9_cpd(mesh_points_canonical: np.ndarray) -> np.ndarra
 # means). Matches the apicobasal + rotational coordinate idea in Bazhutina
 # et al. (CinC 2023) / Bayer et al. (2018 Universal Ventricular Coordinates),
 # computed on the patient's real slices rather than a deformed generic atlas.
+#
+# 2026-10, per Sharlene: the per-slice SECTOR cut (below) has gone through two
+# rounds of replacement, both ported from rv-deformation's rv_chord_geometry.py
+# and validated on real sample_3_frames/patient005 data before being wired in
+# here (earlier methods kept there as unused reference code, not deleted):
+#   1. This module's original inline "three parallel chords from the centroid"
+#      geometry -> a free-wall arc-length cut (compute_freewall_arc_sectors):
+#      the chord method's straight line through the centroid could land
+#      outside the RV mask entirely on a crescent-shaped slice, where the arc
+#      method instead walks the free wall's OWN curved boundary.
+#   2. The free-wall arc cut -> a single chord through the centroid, ANCHORED
+#      to each slice's own septal (RV->LV) direction instead of searched from
+#      the mask's own shape (_septal_anchored_chord_sector_labels, per
+#      Sharlene's preference after comparing both side by side). This gives
+#      the same clean result as the arc method without needing its slice-to-
+#      slice horn-continuity machinery, since the chord's direction is
+#      re-derived fresh each slice from anatomy rather than from a per-slice
+#      shape search.
+# Level assignment (apex-base rank into thirds) and the apex-orientation cache
+# are UNCHANGED throughout -- only the sector math has moved. See
+# _septal_anchored_chord_sector_labels below for the current method.
 _RV_LABEL = 1
 _LV_CAVITY_LABEL = 3
 _CPD9_MIN_RV_PIXELS = 15
@@ -1546,6 +1623,109 @@ def _cpd9_slice_info(arr: np.ndarray) -> list[dict | None]:
     return info
 
 
+def _mask_boundary_contour(mask: np.ndarray) -> np.ndarray | None:
+    """The mask's own largest boundary loop, as an ordered (N, 2) array of
+    (row, col) float coordinates (sub-pixel, marching-squares) -- the actual
+    pixel perimeter, not a convex hull, so it follows concavities (the real
+    septal/free-wall hinge points, a.k.a. "horns" below, are concave and can
+    fail to survive onto a hull). None if the mask has no boundary (empty)."""
+    from skimage.measure import find_contours
+
+    contours = find_contours(np.asarray(mask).astype(float), level=0.5)
+    if not contours:
+        return None
+    contour = max(contours, key=len)
+    return contour[:-1]  # drop the duplicate closing point (first == last)
+
+
+def _septal_anchored_chord_sector_labels(
+    rv_ij: np.ndarray, rv_mask: np.ndarray, centroid: np.ndarray, septal_direction: np.ndarray,
+) -> np.ndarray | None:
+    """
+    Seg1/Seg2/Seg3 (0/1/2) per rv_ij row, cut along a single straight chord
+    through the centroid, ANCHORED to this slice's own septal (RV centroid ->
+    LV centroid) direction. Replaces this module's free-wall arc-length cut
+    (2026-10a) after side-by-side comparison on real sample_3_frames/
+    patient005 data confirmed this simpler method -- ported from Sharlene's
+    rv-deformation repo (src/rv_chord_geometry.py,
+    compute_septal_anchored_chord / sector_labels_from_septal_chord) -- gives
+    the same clean result without needing the arc method's slice-to-slice
+    horn-continuity machinery (prev_axis/prev_horns): the chord's direction
+    is re-derived fresh each slice from that slice's OWN septal direction
+    (anatomy), not searched for from the mask's own shape, so there's no
+    independent-vs-continuity drift to correct in the first place. Two
+    earlier methods are kept as unused reference code in rv_chord_geometry.py
+    (the free-wall arc method this replaces, and an even earlier three-
+    parallel-chord method) -- not deleted, for the exploratory history.
+
+    Method, per slice:
+      1. The chord is the full straight line through `centroid`,
+         PERPENDICULAR to `septal_direction` -- anchored to anatomy, not to
+         the mask's own widest extent (confirmed on real data: anchoring to
+         the mask's own farthest-pair axis instead can drift the cut
+         orientation up to ~40deg between adjacent slices).
+      2. p1/p2 = where that line exits the mask's own boundary contour on
+         each side (sub-pixel, via linear interpolation on whichever contour
+         edge the line crosses).
+      3. q1 = the Euclidean midpoint of centroid-to-p1, q2 = the midpoint of
+         centroid-to-p2 -- both land exactly ON the chord, since it already
+         passes through the centroid (unlike a plain farthest-pair chord,
+         confirmed able to sit up to ~9.5% of its own length off-centroid).
+         The perpendicular cuts through q1/q2 are the Seg1|Seg2 and
+         Seg2|Seg3 boundaries.
+      4. Which side is Seg1 vs Seg3 is fixed by `septal_direction`'s
+         handedness, so segment identity stays anatomically consistent
+         slice-to-slice and frame-to-frame/patient-to-patient.
+
+    Returns None if this slice is too degenerate to cut (no boundary
+    contour, or the septal-perpendicular line doesn't cross the mask
+    boundary at least twice -- confirmed rare in practice).
+    """
+    contour = _mask_boundary_contour(rv_mask)
+    if contour is None or len(contour) < 3:
+        return None
+    contour_closed = np.vstack([contour, contour[0]])
+
+    axis = np.array([-septal_direction[1], septal_direction[0]])  # perpendicular to septal_direction
+    perp_off = (contour_closed - centroid) @ septal_direction
+    crossings = []
+    for k in range(len(contour_closed) - 1):
+        a, b = perp_off[k], perp_off[k + 1]
+        if a == 0:
+            crossings.append(contour_closed[k])
+            continue
+        if (a < 0) != (b < 0):
+            t = a / (a - b)
+            crossings.append(contour_closed[k] + t * (contour_closed[k + 1] - contour_closed[k]))
+    if len(crossings) < 2:
+        return None
+    crossings = np.array(crossings)
+    proj = (crossings - centroid) @ axis
+    p1, p2 = crossings[np.argmin(proj)], crossings[np.argmax(proj)]
+
+    proj_all = (rv_ij - centroid) @ axis
+    cut_lo, cut_hi = sorted([((p1 - centroid) @ axis) / 2.0, ((p2 - centroid) @ axis) / 2.0])
+
+    rel_p1 = p1 - centroid
+    cross_p1 = septal_direction[0] * rel_p1[1] - septal_direction[1] * rel_p1[0]
+    p1_seg, p2_seg = (0, 2) if cross_p1 > 0 else (2, 0)
+
+    sector = np.full(len(rv_ij), 1, dtype=np.int64)
+    sector[proj_all < cut_lo] = p1_seg
+    sector[proj_all >= cut_hi] = p2_seg
+
+    # Guard against an empty middle band (same rationale as every earlier
+    # sector method in this module's history): force the single pixel
+    # closest to the cut midpoint into Seg2 so every slice contributes at
+    # least one point to its level's middle band.
+    if not np.any(sector == 1):
+        cut_mid = (cut_lo + cut_hi) / 2.0
+        nearest_px = np.argmin(np.abs(proj_all - cut_mid))
+        sector[nearest_px] = 1
+
+    return sector
+
+
 def label_cpd9_from_raw_slices(
     nifti_path: str, frame_idx: int, mesh_vertices: np.ndarray,
 ) -> np.ndarray | None:
@@ -1556,6 +1736,36 @@ def label_cpd9_from_raw_slices(
     resolved ONCE per nifti_path (from that file's own frame 0 / ED RV-area
     profile: the smaller-area end is apical) and cached, so which end is
     "apical" can't flip frame-to-frame due to per-frame area noise.
+
+    Sector (Seg1/Seg2/Seg3) is computed by _septal_anchored_chord_sector_labels:
+    a single chord through the centroid, anchored to each slice's own septal
+    direction -- see that helper's docstring for the full method and its
+    history (replaced a free-wall arc-length cut, which itself replaced an
+    earlier three-straight-chords geometry).
+
+    The single most apex-ward and most base-ward slice still get levels/
+    sectors computed (they still count for the apex-base rank/level thirds,
+    and for prev-slice state where relevant) but DON'T contribute points to
+    the nearest-neighbor fusion point cloud below -- 2026-10, per Sharlene,
+    after tracing a recurring Basal_Seg1/Basal_Seg2 (and, symmetrically,
+    Apical_Seg3) 3D fragmentation report back to its source: in every traced
+    case, >90% of the orphaned smaller piece's vertices nearest-matched to
+    that single edge slice specifically. The outermost slice sits right at
+    the boundary of what the DeepSDF reconstruction is actually constrained
+    by (no further slice beyond it to help pin the surface down), so it's
+    the most likely place for the reconstructed mesh to drift from the raw
+    segmentation -- a mesh vertex near that drifted tip can end up closer to
+    the edge slice's points than to its own true neighboring region,
+    producing a small second piece far from the main segment body. Excluding
+    just that one slice's points lets such a vertex fall back to its nearest
+    INTERIOR slice instead. Verified directly on patient005, all 30 frames:
+    this fixed Basal/Apical edge fragmentation on 6 of 30 frames with zero
+    frames getting WORSE, while leaving Mid_Seg2's own (different, interior-
+    slice) fragmentation completely unaffected, as expected -- see
+    _septal_anchored_chord_sector_labels and this function's own git history
+    for that separate, still-open issue. Only applied when there are enough
+    slices left to still be meaningful (>=5 valid slices); smaller stacks
+    keep every slice, same as before.
     """
     try:
         arr, lps2world = _cpd9_load_frame_labelmap(nifti_path, frame_idx)
@@ -1600,96 +1810,28 @@ def label_cpd9_from_raw_slices(
             if rank not in ref_dirs:
                 ref_dirs[rank] = ref_dirs[int(known_ranks[np.argmin(np.abs(known_ranks - rank))])]
 
+        # See this function's own docstring for why the two outermost slices'
+        # points are excluded from fusion when there's enough stack depth to
+        # spare them.
+        exclude_edges = n_valid >= 5
+
         points, region_id = [], []
-        prev_axis = None  # undirected p1-p2 line direction, carried slice-to-slice below
         for rank, s in enumerate(valid_sorted):
             rv_ij = np.argwhere(s["rv_mask"])
             c = s["rv_centroid_ij"]
-            d = ref_dirs[rank]  # septal direction -- orientation only now, see below
+            d = ref_dirs[rank]  # septal direction
 
-            # Sector: 2026-09-30, per Sharlene's client -- 3 bands along the RV
-            # cross-section's OWN longest chord, not 3 fixed-angle wedges from
-            # the centroid. On a crescent cross-section the two most-distant
-            # boundary points ("p1"/"p2") land close to the anterior/posterior
-            # septal hinge points, so the p1-p2 line runs along the free
-            # wall's own arc -- roughly PERPENDICULAR to the septal direction
-            # `d` (the septum sits across from the belly of the crescent, not
-            # along its tip-to-tip axis), confirmed against this patient's own
-            # data. This is a better geometric proxy for Bazhutina et al.'s
-            # (CinC 2023) actual free-wall convention (septum excluded, split
-            # between the two RV insertion points) than a fixed-angle wedge
-            # ever was, and it adapts to each slice's own proportions instead
-            # of assuming a circular cross-section (this patient's old 120deg
-            # scheme measured Seg2 at roughly half of Seg1/Seg3's vertex
-            # count, precisely because the RV isn't circularly symmetric).
-            #
-            # p1, p2: the two most-distant points are always a pair of convex
-            # hull vertices, so the hull (tens of points) is searched instead
-            # of every pixel pair.
-            #
-            # When two candidate pairs are nearly tied for "most distant",
-            # picking only the single winner independently per slice let the
-            # axis direction flip by a large angle between adjacent slices
-            # even though the RV shape barely changed -- confirmed visually:
-            # it produced a jagged, interlocking segment boundary once
-            # stacked into 3D, instead of the clean cut a smoothly-turning
-            # axis gives. So among every candidate pair within 10% of the
-            # true max distance, the one closest in DIRECTION to the previous
-            # slice's own axis is kept (first slice has no previous axis, so
-            # it just takes the outright best pair).
-            hull_pts = rv_ij[ConvexHull(rv_ij).vertices]
-            diffs = hull_pts[:, None, :] - hull_pts[None, :, :]
-            dist2 = np.einsum("ijk,ijk->ij", diffs, diffs)
-            cand_i, cand_j = np.where(dist2 >= 0.9 * dist2.max())
-            if prev_axis is not None and len(cand_i) > 1:
-                cand_axes = hull_pts[cand_j].astype(float) - hull_pts[cand_i].astype(float)
-                cand_norms = np.linalg.norm(cand_axes, axis=1, keepdims=True)
-                cand_axes = cand_axes / cand_norms
-                best_k = np.argmax(np.abs(cand_axes @ prev_axis))
-            else:
-                best_k = np.argmax(dist2[cand_i, cand_j])
-            i1, i2 = cand_i[best_k], cand_j[best_k]
-            p1, p2 = hull_pts[i1].astype(float), hull_pts[i2].astype(float)
-
-            # q1 = midpoint(p1, c), q2 = midpoint(c, p2); the two cuts,
-            # perpendicular to the p1-p2 axis, pass through q1 and q2 -- so in
-            # the coordinate that matters (position along that axis, relative
-            # to the centroid), the cuts sit at half of each side's own
-            # p-to-centroid distance.
-            axis = p2 - p1
-            axis = axis / np.linalg.norm(axis)
-            prev_axis = axis
-            proj_all = (rv_ij - c) @ axis
-            cut_lo, cut_hi = sorted([((p1 + c) / 2.0 - c) @ axis, ((c + p2) / 2.0 - c) @ axis])
-
-            # Orientation only (not the axis itself): which physical side --
-            # p1's or p2's -- is "Seg1" vs "Seg3" is decided by the septal
-            # direction's handedness, purely so segment identity stays
-            # consistent slice-to-slice and frame-to-frame, the same role `d`
-            # played in the old 120-degree scheme (theta=0 at the septum).
-            cross_p1 = d[0] * (p1 - c)[1] - d[1] * (p1 - c)[0]
-            p1_seg, p2_seg = (0, 2) if cross_p1 > 0 else (2, 0)
-
-            sector = np.full(len(rv_ij), 1, dtype=np.int64)  # default: middle band = Seg2
-            sector[proj_all < cut_lo] = p1_seg
-            sector[proj_all >= cut_hi] = p2_seg
-
-            # Guard against an empty middle band. [cut_lo, cut_hi) is a purely
-            # geometric interval (half of each side's own p-to-centroid
-            # distance) -- on a crescent-shaped slice the centroid often sits
-            # outside the RV mask itself, so NO pixel's projection may actually
-            # fall inside that interval, leaving this slice's "Seg2" band with
-            # zero pixels. When every slice at a given level hits this, the
-            # mesh ends up with 0/9 points for that (level, Seg2) region and
-            # the warning below fires -- reported live as "Mid_Seg2 missing"
-            # (2026-10). Force the single pixel closest to the band's own
-            # midpoint into the middle sector so every slice contributes at
-            # least one point to its level's middle band, without touching the
-            # cut geometry or the free-wall convention it encodes.
-            if not np.any(sector == 1):
-                cut_mid = (cut_lo + cut_hi) / 2.0
-                nearest_px = np.argmin(np.abs(proj_all - cut_mid))
-                sector[nearest_px] = 1
+            sector = _septal_anchored_chord_sector_labels(rv_ij, s["rv_mask"], c, d)
+            if sector is None:
+                # Too degenerate to cut (see _septal_anchored_chord_sector_labels'
+                # docstring) -- skip this slice rather than guess; the nearest-
+                # neighbor fuse below still labels the mesh from every other
+                # valid slice.
+                logger.warning(f"[CPD9] Frame {frame_idx}, slice z={s['z']}: degenerate for the "
+                                "septal-anchored chord cut; skipping this slice.")
+                continue
+            if exclude_edges and (rank == 0 or rank == n_valid - 1):
+                continue
 
             region_id.append(s["level"] * 3 + sector + 1)
 
@@ -1697,6 +1839,9 @@ def label_cpd9_from_raw_slices(
             homog = np.column_stack([cols, rows, np.full(len(rv_ij), s["z"], dtype=float), np.ones(len(rv_ij))])
             points.append((lps2world @ homog.T).T[:, :3])
 
+        if not points:
+            logger.warning(f"[CPD9] Frame {frame_idx}: every slice was degenerate for the septal-anchored chord cut.")
+            return None
         points = np.concatenate(points, axis=0)
         region_id = np.concatenate(region_id, axis=0)
 

@@ -10,11 +10,13 @@ import debugRoute from '../routes/debug_routes';
 import segmentationRoutes from '../routes/segmentation_routes';
 import reconstructionRoutes from '../routes/reconstruction_routes';
 import landmarkRoutes from '../routes/landmark_routes';
+import pipelineRoutes from '../routes/pipeline_routes';
 import gpuStatusRoute from '../routes/gpu_status';
 import supportRoutes from '../routes/support_routes';
 import adminToolsRoute from '../routes/admin_tools';
 import sampleNiftiRoute from '../routes/sample_nifti';
 import retrainingRoute from '../routes/retraining_routes';
+import assignmentReviewRoute from '../routes/assignment_review_routes';
 import { compressJson } from '../middleware/compress_json';
 import cpuMetricsRoute from '../routes/cpu_metrics';
 import ecrMetricsRoute from '../routes/ecr_metrics';
@@ -151,6 +153,8 @@ app.use('/reconstruction', reconstructionRoutes); // Mount the 4D reconstruction
 // Landmark Detection Routes
 app.use('/landmark-detection', landmarkRoutes);
 
+app.use('/pipeline', pipelineRoutes);
+
 // Status Routes (mount under '/status')
 app.use('/status', gpuStatusRoute); // Mount GPU status routes
 
@@ -183,6 +187,9 @@ app.use('/sample-nifti', sampleNiftiRoute);
 
 // UNet Extend Training routes (users and admins; forwarded to visheart-retraining/worker.py on the host)
 app.use('/retraining', retrainingRoute);
+
+// Admin's flagged-masks review queue (Doctor/Admin/Assistant-sharing RBAC workflow)
+app.use('/admin', assignmentReviewRoute);
 
 // Return simple server status when accessing the root path
 app.get('/', (req: Request, res: Response) => {

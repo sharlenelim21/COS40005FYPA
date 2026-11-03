@@ -1,10 +1,9 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { AlertCircle, ArrowLeft, Brain, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, Brain, Loader2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,10 +13,15 @@ import { clearedCases, initialSelection, reviewLabel, trainableCases } from "@/c
 import { PrepareTab } from "@/components/extend-training/PrepareTab";
 import { ResultsTab } from "@/components/extend-training/ResultsTab";
 import { SwitchDialog, SwitchTarget } from "@/components/extend-training/SwitchDialog";
-import { isActiveJob, RetrainingStatus, retrainingApi } from "@/lib/retraining-api";
+import { RetrainingStatus, retrainingApi } from "@/lib/retraining-api";
 
 const POLL_ACTIVE_MS = 5000;
 const POLL_IDLE_MS = 30000;
+// How often to silently re-run the real correction check while this page stays open, so a
+// User's save elsewhere shows up without the admin having to reload or click "Check again".
+// This re-runs the same expensive Docker-backed scan the manual button does (there's no cheap
+// "anything new?" signal), so this is a real cost every 5 minutes, not a free poll.
+const BACKGROUND_RECHECK_MS = 5 * 60 * 1000;
 const CLEARED_KEY = "extend-training-cleared"; // this browser only: the cases the user chose to leave out
 
 type Tab = "prepare" | "results";
@@ -81,7 +85,11 @@ function ExtendTrainingInner() {
   const previousJob = useRef<{ id: string; state: string } | null>(null);
   const autoChecked = useRef(false);
   const knownCases = useRef<string | null>(null);
-  const registered = Boolean(user && user.role !== "guest");
+  // The case ids seen as of the last check — lets the background re-check notify only about
+  // genuinely NEW corrections instead of toasting every time it reruns and finds the same set.
+  const lastCaseIds = useRef<Set<string> | null>(null);
+  // Only admins use Extend Training (the server's guard says the same); users and guests do not see it.
+  const admin = user?.role === "admin";
 
   const setTab = useCallback((next: Tab) => {
     setTabState(next);
@@ -116,7 +124,7 @@ function ExtendTrainingInner() {
 
   // First load: check again when the last check is old, or when coming back from Edit.
   useEffect(() => {
-    if (!registered) return;
+    if (!admin) return;
     let stopped = false;
     void (async () => {
       const data = await refresh();
@@ -130,22 +138,32 @@ function ExtendTrainingInner() {
     return () => {
       stopped = true;
     };
-  }, [registered, refresh, checkCorrections]);
+  }, [admin, refresh, checkCorrections]);
 
   const busy = status?.busy ?? false;
   useEffect(() => {
-    if (!registered) return;
+    if (!admin) return;
     const timer = window.setInterval(() => void refresh(), busy ? POLL_ACTIVE_MS : POLL_IDLE_MS);
     return () => window.clearInterval(timer);
-  }, [registered, busy, refresh]);
+  }, [admin, busy, refresh]);
 
-  // Without ?tab=, open Results while a training runs or its new version awaits a decision.
+  // Silently reruns the real correction check on an interval, so a User's save elsewhere
+  // (or another admin's check) surfaces without this admin reloading the page. Skipped while a
+  // training job is running, a check is already in flight, or a train is starting.
+  useEffect(() => {
+    if (!admin) return;
+    const timer = window.setInterval(() => {
+      if (busy || checking || starting) return;
+      void checkCorrections();
+    }, BACKGROUND_RECHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [admin, busy, checking, starting, checkCorrections]);
+
+  // Without ?tab=, always default to Prepare — Results is one click away, and still shows
+  // the spinner badge when a job is running.
   useEffect(() => {
     if (tab || !status) return;
-    const job = status.job;
-    const waiting = job?.state === "succeeded"
-      && status.versions.some(version => version.label === job.result?.label && version.status === "candidate");
-    setTabState(isActiveJob(job) || waiting ? "results" : "prepare");
+    setTabState("prepare");
   }, [tab, status]);
 
   // Every case that can train starts selected, except those this browser remembers the user clearing.
@@ -156,6 +174,22 @@ function ExtendTrainingInner() {
     knownCases.current = caseKey;
     setSelected(new Set(initialSelection(caseKey ? caseKey.split(",") : [], readCleared())));
   }, [caseKey]);
+
+  // Flags genuinely new corrections (by maskId) found by any check — the initial one, a manual
+  // "Check again", or the silent background recheck — without toasting on first load or when a
+  // recheck just confirms the same set again.
+  useEffect(() => {
+    if (!cases) return;
+    const currentIds = new Set(cases.map(item => item.maskId));
+    const previousIds = lastCaseIds.current;
+    if (previousIds) {
+      const newCount = [...currentIds].filter(id => !previousIds.has(id)).length;
+      if (newCount > 0) {
+        toast.info(`${newCount} new correction${newCount === 1 ? "" : "s"} found.`);
+      }
+    }
+    lastCaseIds.current = currentIds;
+  }, [cases]);
 
   const changeSelection = useCallback((next: Set<string>) => {
     setSelected(next);
@@ -183,14 +217,15 @@ function ExtendTrainingInner() {
     );
   }
 
-  if (!registered) {
+  if (!admin) {
     return (
       <div className="container mx-auto max-w-3xl p-6">
         <Alert>
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Sign in to use UNet Extend Training</AlertTitle>
+          <AlertTitle>UNet Extend Training is for admins</AlertTitle>
           <AlertDescription>
-            Training a new version of the model needs a user or admin account. Guest accounts cannot use it.
+            Only an admin can train a new version of the segmentation model. Your projects and their segmentations are
+            on the dashboard.
           </AlertDescription>
         </Alert>
       </div>
@@ -202,20 +237,16 @@ function ExtendTrainingInner() {
     : status ? reviewLabel(status.versions, status.job?.result?.label) : null;
 
   return (
-    <div className="container mx-auto max-w-6xl space-y-6 p-4 md:p-8">
+    <div className="space-y-6">
       <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
-          <Link href="/dashboard" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="mr-1 h-4 w-4" />
-            Dashboard
-          </Link>
           <h1 className="flex items-center gap-2 text-2xl font-semibold">
             <Brain className="h-6 w-6" />
             UNet Extend Training
           </h1>
           <p className="max-w-2xl text-muted-foreground">
-            Teach the segmentation model from the corrections you saved. A new version is compared on scans it has never
-            seen, and nothing changes until you choose to use it.
+            Teach the segmentation model from the corrections saved in VisHeart. A new version is compared on scans it
+            has never seen, and nothing changes until you choose to use it.
           </p>
         </div>
         {status && <ModelInUse status={status} />}
@@ -256,6 +287,7 @@ function ExtendTrainingInner() {
           <TabsContent value="prepare">
             <PrepareTab
               status={status}
+              userId={user?._id ?? null}
               selected={selected}
               onSelectedChange={changeSelection}
               checking={checking}

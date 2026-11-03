@@ -488,18 +488,25 @@ export class TarImageCache {
         };
       }
 
-      // Read the body straight into memory. Going through response.blob() first
-      // lets the browser park a large download in its on-disk blob store, and
-      // reading it back can fail with "NotReadableError: The requested file
-      // could not be read" when that store is unavailable (e.g. after the tab
-      // ran low on memory) — even though the download itself succeeded.
-      const tarBuffer = await tarResponse.arrayBuffer();
+      // Read straight into an ArrayBuffer instead of response.blob() — a
+      // Blob obtained from fetch() can get backed by a Chromium-internal
+      // temp file for larger responses, and reading IT BACK via
+      // .arrayBuffer() a moment later can throw "NotReadableError...
+      // permission problems that have occurred after a reference to a file
+      // was acquired" (a known Chromium Blob/temp-file bug class, not an
+      // IndexedDB/cache issue — reported live, 2026-10, reproduced on a
+      // *freshly fetched* tar, not a cached one, confirmed via console
+      // logs showing the failure land immediately after "Extracting tar
+      // file", before any IndexedDB write). Reading the network response
+      // directly into memory sidesteps that disk-backed intermediate
+      // entirely.
+      const tarArrayBuffer = await tarResponse.arrayBuffer();
       this.debugInfo.tarFileFetched = true;
-      this.debugInfo.tarFileSize = tarBuffer.byteLength;
+      this.debugInfo.tarFileSize = tarArrayBuffer.byteLength;
 
       // Step 3: Extract and store images
-      console.log(`[TarImageCache] Extracting tar file (${tarBuffer.byteLength} bytes)`);
-      const extractionResult = await this.extractAndStoreImages(projectId, tarBuffer);
+      console.log(`[TarImageCache] Extracting tar file (${tarArrayBuffer.byteLength} bytes)`);
+      const extractionResult = await this.extractAndStoreImages(projectId, tarArrayBuffer);
 
       this.debugInfo.processingTime = performance.now() - startTime;
 

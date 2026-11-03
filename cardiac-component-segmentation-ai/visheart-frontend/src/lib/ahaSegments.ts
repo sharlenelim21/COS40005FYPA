@@ -1,0 +1,8 @@
+export const SEGMENT_LABELS = [
+  "Basal Anterior", "Basal Anteroseptal", "Basal Inferoseptal",
+  "Basal Inferior", "Basal Inferolateral", "Basal Anterolateral",
+  "Mid Anterior", "Mid Anteroseptal", "Mid Inferoseptal",
+  "Mid Inferior", "Mid Inferolateral", "Mid Anterolateral",
+  "Apical Anterior", "Apical Septal", "Apical Inferior", "Apical Lateral",
+  "Apex",
+];

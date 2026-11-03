@@ -46,10 +46,17 @@ describe('Extend Training export helpers (plan WS13 R1)', () => {
       editedAt: '2026-09-26T05:00:00Z', height: 216, width: 256,
       slices: [{ frameindex: 0, sliceindex: 3, pixelsChanged: 120, editedClasses: ['rv'] },
                { frameindex: 0, sliceindex: 4, pixelsChanged: 900, editedClasses: ['rv', 'myo'] }],
-      pixelsChanged: 1020, structures: ['rv', 'myo'], shared: 1, frozen: null,
+      pixelsChanged: 1020, structures: ['rv', 'myo'], shared: 1, frozen: null, ownerId: null, ownerName: null,
     });
     // With both selected, D5 gives frame 0 slice 4 to the later MedSAM save, as before.
     expect(both.selected.find(entry => entry.model === 'unet')!.slices).toHaveLength(1);
+  });
+
+  it("names the project's owner, so Prepare can list everyone's cases and offer Edit to the owner only", () => {
+    const unet = mask('m-unet', 'unet', '2026-09-26T05:00:00Z', [[0, 3, 120, ['rv']]]);
+    const owned = { ...project, userid: { toString: () => 'u-7' } };   // an ObjectId in the database
+    const row = describeCase(owned, selectTrainingSlices([unet], 20).selected[0], [], null, 'dr-lee');
+    expect([row.ownerId, row.ownerName]).toEqual(['u-7', 'dr-lee']);
   });
 
   it('marks a case whose project is a frozen test patient, so Prepare can lock it', () => {

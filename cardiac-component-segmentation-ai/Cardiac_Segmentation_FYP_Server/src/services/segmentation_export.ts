@@ -11,7 +11,7 @@ import FormData from 'form-data';
 import logger from "./logger";
 import fs from 'fs-extra';
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
 import { findSavedLandmarkDoc, findLatestLandmarkJobResult, loadRvInsertionSlicesByFrame, meanSavedRvInsertionPoints, resolveRvInsertionSlices, type RvInsertionSlice } from "./rv_insertion_points";
@@ -37,9 +37,9 @@ export const mmPerPixel = (project: any): number | null => {
  * Wall-thickness bullseye results (GPU /bullseye/analyze and
  * compute_bullseye_from_rle.py) come out in PIXELS, but every consumer reads
  * them as mm — the Structure tab, the report and the MaxWallThicknessMm check
- * against the 12 / 15 mm cut-offs. Scales segment_values, the segment_metadata
- * values and stats to mm and tags unit: "mm". Without a known pixel size the
- * values stay in pixels, tagged unit: "px".
+ * against the 12 / 15 mm cut-offs. Scales segment_values, segment_values_max,
+ * the segment_metadata values and stats to mm and tags unit: "mm". Without a
+ * known pixel size the values stay in pixels, tagged unit: "px".
  */
 export const bullseyeToMm = <T extends Record<string, any>>(result: T, mmPx: number | null): T => {
     if (!result || result.unit === "mm") return result;
@@ -48,6 +48,7 @@ export const bullseyeToMm = <T extends Record<string, any>>(result: T, mmPx: num
     return {
         ...result,
         segment_values: Array.isArray(result.segment_values) ? result.segment_values.map(mm) : result.segment_values,
+        segment_values_max: Array.isArray(result.segment_values_max) ? result.segment_values_max.map(mm) : result.segment_values_max,
         segment_metadata: Array.isArray(result.segment_metadata)
             ? result.segment_metadata.map((s: any) => ({ ...s, value: mm(s?.value) }))
             : result.segment_metadata,
@@ -103,7 +104,7 @@ const runBullseyeRleScript = (
     });
 
     return new Promise<any | null>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [Bullseye] Python script failed for ${logTag}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [Bullseye] stderr: ${stderr.substring(0, 500)}`);
@@ -159,7 +160,7 @@ const runRvBullseyeRleScript = (
     });
 
     return new Promise<any | null>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RvBullseye] Python script failed for ${logTag}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RvBullseye] stderr: ${stderr.substring(0, 500)}`);
@@ -223,17 +224,22 @@ export const computeFrameRvAreaSeries = async (
     const rvSlices: RvInsertionSlice[] = projectId ? await resolveRvInsertionSlices(projectId, referenceFrame) : [];
     const rvInsertion1 = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
 
-    const results: { frameIndex: number; regions: { region: number; area: number | null }[] }[] = [];
-    for (const frameIndex of frameIndices) {
-        const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runRvBullseyeRleScript(
-            framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`,
-            { referenceFrames, rvSlices, rvInsertion1 },
-        );
-        if (result) {
-            results.push({ frameIndex, regions: result.regions });
-        }
-    }
+    // Every frame's script gets the reference frame's masks and landmarks (it makes the
+    // layout from them) but nothing from any other frame's result, so all frames can run
+    // as separate python3 subprocesses concurrently instead of waiting on each other.
+    const settled = await Promise.all(
+        frameIndices.map(async (frameIndex) => {
+            const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
+            const result = await runRvBullseyeRleScript(
+                framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`,
+                { referenceFrames, rvSlices, rvInsertion1 },
+            );
+            return result ? { frameIndex, regions: result.regions } : null;
+        }),
+    );
+    const results = settled
+        .filter((r): r is { frameIndex: number; regions: { region: number; area: number | null }[] } => r !== null)
+        .sort((a, b) => a.frameIndex - b.frameIndex);
     if (!results.length) {
         logger.warn(`${serviceLocation}: [FrameRvArea] No frames produced a result for mask ${maskId} — not storing.`);
         return;
@@ -321,28 +327,53 @@ export const computeFrameWallThicknessSeries = async (
     let anteriorPoints: { slice: number; point: number[] }[] | undefined;
     const mmPx = await mmPerPixelOfMask(maskId, projectId);
 
-    const results: { frameIndex: number; segment_values: (number | null)[]; stats: any; unit?: string }[] = [];
-    for (const frameIndex of frameIndices) {
-        const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runBullseyeRleScript(
-            framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint,
-            anteriorPoints ? { anteriorPoints, rvSlices: rvSlicesForFrame(frameIndex) } : { rvSlices: refSlices },
+    type FrameResult = { frameIndex: number; segment_values: (number | null)[]; stats: any; unit?: string };
+    const results: FrameResult[] = [];
+
+    // Phase 1: frame 0 (the reference frame) alone -- it may be the one call that actually
+    // RESOLVES alignPoint/anteriorPoints/rvSlicesForFrame (when neither was already known from
+    // the project's landmarks), which every later frame then depends on. Must finish, and its
+    // resolution must be applied, before any other frame starts.
+    const [firstFrameIndex, ...restFrameIndices] = frameIndices;
+    const firstFrames = frames.filter((f: any) => f.frameindex === firstFrameIndex);
+    const firstResult = await runBullseyeRleScript(
+        firstFrames, width, height, `mask ${maskId} frame ${firstFrameIndex}`, alignPoint,
+        { rvSlices: refSlices },
+    );
+    if (refSlices.length && firstResult) {
+        if (Array.isArray(firstResult.anterior_points) && firstResult.anterior_points.length) {
+            anteriorPoints = firstResult.anterior_points;
+        } else {
+            // no usable slice on the reference frame — keep the single point for every frame
+            rvSlicesForFrame = () => [];
+        }
+    }
+    if (!alignPoint && firstResult?.alignment_source === "rv-mask" && Array.isArray(firstResult.alignment_point)) {
+        alignPoint = firstResult.alignment_point;
+    }
+    if (firstResult) {
+        const inMm = bullseyeToMm(firstResult, mmPx);
+        results.push({ frameIndex: firstFrameIndex, segment_values: inMm.segment_values, stats: inMm.stats, unit: inMm.unit });
+    }
+
+    // Phase 2: every other frame, now that alignPoint/anteriorPoints/rvSlicesForFrame are fully
+    // resolved and stable (read-only from here on) -- safe to run all of them concurrently
+    // instead of one at a time, since none of them write back to that shared state.
+    if (restFrameIndices.length) {
+        const settled = await Promise.all(
+            restFrameIndices.map(async (frameIndex) => {
+                const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
+                const result = await runBullseyeRleScript(
+                    framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint,
+                    anteriorPoints ? { anteriorPoints, rvSlices: rvSlicesForFrame(frameIndex) } : { rvSlices: refSlices },
+                );
+                if (!result) return null;
+                const inMm = bullseyeToMm(result, mmPx);
+                return { frameIndex, segment_values: inMm.segment_values, stats: inMm.stats, unit: inMm.unit };
+            }),
         );
-        if (!anteriorPoints && refSlices.length && result) {
-            if (Array.isArray(result.anterior_points) && result.anterior_points.length) {
-                anteriorPoints = result.anterior_points;
-            } else {
-                // no usable slice on the reference frame — keep the single point for every frame
-                rvSlicesForFrame = () => [];
-            }
-        }
-        if (!alignPoint && result?.alignment_source === "rv-mask" && Array.isArray(result.alignment_point)) {
-            alignPoint = result.alignment_point;
-        }
-        if (result) {
-            const inMm = bullseyeToMm(result, mmPx);
-            results.push({ frameIndex, segment_values: inMm.segment_values, stats: inMm.stats, unit: inMm.unit });
-        }
+        for (const r of settled) if (r) results.push(r);
+        results.sort((a, b) => a.frameIndex - b.frameIndex);
     }
     if (!results.length) {
         logger.warn(`${serviceLocation}: [FrameWallThickness] No frames produced a result for mask ${maskId} — not storing.`);
@@ -399,7 +430,7 @@ export const computeHeartMetricsFromMaskDoc = async (
     const input = JSON.stringify({ frames, width, height, affine, ...templateExtras });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [HeartMetrics] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [HeartMetrics] stderr: ${stderr.substring(0, 500)}`);
@@ -472,9 +503,9 @@ export const computeHeartMetricsFromMaskDoc = async (
  * Reads `heartMetrics.measurements` and `heartMetrics.warnings` off the mask
  * document, runs the local Python rule engine, and $set-stores the result on
  * the same mask document under `healthStatus`. Mirrors
- * computeDiseaseSimilarityFromMetrics's shape: stdin JSON → local Python →
+ * computeDiseasePatternGatesFromMetrics's shape: stdin JSON → local Python →
  * stdout JSON → $set. Never rejects; always resolves so callers can fire-and-
- * forget it in parallel with disease similarity.
+ * forget it in parallel with the other mask-doc computes.
  *
  * Callers do NOT pass measurements — this function fetches them itself so
  * the auto-fire paths (end of heart metrics, after the strain backfill) can
@@ -515,7 +546,7 @@ export const computeHealthStatusFromMetrics = async (
     });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [HealthStatus] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [HealthStatus] stderr: ${stderr.substring(0, 500)}`);
@@ -569,8 +600,8 @@ export const computeHealthStatusFromMetrics = async (
  * Reads RVEF/RVEDV/RVESV and the volume-reliability fields off the mask's
  * heartMetrics, runs the Python module, and $set-stores the result under
  * `rvHealthStatus`, beside `healthStatus`. It never reads or writes the LV
- * result. `sex` and `bsa_m2` come from the report page on each call, as for
- * disease similarity; the module echoes them back so the page can tell whether
+ * result. `sex` and `bsa_m2` come from the report page on each call, neither
+ * persisted; the module echoes them back so the page can tell whether
  * a stored result matches what is on screen. Without a sex the stored status is
  * "Not assessable" — no sex-blind limit is substituted. Never rejects.
  */
@@ -606,7 +637,7 @@ export const computeRvHealthStatusFromMetrics = async (
     });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RvHealthStatus] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RvHealthStatus] stderr: ${stderr.substring(0, 500)}`);
@@ -753,7 +784,7 @@ export const computeRegionalHealthStatusFromStrain = async (
     );
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RegionalHealth] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RegionalHealth] stderr: ${stderr.substring(0, 500)}`);
@@ -900,7 +931,7 @@ export const computeRvRegionalHealthStatusFromStrain = async (
     );
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
                 logger.warn(`${serviceLocation}: [RvRegionalHealth] Python script failed for mask ${maskId}: ${error.message}`);
                 if (stderr) logger.warn(`${serviceLocation}: [RvRegionalHealth] stderr: ${stderr.substring(0, 500)}`);
@@ -942,69 +973,76 @@ export const computeRvRegionalHealthStatusFromStrain = async (
 };
 
 /**
- * Disease Pattern Similarity Assessment — NOT a diagnosis.
+ * Unified LV+RV Disease Pattern Similarity Assessment — NOT a diagnosis.
  *
- * Compares a patient's cardiac measurements against literature-derived NOR/HCM/DCM
- * reference profiles and reports which pattern they most resemble, with per-metric
- * reasoning. Mirrors computeHeartMetricsFromMaskDoc's shape: stdin JSON → local
- * Python → stdout JSON → $set on the mask doc under `diseaseSimilarity`. Never
- * rejects; always resolves so it can be fired in parallel with the other computes.
+ * Checks each of ACDC's 5 diagnostic groups (NOR/MINF/DCM/HCM/RV) as its own
+ * independent gate, since RV uses a different feature space than the 4 LV
+ * groups and can't be ranked against them on one scale. Runs
+ * compute_disease_pattern_gates.py and $set-stores the result under
+ * `diseasePatternGates`. Never rejects; always resolves.
  *
- * `measurements` is the flat block produced by heartMetrics.measurements with
- * PeakGRS/PeakGCS filled in from the strain pipeline. Any subset is accepted —
- * the Python side ignores nulls and warns when too few features are present.
+ * `lv`/`rv` are the flat measurement blocks the caller assembles (see
+ * assembleDiseasePatternGateInputs in segmentation_routes.ts); this function
+ * does no BSA/indexing math itself — that's the assembler's job.
  */
-export const computeDiseaseSimilarityFromMetrics = async (
+export const computeDiseasePatternGatesFromMetrics = async (
     maskId: string,
-    measurements: {
+    lv: {
         EF: number | null;
         EDV: number | null;
-        ESV: number | null;
-        // Indexed/morphology features — all optional. EDVI/ESVI/LVMI/StrokeVolumeIndex
-        // are only meaningful (non-null) when the caller supplied a bsa_m2; see
-        // assembleSimilarityMeasurements, which derives them. MaxWallThicknessMm is
-        // pulled from the mask's own stored bullseye — no BSA needed for that one.
         EDVI?: number | null;
-        ESVI?: number | null;
         LVMassG?: number | null;
         LVMI?: number | null;
         MaxWallThicknessMm?: number | null;
-        StrokeVolume: number | null;
-        StrokeVolumeIndex?: number | null;
-        PeakGRS: number | null;
-        PeakGCS: number | null;
     },
+    rv: {
+        RVEDV: number | null;
+        RVEDVI?: number | null;
+        RVESVI?: number | null;
+        RVEF: number | null;
+        SVI?: number | null;
+    },
+    regionalLvSegments: { segment: number; level: string }[] | null,
     sex?: "male" | "female" | "unspecified",
+    volumeSignals?: { voxel_mm3: number | null; duplicate_slices: unknown[] },
 ): Promise<void> => {
-    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_disease_similarity.py');
-    const input = JSON.stringify({ measurements, sex: sex ?? "unspecified" });
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_disease_pattern_gates.py');
+    const input = JSON.stringify({
+        lv, rv,
+        regional_lv_segments: regionalLvSegments,
+        sex: sex ?? "unspecified",
+        // See compute_disease_pattern_gates.py's "Volume-reliability guard" —
+        // withholds EDVI/LVMI/RVEDVI/RVESVI/SVI when the affine/voxel geometry
+        // is known-suspect, same as the health-status graders already do.
+        volume_signals: volumeSignals ?? null,
+    });
 
     return new Promise<void>((resolve) => {
-        const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
+        const child = execFile('python3', [scriptPath], async (error, stdout, stderr) => {
             if (error) {
-                logger.warn(`${serviceLocation}: [DiseaseSimilarity] Python script failed for mask ${maskId}: ${error.message}`);
-                if (stderr) logger.warn(`${serviceLocation}: [DiseaseSimilarity] stderr: ${stderr.substring(0, 500)}`);
+                logger.warn(`${serviceLocation}: [DiseasePatternGates] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [DiseasePatternGates] stderr: ${stderr.substring(0, 500)}`);
                 return resolve();
             }
             try {
                 const result = JSON.parse(stdout.trim());
                 if (result.error) {
-                    logger.warn(`${serviceLocation}: [DiseaseSimilarity] Script reported error for mask ${maskId}: ${result.error}`);
+                    logger.warn(`${serviceLocation}: [DiseasePatternGates] Script reported error for mask ${maskId}: ${result.error}`);
                     return resolve();
                 }
                 result.computed_at = new Date().toISOString();
                 const writeResult = await projectSegmentationMaskModel.collection.updateOne(
                     { _id: new mongoose.Types.ObjectId(maskId) },
-                    { $set: { diseaseSimilarity: result, updatedAt: new Date() } },
+                    { $set: { diseasePatternGates: result, updatedAt: new Date() } },
                 );
                 logger.info(
-                    `${serviceLocation}: [DiseaseSimilarity] Stored similarity for mask ${maskId} — ` +
-                    `most_similar=${result.most_similar} ` +
-                    `used=${result.features_used?.length ?? 0} warnings=${result.warnings?.length ?? 0} | ` +
+                    `${serviceLocation}: [DiseasePatternGates] Stored gates for mask ${maskId} — ` +
+                    `met=${(result.met_codes ?? []).join(',') || 'none'} ` +
+                    `warnings=${result.warnings?.length ?? 0} | ` +
                     `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
                 );
             } catch (parseErr: any) {
-                logger.warn(`${serviceLocation}: [DiseaseSimilarity] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+                logger.warn(`${serviceLocation}: [DiseasePatternGates] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
             resolve();
         });
@@ -1138,7 +1176,7 @@ export const computeBullseyeAndStore = async (
                 logger.warn(`${serviceLocation}: [Bullseye] Keeping stored bullseye for mask ${maskId} — local fallback is not landmark-aligned.`);
                 return;
             }
-            const frames = (maskDoc as any)?.frames ?? [];
+            const frames = edFrameOnly(maskDoc as any)?.frames ?? [];
             if (!frames.length) {
                 logger.warn(`${serviceLocation}: [Bullseye] No frame data on mask ${maskId} — cannot fall back to local computation.`);
                 return;
@@ -1157,6 +1195,30 @@ export const computeBullseyeAndStore = async (
         }
     }
 };
+
+/**
+ * A mask doc with `frames` restricted to its own ED frame. The GPU's
+ * /bullseye/analyze route collapses a 4-D NIfTI by taking the MAX label per
+ * voxel across every frame on its frame axis, rather than selecting one
+ * (bullseye_route.py's _load_nifti_bytes: "arr = arr.max(axis=-1)") — so a
+ * NIfTI built from a mask's full cardiac cycle (as both call sites below
+ * used to send, via `fs.writeJson(segJsonPath, [maskDoc], ...)` with no
+ * frame filtering) is analysed as the UNION of every frame's myocardium
+ * position, not the single end-diastole frame DCM/HCM's wall-thickness gates
+ * need — the ring appears to sweep through its whole range of motion, well
+ * past its true ED thickness. Reported live, 2026-10: patient005's MedSAM
+ * mask read 12.9mm wall thickness this way vs 7.7mm measured from its ED
+ * frame alone. Restricting to ED before the NIfTI is built keeps the file
+ * 3-D in practice (one frame), so the GPU's max-across-frames collapse is a
+ * no-op instead of a silent motion blur.
+ */
+function edFrameOnly(maskDoc: any): any {
+    const edFrame = typeof maskDoc?.heartMetrics?.ed_frame === "number" ? maskDoc.heartMetrics.ed_frame : null;
+    if (edFrame === null) return maskDoc;
+    const frames = (maskDoc.frames ?? []).filter((f: any) => f.frameindex === edFrame);
+    if (!frames.length) return maskDoc;
+    return { ...maskDoc, frames };
+}
 
 /**
  * Live-route entry point for the plain Bullseye tab: generates a temporary
@@ -1191,16 +1253,16 @@ export const generateNiftiAndComputeBullseye = async (
         }
 
         await fs.ensureDir(baseTempDir);
-        await fs.writeJson(segJsonPath, [maskDoc], { spaces: 2 });
+        await fs.writeJson(segJsonPath, [edFrameOnly(maskDoc)], { spaces: 2 });
 
-        let pythonCommand: string;
+        let pythonArgs: string[];
         if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
             const affineFile = path.join(baseTempDir, `affine_${maskId}.json`);
             const dimsFile   = path.join(baseTempDir, `dims_${maskId}.json`);
             await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
             await fs.writeJson(dimsFile,   project.dimensions,   { spaces: 2 });
             const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-            pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+            pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
         } else {
             const s3Url = (project as any).extractedfolderpath;
             if (!s3Url) {
@@ -1208,11 +1270,11 @@ export const generateNiftiAndComputeBullseye = async (
                 return;
             }
             const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-            pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+            pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
         }
 
         const pythonOk = await new Promise<boolean>((resolve) => {
-            exec(pythonCommand, (error, _stdout, stderr) => {
+            execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                 if (error) {
                     logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI generation failed for mask ${maskId}: ${stderr || error.message}`);
                     resolve(false);
@@ -1224,7 +1286,7 @@ export const generateNiftiAndComputeBullseye = async (
 
         if (!pythonOk || !(await fs.pathExists(niftiPath))) {
             logger.warn(`${serviceLocation}: [BullseyeTrigger] NIfTI not produced for mask ${maskId} — falling back to subprocess RLE path`);
-            const frames = (maskDoc as any).frames ?? [];
+            const frames = edFrameOnly(maskDoc as any).frames ?? [];
             if (frames.length) {
                 await computeBullseyeFromMaskDoc(maskId, frames, W, H, projectId);
             }
@@ -1296,7 +1358,7 @@ export async function recomputeBullseyeWithLandmarks(
             return;
         }
 
-        // 3. Find all editable masks
+        // 3. Find all editable masks.
         const masksResult = await readProjectSegmentationMask(projectId);
         const editableMasks = (masksResult.projectsegmentationmasks ?? []).filter(
             (m: any) => m.isMedSAMOutput === false
@@ -1324,16 +1386,16 @@ export async function recomputeBullseyeWithLandmarks(
 
             try {
                 // 4a. Generate NIfTI from RLE frames
-                await fs.writeJson(segJsonPath, [mask], { spaces: 2 });
+                await fs.writeJson(segJsonPath, [edFrameOnly(mask)], { spaces: 2 });
 
-                let pythonCommand: string;
+                let pythonArgs: string[];
                 if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                     const affineFile = path.join(baseTempDir, `affine_${maskId}.json`);
                     const dimsFile   = path.join(baseTempDir, `dims_${maskId}.json`);
                     await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                     await fs.writeJson(dimsFile,   project.dimensions,   { spaces: 2 });
                     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                    pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                    pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
                 } else {
                     const s3Url = project.extractedfolderpath;
                     if (!s3Url) {
@@ -1341,11 +1403,11 @@ export async function recomputeBullseyeWithLandmarks(
                         continue;
                     }
                     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                    pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                    pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
                 }
 
                 const pythonOk = await new Promise<boolean>((resolve) => {
-                    exec(pythonCommand, (error, _stdout, stderr) => {
+                    execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                         if (error) {
                             logger.warn(`${serviceLocation}: [BullseyeLM] NIfTI generation failed for mask ${maskId}: ${stderr || error.message}`);
                             resolve(false);
@@ -1482,13 +1544,16 @@ export const generateAISegmentationForReconstruction = async (
             return { success: false, message: "No segmentation masks found. Run AI segmentation first for reconstruction." };
         }
 
-        // 2. Read Project Details (including dimensions and original NIfTI path)
-        const projectResult = await readProject(projectId, userId);
+        // 2. Read Project Details (including dimensions and original NIfTI path). Both callers
+        // of this function (reconstruction.ts's startReconstruction, landmark_inference.ts's
+        // startLandmarkInference) already verify owner-or-assigned-or-admin access before
+        // reaching here, so this is a plain existence lookup, not a second ownership filter.
+        const projectResult = await readProject(projectId);
         if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
-            logger.warn(`${serviceLocation}: Project ${projectId} not found or user ${userId} does not have access.`);
+            logger.warn(`${serviceLocation}: Project ${projectId} not found.`);
             return { success: false, message: "Project not found or access denied." };
         }
-        
+
         const project: IProjectDocument = projectResult.projects[0];
 
         if (!project.dimensions || project.dimensions.width == null || project.dimensions.height == null) {
@@ -1525,7 +1590,7 @@ export const generateAISegmentationForReconstruction = async (
             }
         }
 
-        const editableMask = candidatePool.find(mask => mask.isMedSAMOutput === false);
+        const editableMask = candidatePool.find(m => m.isMedSAMOutput === false);
         const aiMask = candidatePool.find(mask => mask.isMedSAMOutput === true);
 
         const maskHasMyocardium = (mask?: IProjectSegmentationMask) =>
@@ -1593,7 +1658,7 @@ export const generateAISegmentationForReconstruction = async (
 
         // 4. Generate NIfTI using Python script
         let pythonScriptPath: string;
-        let pythonCommand: string;
+        let pythonArgs: string[];
 
         if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
             // Use stored affine matrix approach (faster, no S3 download required)
@@ -1617,7 +1682,7 @@ export const generateAISegmentationForReconstruction = async (
             };
             logger.info(`${serviceLocation}: NIfTI generation parameters for project ${projectId}: ${JSON.stringify(niftiParams)}`);
 
-            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "uint8" ${planeHeightForRLE} ${planeWidthForRLE}`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, localOutputSegmentationNiftiPath, affineMatrixFile, dimensionsFile, 'uint8', String(planeHeightForRLE), String(planeWidthForRLE)];
         } else {
             // Use download and extract approach (legacy)
             logger.info(`${serviceLocation}: No stored affine matrix found for reconstruction of project ${projectId}. Using download approach.`);
@@ -1629,14 +1694,14 @@ export const generateAISegmentationForReconstruction = async (
                 return { success: false, message: "Project has no associated S3 file path." };
             }
 
-            pythonCommand = `python3 "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" ${planeWidthForRLE} ${planeHeightForRLE} "${s3Url}"`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, localOutputSegmentationNiftiPath, String(planeWidthForRLE), String(planeHeightForRLE), s3Url];
         }
 
         logger.info(`${serviceLocation}: Saving output - executing Python script for reconstruction NIfTI generation of project ${projectId}`);
-        logger.debug(`${serviceLocation}: Python command: ${pythonCommand}`);
+        logger.debug(`${serviceLocation}: Python command: python3 ${pythonArgs.join(' ')}`);
 
         const pythonResult = await new Promise<{ success: boolean; stdout?: string; stderr?: string; error?: string }>((resolve) => {
-            exec(pythonCommand, (error, stdout, stderr) => {
+            execFile('python3', pythonArgs, (error, stdout, stderr) => {
                 if (error) {
                     logger.error(`${serviceLocation}: Python script execution failed for reconstruction of project ${projectId}: ${error.message}`);
                     logger.error(`${serviceLocation}: Python stderr: ${stderr}`);
@@ -1695,7 +1760,7 @@ export const generateAISegmentationForReconstruction = async (
         // using each mask's own RLE frame data so MedSAM and UNet produce independent results.
         const allEditableMasks = hasMasksResult.projectsegmentationmasks!.filter(
             m => m.isMedSAMOutput === false
-        ); 
+        );
         const hasLandmarkAlignment = (await findLandmarkAlignment(projectId).catch(() => null)) !== null;
         for (const editableMaskForBullseye of allEditableMasks) {
             const bullseyeMaskId = editableMaskForBullseye._id?.toString();
@@ -1707,10 +1772,12 @@ export const generateAISegmentationForReconstruction = async (
                 continue;
             }
 
-            // Use each mask's own RLE frame data (not the shared reconstruction NIfTI)
+            // Use each mask's own RLE frame data (not the shared reconstruction NIfTI). Bullseye wants
+            // the ED frame only (edFrameOnly) -- heartMetrics below still gets the full maskFrames, which
+            // it needs for EDV/ESV/EF across the cycle.
             (hasLandmarkAlignment
                 ? generateNiftiAndComputeBullseye(editableMaskForBullseye, project, bullseyeMaskId)
-                : computeBullseyeFromMaskDoc(bullseyeMaskId, maskFrames, planeWidthForRLE, planeHeightForRLE)
+                : computeBullseyeFromMaskDoc(bullseyeMaskId, edFrameOnly(editableMaskForBullseye).frames ?? maskFrames, planeWidthForRLE, planeHeightForRLE)
             ).catch((err: any) => {
                 logger.warn(`${serviceLocation}: [Bullseye] Failed for mask ${bullseyeMaskId} (${editableMaskForBullseye.name}): ${err?.message}`);
             });
