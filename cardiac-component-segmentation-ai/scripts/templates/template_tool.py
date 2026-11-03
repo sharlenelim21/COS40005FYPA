@@ -632,9 +632,9 @@ print(JSON.stringify({{ ok: true, jobsMoved: jobs.modifiedCount }}));
         log(f"{chamber.upper()} 3D model ready")
         mark(f"reconstruction_{chamber}")
 
-    # Smooth heart motion for the landmark page's 3D heart: built once per 3D model by
-    # the template account (viewers can only read it); without it the page swaps
-    # per-frame meshes. Stored beside each model in storage, so `export` ships it.
+    # Smooth heart motion for the landmark page's 3D heart, built now so it is ready at
+    # once here (on other machines the first view builds it); without it the page swaps
+    # per-frame meshes.
     if step("motion"):
         build_motion(api, a.project, a.model)
         mark("motion")
@@ -825,16 +825,10 @@ for (const o of owners) {{
             keys: set = set()
             for d in docs:
                 bucket_keys(d["d"], prefixes, keys)
-            keys = {k for k in keys if not k.endswith(".nii.gz")}
-            # Each 3D model's smooth-motion file lies beside its tar, named after it
-            # (reconstruction_motion.ts: "<tar name>.motion.<method>.bin"); no document points at it.
-            for k in [k for k in keys if k.startswith("reconstructions/") and k.endswith(".tar")]:
-                ls = minio("ls", "--json", f"visheart_seed/{a.bucket}/{os.path.dirname(k)}/")
-                for row in ls.stdout.splitlines() if ls.returncode == 0 else []:
-                    name = json.loads(row).get("key", "")
-                    if name.startswith(os.path.basename(k)[:-len(".tar")] + ".motion."):
-                        keys.add(f"{os.path.dirname(k)}/{name}")
-            keys = sorted(keys)
+            # The 3D models' smooth-motion files (beside each tar, "<tar name>.motion.<method>.bin")
+            # are not exported: they barely compress (~80 MB for six templates), and the backend
+            # builds a template's motion on its first view (reconstruction_routes.ts, GET motion).
+            keys = sorted(k for k in keys if not k.endswith(".nii.gz"))
             log(f"{project['name']}: {len(docs)} documents, {len(keys)} file paths")
             objects = [o for o in pool.map(export_object, keys) if o]
             for o in objects:

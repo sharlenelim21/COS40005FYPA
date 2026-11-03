@@ -831,8 +831,8 @@ router.delete("/delete-model-reconstruction/:projectId",
 
 // Smooth heart motion for the landmark page's 3D heart (services/reconstruction_motion.ts): GET says where a
 // reconstruction's motion stands (missing / processing / failed / ready with a link), POST starts building it.
-// Owner or Admin only.
-async function motionSource(req: Request, requireRun: boolean): Promise<{ source?: MotionSource; status: number; message?: string }> {
+// Owner or Admin only — except that anyone may read a template's (and its first view builds it, see GET).
+async function motionSource(req: Request, requireRun: boolean): Promise<{ source?: MotionSource; isTemplate?: boolean; status: number; message?: string }> {
     const projectId = String(req.params.projectId);
     const reconstructionId = String(req.params.reconstructionId);
     const userId = (req.user as { _id?: unknown } | undefined)?._id?.toString();
@@ -842,24 +842,33 @@ async function motionSource(req: Request, requireRun: boolean): Promise<{ source
     }
     // Building the motion needs run access; reading it is open to anyone who may view the
     // project (including a template's viewers — its motion is built by the template account).
-    const allowed = requireRun
-        ? (await userCanAccessProject(projectId, req.user)).canRun
-        : !!(await findViewableProject(projectId, req.user));
+    const viewable = requireRun ? null : await findViewableProject(projectId, req.user);
+    const allowed = requireRun ? (await userCanAccessProject(projectId, req.user)).canRun : !!viewable;
     if (!allowed) return { status: 404, message: "Project not found." };
+    const isTemplate = !!viewable?.project?.isTemplate;
     const result = await readProjectReconstruction(projectId, reconstructionId);
     // With a reconstruction id the reader returns that one document (projectreconstruction), already scoped to the project.
     const reconstruction = result.projectreconstruction;
     if (!result.success || !reconstruction) return { status: 404, message: "Reconstruction not found." };
     const tarUrl = reconstruction.reconstructedMesh?.path;
     if (!tarUrl) return { status: 409, message: "This reconstruction has no meshes yet." };
-    return { status: 200, source: { reconstructionId, tarUrl, chamber: reconstruction.chamber, userId } };
+    // A template's motion file is stored as its owner's (the template account), whoever triggers it.
+    return {
+        status: 200, isTemplate,
+        source: { reconstructionId, tarUrl, chamber: reconstruction.chamber, userId: isTemplate ? viewable!.ownerId : userId },
+    };
 }
 
 router.get("/motion/:projectId/:reconstructionId", isAuth, async (req: Request, res: Response) => {
     try {
-        const { source, status, message } = await motionSource(req, false);
+        const { source, isTemplate, status, message } = await motionSource(req, false);
         if (!source) return res.status(status).json({ success: false, message });
-        return res.status(200).json({ success: true, motion: await getMotion(source) });
+        let motion = await getMotion(source);
+        // A template's viewers can't build its motion (that needs run access), and templates
+        // loaded from the repo's seed arrive without it — so the first view builds it, as the
+        // owner's page would. Afterwards it is a file in storage like any other.
+        if (motion.status === "missing" && isTemplate) motion = await startMotion(source);
+        return res.status(200).json({ success: true, motion });
     } catch (error) {
         LogError(error as Error, serviceLocation, "Error reading reconstruction motion");
         return res.status(500).json({ success: false, message: "The motion could not be read." });

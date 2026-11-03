@@ -6,10 +6,10 @@
   {
    "project_id": "6ada4dabb754d1f3d8e328f0",
    "name": "Template – Normal heart (female)",
-   "version": "eac4885bd398983a",
+   "version": "760520a1a54f101f",
    "db": {
     "file": "db/6ada4dabb754d1f3d8e328f0.ndjson.xz",
-    "sha256": "e79174a7f611025d83e2b8c7a17f04f1c4c5b61cccdb1da9108481b0ee21b1ef",
+    "sha256": "39fc08ad2f2b5c1d267bce8185ef7e12c999c9ecb70f556bea52c0aa0e4472cd",
     "documents": {
      "projects": 1,
      "segmentation masks": 2,
@@ -42,10 +42,10 @@
   {
    "project_id": "6ada62ca81ce5e074c8c5cb6",
    "name": "Template – Normal heart (male)",
-   "version": "42066609f4d7398b",
+   "version": "878474bdbd384786",
    "db": {
     "file": "db/6ada62ca81ce5e074c8c5cb6.ndjson.xz",
-    "sha256": "8e725380334583a89007655e89830112887eb2d01000d9cfcb7cb9db615669e6",
+    "sha256": "72321ed83916323dc082bfdf49a04f08b09917c1e0ce71cbeabd2b4222c4f3e4",
     "documents": {
      "projects": 1,
      "segmentation masks": 2,
@@ -78,10 +78,10 @@
   {
    "project_id": "6ada54fcb754d1f3d8e335cf",
    "name": "Template – HCM heart (female)",
-   "version": "00563b3665dd004f",
+   "version": "29818fc7f24adeb5",
    "db": {
     "file": "db/6ada54fcb754d1f3d8e335cf.ndjson.xz",
-    "sha256": "323756acd7ef2ec2ce731cabab7e035b25b90a4817eaf16efb18c2c30924d540",
+    "sha256": "442d162d1731a27ac3a5c05b0a0523b338dd950f274142837ed190b543c9216a",
     "documents": {
      "projects": 1,
      "segmentation masks": 2,
@@ -114,10 +114,10 @@
   {
    "project_id": "6ada62f281ce5e074c8c5d3e",
    "name": "Template – HCM heart (male)",
-   "version": "eeb34217859b5b86",
+   "version": "30a4a1a411c6320b",
    "db": {
     "file": "db/6ada62f281ce5e074c8c5d3e.ndjson.xz",
-    "sha256": "016fe67d4daf6de246615d2d3376ea7247e260a836b22dc06c7166580db19fcd",
+    "sha256": "ad05e9cb97c288ce92c8f72f467b0d50610eb92366568aea16ce3f072730d259",
     "documents": {
      "projects": 1,
      "segmentation masks": 2,
@@ -150,10 +150,10 @@
   {
    "project_id": "6ae38e705131a29b39d04c88",
    "name": "Template – DCM heart (female)",
-   "version": "c98377e374069657",
+   "version": "d31559724cfd4bb6",
    "db": {
     "file": "db/6ae38e705131a29b39d04c88.ndjson.xz",
-    "sha256": "16fe17f410035d873481b55f22063e3cb1202a4a8bae3da0eced17be39e42c0f",
+    "sha256": "4c076e89c94ac7163745066168095a84ea10e4f48cc8207c02350f123860c5d4",
     "documents": {
      "projects": 1,
      "segmentation masks": 2,
@@ -186,10 +186,10 @@
   {
    "project_id": "6ae393545131a29b39d05083",
    "name": "Template – DCM heart (male)",
-   "version": "e92bca1b632e264e",
+   "version": "c04e6db294ed21e2",
    "db": {
     "file": "db/6ae393545131a29b39d05083.ndjson.xz",
-    "sha256": "93ec6ec71393e52fe302298ae6f6e1268b5ec23eec736c5a09748c745436d42a",
+    "sha256": "a192bf0acccf2e428cc41770aa61e2546f204583072bc43ee2a589f9a045b889",
     "documents": {
      "projects": 1,
      "segmentation masks": 2,

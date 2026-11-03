@@ -106,8 +106,10 @@ python template_tool.py export
 
 This writes every published template to `visheart-local-deployment/seed/templates` (about 200 MB,
 xz-compressed). It includes the documents (project, masks, landmarks, jobs, 3D model records) and the
-files the read-only pages load (image stacks and 3D models). The original `.nii.gz` scans are left out,
-because only the AI pipeline reads them and templates never run it. Commit that folder.
+files the read-only pages load (image stacks and 3D models). Left out: the original `.nii.gz` scans
+(only the AI pipeline reads them, and templates never run it) and the 3D models' smooth-motion files
+(they barely compress; the backend builds a template's motion the first time someone opens it, and the
+3D heart plays frame by frame until then). Commit that folder.
 
 After a teammate merges, they rebuild and restart their stack (see the commit/merge notes: `npm run build`
 for the backend, `build.ps1` for the frontend image, then recreate `visheart-app`). On start-up the backend
