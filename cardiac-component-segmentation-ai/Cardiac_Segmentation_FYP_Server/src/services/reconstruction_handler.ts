@@ -10,6 +10,7 @@ import { execSync } from "child_process";
 import mongoose from "mongoose";
 import logger from "./logger";
 import { uploadToS3 } from "./s3_handler";
+import { originalFrameResult, originalMeshName } from "./reconstruction_frames";
 import {
   updateJob,
   createProjectReconstruction,
@@ -162,6 +163,22 @@ export async function processReconstructionCallback(
 
     // Process OBJ mesh files and extract project information
     const processedFiles = await processObjFiles(safeUploadedFiles, gpuJobId);
+    // Built from chosen frames: the GPU numbered the meshes by position in the file it got, so give them, and its
+    // per-frame results, the scan's own frame numbers before anything is stored.
+    const frameMap: number[] | undefined = existingJob.success ? (existingJob.job as any)?.frameMap : undefined;
+    let frameResult = gpuResult;
+    if (Array.isArray(frameMap) && frameMap.length > 0) {
+      for (const file of processedFiles) {
+        const renamed = path.join(path.dirname(file.tempPath), originalMeshName(path.basename(file.tempPath), frameMap));
+        if (renamed !== file.tempPath) await fs.rename(file.tempPath, renamed);
+        file.tempPath = renamed;
+        file.filename = path.basename(renamed);
+        file.originalName = originalMeshName(file.originalName, frameMap);
+        if (file.frameIndex !== undefined && frameMap[file.frameIndex] !== undefined) file.frameIndex = frameMap[file.frameIndex];
+      }
+      frameResult = originalFrameResult(gpuResult || callbackMetadata, frameMap);
+      logger.info(`${serviceLocation}: Job ${gpuJobId} built frames ${frameMap.map(f => f + 1).join(',')}; meshes renamed to them`);
+    }
     const { userId, filehash, projectId, maskId } = await getProjectDetails(gpuJobId);
 
     // Determine segmentation model: prefer explicit field stored on the Job record,
@@ -276,7 +293,7 @@ export async function processReconstructionCallback(
           projectId,
           userId,
           filehash,
-          gpuResult,
+          frameResult,
           processedFiles,
           tarResult.tarSize!,
           reconstructionFileS3Url,
@@ -741,7 +758,7 @@ async function createReconstructionRecord(
     if (typeof rawEdFrameIndex !== 'number' || rawEdFrameIndex < 0) {
       logger.warn(`${serviceLocation}: Invalid ED frame index, using default 0`);
       edFrameIndex = 0;
-    } else if (processedFiles.length > 0 && rawEdFrameIndex >= processedFiles.length) {
+    } else if (!gpuResult?.built_frames && processedFiles.length > 0 && rawEdFrameIndex >= processedFiles.length) {
       logger.warn(`${serviceLocation}: ED frame index exceeds available frames, using last frame`);
       edFrameIndex = Math.max(0, processedFiles.length - 1);
     } else if (rawEdFrameIndex >= totalFrames) {
@@ -766,7 +783,7 @@ async function createReconstructionRecord(
       : `4D Reconstruction - Job ${gpuJobId.substring(0, 8)}`;
     const reconstructionDescription = isRvChamber
       ? `RV cavity reconstruction (RESEARCH/REFERENCE ONLY - not for clinical diagnosis): ${processedFiles.length} frames, ED frame ${edFrameIndex + 1}`
-      : `4D cardiac reconstruction: ${processedFiles.length} frames, ED frame ${edFrameIndex + 1}`;
+      : `4D cardiac reconstruction: ${processedFiles.length} frames${Array.isArray(gpuResult?.built_frames) ? ' (chosen frames only)' : ''}, ED frame ${edFrameIndex + 1}`;
     const finalFilename = path.posix.basename(reconstructionObjectKey);
 
     // Detect mesh format from uploaded files
@@ -857,6 +874,7 @@ async function createReconstructionRecord(
       name: reconstructionName,
       description: reconstructionDescription,
       ed_frame: edFrameIndex + 1,
+      ...(Array.isArray(gpuResult?.built_frames) ? { builtFrames: gpuResult.built_frames } : {}),
       isSaved: false,
       isAIGenerated: true,
       meshFormat: detectedFormat,  // CHANGED: Detect from file extension (OBJ or GLB)

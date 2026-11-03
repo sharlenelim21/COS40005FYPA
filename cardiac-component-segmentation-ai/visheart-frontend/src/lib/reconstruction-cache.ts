@@ -32,6 +32,7 @@
  */
 
 import { loadUntar } from "./load-untar";
+import { nearestBuiltFrame } from "@/lib/reconstruction-frames";
 
 // Type definitions for js-untar
 interface UntarFile {
@@ -901,6 +902,20 @@ export class ReconstructionCache {
    * @param frame - Sequential frame number (0, 1, 2...)
    * @returns Promise resolving to blob URL string or null if not found
    */
+  /**
+   * The model URL for a frame of the scan (0-based), not for a position in the list of meshes. A reconstruction of
+   * chosen frames (or one whose GPU run skipped a frame) has fewer meshes than frames, so a frame without a mesh shows
+   * the nearest built frame before it (lib/reconstruction-frames.ts nearestBuiltFrame).
+   */
+  async getModelURLForFrame(projectId: string, reconstructionId: string, frame: number): Promise<string | null> {
+    await this.ensureInitialized();
+    const models = await this.db.getModelsByReconstruction(reconstructionId);
+    const built = models.map(model => model.frameIndex).filter(index => index >= 0).sort((a, b) => a - b);
+    const shown = nearestBuiltFrame(frame, built);
+    if (shown === -1) return null;
+    return this.getModelURL(projectId, reconstructionId, built.indexOf(shown));
+  }
+
   async getModelURL(projectId: string, reconstructionId: string, frame: number): Promise<string | null> {
     await this.ensureInitialized();
 

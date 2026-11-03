@@ -11,6 +11,7 @@ import { generatePresignedGetUrlForInternalService } from "../utils/s3_presigned
 import { URL } from 'url';  // ADDED URL import for S3 URL parsing
 import { getFreshGPUServerAddress, getCurrentToken } from "./gpu_auth_client";
 import { generateAISegmentationForReconstruction } from "./segmentation_export";
+import { checkFrameSelection } from "./reconstruction_frames";
 
 const serviceLocation = 'Reconstruction';
 
@@ -154,6 +155,7 @@ const sendReconstructionRequestToCloudGpu = async (
  * @param parameters - Reconstruction parameters (iterations, resolution, etc.)
  * @param ed_frame - End-diastolic frame number (1-based)
  * @param export_format - Export format for mesh files ('glb' or 'obj')
+ * @param frames - Optional 1-based frames to build (reconstruction_frames.ts); omitted builds every frame
  * @returns Promise with success status, message, and job UUID
  */
 export const startReconstruction = async (
@@ -165,7 +167,8 @@ export const startReconstruction = async (
     ed_frame?: number,
     export_format?: string,
     segmentationModel?: string,
-    chamber?: string
+    chamber?: string,
+    frames?: unknown
 ): Promise<{ success: boolean; message: string; uuid?: string; statusCode?: number; reason?: "already_exists" | "job_in_progress" }> => {
     // Normalise the requested segmentation model. Allowed values:
     //   "medsam" — only MedSAM-tagged editable masks
@@ -365,13 +368,26 @@ export const startReconstruction = async (
             
         }
 
+        // Which frames to build: every frame unless the user chose some (to save time and storage).
+        const processAllFrames = parameters?.process_all_frames ?? true;
+        let frameMap: number[] | null = null;
+        if (frames !== undefined && frames !== null && processAllFrames) {
+            const totalFrames = Number(projectData.dimensions?.frames) || 1;
+            const selection = checkFrameSelection(frames, totalFrames, ed_frame || 1);
+            if (!selection.ok) {
+                return { success: false, statusCode: 400, message: selection.error };
+            }
+            frameMap = selection.frameMap;
+        }
+
         // Generate segmentation NIfTI file directly (no HTTP call needed)
-        logger.info(`${serviceLocation}: Reconstruction started - generating segmentation NIfTI for project ${projectId}`);
-        
+        logger.info(`${serviceLocation}: Reconstruction started - generating segmentation NIfTI for project ${projectId}${frameMap ? ` (frames ${frameMap.map(f => f + 1).join(',')})` : ''}`);
+
         const segmentationResult = await generateAISegmentationForReconstruction(
             projectId,
             user?._id,
-            requestedModel ?? undefined
+            requestedModel ?? undefined,
+            frameMap ?? undefined
         );
         
         if (!segmentationResult.success || !segmentationResult.s3Key) {
@@ -411,10 +427,11 @@ export const startReconstruction = async (
             url: dataUrlForGpu,  // Presigned URL for segmentation data
             uuid: jobUuid,
             callback_url: callback_url,  
-            ed_frame_index: (ed_frame || 1) - 1,  // Convert 1-based ed_frame to 0-based ed_frame_index for GPU
+            // 0-based for the GPU; with chosen frames, the ED frame's position in the file sent
+            ed_frame_index: frameMap ? frameMap.indexOf((ed_frame || 1) - 1) : (ed_frame || 1) - 1,
             num_iterations: parameters?.num_iterations || 50,  // Flattened parameters
             resolution: parameters?.resolution || 128,
-            process_all_frames: parameters?.process_all_frames ?? true,  // Enable 4D processing by default
+            process_all_frames: processAllFrames,  // Enable 4D processing by default
             export_format: meshFormat,  // NEW: Send mesh format to GPU (obj or glb)
             debug_save: parameters?.debug_save || parameters?.debug || false,  // Support both debug and debug_save
             debug_dir: parameters?.debug_dir || "/tmp/4d_reconstruction_debug",
@@ -462,7 +479,9 @@ export const startReconstruction = async (
                     ? SegmentationModel.UNET
                     : undefined,
                 // So the in-flight guard above can tell an RV job from an LV one.
-                chamber: requestedChamber === "rv" ? ReconstructionChamber.RV : ReconstructionChamber.LV
+                chamber: requestedChamber === "rv" ? ReconstructionChamber.RV : ReconstructionChamber.LV,
+                // The callback renames the returned meshes from file position to these original frames.
+                ...(frameMap ? { frameMap } : {})
             };
 
             const jobCreationResult = await createJob(jobData as IJob);
