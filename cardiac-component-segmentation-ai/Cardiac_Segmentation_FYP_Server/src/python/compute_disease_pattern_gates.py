@@ -447,7 +447,7 @@ _PILOT_VALIDATION_NOTES: dict[str, str] = {
     ),
     "HCM": (
         "Pipeline validation: ACDC's own 20 ground-truth-labelled HCM patients averaged LVMI 92.2 g/m^2 "
-        "and wall thickness 17.8 mm (ground-truth masks) vs 99.7 g/m^2 and 17.1 mm measured by this "
+        "and wall thickness 17.1 mm (ground-truth masks) vs 99.7 g/m^2 and 16.6 mm measured by this "
         "app's own segmentation model after manual QC/correction (n=10 of those 20) — confirming "
         "agreement with the official ground truth for this criterion. (The group AVERAGE LVMI sits "
         "below the >110 g/m^2 cutoff in both measurements — expected, since ACDC's HCM label is a "
