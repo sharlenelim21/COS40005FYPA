@@ -173,6 +173,8 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
  *
  * - It does not treat a 4D reconstruction job as a blocker. Those set `model_used` to
  *   "4d_reconstruction" and have their own per-(model, chamber) guard in reconstruction.ts.
+ *   Nor a strain job ("strain_series", "rv_strain_series") or a landmark job: they also carry
+ *   `segmentationModel` (the masks they read) but do not write segmentation results.
  * - It does not block across models. MedSAM and UNet write separate results, so running one
  *   while the other is in flight is legitimate.
  * - It does not block forever. A job whose callback never arrives (GPU restarted, webhook lost)
@@ -203,6 +205,9 @@ const sendInferenceRequestToCloudGpu = async (inferenceData: any, gpuAuthToken: 
  * them makes a stuck job block for longer; lowering them lets duplicates through on slow jobs.
  * Neither is measured -- adjust once real CPU UNet runtimes are known.
  */
+/** Job types that share the jobs collection, and the project's segmentation model, but are not segmentations. */
+export const NON_SEGMENTATION_JOBS = ["4d_reconstruction", "strain_series", "rv_strain_series"];
+
 const STALE_JOB_MINUTES: Record<string, number> = {
     [SegmentationModel.MEDSAM]: 30,
     [SegmentationModel.UNET]: 90,
@@ -220,7 +225,7 @@ export const findBlockingSegmentationJob = async (
         const job = await jobModel.findOne({
             projectid: projectId,
             status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
-            model_used: { $nin: ["4d_reconstruction", /landmark/i] },
+            model_used: { $nin: [...NON_SEGMENTATION_JOBS, /landmark/i] },
             createdAt: { $gte: new Date(Date.now() - (STALE_JOB_MINUTES[model] ?? 30) * 60 * 1000) },
             ...modelFilter,
         }).sort({ createdAt: -1 });

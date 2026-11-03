@@ -4,6 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 import { projectApi, segmentationApi, adminApi, statusApi } from "@/lib/api";
 import { Project, Job, SystemStats, UserStats } from "@/types/dashboard";
 
+// While the processing service cannot be reached (for example during the first ~30 s after the stack starts, while the
+// GPU service loads its models), check again this often, so the status clears without pressing Refresh.
+export const GPU_RECHECK_MS = 15000;
+
 export function useGpuStatus() {
   const [processingUnit, setProcessingUnit] = useState<{
     serviceOnline: boolean;
@@ -22,9 +26,10 @@ export function useGpuStatus() {
   });
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchGpuStatus = useCallback(async () => {
+  // `quiet` re-checks leave isLoading alone, so the page does not flash "Checking..." every few seconds.
+  const fetchGpuStatus = useCallback(async (quiet = false) => {
     console.log("🔄 [useGpuStatus] Starting processing unit status fetch...");
-    setIsLoading(true);
+    if (!quiet) setIsLoading(true);
 
     try {
       const response = await statusApi.getGpuStatus();
@@ -132,7 +137,17 @@ export function useGpuStatus() {
     fetchGpuStatus();
   }, [fetchGpuStatus]);
 
-  return { processingUnit, isLoading, refresh: fetchGpuStatus };
+  // Re-check only while the service is unreachable; stop once it answers (GPU or CPU).
+  const unreachable = !isLoading && !processingUnit.serviceOnline;
+  useEffect(() => {
+    if (!unreachable) return;
+    const timer = setInterval(() => fetchGpuStatus(true), GPU_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [unreachable, fetchGpuStatus]);
+
+  const refresh = useCallback(() => fetchGpuStatus(), [fetchGpuStatus]);
+
+  return { processingUnit, isLoading, refresh };
 }
 
 export function useUserProjects(enabled = true) {
