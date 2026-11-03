@@ -664,7 +664,7 @@ const projectVoxelsizeSchema = new Schema({
 const projectSchema = new Schema<IProject>({
   // Identifiers
   // _id:  string; // MongoDB Object ID of the project
-  userid: { type: String, required: true }, // MongoDB User ID of the user to whom the project belongs
+  userid: { type: String, required: true }, // MongoDB User ID of the user to whom the project belongs (the owning Doctor/Admin)
   // User inputs
   name: { type: String, required: true }, // Name of the project
   originalfilename: { type: String, required: true }, // Original filename of the uploaded file
@@ -790,6 +790,9 @@ const projectSegmentationMaskSchema = new Schema<IProjectSegmentationMask>({
   rvStrain: { type: Schema.Types.Mixed, required: false }, // Single ED→ES regional RV (cavity-radius) strain — see IProjectSegmentationMask.rvStrain
   rvStrainSeries: { type: Schema.Types.Mixed, required: false }, // Per-frame RV strain vs. the fixed ED reference — see IProjectSegmentationMask.rvStrainSeries
   diseasePatternGates: { type: Schema.Types.Mixed, required: false }, // Unified LV+RV ACDC-criteria gate assessment (NOT a diagnosis) — compute_disease_pattern_gates.py. Mixed for the same reason as regionalHealthStatus.
+  flaggedForRetrain: { type: Boolean, required: false },
+  flaggedAt: { type: String, required: false },
+  flaggedByUserId: { type: String, required: false },
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 
 // Create the model with proper typing
@@ -957,6 +960,7 @@ const projectReconstructionModel = model<IProjectReconstructionDocument, Model<I
 projectReconstructionSchema.index({ maskId: 1 }); // Index on mask ID for performance
 projectReconstructionSchema.index({ projectid: 1, maskId: 1 }); // Compound index for project-mask queries (also covers projectid-only queries)
 projectReconstructionSchema.index({ projectid: 1, name: 1 }, { unique: true }); // Unique index on project ID and name (also covers projectid-only queries)
+projectReconstructionSchema.index({ projectid: 1, segmentationModel: 1, chamber: 1 }); // Per-(model, chamber) duplicate/ownership checks
 
 /**
  * Creates a new project record in the database.
@@ -1246,6 +1250,40 @@ const readProject = async (
     return { success: false, operation, message: "Error reading projects." };
   }
 }
+
+/**
+ * Resolves whether a user may access a project — as its owning Doctor, or as an Admin (who can
+ * access everything). This is deliberately a direct `findById` + manual check rather than an
+ * extension of `readProject`'s `$and`-only query builder, so the existing owner-only callers of
+ * `readProject` are left untouched.
+ *
+ * A project belongs to exactly one Doctor (or Admin); nobody else can ever access it, so
+ * `allowed`, `isOwner`, and `canRun` are always equal.
+ *
+ * @async
+ * @function userCanAccessProject
+ * @param {string} projectId - The project's MongoDB _id.
+ * @param {{ _id: string; role: UserRole }} user - The requesting user (role + id only needed).
+ * @returns {Promise<{ allowed: boolean; isOwner: boolean; canRun: boolean; project?: IProjectDocument }>}
+ */
+const userCanAccessProject = async (
+  projectId: string,
+  user: { _id: string; role: UserRole },
+): Promise<{
+  allowed: boolean;
+  isOwner: boolean;
+  canRun: boolean;
+  project?: IProjectDocument;
+}> => {
+  const project = await projectModel.findById(projectId);
+  if (!project) {
+    return { allowed: false, isOwner: false, canRun: false };
+  }
+  const userIdString = user._id.toString();
+  const isOwner = project.userid === userIdString;
+  const allowed = user.role === UserRole.Admin || isOwner;
+  return { allowed, isOwner, canRun: allowed, project: project as unknown as IProjectDocument };
+};
 
 // updateProject function
 const updateProject = async (
@@ -1565,6 +1603,15 @@ const updateProjectSegmentationMask = async (
       mask.segmentationmaskRLE = maskupdates.segmentationmaskRLE;
     }
 
+    if (maskupdates.flaggedForRetrain !== undefined) {
+      mask.flaggedForRetrain = maskupdates.flaggedForRetrain;
+    }
+    if (maskupdates.flaggedAt !== undefined) {
+      mask.flaggedAt = maskupdates.flaggedAt;
+    }
+    if (maskupdates.flaggedByUserId !== undefined) {
+      mask.flaggedByUserId = maskupdates.flaggedByUserId;
+    }
 
     if (maskupdates.frames) {
       if (!Array.isArray(maskupdates.frames) || maskupdates.frames.length === 0) {
@@ -2548,7 +2595,7 @@ const updateGPUHost = async (updates: Partial<IGPUHost>): Promise<GPUHostCrudRes
 // Using ES modules instead of CommonJS which is module.exports = {connectToDatabase, User};
 // ONLY unit tests should use userModel, fileModel directly, otherwise use the created functions to create users/files.
 export {
-  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, 
+  connectToDatabase, userModel, createUser, readUser, updateUser, deleteUser, authenticateUser, UserRole, IUser, IUserSafe, UserCrudResult, CRUDOperation, IUserDocument, IProject, IProjectDocument, IProjectSegmentationMask, projectModel, projectSegmentationMaskModel, createProject, readProject, updateProject, deleteProject, createProjectSegmentationMask, readProjectSegmentationMask, updateProjectSegmentationMask, deleteProjectSegmentationMask, userCanAccessProject,
   // Project Reconstruction exports
   IProjectReconstruction, IProjectReconstructionDocument, ProjectReconstructionCrudResult, MeshFormat, projectReconstructionModel, createProjectReconstruction, readProjectReconstruction, updateProjectReconstruction, deleteProjectReconstruction,
   // Job and GPU Host exports

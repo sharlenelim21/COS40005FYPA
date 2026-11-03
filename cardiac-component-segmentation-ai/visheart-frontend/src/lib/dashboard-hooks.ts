@@ -180,6 +180,21 @@ export function useUserProjects(enabled = true) {
     fetchProjects();
   }, [fetchProjects]);
 
+  // Background polling so a User's save shows up without a manual page reload — silent (no
+  // loading flicker), and skipped while disabled.
+  useEffect(() => {
+    if (!enabled) return;
+    const interval = setInterval(() => {
+      projectApi
+        .getProjects()
+        .then((response) => setProjects(Array.isArray(response?.projects) ? response.projects : []))
+        .catch(() => {
+          // Silent — this is a background refresh; the next manual refresh or poll will retry.
+        });
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [enabled]);
+
   return { projects, isLoading, refresh: fetchProjects };
 }
 

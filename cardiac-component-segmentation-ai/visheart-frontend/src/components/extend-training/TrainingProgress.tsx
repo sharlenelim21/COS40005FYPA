@@ -66,7 +66,7 @@ function StepDetail({ job, stepKey }: { job: TrainingJob; stepKey: string }) {
           {scored} of {progress.total} scans the model has never seen are scored
           {progress.scoring_active_first ? " (the model in use is scored first)" : ""}
         </p>
-        <Progress value={(scored / progress.total) * 100} />
+        <Progress value={trainingJobPercent(job) ?? 0} />
       </div>
     );
   }

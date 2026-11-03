@@ -10,7 +10,10 @@ import {
     projectReconstructionModel,
     readProject,
     IProjectDocument,
-    deleteProjectReconstruction
+    deleteProjectReconstruction,
+    updateProjectReconstruction,
+    userCanAccessProject,
+    UserRole,
 } from "../services/database";
 import { SegmentationModel } from "../types/database_types";
 import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
@@ -32,6 +35,41 @@ const normalizeSegmentationModel = (value: unknown): "medsam" | "unet" | null =>
     }
     return null;
 };
+
+/**
+ * Fails any pending/in-progress landmark-detection jobs that depend on a reconstruction being
+ * deleted. Without this, the job-processing side panel keeps reporting "in progress" until the
+ * unrelated stale-job sweep (jobs/stalelandmarkjobsweep.ts) eventually times it out, since
+ * landmarkApi.jobSummary on the frontend just mirrors the raw Job status (reported live, 2026-10).
+ *
+ * `segmentationModel` scopes the cleanup to jobs for that one model, using the same UNet-exact /
+ * MedSAM-or-null matching already used for landmark job queries at
+ * services/landmark_inference.ts:89-93 (MedSAM-sourced landmark jobs can have a null
+ * segmentationModel for backward compatibility). Omit it to clear every in-progress landmark job
+ * for the project -- used when every reconstruction (every model) is being deleted at once.
+ */
+async function clearDependentLandmarkJobs(projectId: string, segmentationModel?: "medsam" | "unet"): Promise<number> {
+    const query: Record<string, unknown> = {
+        projectid: projectId,
+        model_used: /landmark/i,
+        status: { $in: [JobStatus.PENDING, JobStatus.IN_PROGRESS] },
+    };
+    if (segmentationModel) {
+        query.segmentationModel = segmentationModel === "unet"
+            ? SegmentationModel.UNET
+            : { $in: [SegmentationModel.MEDSAM, null] };
+    }
+    const result = await jobModel.updateMany(query, {
+        $set: {
+            status: JobStatus.FAILED,
+            message: "Landmark detection cancelled: its 4D reconstruction was deleted before the job completed.",
+        },
+    });
+    if (result.modifiedCount > 0) {
+        logger.info(`${serviceLocation}: Cleared ${result.modifiedCount} pending/in-progress landmark job(s) for project ${projectId}${segmentationModel ? ` (model: ${segmentationModel})` : ""}.`);
+    }
+    return result.modifiedCount;
+}
 
 /**
  * Start 4D cardiac reconstruction job
@@ -114,6 +152,13 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
     }
     logger.info(`${serviceLocation}: Received request to fetch reconstruction results for project ID: ${projectId}`);
     try {
+        // Owner or Admin may read reconstruction results. Pre-existing gap: this endpoint
+        // previously had no ownership check at all beyond being logged in.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.allowed) {
+            return res.status(404).json({ success: false, message: "Project not found or access denied." });
+        }
+
         const [result, masksResult] = await Promise.all([
             readProjectReconstruction(projectId),
             readProjectSegmentationMask(projectId),
@@ -127,7 +172,9 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
             logger.error(`${serviceLocation}: Error reading reconstruction results for project ${projectId}: ${result.message}`);
             return res.status(500).json({ success: false, message: result.message || "Error reading reconstruction results." });
         }
-        if (!result.projectreconstructions || result.projectreconstructions.length === 0) {
+        const visibleReconstructions = result.projectreconstructions ?? [];
+
+        if (visibleReconstructions.length === 0) {
             logger.info(`${serviceLocation}: No reconstruction results found for project ID ${projectId}.`);
             return res.status(200).json({
                 message: "No reconstruction results found for this project.",
@@ -146,11 +193,11 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
 
         logger.info(
             `${serviceLocation}: Loaded reconstruction metadata for project ${projectId} in ${Date.now() - requestStart}ms ` +
-            `(reconstructions=${result.projectreconstructions.length}, masks=${masksById.size})`
+            `(reconstructions=${visibleReconstructions.length}, masks=${masksById.size})`
         );
 
         const reconstructionsWithUrls = await Promise.all(
-            result.projectreconstructions.map(async (recon) => {
+            visibleReconstructions.map(async (recon) => {
                 let downloadUrl = null;
                 const outputKey = recon.reconstructedMesh?.path
                     ? extractS3KeyFromUrl(recon.reconstructedMesh.path)
@@ -234,7 +281,7 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
         );
 
         logger.info(
-            `${serviceLocation}: Successfully fetched ${result.projectreconstructions.length} reconstruction(s) for project ID ${projectId} in ${Date.now() - requestStart}ms.`
+            `${serviceLocation}: Successfully fetched ${visibleReconstructions.length} reconstruction(s) for project ID ${projectId} in ${Date.now() - requestStart}ms.`
         );
         return res.status(200).json({ success: true, reconstructions: reconstructionsWithUrls });
     } catch (error) {
@@ -351,9 +398,9 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
     }
 
     try {
-        // 1. Verify user owns all requested projects
+        // 1. Verify user owns all requested projects. Admin may check status on any project.
         const userProjectsResult = await readProject(undefined, userId.toString());
-        if (!userProjectsResult.success || !userProjectsResult.projects) {
+        if (!userProjectsResult.success) {
             logger.error(`${serviceLocation}: Failed to fetch user projects for batch status check.`);
             return res.status(500).json({
                 success: false,
@@ -361,8 +408,12 @@ router.post("/batch-reconstruction-status", isAuth, async (req: Request, res: Re
             });
         }
 
-        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => String(p._id));
-        const unauthorizedProjects = projectIds.filter((id: string) => !userProjectIds.includes(id));
+        const accessibleProjectIds = new Set<string>(
+            (userProjectsResult.projects ?? []).map((p: IProjectDocument) => String(p._id))
+        );
+        const unauthorizedProjects = req.user!.role === UserRole.Admin
+            ? []
+            : projectIds.filter((id: string) => !accessibleProjectIds.has(id));
 
         if (unauthorizedProjects.length > 0) {
             logger.warn(`${serviceLocation}: User ${userId} attempted to check reconstruction status for unauthorized projects: ${unauthorizedProjects.join(', ')}`);
@@ -454,9 +505,9 @@ router.delete("/delete-project-reconstructions/:projectId",
         }
 
         try {
-            // 1. Verify user owns the project
-            const projectResult = await readProject(projectId, userId);
-            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            // Deleting reconstructions is a destructive/management action — owner or Admin only.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.isOwner && req.user!.role !== UserRole.Admin) {
                 logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
                 return res.status(403).json({
                     success: false,
@@ -517,10 +568,15 @@ router.delete("/delete-project-reconstructions/:projectId",
 
             logger.info(`${serviceLocation}: Successfully deleted ${deletedCount} reconstruction(s) for project ${projectId}.`);
 
+            // Every reconstruction (every model) is gone, so clear every in-progress landmark job
+            // for the project -- see clearDependentLandmarkJobs' own docstring for why.
+            const clearedLandmarkJobCount = await clearDependentLandmarkJobs(projectId);
+
             return res.status(200).json({
                 success: true,
                 message: `Successfully deleted ${deletedCount} reconstruction(s).`,
-                deletedCount
+                deletedCount,
+                clearedJobCount: clearedLandmarkJobCount
             });
 
         } catch (error: unknown) {
@@ -561,8 +617,9 @@ router.delete("/delete-reconstruction/:projectId/:reconstructionId",
         }
 
         try {
-            const projectResult = await readProject(projectId, userId);
-            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            // Deleting a reconstruction is a destructive/management action — owner or Admin only.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.isOwner && req.user!.role !== UserRole.Admin) {
                 logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
                 return res.status(403).json({
                     success: false,
@@ -600,10 +657,14 @@ router.delete("/delete-reconstruction/:projectId/:reconstructionId",
                 });
             }
 
+            const deletedModel = normalizeSegmentationModel(reconstruction.segmentationModel) ?? undefined;
+            const clearedLandmarkJobCount = await clearDependentLandmarkJobs(projectId, deletedModel);
+
             return res.status(200).json({
                 success: true,
                 message: "Reconstruction deleted successfully.",
-                deletedCount: 1
+                deletedCount: 1,
+                clearedJobCount: clearedLandmarkJobCount
             });
         } catch (error: unknown) {
             LogError(error as Error, serviceLocation, `Error deleting reconstruction ${reconstructionId} for project ${projectId}`);
@@ -657,9 +718,9 @@ router.delete("/delete-model-reconstruction/:projectId",
         }
 
         try {
-            // 1. Verify user owns the project
-            const projectResult = await readProject(projectId, userId);
-            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            // Deleting a reconstruction is a destructive/management action — owner or Admin only.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.isOwner && req.user!.role !== UserRole.Admin) {
                 logger.warn(`${serviceLocation}: User ${userId} does not have access to project ${projectId} or project not found.`);
                 return res.status(403).json({
                     success: false,
@@ -752,12 +813,13 @@ router.delete("/delete-model-reconstruction/:projectId",
             if (clearedJobsResult.modifiedCount > 0) {
                 logger.info(`${serviceLocation}: Cleared ${clearedJobsResult.modifiedCount} pending/in-progress ${segmentationModel} job(s) for project ${projectId}.`);
             }
+            const clearedLandmarkJobCount = await clearDependentLandmarkJobs(projectId, segmentationModel);
 
             return res.status(200).json({
                 success: true,
                 message: `Successfully deleted ${deletedCount} ${segmentationModel} reconstruction(s).`,
                 deletedCount,
-                clearedJobCount: clearedJobsResult.modifiedCount
+                clearedJobCount: clearedJobsResult.modifiedCount + clearedLandmarkJobCount
             });
 
         } catch (error: unknown) {
@@ -771,18 +833,17 @@ router.delete("/delete-model-reconstruction/:projectId",
 
 // Smooth heart motion for the landmark page's 3D heart (services/reconstruction_motion.ts): GET says where a
 // reconstruction's motion stands (missing / processing / failed / ready with a link), POST starts building it.
-// Only the project's owner; the motion is built from the reconstruction's own meshes, so nothing else is read.
-async function motionSource(req: Request): Promise<{ source?: MotionSource; status: number; message?: string }> {
+// Owner or Admin only.
+async function motionSource(req: Request, requireRun: boolean): Promise<{ source?: MotionSource; status: number; message?: string }> {
     const projectId = String(req.params.projectId);
     const reconstructionId = String(req.params.reconstructionId);
     const userId = (req.user as { _id?: unknown } | undefined)?._id?.toString();
-    if (!userId) return { status: 401, message: "Unauthorized." };
+    if (!userId || !req.user) return { status: 401, message: "Unauthorized." };
     if (!/^[0-9a-f]{24}$/i.test(projectId) || !/^[0-9a-f]{24}$/i.test(reconstructionId)) {
         return { status: 400, message: "Unknown project or reconstruction." };
     }
-    const project = await readProject(projectId, userId);
-    if (!project.success) return { status: 500, message: "The project could not be read." };
-    if (!project.projects?.length) return { status: 404, message: "Project not found." };
+    const access = await userCanAccessProject(projectId, req.user);
+    if (requireRun ? !access.canRun : !access.allowed) return { status: 404, message: "Project not found." };
     const result = await readProjectReconstruction(projectId, reconstructionId);
     // With a reconstruction id the reader returns that one document (projectreconstruction), already scoped to the project.
     const reconstruction = result.projectreconstruction;
@@ -794,7 +855,7 @@ async function motionSource(req: Request): Promise<{ source?: MotionSource; stat
 
 router.get("/motion/:projectId/:reconstructionId", isAuth, async (req: Request, res: Response) => {
     try {
-        const { source, status, message } = await motionSource(req);
+        const { source, status, message } = await motionSource(req, false);
         if (!source) return res.status(status).json({ success: false, message });
         return res.status(200).json({ success: true, motion: await getMotion(source) });
     } catch (error) {
@@ -805,7 +866,7 @@ router.get("/motion/:projectId/:reconstructionId", isAuth, async (req: Request, 
 
 router.post("/motion/:projectId/:reconstructionId", isAuth, isAuthAndNotGuest, async (req: Request, res: Response) => {
     try {
-        const { source, status, message } = await motionSource(req);
+        const { source, status, message } = await motionSource(req, true);
         if (!source) return res.status(status).json({ success: false, message });
         if ((req.body as { retry?: unknown } | undefined)?.retry === true) clearFailedMotion(source.reconstructionId);
         const motion = await startMotion(source);

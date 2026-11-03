@@ -68,11 +68,23 @@ async function login() {
 }
 
 async function getJson(cookie, pathname) {
-  const res = await fetch(`${BASE_URL}${pathname}`, { headers: { Cookie: cookie } });
-  const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); } catch { json = { raw: text }; }
-  return { status: res.status, json };
+  // One retry on a transient connection drop (observed live, 2026-10: Node's fetch
+  // occasionally resets the keep-alive connection between sequential requests on
+  // this box) -- a single ECONNRESET used to abort the entire multi-patient run.
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${BASE_URL}${pathname}`, { headers: { Cookie: cookie } });
+      const text = await res.text();
+      let json;
+      try { json = JSON.parse(text); } catch { json = { raw: text }; }
+      return { status: res.status, json };
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  throw lastErr;
 }
 
 function runPython(scriptName, payload) {
@@ -211,7 +223,14 @@ async function main() {
     const row = csvById[p.patientId];
     if (!row) { console.log(`  ${p.patientId}: skipped — not in CSV`); skipped++; continue; }
 
-    const features = await processPatient(cookie, p.patientId, p.projectId, row);
+    let features;
+    try {
+      features = await processPatient(cookie, p.patientId, p.projectId, row);
+    } catch (err) {
+      console.log(`  ${p.patientId}: skipped — ${err.message}`);
+      skipped++;
+      continue;
+    }
     if (!features) { skipped++; continue; }
     byGroup[row.Group].push(features);
     console.log(`  ${p.patientId} (${row.Group}): EF=${features.EF?.toFixed?.(1)} EDVI=${features.EDVI?.toFixed?.(1)} ` +

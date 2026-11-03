@@ -87,6 +87,22 @@ export function ShowForUser({
   );
 }
 
+// User or Admin — anyone who creates/owns/manages their own projects directly.
+// Excludes Guest (handled separately via ShowForGuest).
+export function ShowForProjectCreator({
+  children,
+  fallback,
+}: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}) {
+  return (
+    <RoleGuard allowedRoles={["user", "admin"]} fallback={fallback}>
+      {children}
+    </RoleGuard>
+  );
+}
+
 export function ShowForGuest({
   children,
   fallback,

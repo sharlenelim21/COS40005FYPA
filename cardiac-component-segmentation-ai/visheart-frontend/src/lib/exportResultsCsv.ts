@@ -203,7 +203,7 @@ export function buildResultsCsv(
       ));
     }
     if (pg.rv_severity) {
-      const notes = [pg.rv_severity.ratio_note, pg.rv_severity.arvc_note, pg.rv_severity.pah_note, pg.rv_severity.generic_note]
+      const notes = [pg.rv_severity.arvc_note, pg.rv_severity.pah_note, pg.rv_severity.generic_note]
         .filter((n): n is string => !!n)
         .join(" | ");
       lines.push(row(MODEL_LABEL[m], "RV severity context", "", notes, ""));

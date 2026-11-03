@@ -140,8 +140,10 @@ export function RegistrationOnly({ children, redirectTo = "/dashboard" }: { chil
 
   useEffect(() => {
     if (!loading && user && user.role !== "guest") {
-      // Only redirect non-guest authenticated users (full users and admins)
-      router.push(redirectTo);
+      // Admin's landing page is the Admin Panel (oversight is their primary job here),
+      // not the pipeline dashboard every other role lands on.
+      const target = redirectTo === "/dashboard" && user.role === "admin" ? "/admin" : redirectTo;
+      router.push(target);
     }
   }, [user, loading, router, redirectTo]);
 

@@ -87,8 +87,14 @@ interface SortConfig {
 const ROLE_STYLES = {
   admin: "bg-blue-100 text-blue-800",
   guest: "bg-yellow-100 text-yellow-800",
-  user: "bg-gray-100 text-gray-800",
+  user: "bg-green-100 text-green-800",
 } as const;
+
+const ROLE_LABELS: Record<AdminUser["role"], string> = {
+  admin: "Admin",
+  user: "User",
+  guest: "Guest",
+};
 
 // Loading skeleton component
 const TableSkeleton = React.memo(() => (
@@ -120,7 +126,7 @@ const UserStatistics = React.memo(
         <CardDescription>Overview of users in the system</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border p-4">
             <div className="text-2xl font-bold">{userStats.total}</div>
             <div className="text-muted-foreground text-sm">Total Users</div>
@@ -193,7 +199,7 @@ const UserTableRow = React.memo(
             <span
               className={`rounded-full px-2 py-1 text-xs font-medium ${ROLE_STYLES[user.role]}`}
             >
-              {user.role}
+              {ROLE_LABELS[user.role]}
             </span>
           </div>
         </TableCell>

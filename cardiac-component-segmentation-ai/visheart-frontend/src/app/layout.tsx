@@ -14,7 +14,7 @@ import Script from "next/script";
 // });
 
 // UI Imports
-import Footer from "@/ui/footer/footer";
+import FooterGate from "@/ui/footer/footer-gate";
 import Header from "@/ui/header/header";
 
 import type { Viewport } from "next";
@@ -24,6 +24,7 @@ import { ThemeProvider } from "@/lib/theme-provider";
 import { AuthProvider } from "@/context/auth-context";
 import { FloatingFAQButton } from "@/components/FloatingFAQButton";
 import { JobCompletionNotifier } from "@/components/JobCompletionNotifier";
+import { AdminAlertNotifier } from "@/components/AdminAlertNotifier";
 
 export const metadata: Metadata = {
   title: "VisHeart",
@@ -61,10 +62,11 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AuthProvider>
             <JobCompletionNotifier />
+            <AdminAlertNotifier />
             <Header />
             {children}
             <FloatingFAQButton />
-            <Footer />
+            <FooterGate />
           </AuthProvider>
         </ThemeProvider>
         <Toaster richColors closeButton />

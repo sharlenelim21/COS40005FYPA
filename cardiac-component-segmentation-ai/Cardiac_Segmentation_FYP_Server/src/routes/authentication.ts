@@ -3,15 +3,18 @@
 
 import express, { Request, Response, NextFunction } from "express";
 import passport from "passport";
-import { IUser, IUserSafe, UserRole, createUser, readUser, updateUser, deleteUser, authenticateUser } from "../services/database"; // CRUD + Auth functions for User
-import { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest } from "../services/passportjs"; // Import Passport.js middleware
+import {
+  IUser, IUserSafe, UserRole,
+  createUser, readUser, updateUser, deleteUser, authenticateUser,
+} from "../services/database"; // CRUD + Auth functions for User
+import { isAuth, isAuthAndAdmin, isAuthAndNotGuest, isAuthandGuest, isAuthAndUser } from "../services/passportjs"; // Import Passport.js middleware
 import logger from "../services/logger"; // Import logger
-// import { extractS3KeyFromUrl, deleteFromS3 } from "../services/s3_handler";
+import { cleanupUserS3Storage } from '../services/s3_handler';
 import validateFields from "../utils/field_validation"; // Import reusable validation middleware
 import { body, validationResult } from 'express-validator'; // Import express-validator for input validation
 import { v4 as uuidv4 } from 'uuid'; // Import UUID for generating unique guest IDs
-import { cleanupUserS3Storage } from '../services/s3_handler';
 import { handleUserSaveUnsave } from "../jobs/projectcleanupjob"; // Import project handler for user project management
+import LogError from "../utils/error_logger";
 // express-rate-limit is installed as a production dependency — baked into the Docker image.
 // It will be active after the next docker build. For local volume-mount dev, the backend
 // falls back gracefully if the module is somehow missing (see loginRateLimiter below).
@@ -45,7 +48,6 @@ const loginRateLimiter = rateLimit
   : (_req: Request, _res: Response, next: NextFunction) => next(); // no-op fallback until image rebuild
 
 router.post("/register",
-  // Use all validation fields for registration
   validateFields,
   (req: Request, res: Response, next: NextFunction): void => {
     const errors = validationResult(req);
@@ -58,13 +60,18 @@ router.post("/register",
   },
   async (req: Request, res: Response): Promise<void> => {
     const { username, password, email, phone } = req.body;
+
     // Create new IUser object
     const newUser: IUser = {
       username,
       password,
       email,
       phone,
-      role: UserRole.User, // Default role for new users
+      // Every signup is a User directly — no verification step. This is a fully local,
+      // single-shared-laptop deployment (Admin and User share the device), so the ID-card/
+      // Admin-approval gate this used to require added UI friction without adding real
+      // security on a device that's already physically trusted. Removed 2026-10.
+      role: UserRole.User,
     };
     const result = await createUser(newUser);
     if (!result.success) {
@@ -106,13 +113,13 @@ router.post("/register-from-guest",
         return;
       }
 
-      // Update the guest entry with new details and change role to User
+      // Update the guest entry with new details — same starting role as any other signup.
       const updateData = {
         username,
         password,
         email,
         phone,
-        role: UserRole.User, // Change role to User
+        role: UserRole.User,
       };
       const result = await updateUser(guestUser._id, updateData);
 

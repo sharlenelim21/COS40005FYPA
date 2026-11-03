@@ -133,14 +133,16 @@ function ProjectPageInner() {
     if (loading !== "done") return;
     if (!requestedBuildChamber) return;
     if (handledBuildParamRef.current) return;
+    if (projectData?.canRun === false) return; // View-only — a deep link can't bypass the lock.
     handledBuildParamRef.current = true;
     if (requestedBuildModel) setSelectedModelForCreation(requestedBuildModel);
     setPresetChamber(requestedBuildChamber);
     setShowReconstructionDialog(true);
-  }, [loading, requestedBuildChamber, requestedBuildModel]);
+  }, [loading, requestedBuildChamber, requestedBuildModel, projectData?.canRun]);
   const { processingUnit } = useGpuStatus();
   const { user } = useAuth();
   const isGuest = user?.role === "guest";
+  const isProjectOwner = projectData?.isOwner !== false;
 
   // Update page title dynamically
   useEffect(() => {
@@ -529,6 +531,7 @@ function ProjectPageInner() {
     () => ({ lv: existing4DModels, rv: existingRvModels }),
     [existing4DModels, existingRvModels],
   );
+
   const refreshMasksSilently = useCallback(() => refreshMasks({ silent: true }), [refreshMasks]);
   const pipeline = useAutoPipelineChain({
     projectId,
@@ -601,6 +604,14 @@ function ProjectPageInner() {
       ? "landmark"
       : null;
   const highlightedStage = explicitStage ?? derivedNextStage;
+  // The guidance popups on the segmentation/reconstruction pages navigate here with
+  // ?highlight=<stage>, which already drives the glow/pulse ring below -- but a user landing on
+  // a long project page still has to notice and scroll to the glowing button themselves. Bring it
+  // into view instead.
+  useEffect(() => {
+    if (!highlightedStage) return;
+    document.getElementById(`stage-${highlightedStage}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightedStage]);
   const [pulseStage, setPulseStage] = useState<StageKey | null>(null);
   useEffect(() => {
     if (!derivedNextStage || !projectId) return;
@@ -953,7 +964,7 @@ function ProjectPageInner() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button asChild size="lg" variant={isHighlighted("segmentation") ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${stageHighlightClass("segmentation")}`}>
-              <Link href={`/project/${projectId}/segmentation`}>
+              <Link id="stage-segmentation" href={`/project/${projectId}/segmentation`}>
                 <div className="flex items-center gap-3 w-full">
                   <Edit className={`h-5 w-5 ${isHighlighted("segmentation") ? "text-primary-foreground" : "text-primary"}`} />
                   <div className="text-left flex-1">
@@ -1036,6 +1047,7 @@ function ProjectPageInner() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              id="stage-reconstruction"
               onClick={() => handleOpenReconstruction()}
               size="lg"
               variant={isHighlighted("reconstruction") ? "default" : "outline"}
@@ -1130,7 +1142,7 @@ function ProjectPageInner() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button asChild size="lg" variant={isHighlighted("landmark") ? "default" : "outline"} className={`justify-start h-auto py-4 transition-all duration-300 ${stageHighlightClass("landmark")}`}>
-              <Link href={`/project/${projectId}/landmark-detection`}>
+              <Link id="stage-landmark" href={`/project/${projectId}/landmark-detection`}>
                 <div className="flex items-center gap-3 w-full">
                   <Crosshair className={`h-5 w-5 ${isHighlighted("landmark") ? "text-primary-foreground" : "text-primary"}`} />
                   <div className="text-left flex-1">
@@ -1373,9 +1385,11 @@ function ProjectPageInner() {
                     )}
                   </div>
                 ) : (
-                  <h1 className="text-4xl font-bold tracking-tight">{currentProjectName}</h1>
+                  <div className="flex items-center gap-3">
+                    <h1 className="text-4xl font-bold tracking-tight">{currentProjectName}</h1>
+                  </div>
                 )}
-                
+
                 {isEditing ? (
                   <Textarea 
                     value={editedDescription} 
@@ -1402,9 +1416,9 @@ function ProjectPageInner() {
               </div>
             </div>
 
-            {/* Edit Controls */}
+            {/* Edit Controls — owner (User/Admin) only. */}
             <ShowForRegisteredUser>
-              {isEditing ? (
+              {isProjectOwner && (isEditing ? (
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" onClick={handleCancelEdit} disabled={isUpdating}>
                     <X className="h-4 w-4 mr-2" />
@@ -1431,7 +1445,7 @@ function ProjectPageInner() {
                     Delete
                   </Button>
                 </div>
-              )}
+              ))}
             </ShowForRegisteredUser>
           </div>
         </div>
@@ -1752,7 +1766,7 @@ function ProjectPageInner() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                   {/* Dimensions */}
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Dimensions</p>
@@ -1904,7 +1918,7 @@ function ProjectPageInner() {
 
                     return (
                       <div key={recon.reconstructionId} className={`rounded-lg border p-4 space-y-3 ${isRvOnly ? "border-amber-500/40" : ""}`}>
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div className="min-w-0 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="font-semibold truncate">{recon.name || "4D Reconstruction"}</p>
@@ -1975,7 +1989,7 @@ function ProjectPageInner() {
                                     hidden there. RV is for reference/research only — not reliable for
                                     clinical diagnosis.
                                   </p>
-                                  <ShowForRegisteredUser>
+                                  {isProjectOwner && (
                                     <Button
                                       size="sm"
                                       variant="ghost"
@@ -1988,7 +2002,7 @@ function ProjectPageInner() {
                                       <Trash2 className="h-3 w-3 mr-1" />
                                       Delete RV only
                                     </Button>
-                                  </ShowForRegisteredUser>
+                                  )}
                                 </div>
                               </div>
                             )}
@@ -2011,7 +2025,7 @@ function ProjectPageInner() {
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
-                            <ShowForRegisteredUser>
+                            {isProjectOwner && (
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -2024,7 +2038,7 @@ function ProjectPageInner() {
                                 <Trash2 className="h-4 w-4 mr-2" />
                                 Delete
                               </Button>
-                            </ShowForRegisteredUser>
+                            )}
                           </div>
                         </div>
                       </div>

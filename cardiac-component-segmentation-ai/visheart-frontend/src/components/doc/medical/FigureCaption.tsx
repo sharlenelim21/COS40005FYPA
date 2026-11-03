@@ -6,7 +6,7 @@ import { ContentText } from "@/components/doc/medical/ContentText";
 const URL_SPLIT = /(https?:\/\/\S+)/;
 const IS_URL = /^https?:\/\/\S+$/;
 
-function SourceText({ text }: { text: string }) {
+export function SourceText({ text }: { text: string }) {
   return (
     <>
       {text.split(URL_SPLIT).map((part, index) =>

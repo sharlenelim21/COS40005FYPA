@@ -27,16 +27,12 @@ console.log(`API base URL: ${process.env.NEXT_PUBLIC_API_URL}`);
 // Authentication functions
 export const authApi = {
   /**
-   * Register a new user account
-   * @param userData - User registration data containing username, password, email, and phone
+   * Register a new user account. Plain JSON — no staff-verification fields or file upload
+   * anymore, every new account is a User directly (see authentication.ts's /register).
+   * @param userData - username, password, email, phone
    * @returns Promise<ApiResponse> - Registration response with success status and user data
    */
-  register: async (userData: {
-    username: string;
-    password: string;
-    email: string;
-    phone: string;
-  }) => {
+  register: async (userData: { username: string; password: string; email: string; phone: string }) => {
     try {
       const response = await api.post("/auth/register", userData);
       return response.data;
@@ -155,6 +151,7 @@ export const authApi = {
       throw error;
     }
   },
+
 };
 
 // Project management functions
@@ -196,6 +193,16 @@ export const projectApi = {
         },
         timeout: 300000,
       });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Create a project from the fixed Guest demo case (Guest accounts can't upload arbitrary files)
+  createDemoProject: async () => {
+    try {
+      const response = await api.post("/project/create-demo", {}, { timeout: 300000 });
       return response.data;
     } catch (error) {
       throw error;
@@ -256,6 +263,7 @@ export const projectApi = {
       throw error;
     }
   },
+
 };
 
 // Segmentation functions
@@ -539,6 +547,16 @@ export const segmentationApi = {
       throw error;
     }
   },
+
+  // Flag a mask (own or assigned) as worth considering for U-Net retraining
+  flagMaskForRetrain: async (maskId: string) => {
+    try {
+      const response = await api.patch(`/segmentation/mask/${maskId}/flag-for-retrain`);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
 };
 
 // Reconstruction functions
@@ -800,6 +818,16 @@ export const adminApi = {
     try {
       // This endpoint is now GET /auth/users as per the new routes
       const response = await api.get("/auth/users");
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Masks flagged "consider for retraining" across all projects (admin only)
+  getFlaggedMasks: async () => {
+    try {
+      const response = await api.get("/admin/flagged-masks");
       return response.data;
     } catch (error) {
       throw error;

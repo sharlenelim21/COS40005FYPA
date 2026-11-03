@@ -405,3 +405,66 @@ export const uploadMaskToS3 = async (
     throw error;
   }
 };
+
+/**
+ * Uploads a small in-memory buffer (e.g. a staff ID card image/PDF from a multer memory-storage
+ * upload) directly to the configured bucket under the given key. Unlike `uploadToS3`, this never
+ * constructs or returns a public/presigned URL — callers that need the file back (e.g. the admin
+ * ID-card viewer) must go through `getS3ObjectStream` instead, so these objects are never
+ * reachable except by a backend route that explicitly checks admin access first.
+ *
+ * @async
+ * @function uploadBufferToS3
+ * @param {Buffer} buffer - The file contents.
+ * @param {string} key - Full object key to store under (e.g. `staff_id_cards/{userId}/{uuid}.png`).
+ * @param {string} contentType - MIME type to store on the object.
+ * @returns {Promise<boolean>} true on success, false if the client isn't configured.
+ */
+export const uploadBufferToS3 = async (buffer: Buffer, key: string, contentType: string): Promise<boolean> => {
+  if (!s3Client || !process.env.AWS_BUCKET_NAME) {
+    logger.error(`${serviceLocation}: Cannot upload buffer to S3: Client or bucket not configured`);
+    return false;
+  }
+  try {
+    await s3Client.send(new PutObjectCommand({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+    }));
+    logger.info(`${serviceLocation}: Successfully uploaded buffer to S3 key ${key}`);
+    return true;
+  } catch (error) {
+    logger.error(`${serviceLocation}: Error uploading buffer to S3 key ${key}:`, error);
+    return false;
+  }
+};
+
+/**
+ * Reads an object back as a stream + content type, for a backend route to pipe directly to an
+ * authorized caller's response (e.g. the admin-only staff ID-card viewer). Deliberately does not
+ * generate a presigned URL — the object is private and only ever reachable through a route that
+ * has already checked the requester's role.
+ *
+ * @async
+ * @function getS3ObjectStream
+ * @param {string} key - Full object key to read.
+ * @returns {Promise<{ body: Readable; contentType?: string } | null>} null if not found/misconfigured.
+ */
+export const getS3ObjectStream = async (key: string): Promise<{ body: Readable; contentType?: string } | null> => {
+  if (!s3Client || !process.env.AWS_BUCKET_NAME) {
+    logger.error(`${serviceLocation}: Cannot read object from S3: Client or bucket not configured`);
+    return null;
+  }
+  try {
+    const response: GetObjectCommandOutput = await s3Client.send(new GetObjectCommand({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: key,
+    }));
+    if (!response.Body) return null;
+    return { body: response.Body as Readable, contentType: response.ContentType };
+  } catch (error) {
+    logger.error(`${serviceLocation}: Error reading S3 key ${key}:`, error);
+    return null;
+  }
+};

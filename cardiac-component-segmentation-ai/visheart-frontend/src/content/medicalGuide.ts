@@ -48,6 +48,11 @@ export const REFERENCES = {
       "Zhan Y, Friedrich MG, Dendukuri N, Lu Y, Chetrit M, Schiller I, Joseph L, Shaw JL, Chuang ML, Riffel JH, Manning WJ, Afilalo J. Meta-Analysis of Normal Reference Values for Right and Left Ventricular Quantification by Cardiovascular Magnetic Resonance. Circ Cardiovasc Imaging. 2024;17(2):e016090.",
     doi: "10.1161/CIRCIMAGING.123.016090",
   },
+  bernard2018: {
+    citation:
+      "Bernard O, Lalande A, Zotti C, et al. Deep Learning Techniques for Automatic MRI Cardiac Multi-Structures Segmentation and Diagnosis: Is the Problem Solved? IEEE Trans Med Imaging. 2018;37(11):2514–2525.",
+    doi: "10.1109/TMI.2018.2837502",
+  },
   bazhutina2023: {
     citation:
       "Bazhutina A, Khamzin S, Chmelevsky M, Zubarev S, Sinitca A, Budanova M, Rainer W. An automated algorithm for generating of AHA model based on 3D heart geometry. Computing in Cardiology (CinC). 2023.",
@@ -98,6 +103,7 @@ export interface CalloutBlock {
   variant: CalloutVariant;
   title: string;
   body: Claim[];
+  list?: Claim[];
 }
 
 export interface RangeRow {
@@ -155,7 +161,27 @@ export interface ConditionsBlock {
   note?: Claim;
 }
 
-export type ContentBlock = CalloutBlock | RangeTableBlock | FigureBlock | VideoBlock | ConditionsBlock;
+export interface PatternRow {
+  group: string;
+  meaning: string;
+  measurements: string;
+}
+
+export interface PatternTableBlock {
+  kind: "patternTable";
+  caption: string;
+  rows: PatternRow[];
+  attribution: string;
+  refs: RefId[];
+}
+
+export type ContentBlock =
+  | CalloutBlock
+  | RangeTableBlock
+  | FigureBlock
+  | VideoBlock
+  | ConditionsBlock
+  | PatternTableBlock;
 
 export interface GuideSection {
   id: string;
@@ -579,36 +605,6 @@ export const MEDICAL_GUIDE: MedicalGuide = {
       ],
       blocks: [
         {
-          kind: "callout",
-          variant: "info",
-          title: "How this relates to VisHeart",
-          body: [
-            {
-              text: "VisHeart's Disease Pattern Gates feature checks a scan's measurements against each condition's own published classification criteria (normal, MINF, DCM, HCM, and an abnormal-right-ventricle group) and reports which criteria are met. It does not diagnose disease, and meeting zero, one, or more than one gate at once is expected and not an error.",
-              refs: [],
-            },
-          ],
-        },
-        {
-          kind: "callout",
-          variant: "info",
-          title: "How VisHeart checks its own measurements against this research",
-          body: [
-            {
-              text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the ACDC Challenge dataset's own published classification rules directly (for example, ejection fraction below 40% for MINF).",
-              refs: [],
-            },
-            {
-              text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the results against the dataset's official hand-labelled ground truth for the same patients. The two agreed closely for every condition, which is evidence the pipeline's own numbers can be trusted, not a new diagnostic range.",
-              refs: [],
-            },
-            {
-              text: "The normal (NOR) group is the one exception: the ACDC Challenge publishes no numeric criterion for it at all. VisHeart instead uses the widest combination of three sources — a published meta-analysis of healthy adults, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group — so a genuinely healthy heart is not wrongly flagged just because of how one single study happened to measure it.",
-              refs: ["zhan2024"],
-            },
-          ],
-        },
-        {
           kind: "conditions",
           conditions: [
             {
@@ -728,6 +724,89 @@ export const MEDICAL_GUIDE: MedicalGuide = {
           },
         },
       ],
+      subsections: [
+        {
+          id: "disease-patterns",
+          title: "Disease patterns",
+          summary: [
+            {
+              text: "VisHeart compares a patient’s heart measurements with reference patterns of common heart conditions. These patterns follow the diagnostic groups used in the ACDC cardiac MRI dataset. Volumes are indexed to body surface area (mL/m²).",
+              refs: ["bernard2018"],
+            },
+          ],
+          blocks: [
+            {
+              kind: "patternTable",
+              caption: "Diagnostic groups in the ACDC cardiac MRI dataset.",
+              rows: [
+                {
+                  group: "Normal (NOR)",
+                  meaning: "Normal heart structure and function",
+                  measurements:
+                    "LV ejection fraction above 50%; wall thickness in diastole below 12 mm; LV diastolic volume below 90 mL/m² (men) or 80 mL/m² (women); RV volume below 100 mL/m² and RV ejection fraction above 40%",
+                },
+                {
+                  group: "Myocardial infarction (MINF)",
+                  meaning: "Weakened pumping after a heart attack",
+                  measurements:
+                    "LV ejection fraction below 40%; some patients have a high diastolic LV volume as the heart remodels",
+                },
+                {
+                  group: "Dilated cardiomyopathy (DCM)",
+                  meaning: "Enlarged, weakened left ventricle",
+                  measurements:
+                    "LV ejection fraction below 40%; LV volume above 100 mL/m²; wall thickness in diastole below 12 mm",
+                },
+                {
+                  group: "Hypertrophic cardiomyopathy (HCM)",
+                  meaning: "Thickened heart muscle, normal pumping",
+                  measurements:
+                    "LV ejection fraction above 55%; one or more myocardial segments thicker than 15 mm in diastole",
+                },
+                {
+                  group: "Abnormal right ventricle (ARV)",
+                  meaning: "Enlarged or weakened right ventricle",
+                  measurements:
+                    "RV volume above 110 mL/m² (men) or 100 mL/m² (women), and/or RV ejection fraction below 40%",
+                },
+              ],
+              attribution:
+                "O. Bernard et al., “Deep Learning Techniques for Automatic MRI Cardiac Multi-structures Segmentation and Diagnosis: Is the Problem Solved?”, IEEE Transactions on Medical Imaging, vol. 37, no. 11, pp. 2514–2525, 2018. https://doi.org/10.1109/TMI.2018.2837502",
+              refs: ["bernard2018"],
+            },
+            {
+              kind: "callout",
+              variant: "info",
+              title: "How this relates to VisHeart",
+              body: [
+                {
+                  text: "VisHeart's Disease Pattern Gates feature checks a scan's measurements against each condition's own published classification criteria (normal, MINF, DCM, HCM, and an abnormal-right-ventricle group) and reports which criteria are met. It does not diagnose disease, and meeting zero, one, or more than one gate at once is expected and not an error.",
+                  refs: [],
+                },
+              ],
+            },
+            {
+              kind: "callout",
+              variant: "info",
+              title: "How VisHeart checks its own measurements against this research",
+              body: [
+                {
+                  text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the numbers from the actual research paper that created and labelled the ACDC dataset (for example, ejection fraction below 40% for MINF). This replaces an earlier version of VisHeart that read these numbers from the ACDC Challenge website's own short summary instead, which turned out to differ from the paper in two places: it omits a wall-thickness requirement for DCM, and it treats a cardiac-mass figure as required for HCM when the paper's own wording makes it an incidental finding in some patients, not a requirement.",
+                  refs: ["bernard2018"],
+                },
+                {
+                  text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the results against the dataset's official hand-labelled ground truth for the same patients. The two agreed closely for every condition, which is evidence the pipeline's own numbers can be trusted, not a new diagnostic range.",
+                  refs: [],
+                },
+                {
+                  text: "The normal (NOR) group is checked for both the left and right side of the heart, using the paper's own published NOR numbers for each. VisHeart still widens every number to the widest combination of three sources — this paper's own numbers, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group (plus, for the one measurement the paper gives no number for, a published meta-analysis of healthy adults) — so a genuinely healthy heart is not wrongly flagged just because of how one single source happened to measure it.",
+                  refs: ["bernard2018", "zhan2024"],
+                },
+              ],
+            },
+          ],
+        },
+      ],
     },
   ],
 
@@ -739,12 +818,14 @@ const claimRefs = (claims: Claim[] = []): RefId[] => claims.flatMap((claim) => c
 function blockRefs(block: ContentBlock): RefId[] {
   switch (block.kind) {
     case "callout":
-      return claimRefs(block.body);
+      return [...claimRefs(block.body), ...claimRefs(block.list)];
     case "rangeTable":
       return [...block.groups.flatMap((group) => group.rows.flatMap((row) => row.refs)), ...claimRefs(block.footnotes)];
     case "figure":
     case "video":
       return block.refs ?? [];
+    case "patternTable":
+      return block.refs;
     case "conditions":
       return [
         ...block.conditions.flatMap((condition) => [...condition.summary.refs, ...claimRefs(condition.imagingFeatures)]),

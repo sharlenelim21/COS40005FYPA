@@ -3,7 +3,6 @@
 import dynamic from "next/dynamic";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { toast } from "sonner";
 import {
   Loader2,
@@ -21,6 +20,7 @@ import {
   Save,
 } from "lucide-react";
 
+import { useAuth } from "@/context/auth-context";
 import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
 import { useProjectResults, invalidateProjectResults, type MaskDoc } from "@/hooks/useProjectResults";
 import { LoadingProject } from "@/components/project/LoadingProject";
@@ -31,6 +31,7 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
@@ -38,6 +39,7 @@ import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, type StrainComput
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
 import { useMotionMesh } from "@/hooks/useMotionMesh";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { RV_SEGMENT_NAMES, RV_REGION_TO_SEGMENT3D, RV_SEGMENT3D_TO_REGION } from "@/components/landmark/heartColor";
 import { rvEdEsFac, rvFacSeries } from "@/lib/rvAreaMetrics";
 import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
@@ -146,9 +148,10 @@ export default function LandmarkDetectionPage() {
   const activeModel: "unet" | "medsam" =
     modelParam === "medsam" ? "medsam"
     : modelParam === "unet" ? "unet"
-    // No explicit choice in the URL: prefer UNet, but only when it's actually available —
-    // fall back to MedSAM if UNet has no mask for this project yet. Before existingSegModels
-    // has loaded (both false), this still reads as "unet", matching the old hardcoded default.
+    // No explicit choice in the URL yet: this initial synchronous value still prefers UNet
+    // (matching the old hardcoded default) for the first render only — autoPickedMaskModel
+    // below corrects it to whichever model's mask is actually most recent as soon as that
+    // data loads, and writes the result back into the URL so this branch is skipped after.
     : existingSegModels.unet ? "unet"
     : existingSegModels.medsam ? "medsam"
     : "unet";
@@ -187,6 +190,8 @@ export default function LandmarkDetectionPage() {
     hasReconstructions,
     refreshReconstructions,
   } = useProject();
+
+  const { user } = useAuth();
 
   useEffect(() => {
     const name = projectData?.name;
@@ -257,14 +262,64 @@ export default function LandmarkDetectionPage() {
   // GRS/GCS) since RV has different metrics: GCS (free-wall length) and GAS
   // (cavity area) from the 9-segment RV bullseye, shown separately.
   const [selectedRvMetricType, setSelectedRvMetricType] = useState<"GCS" | "GAS">("GCS");
-  // Full cycle's "Compute/Recompute all frames" busy state lives in StrainTab
-  // (LandmarkSidebar.tsx) as local state, but the main panel needs to know
-  // about it too (to show its own loading state) — reported up via the
-  // strainCompute bundle's onFullCycleBusyChange.
+  // Full cycle's "Compute/Recompute all frames" busy state and progress, owned HERE at the page
+  // level (not by StrainTab in LandmarkSidebar.tsx) specifically so they survive the tab-switch
+  // remount the desktop layout forces on Strain/Structure/Landmarks (ResizablePanelGroup
+  // key={workspace} below). Driven entirely by fullCycleJobIds' own poll effect, not by
+  // StrainTab's triggering promise — a flag only StrainTab's own (remount-prone) closure could
+  // clear showed the previous run's "Computing… N%" as stale after switching tabs and back, even
+  // once the compute had actually finished server-side (reported live, 2026-10).
   const [fullCycleBusy, setFullCycleBusy] = useState(false);
-  // Same idea, the real 0-100 reading — see strainCompute's own
-  // onFullCycleProgressChange doc comment.
   const [fullCycleProgress, setFullCycleProgress] = useState<number | null>(null);
+  // The job IDs StrainTab's "Compute/Recompute all frames" just started, or null when no full-
+  // cycle compute is tracked. Setting this (via onFullCycleJobsStarted below) is what starts the
+  // poll effect right after it; the poll clears it again once both jobs leave pending/in-progress.
+  const [fullCycleJobIds, setFullCycleJobIds] = useState<{ lv: string; rv: string } | null>(null);
+  const onFullCycleJobsStarted = useCallback((lv: string, rv: string) => {
+    setFullCycleBusy(true);
+    setFullCycleProgress(null);
+    setFullCycleJobIds({ lv, rv });
+  }, []);
+  useEffect(() => {
+    if (!fullCycleJobIds || !projectId) return;
+    let cancelled = false;
+    const poll = async () => {
+      let jobs: any[] = [];
+      try {
+        ({ jobs } = await segmentationApi.getUserJobs());
+      } catch {
+        return; // A dropped poll is not evidence of anything -- try again next tick.
+      }
+      if (cancelled) return;
+      const byId = new Map<string, any>((jobs ?? []).map((j: any) => [j.jobId, j]));
+      const lvJob = byId.get(fullCycleJobIds.lv);
+      const rvJob = byId.get(fullCycleJobIds.rv);
+      const isPending = (j: any) => j && (j.status === "pending" || j.status === "in_progress");
+      if (isPending(lvJob) || isPending(rvJob)) {
+        const readings = [lvJob?.progress, rvJob?.progress].filter(
+          (p): p is number => typeof p === "number" && p > 0,
+        );
+        if (readings.length) {
+          setFullCycleProgress(Math.round(readings.reduce((a, b) => a + b, 0) / readings.length));
+        }
+        return;
+      }
+      // Neither job is pending/in_progress any more (done, failed, or aged out of the list) --
+      // the compute is over. Pick up whatever it produced and stop tracking it.
+      if (!cancelled) {
+        setFullCycleBusy(false);
+        setFullCycleProgress(null);
+        setFullCycleJobIds(null);
+        invalidateProjectResults(projectId);
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [fullCycleJobIds, projectId]);
   const [selectedStrainSegment, setSelectedStrainSegment] = useState<number | null>(null);
   // Lifted out of StrainPreviewPanel so the sidebar's Strain tab (a sibling,
   // not a descendant) can read it too -- the sidebar's own LV/RV toggle was
@@ -311,6 +366,7 @@ export default function LandmarkDetectionPage() {
   const [savedLandmarkEdits, setSavedLandmarkEdits] = useState<Record<string, Partial<FramePrediction>>>({});
   const [isSavingLandmarks, setIsSavingLandmarks] = useState(false);
   const [hasUnsavedLandmarkEdits, setHasUnsavedLandmarkEdits] = useState(false);
+  const { pendingNavigation, setPendingNavigation, navigateWithUnsavedGuard } = useUnsavedChangesGuard(hasUnsavedLandmarkEdits);
   const [bullseyeRecomputing, setBullseyeRecomputing] = useState(false);
 
   // (Model default now comes from the URL via activeModel — UNet unless the
@@ -704,11 +760,14 @@ export default function LandmarkDetectionPage() {
     autoRunStartedRef.current = true;
     const model = landmarkSegModel;
     const since = maskCreatedAtRef.current[model];
+    let cancelled = false;
     (async () => {
       const done = since === null ? null : await landmarkApi.findCompletedJobSince(projectId, model, since);
+      if (cancelled) return;
       if (done) handleAttachToJob(done, model);
       else runDetectionAndResetEdits(selectedModel);
     })();
+    return () => { cancelled = true; };
   }, [loading, projectData, hydrating, segModelsLoaded, segPending, state.status, reconCheckDone, hasReconstructions, hasReconForLandmarkModel, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
 
   const runUnlessSegmentationPending = useCallback(async (run: () => void) => {
@@ -945,6 +1004,7 @@ export default function LandmarkDetectionPage() {
     return () => { cancelled = true; };
   }, [state.status, projectId, allPredictions]);
 
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.key === 's') {
@@ -959,6 +1019,7 @@ export default function LandmarkDetectionPage() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [hasUnsavedLandmarkEdits, isSavingLandmarks, handleSaveLandmarks]);
+
   const bullseyeFrameCount =
     (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
       ? projectData.dimensions.frames
@@ -1015,7 +1076,13 @@ export default function LandmarkDetectionPage() {
     const doc = resultsByModel?.[activeModel];
     if (!doc) return;
 
-    const hasLvData = !!doc.strain || !!doc.strainSeries?.frames?.length;
+    // A `strain`/`strainSeries` object can be present but malformed — e.g. just a stray
+    // `{ staleSince }` stamp with no actual computed data, from a backend bug (now fixed) that
+    // could create one from dot-notation `$set` on a doc that never had a real result. Never
+    // trust the parent object's mere presence; require the data it should actually carry.
+    const hasRealStrain = !!doc.strain?.segments?.length;
+    const hasRealStrainSeries = !!doc.strainSeries?.frames?.length;
+    const hasLvData = hasRealStrain || hasRealStrainSeries;
     if (!hasLvData) return;
     hydratedModelsRef.current.add(activeModel);
 
@@ -1025,7 +1092,7 @@ export default function LandmarkDetectionPage() {
     };
 
     if (!strainResultRef.current) {
-      if (doc.strain) {
+      if (hasRealStrain && doc.strain) {
         setStrainResult({
           segments: doc.strain.segments,
           global_grs: doc.strain.global_grs,
@@ -1111,6 +1178,35 @@ export default function LandmarkDetectionPage() {
     }
   }, [activeModel, resultsByModel]);
 
+  // On first load with NO model in the URL, before any strain series exists yet for
+  // either model (so autoPickedSeriesModel below has nothing to go on), default to
+  // whichever model's editable mask was most recently created — e.g. the model that
+  // was just run via the one-click pipeline — rather than a hardcoded UNet preference.
+  // Without this, running MedSAM's landmark detection but landing here with no ?model=
+  // silently showed UNet's (older) mask/results instead whenever a UNet mask also
+  // existed for the project (reported live, 2026-10). Mongo ObjectIds are monotonic by
+  // creation time, so a plain string compare orders them without needing a timestamp
+  // field on the wire — same technique useProjectResults' own newerMaskAvailable uses.
+  // Superseded by autoPickedSeriesModel below once strain data exists for one model, a
+  // stronger signal of current interest than raw mask recency.
+  const autoPickedMaskModel = useRef(false);
+  useEffect(() => {
+    if (autoPickedMaskModel.current) return;
+    if (searchParams.get("model")) { autoPickedMaskModel.current = true; return; }
+    const unetId = resultsByModel?.unet?._id;
+    const medsamId = resultsByModel?.medsam?._id;
+    if (!unetId && !medsamId) return;
+    const preferred: "unet" | "medsam" =
+      unetId && medsamId
+        ? (String(medsamId) > String(unetId) ? "medsam" : "unet")
+        : unetId ? "unet" : "medsam";
+    autoPickedMaskModel.current = true;
+    if (preferred !== activeModel) {
+      setActiveModel(preferred);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultsByModel?.unet?._id, resultsByModel?.medsam?._id]);
+
   // On first load with NO model in the URL, land on a model that actually has
   // per-frame data (or the most recently computed when both do). When the URL
   // already names a model — e.g. after a reload — that choice wins and this is
@@ -1173,6 +1269,14 @@ export default function LandmarkDetectionPage() {
   // keeps the RV view's orientation stable across frames instead of
   // wobbling as LV's own per-frame alignment shifts.
   const lvAlignmentReconstruction = reconstructionsByModel?.[activeModel] ?? null;
+
+  // Warm the LV reconstruction's motion build as soon as the page loads, the same way
+  // structureRvMesh above does for RV. Without this, LV's motion only starts building
+  // once AhaBullseyePanel itself mounts (i.e. once the user opens the Structure tab),
+  // so on that tab's first visit LV is never ready yet while RV (already warm from
+  // page load) usually is — reported live, 2026-10-26.
+  useMotionMesh(lvAlignmentReconstruction, activeModel, strainPlaybackFrame);
+
   const [structureLvAlignmentMeshUrl, setStructureLvAlignmentMeshUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -1501,8 +1605,7 @@ export default function LandmarkDetectionPage() {
     quickRvResult,
     rvMetricType: selectedRvMetricType,
     onRvMetricTypeChange: setSelectedRvMetricType,
-    onFullCycleBusyChange: setFullCycleBusy,
-    onFullCycleProgressChange: setFullCycleProgress,
+    onFullCycleJobsStarted,
     segmentationRunning: segPendingByModel[activeModel],
     checkSegmentationRunning: () => segmentationRunningFor(activeModel),
   };
@@ -1520,11 +1623,14 @@ export default function LandmarkDetectionPage() {
 
         {/* Project name + badges */}
         <div className="flex items-center gap-2 min-w-0">
-          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
-            <Link href={`/project/${projectId}`}>
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to Project
-            </Link>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => navigateWithUnsavedGuard(() => router.push(`/project/${projectId}`))}
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Back to Project
           </Button>
           <Heart className="h-4 w-4 text-rose-500 shrink-0" aria-hidden />
           <span className="text-sm font-medium truncate">{projectData.name}</span>
@@ -1616,7 +1722,7 @@ export default function LandmarkDetectionPage() {
         </div>
       )}
       {/* Mobile layout */}
-      <div className="lg:hidden flex-1 overflow-y-auto p-3 space-y-3">
+      <div className="sm:hidden flex-1 overflow-y-auto p-3 space-y-3">
         {hasPredictions && (
           <FrameSliceControls
             currentFrame={Math.max(0, state.frameIds.indexOf(state.landmarkFrame))}
@@ -1709,7 +1815,7 @@ export default function LandmarkDetectionPage() {
       </div>
 
       {/* Desktop: 3-panel resizable layout */}
-      <div className="hidden lg:flex flex-1 min-h-0 p-3">
+      <div className="hidden sm:flex flex-1 min-h-0 p-3">
         {/* Keyed on the workspace: the group caches panel sizes by index, so
             adding/removing the bullseye panel without a remount leaves the
             remaining panels at stale widths. */}
@@ -2111,6 +2217,30 @@ export default function LandmarkDetectionPage() {
 
         </ResizablePanelGroup>
       </div>
+
+      <AlertDialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
+            <AlertDialogDescription>
+              Leaving now will lose your edits to these landmarks. Save first, or leave anyway?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Go back and save</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = pendingNavigation;
+                setPendingNavigation(null);
+                action?.();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Leave anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -2751,10 +2881,10 @@ function StrainPreviewPanel({
    *  cycle's seriesBusy reported up) — shows a loading state over the
    *  bullseye/3D heart and their stat tiles instead of the now-stale values. */
   isComputeBusy: boolean;
-  /** Live 0-100 progress for the full-cycle compute, reported up from the
-   *  sidebar's job polling (see onFullCycleProgressChange) — null until the
-   *  first real reading comes in, in which case the spinner fallback below
-   *  is shown instead of a determinate bar. */
+  /** Live 0-100 progress for the full-cycle compute, from this page's own job
+   *  polling (see fullCycleJobIds' own poll effect) — null until the first
+   *  real reading comes in, in which case the spinner fallback below is
+   *  shown instead of a determinate bar. */
   fullCycleProgress: number | null;
   /** Lifted to the page so the sidebar's Strain tab (a sibling of this
    *  panel, not a descendant) can read the same value — see the page-level

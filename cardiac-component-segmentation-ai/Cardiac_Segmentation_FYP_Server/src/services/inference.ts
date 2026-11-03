@@ -3,7 +3,7 @@
 
 import { IUserSafe, ProjectCrudResult, segmentationSource, SegmentationModel } from "../types/database_types";
 import logger from "./logger";
-import { createJob, IJob, jobModel, JobStatus, readProject, updateJob } from "./database";
+import { createJob, IJob, jobModel, JobStatus, readProject, updateJob, userCanAccessProject, UserRole } from "./database";
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
@@ -268,6 +268,23 @@ export const startInference = async (projectId: string, user?: IUserSafe, gpuAut
     }
 
     try {
+        // This previously called readProject(projectId) with no owner/assignment check at
+        // all — any authenticated user who knew or guessed a projectId could start a MedSAM
+        // run on someone else's project. Owner, Admin, or a Run-mode assigned Clinical
+        // Assistant may run it; a ViewOnly-mode assistant may not.
+        if (!user) {
+            return { success: false, message: "Unauthorized." };
+        }
+        const access = await userCanAccessProject(projectId, user as unknown as { _id: string; role: UserRole });
+        if (!access.canRun || !access.project) {
+            logger.warn(`${serviceLocation}: User ${user?._id} denied access to project ${projectId} for MedSAM inference.`);
+            return { success: false, message: "Project not found or access denied." };
+        }
+
+        // A Run-mode Assistant is never blocked from (re-)running MedSAM, even if the Doctor
+        // already has a result — the gpu-callback webhook isolates their run as their own
+        // Draft pair instead of overwriting the Doctor's Final (see the run-mode isolation plan).
+
         const projectResult: ProjectCrudResult = await readProject(projectId);
         if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
             logger.warn(`${serviceLocation}: Project with ID ${projectId} not found or error reading project.`);
@@ -489,6 +506,20 @@ export async function startModel2Inference(
     }
 
     try {
+        // Same gap as startInference above: this previously had no owner/assignment check at
+        // all. Owner, Admin, or a Run-mode assigned Clinical Assistant may run it; a ViewOnly
+        // assistant may not. A Run-mode Assistant is never blocked from (re-)running UNet, even
+        // if the Doctor already has a result — the gpu-callback webhook isolates their run as
+        // their own Draft pair instead of overwriting the Doctor's Final.
+        if (!user) {
+            return { success: false, message: "Unauthorized." };
+        }
+        const access = await userCanAccessProject(projectId, user as unknown as { _id: string; role: UserRole });
+        if (!access.canRun || !access.project) {
+            logger.warn(`${serviceLocation}: User ${user?._id} denied access to project ${projectId} for UNET inference.`);
+            return { success: false, message: "Project not found or access denied." };
+        }
+
         const projectResult = await readProject(projectId);
         if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
             logger.warn(`${serviceLocation}: Project with ID ${projectId} not found or error reading project for UNET inference.`);

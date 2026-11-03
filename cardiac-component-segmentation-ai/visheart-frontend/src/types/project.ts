@@ -62,6 +62,9 @@ export interface ProjectData {
     affineMatrix?: number[][];
     createdAt?: string;
     updatedAt?: string;
+    /** True for the owning User/Admin. */
+    isOwner?: boolean;
+    canRun?: boolean;
 }
 
 /**

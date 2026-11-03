@@ -7,21 +7,24 @@ import { computeAndStoreEditTracking } from "../services/edit_tracking";
 import {
     readProjectSegmentationMask,
     updateProjectSegmentationMask,
+    createProjectSegmentationMask,
     updateProject,
     readProject,
+    userCanAccessProject,
     jobModel,
     userModel,
     JobStatus,
     createJob,
     updateJob,
-    projectSegmentationMaskModel
+    projectSegmentationMaskModel,
+    UserRole,
 } from "../services/database";
 import { isAuth, isAuthAndAdmin, isAuthAndNotGuest } from "../services/passportjs";
 import LogError from "../utils/error_logger";
 import { ComponentBoundingBoxesClass, IProjectSegmentationMask, IProjectDocument, IProjectSegmentationMaskDocument, SegmentationModel } from "../types/database_types";
 import fs from 'fs-extra'; // Use fs-extra for easier directory handling and tar extraction
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import axios from 'axios'; // Simplified Axios import
 import { v4 as uuidv4 } from 'uuid';
 import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalService } from "../utils/s3_presigned_url";
@@ -31,8 +34,8 @@ import { loadRvInsertionSlicesByFrame, resolveRvInsertionPoints, resolveRvInsert
 
 const router = Router();
 
-// Only a project's owner saves its segmentation. Other users may view it (UNet Extend Training lists every user's
-// corrections), so each save route checks ownership before it writes anything.
+// A project's owning Doctor (or an Admin) saves its segmentation directly. Every write requires
+// owner/admin access.
 const NOT_OWNER_MESSAGE = "Only the project's owner can save its segmentation.";
 const serviceLocation = "SegmentationRoutes";
 
@@ -161,6 +164,13 @@ router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res:
     }
     logger.info(`${serviceLocation}: Received request to fetch segmentation masks for project ID: ${projectId}`);
     try {
+        // This previously had no access check at all — any authenticated user who knew a
+        // projectId could read its masks. Owner or Admin may read.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.allowed) {
+            return res.status(404).json({ success: false, message: "Project not found or access denied." });
+        }
+
         const result = await readProjectSegmentationMask(projectId);
         if (!result.success) {
             if (result.message?.includes("does not exist")) {
@@ -170,7 +180,10 @@ router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res:
             logger.error(`${serviceLocation}: Error reading segmentation masks for project ${projectId}: ${result.message}`);
             return res.status(500).json({ success: false, message: result.message || "Error reading segmentation masks." });
         }
-        if (!result.projectsegmentationmasks || result.projectsegmentationmasks.length === 0) {
+
+        const visibleMasks = result.projectsegmentationmasks ?? [];
+
+        if (visibleMasks.length === 0) {
             logger.info(`${serviceLocation}: No segmentation masks found for project ID ${projectId}.`);
             return res.status(200).json({
                 message: "No segmentation masks found for this project.",
@@ -178,8 +191,8 @@ router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res:
                 segmentations: []
             });
         }
-        logger.info(`${serviceLocation}: Successfully fetched ${result.projectsegmentationmasks.length} segmentation mask(s) for project ID ${projectId}.`);
-        return res.status(200).json({ success: true, segmentations: result.projectsegmentationmasks });
+        logger.info(`${serviceLocation}: Successfully fetched ${visibleMasks.length} segmentation mask(s) for project ID ${projectId}.`);
+        return res.status(200).json({ success: true, segmentations: visibleMasks });
     } catch (error) {
         LogError(error as Error, serviceLocation, `Unexpected error fetching segmentation masks for project ${projectId}`);
         return res.status(500).json({ message: "An unexpected error occurred while fetching segmentation masks." });
@@ -219,12 +232,13 @@ router.post("/start-manual-segmentation/:projectId",
 
         try {
             logger.debug(`${serviceLocation}: Fetching project details for ${projectId} to get S3 URL.`);
-            const projectResult = await readProject(projectId, userId.toString());
-            if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
+            // Owner, an assigned Clinical Assistant, or Admin may run segmentation.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.canRun || !access.project) {
                 logger.warn(`${serviceLocation}: Project ${projectId} not found or user ${userId} does not have access.`);
                 return res.status(404).json({ success: false, message: "Project not found or access denied." });
             }
-            const project = projectResult.projects[0];
+            const project = access.project;
             const s3HttpsUrlForTar = project.extractedfolderpath;
             if (!s3HttpsUrlForTar) {
                 logger.warn(`${serviceLocation}: Project ${projectId} has no associated S3 file (extractedfolderpath missing).`);
@@ -483,12 +497,12 @@ router.patch("/save-ai-segmentation", isAuthAndNotGuest, async (req: Request, re
             return res.status(404).json({ success: false, message: maskResult.message || "Segmentation mask not found." });
         }
         const projectId = maskResult.projectsegmentationmask.projectid;
-        const owned = await readProject(String(projectId), userId.toString());
-        if (!owned.success) {
-            return res.status(500).json({ success: false, message: owned.message || "The project could not be read." });
-        }
-        if (!owned.projects?.length) {
-            logger.warn(`${serviceLocation}: User ${userId} tried to save AI segmentation mask ${segmentationMaskId} of project ${projectId}, which is not theirs.`);
+        // Marking an AI-generated mask as saved doesn't change its content, but it's still part
+        // of the run flow — owner or a Run-mode assigned Clinical Assistant may do this; a
+        // ViewOnly-mode assistant may not.
+        const access = await userCanAccessProject(String(projectId), req.user!);
+        if (!access.canRun) {
+            logger.warn(`${serviceLocation}: User ${userId} tried to save AI segmentation mask ${segmentationMaskId} of project ${projectId}, which they cannot access.`);
             return res.status(403).json({ success: false, message: NOT_OWNER_MESSAGE });
         }
         logger.debug(`${serviceLocation}: Updating AI segmentation mask ${segmentationMaskId} to isSaved: true.`);
@@ -610,12 +624,10 @@ router.put("/save-manual-segmentation/:projectId",
         }
 
         try {
-            const owned = await readProject(projectId, userId.toString());
-            if (!owned.success) {
-                return res.status(500).json({ success: false, message: owned.message || "The project could not be read." });
-            }
-            if (!owned.projects?.length) {
-                logger.warn(`${serviceLocation}: User ${userId} tried to save the segmentation of project ${projectId}, which is not theirs.`);
+            // Owner (Doctor) or Admin may save here.
+            const access = await userCanAccessProject(projectId, req.user!);
+            if (!access.canRun) {
+                logger.warn(`${serviceLocation}: User ${userId} tried to save the segmentation of project ${projectId}, which they cannot edit.`);
                 return res.status(403).json({ success: false, message: NOT_OWNER_MESSAGE });
             }
 
@@ -703,11 +715,11 @@ router.put("/save-manual-segmentation/:projectId",
             );
 
             if (!segmentationDbUpdateResult.success || !segmentationDbUpdateResult.projectsegmentationmask) {
-                logger.error(`${serviceLocation}: Failed to update manual segmentation mask ${editableMask._id} in database. Message: ${segmentationDbUpdateResult.message}`);
-                return res.status(500).json({ success: false, message: segmentationDbUpdateResult.message || "Failed to update segmentation mask." });
+                logger.error(`${serviceLocation}: Failed to save manual segmentation for mask ${editableMask._id} in database. Message: ${segmentationDbUpdateResult.message}`);
+                return res.status(500).json({ success: false, message: segmentationDbUpdateResult.message || "Failed to save segmentation mask." });
             }
 
-            logger.info(`${serviceLocation}: Successfully updated manual segmentation mask ${editableMask._id} for project ${projectId}.`);
+            logger.info(`${serviceLocation}: Successfully saved manual segmentation based on mask ${editableMask._id} for project ${projectId}.`);
 
             const projectResult = await readProject(projectId, userId.toString());
             if (projectResult.success && projectResult.projects && projectResult.projects.length > 0) {
@@ -727,8 +739,8 @@ router.put("/save-manual-segmentation/:projectId",
                 logger.warn(`${serviceLocation}: Could not find project ${projectId} to check/update save status after updating manual segmentation.`);
             }
 
-            // Record which slices now differ from this model's preserved AI output. Never fails the save.
-            // Frames come from the saved document, not the pre-update editableMask; the RLE plane uses
+            // AI-baseline edit tracking. Never fails the save either way. Frames come from the
+            // saved document, not the pre-update editableMask; the RLE plane uses
             // project.dimensions, the same values the NIfTI export passes.
             let editTracking = null;
             const savedMask = segmentationDbUpdateResult.projectsegmentationmask as any;
@@ -790,12 +802,13 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
         await fs.ensureDir(baseTempDir);
 
         // 1. Read Project Details (including dimensions and original NIfTI path)
-        const projectResult = await readProject(projectId, userId);
-        if (!projectResult.success || !projectResult.projects || projectResult.projects.length === 0) {
-            logger.warn(`${serviceLocationExport}: Project ${projectId} not found or user ${userId} does not have access. Message: ${projectResult.message}`);
-            return res.status(404).json({ success: false, message: projectResult.message || "Project not found or access denied." });
+        // Owner or Admin may export.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.canRun || !access.project) {
+            logger.warn(`${serviceLocationExport}: Project ${projectId} not found or user ${userId} does not have access.`);
+            return res.status(404).json({ success: false, message: "Project not found or access denied." });
         }
-        const project: IProjectDocument = projectResult.projects[0]; // IProject should be imported
+        const project: IProjectDocument = access.project;
 
         if (!project.dimensions || project.dimensions.width == null || project.dimensions.height == null) {
             logger.error(`${serviceLocationExport}: Project ${projectId} is missing critical dimension data (width/height). Cannot proceed with NIfTI export.`);
@@ -819,8 +832,8 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
             mask => mask.isMedSAMOutput === false
         );
 
-        const modelMatchedMask = requestedExportModel
-            ? editableMasks.find(mask => {
+        const modelMatchedMasks = requestedExportModel
+            ? editableMasks.filter(mask => {
                   const tag = (
                       (mask as any).segmentationModel ||
                       (mask as any).model_used ||
@@ -828,14 +841,17 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
                   ).toString().toLowerCase();
                   return tag === requestedExportModel;
               })
-            : undefined;
+            : editableMasks;
 
-        const chosenMask = modelMatchedMask ?? editableMasks[0] ?? segmentationMasksResult.projectsegmentationmasks![0];
+        const chosenMask =
+            modelMatchedMasks[0] ??
+            editableMasks[0] ??
+            segmentationMasksResult.projectsegmentationmasks![0];
 
         logger.info(
             `${serviceLocationExport}: Exporting mask for project ${projectId} ` +
             `(requestedModel=${requestedExportModel ?? "<none>"}, ` +
-            `matchedByModel=${!!modelMatchedMask}, ` +
+            `matchedByModel=${!requestedExportModel || modelMatchedMasks.length > 0}, ` +
             `maskId=${(chosenMask as any)?._id ?? "<unknown>"}).`
         );
         segmentationsToProcess = [chosenMask];
@@ -846,7 +862,7 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
         // 4. Call Python script to create the segmentation NIfTI
         // Check if we have stored affine matrix to avoid downloading original file
         let pythonScriptPath: string;
-        let pythonCommand: string;
+        let pythonArgs: string[];
 
         if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
             // Use stored affine matrix approach (no download needed)
@@ -863,7 +879,7 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
 
             const datatype = project.datatype || 'uint8';
 
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${localOutputSegmentationNiftiPath}" "${affineMatrixFile}" "${dimensionsFile}" "${datatype}" "${planeHeightForRLE}" "${planeWidthForRLE}"`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, localOutputSegmentationNiftiPath, affineMatrixFile, dimensionsFile, datatype, String(planeHeightForRLE), String(planeWidthForRLE)];
         } else {
             // Fallback to original approach (download and extract from file)
             logger.info(`${serviceLocationExport}: No stored affine matrix found for project ${projectId}. Using original file download approach.`);
@@ -886,12 +902,12 @@ router.get("/export-project-data/:projectId", isAuth, async (req: Request, res: 
             await downloadFromS3(s3BucketName, originalNiftiS3Key, tempOriginalNiftiPath);
 
             pythonScriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-            pythonCommand = `python "${pythonScriptPath}" "${segmentationsJsonPath}" "${tempOriginalNiftiPath}" "${localOutputSegmentationNiftiPath}" "${planeHeightForRLE}" "${planeWidthForRLE}"`;
+            pythonArgs = [pythonScriptPath, segmentationsJsonPath, tempOriginalNiftiPath, localOutputSegmentationNiftiPath, String(planeHeightForRLE), String(planeWidthForRLE)];
         }
 
-        logger.info(`${serviceLocationExport}: Executing Python script: ${pythonCommand}`);
+        logger.info(`${serviceLocationExport}: Executing Python script: python ${pythonArgs.join(' ')}`);
         await new Promise<void>((resolve, reject) => {
-            exec(pythonCommand, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+            execFile('python', pythonArgs, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
                 if (error) {
                     logger.error(`${serviceLocationExport}: Python script error for project ${projectId}: ${stderr || error.message}`);
                     return reject(new Error(`NIfTI creation failed: ${stderr || error.message}`));
@@ -1016,9 +1032,9 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
     }
 
     try {
-        // 1. Verify user owns all requested projects
+        // 1. Verify user owns all requested projects. Admin may check status on any project.
         const userProjectsResult = await readProject(undefined, userId.toString());
-        if (!userProjectsResult.success || !userProjectsResult.projects) {
+        if (!userProjectsResult.success) {
             logger.error(`${serviceLocation}: Failed to fetch user projects for batch status check.`);
             return res.status(500).json({
                 success: false,
@@ -1026,8 +1042,12 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
             });
         }
 
-        const userProjectIds = userProjectsResult.projects.map((p: IProjectDocument) => String(p._id));
-        const unauthorizedProjects = projectIds.filter((id: string) => !userProjectIds.includes(id));
+        const accessibleProjectIds = new Set<string>(
+            (userProjectsResult.projects ?? []).map((p: IProjectDocument) => String(p._id))
+        );
+        const unauthorizedProjects = req.user!.role === UserRole.Admin
+            ? []
+            : projectIds.filter((id: string) => !accessibleProjectIds.has(id));
 
         if (unauthorizedProjects.length > 0) {
             logger.warn(`${serviceLocation}: User ${userId} attempted to check segmentation status for unauthorized projects: ${unauthorizedProjects.join(', ')}`);
@@ -1041,7 +1061,7 @@ router.post("/batch-segmentation-status", isAuth, async (req: Request, res: Resp
         const segmentationResults = await projectSegmentationMaskModel.aggregate([
             {
                 $match: {
-                    projectid: { $in: projectIds }
+                    projectid: { $in: projectIds },
                 }
             },
             {
@@ -1104,11 +1124,12 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
 
     try {
         // 1. Verify project access
-        const projectResult = await readProject(projectId, userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner or Admin may run this computation.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ error: "Project not found or access denied." });
         }
-        const project = projectResult.projects[0] as IProjectDocument;
+        const project = access.project as IProjectDocument;
         const W = project.dimensions?.width;
         const H = project.dimensions?.height;
         if (!W || !H) {
@@ -1177,7 +1198,7 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
@@ -1185,16 +1206,16 @@ router.post("/compute-strain-from-frames", isAuth, async (req: Request, res: Res
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 logger.info(`${serviceLocation}: compute-strain-from-frames [${label}] seg JSON frames=${singleFrameMaskDoc.frames.length} frameindex=${singleFrameDoc.frameindex} dimsFrames=1`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, stdout, stderr) => {
                     if (stdout) logger.info(`${serviceLocation}: Python [${label}] stdout: ${stdout.trim()}`);
                     if (stderr) logger.warn(`${serviceLocation}: Python [${label}] stderr: ${stderr.trim()}`);
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
@@ -1392,11 +1413,12 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
 
     try {
         // 1. Verify project access
-        const projectResult = await readProject(projectId, userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner or Admin may run this computation.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ error: "Project not found or access denied." });
         }
-        const project = projectResult.projects[0] as IProjectDocument;
+        const project = access.project as IProjectDocument;
         const W = project.dimensions?.width;
         const H = project.dimensions?.height;
         if (!W || !H) {
@@ -1451,23 +1473,23 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, stdout, stderr) => {
                     if (stdout) logger.info(`${serviceLocation}: Python [${label}] stdout: ${stdout.trim()}`);
                     if (stderr) logger.warn(`${serviceLocation}: Python [${label}] stderr: ${stderr.trim()}`);
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
@@ -1594,11 +1616,12 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `strain_series_${tempId}`);
 
     try {
-        const projectResult = await readProject(projectId, userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ error: "Project not found or access denied." });
         }
-        const project = projectResult.projects[0] as IProjectDocument;
+        const project = access.project as IProjectDocument;
         const W = project.dimensions?.width;
         const H = project.dimensions?.height;
         if (!W || !H) {
@@ -1668,23 +1691,23 @@ router.post("/compute-strain-series", isAuth, async (req: Request, res: Response
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, _stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
                     else resolve();
                 });
@@ -1863,11 +1886,12 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `rv_strain_series_${tempId}`);
 
     try {
-        const projectResult = await readProject(projectId, userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(projectId, req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ error: "Project not found or access denied." });
         }
-        const project = projectResult.projects[0] as IProjectDocument;
+        const project = access.project as IProjectDocument;
         const W = project.dimensions?.width;
         const H = project.dimensions?.height;
         if (!W || !H) {
@@ -1925,23 +1949,23 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
             const singleFrameMaskDoc = { ...maskDoc, frames: [singleFrameDoc] };
             await fs.writeJson(segJsonPath, [singleFrameMaskDoc], { spaces: 2 });
 
-            let pythonCommand: string;
+            let pythonArgs: string[];
             if (project.affineMatrix && Array.isArray(project.affineMatrix) && project.affineMatrix.length > 0) {
                 const affineFile = path.join(baseTempDir, `affine_${label}.json`);
                 const dimsFile   = path.join(baseTempDir, `dims_${label}.json`);
                 await fs.writeJson(affineFile, project.affineMatrix, { spaces: 2 });
                 await fs.writeJson(dimsFile, { width: W, height: H, slices: project.dimensions?.slices ?? 0, frames: 1, voxelsize: (project as any).voxelsize ?? null }, { spaces: 2 });
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_with_stored_affine.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" "${affineFile}" "${dimsFile}" "uint8" ${H} ${W}`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, affineFile, dimsFile, 'uint8', String(H), String(W)];
             } else {
                 const s3Url = (project as any).extractedfolderpath;
                 if (!s3Url) throw new Error(`Project ${projectId} has no affine matrix and no S3 URL`);
                 const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'create_nifti_from_segmentations.py');
-                pythonCommand = `python3 "${scriptPath}" "${segJsonPath}" "${niftiPath}" ${W} ${H} "${s3Url}"`;
+                pythonArgs = [scriptPath, segJsonPath, niftiPath, String(W), String(H), s3Url];
             }
 
             await new Promise<void>((resolve, reject) => {
-                exec(pythonCommand, (error, _stdout, stderr) => {
+                execFile('python3', pythonArgs, (error, _stdout, stderr) => {
                     if (error) reject(new Error(`NIfTI generation failed for ${label}: ${stderr || error.message}`));
                     else resolve();
                 });
@@ -2090,12 +2114,12 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
             return res.status(404).json({ success: false, message: "Mask not found." });
         }
 
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
-
-        const project = projectResult.projects[0] as IProjectDocument;
+        const project = access.project as IProjectDocument;
         const W = project.dimensions?.width;
         const H = project.dimensions?.height;
         if (!W || !H) {
@@ -2153,12 +2177,12 @@ router.post("/trigger-heart-metrics/:maskId", isAuth, async (req: Request, res: 
             return res.status(404).json({ success: false, message: "Mask not found." });
         }
 
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
-
-        const project = projectResult.projects[0] as IProjectDocument;
+        const project = access.project as IProjectDocument;
         const W = project.dimensions?.width;
         const H = project.dimensions?.height;
         if (!W || !H) {
@@ -2207,7 +2231,7 @@ function assembleDiseasePatternGateInputs(
     maskDoc: any,
     body?: { bsa_m2?: number | null; sex?: "male" | "female" | "unspecified" },
 ): {
-    lv: { EF: number | null; EDV: number | null; EDVI: number | null; LVMassG: number | null; LVMI: number | null; MaxWallThicknessMm: number | null };
+    lv: { EF: number | null; EDV: number | null; EDVI: number | null; LVMassG: number | null; LVMI: number | null; MaxWallThicknessMm: number | null; DcmWallThicknessMm: number | null };
     rv: { RVEDV: number | null; RVEDVI: number | null; RVESVI: number | null; RVEF: number | null; SVI: number | null };
     regionalLvSegments: { segment: number; level: string }[] | null;
     sex: "male" | "female" | "unspecified";
@@ -2233,13 +2257,42 @@ function assembleDiseasePatternGateInputs(
     // since scaling is linear. Previously this was taken as mm with no
     // conversion at all, silently comparing a pixel count against the HCM
     // gate's 15mm clinical threshold (reported live, 2026-10).
+    // Prefer segment_values_max (true per-ray peak -- see bullseye_analysis.group_sectors_max)
+    // over segment_values (sector-mean), since a sector average dilutes focal/asymmetric
+    // hypertrophy and can understate true max wall thickness for exactly the HCM pattern this
+    // gate checks for (reported live, 2026-10: a known-HCM patient measured 13.8mm against the
+    // 15mm cutoff on the mean-based value). Falls back to segment_values on any mask computed
+    // before segment_values_max existed -- not backfilled, so this field may be absent/empty.
+    const bullseyeValuesMax: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values_max;
     const bullseyeValues: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values;
-    const finiteSegmentValues = (bullseyeValues ?? []).filter(
+    const finiteMaxValues = (bullseyeValuesMax ?? []).filter(
         (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
     );
+    const finiteSegmentValues = finiteMaxValues.length
+        ? finiteMaxValues
+        : (bullseyeValues ?? []).filter(
+            (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
+        );
     const inPlaneSpacingMm: number | null = maskDoc?.heartMetrics?.spacing_mm?.[0] ?? null;
     const maxWallThicknessMm: number | null = finiteSegmentValues.length && inPlaneSpacingMm
         ? Math.max(...finiteSegmentValues) * inPlaneSpacingMm
+        : null;
+    // DCM's wall-thickness criterion is an upper bound ("stays thin" -- dilated/stretched
+    // myocardium), the opposite question from HCM's lower bound ("is there a pathologically
+    // thick spot anywhere"). Reusing maxWallThicknessMm's true-peak value here would make DCM
+    // systematically harder to meet (peak >= mean always) for a criterion that was never about
+    // avoiding one thick patch -- reported live, 2026-10: a ground-truth-DCM patient whose EDVI
+    // and EF both qualified now failed DCM purely because the new peak value (13.3mm) exceeded
+    // 12.28mm, even though the heart's TYPICAL wall thickness (the old sector-mean value,
+    // 11.5mm here) was still comfortably thin. DCM's _DCM_WALL_MM_MAX threshold was calibrated
+    // against this mean-based statistic specifically (see that constant's own derivation
+    // comment in compute_disease_pattern_gates.py) -- always uses segment_values (sector-mean),
+    // never segment_values_max, regardless of which is available.
+    const finiteMeanValues = (bullseyeValues ?? []).filter(
+        (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
+    );
+    const dcmWallThicknessMm: number | null = finiteMeanValues.length && inPlaneSpacingMm
+        ? Math.max(...finiteMeanValues) * inPlaneSpacingMm
         : null;
 
     const hmTop = maskDoc?.heartMetrics;
@@ -2261,6 +2314,7 @@ function assembleDiseasePatternGateInputs(
             LVMassG: lvMassG,
             LVMI: indexed(lvMassG),
             MaxWallThicknessMm: maxWallThicknessMm,
+            DcmWallThicknessMm: dcmWallThicknessMm,
         },
         rv: {
             RVEDV: rvEdv,
@@ -2302,10 +2356,12 @@ router.post("/trigger-disease-pattern-gates/:maskId", isAuth, async (req: Reques
             return res.status(404).json({ success: false, message: "Mask not found." });
         }
 
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
+        const project = access.project as IProjectDocument;
 
         const inputs = assembleDiseasePatternGateInputs(maskDoc, req.body);
         if (!inputs) {
@@ -2348,10 +2404,12 @@ router.post("/trigger-health-status/:maskId", isAuth, async (req: Request, res: 
         }
 
         // Project access check.
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
+        const project = access.project as IProjectDocument;
 
         const hm: any = (maskDoc as any).heartMetrics;
         if (!hm || !hm.measurements) {
@@ -2395,10 +2453,12 @@ router.post("/trigger-rv-health-status/:maskId", isAuth, async (req: Request, re
             return res.status(404).json({ success: false, message: "Mask not found." });
         }
 
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
+        const project = access.project as IProjectDocument;
 
         if (!(maskDoc as any).heartMetrics) {
             return res.status(400).json({
@@ -2446,10 +2506,12 @@ router.post("/trigger-regional-health-status/:maskId", isAuth, async (req: Reque
         }
 
         // Project access check — same as the sibling trigger routes.
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
+        const project = access.project as IProjectDocument;
 
         // Respond immediately and run the compute async.
         res.json({ success: true, message: "Regional health-status computation started." });
@@ -2481,10 +2543,12 @@ router.post("/trigger-rv-regional-health-status/:maskId", isAuth, async (req: Re
             return res.status(404).json({ success: false, message: "Mask not found." });
         }
 
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
+        const project = access.project as IProjectDocument;
 
         res.json({ success: true, message: "RV regional health-status computation started." });
 
@@ -2548,11 +2612,12 @@ router.post("/resolve-duplicate-slice/:maskId", isAuthAndNotGuest, async (req: R
         }
 
         // Project access check — identical to the sibling trigger-* routes.
-        const projectResult = await readProject(maskDoc.projectid?.toString(), userId);
-        if (!projectResult.success || !projectResult.projects?.length) {
+        // Owner, an assigned Clinical Assistant, or Admin may run this computation.
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.canRun || !access.project) {
             return res.status(403).json({ success: false, message: "Project not found or access denied." });
         }
-        const project = projectResult.projects[0] as IProjectDocument;
+        const project = access.project as IProjectDocument;
 
         // Locate the frame + slice by VALUE, not array position — frameindex /
         // sliceindex are stored values, and a mask may hold sparse frames like
@@ -2649,6 +2714,39 @@ router.post("/resolve-duplicate-slice/:maskId", isAuthAndNotGuest, async (req: R
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: "An unexpected error occurred." });
         }
+    }
+});
+
+// Flag a mask as worth considering for U-Net retraining — surfaced to Admin on
+// /admin/flagged-masks.
+router.patch("/mask/:maskId/flag-for-retrain", isAuthAndNotGuest, async (req: Request, res: Response) => {
+    const maskId = toSingleString(req.params.maskId);
+    const userId = req.user?._id;
+    if (!maskId) {
+        return res.status(400).json({ success: false, message: "Missing maskId." });
+    }
+    try {
+        const maskDoc = await projectSegmentationMaskModel.findById(maskId);
+        if (!maskDoc) {
+            return res.status(404).json({ success: false, message: "Mask not found." });
+        }
+        const access = await userCanAccessProject(maskDoc.projectid?.toString() ?? "", req.user!);
+        if (!access.allowed) {
+            return res.status(403).json({ success: false, message: "Project not found or access denied." });
+        }
+        const result = await updateProjectSegmentationMask(maskId, {
+            flaggedForRetrain: true,
+            flaggedAt: new Date().toISOString(),
+            flaggedByUserId: userId,
+        } as Partial<IProjectSegmentationMaskDocument>);
+        if (!result.success) {
+            return res.status(400).json({ success: false, message: result.message });
+        }
+        logger.info(`${serviceLocation}: User ${userId} flagged mask ${maskId} for retraining consideration.`);
+        return res.status(200).json({ success: true, message: "Mask flagged for retraining consideration.", segmentation: result.projectsegmentationmask });
+    } catch (error) {
+        LogError(error as Error, serviceLocation, `Error flagging mask ${maskId} for retraining`);
+        return res.status(500).json({ success: false, message: "An unexpected error occurred." });
     }
 });
 

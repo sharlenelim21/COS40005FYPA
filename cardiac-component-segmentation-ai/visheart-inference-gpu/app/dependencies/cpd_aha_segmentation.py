@@ -26,6 +26,7 @@ import trimesh
 from pycpd import DeformableRegistration
 from scipy.spatial import cKDTree
 
+import cpd_gpu
 from aha_segmentation_3d import classify_vertices_to_aha17
 
 logger = logging.getLogger("visheart")
@@ -215,19 +216,33 @@ def _find_best_rigid_rotation(
     off" - many wrong rotations score just as well as the right one on shape alone).
 
     Cheap by construction: RIGID nearest-neighbor label lookup only (rotate the
-    dense atlas, build a tree, query) - no deformable registration per candidate.
-    The winning angle then seeds the one real, expensive CPD registration, so total
-    added cost is K cheap rigid checks, not K expensive registrations.
+    *query* points and search one fixed atlas tree - see below) - no deformable
+    registration per candidate. The winning angle then seeds the one real, expensive
+    CPD registration, so total added cost is K cheap rigid checks, not K expensive
+    registrations.
+
+    The tree is built ONCE on the unrotated atlas, not once per candidate. Rotation
+    matrices are orthogonal (R^T R = I), so ||t - R@p|| == ||R^T@t - p|| for any
+    point pair -- querying a fixed atlas tree with the target rotated by R^T finds
+    the identical nearest neighbor (and therefore the identical `populated` score)
+    as rotating the atlas by R and rebuilding the tree, for every candidate. This is
+    provably the same search, not an approximation of it; `best_rotation` still
+    means exactly what it always did (the atlas is rotated by it downstream via
+    `points @ best_rotation.T` in the caller) -- only which side gets rotated during
+    THIS search is different, to avoid rebuilding a ~26k-point tree 72 times.
 
     Returns (rotation_matrix, populated_count) for the best candidate found.
     """
     best_rotation = np.eye(3)
     best_populated = -1
+    atlas_tree = cKDTree(dense_points)
     for angle_deg in np.linspace(0, 360, n_candidates, endpoint=False):
         rotation = _rotation_matrix_z(angle_deg)
-        rotated_dense = dense_points @ rotation.T
-        tree = cKDTree(rotated_dense)
-        _, nearest_idx = tree.query(target_points)
+        # Equivalent to rotating dense_points by `rotation` and querying with
+        # target_points unrotated (see docstring) -- rotate the much smaller query
+        # set by `rotation` (not its transpose) against the one fixed atlas tree.
+        rotated_target = target_points @ rotation
+        _, nearest_idx = atlas_tree.query(rotated_target)
         labels = dense_labels[nearest_idx]
         populated = len(np.unique(labels))
         if populated > best_populated:
@@ -301,11 +316,21 @@ def register_cpd_warp(mesh_points_canonical: np.ndarray) -> dict | None:
         reg_points_scaled = reg_points_scaled @ best_rotation.T
         dense_points_scaled = dense_points_scaled @ best_rotation.T
 
-        reg = DeformableRegistration(
-            X=target_sample, Y=reg_points_scaled,
-            beta=_CPD_BETA, lamb=_CPD_LAMBDA, max_iterations=_CPD_MAX_ITER,
-        )
-        reg.register()
+        # GPU when available, CPU otherwise -- same auto-detect pattern already proven in
+        # cpd_rv_segmentation.py's _fit_cpd. cpd_gpu.fit_cpd_gpu returns a FittedField, a
+        # duck-typed drop-in for the three attributes (.Y, .W, .beta) read off `reg` below, so
+        # nothing past this point needs to know or care which backend actually ran.
+        if cpd_gpu.gpu_available():
+            reg = cpd_gpu.fit_cpd_gpu(
+                target_sample, reg_points_scaled,
+                beta=_CPD_BETA, lamb=_CPD_LAMBDA, max_iterations=_CPD_MAX_ITER,
+            )
+        else:
+            reg = DeformableRegistration(
+                X=target_sample, Y=reg_points_scaled,
+                beta=_CPD_BETA, lamb=_CPD_LAMBDA, max_iterations=_CPD_MAX_ITER,
+            )
+            reg.register()
 
         # Extend the learned field from the registration sample to the FULL dense
         # atlas vertex set - this is what gives fine-grained boundary resolution

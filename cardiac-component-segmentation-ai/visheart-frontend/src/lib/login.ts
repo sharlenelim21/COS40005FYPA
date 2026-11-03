@@ -16,14 +16,18 @@ export function useLogin(redirectTo: string = "#") {
     e.preventDefault();
     try {
       // Add a minimum 1-second delay to show the signing in spinner
-      await Promise.all([
+      const [authenticatedUser] = await Promise.all([
         login(username, password),
         new Promise((resolve) => setTimeout(resolve, 1000)),
       ]);
       // Set redirecting state to prevent login screen flash
       if (redirectTo !== "#") {
         setIsRedirecting(true);
-        router.push(redirectTo);
+        // Admin's landing page is the Admin Panel (oversight is their primary job here), not
+        // the pipeline dashboard every other role lands on -- same rule ProtectedRoute's
+        // RegistrationOnly already applies on a route-mount recheck, but that never fires here
+        // since this push already navigates away before it would run.
+        router.push(authenticatedUser.role === "admin" ? "/admin" : redirectTo);
       }
     } catch (error) {
       // Reset redirecting state on error
@@ -36,14 +40,14 @@ export function useLogin(redirectTo: string = "#") {
   const handleGuestLogin = async () => {
     try {
       // Add a minimum 1-second delay to show the loading spinner
-      await Promise.all([
+      const [authenticatedUser] = await Promise.all([
         guestLogin(),
         new Promise((resolve) => setTimeout(resolve, 1000)),
       ]);
       // Set redirecting state to prevent login screen flash
       if (redirectTo !== "#") {
         setIsRedirecting(true);
-        router.push(redirectTo);
+        router.push(authenticatedUser.role === "admin" ? "/admin" : redirectTo);
       }
     } catch (error) {
       // Reset redirecting state on error

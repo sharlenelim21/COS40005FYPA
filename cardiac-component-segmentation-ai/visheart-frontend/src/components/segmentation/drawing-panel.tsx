@@ -46,7 +46,6 @@ export function DrawingPanel({
   onReset,
   boundingBoxDisabled = false,
 }: DrawingPanelProps) {
-
   // Memoized tool selection handler
   const handleToolChange = React.useCallback((value: string) => {
     if (value === 'rectangle' && boundingBoxDisabled) return;
@@ -64,10 +63,10 @@ export function DrawingPanel({
         handleClear();
         return;
       }
-      
+
       // Only handle Ctrl/Cmd shortcuts if no other modifier keys
       if (e.altKey || e.shiftKey) return;
-      
+
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && canUndo) {
         e.preventDefault();
         handleUndo();
@@ -76,7 +75,7 @@ export function DrawingPanel({
         handleRedo();
       }
     };
-    
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear]);
@@ -86,7 +85,7 @@ export function DrawingPanel({
       {/* Tool Selection */}
       <div>
         <h3 className="text-sm font-medium text-foreground mb-3">Tool Selection</h3>
-        <div className="grid grid-cols-6 gap-2">
+        <div className="grid grid-cols-3 @sm:grid-cols-6 gap-2">
           {DRAWING_TOOLS.map((toolKey) => {
             const config = TOOL_CONFIG[toolKey];
             const IconComponent = config.icon;
@@ -111,7 +110,7 @@ export function DrawingPanel({
                 )}
               >
                 <IconComponent className="w-4 h-4 mb-1" />
-                <span className="text-xs font-medium">{config.label}</span>
+                <span className="hidden @xs:block text-xs font-medium">{config.label}</span>
               </button>
             );
           })}
@@ -240,7 +239,7 @@ export function DrawingPanel({
 
       {/* Collapsible Sections using Accordion */}
       <Accordion type="single" collapsible className="w-full">
-        {/* Actions - Open by default */}
+        {/* Actions - Open by default. */}
         <AccordionItem value="actions" className="border-none">
           <AccordionTrigger className="py-2 hover:no-underline [&[data-state=open]>svg]:rotate-180">
             <h3 className="text-sm font-medium text-foreground">Actions</h3>
@@ -259,7 +258,7 @@ export function DrawingPanel({
                 Undo
                 <span className="text-xs text-muted-foreground ml-auto">Ctrl+Z</span>
               </Button>
-              
+
               <Button
                 variant="outline"
                 size="sm"
@@ -272,7 +271,7 @@ export function DrawingPanel({
                 Redo
                 <span className="text-xs text-muted-foreground ml-auto">Ctrl+Y</span>
               </Button>
-              
+
               <Button
                 variant="destructive"
                 onClick={handleClear}

@@ -26,8 +26,11 @@ export enum ReconstructionChamber {
 /**
  * Defines the possible roles a user can have within the application.
  * @enum {string}
- * @property {string} User - Represents a standard user with basic permissions.
- * @property {string} Admin - Represents an administrator with elevated privileges.
+ * @property {string} User - Full clinical user: upload, segmentation, landmark detection,
+ *   reconstruction. Assigned directly at signup.
+ * @property {string} Admin - Represents an administrator with elevated privileges (user
+ *   management, U-Net retraining).
+ * @property {string} Guest - Temporary, unauthenticated-feeling trial user.
  */
 export enum UserRole {
   User = "user",
@@ -42,14 +45,15 @@ export enum UserRole {
  * @property {string} password - The user's hashed password.
  * @property {string} email - The user's unique email address.
  * @property {string} phone - The user's unique phone number.
- * @property {UserRole} role - The role assigned to the user (e.g., User, Admin).
+ * @property {UserRole} role - The role assigned to the user. Always server-assigned — never read
+ *   from request bodies — and always starts as User at signup.
  */
 export interface IUser {
   username: string;
   password: string;
   email: string;
   phone: string;
-  role: UserRole; // Default to "user" unless specified otherwise
+  role: UserRole; // Default/starting role for every new signup is User
 }
 
 /**
@@ -69,7 +73,7 @@ export interface IUserSafe {
   username: string;
   email: string;
   phone: string;
-  role: UserRole; // Default to "user" unless specified otherwise
+  role: UserRole;
   createdAt?: Date; // Creation date of the user
   updatedAt?: Date; // Last update date of the user
 }
@@ -155,7 +159,7 @@ export enum FileDataType {
 export interface IProject {
   // Identifiers
   // _id:  string; // MongoDB Object ID of the project, commented out if extended with mongoose.Document
-  userid: string; // MongoDB User ID of the user who uploaded the file
+  userid: string; // MongoDB User ID of the user who uploaded the file (the owning Doctor/Admin)
   // User inputs
   name: string; // Name of the project
   originalfilename: string;
@@ -252,6 +256,11 @@ export interface IProjectSegmentationMask {
   isMedSAMOutput: boolean; // Indicates if the segmentation mask is a MedSAM output (kept for backward compatibility)
   segmentationModel?: SegmentationModel; // Optional model tag for future extensibility
   model_used?: string; // Compatibility field: stores model name as string (e.g., 'medsam' or 'unet')
+
+  /** "Consider this edit for U-Net retraining" — surfaced to Admin on /admin/flagged-masks. */
+  flaggedForRetrain?: boolean;
+  flaggedAt?: string;
+  flaggedByUserId?: string;
   // Properties of the bounding box coordinates used to input into MedSAM for segmentation
   // If the segmentation mask is a single frame, there will be only one entry in the frames array
   frames: {
@@ -287,6 +296,13 @@ export interface IProjectSegmentationMask {
      *  HCM gate) must multiply by heartMetrics.spacing_mm[0] themselves —
      *  this field was previously read as mm with no conversion at all. */
     segment_values: number[];
+    /** True-peak (not mean) wall thickness per AHA segment, same pixel units/ordering as
+     *  segment_values -- see bullseye_analysis.group_sectors_max. Added 2026-10; absent on masks
+     *  computed before this field existed, so consumers (assembleDiseasePatternGateInputs,
+     *  useProjectResults.ts) must fall back to segment_values when it's missing/empty, not
+     *  require it. Only meant for MaxWallThicknessMm (the HCM gate); the bullseye display keeps
+     *  reading segment_values. */
+    segment_values_max?: number[];
     segment_metadata: { idx: number; name: string; ring: string; value: number }[];
     stats: { min: number; max: number; mean: number; n_nan: number };
     computed_at: string;
@@ -557,15 +573,17 @@ export interface IProjectSegmentationMask {
   /**
    * Unified LV+RV Disease Pattern Similarity Assessment — NOT a diagnosis.
    * Produced by compute_disease_pattern_gates.py. Each of ACDC's 5 diagnostic
-   * groups (NOR/MINF/DCM/HCM/RV) is its own independent gate (met/not-met/
-   * pending), since RV uses a different feature space than the 4 LV groups
-   * and can't honestly share one ranked score with them. A patient can meet
-   * zero, one, or more than one gate — see the Python module's own docstring
-   * for full method/citation detail.
+   * groups is its own independent gate (met/not-met/pending) — NOR is split
+   * into NOR_LV and NOR_RV (so a report can tell which chamber actually
+   * failed), giving 6 gates total (NOR_LV/NOR_RV/MINF/DCM/HCM/RV). RV uses a
+   * different feature space than the 4 LV groups and can't honestly share
+   * one ranked score with them. A patient can meet zero, one, or more than
+   * one gate — see the Python module's own docstring for full method/
+   * citation detail.
    */
   diseasePatternGates?: {
     gates: {
-      code: "NOR" | "MINF" | "DCM" | "HCM" | "RV";
+      code: "NOR_LV" | "NOR_RV" | "MINF" | "DCM" | "HCM" | "RV";
       label: string;
       met: boolean | null;     // null = not enough data to decide (pending) — never treat as false
       reasons: string[];       // plain-language per-criterion explanation
@@ -573,13 +591,12 @@ export interface IProjectSegmentationMask {
     }[];
     met_codes: string[];       // codes with met === true, gates-array order preserved
     // Advisory layering shown only when the RV gate is met — see module
-    // docstring "RV gate severity layering" for why these 3 notes are kept
+    // docstring "RV gate severity layering" for why these 2 notes are kept
     // independent rather than combined into one score.
     rv_severity: {
-      ratio_note: string;        // primary, disease-agnostic — RV/LV volume ratio vs ACDC's own RV/NOR group stats
-      arvc_note: string | null;  // secondary — only set when close to the Kubler et al. 2021 ARVC cohort range
-      pah_note: string | null;   // secondary — only set when in the ESC/ERS 2022 PAH higher-risk band
-      generic_note: string | null; // set only when neither secondary note fired
+      arvc_note: string | null;  // only set when close to the Kubler et al. 2021 ARVC cohort range
+      pah_note: string | null;   // only set when in the ESC/ERS 2022 PAH higher-risk band
+      generic_note: string | null; // set only when neither note fired
     } | null;
     sex: "male" | "female" | "unspecified";
     disclaimer: string;        // fixed non-diagnostic disclaimer
@@ -891,7 +908,7 @@ export interface IProjectReconstruction {
                                    // RV is research-only and must be labelled wherever it is shown.
   builtFrames?: number[]; // 1-based frames that were built, when the user chose some; absent: every frame
   
-  // File properties 
+
   filename: string; // Server-generated reconstruction filename (e.g., projectid_reconstructionid_4d)
   filesize: number; // Size of the reconstruction file in bytes
   filehash: string; // SHA256 hash of the reconstruction file for integrity
