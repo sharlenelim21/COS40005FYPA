@@ -90,6 +90,15 @@ const isActiveRecentJob = (job: ProjectTypes.UserJob): boolean => {
 const isActiveSegmentationJob = isActiveRecentJob;
 const isActiveReconstructionJob = isActiveRecentJob;
 
+// Strain jobs share the jobs collection and carry segmentationModel (the masks they read), but are not
+// segmentations: the same split as the server's NON_SEGMENTATION_JOBS in inference.ts. Keyed by model_used.
+const STRAIN_JOB_LABELS: Record<string, string> = {
+  strain_series: "Strain Computation",
+  rv_strain_series: "RV Strain Computation",
+};
+const strainJobLabel = (job: ProjectTypes.UserJob): string | undefined =>
+  STRAIN_JOB_LABELS[String(job.modelUsed ?? "").toLowerCase()];
+
 function ProjectPageInner() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
@@ -562,7 +571,7 @@ function ProjectPageInner() {
     return () => clearInterval(timer);
   }, [landmarkSummary?.active, pipeline.landmarkActive, refreshLandmarkSummary]);
   const activeSegJobs = (jobs ?? []).filter(
-    (j) => isActiveSegmentationJob(j) && !/4d_reconstruction|landmark/i.test(String(j.modelUsed ?? "")),
+    (j) => isActiveSegmentationJob(j) && !/4d_reconstruction|landmark/i.test(String(j.modelUsed ?? "")) && !strainJobLabel(j),
   );
   const segRunning = pipeline.segActive || activeSegJobs.length > 0;
   const segProgressState: "running" | "queued" =
@@ -665,6 +674,8 @@ function ProjectPageInner() {
   const jobDisplayName = (job: ProjectTypes.UserJob) => {
     const kind = String(job.modelUsed ?? "").toLowerCase();
     if (kind.includes("landmark")) return `${modelName(job.segmentationModel)} Landmark Detection`;
+    const strainLabel = strainJobLabel(job);
+    if (strainLabel) return `${modelName(job.segmentationModel)} ${strainLabel}`;
     if (kind.includes("4d_reconstruction")) {
       const chamber = job.chamber ? normalizeReconstructionChamber(job.chamber).toUpperCase() : reconstructionChamberById.get(job.jobId);
       return `${modelName(job.segmentationModel)}${chamber ? ` · ${chamber}` : ""} Reconstruction`;
@@ -1266,6 +1277,8 @@ function ProjectPageInner() {
     const model = String(job.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
     const key = kind.includes("landmark")
       ? `landmark:${model}`
+      : strainJobLabel(job)
+      ? `strain:${kind}:${model}`
       : kind.includes("4d_reconstruction")
       ? `recon:${model}:${normalizeReconstructionChamber(job.chamber ?? reconstructionChamberById.get(job.jobId))}`
       : `seg:${model}`;

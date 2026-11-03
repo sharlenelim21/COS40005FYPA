@@ -97,8 +97,10 @@ export const extractS3KeyFromUrl = (s3Url: string): string | null => {
   }
 };
 
-// Get file size from S3 using HeadObject
-export const getS3FileSize = async (s3Url: string): Promise<number | null> => {
+// Get file size from S3 using HeadObject.
+// missingIsExpected: the caller is only checking whether the file exists yet (e.g. a motion file not built yet),
+// so a 404 is logged at debug level instead of error. The return value is null either way.
+export const getS3FileSize = async (s3Url: string, missingIsExpected = false): Promise<number | null> => {
   if (!s3Client || !process.env.AWS_BUCKET_NAME) {
     logger.error(`${serviceLocation}: Cannot get file size from S3: Client or bucket not configured`);
     return null;
@@ -119,6 +121,11 @@ export const getS3FileSize = async (s3Url: string): Promise<number | null> => {
     const response = await s3Client.send(command);
     return response.ContentLength || null;
   } catch (error) {
+    const s3Error = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+    if (missingIsExpected && (s3Error?.name === "NotFound" || s3Error?.$metadata?.httpStatusCode === 404)) {
+      logger.debug(`${serviceLocation}: File not found (expected) for ${s3Url}`);
+      return null;
+    }
     logger.error(`${serviceLocation}: Error getting file size for ${s3Url}:`, error);
     return null;
   }

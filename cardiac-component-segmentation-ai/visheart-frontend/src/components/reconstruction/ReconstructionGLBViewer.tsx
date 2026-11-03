@@ -1,5 +1,5 @@
 ﻿"use client";
-import { useEffect, useRef, Suspense, useState, useCallback } from "react";
+import { Component, useEffect, useRef, Suspense, useState, useCallback, type ReactNode } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, useGLTF, Center } from "@react-three/drei";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
@@ -24,7 +24,33 @@ interface ViewerSettings {
   roughness: number;
   metalness: number;
   opacity: number;
-  environmentPreset: 'studio' | 'sunset' | 'dawn' | 'night' | 'warehouse' | 'forest' | 'apartment' | 'city' | 'park' | 'lobby';
+  /** Only the bundled HDR (ENVIRONMENT_FILES); drei's other presets load from a CDN at runtime. */
+  environmentPreset: 'studio';
+}
+
+// Lighting maps served from public/hdri so the viewer works offline. drei's `preset` prop fetches
+// these from raw.githack.com, and a failed fetch took the whole page down ("Application error").
+// studio_small_03_1k.hdr: "Studio Small 03" by Poly Haven (https://polyhaven.com/a/studio_small_03),
+// CC0 1.0 public domain; the same 1k file drei's "studio" preset loads (pmndrs/drei-assets).
+const ENVIRONMENT_FILES: Record<ViewerSettings['environmentPreset'], string> = {
+  studio: '/hdri/studio_small_03_1k.hdr',
+};
+
+/** Renders `fallback` instead of crashing the page when the lighting map cannot be loaded. */
+class EnvironmentErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.warn("[ReconstructionGLBViewer] Environment map failed to load; using basic lighting.", error);
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
 }
 
 // Default settings
@@ -917,8 +943,14 @@ export function ReconstructionGLBViewer({
             )}
           </Center>
           
-          {/* Environment Map for reflections - customizable preset */}
-          <Environment preset={settings.environmentPreset} />
+          {/* Environment Map for reflections, loaded from public/hdri (see ENVIRONMENT_FILES).
+              Its own Suspense keeps the model visible while it loads; if it fails, the three-point
+              lights above stay and a soft ambient light stands in for the missing reflections. */}
+          <EnvironmentErrorBoundary fallback={<ambientLight intensity={0.4} />}>
+            <Suspense fallback={null}>
+              <Environment files={ENVIRONMENT_FILES[settings.environmentPreset]} />
+            </Suspense>
+          </EnvironmentErrorBoundary>
           
           <CameraController 
             onCameraChange={handleCameraChange} 

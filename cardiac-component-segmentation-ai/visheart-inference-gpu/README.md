@@ -273,6 +273,31 @@ Model files are stored in the `/models` directory:
 > The **MedSAM model** is not provided in the repository due to its large size.
 - **4D Reconstruction Model**: `fourd_model_epoch_250.pth` (PyTorch model)
   - This model is already provided in the repository.
+- **UNet segmentation**: `unet.pth` (PyTorch model)
+  - Not in the repository (gitignored, large). It is looked up in this order: the `UNET_CHECKPOINT_PATH`
+    environment variable, `app/models/active/unet.pth` (a retrained version activated by Extend Training),
+    then `app/models/unet.pth` (the original).
+
+### Getting `unet.pth` and `medsam_vit_b.pth` for the Docker stack
+
+`visheart-local-deployment/docker-compose.yml` mounts this repo's `app/models` folder over the image's
+`/app/app/models` (read-only), which hides the copies baked into the image. On a fresh clone the folder has
+neither file, so UNet fails with "UNet checkpoint file not found" and MedSAM cannot load. Copy them out of the
+image once (Linux, macOS or Git Bash; run from `visheart-inference-gpu/`):
+
+```bash
+docker pull sharlene21/visheart-gpu:latest
+docker run --rm --entrypoint ls sharlene21/visheart-gpu:latest -l /app/app/models   # check what the image has
+id=$(docker create sharlene21/visheart-gpu:latest)
+docker cp "$id:/app/app/models/unet.pth" app/models/unet.pth
+docker cp "$id:/app/app/models/medsam_vit_b.pth" app/models/medsam_vit_b.pth
+docker rm "$id"
+```
+
+Then restart the inference container (`docker restart visheart-gpu-cpu` or `visheart-gpu-nvidia`). On Windows,
+`visheart-retraining/setup-training-pc.ps1` (run by `start.ps1` when the training data pack is present) also
+puts the original `unet.pth` in place. See `visheart-local-deployment/README.md` for the full Linux setup.
+
 ## API Documentation
 
 ### Base URL
