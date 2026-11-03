@@ -49,6 +49,7 @@ a percentage, so it does not depend on the voxel size.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import os
 from typing import Annotated, List, Optional
@@ -72,6 +73,7 @@ from bullseye_analysis import (
     estimate_anterior_rv_insertion,
     mask_to_17_segments,
     mask_to_rv_regions,
+    select_anterior_insertions,
 )
 
 router = APIRouter()
@@ -146,11 +148,38 @@ def _load_strain_mask(data: bytes, fname: str):
             pass
 
 
+def _parse_rv_insertion_slices(text: Optional[str]):
+    """Parse the optional `rv_insertion_slices` form field: both RV insertion
+    points of every slice, as JSON [{"slice": z, "p1": [x, y], "p2": [x, y]}, ...].
+    Which of the two is anterior does not matter — select_anterior_insertions
+    decides that from the mask. Entries that are not in this shape are skipped.
+
+    Returns {slice index: ((x, y), (x, y))}, or None when the field is absent
+    or holds no usable entry. Raises 422 when it is not valid JSON."""
+    if not text:
+        return None
+    try:
+        entries = json.loads(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"rv_insertion_slices is not valid JSON: {exc}")
+    pairs: dict[int, tuple[tuple[float, float], tuple[float, float]]] = {}
+    for e in entries if isinstance(entries, list) else []:
+        try:
+            z = int(e["slice"])
+            p1 = (float(e["p1"][0]), float(e["p1"][1]))
+            p2 = (float(e["p2"][0]), float(e["p2"][1]))
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        pairs[z] = (p1, p2)
+    return pairs or None
+
+
 def _run_analysis(
     mask_3d: np.ndarray,
     request_id: Optional[str],
     rv_insertion_1: Optional[tuple[float, float]] = None,
     rv_insertion_2: Optional[tuple[float, float]] = None,
+    rv_slices: Optional[dict] = None,
 ) -> BullseyeAnalysisResult:
     """CPU-bound analysis — called via run_in_threadpool.
     LV wall thickness per AHA segment, in pixels."""
@@ -160,7 +189,12 @@ def _run_analysis(
             detail="Mask contains no myocardium (class 2) pixels. Cannot compute wall thickness."
         )
 
-    analysis = mask_to_17_segments(mask_3d, rv_insertion_1=rv_insertion_1, rv_insertion_2=rv_insertion_2)
+    # Per-slice landmarks (if sent) → the anterior point of each slice, used per ring.
+    anterior_by_slice = select_anterior_insertions(mask_3d, rv_slices) if rv_slices else None
+    analysis = mask_to_17_segments(
+        mask_3d, rv_insertion_1=rv_insertion_1, rv_insertion_2=rv_insertion_2,
+        anterior_by_slice=anterior_by_slice,
+    )
     values: np.ndarray = analysis["values"]
     lv_centroid: Optional[List[float]] = analysis["lv_centroid"]
     slice_labels: list[str] = classify_slices(mask_3d)
@@ -239,6 +273,7 @@ async def analyze_bullseye_upload(
     rv_insertion_1_y: Optional[float] = Form(default=None),
     rv_insertion_2_x: Optional[float] = Form(default=None),
     rv_insertion_2_y: Optional[float] = Form(default=None),
+    rv_insertion_slices: Optional[str] = Form(default=None),
 ) -> BullseyeAnalysisResult:
     """
     Accept a NIfTI segmentation mask as a multipart upload and return
@@ -253,6 +288,11 @@ async def analyze_bullseye_upload(
     RV insertion point coordinates (pixel coords) for anatomical alignment.
     Point 1 is the anterior insertion point; only point 1 is used. Without
     it, the point is estimated from the RV in the mask.
+
+    Optional form field rv_insertion_slices (JSON, see
+    _parse_rv_insertion_slices) gives both points of every slice; when it
+    holds usable slices, each ring is aligned to its own slices' points and
+    rv_insertion_1 is not used.
     """
     fname = file.filename or ""
     if not (fname.endswith(".nii") or fname.endswith(".nii.gz")):
@@ -264,9 +304,11 @@ async def analyze_bullseye_upload(
     rv1 = (rv_insertion_1_x, rv_insertion_1_y) if rv_insertion_1_x is not None and rv_insertion_1_y is not None else None
     rv2 = (rv_insertion_2_x, rv_insertion_2_y) if rv_insertion_2_x is not None and rv_insertion_2_y is not None else None
 
+    rv_slices = _parse_rv_insertion_slices(rv_insertion_slices)
+
     raw = await file.read()
     mask_3d = await run_in_threadpool(_load_nifti_bytes, raw)
-    return await run_in_threadpool(_run_analysis, mask_3d, None, rv1, rv2)
+    return await run_in_threadpool(_run_analysis, mask_3d, None, rv1, rv2, rv_slices)
 
 
 # ── Route B: S3 presigned URL ─────────────────────────────────────────────────
@@ -319,6 +361,8 @@ def _compute_strain_sync(
     es_fname: str,
     rv1: Optional[tuple[float, float]],
     rv2: Optional[tuple[float, float]],
+    rv_slices: Optional[dict] = None,
+    rv_slices_es: Optional[dict] = None,
 ) -> dict:
     """CPU-bound: load both NIfTIs, run mask_to_17_segments on each, compute GRS/GCS.
 
@@ -327,6 +371,12 @@ def _compute_strain_sync(
 
     ED and ES are each analysed on their own (ES gets its own slice
     classification) — unlike the RV route, which reuses ED's layout at ES.
+
+    rv_slices    : per-slice landmarks of the ED frame (aligns the ED mask).
+    rv_slices_es : per-slice landmarks of the ES frame (aligns the ES mask), so
+                   the segments follow the heart as it moves through the cycle.
+                   A slice whose ES points are unusable keeps the ED point. When
+                   absent, ES uses the ED points.
     """
 
     # The voxel size is taken from the ED file and used for both frames.
@@ -338,18 +388,29 @@ def _compute_strain_sync(
     if not np.any(mask_es == 2):
         raise ValueError("ES mask contains no myocardium (class 2) pixels.")
 
-    # No landmark → estimate the anterior RV insertion point ONCE, from the ED
-    # mask, and use that same point for both frames, so ED and ES are split
-    # into the same wedges (estimating it separately per frame would shift the
-    # segment borders between the two).
+    # Per-slice landmarks → the anterior point of each slice, chosen on each
+    # frame's own mask (each ring is aligned to its own slices' points — see
+    # _ring_alignment_points). ED uses the ED frame's points; ES uses the ES
+    # frame's points where they are usable and the ED point for any other slice.
+    anterior_by_slice = select_anterior_insertions(mask_ed, rv_slices) if rv_slices else {}
+    anterior_by_slice_es = dict(anterior_by_slice)
+    if anterior_by_slice and rv_slices_es:
+        anterior_by_slice_es.update(select_anterior_insertions(mask_es, rv_slices_es))
+
+    # No landmark at all → estimate the anterior RV insertion point ONCE, from
+    # the ED mask, and use that same point for both frames, so ED and ES are
+    # split into the same wedges (estimating it separately per frame would
+    # shift the segment borders between the two).
     align_pt = rv1
     estimated_from_mask = False
-    if align_pt is None:
+    if align_pt is None and not anterior_by_slice:
         align_pt = estimate_anterior_rv_insertion(mask_ed)
         estimated_from_mask = align_pt is not None
 
-    res_ed = mask_to_17_segments(mask_ed, rv_insertion_1=align_pt, rv_insertion_2=rv2)
-    res_es = mask_to_17_segments(mask_es, rv_insertion_1=align_pt, rv_insertion_2=rv2)
+    res_ed = mask_to_17_segments(mask_ed, rv_insertion_1=align_pt, rv_insertion_2=rv2,
+                                 anterior_by_slice=anterior_by_slice or None)
+    res_es = mask_to_17_segments(mask_es, rv_insertion_1=align_pt, rv_insertion_2=rv2,
+                                 anterior_by_slice=anterior_by_slice_es or None)
 
     wt_ed   = np.array(res_ed["values"],      dtype=float)
     wt_es   = np.array(res_es["values"],      dtype=float)
@@ -479,6 +540,8 @@ async def compute_strain(
     rv_insertion_1_y: Optional[float] = Form(default=None),
     rv_insertion_2_x: Optional[float] = Form(default=None),
     rv_insertion_2_y: Optional[float] = Form(default=None),
+    rv_insertion_slices: Optional[str] = Form(default=None),
+    rv_insertion_slices_es: Optional[str] = Form(default=None),
 ):
     """
     Upload segmentation masks for End-Diastole (ED) and End-Systole (ES) frames.
@@ -488,6 +551,13 @@ async def compute_strain(
     Each mask should hold one cardiac frame: 3-D (H × W × N_slices), or 4-D
     with a single frame, with class values:
     0=background, 1=RV, 2=myocardium, 3=LV cavity.
+
+    Optional form field rv_insertion_slices (JSON, see
+    _parse_rv_insertion_slices): both RV insertion points of every slice of
+    the ED frame. When it holds usable slices, each ring is aligned to its own
+    slices' anterior points (chosen on the ED mask) instead of rv_insertion_1.
+    Optional rv_insertion_slices_es: the same for the ES frame, so the ES mask
+    is aligned to its own landmarks (slice by slice, falling back to ED's).
     """
     for f, label in ((ed_file, "ed_file"), (es_file, "es_file")):
         fname = f.filename or ""
@@ -499,6 +569,8 @@ async def compute_strain(
 
     rv1 = (rv_insertion_1_x, rv_insertion_1_y) if rv_insertion_1_x is not None and rv_insertion_1_y is not None else None
     rv2 = (rv_insertion_2_x, rv_insertion_2_y) if rv_insertion_2_x is not None and rv_insertion_2_y is not None else None
+    rv_slices = _parse_rv_insertion_slices(rv_insertion_slices)
+    rv_slices_es = _parse_rv_insertion_slices(rv_insertion_slices_es)
 
     ed_bytes = await ed_file.read()
     es_bytes = await es_file.read()
@@ -509,7 +581,7 @@ async def compute_strain(
             ed_bytes, es_bytes,
             ed_file.filename or "ed.nii.gz",
             es_file.filename or "es.nii.gz",
-            rv1, rv2,
+            rv1, rv2, rv_slices, rv_slices_es,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

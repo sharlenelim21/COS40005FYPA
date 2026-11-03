@@ -1,6 +1,7 @@
 "use client";
 
 import { lvScaleKey, strainScaleFraction, strainScaleMinMax } from "@/lib/strainColorScale";
+import { SEGMENT_LABELS } from "@/lib/ahaSegments";
 import React, { useRef, useEffect, useCallback } from "react";
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -98,14 +99,7 @@ export interface RvStrainResult {
 const BASE_GCS = [-17.1, -18.3, -16.8, -17.7, -19.4, -18.5, -20.2, -19.1, -18.2, -19.7, -20.8, -20.1, -21.0, -19.5, -20.4, -19.8, -18.9];
 const BASE_GRS = [26.4, 28.2, 24.9, 25.8, 30.1, 29.4, 31.2, 30.5, 27.8, 28.6, 32.4, 31.6, 34.1, 32.7, 33.4, 31.9, 29.8];
 
-export const SEGMENT_LABELS = [
-  "Basal Anterior", "Basal Anteroseptal", "Basal Inferoseptal",
-  "Basal Inferior", "Basal Inferolateral", "Basal Anterolateral",
-  "Mid Anterior", "Mid Anteroseptal", "Mid Inferoseptal",
-  "Mid Inferior", "Mid Inferolateral", "Mid Anterolateral",
-  "Apical Anterior", "Apical Septal", "Apical Inferior", "Apical Lateral",
-  "Apex",
-];
+export { SEGMENT_LABELS };
 
 export function getDummyStrainData(
   selectedStrainType: StrainType = "GCS",

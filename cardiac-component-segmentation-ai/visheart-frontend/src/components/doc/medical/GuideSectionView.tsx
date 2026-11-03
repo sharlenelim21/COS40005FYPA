@@ -1,4 +1,4 @@
-import type { ContentBlock, GuideSection } from "@/content/medicalGuide";
+import { figureNumber, type ContentBlock, type GuideSection } from "@/content/medicalGuide";
 import { Callout } from "@/components/doc/medical/Callout";
 import { ClaimParagraphs } from "@/components/doc/medical/Citation";
 import { ConditionGrid } from "@/components/doc/medical/ConditionCard";
@@ -6,6 +6,7 @@ import { ContentText } from "@/components/doc/medical/ContentText";
 import { FigureSlot } from "@/components/doc/medical/FigureSlot";
 import { ReferenceRangeTable } from "@/components/doc/medical/ReferenceRangeTable";
 import { TwoLayerSection } from "@/components/doc/medical/TwoLayerSection";
+import { VideoSlot } from "@/components/doc/medical/VideoSlot";
 
 export function ContentBlockView({ block }: { block: ContentBlock }) {
   switch (block.kind) {
@@ -18,7 +19,9 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
     case "rangeTable":
       return <ReferenceRangeTable caption={block.caption} groups={block.groups} footnotes={block.footnotes} />;
     case "figure":
-      return <FigureSlot {...block} />;
+      return <FigureSlot {...block} number={figureNumber(block)} />;
+    case "video":
+      return <VideoSlot {...block} number={figureNumber(block)} />;
     case "conditions":
       return <ConditionGrid conditions={block.conditions} note={block.note} />;
   }

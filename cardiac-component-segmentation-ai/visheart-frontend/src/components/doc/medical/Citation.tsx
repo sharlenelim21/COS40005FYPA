@@ -18,6 +18,7 @@ export function CitationMarker({ refs }: { refs: readonly RefId[] }) {
           {index > 0 && ", "}
           <a
             href={`#${referenceAnchorId(id)}`}
+            data-cite-ref={id}
             aria-label={`Reference ${n}`}
             className="text-primary focus-visible:ring-ring rounded-sm underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none"
           >

@@ -6,6 +6,8 @@ import logger from './services/logger'; // Import Winston Logger
 import { connectRedis, checkRedisHealth } from './services/redis'; // Import Redis connection and health check
 import { scheduleGuestCleanup } from './jobs/guestcleanupjob'; // Import guest cleanup job
 import { scheduleInferenceJobCleanup } from './jobs/inferencejobcleanupjob'; // Import inference job cleanup CRON
+import { scheduleStaleLandmarkJobSweep } from './jobs/stalelandmarkjobsweep';
+import { startPipelineReconciler, stopPipelineReconciler } from './services/pipeline_orchestrator';
 import { loadEnvFromKnownLocations } from './utils/env';
 // Import the http module for graceful shutdown
 import http from 'http';
@@ -78,6 +80,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     // Schedule CRON jobs
     await scheduleGuestCleanup(); // Guest user cleanup
     await scheduleInferenceJobCleanup(); // Inference job cleanup (orphaned and old jobs)
+    await scheduleStaleLandmarkJobSweep();
+    startPipelineReconciler();
 
     // Graceful Shutdown Logic 
     const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
@@ -85,6 +89,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       process.on(signal, () => {
         logger.info(`${serviceLocation}: ${signal} signal received: closing HTTP server and stopping timers...`);
         stopTokenRefresh(); // Stop the JWT refresh interval
+        stopPipelineReconciler();
 
         // Cleanup Tasks here
         // Check if server exists before closing (it should, if this point is reached)

@@ -46,6 +46,7 @@ const ToolsAndMasksPanel = React.memo(({
   zoomLevel,
   setZoomLevel,
   onReset,
+  boundingBoxDisabled,
 }: {
   decodedMasks: Record<string, Uint8Array>;
   currentFrame: number;
@@ -69,6 +70,7 @@ const ToolsAndMasksPanel = React.memo(({
   zoomLevel?: number;
   setZoomLevel?: (level: number) => void;
   onReset?: () => void;
+  boundingBoxDisabled?: boolean;
 }) => {
   // Memoized current masks calculation - ALWAYS show all labels in consistent order
   const currentMasks = useMemo(() => {
@@ -205,6 +207,7 @@ const ToolsAndMasksPanel = React.memo(({
         zoomLevel={zoomLevel}
         setZoomLevel={setZoomLevel}
         onReset={onReset}
+        boundingBoxDisabled={boundingBoxDisabled}
       />
     </div>
   );
@@ -441,11 +444,13 @@ export function SegmentationSidebar({
   onModelChange,
   isModelActive = false,
   isModelRunning = false,
+  boundingBoxDisabled = false,
 }: SegmentationSidebarProps & {
   selectedModel?: SegmentationModelId;
   onModelChange?: (value: SegmentationModelId) => void;
   isModelActive?: boolean;
   isModelRunning?: boolean;
+  boundingBoxDisabled?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('tools');
 
@@ -493,7 +498,7 @@ export function SegmentationSidebar({
         <Brain className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] text-muted-foreground">Model:</span>
         <span className="text-[11px] font-semibold text-foreground truncate">
-          {selectedModel === "medsam" ? "MedSam" : "Unet"}
+          {selectedModel === "medsam" ? "MedSAM" : "UNet"}
         </span>
         <span
           className={cn(
@@ -585,6 +590,7 @@ export function SegmentationSidebar({
             zoomLevel={zoomLevel}
             setZoomLevel={setZoomLevel}
             onReset={onReset}
+            boundingBoxDisabled={boundingBoxDisabled}
           />
         )}
 

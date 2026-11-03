@@ -8,6 +8,7 @@ import {
   IJob,
   JobStatus,
   jobModel,
+  projectSegmentationMaskModel,
   readProject,
   updateJob,
 } from "./database";
@@ -69,7 +70,39 @@ const buildCallbackUrl = (): string | null => {
   return `${configuredCallbackUrl.replace(/\/$/, "")}/webhook/landmark-callback`;
 };
 
-const STALE_LANDMARK_JOB_MINUTES = 30;
+export const STALE_LANDMARK_JOB_MINUTES = 30;
+
+export type LandmarkCompletion = Record<"medsam" | "unet", { uuid: string; createdAt: Date } | null>;
+
+export const findLandmarkCompletionForCurrentMasks = async (
+  projectId: string,
+  userId: string,
+): Promise<LandmarkCompletion> => {
+  const out: LandmarkCompletion = { medsam: null, unet: null };
+  for (const model of ["medsam", "unet"] as const) {
+    const mask = await projectSegmentationMaskModel
+      .findOne({ projectid: projectId, isMedSAMOutput: false, segmentationModel: model }, { createdAt: 1 })
+      .sort({ createdAt: -1 })
+      .lean<{ createdAt?: Date }>();
+    if (!mask?.createdAt) continue;
+    const job = await jobModel
+      .findOne(
+        {
+          projectid: projectId,
+          userid: userId,
+          model_used: /landmark/i,
+          status: JobStatus.COMPLETED,
+          segmentationModel: model === "unet" ? SegmentationModel.UNET : { $in: [SegmentationModel.MEDSAM, null] },
+          createdAt: { $gte: mask.createdAt },
+        },
+        { uuid: 1, createdAt: 1 },
+      )
+      .sort({ createdAt: -1 })
+      .lean<{ uuid: string; createdAt: Date }>();
+    if (job) out[model] = { uuid: job.uuid, createdAt: job.createdAt };
+  }
+  return out;
+};
 
 export const findBlockingLandmarkJob = async (
   projectId: string,

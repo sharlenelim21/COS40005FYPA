@@ -4,7 +4,7 @@ import axios from "axios";
 import FormData from "form-data";
 import { isAuth, isAuthAndNotGuest } from "../services/passportjs";
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
-import { startLandmarkInference } from "../services/landmark_inference";
+import { startLandmarkInference, findLandmarkCompletionForCurrentMasks } from "../services/landmark_inference";
 import {
   jobModel,
   readProject,
@@ -16,7 +16,7 @@ import {
 import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/database_types";
 import logger from "../services/logger";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
-import { resolveRvInsertionPoints } from "../services/rv_insertion_points";
+import { resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
 import { normalizeLandmarkFrames, normalizeLandmarkJobResult } from "../utils/landmark_order";
 
 const memUpload = multer({ storage: multer.memoryStorage() });
@@ -189,6 +189,7 @@ router.get(
         .find({
           projectid: projectId,
           userid: req.user?._id?.toString(),
+          model_used: /landmark/i,
           status: JobStatus.COMPLETED,
           result: { $exists: true, $ne: null },
         })
@@ -241,8 +242,12 @@ router.get(
         .sort({ createdAt: -1 })
         .limit(30)
         .lean();
+      const landmarkCompletion = await findLandmarkCompletionForCurrentMasks(
+        projectId,
+        String(req.user?._id ?? ""),
+      );
 
-      res.status(200).json({ success: true, jobs });
+      res.status(200).json({ success: true, jobs, landmarkCompletion });
     } catch (error: any) {
       logger.error(`${serviceLocation}: Error reading landmark jobs`, {
         projectId: req.params.projectId,
@@ -305,6 +310,9 @@ router.post(
         form.append("rv_insertion_2_x", String(lm2.x));
         form.append("rv_insertion_2_y", String(lm2.y));
       }
+      // Per-slice landmarks of frame 0 (the uploaded files carry no frame index).
+      const rvSlices = await resolveRvInsertionSlices(projectId, 0);
+      if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
 
       const response = await axios.post(`${gpuBaseUrl}/bullseye/compute-strain`, form, {
         headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },

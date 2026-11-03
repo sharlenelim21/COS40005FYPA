@@ -18,8 +18,8 @@ interface FirstSectionProps {
 
 export default function FirstSection({
   title = "Welcome to VisHeart",
-  subtitle = "A 2D Cardiac MRI Segmentation, Landmark Detection, and 4D Reconstruction Platform",
-  description = "Experience GPU-powered cardiac imaging analysis with AI segmentation, cardiac landmark detection, AHA bullseye and regional strain analysis, and dynamic 4D reconstruction in one clinical workflow.",
+  subtitle = "A 2D Cardiac MRI Segmentation, 4D Reconstruction, and Landmark Detection Platform",
+  description = "Experience GPU-powered cardiac imaging analysis with AI segmentation, dynamic 4D reconstruction, cardiac landmark detection, and AHA bullseye and regional strain analysis in one clinical workflow.",
   className = "",
 }: FirstSectionProps) {
   const { user } = useAuth();

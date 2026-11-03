@@ -1,14 +1,23 @@
 import { ImageIcon } from "lucide-react";
 import type { FigureBlock } from "@/content/medicalGuide";
 import { DocImage } from "@/components/doc/DocImage";
-import { CitationMarker } from "@/components/doc/medical/Citation";
 import { ContentText } from "@/components/doc/medical/ContentText";
+import { FigureCaption } from "@/components/doc/medical/FigureCaption";
 
-export function FigureSlot({ src, alt, caption, attribution, refs = [] }: Omit<FigureBlock, "kind">) {
+interface FigureSlotProps extends Omit<FigureBlock, "kind"> {
+  number: number;
+}
+
+export function FigureSlot({ number, src, alt, caption, attribution, refs }: FigureSlotProps) {
   return (
     <figure className="bg-muted/30 rounded-lg border p-2 md:p-4">
       {src ? (
-        <DocImage src={src} alt={alt} className="h-auto w-full rounded-md border shadow-sm" />
+        <DocImage
+          src={src}
+          alt={alt}
+          capAtIntrinsicWidth
+          className="mx-auto block h-auto w-full rounded-md border shadow-sm"
+        />
       ) : (
         <div
           role="img"
@@ -22,15 +31,7 @@ export function FigureSlot({ src, alt, caption, attribution, refs = [] }: Omit<F
           </span>
         </div>
       )}
-      <figcaption className="mt-2 space-y-1">
-        <p className="text-muted-foreground text-xs">
-          <ContentText text={caption} />
-          <CitationMarker refs={refs} />
-        </p>
-        <p className="text-muted-foreground/80 text-[11px]">
-          Source: <ContentText text={attribution} />
-        </p>
-      </figcaption>
+      <FigureCaption number={number} caption={caption} attribution={attribution} refs={refs} />
     </figure>
   );
 }

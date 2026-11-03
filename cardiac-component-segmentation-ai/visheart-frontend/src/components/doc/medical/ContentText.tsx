@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 
-const PLACEHOLDER_SPLIT = /(\[PLACEHOLDER:[^\]]*\])/;
-const IS_PLACEHOLDER = /^\[PLACEHOLDER:[^\]]*\]$/;
+const PLACEHOLDER_SPLIT = /(\[(?:PLACEHOLDER|TODO):[^\]]*\])/;
+const IS_PLACEHOLDER = /^\[(?:PLACEHOLDER|TODO):[^\]]*\]$/;
 
 export function ContentText({ text }: { text: string }) {
   const parts = text.split(PLACEHOLDER_SPLIT);

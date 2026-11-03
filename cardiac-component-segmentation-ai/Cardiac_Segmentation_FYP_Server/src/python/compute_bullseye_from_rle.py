@@ -13,6 +13,14 @@ Input (stdin): JSON object with fields:
                       the GPU does. Without it the point is estimated from the RV
                       in the mask (same method as the GPU); only if the mask has
                       no RV are the fixed fallback angles used.
+    rv_insertion_slices — optional [{slice, p1: [x, y], p2: [x, y]}, ...]: both RV
+                      insertion points of every slice (slice = sliceindex). When it
+                      holds usable slices, each ring is aligned to its own slices'
+                      anterior points (as the GPU does) and rv_insertion_1 is not used.
+    anterior_points — optional [{slice, point: [x, y]}, ...]: anterior points that
+                      were ALREADY chosen on a reference frame (the first frame of
+                      the cycle). Used for every slice that has no usable point of
+                      its own in rv_insertion_slices.
 
 Output (stdout): JSON object matching BullseyeAnalysisResult:
     segment_values   — list[float], length 17 (pixels), standard AHA numbering
@@ -24,6 +32,8 @@ Output (stdout): JSON object matching BullseyeAnalysisResult:
     alignment_angle_deg / alignment_source — as in the GPU result
         ("landmark" | "rv-mask" | "fixed-angle")
     alignment_point  — [x, y] the start angle was measured from, or null
+    anterior_points  — [{slice, point}] the anterior points used per slice (empty
+                       when per-slice landmarks were not used)
 
 Segment order and alignment follow the GPU's bullseye_analysis.py (which
 follows the client's alignment notebook): rays sweep with increasing angle
@@ -83,6 +93,9 @@ _MIN_RV_PIXELS = 30
 # Share of each slice's RV pixels (those with the lowest angle seen from the LV
 # centre) taken as the RV's anterior tip — same value as the GPU code.
 _RV_EDGE_PERCENTILE = 2.0
+# Two insertion points closer than this (pixels) are treated as "both on the
+# same spot" and ignored — same value as the GPU code.
+_MIN_INSERTION_SEPARATION_PX = 5.0
 
 CLASS_MAP = {
     "myo": 2, "MYO": 2,
@@ -240,6 +253,69 @@ def estimate_anterior_rv_insertion(mask_3d: np.ndarray):
     )
 
 
+def select_anterior_insertions(mask_3d: np.ndarray, slice_pairs) -> dict:
+    """
+    Port of the GPU's bullseye_analysis.select_anterior_insertions (same rule):
+    from the two RV insertion points of each slice keep the one that has the RV
+    on its increasing-angle (clockwise-on-screen) side, seen from that slice's
+    LV-cavity centre. Skips slices with no LV cavity, too little RV, collapsed
+    points (< _MIN_INSERTION_SEPARATION_PX apart) or an ambiguous choice.
+
+    slice_pairs : {z: ((x, y), (x, y))} in this mask's slice position.
+    Returns {z: (x, y)}.
+    """
+    selected = {}
+    for z, (p1, p2) in (slice_pairs or {}).items():
+        if not (0 <= z < mask_3d.shape[2]):
+            continue
+        if math.hypot(p1[0] - p2[0], p1[1] - p2[1]) < _MIN_INSERTION_SEPARATION_PX:
+            continue
+        sl = mask_3d[:, :, z]
+        lys, lxs = np.nonzero(sl == _LV_CAVITY_CLASS)
+        if lxs.size == 0:
+            continue
+        cx, cy = float(lxs.mean()), float(lys.mean())
+        ys, xs = np.nonzero(sl == _RV_CLASS)
+        if xs.size < _MIN_RV_PIXELS:
+            continue
+        rv_dir = math.atan2(float(ys.mean()) - cy, float(xs.mean()) - cx)
+
+        def _rv_is_clockwise_of(p):
+            d = (rv_dir - math.atan2(p[1] - cy, p[0] - cx)) % (2.0 * math.pi)
+            return 0.0 < d < math.pi
+
+        cw1, cw2 = _rv_is_clockwise_of(p1), _rv_is_clockwise_of(p2)
+        if cw1 == cw2:
+            continue
+        anterior = p1 if cw1 else p2
+        selected[z] = (float(anterior[0]), float(anterior[1]))
+    return selected
+
+
+def ring_alignment_points(labels: list, anterior_by_slice: dict) -> dict:
+    """
+    Port of the GPU's bullseye_analysis._ring_alignment_points: one point per
+    ring = mean of the anterior points of the ring's own slices; a ring with
+    no usable slice takes the points of the nearest slice(s).
+    """
+    points = {}
+    if not anterior_by_slice:
+        return points
+    for ring in ("basal", "mid", "apical"):
+        ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring]
+        own = [p for z, p in anterior_by_slice.items() if z in ring_slices]
+        if not own and ring_slices:
+            gap = {z: min(abs(z - r) for r in ring_slices) for z in anterior_by_slice}
+            nearest = min(gap.values())
+            own = [anterior_by_slice[z] for z, g in gap.items() if g == nearest]
+        if own:
+            points[ring] = (
+                float(np.mean([p[0] for p in own])),
+                float(np.mean([p[1] for p in own])),
+            )
+    return points
+
+
 def ray_cast_thickness(
     slice_mask: np.ndarray, cx: float, cy: float, n_rays: int = 360, start_angle_rad: float = 0.0,
 ) -> np.ndarray:
@@ -300,21 +376,26 @@ def group_sectors(thicknesses: np.ndarray, ring_type: str) -> np.ndarray:
     return result
 
 
-def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None) -> dict:
+def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None, anterior_by_slice=None) -> dict:
     """
     17 AHA wall-thickness values (pixels), standard AHA numbering.
 
+    anterior_by_slice : {z: (x, y)} anterior insertion point per slice (from
+        select_anterior_insertions). When non-empty, each ring is aligned to
+        its own slices' points and rv_insertion_1 is not used.
     rv_insertion_1 : (x, y) of the ANTERIOR RV insertion point, or None.
         With it, the ray start angle of each ring follows the landmark (same
         rule as the GPU). Without it, the point is estimated from the RV in
         the mask; only if that is impossible are the fixed angles used.
     """
     labels = classify_slices(mask_3d)
+    ring_points = ring_alignment_points(labels, anterior_by_slice) if anterior_by_slice else {}
 
     alignment_source = "landmark"
-    if rv_insertion_1 is None:
+    if not ring_points and rv_insertion_1 is None:
         rv_insertion_1 = estimate_anterior_rv_insertion(mask_3d)
         alignment_source = "rv-mask" if rv_insertion_1 is not None else "fixed-angle"
+    final_alignment_point = None
     ring_configs = {"basal": 6, "mid": 6, "apical": 4, "apex": 1}
     ring_results = {}
     lv_centroids: list[list[float]] = []
@@ -327,16 +408,18 @@ def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None) -> dict:
 
         # Start angle of this ring: from the landmark (measured from the first
         # slice of the ring that has a centroid), else the fixed fallback.
+        ring_point = ring_points.get(ring_type, rv_insertion_1) if ring_points else rv_insertion_1
         start_deg: Optional[float] = None
         if ring_type != "apex":
             for sl_idx in ring_slices:
                 cx_ref, cy_ref = compute_centroid(mask_3d[:, :, sl_idx])
                 if cx_ref is not None:
-                    start_deg = compute_alignment_angle_deg(cx_ref, cy_ref, rv_insertion_1, ring_type)
+                    start_deg = compute_alignment_angle_deg(cx_ref, cy_ref, ring_point, ring_type)
                     break
         if start_deg is not None:
             if final_alignment_deg is None:
                 final_alignment_deg = start_deg
+                final_alignment_point = ring_point
         else:
             start_deg = _FALLBACK_START_DEG[ring_type]
         start_rad = math.radians(start_deg)
@@ -374,8 +457,8 @@ def mask_to_17_segments(mask_3d: np.ndarray, rv_insertion_1=None) -> dict:
         "alignment_angle_deg": final_alignment_deg,
         "alignment_source": alignment_source if final_alignment_deg is not None else "fixed-angle",
         "alignment_point": (
-            [float(rv_insertion_1[0]), float(rv_insertion_1[1])]
-            if rv_insertion_1 is not None and final_alignment_deg is not None else None
+            [float(final_alignment_point[0]), float(final_alignment_point[1])]
+            if final_alignment_point is not None else None
         ),
     }
 
@@ -403,11 +486,39 @@ def main():
 
     mask_3d = build_mask_3d(frames, H, W)
 
+    # Per-slice landmarks. `slice` is the stored sliceindex; build_mask_3d
+    # stacks the slices in sorted sliceindex order, so map it to that position.
+    slice_order = sorted({slc.get("sliceindex", 0) for fr in frames for slc in fr.get("slices", [])})
+    z_of = {sidx: z for z, sidx in enumerate(slice_order)}
+    sidx_of = {z: sidx for sidx, z in z_of.items()}
+
+    def _xy(v):
+        return (float(v[0]), float(v[1]))
+
+    # This frame's own points (chosen on this mask) win; any slice without a
+    # usable one keeps the reference frame's point.
+    anterior_by_slice = {}
+    for e in data.get("anterior_points") or []:
+        try:
+            if int(e["slice"]) in z_of:
+                anterior_by_slice[z_of[int(e["slice"])]] = _xy(e["point"])
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    pairs = {}
+    for e in data.get("rv_insertion_slices") or []:
+        try:
+            if int(e["slice"]) in z_of:
+                pairs[z_of[int(e["slice"])]] = (_xy(e["p1"]), _xy(e["p2"]))
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    if pairs:
+        anterior_by_slice.update(select_anterior_insertions(mask_3d, pairs))
+
     if not np.any(mask_3d == _MYO_CLASS):
         print(json.dumps({"error": "No myocardium (class 2) pixels found in mask data."}), file=sys.stdout)
         sys.exit(1)
 
-    analysis = mask_to_17_segments(mask_3d, rv_insertion_1)
+    analysis = mask_to_17_segments(mask_3d, rv_insertion_1, anterior_by_slice)
     values = analysis["values"]
     lv_centroid = analysis["lv_centroid"]
     slice_labels = classify_slices(mask_3d)
@@ -454,6 +565,9 @@ def main():
         "alignment_angle_deg": analysis["alignment_angle_deg"],
         "alignment_source":    analysis["alignment_source"],
         "alignment_point":     analysis["alignment_point"],
+        "anterior_points":     [
+            {"slice": sidx_of[z], "point": [p[0], p[1]]} for z, p in sorted(anterior_by_slice.items())
+        ],
     }
 
     print(json.dumps(result))

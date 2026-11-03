@@ -184,6 +184,34 @@ export function ProgressMeter({
   )
 }
 
+export function isFinishingReading(value: unknown): boolean {
+  return hasProgressReading(value) && value >= 100
+}
+
+export function FinishingProgress({
+  title,
+  label = "Exporting…",
+  className,
+}: {
+  title?: string
+  label?: string
+  className?: string
+}) {
+  return (
+    <div className={cn("w-full", className)}>
+      {title && (
+        <div className="mb-1 flex items-baseline justify-between gap-2 text-xs font-bold">
+          <span className="min-w-0 truncate">{title}</span>
+        </div>
+      )}
+      <div className="flex items-center gap-1.5">
+        <KineticProgress size="h-1" className="flex-1" state="running" label={title ? `${title}: ${label}` : label} />
+        <span className="whitespace-nowrap text-[10px] font-semibold text-muted-foreground">{label}</span>
+      </div>
+    </div>
+  )
+}
+
 /**
  * A job's progress bar. Shows the real percentage once the GPU has reported one, and falls back to
  * the indeterminate bar while a job is queued or has not reported anything yet.
@@ -193,14 +221,19 @@ export function JobProgress({
   status,
   className,
   label,
+  finishingLabel,
 }: {
   progress?: number | null
   status: string | null | undefined
   className?: string
   label?: string
+  finishingLabel?: string
 }) {
   const state = kineticStateFromJobStatus(status)
   if (!state) return null
+  if (state === "running" && isFinishingReading(progress)) {
+    return <FinishingProgress className={className} title={label} label={finishingLabel} />
+  }
   if (state === "running" && hasProgressReading(progress)) {
     return <ProgressMeter className={className} value={progress} title={label} />
   }

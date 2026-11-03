@@ -60,6 +60,8 @@ export interface DrawingPanelProps {
   zoomLevel?: number;
   setZoomLevel?: (level: number) => void;
   onReset?: () => void;
+  /** Bounding Box always runs MedSAM, which the CPU inference service does not load. */
+  boundingBoxDisabled?: boolean;
 }
 
 export interface ImageCanvasProps {

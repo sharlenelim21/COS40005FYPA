@@ -10,6 +10,7 @@ import debugRoute from '../routes/debug_routes';
 import segmentationRoutes from '../routes/segmentation_routes';
 import reconstructionRoutes from '../routes/reconstruction_routes';
 import landmarkRoutes from '../routes/landmark_routes';
+import pipelineRoutes from '../routes/pipeline_routes';
 import gpuStatusRoute from '../routes/gpu_status';
 import supportRoutes from '../routes/support_routes';
 import adminToolsRoute from '../routes/admin_tools';
@@ -150,6 +151,8 @@ app.use('/reconstruction', reconstructionRoutes); // Mount the 4D reconstruction
 
 // Landmark Detection Routes
 app.use('/landmark-detection', landmarkRoutes);
+
+app.use('/pipeline', pipelineRoutes);
 
 // Status Routes (mount under '/status')
 app.use('/status', gpuStatusRoute); // Mount GPU status routes

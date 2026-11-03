@@ -274,14 +274,14 @@ function DashboardPage() {
       action: () => setWalkthroughStep((step) => Math.min(step + 1, walkthroughSteps.length - 1)),
     },
     {
-      title: "Open the analysis tools",
-      body: "After segmentation, use Edit Segmentation Masks for refinements and Landmark Detection for automatic landmark and strain review.",
+      title: "Refine and create 4D",
+      body: "After segmentation, use Edit Segmentation Masks for refinements, then Create 4D Reconstruction (choose the MedSAM or UNet source) and click View 4D once it is ready.",
       actionLabel: "Next",
       action: () => setWalkthroughStep((step) => Math.min(step + 1, walkthroughSteps.length - 1)),
     },
     {
-      title: "Create and view 4D",
-      body: "Use Create 4D Reconstruction, choose the MedSAM or UNet source, then click View 4D once reconstruction is ready.",
+      title: "Run landmark detection",
+      body: "Once a 4D reconstruction exists, open Landmark Detection for automatic landmark and strain review and the printable report.",
       actionLabel: "Open Project",
       action: () => {
         setWalkthroughOpen(false);

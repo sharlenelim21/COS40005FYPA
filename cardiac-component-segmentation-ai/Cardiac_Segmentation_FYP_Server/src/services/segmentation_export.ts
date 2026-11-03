@@ -14,7 +14,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { getCurrentToken, getFreshGPUServerAddress } from "./gpu_auth_client";
-import { findSavedLandmarkDoc, findLatestLandmarkJobResult, meanSavedRvInsertionPoints } from "./rv_insertion_points";
+import { findSavedLandmarkDoc, findLatestLandmarkJobResult, loadRvInsertionSlicesByFrame, meanSavedRvInsertionPoints, resolveRvInsertionSlices, type RvInsertionSlice } from "./rv_insertion_points";
 
 const serviceLocation = 'SegmentationExport';
 
@@ -34,9 +34,19 @@ const runBullseyeRleScript = (
     // the segments to the landmark exactly as the GPU does; without it the
     // script estimates the point from the RV in the mask.
     rvInsertion1: number[] | null = null,
+    // Per-slice landmarks: both points of every slice of THIS frame (the script
+    // picks the anterior one on this mask) and/or anterior points already
+    // picked on a reference frame (used for any slice without a usable point
+    // of its own). Either one makes each ring align to its own slices;
+    // rvInsertion1 is then not used.
+    perSlice: { rvSlices?: RvInsertionSlice[]; anteriorPoints?: { slice: number; point: number[] }[] } = {},
 ): Promise<any | null> => {
     const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_bullseye_from_rle.py');
-    const input = JSON.stringify({ frames, width, height, rv_insertion_1: rvInsertion1 });
+    const input = JSON.stringify({
+        frames, width, height, rv_insertion_1: rvInsertion1,
+        rv_insertion_slices: perSlice.rvSlices ?? null,
+        anterior_points: perSlice.anteriorPoints ?? null,
+    });
 
     return new Promise<any | null>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, (error, stdout, stderr) => {
@@ -176,7 +186,8 @@ export const computeBullseyeFromMaskDoc = async (
     projectId?: string,
 ): Promise<void> => {
     const rv1 = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
-    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1);
+    const rvSlices = projectId ? await resolveRvInsertionSlices(projectId, 0) : [];
+    const result = await runBullseyeRleScript(frames, width, height, `mask ${maskId}`, rv1, { rvSlices });
     if (!result) return;
     result.computed_at = new Date().toISOString();
     const writeResult = await projectSegmentationMaskModel.collection.updateOne(
@@ -215,11 +226,31 @@ export const computeFrameWallThicknessSeries = async (
     // in the mask; we keep the estimate from the FIRST frame (ED) and reuse it
     // for all later frames, so the segment borders do not move between frames.
     let alignPoint: number[] | null = projectId ? (await findLandmarkAlignment(projectId))?.rv1 ?? null : null;
+    // Per-slice landmarks: the first frame is the reference — it is aligned to
+    // its landmarks and its chosen anterior points are kept. Every later frame
+    // is aligned to its OWN landmarks, using the reference point for any slice
+    // whose own points are unusable, so the segments follow the heart through
+    // the cycle without jumping where a frame's landmarks are missing.
+    const refSlices: RvInsertionSlice[] = projectId ? await resolveRvInsertionSlices(projectId, frameIndices[0]) : [];
+    let rvSlicesForFrame: (frameIndex: number) => RvInsertionSlice[] =
+        projectId && refSlices.length ? await loadRvInsertionSlicesByFrame(projectId) : () => [];
+    let anteriorPoints: { slice: number; point: number[] }[] | undefined;
 
     const results: { frameIndex: number; segment_values: (number | null)[]; stats: any }[] = [];
     for (const frameIndex of frameIndices) {
         const framesForThisIndex = frames.filter((f: any) => f.frameindex === frameIndex);
-        const result = await runBullseyeRleScript(framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint);
+        const result = await runBullseyeRleScript(
+            framesForThisIndex, width, height, `mask ${maskId} frame ${frameIndex}`, alignPoint,
+            anteriorPoints ? { anteriorPoints, rvSlices: rvSlicesForFrame(frameIndex) } : { rvSlices: refSlices },
+        );
+        if (!anteriorPoints && refSlices.length && result) {
+            if (Array.isArray(result.anterior_points) && result.anterior_points.length) {
+                anteriorPoints = result.anterior_points;
+            } else {
+                // no usable slice on the reference frame — keep the single point for every frame
+                rvSlicesForFrame = () => [];
+            }
+        }
         if (!alignPoint && result?.alignment_source === "rv-mask" && Array.isArray(result.alignment_point)) {
             alignPoint = result.alignment_point;
         }
@@ -334,9 +365,9 @@ export const computeHeartMetricsFromMaskDoc = async (
  * Reads `heartMetrics.measurements` and `heartMetrics.warnings` off the mask
  * document, runs the local Python rule engine, and $set-stores the result on
  * the same mask document under `healthStatus`. Mirrors
- * computeDiseaseSimilarityFromMetrics's shape: stdin JSON → local Python →
+ * computeDiseasePatternGatesFromMetrics's shape: stdin JSON → local Python →
  * stdout JSON → $set. Never rejects; always resolves so callers can fire-and-
- * forget it in parallel with disease similarity.
+ * forget it in parallel with the other mask-doc computes.
  *
  * Callers do NOT pass measurements — this function fetches them itself so
  * the auto-fire paths (end of heart metrics, after the strain backfill) can
@@ -431,8 +462,8 @@ export const computeHealthStatusFromMetrics = async (
  * Reads RVEF/RVEDV/RVESV and the volume-reliability fields off the mask's
  * heartMetrics, runs the Python module, and $set-stores the result under
  * `rvHealthStatus`, beside `healthStatus`. It never reads or writes the LV
- * result. `sex` and `bsa_m2` come from the report page on each call, as for
- * disease similarity; the module echoes them back so the page can tell whether
+ * result. `sex` and `bsa_m2` come from the report page on each call, neither
+ * persisted; the module echoes them back so the page can tell whether
  * a stored result matches what is on screen. Without a sex the stored status is
  * "Not assessable" — no sex-blind limit is substituted. Never rejects.
  */
@@ -804,69 +835,76 @@ export const computeRvRegionalHealthStatusFromStrain = async (
 };
 
 /**
- * Disease Pattern Similarity Assessment — NOT a diagnosis.
+ * Unified LV+RV Disease Pattern Similarity Assessment — NOT a diagnosis.
  *
- * Compares a patient's cardiac measurements against literature-derived NOR/HCM/DCM
- * reference profiles and reports which pattern they most resemble, with per-metric
- * reasoning. Mirrors computeHeartMetricsFromMaskDoc's shape: stdin JSON → local
- * Python → stdout JSON → $set on the mask doc under `diseaseSimilarity`. Never
- * rejects; always resolves so it can be fired in parallel with the other computes.
+ * Checks each of ACDC's 5 diagnostic groups (NOR/MINF/DCM/HCM/RV) as its own
+ * independent gate, since RV uses a different feature space than the 4 LV
+ * groups and can't be ranked against them on one scale. Runs
+ * compute_disease_pattern_gates.py and $set-stores the result under
+ * `diseasePatternGates`. Never rejects; always resolves.
  *
- * `measurements` is the flat block produced by heartMetrics.measurements with
- * PeakGRS/PeakGCS filled in from the strain pipeline. Any subset is accepted —
- * the Python side ignores nulls and warns when too few features are present.
+ * `lv`/`rv` are the flat measurement blocks the caller assembles (see
+ * assembleDiseasePatternGateInputs in segmentation_routes.ts); this function
+ * does no BSA/indexing math itself — that's the assembler's job.
  */
-export const computeDiseaseSimilarityFromMetrics = async (
+export const computeDiseasePatternGatesFromMetrics = async (
     maskId: string,
-    measurements: {
+    lv: {
         EF: number | null;
         EDV: number | null;
-        ESV: number | null;
-        // Indexed/morphology features — all optional. EDVI/ESVI/LVMI/StrokeVolumeIndex
-        // are only meaningful (non-null) when the caller supplied a bsa_m2; see
-        // assembleSimilarityMeasurements, which derives them. MaxWallThicknessMm is
-        // pulled from the mask's own stored bullseye — no BSA needed for that one.
         EDVI?: number | null;
-        ESVI?: number | null;
         LVMassG?: number | null;
         LVMI?: number | null;
         MaxWallThicknessMm?: number | null;
-        StrokeVolume: number | null;
-        StrokeVolumeIndex?: number | null;
-        PeakGRS: number | null;
-        PeakGCS: number | null;
     },
+    rv: {
+        RVEDV: number | null;
+        RVEDVI?: number | null;
+        RVESVI?: number | null;
+        RVEF: number | null;
+        SVI?: number | null;
+    },
+    regionalLvSegments: { segment: number; level: string }[] | null,
     sex?: "male" | "female" | "unspecified",
+    volumeSignals?: { voxel_mm3: number | null; duplicate_slices: unknown[] },
 ): Promise<void> => {
-    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_disease_similarity.py');
-    const input = JSON.stringify({ measurements, sex: sex ?? "unspecified" });
+    const scriptPath = path.join(__dirname, '..', '..', 'src', 'python', 'compute_disease_pattern_gates.py');
+    const input = JSON.stringify({
+        lv, rv,
+        regional_lv_segments: regionalLvSegments,
+        sex: sex ?? "unspecified",
+        // See compute_disease_pattern_gates.py's "Volume-reliability guard" —
+        // withholds EDVI/LVMI/RVEDVI/RVESVI/SVI when the affine/voxel geometry
+        // is known-suspect, same as the health-status graders already do.
+        volume_signals: volumeSignals ?? null,
+    });
 
     return new Promise<void>((resolve) => {
         const child = exec(`python3 "${scriptPath}"`, async (error, stdout, stderr) => {
             if (error) {
-                logger.warn(`${serviceLocation}: [DiseaseSimilarity] Python script failed for mask ${maskId}: ${error.message}`);
-                if (stderr) logger.warn(`${serviceLocation}: [DiseaseSimilarity] stderr: ${stderr.substring(0, 500)}`);
+                logger.warn(`${serviceLocation}: [DiseasePatternGates] Python script failed for mask ${maskId}: ${error.message}`);
+                if (stderr) logger.warn(`${serviceLocation}: [DiseasePatternGates] stderr: ${stderr.substring(0, 500)}`);
                 return resolve();
             }
             try {
                 const result = JSON.parse(stdout.trim());
                 if (result.error) {
-                    logger.warn(`${serviceLocation}: [DiseaseSimilarity] Script reported error for mask ${maskId}: ${result.error}`);
+                    logger.warn(`${serviceLocation}: [DiseasePatternGates] Script reported error for mask ${maskId}: ${result.error}`);
                     return resolve();
                 }
                 result.computed_at = new Date().toISOString();
                 const writeResult = await projectSegmentationMaskModel.collection.updateOne(
                     { _id: new mongoose.Types.ObjectId(maskId) },
-                    { $set: { diseaseSimilarity: result, updatedAt: new Date() } },
+                    { $set: { diseasePatternGates: result, updatedAt: new Date() } },
                 );
                 logger.info(
-                    `${serviceLocation}: [DiseaseSimilarity] Stored similarity for mask ${maskId} — ` +
-                    `most_similar=${result.most_similar} ` +
-                    `used=${result.features_used?.length ?? 0} warnings=${result.warnings?.length ?? 0} | ` +
+                    `${serviceLocation}: [DiseasePatternGates] Stored gates for mask ${maskId} — ` +
+                    `met=${(result.met_codes ?? []).join(',') || 'none'} ` +
+                    `warnings=${result.warnings?.length ?? 0} | ` +
                     `matched=${writeResult.matchedCount} modified=${writeResult.modifiedCount}`
                 );
             } catch (parseErr: any) {
-                logger.warn(`${serviceLocation}: [DiseaseSimilarity] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
+                logger.warn(`${serviceLocation}: [DiseasePatternGates] Failed to parse Python output for mask ${maskId}: ${parseErr?.message}`);
             }
             resolve();
         });
@@ -965,6 +1003,9 @@ export const computeBullseyeAndStore = async (
             form.append('rv_insertion_2_x', String(rv2[0]));
             form.append('rv_insertion_2_y', String(rv2[1]));
         }
+        // Per-slice landmarks of frame 0 — the GPU aligns each ring to its own slices.
+        const rvSlices = await resolveRvInsertionSlices(projectId, 0);
+        if (rvSlices.length) form.append('rv_insertion_slices', JSON.stringify(rvSlices));
 
         const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
             headers: {
@@ -1120,6 +1161,9 @@ export async function recomputeBullseyeWithLandmarks(
     projectId: string,
     avgLm1: [number, number],
     avgLm2: [number, number],
+    // Per-slice points from the same landmark job (frame 0). When given, the
+    // GPU aligns each ring to its own slices instead of the averaged point.
+    rvSlices: RvInsertionSlice[] = [],
 ): Promise<void> {
     const tempId = uuidv4();
     const baseTempDir = path.join(__dirname, '..', 'temp_exports', `bullseye_lm_${tempId}`);
@@ -1226,6 +1270,7 @@ export async function recomputeBullseyeWithLandmarks(
                 form.append('rv_insertion_1_y', String(avgLm1[1]));
                 form.append('rv_insertion_2_x', String(avgLm2[0]));
                 form.append('rv_insertion_2_y', String(avgLm2[1]));
+                if (rvSlices.length) form.append('rv_insertion_slices', JSON.stringify(rvSlices));
 
                 const response = await axios.post(`${gpuBaseUrl}/bullseye/analyze`, form, {
                     headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },

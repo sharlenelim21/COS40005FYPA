@@ -571,8 +571,8 @@ def main() -> None:
     # haemodynamics; do not conflate the two).
     LV_SVI = _indexed(LV_SV)
     RV_SVI = _indexed(RV_SV)
-    # LV mass index — the LVMI feature compute_disease_similarity.py's indexed
-    # mode uses for HCM-morphology scoring.
+    # LV mass index — the LVMI feature compute_disease_pattern_gates.py's HCM
+    # gate uses for morphology scoring.
     LVMI = _indexed(LV_mass_g)
 
     # 9. Emit result JSON. All numeric fields go through _safe_float so no

@@ -26,7 +26,12 @@ export function LandmarkDetectionSection() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Click into the highlighted <strong>Landmark Detection</strong> button on the project page. The
+            Landmark detection is the last step: it needs a finished <strong>4D reconstruction</strong> first
+            (see How Reconstruction Works above). Until one exists, the Landmark Detection button on the
+            project page stays locked.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Then click the highlighted <strong>Landmark Detection</strong> button on the project page. The
             detection runs automatically using the model shown in the page header.
           </p>
           <p className="text-sm text-muted-foreground">

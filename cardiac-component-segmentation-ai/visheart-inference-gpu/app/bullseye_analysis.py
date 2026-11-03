@@ -36,6 +36,8 @@ LV — AHA 17 segments (wall thickness, and the lengths used for GRS / GCS)
     compute_alignment_angle(...)                -> ray start angle from the RV insertion landmark
     estimate_anterior_rv_insertion(mask_3d)     -> stand-in for that landmark when there is none
                                                    (estimated from the RV in the mask; LV and RV use it)
+    select_anterior_insertions(mask_3d, pairs)  -> per-slice landmarks: the anterior point of each
+                                                   slice, chosen by geometry (used per ring)
     mask_to_17_segments(mask_3d, ...)           -> dict   (LV ENTRY POINT)
 
 RV — 9 segments (3 rings x 3 free-wall sections) + 1 septal segment per ring
@@ -1019,6 +1021,104 @@ def estimate_anterior_rv_insertion(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# select_anterior_insertions / ring alignment points  (per-slice landmarks)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Two insertion points closer than this (pixels) are treated as "both on the
+# same spot" — the landmark model sometimes collapses them — and ignored.
+_MIN_INSERTION_SEPARATION_PX = 5.0
+
+
+def select_anterior_insertions(
+    mask_3d: np.ndarray,
+    slice_pairs: dict[int, tuple[tuple[float, float], tuple[float, float]]] | None,
+    min_rv_pixels: int | None = None,
+) -> dict[int, tuple[float, float]]:
+    """
+    From the two RV insertion points of each slice, keep the ANTERIOR one —
+    chosen by geometry, not by its label.
+
+    compute_alignment_angle needs the insertion point that has the RV on its
+    increasing-angle (clockwise-on-screen) side. Per slice, seen from that
+    slice's LV-cavity centre, the point whose direction is followed by the RV
+    centre (within 180°) is that point; the other one is the inferior point.
+    This does not depend on which point is stored as rv_insertion_1, so
+    swapped labels do no harm.
+
+    A slice is skipped when:
+        - it is outside the mask, or has no LV cavity, or fewer than
+          `min_rv_pixels` RV pixels;
+        - the two points are closer than _MIN_INSERTION_SEPARATION_PX
+          (collapsed — they carry no direction);
+        - both points (or neither) have the RV on their clockwise side
+          (ambiguous).
+
+    slice_pairs : {slice index: ((x, y), (x, y))}, in this mask's slice index.
+    Returns {slice index: (x, y) of the anterior insertion point}.
+    """
+    if min_rv_pixels is None:
+        min_rv_pixels = _MIN_RV_PIXELS
+    selected: dict[int, tuple[float, float]] = {}
+    if not slice_pairs:
+        return selected
+
+    for sl_idx, (p1, p2) in slice_pairs.items():
+        if not (0 <= sl_idx < mask_3d.shape[2]):
+            continue
+        if np.hypot(p1[0] - p2[0], p1[1] - p2[1]) < _MIN_INSERTION_SEPARATION_PX:
+            continue
+        sl = mask_3d[:, :, sl_idx]
+        cx, cy = compute_centroid(sl)  # LV cavity
+        if cx is None:
+            continue
+        ys, xs = np.nonzero(sl == _RV_CLASS)
+        if xs.size < min_rv_pixels:
+            continue
+        rv_dir = np.arctan2(ys.mean() - cy, xs.mean() - cx)
+
+        def _rv_is_clockwise_of(p: tuple[float, float]) -> bool:
+            d = (rv_dir - np.arctan2(p[1] - cy, p[0] - cx)) % (2.0 * np.pi)
+            return 0.0 < d < np.pi
+
+        cw1, cw2 = _rv_is_clockwise_of(p1), _rv_is_clockwise_of(p2)
+        if cw1 == cw2:
+            continue
+        anterior = p1 if cw1 else p2
+        selected[sl_idx] = (float(anterior[0]), float(anterior[1]))
+    return selected
+
+
+def _ring_alignment_points(
+    labels: list[str],
+    anterior_by_slice: dict[int, tuple[float, float]],
+) -> dict[str, tuple[float, float]]:
+    """
+    One alignment point per ring (basal / mid / apical): the mean of the
+    anterior insertion points of the ring's OWN slices. The insertion
+    direction changes markedly from base to apex (40–70° on the projects this
+    was checked on), so one point averaged over all slices misaligns the
+    rings. A ring with no usable slice takes the points of the slice(s)
+    nearest to it.
+    """
+    points: dict[str, tuple[float, float]] = {}
+    if not anterior_by_slice:
+        return points
+    for ring in ("basal", "mid", "apical"):
+        ring_slices = [i for i, lbl in enumerate(labels) if lbl == ring]
+        own = [p for z, p in anterior_by_slice.items() if z in ring_slices]
+        if not own and ring_slices:
+            gap = {z: min(abs(z - r) for r in ring_slices) for z in anterior_by_slice}
+            nearest = min(gap.values())
+            own = [anterior_by_slice[z] for z, g in gap.items() if g == nearest]
+        if own:
+            points[ring] = (
+                float(np.mean([p[0] for p in own])),
+                float(np.mean([p[1] for p in own])),
+            )
+    return points
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # mask_to_17_segments  (main entry point)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1026,6 +1126,7 @@ def mask_to_17_segments(
     mask_3d: np.ndarray,
     rv_insertion_1: tuple[float, float] | None = None,
     rv_insertion_2: tuple[float, float] | None = None,
+    anterior_by_slice: dict[int, tuple[float, float]] | None = None,
 ) -> dict:
     """
     Convert a 3-D segmentation mask (one cardiac frame) to 17 AHA segment
@@ -1035,10 +1136,14 @@ def mask_to_17_segments(
         1. classify_slices()  → label each slice basal/mid/apical/apex/none
         2. Pick the ray start angle of each ring (compute_alignment_angle),
            from, in order of preference:
-               a. the RV insertion landmark, if given;
-               b. a point estimated from the RV in the mask
+               a. per-slice landmarks (`anterior_by_slice`), if given: each
+                  ring uses the anterior points of its own slices
+                  (_ring_alignment_points);
+               b. the RV insertion landmark `rv_insertion_1`, if given (one
+                  point for all rings);
+               c. a point estimated from the RV in the mask
                   (estimate_anterior_rv_insertion);
-               c. fixed angles (240° basal/mid, 225° apical) — only when the
+               d. fixed angles (240° basal/mid, 225° apical) — only when the
                   mask has no RV to estimate from.
         3. For every slice of the ring, from its LV-cavity centroid
            (compute_centroid):
@@ -1063,6 +1168,11 @@ def mask_to_17_segments(
         it once, from the ED mask.
     rv_insertion_2 : (x, y) of the inferior RV insertion point, or None.
         Accepted but not used.
+    anterior_by_slice : {slice index: (x, y)} — the anterior insertion point
+        of each slice, already chosen by select_anterior_insertions. When it
+        is non-empty it takes precedence over rv_insertion_1. To compare two
+        frames (strain), pass the SAME dict to both calls — the strain route
+        selects it once, on the ED mask.
 
     Returns
     -------
@@ -1079,18 +1189,25 @@ def mask_to_17_segments(
         "alignment_angle_deg"  : float | None — start angle (degrees) of the first ring that
                                  has slices (normally basal); None when the fixed angles
                                  were used
-        "alignment_source"     : "landmark"    — rv_insertion_1 was given
+        "alignment_source"     : "landmark"    — per-slice landmarks or rv_insertion_1 were used
                                  "rv-mask"     — no landmark; point estimated from the RV
                                  "fixed-angle" — no landmark and no RV in the mask
-        "alignment_point"      : [x, y] | None — the point the start angle was measured from
+        "alignment_point"      : [x, y] | None — the point the first ring's start angle was
+                                 measured from
+        "alignment_points_by_ring" : {ring: [x, y]} | None — the point of each ring when
+                                 per-slice landmarks were used
     """
     labels = classify_slices(mask_3d)
 
-    # No landmark → estimate the anterior RV insertion point from the mask.
+    # Per-slice landmarks → one point per ring.
+    ring_points = _ring_alignment_points(labels, anterior_by_slice) if anterior_by_slice else {}
+
+    # No landmark at all → estimate the anterior RV insertion point from the mask.
     alignment_source = "landmark"
-    if rv_insertion_1 is None:
+    if not ring_points and rv_insertion_1 is None:
         rv_insertion_1 = estimate_anterior_rv_insertion(mask_3d)
         alignment_source = "rv-mask" if rv_insertion_1 is not None else "fixed-angle"
+    final_alignment_point: tuple[float, float] | None = None
 
     ring_configs: dict[str, int] = {
         "basal":  6,
@@ -1117,8 +1234,10 @@ def mask_to_17_segments(
             ring_inner_chord_results[ring_type] = np.full(n_sectors, np.nan)
             continue
 
-        # Determine start angle: from the landmark (or the point estimated from
-        # the RV above); only if neither exists, fall back to the fixed angles.
+        # Determine start angle: from this ring's landmark point (or the one
+        # landmark / the point estimated from the RV above); only if none
+        # exists, fall back to the fixed angles.
+        ring_point = ring_points.get(ring_type, rv_insertion_1) if ring_points else rv_insertion_1
         alignment_angle: float | None = None
         if ring_type != "apex":
             for sl_idx in ring_slices:
@@ -1126,7 +1245,7 @@ def mask_to_17_segments(
                 cx_ref, cy_ref = compute_centroid(sl_ref)
                 if cx_ref is not None:
                     alignment_angle = compute_alignment_angle(
-                        cx_ref, cy_ref, rv_insertion_1, rv_insertion_2, ring_type
+                        cx_ref, cy_ref, ring_point, rv_insertion_2, ring_type
                     )
                     break
 
@@ -1134,6 +1253,7 @@ def mask_to_17_segments(
             start_angle = alignment_angle
             if final_alignment_angle is None:
                 final_alignment_angle = alignment_angle
+                final_alignment_point = ring_point
         else:
             start_angle_by_ring = {
                 "basal":  4 * np.pi / 3,   # 240° — segment 1 = 240–300° (top of the image), then 300, 0, 60, 120, 180
@@ -1234,8 +1354,11 @@ def mask_to_17_segments(
         "alignment_angle_deg": float(np.degrees(final_alignment_angle)) if final_alignment_angle is not None else None,
         "alignment_source": alignment_source if final_alignment_angle is not None else "fixed-angle",
         "alignment_point": (
-            [float(rv_insertion_1[0]), float(rv_insertion_1[1])]
-            if rv_insertion_1 is not None and final_alignment_angle is not None else None
+            [float(final_alignment_point[0]), float(final_alignment_point[1])]
+            if final_alignment_point is not None else None
+        ),
+        "alignment_points_by_ring": (
+            {r: [p[0], p[1]] for r, p in ring_points.items()} if ring_points else None
         ),
     }
 

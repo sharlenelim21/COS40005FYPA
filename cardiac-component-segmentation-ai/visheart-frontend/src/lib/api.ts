@@ -385,7 +385,7 @@ export const segmentationApi = {
     }
   },
 
-  // ── Analysis computes (volumes → health status → disease similarity) ────────
+  // ── Analysis computes (volumes → health status → disease pattern gates) ─────
   // All three mirror triggerBullseye: the backend responds immediately with
   // {success:true} and does the actual work asynchronously, writing the result
   // onto the mask document. Callers must re-fetch the mask to observe the
@@ -450,24 +450,19 @@ export const segmentationApi = {
   },
 
   /**
-   * Disease-pattern similarity (NOT a diagnosis). Also depends on
-   * heartMetrics.measurements (400 without it). Strain peaks are read from the
-   * stored strain result server-side; `peaks` optionally overrides them.
+   * Unified LV+RV Disease Pattern Similarity gate assessment (NOT a diagnosis).
+   * See diseasePatternGates on MaskDoc for the result shape. Also depends on
+   * heartMetrics.measurements (400 without it); bsa_m2/sex are never persisted
+   * server-side — pass them fresh each call
+   * to get indexed-mode gates (EDVI/LVMI/RVEDVI/RVESVI/SVI).
    */
-  triggerDiseaseSimilarity: async (
+  triggerDiseasePatternGates: async (
     maskId: string,
-    body?: {
-      PeakGRS?: number | null; PeakGCS?: number | null;
-      /** Never persisted server-side — see report/page.tsx's BSA card. Passing
-       *  these switches the stored result to indexed mode; omitting them (or
-       *  calling with no body at all) computes/stores the non-indexed fallback. */
-      bsa_m2?: number | null;
-      sex?: "male" | "female" | "unspecified";
-    },
+    body?: { bsa_m2?: number | null; sex?: "male" | "female" | "unspecified" },
   ) => {
     try {
       const response = await api.post(
-        `/segmentation/trigger-disease-similarity/${maskId}`,
+        `/segmentation/trigger-disease-pattern-gates/${maskId}`,
         body ?? {},
       );
       return response.data;
@@ -479,7 +474,7 @@ export const segmentationApi = {
   /**
    * RV health status — sex-specific reference ranges, NOT a diagnosis and not a
    * severity grade. Reads heartMetrics off the mask (400 without it). Supply sex
-   * and BSA on every call, as for disease similarity: the stored result echoes
+   * and BSA on every call — neither is persisted; the stored result echoes
    * both back, and with no sex it is "Not assessable" rather than a guess.
    */
   triggerRvHealthStatus: async (
@@ -697,6 +692,43 @@ export interface GetAllUsersWithProjectsResponse {
   totalUsers: number;
   data: UserWithProjects[];
 }
+
+export type PipelineStepDto = {
+  kind: "seg" | "recon" | "landmark";
+  model?: "medsam" | "unet";
+  chamber?: "lv" | "rv";
+  status: "pending" | "starting" | "queued" | "running" | "done" | "failed" | "skipped";
+  jobUuid?: string;
+  note?: string;
+};
+
+export type PipelineDto = {
+  id: string;
+  status: "active" | "finished";
+  steps: PipelineStepDto[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export const pipelineApi = {
+  start: async (
+    projectId: string,
+    body: {
+      segModels: Array<"medsam" | "unet">;
+      combos: Array<{ model: "medsam" | "unet"; chamber: "lv" | "rv"; request: Record<string, unknown> }>;
+      runLandmark: boolean;
+      landmarkModel?: "medsam" | "unet";
+    },
+  ): Promise<{ pipeline: PipelineDto | null }> => {
+    const response = await api.post(`/pipeline/start/${projectId}`, body);
+    return response.data;
+  },
+
+  get: async (projectId: string): Promise<{ pipeline: PipelineDto | null }> => {
+    const response = await api.get(`/pipeline/${projectId}`);
+    return response.data;
+  },
+};
 
 // Admin functions
 export const adminApi = {

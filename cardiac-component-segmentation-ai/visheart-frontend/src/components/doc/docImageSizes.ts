@@ -1,4 +1,7 @@
 export const DOC_IMAGE_SIZES: Record<string, [number, number]> = {
+  "/images/doc/AHA_Bullseye.jpg": [450, 443],
+  "/images/doc/Cardiac_MRI.png": [850, 286],
+  "/images/doc/heart_blood_flow.png": [630, 417],
   "/images/doc/dashboard-overview.png": [3083, 1638],
   "/images/doc/dashboard-project-no-projects.png": [3061, 1042],
   "/images/doc/dashboard-project-upload-new-project-with-file-added.png": [3396, 1449],
