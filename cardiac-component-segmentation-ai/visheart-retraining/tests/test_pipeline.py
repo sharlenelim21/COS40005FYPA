@@ -50,7 +50,8 @@ class Pipeline(unittest.TestCase):
         self.config = pipeline.Config(tools=TOOLS, python=sys.executable, unet_root=root / "unet",
                                       registry=versions_dir / "registry.json",
                                       frozen_manifest=versions_dir / "frozen_holdout.json",
-                                      frozen_index=versions_dir / "frozen_slices.npz", server_dir=root / "server")
+                                      frozen_index=versions_dir / "frozen_slices.npz", server_dir=root / "server",
+                                      docker=["docker"])
         self.config.temp_exports.mkdir(parents=True)
         versions_dir.mkdir(parents=True)
 
@@ -76,16 +77,17 @@ class Pipeline(unittest.TestCase):
                 {"counts": {"projects": len(candidates), "conflicts": 1}, "candidates": candidates}), encoding="utf-8")
         return (lambda command: "--dry-run" in command), effect
 
-    def real_export(self, slices):
+    def real_export(self, slices, projects=5):
         def effect(command, on_line):
             (self.staged(command) / "images").mkdir(parents=True, exist_ok=True)
             (self.staged(command) / "export_manifest.json").write_text(json.dumps(
-                {"counts": {"projects": 2, "slices": slices, "conflicts": 1},
+                {"counts": {"projects": projects, "slices": slices, "conflicts": 1},
                  "frozen_excluded": [{"projectId": "p9"}]}), encoding="utf-8")
         return (lambda command: "--frozen-slices" in command), effect
 
     def test_prepare_runs_the_proven_export_commands_and_moves_the_export(self):
-        ctx = FakeContext([self.dry_run([{"qualifyingSlices": 3}, {"qualifyingSlices": 4}]), self.real_export(7)])
+        ctx = FakeContext([self.dry_run([{"qualifyingSlices": 3}, {"qualifyingSlices": 4}, {"qualifyingSlices": 1},
+                                         {"qualifyingSlices": 1}, {"qualifyingSlices": 1}]), self.real_export(10)])
         pipeline.prepare(self.config, ctx, LABEL)
         self.assertEqual(ctx.commands[0][:3], ["docker", "exec", "visheart-local"])
         self.assertEqual(sum(command[1] == "cp" for command in ctx.commands), 5)
@@ -98,7 +100,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(ctx.values["export"], export)
         self.assertTrue((export / "export_manifest.json").exists())
         self.assertFalse((self.config.temp_exports / f"export-{LABEL}").exists())
-        self.assertEqual(ctx.progress["corrections"], {"projects": 2, "slices": 7, "conflicts": 1})
+        self.assertEqual(ctx.progress["corrections"], {"projects": 5, "slices": 10, "conflicts": 1})
         self.assertEqual(ctx.progress["export"]["frozen_excluded"], 1)
 
     def test_prepare_exports_only_the_chosen_cases_of_their_owner(self):
@@ -108,7 +110,7 @@ class Pipeline(unittest.TestCase):
             selection = self.config.temp_exports / f"selection-{LABEL}.json"
             seen.setdefault("files", []).append(json.loads(selection.read_text(encoding="utf-8")))
         ctx = FakeContext([((lambda command: "node" in command), capture),
-                           self.dry_run([{"qualifyingSlices": 3}]), self.real_export(3)])
+                           self.dry_run([{"qualifyingSlices": 2}] * 5), self.real_export(10)])
         pipeline.prepare(self.config, ctx, LABEL, owner="u1", selection=["m1", "m2"])
         node = [command for command in ctx.commands if "node" in command]
         self.assertEqual(len(node), 2)
@@ -134,16 +136,38 @@ class Pipeline(unittest.TestCase):
         self.assertFalse((self.config.temp_exports / f"export-{LABEL}").exists())
 
     def test_an_export_emptied_by_the_frozen_guard_stops_before_training(self):
-        ctx = FakeContext([self.dry_run([{"qualifyingSlices": 2}]), self.real_export(0)])
+        ctx = FakeContext([self.dry_run([{"qualifyingSlices": 2}] * 5), self.real_export(0)])
         with self.assertRaises(jobs.StepFailed) as failed:
             pipeline.prepare(self.config, ctx, LABEL)
         self.assertIn("left out", str(failed.exception))
         self.assertNotIn("export", ctx.values)
 
-    def test_training_uses_the_d7_recipe_from_the_original_and_reports_real_epochs(self):
+    def test_below_the_minimum_nothing_is_exported(self):
+        for candidates in ([{"qualifyingSlices": 3}] * 4, [{"qualifyingSlices": 10}] * 4):
+            ctx = FakeContext([self.dry_run(candidates)])          # 4 projects, with 12 or 40 slices
+            with self.assertRaises(jobs.StepFailed) as failed:
+                pipeline.prepare(self.config, ctx, LABEL)
+            self.assertIn("at least 5 corrected projects", str(failed.exception))
+            self.assertEqual(sum("node" in command for command in ctx.commands), 1)  # the dry run only
+            self.assertFalse((self.config.temp_exports / f"export-{LABEL}").exists())
+
+    def test_an_export_that_drops_below_the_minimum_stops_before_training(self):
+        ctx = FakeContext([self.dry_run([{"qualifyingSlices": 2}] * 5), self.real_export(8, projects=4)])
+        with self.assertRaises(jobs.StepFailed) as failed:
+            pipeline.prepare(self.config, ctx, LABEL)
+        self.assertIn("4 project(s) and 8 slice(s)", str(failed.exception))
+        self.assertNotIn("export", ctx.values)
+
+    def test_the_minimum_counts_projects_not_slices(self):
+        self.assertIsNone(pipeline.too_little(5, 10))
+        self.assertIsNone(pipeline.too_little(5, 5))       # one qualifying slice per project is enough
+        self.assertIsNotNone(pipeline.too_little(4, 30))
+        self.assertEqual((pipeline.MIN_PROJECTS, pipeline.RECOMMENDED_PROJECTS, pipeline.FEW_SLICES), (5, 7, 10))
+
+    def test_training_uses_the_whole_recipe_from_the_original_and_reports_real_steps(self):
         self.write_registry()
-        lines = ['{"epoch": 0, "val_loss": 1.2, "val_dice": 0.5}', "replay set: 100 slices",
-                 '{"epoch": 1, "train_loss": 0.9, "train_dice": 0.6}', '{"epoch": 2, "train_loss": 0.8, "train_dice": 0.7}']
+        lines = ['{"epoch": 0, "val_loss": 1.2, "val_dice": 0.5}', "whole set: 7346 slices",
+                 '{"epoch": 1, "batch": 10, "batches": 1011}', '{"epoch": 1, "batch": 500, "batches": 1011}']
 
         def effect(command, on_line):
             for line in lines:
@@ -152,9 +176,15 @@ class Pipeline(unittest.TestCase):
         ctx.values["export"] = self.config.exports / "export-x"
         pipeline.train(self.config, ctx, LABEL)
         command = ctx.commands[0]
-        self.assertEqual(command[command.index("--epochs") + 1], "20")
+        self.assertEqual(command[command.index("--epochs") + 1], "1")
+        self.assertNotIn("--recipe", command)                   # train_candidate.py's default: the whole recipe
         self.assertEqual(command[command.index("--base-checkpoint") + 1], str(self.config.versions_dir / "orig.pth"))
-        self.assertEqual((ctx.progress["epoch"], ctx.progress["epochs"]), (2, 20))
+        self.assertEqual((ctx.progress["epoch"], ctx.progress["epochs"]), (0, 1))
+        self.assertEqual((ctx.progress["batch"], ctx.progress["batches"]), (500, 1011))
+        self.assertEqual(ctx.progress["recipe"], "whole dataset + corrections 1:10, decoder only, 1 epoch")
+        on_line = pipeline.epoch_progress(ctx)
+        on_line('{"epoch": 1, "train_loss": 0.9, "train_dice": 0.6}\n')
+        self.assertEqual((ctx.progress["epoch"], ctx.progress["epochs"]), (1, 1))
 
     def test_seed_report_reuses_only_complete_scores_of_the_same_file_and_folders(self):
         folder = self.config.evaluations
@@ -276,6 +306,17 @@ class Pipeline(unittest.TestCase):
         ctx.values["report"] = report
         pipeline.render_examples_step(self.config, ctx, LABEL)          # returns: the comparison is complete
         self.assertEqual((ctx.progress["examples"]["ready"], ctx.progress["examples"]["error"]), (False, "no report"))
+
+    def test_example_scans_the_results_tab_already_made_are_not_made_again(self):
+        made = self.config.examples / LABEL
+        made.mkdir(parents=True)
+        (made / "index.json").write_text("{}", encoding="utf-8")
+        ctx = FakeContext([])
+        ctx.values["report"] = self.config.evaluations / f"{LABEL}-public.json"
+        pipeline.render_examples_step(self.config, ctx, LABEL)
+        self.assertEqual(ctx.commands, [])
+        self.assertTrue(ctx.progress["examples"]["ready"])
+        self.assertNotIn("error", ctx.progress["examples"])
 
     def test_only_running_gpu_containers_are_restarted(self):
         calls = []

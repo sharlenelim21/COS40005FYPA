@@ -29,7 +29,7 @@ def write_volume(images, masks, stem, seed):
 
 
 class TrainCandidate(unittest.TestCase):
-    """The default release recipe end to end on tiny data: one real fine-tune epoch, so this takes a little while."""
+    """Both recipes end to end on tiny data: real one-epoch fine-tunes, so this takes a little while."""
 
     @classmethod
     def setUpClass(cls):
@@ -62,9 +62,12 @@ class TrainCandidate(unittest.TestCase):
         cls.frozen = root / "frozen_slices.npz"
         FrozenIndex.from_arrays({"other.nii.gz": np.random.default_rng(7).random((16, 16, 2)).astype(np.float32)}).save(cls.frozen)
         cls.versions = root / "versions"
-        cls.code = train_candidate.main(cls.argv("cand", "--replay-ratio", "2", "--replay-seed", "5"))
+        cls.code = train_candidate.main(cls.argv("cand", "--recipe", "replay", "--replay-ratio", "2", "--replay-seed", "5"))
         cls.meta = json.loads((cls.versions / "cand.json").read_text(encoding="utf-8"))
         cls.replay = json.loads((root / "exports" / "replay-cand" / "replay_manifest.json").read_text(encoding="utf-8"))
+        cls.whole_code = train_candidate.main(cls.argv("whole", "--cache-dir", str(root / "cache")))
+        cls.whole_meta = json.loads((cls.versions / "whole.json").read_text(encoding="utf-8"))
+        cls.whole = json.loads((root / "exports" / "whole-whole" / "whole_manifest.json").read_text(encoding="utf-8"))
 
     @classmethod
     def argv(cls, label, *extra):
@@ -98,13 +101,32 @@ class TrainCandidate(unittest.TestCase):
         self.assertEqual(trained, ["corr", "replay-cand"])
         self.assertTrue(self.meta["train"][0]["manifest"]["file"].endswith("export_manifest.json"))
         self.assertTrue(self.meta["train"][1]["manifest"]["file"].endswith("replay_manifest.json"))
-        self.assertEqual(self.meta["recipe"]["name"], train_candidate.RECIPE)
+        self.assertEqual(self.meta["recipe"]["name"], train_candidate.RECIPES["replay"]["name"])
 
     def test_max_replay_caps_the_replay_set(self):
-        code = train_candidate.main(self.argv("capped", "--replay-ratio", "10", "--max-replay", "3"))
+        code = train_candidate.main(self.argv("capped", "--recipe", "replay", "--replay-ratio", "10", "--max-replay", "3"))
         self.assertEqual(code, 0)
         manifest = json.loads((self.root / "exports" / "replay-capped" / "replay_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["slices"], 3)
+
+    def test_the_whole_recipe_is_the_default(self):
+        self.assertEqual(self.whole_code, 0)
+        self.assertEqual(train_candidate.DEFAULT_RECIPE, "whole")
+        recipe = self.whole_meta["recipe"]
+        self.assertEqual((recipe["key"], recipe["name"]), ("whole", train_candidate.RECIPE))
+        self.assertEqual(self.whole_meta["hyperparameters"]["select"], "last")
+        self.assertTrue(self.whole_meta["hyperparameters"]["encoder_frozen"])
+
+    def test_the_whole_set_trains_every_other_patient_and_repeats_the_corrections(self):
+        # 2 sources x 4 patients x 2 volumes x 6 slices, less acdcp1 (the correction's patient): 84 slices.
+        self.assertEqual(self.whole["whole_slices"], 84)
+        self.assertEqual(self.whole["repeats"], 4)                            # round(84 / (10 x 2))
+        self.assertEqual(self.whole_meta["train_slices"], 84 + 4 * 2)
+        excluded = {(e["source"], e["patient"]): e["reason"] for e in self.whole["excluded"]}
+        self.assertEqual(excluded, {("acdc", "acdcp1"): "same image as a correction"})
+        trained = [Path(t["images"]).parent.name for t in self.whole_meta["train"]]
+        self.assertEqual(trained, ["acdc", "mms2", "corrections"])
+        self.assertTrue(self.whole_meta["train"][0]["manifest"]["file"].endswith("whole_manifest.json"))
 
     def test_an_existing_label_is_refused_before_any_work(self):
         self.assertEqual(train_candidate.main(self.argv("cand", "--replay-out", str(self.root / "unused"))), 1)

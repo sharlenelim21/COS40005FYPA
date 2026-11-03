@@ -6,11 +6,13 @@
 
 export interface SelectableCase {
   maskId: string;
+  projectId?: string;
   projectName: string;
   model: string;
   slices: unknown[];
   frozen?: unknown;
   ownerName?: string | null;
+  scanId?: string | null;
 }
 
 const TEST_SET_NAMES: Record<string, string> = { acdc: "ACDC", mms1: "M&Ms-1", mms2: "M&Ms-2" };
@@ -39,9 +41,72 @@ export function clearedCases(maskIds: string[], selected: Set<string>): string[]
   return maskIds.filter(id => !selected.has(id));
 }
 
-export function selectionSummary(cases: SelectableCase[], selected: Set<string>): { cases: number; slices: number } {
+/** The scan a case is of (the uploaded file's hash), so the same scan uploaded by two users counts once. */
+function scanOf(item: SelectableCase): string {
+  return item.scanId ?? item.projectId ?? item.maskId;
+}
+
+/**
+ * What the selection trains. A scan counts as one project, and only its first project's slices count: the export
+ * trains one project per scan (export_training_set.ts).
+ */
+export function selectionSummary(cases: SelectableCase[], selected: Set<string>):
+    { cases: number; projects: number; slices: number } {
   const chosen = cases.filter(item => selected.has(item.maskId));
-  return { cases: chosen.length, slices: chosen.reduce((sum, item) => sum + item.slices.length, 0) };
+  const firstProject = new Map<string, string>();
+  for (const item of chosen) if (!firstProject.has(scanOf(item))) firstProject.set(scanOf(item), item.projectId ?? item.maskId);
+  const trained = chosen.filter(item => firstProject.get(scanOf(item)) === (item.projectId ?? item.maskId));
+  return { cases: chosen.length, projects: firstProject.size,
+           slices: trained.reduce((sum, item) => sum + item.slices.length, 0) };
+}
+
+/** Selected projects that are the same scan uploaded more than once: each group's project names, in list order. */
+export function sameScanGroups(cases: SelectableCase[], selected: Set<string>): string[][] {
+  const projectsByScan = new Map<string, Map<string, string>>();
+  for (const item of cases) {
+    if (!selected.has(item.maskId)) continue;
+    const projects = projectsByScan.get(scanOf(item)) ?? new Map<string, string>();
+    projects.set(item.projectId ?? item.maskId, item.ownerName ? `${item.projectName} (${item.ownerName})` : item.projectName);
+    projectsByScan.set(scanOf(item), projects);
+  }
+  return [...projectsByScan.values()].filter(projects => projects.size > 1).map(projects => [...projects.values()]);
+}
+
+/**
+ * How much data a training needs (Jy's decision 2026-11-02; the training worker enforces the same minimum). The gate
+ * counts projects, not slices: more patients help a model more than more slices from fewer patients (Ankenbrand et al.
+ * 2021). Below MIN_PROJECTS it does not start; below RECOMMENDED_PROJECTS, or with fewer than FEW_SLICES slices (each
+ * correction is then repeated more often in the epoch), the page warns. A project counts once, and only with a slice
+ * that qualifies.
+ */
+export const MIN_PROJECTS = 5;
+export const RECOMMENDED_PROJECTS = 7;
+export const FEW_SLICES = 10;
+
+export function dataGate(summary: { projects: number; slices: number }): { allowed: boolean; message: string | null } {
+  const { projects, slices } = summary;
+  if (projects < MIN_PROJECTS) {
+    return { allowed: false, message: `Needs at least ${MIN_PROJECTS} projects with a corrected mask to train.` };
+  }
+  const warnings: string[] = [];
+  if (projects < RECOMMENDED_PROJECTS) warnings.push(`${RECOMMENDED_PROJECTS} or more projects recommended.`);
+  if (slices < FEW_SLICES) warnings.push(`Few corrected slices (${slices}); ${FEW_SLICES} or more recommended.`);
+  return { allowed: true, message: warnings.length ? warnings.join(" ") : null };
+}
+
+/** A version's training method (train_candidate.py's recipe name) in the page's words; an unknown one as it is. */
+export function recipeLabel(recipe: string | null | undefined): string | null {
+  if (!recipe) return null;
+  if (recipe.startsWith("whole dataset")) return "Whole training set + corrections, 1 epoch";
+  if (recipe.startsWith("corrections + replay")) return "Corrections + replay sample, 20 epochs";
+  return recipe;
+}
+
+/** Training progress as a share of the whole run: finished epochs plus the batches of the one under way. */
+export function trainingShare(progress: { epoch?: number; epochs?: number; batch?: number; batches?: number }): number {
+  if (!progress.epochs) return 0;
+  const partial = progress.batches ? (progress.batch ?? 0) / progress.batches : 0;
+  return Math.min(1, ((progress.epoch ?? 0) + (progress.epoch === progress.epochs ? 0 : partial)) / progress.epochs);
 }
 
 /** Every word of the query appears in the project name, the model or the owner's name. */

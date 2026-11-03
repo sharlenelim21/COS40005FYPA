@@ -10,8 +10,8 @@ import mongoose from 'mongoose';
 import { projectSegmentationMaskModel, projectModel, userModel } from '../services/database';
 import { extractS3KeyFromUrl, downloadFromS3 } from '../services/s3_handler';
 import { runEditTrackingScript } from '../services/edit_tracking';
-import { selectTrainingSlices, sliceKey, TRAINING_MODELS } from '../services/training_selection';
-import { describeCase, FrozenMatch, maskQuery, parseSelection, withTrainingPixelCounts } from '../services/training_export';
+import { FALLBACK_MIN_PIXELS, MIN_EDIT_SHARE, selectTrainingSlices, sliceKey, TRAINING_MODELS } from '../services/training_selection';
+import { describeCase, FrozenMatch, maskQuery, parseSelection, scanIdOf, withTrainingPixelCounts } from '../services/training_export';
 
 // Run inside the app container, which already has the database and S3 settings. The container does not
 // hold visheart-retraining/, so copy build_training_volumes.py and common.py in and pass --builder.
@@ -24,7 +24,11 @@ import { describeCase, FrozenMatch, maskQuery, parseSelection, withTrainingPixel
 // A dry run given --frozen-slices and --builder also checks each project's source volume, and marks the cases of a
 // frozen test patient ("frozen"), which never count as candidates. A slice's changed pixels are the pixels whose
 // training label changed, recounted against the mask's AI result; edit tracking's own count is per class, so a
-// pixel moved between two structures would count twice.
+// pixel moved between two structures would count twice. A slice counts when those pixels are at least --min-share
+// (default 0.02) of the heart in the AI result and the correction together, or a structure was added or removed;
+// --min-pixels (default 20) applies only to a mask whose AI result is missing (training_selection.ts).
+// The same scan uploaded by two users (scanIdOf: the same file hash) counts as one project, and only the first of
+// its projects is exported.
 const argValue = (name: string, fallback?: string) => {
     const i = process.argv.indexOf(`--${name}`);
     return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : fallback;
@@ -49,7 +53,9 @@ async function main() {
     if (!outDir) throw new Error('--out is required');
     const python = argValue('python', process.env.PYTHON_CMD || (process.platform === 'win32' ? 'python' : 'python3'))!;
     const builder = argValue('builder', path.resolve(__dirname, '..', '..', '..', 'visheart-retraining', 'build_training_volumes.py'))!;
-    const minPixels = Number(argValue('min-pixels', '20'));
+    const minPixels = Number(argValue('min-pixels', String(FALLBACK_MIN_PIXELS)));
+    const minShare = Number(argValue('min-share', String(MIN_EDIT_SHARE)));
+    if (!(minShare >= 0 && minShare < 1)) throw new Error(`--min-share must be a fraction from 0 to 1: ${minShare}`);
     const limit = Number(argValue('limit', '0'));
     const holdoutPath = argValue('holdout');
     const choicesPath = argValue('choices');
@@ -102,6 +108,7 @@ async function main() {
         byProject.set(projectId, [...(byProject.get(projectId) ?? []), mask]);
     }
     let exportedProjects = 0;
+    const exportedScans = new Map<string, string>(); // scan -> the project it was exported from
 
     // Prepare lists every user's cases by owner: each owner's username, looked up once.
     const ownerNames = new Map<string, string | null>();
@@ -145,7 +152,7 @@ async function main() {
         });
 
         const choices = choicesByProject.get(projectId);
-        let selection = selectTrainingSlices(projectMasks, minPixels, { choices });
+        let selection = selectTrainingSlices(projectMasks, minPixels, { choices, minShare });
         const differing = new Map<string, number>();
         const ofModel = (model: string) => projectMasks.filter(m => String(m.segmentationModel).toLowerCase() === model);
         if (selection.conflicts.length > 0 && ofModel('unet').length === 1 && ofModel('medsam').length === 1) {
@@ -156,7 +163,7 @@ async function main() {
                 const identicalSlices = new Set(selection.conflicts
                     .map(c => sliceKey(c.frameindex, c.sliceindex))
                     .filter(key => !differing.has(key)));
-                if (identicalSlices.size > 0) selection = selectTrainingSlices(projectMasks, minPixels, { choices, identicalSlices });
+                if (identicalSlices.size > 0) selection = selectTrainingSlices(projectMasks, minPixels, { choices, identicalSlices, minShare });
             }
         }
         for (const [reason, n] of Object.entries(selection.skipped)) skip(reason, n);
@@ -178,7 +185,7 @@ async function main() {
                 }
             }
             for (const mask of projectMasks) {
-                const own = selectTrainingSlices([mask], minPixels).selected[0];
+                const own = selectTrainingSlices([mask], minPixels, { minShare }).selected[0];
                 if (own) caseRows.push(describeCase(project, own, selection.conflicts, frozen, await ownerName(project.userid)));
             }
             if (frozen) {
@@ -187,12 +194,18 @@ async function main() {
                 continue;
             }
             for (const entry of selection.selected) {
-                candidates.push({ projectId, model: entry.model, maskId: String(entry.mask._id),
+                candidates.push({ projectId, scanId: scanIdOf(project), model: entry.model, maskId: String(entry.mask._id),
                                   editedSliceCount: entry.mask.editTracking.editedSliceCount, qualifyingSlices: entry.slices.length });
             }
             continue;
         }
         if (limit && exportedProjects >= limit) break;
+        const scanId = scanIdOf(project);
+        if (exportedScans.has(scanId)) {
+            skip('same_scan_as_another_project');
+            console.warn(`${projectId}: the same scan as project ${exportedScans.get(scanId)}, which is already exported; left out`);
+            continue;
+        }
 
         try {
             // One download serves every model's corrections.
@@ -200,7 +213,7 @@ async function main() {
                 let exported = false;
                 for (const entry of selection.selected) {
                     const out = await runBuilder(python, builder, {
-                        source_nifti: local, case_id: `p${projectId}_${entry.model}`, out_dir: outDir, plane, min_pixels: minPixels,
+                        source_nifti: local, case_id: `p${projectId}_${entry.model}`, out_dir: outDir, plane, min_pixels: minPixels, min_share: minShare,
                         tracked_slices: entry.slices, frames: entry.mask.frames, frozen_slices: frozenSlices,
                     });
                     if (out.frozen_match) {
@@ -213,12 +226,19 @@ async function main() {
                     for (const [reason, n] of Object.entries(out.skipped as Record<string, number>)) skip(`slice_${reason}`, n);
                     if (out.files.length === 0) { skip('no_slice_qualified'); continue; }
                     cases.push({ projectId, model: entry.model, maskId: String(entry.mask._id), aiMaskId: entry.mask.editTracking.aiMaskId,
-                                 editTrackingComputedAt: entry.mask.editTracking.computed_at, files: out.files });
+                                 editTrackingComputedAt: entry.mask.editTracking.computed_at, files: out.files,
+                                 // the raw count and the share each kept slice was judged by
+                                 slices: entry.slices.map((s: any) => ({ frameindex: s.frameindex, sliceindex: s.sliceindex,
+                                     pixelsChanged: s.pixelsChanged, heartPixels: s.heartPixels ?? null,
+                                     editShare: s.editShare ?? null, structureChanged: Boolean(s.structureChanged) })) });
                     exported = true;
                 }
                 return exported;
             });
-            if (exported) exportedProjects++;
+            if (exported) {
+                exportedProjects++;
+                exportedScans.set(scanId, projectId);
+            }
         } catch (err) {
             skip('download_or_build_failed');
             console.warn(`${projectId}: ${(err as Error).message}`);
@@ -233,12 +253,12 @@ async function main() {
     for (const c of cases) byModel[c.model] = (byModel[c.model] ?? 0) + 1;
     const createdAt = new Date().toISOString();
     const manifest = dryRun
-        ? { mode: 'dry-run', created_at: createdAt, min_pixels: minPixels, choices_file: choicesPath ?? null,
+        ? { mode: 'dry-run', created_at: createdAt, min_share: minShare, min_pixels: minPixels, choices_file: choicesPath ?? null,
             owner: owner ?? null, selection: chosenMaskIds,
-            counts: { masks: masks.length, projects: new Set(candidates.map(c => c.projectId)).size, candidates: candidates.length,
+            counts: { masks: masks.length, projects: new Set(candidates.map(c => c.scanId)).size, candidates: candidates.length,
                       conflicts: conflictReport.length, skipped },
             candidates, conflicts: conflictReport, cases: caseRows, frozen_excluded: frozenExcluded }
-        : { mode: onlyHoldout ? 'clinical-holdout' : 'training', created_at: createdAt, min_pixels: minPixels,
+        : { mode: onlyHoldout ? 'clinical-holdout' : 'training', created_at: createdAt, min_share: minShare, min_pixels: minPixels,
             holdout_manifest: holdoutPath ?? null, choices_file: choicesPath ?? null, frozen_slices: frozenSlices ?? null,
             owner: owner ?? null, selection: chosenMaskIds,
             counts: { masks: masks.length, projects: exportedProjects, cases: cases.length, byModel, slices,

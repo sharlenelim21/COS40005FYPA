@@ -65,7 +65,16 @@ class BuildTrainingVolumes(unittest.TestCase):
         chosen, skipped = btv.select_slices(
             [tracked(0, 0, 5), tracked(0, 1, 50), tracked(0, 2, 50), tracked(0, 7, 50)], frames, min_pixels=20)
         self.assertEqual(chosen, {})
-        self.assertEqual(skipped, {"below_min_pixels": 1, "manual": 1, "excluded": 1, "missing": 1})
+        self.assertEqual(skipped, {"below_min_share": 0, "below_min_pixels": 1, "manual": 1, "excluded": 1, "missing": 1})
+
+    def test_the_two_percent_rule(self):
+        frames = [frame(0, *[(z, [], {}) for z in range(5)])]
+        share = lambda z, value, **extra: {**tracked(0, z, 3), "editShare": value, **extra}  # noqa: E731
+        chosen, skipped = btv.select_slices(
+            [share(0, 0.02), share(1, 0.0199), share(2, 0.001, structureChanged=True), tracked(0, 3, 25),
+             tracked(0, 4, 19)], frames)
+        self.assertEqual([z for z, _ in chosen[0]], [0, 2, 3])   # 2%; a structure added; no share: 20-pixel fallback
+        self.assertEqual((skipped["below_min_share"], skipped["below_min_pixels"]), (1, 1))
 
     def test_refuses_plane_mismatch(self):
         self.assertIn("error", btv.build(self.payload([], [], plane=(4, 6))))

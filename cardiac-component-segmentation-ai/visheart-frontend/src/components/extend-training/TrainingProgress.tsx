@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { elapsed, isActiveJob, retrainingApi, StepState, TrainingJob } from "@/lib/retraining-api";
+import { trainingShare } from "@/components/extend-training/logic";
 
 function StepIcon({ state }: { state: StepState }) {
   if (state === "done") return <CheckCircle className="h-5 w-5 shrink-0 text-green-600 dark:text-green-400" />;
@@ -41,10 +42,19 @@ function StepDetail({ job, stepKey }: { job: TrainingJob; stepKey: string }) {
   }
   if (stepKey === "train" && progress.epochs) {
     const epoch = progress.epoch ?? 0;
+    const underWay = progress.batches && epoch < progress.epochs;
     return (
       <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">Epoch {epoch} of {progress.epochs}</p>
-        <Progress value={(epoch / progress.epochs) * 100} />
+        <p className="text-sm text-muted-foreground">
+          {underWay
+            ? `Step ${progress.batch ?? 0} of ${progress.batches}`
+              + (progress.epochs > 1 ? ` · epoch ${epoch + 1} of ${progress.epochs}` : "")
+            : progress.epochs === 1 && epoch === 0
+              ? "Preparing the training data (the whole training set and your corrections)"
+              : `Epoch ${epoch} of ${progress.epochs}`}
+        </p>
+        <Progress value={trainingShare(progress) * 100} />
+        {progress.recipe && <p className="text-xs text-muted-foreground">Method: {progress.recipe}</p>}
       </div>
     );
   }

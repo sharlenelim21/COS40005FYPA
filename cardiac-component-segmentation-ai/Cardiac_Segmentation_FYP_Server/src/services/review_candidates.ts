@@ -4,8 +4,9 @@
  *
  * Pure (no database), so it can be tested: export_review_volumes.ts loads a project and its masks and
  * calls this. Eligibility follows the training export (export_training_set.ts): the queue only suggests
- * projects whose corrections could later be exported. "Corrected" uses selectTrainingSlices with the same
- * min-pixels rule, so a project is corrected exactly when the export would take at least one of its slices.
+ * projects whose corrections could later be exported. "Corrected" uses selectTrainingSlices. The masks are loaded
+ * without their frames, so no slice carries the export's 2% edit share and the 20-pixel fallback decides: a project
+ * is corrected when the export's old rule would take at least one of its slices (close to, not exactly, the 2% rule).
  */
 import { selectTrainingSlices, TrackedMask } from "./training_selection";
 

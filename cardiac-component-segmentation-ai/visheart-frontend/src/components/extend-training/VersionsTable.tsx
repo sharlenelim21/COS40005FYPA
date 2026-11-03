@@ -10,7 +10,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { DATASET_NAMES, ModelVersion, RetrainingStatus, VersionAction } from "@/lib/retraining-api";
-import { changeTone, historyRows, HISTORY_ROWS, points, whyNotSwitch } from "@/components/extend-training/logic";
+import { changeTone, historyRows, HISTORY_ROWS, points, recipeLabel, whyNotSwitch } from "@/components/extend-training/logic";
 
 const CHIP = {
   up: "border-green-200 text-green-700 dark:border-green-900 dark:text-green-400",
@@ -94,6 +94,11 @@ export function VersionsTable({ status, reviewing, onReview, onAction }: {
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-sm">
                   {version.registered_at ? new Date(version.registered_at).toLocaleString() : "—"}
+                  {recipeLabel(version.recipe) && (
+                    <div className="text-xs text-muted-foreground" title={version.recipe ?? undefined}>
+                      {recipeLabel(version.recipe)}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell><Changes version={version} active={status.active} /></TableCell>
                 <TableCell className="text-right">

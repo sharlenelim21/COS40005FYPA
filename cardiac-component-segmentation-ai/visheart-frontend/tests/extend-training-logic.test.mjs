@@ -22,8 +22,51 @@ test("every case starts selected, except those this browser remembers clearing",
   assert.deepEqual(logic.clearedCases(["m1", "m2", "m3"], new Set(["m1"])), ["m2", "m3"]);
 });
 
-test("the summary counts the chosen cases and their slices", () => {
-  assert.deepEqual(logic.selectionSummary(cases, new Set(["m1", "m3"])), { cases: 2, slices: 5 });
+test("the summary counts the chosen cases, their projects and their slices", () => {
+  assert.deepEqual(logic.selectionSummary(cases, new Set(["m1", "m3"])), { cases: 2, projects: 2, slices: 5 });
+  const twoModels = [{ ...cases[0], projectId: "p1" }, { ...cases[1], projectId: "p1" }];
+  assert.deepEqual(logic.selectionSummary(twoModels, new Set(["m1", "m2"])), { cases: 2, projects: 1, slices: 4 });
+});
+
+test("the same scan uploaded by two users counts as one project, and only one of them trains", () => {
+  const cases = [
+    { maskId: "m1", projectId: "p1", projectName: "Patient 1", model: "unet", slices: [1, 2], scanId: "h1", ownerName: "jy" },
+    { maskId: "m2", projectId: "p2", projectName: "Patient 1 copy", model: "unet", slices: [1, 2, 3], scanId: "h1", ownerName: "lee" },
+    { maskId: "m3", projectId: "p3", projectName: "Patient 3", model: "unet", slices: [1], scanId: "h3" },
+  ];
+  const all = new Set(["m1", "m2", "m3"]);
+  assert.deepEqual(logic.selectionSummary(cases, all), { cases: 3, projects: 2, slices: 3 });
+  assert.deepEqual(logic.sameScanGroups(cases, all), [["Patient 1 (jy)", "Patient 1 copy (lee)"]]);
+  assert.deepEqual(logic.sameScanGroups(cases, new Set(["m1", "m3"])), []);
+  const noHash = cases.map(({ scanId, ...rest }) => rest);   // older rows: each project counts
+  assert.equal(logic.selectionSummary(noHash, all).projects, 3);
+});
+
+test("training needs 5 projects, whatever the slices; 7 projects and 10 slices only warn", () => {
+  assert.equal(logic.dataGate({ projects: 4, slices: 40 }).allowed, false);
+  assert.match(logic.dataGate({ projects: 3, slices: 10 }).message, /^Needs at least 5 projects with a corrected mask to train\.$/);
+  const fewSlices = logic.dataGate({ projects: 5, slices: 5 });   // one slice per patient is allowed
+  assert.equal(fewSlices.allowed, true);
+  assert.match(fewSlices.message, /7 or more projects recommended.*Few corrected slices \(5\)/);
+  assert.match(logic.dataGate({ projects: 6, slices: 30 }).message, /7 or more projects/);
+  assert.match(logic.dataGate({ projects: 7, slices: 9 }).message, /Few corrected slices \(9\)/);
+  assert.deepEqual(logic.dataGate({ projects: 7, slices: 10 }), { allowed: true, message: null });
+});
+
+test("a version's training method reads in words", () => {
+  assert.equal(logic.recipeLabel("whole dataset + corrections 1:10, decoder only, 1 epoch"),
+               "Whole training set + corrections, 1 epoch");
+  assert.equal(logic.recipeLabel("corrections + replay 1:10, decoder only, last epoch"),
+               "Corrections + replay sample, 20 epochs");
+  assert.equal(logic.recipeLabel(null), null);
+  assert.equal(logic.recipeLabel("something new"), "something new");
+});
+
+test("training progress counts the batches of the epoch under way", () => {
+  assert.equal(logic.trainingShare({ epoch: 0, epochs: 1, batch: 250, batches: 1000 }), 0.25);
+  assert.equal(logic.trainingShare({ epoch: 1, epochs: 1, batch: 1000, batches: 1000 }), 1);
+  assert.equal(logic.trainingShare({ epoch: 8, epochs: 20 }), 0.4);
+  assert.equal(logic.trainingShare({}), 0);
 });
 
 test("a search matches every word in the project name, the model or the owner's name", () => {

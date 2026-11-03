@@ -2,10 +2,16 @@
  * Which slices of a project's saved editable masks become training labels for the UNet.
  *
  * Pure (no database), so it can be tested: the export script groups a project's masks and calls this.
- * UNet and MedSAM corrections count alike (Jy, 2026-09-15): a slice counts when edit tracking found at
- * least `minPixels` changed pixels and no `manual` pixels. `manual` marks a region whose anatomical class
- * is unknown, and dropping only those pixels would teach the model that they are background. A
- * bounding-box re-run that reproduces the AI output changes no pixels, so it never counts.
+ * UNet and MedSAM corrections count alike (Jy, 2026-09-15): a slice counts when its edit is large enough and it
+ * has no `manual` pixels. `manual` marks a region whose anatomical class is unknown, and dropping only those pixels
+ * would teach the model that they are background. A bounding-box re-run that reproduces the AI output changes no
+ * pixels, so it never counts.
+ *
+ * Large enough (Jy's decision 2026-11-01, decisions/retraining-edit-threshold-and-minimum-data.md): when the export
+ * measured the slice against its AI result (`editShare`, changed pixels / heart pixels of the AI result and the
+ * correction together), the share is at least `minShare` (2%), or a structure was added or removed
+ * (`structureChanged`, which also covers a basal or apical slice the AI missed or over-drew). Without that measure
+ * (the AI result was not found), the old rule stands: at least `minPixels` (20) changed pixels.
  *
  * One image slice gives at most one label. When both models corrected the same frame and slice:
  * - pixel-identical corrections are not a conflict, and one copy is used;
@@ -14,10 +20,15 @@
 export const TRAINING_MODELS = ["unet", "medsam"] as const;
 export type TrainingModel = typeof TRAINING_MODELS[number];
 
+export const MIN_EDIT_SHARE = 0.02;
+export const FALLBACK_MIN_PIXELS = 20;
+
 export interface TrackedSlice {
     frameindex: number;
     sliceindex: number;
     pixelsChanged: number;
+    editShare?: number | null;
+    structureChanged?: boolean;
     byClass?: Record<string, number>;
     [key: string]: unknown;
 }
@@ -48,7 +59,17 @@ export interface SelectionOptions {
     identicalSlices?: Set<string>;
     /** "frame:slice" -> the model whose correction to use, from a reviewed conflicts file. */
     choices?: Record<string, string>;
+    /** The smallest edit share that counts, for slices measured against their AI result (default MIN_EDIT_SHARE). */
+    minShare?: number;
 }
+
+/** Why a slice's edit is too small to train on, or null when it is large enough. */
+export const editTooSmall = (slice: TrackedSlice, minPixels: number, minShare = MIN_EDIT_SHARE): string | null => {
+    if (typeof slice.editShare === "number") {
+        return slice.editShare >= minShare || slice.structureChanged ? null : "slice_below_min_share";
+    }
+    return slice.pixelsChanged >= minPixels ? null : "slice_below_min_pixels";
+};
 
 export interface SliceConflict {
     frameindex: number;
@@ -75,7 +96,8 @@ export const selectTrainingSlices = <M extends TrackedMask>(masks: M[], minPixel
         if (tracking.suspect) { skip("suspect"); continue; }
         const slices = (tracking.slices ?? []).filter((slice) => {
             if ((slice.byClass?.manual ?? 0) > 0) { skip("slice_manual"); return false; }
-            if (!(slice.pixelsChanged >= minPixels)) { skip("slice_below_min_pixels"); return false; }
+            const tooSmall = editTooSmall(slice, minPixels, options.minShare);
+            if (tooSmall) { skip(tooSmall); return false; }
             return true;
         });
         const savedAt = tracking.editedAt ? Date.parse(tracking.editedAt) : NaN;

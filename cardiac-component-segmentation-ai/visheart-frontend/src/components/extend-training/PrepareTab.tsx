@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CorrectionCase, isActiveJob, MODEL_NAMES, RetrainingStatus } from "@/lib/retraining-api";
 import { LABEL_COLORS } from "@/types/segmentation";
-import { canEditCase, editorHref, matchesQuery, selectionSummary, testScanName, trainableCases } from "@/components/extend-training/logic";
+import { canEditCase, dataGate, editorHref, matchesQuery, sameScanGroups, selectionSummary, testScanName, trainableCases } from "@/components/extend-training/logic";
 import { CasePreview, markEdited } from "@/components/extend-training/CasePreview";
 
 /** Edit tracking's classes as short tags, in the editor's colours; the full name shows on hover. */
@@ -129,6 +129,8 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
   const shown = useMemo(() => cases.filter(item => matchesQuery(item, query)), [cases, query]);
   const shownTrainable = trainableCases(shown);
   const summary = selectionSummary(trainable, selected);
+  const gate = dataGate(summary);
+  const sameScans = sameScanGroups(trainable, selected);
   const locked = cases.length - trainable.length;
   const running = isActiveJob(status.job);
   const allShown = shownTrainable.length > 0 && shownTrainable.every(item => selected.has(item.maskId));
@@ -153,6 +155,7 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
     : !eligible ? "The corrections have not been checked yet."
     : trainable.length === 0 ? "None of the corrections can train yet."
     : summary.cases === 0 ? "Choose at least one case."
+    : !gate.allowed ? gate.message
     : null;
   const canStart = reason === null && !starting && status.training.allowed;
 
@@ -176,7 +179,8 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
             <p className="text-3xl font-semibold tabular-nums">
               {summary.cases}
               <span className="ml-2 text-base font-normal text-muted-foreground">
-                of {trainable.length} cases · {summary.slices} corrected slices
+                of {trainable.length} cases · {summary.projects} {summary.projects === 1 ? "project" : "projects"} ·{" "}
+                {summary.slices} corrected slices
               </span>
             </p>
             {locked > 0 && (
@@ -185,6 +189,15 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
                 {locked} {locked === 1 ? "case is a test scan and is" : "cases are test scans and are"} not used for training
               </p>
             )}
+            {sameScans.map(names => (
+              <p key={names.join("|")} className="flex items-start gap-1.5 text-sm text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {names.map(name => `“${name}”`).join(" and ")} are the same scan, uploaded more than once. It counts as
+                  one project, and only one of them is used for training.
+                </span>
+              </p>
+            ))}
             <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <span>{eligible ? `Checked ${new Date(eligible.checked_at).toLocaleString()}` : "Not checked yet"}</span>
               <Button variant="link" size="sm" className="h-auto p-0" disabled={checking || running} onClick={onCheck}>
@@ -202,10 +215,8 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
                   : "Train a new version"}
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
-            <p className="text-xs text-muted-foreground md:text-right">
-              The model in use stays active. Nothing is replaced without your approval.
-            </p>
             {reason && <p className="text-sm text-amber-700 dark:text-amber-400 md:text-right">{reason}</p>}
+            {!reason && gate.message && <p className="text-sm text-muted-foreground md:text-right">{gate.message}</p>}
           </div>
         </CardContent>
       </Card>
@@ -326,8 +337,11 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
             </Table>
           </div>
           <p className="text-xs text-muted-foreground">
-            A slice counts when at least 20 of its pixels changed their label and none of its regions is marked
-            “manual”. Training never changes your scans or your saved corrections.
+            A slice counts when the pixels whose label changed are at least 2% of the heart in the AI result and
+            your correction together, or a structure was added or removed, and none of its regions is marked “manual”.
+            A training needs at least 5 corrected projects (7 recommended): more patients help more than more
+            slices. Training never
+            changes your scans or your saved corrections.
           </p>
         </CardContent>
       </Card>
