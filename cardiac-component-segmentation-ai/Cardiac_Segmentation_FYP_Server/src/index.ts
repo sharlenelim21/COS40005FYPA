@@ -32,6 +32,7 @@ import LogError from './utils/error_logger'; // Import error logging utility
 import { connectToDatabase } from './services/database'; // Import DB connection function
 import { initAndRefreshAuth, stopTokenRefresh } from './services/gpu_auth_client'; // Import GPU auth client functions
 import { isMigrationNeeded, runAffineMigration } from './scripts/affine_matrix_migration'; // Import migration functions
+import { loadTemplateSeed } from './services/template_seed'; // Template hearts committed to the repo
 
 // Get serving host and port from environment variables
 const HOST = process.env.HOST || 'localhost'; // Default to localhost if not set
@@ -74,6 +75,11 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     server = app.listen(PORT, HOST, () => { // Now PORT is definitely a number
       logger.info(`${serviceLocation}: Server running at http://${HOST}:${PORT}`);
     });
+
+    // Load the template hearts committed to the repo, if this machine doesn't have
+    // them yet. Before the job cleanup below, which would otherwise delete their
+    // jobs while their project / owner are still being inserted.
+    await loadTemplateSeed();
 
     // Schedule CRON jobs
     await scheduleGuestCleanup(); // Guest user cleanup

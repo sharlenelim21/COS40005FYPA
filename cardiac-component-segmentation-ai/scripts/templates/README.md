@@ -98,6 +98,32 @@ python template_tool.py unpublish --project <ID> --to-user <you>   # unlocks it 
 python template_tool.py list                                       # current templates
 ```
 
+## Sharing the templates with your team
+
+Templates live in your local MongoDB and MinIO, not in git. To give teammates the same templates:
+
+```bash
+python template_tool.py export
+```
+
+This writes every published template to `visheart-local-deployment/seed/templates` (about 200 MB,
+xz-compressed). It includes the documents (project, masks, landmarks, jobs, 3D model records) and the
+files the read-only pages load (image stacks and 3D models). The original `.nii.gz` scans are left out,
+because only the AI pipeline reads them and templates never run it. Commit that folder.
+
+After a teammate merges, they rebuild and restart their stack (see the commit/merge notes: `npm run build`
+for the backend, `build.ps1` for the frontend image, then recreate `visheart-app`). On start-up the backend
+loads every template their machine doesn't have yet (`src/services/template_seed.ts`); it takes about a
+minute the first time and appears in the log as `TemplateSeed: loaded ...`. It creates the template account
+with a random password.
+
+- Run `export` again after changing a template and commit the result. Unchanged files are left
+  byte-for-byte as they are, so git only stores what changed. Teammates' copies are replaced on their next
+  start-up, and any change they made to a loaded template is overwritten.
+- Templates you published on your own machine are never touched by the loader, so a restart can't replace
+  your newer edits with an older export.
+- `TEMPLATE_SEED=off` in the backend's environment skips loading.
+
 ## Good to know
 
 - While you work, the project is a normal project in **your** Projects list. After `finalize` it leaves your

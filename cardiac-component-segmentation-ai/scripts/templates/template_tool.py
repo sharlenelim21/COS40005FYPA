@@ -19,6 +19,8 @@ Per subject (see README.md for the full walkthrough):
                publishing it — to check your edits before `finalize`.
   unpublish    Take a template back to your account (unlocked) to edit it again.
   list         Show the current templates.
+  export       Write the published templates to visheart-local-deployment/seed/templates.
+               Committed, they are loaded on start-up on every teammate's machine.
 
 Everything goes through the app's own API, except publish / unpublish, which
 set the template flag and owner directly in the local MongoDB container (there
@@ -656,6 +658,174 @@ print(JSON.stringify({ templates: out }));
         print("(no templates)")
 
 
+# ── export: the published templates as seed files committed to the repo ───────
+#
+# The backend loads them on start-up (Cardiac_Segmentation_FYP_Server/src/services/
+# template_seed.ts) on any machine that does not have them yet, so a teammate sees
+# the templates after merging and restarting the stack, without running anything.
+
+DEFAULT_SEED_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "visheart-local-deployment", "seed", "templates"))
+# The collections that hold a template's documents besides `projects` (all keyed by projectid).
+SEED_COLLECTIONS = ("segmentation masks", "project landmarks", "jobs", "4d reconstructions")
+
+
+def mongo_lines(js: str, container: str) -> list[str]:
+    """Like mongo(), but returns every line the script prints."""
+    subprocess.run(["docker", "exec", "-i", container, "sh", "-c", "cat > /tmp/visheart_template_tool.js"],
+                   input=js.encode("utf-8"), check=True)
+    r = subprocess.run(["docker", "exec", container, "sh", "-c",
+                        'mongosh --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" '
+                        '--authenticationDatabase admin "$MONGO_INITDB_DATABASE" /tmp/visheart_template_tool.js'],
+                       capture_output=True, text=True, encoding="utf-8")
+    if r.returncode != 0:
+        die(f"mongosh failed: {(r.stderr or r.stdout).strip()[:500]}")
+    return [l for l in r.stdout.splitlines() if l.strip()]
+
+
+def bucket_keys(value, prefixes: tuple[str, ...], out: set):
+    """Collect the object keys of every s3:// or https://<bucket>... URL in an EJSON document."""
+    if isinstance(value, str):
+        for p in prefixes:
+            if value.startswith(p):
+                out.add(value[len(p):].split("?")[0])
+    elif isinstance(value, list):
+        for v in value:
+            bucket_keys(v, prefixes, out)
+    elif isinstance(value, dict):
+        for v in value.values():
+            bucket_keys(v, prefixes, out)
+
+
+def cmd_export(a):
+    import hashlib
+    import lzma
+    from concurrent.futures import ThreadPoolExecutor
+
+    sha = lambda b: hashlib.sha256(b).hexdigest()
+    os.makedirs(os.path.join(a.out, "db"), exist_ok=True)
+    os.makedirs(os.path.join(a.out, "objects"), exist_ok=True)
+    manifest_path = os.path.join(a.out, "manifest.json")
+    old = json.load(open(manifest_path, encoding="utf-8")) if os.path.exists(manifest_path) else {}
+    old_files = {o["key"]: o for t in old.get("templates", []) for o in t["objects"]}
+    old_db = {t["project_id"]: t["db"] for t in old.get("templates", [])}
+
+    def write_xz(rel: str, raw: bytes, digest: str, previous: dict | None) -> bool:
+        """Compress `raw` to <out>/<rel>, unless the same content is already there (keeps git diffs empty)."""
+        path = os.path.join(a.out, rel)
+        if previous and previous.get("sha256") == digest and previous.get("file") == rel and os.path.exists(path):
+            return False
+        with open(path, "wb") as f:
+            f.write(lzma.compress(raw, preset=9))
+        return True
+
+    # 1. Documents: every template's project + its masks, landmarks, jobs and 3D model
+    #    records as canonical EJSON (keeps ObjectIds, dates and number types), one per line.
+    lines = mongo_lines(f"""
+const P = {json.dumps({"colls": SEED_COLLECTIONS})};
+const out = (c, d) => print(EJSON.stringify({{ c: c, d: d }}, {{ relaxed: false }}));
+const projects = db.projects.find({{ isTemplate: true }}).sort({{ "templateInfo.order": 1, _id: 1 }}).toArray();
+for (const p of projects) {{
+  const id = p._id.toString();
+  print(JSON.stringify({{ template: id }}));
+  out("projects", p);
+  for (const c of P.colls) db.getCollection(c).find({{ projectid: {{ $in: [id, p._id] }} }}).sort({{ _id: 1 }}).forEach((d) => out(c, d));
+}}
+const owners = [...new Set(projects.map((p) => p.userid))];
+print(JSON.stringify({{ owners: owners }}));
+for (const o of owners) {{
+  const u = db.users.findOne({{ _id: ObjectId(o) }});
+  if (u) {{ delete u.password; out("users", u); }}   // the loader sets a fresh, unknown password
+}}
+""", a.mongo_container)
+    templates, current, account = [], None, None
+    for line in lines:
+        j = json.loads(line)
+        if "template" in j:
+            current = {"project_id": j["template"], "lines": []}
+            templates.append(current)
+        elif "owners" in j:
+            if len(j["owners"]) != 1:
+                die(f"templates must all belong to one account, found {j['owners']}")
+            current = None
+        elif j.get("c") == "users":
+            account = j["d"]
+        else:
+            current["lines"].append(line)
+    if not templates:
+        die("no published templates to export")
+    if account is None:
+        die("the template account was not found")
+
+    # 2. Their files in MinIO: the image stacks and 3D models. The original .nii.gz scans
+    #    are left out — only the AI pipeline reads them, and templates never run it.
+    def minio(*cmd: str, binary: bool = False):
+        return subprocess.run(["docker", "exec", a.minio_container, "mc", *cmd], capture_output=True, text=not binary)
+    r = subprocess.run(["docker", "exec", a.minio_container, "sh", "-c",
+                        'mc alias set visheart_seed http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"'],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"cannot reach MinIO in {a.minio_container}: {(r.stderr or r.stdout).strip()[:300]}")
+    prefixes = (f"s3://{a.bucket}/", f"https://{a.bucket}.s3.amazonaws.com/")
+
+    def export_object(key: str) -> dict | None:
+        if key.endswith("/"):
+            return None  # a folder path (basepath)
+        st = minio("stat", "--json", f"visheart_seed/{a.bucket}/{key}")
+        info = json.loads(st.stdout.strip().splitlines()[0]) if st.returncode == 0 and st.stdout.strip() else {}
+        if info.get("type") != "file" or info.get("name") != os.path.basename(key):
+            return None  # a folder, or a file an older job left behind and was since removed
+        raw = minio("cat", f"visheart_seed/{a.bucket}/{key}", binary=True).stdout
+        digest = sha(raw)
+        rel = f"objects/{os.path.basename(key)}.xz"
+        written = write_xz(rel, raw, digest, old_files.get(key))
+        return {"key": key, "file": rel, "size": len(raw), "sha256": digest, "written": written}
+
+    names, kept = set(), {"manifest.json", "db/template_account.json"}
+    out_templates = []
+    with ThreadPoolExecutor(max_workers=2) as pool:  # lzma preset 9 needs ~0.7 GB per worker
+        for t in templates:
+            docs = [json.loads(l) for l in t["lines"]]
+            project = next(d["d"] for d in docs if d["c"] == "projects")
+            keys: set = set()
+            for d in docs:
+                bucket_keys(d["d"], prefixes, keys)
+            keys = sorted(k for k in keys if not k.endswith(".nii.gz"))
+            log(f"{project['name']}: {len(docs)} documents, {len(keys)} file paths")
+            objects = [o for o in pool.map(export_object, keys) if o]
+            for o in objects:
+                if o["file"] in names:
+                    die(f"two files share the name {o['file']}")
+                names.add(o["file"])
+                log(f"   {'wrote' if o.pop('written') else 'kept '} {o['file']}  ({o['size'] / 1e6:.1f} MB)")
+            raw_db = ("\n".join(t["lines"]) + "\n").encode("utf-8")
+            db_rel = f"db/{t['project_id']}.ndjson.xz"
+            db_entry = {"file": db_rel, "sha256": sha(raw_db),
+                        "documents": {c: sum(d["c"] == c for d in docs) for c in ("projects",) + SEED_COLLECTIONS}}
+            write_xz(db_rel, raw_db, db_entry["sha256"], old_db.get(t["project_id"]))
+            version = sha((db_entry["sha256"] + "".join(f"\n{o['key']} {o['sha256']}" for o in objects)).encode())[:16]
+            out_templates.append({"project_id": t["project_id"], "name": project["name"], "version": version,
+                                  "db": db_entry, "objects": objects})
+            kept.update([db_rel, *(o["file"] for o in objects)])
+
+    with open(os.path.join(a.out, "db", "template_account.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(account, f, indent=1, ensure_ascii=False)
+        f.write("\n")
+    manifest = {"format": 1, "bucket": a.bucket, "template_account": "db/template_account.json", "templates": out_templates}
+    with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(manifest, f, indent=1, ensure_ascii=False)
+        f.write("\n")
+
+    # Drop files of templates or 3D models that no longer exist.
+    for sub in ("db", "objects"):
+        for name in os.listdir(os.path.join(a.out, sub)):
+            if f"{sub}/{name}" not in kept:
+                os.remove(os.path.join(a.out, sub, name))
+                log(f"removed {sub}/{name}")
+    total = sum(os.path.getsize(os.path.join(dp, n)) for dp, _, fs in os.walk(a.out) for n in fs)
+    log(f"exported {len(out_templates)} templates to {a.out} ({total / 1e6:.0f} MB). Commit that folder; "
+        "the backend loads it on start-up on machines that don't have these templates yet.")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -727,6 +897,12 @@ def main():
 
     p = sub.add_parser("list", help="list the current templates")
     p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("export", help="write the published templates to the repo's seed folder (commit it to share them)")
+    p.add_argument("--out", default=DEFAULT_SEED_DIR, help="seed folder (default visheart-local-deployment/seed/templates)")
+    p.add_argument("--minio-container", default="visheart-minio", help="MinIO container (default %(default)s)")
+    p.add_argument("--bucket", default="visheart-bucket", help="bucket the app stores files in (default %(default)s)")
+    p.set_defaults(func=cmd_export)
 
     a = ap.parse_args()
     a.func(a)

@@ -139,6 +139,9 @@ services:
       - temp_upload:/app/backend/dist/temp_upload
       # Stays a bind mount: the UNet Extend Training worker on the host reads the exports from here.
       - ../Cardiac_Segmentation_FYP_Server/dist/temp_exports:/app/backend/dist/temp_exports
+      # Template hearts committed to the repo (template_tool.py export); the backend
+      # loads any that this machine doesn't have yet on start-up (template_seed.ts).
+      - ./seed:/app/seed:ro
     networks:
       - visheart-network
     healthcheck:
