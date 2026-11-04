@@ -930,7 +930,6 @@ export interface IProjectReconstruction {
   chamber?: ReconstructionChamber; // Which chamber this mesh is (lv = myocardium, rv = RV cavity).
                                    // Absent means LV: every record predating this field is LV.
                                    // RV is research-only and must be labelled wherever it is shown.
-  builtFrames?: number[]; // 1-based frames that were built, when the user chose some; absent: every frame
   
 
   filename: string; // Server-generated reconstruction filename (e.g., projectid_reconstructionid_4d)
@@ -1018,8 +1017,6 @@ export interface IJob {
   chamber?: ReconstructionChamber; // 4D reconstruction jobs only: which chamber this job builds.
                                    // Absent means LV. Needed so an in-flight RV job does not block
                                    // an LV job for the same segmentation model, and vice versa.
-  frameMap?: number[]; // 4D reconstruction of chosen frames only: the 0-based original frame of each frame sent
-                       // to the GPU, in order (reconstruction_frames.ts). Absent: every frame was built.
   model_used?: string;
   progress?: number; 
 }

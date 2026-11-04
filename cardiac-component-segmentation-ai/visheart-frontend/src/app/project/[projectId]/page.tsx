@@ -1927,11 +1927,87 @@ function ProjectPageInner() {
                       : `${formatReconstructionModel(model)} ${isRvOnly ? "RV " : ""}reconstruction`;
 
                     return (
-                      <div key={recon.reconstructionId} className={`rounded-lg border text-sm ${isRvOnly ? "border-amber-500/40" : ""}`}>
-                        <div className="space-y-2 p-3">
-                          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-                            <p className="font-semibold">{title}</p>
-                            <p className="text-xs text-muted-foreground">Updated {formatDateTime(recon.updatedAt || recon.createdAt)}</p>
+                      <div key={recon.reconstructionId} className={`rounded-lg border p-4 space-y-3 ${isRvOnly ? "border-amber-500/40" : ""}`}>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold truncate">{recon.name || "4D Reconstruction"}</p>
+                              <Badge variant="outline">{formatReconstructionModel(model)}</Badge>
+                              <Badge variant="secondary">{recon.status || "Ready"}</Badge>
+                              {isRvOnly && (
+                                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
+                                  RV · research only
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="grid gap-3 text-sm sm:grid-cols-2">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Segmentation Model Used</p>
+                                <p>{formatReconstructionModel(model)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Updated</p>
+                                <p>{formatDateTime(recon.updatedAt || recon.createdAt)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">ED Frame</p>
+                                <p className="font-mono">Frame {edFrame}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Export Format</p>
+                                <p className="font-mono uppercase">{recon.meshFormat || "GLB"}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Size</p>
+                                <p>{formatFileSize(recon.meshFileSize)}</p>
+                              </div>
+                              {(resolution || iterations) && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Resolution / Iterations</p>
+                                  <p className="font-mono">
+                                    {resolution ? `${resolution}^3` : "N/A"} / {iterations ?? "N/A"}
+                                  </p>
+                                </div>
+                              )}
+                              {processingTime && (
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Processing Time</p>
+                                  <p>{processingTime.toFixed(1)}s</p>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* An RV reconstruction exists for this model, so "View 4D" opens both
+                                chambers. Said here rather than as a second card, because it is the
+                                same scan — but it must be said, since the RV mesh is research-only
+                                and the user has not opened the viewer yet. */}
+                            {rvCompanion && (
+                              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
+                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs leading-relaxed text-muted-foreground">
+                                    <span className="font-medium text-foreground">Includes RV.</span>{" "}
+                                    Opening 4D shows the RV cavity alongside the LV, and either can be
+                                    hidden there. RV is for reference/research only — not reliable for
+                                    clinical diagnosis.
+                                  </p>
+                                  {isProjectOwner && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setSelectedReconstructionForDeletion(rvCompanion);
+                                        setDeleteModelDialogOpen(true);
+                                      }}
+                                      className="h-auto p-0 mt-1.5 text-xs text-destructive hover:text-destructive hover:bg-transparent hover:underline"
+                                    >
+                                      <Trash2 className="h-3 w-3 mr-1" />
+                                      Delete RV only
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             <Badge variant="outline">{formatReconstructionModel(model)}</Badge>

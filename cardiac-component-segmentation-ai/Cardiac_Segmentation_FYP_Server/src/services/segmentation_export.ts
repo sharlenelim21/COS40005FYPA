@@ -1515,9 +1515,7 @@ export const generateAISegmentationForReconstruction = async (
      * fail explicitly if none are available. When omitted, behaviour
      * matches the original (model-agnostic) implementation.
      */
-    segmentationModel?: "medsam" | "unet",
-    /** 0-based frames to keep, in order (reconstruction_frames.ts); omitted keeps every frame. */
-    frames?: number[]
+    segmentationModel?: "medsam" | "unet"
 ): Promise<{
     success: boolean;
     message?: string;
@@ -1730,21 +1728,6 @@ export const generateAISegmentationForReconstruction = async (
         if (!outputExists) {
             logger.error(`${serviceLocation}: Expected NIfTI output file not created for reconstruction of project ${projectId}: ${localOutputSegmentationNiftiPath}`);
             return { success: false, message: "NIfTI file was not generated successfully for reconstruction." };
-        }
-
-        if (frames && frames.length > 0) {
-            // Only the chosen frames go to the GPU, which builds every frame of the file it gets.
-            const subsetPath = localOutputSegmentationNiftiPath.replace(/\.nii\.gz$/, '_frames.nii.gz');
-            const script = path.join(__dirname, '..', '..', 'src', 'python', 'select_nifti_frames.py');
-            const kept = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
-                exec(`python3 "${script}" "${localOutputSegmentationNiftiPath}" "${subsetPath}" ${frames.join(',')}`,
-                     (error, _stdout, stderr) => resolve(error ? { ok: false, error: stderr || error.message } : { ok: true }));
-            });
-            if (!kept.ok) {
-                return { success: false, message: `Keeping the chosen frames failed: ${kept.error}` };
-            }
-            await fs.move(subsetPath, localOutputSegmentationNiftiPath, { overwrite: true });
-            logger.info(`${serviceLocation}: Kept ${frames.length} chosen frames (0-based ${frames.join(',')}) for project ${projectId}`);
         }
 
         const fileStats = await fs.stat(localOutputSegmentationNiftiPath);
