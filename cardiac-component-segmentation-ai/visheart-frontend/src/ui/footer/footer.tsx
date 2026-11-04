@@ -7,7 +7,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
   if (minimal) {
     return (
       <footer className="w-full bg-background border-t border-border mt-auto">
-        <div className="max-w-7xl mx-auto px-4 py-4 text-center">
+        <div className="container mx-auto px-4 md:px-6 py-4 text-center">
           <p className="text-sm text-muted-foreground">© {new Date().getFullYear()} VisHeart. All rights reserved.</p>
         </div>
       </footer>
@@ -16,11 +16,17 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
 
   return (
     <footer className="w-full bg-background border-t border-border mt-auto">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Main Content */}
-        <div className="flex flex-col sm:flex-row flex-wrap justify-between items-start gap-8">
+      {/* Tailwind's `.container` (not a fixed max-w-7xl), matching the dashboard page's own
+          "container mx-auto" -- a fixed max-width diverges from it on wide monitors (1536px+),
+          which is why the footer sat narrower/more inset than the cards above it. */}
+      <div className="container mx-auto px-4 md:px-6 py-8">
+        {/* Main Content -- an explicit grid, not flex-wrap: flex-wrap let the wide Logo/Brand block
+            crowd "Contact Us"/"Team" off row 1 onto their own row, leaving a big empty gap to the
+            right of Navigation. A grid reserves a column for each of the 4 sections up front, so
+            nothing can push another section onto a different row by itself. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
           {/* Logo / Brand */}
-          <div className="space-y-4 max-w-md">
+          <div className="space-y-4">
             <div className="flex items-center space-x-2">
               <Heart className="h-8 w-8 text-primary" />
               <span className="text-2xl font-bold text-foreground">VisHeart</span>

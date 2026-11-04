@@ -977,15 +977,9 @@ function LandmarksTab({
               <span className="flex-1 text-xs font-medium truncate">
                 {def.fullLabel ?? def.label}
               </span>
-              {/* Coords */}
-              {hasCoord ? (
-                <span className="text-[10px] text-muted-foreground font-mono tabular-nums shrink-0">
-                  {coord![0]}, {coord![1]}
-                </span>
-              ) : isPlacing ? (
+              {/* The coordinate value itself now shows on the left panel, not here. */}
+              {isPlacing && (
                 <span className="text-[9px] font-medium text-primary shrink-0">Click the image to place</span>
-              ) : (
-                <span className="text-[10px] text-muted-foreground/40 shrink-0">—</span>
               )}
               {onHighlightLandmark && !(readOnly && !hasCoord) && (
                 <span

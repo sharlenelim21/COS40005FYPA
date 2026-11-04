@@ -10,7 +10,6 @@ import { useProjectReconstructionStatus } from "@/hooks/useProjectReconstruction
 import { ShowForGuest, ShowForAdmin, ShowForProjectCreator } from "@/components/RoleGuard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { JobProgress } from "@/components/ui/kinetic-progress";
 import { reconstructionApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -60,6 +59,19 @@ const formatFileSize = (bytes: number) => {
   const sizes = ["Bytes", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+};
+
+// Strain jobs share the segmentation jobs collection (jobType is still 'segmentation'), but aren't
+// one — same distinction project/[projectId]/page.tsx's STRAIN_JOB_LABELS/strainJobLabel already
+// make from modelUsed, kept here too since the dashboard builds its own job labels separately.
+const STRAIN_JOB_LABELS: Record<string, string> = {
+  strain_series: "Strain Computation",
+  rv_strain_series: "RV Strain Computation",
+};
+const jobTypeLabel = (job: { jobType: string; modelUsed?: string | null }): string => {
+  const strainLabel = STRAIN_JOB_LABELS[String(job.modelUsed ?? "").toLowerCase()];
+  if (strainLabel) return strainLabel;
+  return job.jobType === "segmentation" ? "Segmentation" : "4D Reconstruction";
 };
 
 // Helper function to get status icon and color
@@ -475,21 +487,23 @@ function DashboardPage() {
 
       {/* Main Dashboard Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="projects" className="relative">
             {user?.role === "user" || user?.role === "admin"
               ? "Case History"
               : "Projects"}
           </TabsTrigger>
-          <TabsTrigger value="jobs">Jobs</TabsTrigger>
           <TabsTrigger value="templates">Templates</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
         <TabsContent value="overview" className="space-y-4">
           {/* Stats Cards */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          {/* Reflows by actual available width (not viewport breakpoints), so two windows snapped
+              side-by-side on one monitor -- narrower than "desktop" but still plenty wide for 5 cards
+              -- still lay out in a row instead of stacking the way sm:/lg:/xl: breakpoints would. */}
+          <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Total Projects</CardTitle>
@@ -597,8 +611,10 @@ function DashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Recent Activity */}
-          <div className="grid gap-4 lg:grid-cols-2">
+          {/* Recent Activity -- same auto-fit reasoning as the stat cards above: reflow by actual
+              width, not a viewport breakpoint, so a half-screen-snapped window still shows these
+              two side by side instead of stacking. */}
+          <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
             <Card>
               <CardHeader>
                 <CardTitle>Recent Projects</CardTitle>
@@ -655,8 +671,8 @@ function DashboardPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Recent Jobs</CardTitle>
-                <CardDescription>Latest segmentation and reconstruction tasks</CardDescription>
+                <CardTitle>Last Run Tasks</CardTitle>
+                <CardDescription>Latest segmentation, strain and reconstruction tasks</CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
                 {allJobs.slice(0, 4).map((job) => {
@@ -672,7 +688,7 @@ function DashboardPage() {
                         </div>
                         <div>
                           <p className="text-sm font-medium">
-                            {job.jobType === 'segmentation' ? 'Segmentation' : '4D Reconstruction'}
+                            {jobTypeLabel(job)}
                           </p>
                           <p className="text-muted-foreground text-xs">
                             {projectName}
@@ -992,189 +1008,6 @@ function DashboardPage() {
               </CardContent>
             </Card>
           )}
-        </TabsContent>
-
-        {/* Ongoing Segmentation Jobs Tab */}
-        <TabsContent value="jobs" className="space-y-4">
-          <div>
-            <h2 className="text-2xl font-bold">Jobs</h2>
-            <p className="text-muted-foreground">View all processing jobs (segmentation and reconstruction)</p>
-          </div>
-
-          {/* All Jobs Display */}
-          <div className="grid gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Active Processing Jobs</CardTitle>
-                <CardDescription>Track your ongoing segmentation and reconstruction tasks</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {allJobs
-                  .filter((job) => job.status === "processing" || job.status === "pending" || job.status === "in_progress")
-                  .map((job) => {
-                    const statusDisplay = getStatusDisplay(job.status);
-                    const StatusIcon = statusDisplay.icon;
-                    const projectName = getProjectName(job.projectId);
-
-                    return (
-                      <div key={`${job.jobType}-${job.jobId}`} className="flex items-center justify-between rounded-lg border p-3 gap-4">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className={`rounded-full p-2 flex-shrink-0 ${statusDisplay.bg}`}>
-                            <StatusIcon className={`h-4 w-4 ${statusDisplay.color}`} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-medium">
-                                {job.jobType === 'segmentation' ? 'Segmentation' : '4D Reconstruction'}
-                              </p>
-                              <Badge 
-                                variant={job.jobType === 'segmentation' ? "secondary" : "outline"}
-                                className="text-xs"
-                              >
-                                {job.jobType === 'segmentation' ? (
-                                  <><Brain className="h-3 w-3 mr-1" />Seg</>
-                                ) : (
-                                  <><Box className="h-3 w-3 mr-1" />4D</>
-                                )}
-                              </Badge>
-                            </div>
-                            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                              <span className="font-medium">{projectName}</span>
-                              <span className="hidden sm:inline">•</span>
-                              <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
-                            </div>
-                            <JobProgress className="mt-2 max-w-xs" status={job.status} progress={(job as { progress?: number | null }).progress} />
-                          </div>
-                        </div>
-                        <Badge variant="outline" className={`${statusDisplay.color} flex-shrink-0`}>
-                          {job.status}
-                        </Badge>
-                      </div>
-                    );
-                  })}
-                {allJobs.filter((job) => job.status === "processing" || job.status === "pending" || job.status === "in_progress").length === 0 && (
-                  <div className="py-8 text-center">
-                    <Brain className="text-muted-foreground/50 mx-auto h-12 w-12" />
-                    <h3 className="mt-4 text-lg font-semibold">No Active Jobs</h3>
-                    <p className="text-muted-foreground">Start a segmentation or reconstruction task from your projects to see active jobs here.</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Completed Jobs History */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Results</CardTitle>
-                <CardDescription>Your completed processing tasks</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {allJobs
-                  .filter((job) => job.status === "completed")
-                  .slice(0, 10)
-                  .map((job) => {
-                    const statusDisplay = getStatusDisplay(job.status);
-                    const StatusIcon = statusDisplay.icon;
-                    const projectName = getProjectName(job.projectId);
-
-                    return (
-                      <div key={`${job.jobType}-${job.jobId}`} className="flex items-center justify-between rounded-lg border p-3 gap-4">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className={`rounded-full p-2 flex-shrink-0 ${statusDisplay.bg}`}>
-                            <StatusIcon className={`h-4 w-4 ${statusDisplay.color}`} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-medium">
-                                {job.jobType === 'segmentation' ? 'Segmentation' : '4D Reconstruction'}
-                              </p>
-                              <Badge 
-                                variant={job.jobType === 'segmentation' ? "secondary" : "outline"}
-                                className="text-xs"
-                              >
-                                {job.jobType === 'segmentation' ? (
-                                  <><Brain className="h-3 w-3 mr-1" />Seg</>
-                                ) : (
-                                  <><Box className="h-3 w-3 mr-1" />4D</>
-                                )}
-                              </Badge>
-                            </div>
-                            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                              <span className="font-medium">{projectName}</span>
-                              <span className="hidden sm:inline">•</span>
-                              <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className={`${statusDisplay.color} flex-shrink-0`}>
-                            {job.status}
-                          </Badge>
-                        </div>
-                      </div>
-                    );
-                  })}
-                {allJobs.filter((job) => job.status === "completed").length === 0 && (
-                  <p className="text-muted-foreground py-4 text-center text-sm">No completed tasks yet.</p>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Failed Jobs */}
-            {allJobs.filter((job) => job.status === "failed").length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Failed Jobs</CardTitle>
-                  <CardDescription>Jobs that encountered errors</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {allJobs
-                    .filter((job) => job.status === "failed")
-                    .slice(0, 5)
-                    .map((job) => {
-                      const statusDisplay = getStatusDisplay(job.status);
-                      const StatusIcon = statusDisplay.icon;
-                      const projectName = getProjectName(job.projectId);
-
-                      return (
-                        <div key={`${job.jobType}-${job.jobId}`} className="flex items-center justify-between rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/20 p-3 gap-4">
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <div className={`rounded-full p-2 flex-shrink-0 ${statusDisplay.bg}`}>
-                              <StatusIcon className={`h-4 w-4 ${statusDisplay.color}`} />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <p className="text-sm font-medium">
-                                  {job.jobType === 'segmentation' ? 'Segmentation' : '4D Reconstruction'}
-                                </p>
-                                <Badge 
-                                  variant={job.jobType === 'segmentation' ? "secondary" : "outline"}
-                                  className="text-xs"
-                                >
-                                  {job.jobType === 'segmentation' ? (
-                                    <><Brain className="h-3 w-3 mr-1" />Seg</>
-                                  ) : (
-                                    <><Box className="h-3 w-3 mr-1" />4D</>
-                                  )}
-                                </Badge>
-                              </div>
-                              <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                                <span className="font-medium">{projectName}</span>
-                                <span className="hidden sm:inline">•</span>
-                                <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
-                              </div>
-                            </div>
-                          </div>
-                          <Badge variant="outline" className={`${statusDisplay.color} flex-shrink-0`}>
-                            {job.status}
-                          </Badge>
-                        </div>
-                      );
-                    })}
-                </CardContent>
-              </Card>
-            )}
-          </div>
         </TabsContent>
 
         {/* Templates Tab — read-only reference hearts */}

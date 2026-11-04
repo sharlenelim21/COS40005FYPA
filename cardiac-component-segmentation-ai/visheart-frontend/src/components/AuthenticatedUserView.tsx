@@ -27,6 +27,7 @@ import {
   AlertCircleIcon,
   FolderOpen,
   AlertTriangle,
+  Heart,
 } from "lucide-react";
 
 const RoleBadge = () => {
@@ -210,15 +211,15 @@ export const AuthenticatedUserView = () => {
           >
             <Link href="/dashboard">
               <Button variant="outline" className="w-full justify-start h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200">
-                <Settings className="mr-2 h-4 w-4 flex-shrink-0" />
-                VisHeart App
+                <Heart className="mr-2 h-4 w-4 flex-shrink-0 text-red-500" />
+                VisHeart Dashboard
               </Button>
             </Link>
           </ShowForAdmin>
           <ShowForAdmin fallback={null}>
             <Link href="/admin">
               <Button variant="outline" className="w-full justify-start h-11 text-sm sm:text-base hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:border-zinc-600 dark:hover:border-zinc-400 transition-all duration-200">
-                <Shield className="mr-2 h-4 w-4 flex-shrink-0" />
+                <Shield className="mr-2 h-4 w-4 flex-shrink-0 text-blue-600 dark:text-blue-400" />
                 Admin Panel
               </Button>
             </Link>

@@ -340,6 +340,9 @@ export interface Job {
     segmentationName?: string;
     segmentationDescription?: string;
     segmentationSource?: SegmentationSource;
+    // Strain jobs share this same collection but aren't segmentations (see STRAIN_JOB_LABELS);
+    // this is how a consumer tells them apart.
+    modelUsed?: string | null;
     createdAt?: string;
     updatedAt?: string;
 }
