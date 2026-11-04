@@ -7,6 +7,7 @@
     "start": "node dist/index.js",
     "dev": "npx nodemon src/index.ts",
     "build": "tsc && cpx \"src/python/**/*\" dist/python",
+    "postbuild": "node -e \"for (const d of ['temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports']) require('fs').mkdirSync('dist/' + d, { recursive: true })\"",
     "test": "jest --runInBand --detectOpenHandles --forceExit"
   },
   "repository": {

@@ -833,13 +833,13 @@ export default function Standalone4DViewerPage() {
                       <div>
                         <p className="text-muted-foreground">Resolution</p>
                         <p className="font-mono">
-                          {activeReconstruction.metadata?.resolution || 32}³
+                          {activeReconstruction.metadata?.resolution ? `${activeReconstruction.metadata.resolution}³` : "—"}
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Iterations</p>
                         <p className="font-mono">
-                          {activeReconstruction.metadata?.numIterations || 30}
+                          {activeReconstruction.metadata?.numIterations ?? "—"}
                         </p>
                       </div>
                     </div>

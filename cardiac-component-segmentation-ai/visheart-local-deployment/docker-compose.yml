@@ -34,7 +34,6 @@ services:
   # Frontend (Next.js) + Backend (Node.js)
   # ============================================
   visheart-app:
-    # image: sharlene21/visheart-local:1.5.0
     image: sharlene21/visheart-local:1.5.0
     container_name: visheart-local
     extra_hosts:
@@ -132,8 +131,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      #gpu:
-      #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
     volumes:
       - ../Cardiac_Segmentation_FYP_Server/dist:/app/backend/dist:ro
@@ -151,7 +148,8 @@ services:
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/", "&&", "curl", "-f", "http://localhost:5000/"]
+      # CMD-SHELL so "&&" is run by a shell; in the exec ("CMD") form it was passed to curl as a URL argument.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:3000/ && curl -fsS -o /dev/null http://localhost:5000/"]
       interval: 30s
       timeout: 10s
       retries: 3

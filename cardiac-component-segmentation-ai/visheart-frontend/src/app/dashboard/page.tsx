@@ -675,7 +675,7 @@ function DashboardPage() {
                             {job.jobType === 'segmentation' ? 'Segmentation' : '4D Reconstruction'}
                           </p>
                           <p className="text-muted-foreground text-xs">
-                            {projectName} • {job.projectId.slice(-8)}
+                            {projectName}
                           </p>
                         </div>
                       </div>
@@ -1039,11 +1039,7 @@ function DashboardPage() {
                               </Badge>
                             </div>
                             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                              <span className="flex items-center gap-1">
-                                <span className="font-medium">{projectName}</span>
-                                <span>•</span>
-                                <span className="font-mono">{job.projectId.slice(-8)}</span>
-                              </span>
+                              <span className="font-medium">{projectName}</span>
                               <span className="hidden sm:inline">•</span>
                               <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
                             </div>
@@ -1104,11 +1100,7 @@ function DashboardPage() {
                               </Badge>
                             </div>
                             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                              <span className="flex items-center gap-1">
-                                <span className="font-medium">{projectName}</span>
-                                <span>•</span>
-                                <span className="font-mono">{job.projectId.slice(-8)}</span>
-                              </span>
+                              <span className="font-medium">{projectName}</span>
                               <span className="hidden sm:inline">•</span>
                               <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
                             </div>
@@ -1167,11 +1159,7 @@ function DashboardPage() {
                                 </Badge>
                               </div>
                               <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                                <span className="flex items-center gap-1">
-                                  <span className="font-medium">{projectName}</span>
-                                  <span>•</span>
-                                  <span className="font-mono">{job.projectId.slice(-8)}</span>
-                                </span>
+                                <span className="font-medium">{projectName}</span>
                                 <span className="hidden sm:inline">•</span>
                                 <span className="whitespace-nowrap">{new Date(job.createdAt).toLocaleString()}</span>
                               </div>

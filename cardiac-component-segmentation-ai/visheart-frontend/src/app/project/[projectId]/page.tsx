@@ -46,8 +46,10 @@ import {
   ChevronRight,
   Trash2,
   Lock,
-  AlertTriangle
+  AlertTriangle,
+  MoreHorizontal
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 // Custom components
 import { NoProjectFound } from "@/components/project/NoProjectFound";
@@ -89,6 +91,15 @@ const isActiveRecentJob = (job: ProjectTypes.UserJob): boolean => {
 
 const isActiveSegmentationJob = isActiveRecentJob;
 const isActiveReconstructionJob = isActiveRecentJob;
+
+// Strain jobs share the jobs collection and carry segmentationModel (the masks they read), but are not
+// segmentations: the same split as the server's NON_SEGMENTATION_JOBS in inference.ts. Keyed by model_used.
+const STRAIN_JOB_LABELS: Record<string, string> = {
+  strain_series: "Strain Computation",
+  rv_strain_series: "RV Strain Computation",
+};
+const strainJobLabel = (job: ProjectTypes.UserJob): string | undefined =>
+  STRAIN_JOB_LABELS[String(job.modelUsed ?? "").toLowerCase()];
 
 function ProjectPageInner() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -547,6 +558,7 @@ function ProjectPageInner() {
   });
   const [showPipelineDialog, setShowPipelineDialog] = useState(false);
   const [expandedJobGroups, setExpandedJobGroups] = useState<Set<string>>(() => new Set());
+  const [expandedReconDetails, setExpandedReconDetails] = useState<Set<string>>(() => new Set());
   const [landmarkSummary, setLandmarkSummary] = useState<{ active: "running" | "queued" | null; hasCompleted: boolean; progress: number | null } | null>(null);
   const refreshLandmarkSummary = useCallback(async () => {
     if (!projectId || isGuest) return;
@@ -562,7 +574,7 @@ function ProjectPageInner() {
     return () => clearInterval(timer);
   }, [landmarkSummary?.active, pipeline.landmarkActive, refreshLandmarkSummary]);
   const activeSegJobs = (jobs ?? []).filter(
-    (j) => isActiveSegmentationJob(j) && !/4d_reconstruction|landmark/i.test(String(j.modelUsed ?? "")),
+    (j) => isActiveSegmentationJob(j) && !/4d_reconstruction|landmark/i.test(String(j.modelUsed ?? "")) && !strainJobLabel(j),
   );
   const segRunning = pipeline.segActive || activeSegJobs.length > 0;
   const segProgressState: "running" | "queued" =
@@ -665,6 +677,8 @@ function ProjectPageInner() {
   const jobDisplayName = (job: ProjectTypes.UserJob) => {
     const kind = String(job.modelUsed ?? "").toLowerCase();
     if (kind.includes("landmark")) return `${modelName(job.segmentationModel)} Landmark Detection`;
+    const strainLabel = strainJobLabel(job);
+    if (strainLabel) return `${modelName(job.segmentationModel)} ${strainLabel}`;
     if (kind.includes("4d_reconstruction")) {
       const chamber = job.chamber ? normalizeReconstructionChamber(job.chamber).toUpperCase() : reconstructionChamberById.get(job.jobId);
       return `${modelName(job.segmentationModel)}${chamber ? ` · ${chamber}` : ""} Reconstruction`;
@@ -1266,6 +1280,8 @@ function ProjectPageInner() {
     const model = String(job.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
     const key = kind.includes("landmark")
       ? `landmark:${model}`
+      : strainJobLabel(job)
+      ? `strain:${kind}:${model}`
       : kind.includes("4d_reconstruction")
       ? `recon:${model}:${normalizeReconstructionChamber(job.chamber ?? reconstructionChamberById.get(job.jobId))}`
       : `seg:${model}`;
@@ -1403,16 +1419,6 @@ function ProjectPageInner() {
                     {currentProjectDescription || "No description provided."}
                   </p>
                 )}
-                
-                <div className="flex items-center gap-4 text-xs text-muted-foreground pt-1">
-                  <span className="font-mono">{projectId}</span>
-                  <Separator orientation="vertical" className="h-3" />
-                  <span>{projectData.dimensions?.frames || 0} frames</span>
-                  <span>·</span>
-                  <span>{projectData.dimensions?.slices || 0} slices</span>
-                  <span>·</span>
-                  <span>{(projectData.filesize / 1024 / 1024).toFixed(2)} MB</span>
-                </div>
               </div>
             </div>
 
@@ -1915,92 +1921,29 @@ function ProjectPageInner() {
                     const resolution = recon.metadata?.resolution;
                     const iterations = recon.metadata?.numIterations;
                     const processingTime = recon.metadata?.reconstructionTime;
+                    const detailsOpen = expandedReconDetails.has(recon.reconstructionId);
+                    const title = viewModel === "unknown"
+                      ? "4D reconstruction"
+                      : `${formatReconstructionModel(model)} ${isRvOnly ? "RV " : ""}reconstruction`;
 
                     return (
-                      <div key={recon.reconstructionId} className={`rounded-lg border p-4 space-y-3 ${isRvOnly ? "border-amber-500/40" : ""}`}>
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="font-semibold truncate">{recon.name || "4D Reconstruction"}</p>
-                              <Badge variant="outline">{formatReconstructionModel(model)}</Badge>
-                              <Badge variant="secondary">{recon.status || "Ready"}</Badge>
-                              {isRvOnly && (
-                                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-                                  RV · research only
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="grid gap-3 text-sm sm:grid-cols-2">
-                              <div>
-                                <p className="text-xs text-muted-foreground">Segmentation Model Used</p>
-                                <p>{formatReconstructionModel(model)}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Updated</p>
-                                <p>{formatDateTime(recon.updatedAt || recon.createdAt)}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">ED Frame</p>
-                                <p className="font-mono">Frame {edFrame}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Export Format</p>
-                                <p className="font-mono uppercase">{recon.meshFormat || "GLB"}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Size</p>
-                                <p>{formatFileSize(recon.meshFileSize)}</p>
-                              </div>
-                              {(resolution || iterations) && (
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Resolution / Iterations</p>
-                                  <p className="font-mono">
-                                    {resolution ? `${resolution}^3` : "N/A"} / {iterations ?? "N/A"}
-                                  </p>
-                                </div>
-                              )}
-                              {processingTime && (
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Processing Time</p>
-                                  <p>{processingTime.toFixed(1)}s</p>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* An RV reconstruction exists for this model, so "View 4D" opens both
-                                chambers. Said here rather than as a second card, because it is the
-                                same scan — but it must be said, since the RV mesh is research-only
-                                and the user has not opened the viewer yet. */}
-                            {rvCompanion && (
-                              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
-                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs leading-relaxed text-muted-foreground">
-                                    <span className="font-medium text-foreground">Includes RV.</span>{" "}
-                                    Opening 4D shows the RV cavity alongside the LV, and either can be
-                                    hidden there. RV is for reference/research only — not reliable for
-                                    clinical diagnosis.
-                                  </p>
-                                  {isProjectOwner && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => {
-                                        setSelectedReconstructionForDeletion(rvCompanion);
-                                        setDeleteModelDialogOpen(true);
-                                      }}
-                                      className="h-auto p-0 mt-1.5 text-xs text-destructive hover:text-destructive hover:bg-transparent hover:underline"
-                                    >
-                                      <Trash2 className="h-3 w-3 mr-1" />
-                                      Delete RV only
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-                            )}
+                      <div key={recon.reconstructionId} className={`rounded-lg border text-sm ${isRvOnly ? "border-amber-500/40" : ""}`}>
+                        <div className="space-y-2 p-3">
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                            <p className="font-semibold">{title}</p>
+                            <p className="text-xs text-muted-foreground">Updated {formatDateTime(recon.updatedAt || recon.createdAt)}</p>
                           </div>
-
-                          <div className="flex flex-wrap gap-2 lg:justify-end">
+                          <div className="flex flex-wrap gap-1.5">
+                            <Badge variant="outline">{formatReconstructionModel(model)}</Badge>
+                            <Badge variant="outline">{isRvOnly ? "RV" : rvCompanion ? "LV + RV" : "LV"}</Badge>
+                          </div>
+                          {(rvCompanion || isRvOnly) && (
+                            <p className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                              RV is for research only, not for clinical diagnosis.
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2 pt-1">
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger asChild>
@@ -2018,21 +1961,87 @@ function ProjectPageInner() {
                               </Tooltip>
                             </TooltipProvider>
                             {isProjectOwner && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => {
-                                  setSelectedReconstructionForDeletion(recon);
-                                  setDeleteModelDialogOpen(true);
-                                }}
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                              >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Delete
-                              </Button>
+                              <DropdownMenu modal={false}>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="ml-auto h-8 w-8" aria-label={`More actions for ${title}`}>
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    onSelect={() => {
+                                      setSelectedReconstructionForDeletion(recon);
+                                      setDeleteModelDialogOpen(true);
+                                    }}
+                                  >
+                                    <Trash2 />
+                                    Delete
+                                  </DropdownMenuItem>
+                                  {rvCompanion && (
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onSelect={() => {
+                                        setSelectedReconstructionForDeletion(rvCompanion);
+                                        setDeleteModelDialogOpen(true);
+                                      }}
+                                    >
+                                      <Trash2 />
+                                      Delete RV only
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             )}
                           </div>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedReconDetails((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(recon.reconstructionId)) next.delete(recon.reconstructionId);
+                              else next.add(recon.reconstructionId);
+                              return next;
+                            })
+                          }
+                          className="flex w-full items-center gap-1 border-t px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/50"
+                          aria-expanded={detailsOpen}
+                        >
+                          <ChevronRight className={`h-3 w-3 transition-transform ${detailsOpen ? "rotate-90" : ""}`} />
+                          Details
+                        </button>
+                        {detailsOpen && (
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-2 border-t bg-muted/20 px-3 py-2 text-xs">
+                            <div>
+                              <p className="text-muted-foreground">ED Frame</p>
+                              <p>Frame {edFrame}</p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">Format</p>
+                              <p className="uppercase">{recon.meshFormat || "GLB"}</p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">Size</p>
+                              <p>{formatFileSize(recon.meshFileSize)}</p>
+                            </div>
+                            {(resolution || iterations) && (
+                              <div>
+                                <p className="text-muted-foreground">Resolution / Iterations</p>
+                                <p>
+                                  {resolution ? `${resolution}³` : "—"} / {iterations ?? "—"}
+                                </p>
+                              </div>
+                            )}
+                            {processingTime && (
+                              <div>
+                                <p className="text-muted-foreground">Processing Time</p>
+                                <p>{processingTime.toFixed(1)}s</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -2107,7 +2116,7 @@ function ProjectPageInner() {
                     </div>
 
                     {/* Job List - Compact */}
-                    <ScrollArea className="h-32">
+                    <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-48">
                       <TooltipProvider>
                       <div className="space-y-2">
                         {processJobs.map((job, index) => {

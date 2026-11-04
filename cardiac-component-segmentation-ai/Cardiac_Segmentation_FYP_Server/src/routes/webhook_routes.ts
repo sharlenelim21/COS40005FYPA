@@ -241,6 +241,12 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
       .status(404)
       .json({ message: `Job with GPU Job ID ${gpuJobId} not found` });
   }
+  // A job's result is written once. A repeated callback (e.g. a GPU retry) would otherwise create a new mask
+  // pair and prune the current ones, saved corrections included. 200 so the GPU stops sending it.
+  if (jobReadResult.job.status === JobStatus.COMPLETED) {
+    logger.info(`${serviceLocation}: Ignoring callback for job ${effectiveJobId}: it is already completed.`);
+    return res.status(200).json({ message: `Job ${effectiveJobId} is already completed; callback ignored.` });
+  }
   // const job = jobReadResult.job; // Get the full job object // Not directly used, currentJob is used later
 
   const { status, result: gpuResult, error: gpuErrorDetail, segmentation_model: callbackSegmentationModelRaw } = req.body;
