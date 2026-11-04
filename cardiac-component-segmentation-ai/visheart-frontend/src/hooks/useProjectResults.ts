@@ -485,8 +485,28 @@ function notifyMasksRefreshed(projectId: string, exclude: () => void) {
   }
 }
 
-export function invalidateProjectResults(projectId: string) {
+export async function invalidateProjectResults(projectId: string) {
   masksCache.delete(projectId);
+  // Re-fetch and repopulate the cache here, rather than only deleting it and
+  // relying on a subscribed `useProjectResults` instance to notice and
+  // refetch (notifyMasksRefreshed below). The usual caller of this function
+  // is the page-level full-cycle-compute poll, which fires AFTER the owning
+  // tab (e.g. Strain) may already have been switched away from and unmounted
+  // — at that instant there is no subscriber to react to the notification at
+  // all. The cache was then left empty with nothing left to repopulate it
+  // until something else happened to remount a consumer, which read as
+  // "compute finished, but the result stays stale until I hit refresh"
+  // (reported live, 2026-11) even though a hard refresh always showed the
+  // correct, already-persisted data. Fetching here guarantees the shared
+  // cache is correct before any future mount reads it, independent of
+  // whether anyone happened to be subscribed at this exact moment.
+  try {
+    const res = await segmentationApi.getSegmentationResults(projectId);
+    const editable = ((res.segmentations ?? []) as MaskDoc[]).filter((m) => !m.isMedSAMOutput);
+    masksCache.set(projectId, editable);
+  } catch {
+    // Leave the cache empty — the next mount's own fetch will retry.
+  }
   notifyMasksRefreshed(projectId, () => {});
 }
 

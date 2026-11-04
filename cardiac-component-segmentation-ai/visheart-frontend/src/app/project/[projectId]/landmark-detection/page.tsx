@@ -294,7 +294,7 @@ export default function LandmarkDetectionPage() {
     const poll = async () => {
       let jobs: any[] = [];
       try {
-        ({ jobs } = await segmentationApi.getUserJobs());
+        ({ jobs } = await segmentationApi.getUserJobs(projectId));
       } catch {
         return; // A dropped poll is not evidence of anything -- try again next tick.
       }

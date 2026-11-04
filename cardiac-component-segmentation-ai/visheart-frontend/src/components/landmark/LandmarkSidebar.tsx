@@ -1538,7 +1538,7 @@ function StrainTab({
     strainCompute?.onFullCycleJobsStarted(lvJobId, rvJobId);
     const pollTimer = setInterval(async () => {
       try {
-        const { jobs } = await segmentationApi.getUserJobs();
+        const { jobs } = await segmentationApi.getUserJobs(projectId);
         const byId = new Map<string, any>((jobs ?? []).map((j: any) => [j.jobId, j]));
         const lvJob: any = byId.get(lvJobId);
         const rvJob: any = byId.get(rvJobId);

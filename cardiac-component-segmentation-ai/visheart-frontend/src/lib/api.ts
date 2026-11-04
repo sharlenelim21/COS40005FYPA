@@ -386,10 +386,15 @@ export const segmentationApi = {
     }
   },
 
-  // Get user job status
-  getUserJobs: async () => {
+  // Get user job status. Pass projectId to scope the query server-side to one
+  // project (avoids the global "most recent 20 across every project" list
+  // truncating out this project's own jobs); omit it for the dashboard's
+  // cross-project recent-jobs view.
+  getUserJobs: async (projectId?: string) => {
     try {
-      const response = await api.get("/segmentation/user-check-jobs");
+      const response = await api.get("/segmentation/user-check-jobs", {
+        params: projectId ? { projectId } : undefined,
+      });
       return response.data;
     } catch (error) {
       throw error;

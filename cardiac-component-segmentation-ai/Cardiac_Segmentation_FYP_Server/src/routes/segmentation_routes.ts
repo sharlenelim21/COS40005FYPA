@@ -386,9 +386,20 @@ router.post("/start-manual-segmentation/:projectId",
 
 router.get("/user-check-jobs", isAuth, async (req: Request, res: Response) => {
     const userId = req.user?._id;
-    logger.info(`${serviceLocation}: Fetching all jobs for user ${req.user?.username}`);
+    // Optional: scope to one project. Without this every caller shared the same
+    // "20 most recent jobs across ALL of this user's projects" list, so a project
+    // page open after testing several other projects could have its own jobs
+    // (e.g. a just-finished strain computation) pushed out of the top 20 before
+    // the frontend's own per-project filter ever saw them -- the job had
+    // completed and was in Mongo, but the Processing Jobs panel never showed it
+    // (reported live, 2026-11). A project-scoped query is naturally bounded, so
+    // it does not need (and does not apply) that limit.
+    const { projectId } = req.query;
+    logger.info(`${serviceLocation}: Fetching jobs for user ${req.user?.username}${projectId ? ` (project ${projectId})` : ""}`);
     try {
-        const jobs = await jobModel.find({ userid: userId }).sort({ createdAt: -1 }).limit(20);
+        const jobs = projectId
+            ? await jobModel.find({ userid: userId, projectid: projectId as string }).sort({ createdAt: -1 })
+            : await jobModel.find({ userid: userId }).sort({ createdAt: -1 }).limit(20);
         const pendingJobs = await jobModel.find({ status: JobStatus.PENDING }).sort({ createdAt: 1 });
         const activeJobCount = await jobModel.countDocuments({
             userid: userId,

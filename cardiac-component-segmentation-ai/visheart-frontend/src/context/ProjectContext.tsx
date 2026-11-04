@@ -1059,7 +1059,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
     // Fetch jobs for the current user
     segmentationApi
-      .getUserJobs()
+      .getUserJobs(projectId)
       .then((response) => {
         // Check if request was aborted
         if (abortController.signal.aborted) {
@@ -1528,7 +1528,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     jobsFetchedRef.current = false;
 
     try {
-      const response = await segmentationApi.getUserJobs();
+      const response = await segmentationApi.getUserJobs(projectId);
 
       if (!response.success) {
         setJobsError(response.message);

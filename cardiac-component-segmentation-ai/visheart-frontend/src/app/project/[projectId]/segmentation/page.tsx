@@ -586,7 +586,7 @@ function SegmentationResultsPageInner() {
   const refreshServerJobState = useCallback(async () => {
     if (!projectId) return;
     try {
-      const response = await segmentationApi.getUserJobs();
+      const response = await segmentationApi.getUserJobs(projectId);
       const jobs: Array<Record<string, unknown>> = Array.isArray(response?.jobs) ? response.jobs : [];
       // Mirrors STALE_JOB_MINUTES in the server's inference.ts. MedSAM is GPU-only (the CPU
       // compose profile does not load it), UNet also runs on CPU where the same work takes much
