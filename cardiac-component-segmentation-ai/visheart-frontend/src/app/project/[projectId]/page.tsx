@@ -1943,14 +1943,6 @@ function ProjectPageInner() {
                                 <p className="text-xs text-muted-foreground">ED Frame</p>
                                 <p className="font-mono">Frame {edFrame}</p>
                               </div>
-                              {Array.isArray(recon.builtFrames) && recon.builtFrames.length > 0 && (
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Built frames</p>
-                                  <p className="font-mono" title={recon.builtFrames.join(", ")}>
-                                    {recon.builtFrames.length} chosen
-                                  </p>
-                                </div>
-                              )}
                               <div>
                                 <p className="text-xs text-muted-foreground">Export Format</p>
                                 <p className="font-mono uppercase">{recon.meshFormat || "GLB"}</p>

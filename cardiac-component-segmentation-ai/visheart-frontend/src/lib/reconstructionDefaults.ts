@@ -40,8 +40,6 @@ export function buildReconstructionRequest(config: ReconstructionConfig, project
     export_format: config.exportFormat,
     segmentationModel: config.segmentationModel,
     chamber,
-    // Only when the user chose some frames: the server builds every frame otherwise, as before.
-    ...(config.frames?.length ? { frames: config.frames } : {}),
     parameters: {
       num_iterations: config.numIterations,
       resolution: config.resolution,

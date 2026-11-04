@@ -436,8 +436,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
       const reconstructionId = targetRecon.reconstructionId as string;
 
       try {
-        // `frame` is the scan's frame (0-based); a frame that was not built shows the nearest built one before it.
-        const cachedUrl = await reconstructionCache.getModelURLForFrame(projectId, reconstructionId, frame);
+        const cachedUrl = await reconstructionCache.getModelURL(projectId, reconstructionId, frame);
         if (cachedUrl) return cachedUrl;
 
         // Cache miss for this reconstruction; lazily fetch/extract this model-specific TAR and retry once.
@@ -450,7 +449,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
           getPresignedUrl,
           targetRecon.segmentationModel || normalizedModel || undefined,
         );
-        return await reconstructionCache.getModelURLForFrame(projectId, reconstructionId, frame);
+        return await reconstructionCache.getModelURL(projectId, reconstructionId, frame);
       } catch (error) {
         console.error("[ProjectContext] Failed to get reconstruction GLB:", error);
         return null;

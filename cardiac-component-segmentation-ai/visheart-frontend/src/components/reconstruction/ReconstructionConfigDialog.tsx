@@ -26,8 +26,6 @@ import {
 } from "@/components/ui/collapsible";
 import { ChevronDown, Settings, Sparkles, AlertTriangle, Eye, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { FrameMode, frameProblem, framesFor, requestFrames, unevenlySpaced } from "@/lib/reconstruction-frames";
-import { FrameStripPicker } from "@/components/reconstruction/FrameStripPicker";
 
 // Latent-fit iterations, per processing unit. The fit is measurably under-converged at the old
 // default of 30: LV myocardial volume swings 23.7% between ED and ES against a 6.8% floor set by
@@ -57,8 +55,6 @@ export interface ReconstructionConfig {
   segmentationModel: ReconstructionSegmentationModel;
   // Which chamber to reconstruct. "lv" is the clinical product; "rv" is research/reference only.
   chamber: ReconstructionChamber;
-  // 1-based frames to build; null or absent builds every frame (lib/reconstruction-frames.ts).
-  frames?: number[] | null;
 }
 
 interface ReconstructionConfigDialogProps {
@@ -146,25 +142,7 @@ export function ReconstructionConfigDialog({
   // LV unless the caller explicitly asked otherwise. RV stays a deliberate choice.
   const [chamber, setChamber] = useState<ReconstructionChamber>(defaultChamber ?? "lv");
   const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
-  // The build's reference frame: frame 1, end-diastole by the cine convention (the scan is triggered on the ECG
-  // R wave). Strain picks its own ED and ES on the landmark page, so the dialog no longer asks (Jy, 2026-11-03).
-  const edFrame = 1;
-  const [frameMode, setFrameMode] = useState<FrameMode>("all");
-  const [pickedFrames, setPickedFrames] = useState<number[]>([]);
-  const chosenFrames = useMemo(() => framesFor(frameMode, totalFrames, edFrame, pickedFrames),
-                               [frameMode, totalFrames, edFrame, pickedFrames]);
-  const framesInvalid = frameProblem(chosenFrames, totalFrames);
-  const paintFrames = (frames: number[], on: boolean) => {
-    setPickedFrames(previous => {
-      const next = new Set(framesFor("custom", totalFrames, edFrame, previous));
-      for (const frame of frames) {
-        if (frame === edFrame) continue;  // the ED frame is always built
-        if (on) next.add(frame);
-        else next.delete(frame);
-      }
-      return [...next];
-    });
-  };
+  const [edFrame, setEdFrame] = useState(1);
   const [numIterations, setNumIterations] = useState(gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU);
   // 32 was the original default and is too coarse: at N=32 the marching-cubes facets are ~17x
   // larger by area than at N=128, which flat-shades into what looks like holes in a closed
@@ -262,7 +240,7 @@ export function ReconstructionConfigDialog({
   const selectedIsBuilding = buildingSet.has(selectedModel);
   const startDisabled =
     isLoading || noModelsAvailable || noCreatableModels || !availableSet.has(selectedModel)
-    || blockedSet.has(selectedModel) || selectedIsBuilding || !!framesInvalid;
+    || blockedSet.has(selectedModel) || selectedIsBuilding;
 
   const handleStart = () => {
     if (startDisabled) return;
@@ -273,7 +251,6 @@ export function ReconstructionConfigDialog({
       resolution,
       segmentationModel: selectedModel,
       chamber,
-      frames: requestFrames(chosenFrames, totalFrames),
     });
   };
 
@@ -543,56 +520,29 @@ export function ReconstructionConfigDialog({
             </p>
           </div>
 
-          {/* Frames: the end-diastole frame and which frames are built */}
-          {totalFrames > 1 ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="frameMode">Frames</Label>
-                <span className="text-sm font-mono text-muted-foreground">
-                  {chosenFrames.length} of {totalFrames} built
-                </span>
-              </div>
-              <Select value={frameMode} onValueChange={(value: string) => {
-                if (value === "custom") setPickedFrames(chosenFrames);
-                setFrameMode(value as FrameMode);
-              }}>
-                <SelectTrigger id="frameMode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Every frame (best motion)</SelectItem>
-                  <SelectItem value="every2">Every 2nd frame (about half the time and storage)</SelectItem>
-                  <SelectItem value="every3">Every 3rd frame (about a third)</SelectItem>
-                  <SelectItem value="custom">Choose frames</SelectItem>
-                </SelectContent>
-              </Select>
-              <FrameStripPicker
-                totalFrames={totalFrames}
-                edFrame={edFrame}
-                built={chosenFrames}
-                onPaint={frameMode === "custom" ? paintFrames : undefined}
-              />
-              {frameMode === "custom" && (
-                <p className="text-xs text-muted-foreground">
-                  Click a dot to build or skip it, or drag across dots. Frame 1 is always built.
-                </p>
-              )}
-              {framesInvalid ? (
-                <p className="text-xs text-red-600 dark:text-red-400">{framesInvalid}</p>
-              ) : frameMode === "custom" && unevenlySpaced(chosenFrames) && (
-                <p className="text-xs text-muted-foreground">
-                  The frames are unevenly spaced, so the motion between them is less even.
-                </p>
-              )}
+          {/* ED Frame Selection */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="edFrame">End-Diastole (ED) Frame</Label>
+              <span className="text-sm font-mono text-muted-foreground">
+                Frame {edFrame}
+              </span>
             </div>
-          ) : (
-            <div className="space-y-1">
-              <Label>Frames</Label>
-              <p className="text-xs text-muted-foreground">
-                This scan has a single frame, so it is the end-diastole frame and the only one built.
-              </p>
-            </div>
-          )}
+            <Input
+              id="edFrame"
+              type="number"
+              min={1}
+              max={totalFrames}
+              step={1}
+              value={edFrame}
+              onChange={(e) => setEdFrame(Math.max(1, Math.min(totalFrames, parseInt(e.target.value) || 1)))}
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              Select the cardiac end-diastole frame for 4D reconstruction (1-{totalFrames}).
+              This frame represents the relaxed state of the cardiac cycle.
+            </p>
+          </div>
 
           {/* Advanced Settings */}
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>

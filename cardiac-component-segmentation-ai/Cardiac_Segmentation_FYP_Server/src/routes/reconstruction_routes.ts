@@ -101,8 +101,6 @@ router.post("/start-reconstruction/:projectId",
             // chamber: which cardiac chamber to reconstruct. "lv" | "rv" | undefined.
             // Omitted means LV, so existing frontends are unaffected.
             chamber,
-            // frames: 1-based frames to build (reconstruction_frames.ts). Omitted builds every frame.
-            frames,
         } = req.body;
 
         logger.info(
@@ -119,8 +117,7 @@ router.post("/start-reconstruction/:projectId",
                 ed_frame,
                 export_format,
                 segmentationModel,
-                chamber,
-                frames
+                chamber
             );
             if (result.success) {
                 res.status(200).json({ message: result.message, uuid: result.uuid });
@@ -263,8 +260,6 @@ router.get("/reconstruction-results/:projectId", isAuth, async (req: Request, re
                     // value and are LV -- that is what the whole pipeline produced until now.
                     // The viewer keys its research-only RV warning off this, so it must be sent.
                     chamber: recon.chamber === "rv" ? "rv" : "lv",
-                    // 1-based frames that were built when the user chose some; null: every frame.
-                    builtFrames: recon.builtFrames?.length ? recon.builtFrames : null,
                     metadata: {
                         edFrameIndex: recon.ed_frame,
                         reconstructionTime: recon.reconstructedMesh?.reconstructionTime,
