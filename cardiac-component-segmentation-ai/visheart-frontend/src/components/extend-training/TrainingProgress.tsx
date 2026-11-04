@@ -16,7 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { elapsed, isActiveJob, retrainingApi, StepState, TrainingJob } from "@/lib/retraining-api";
+import { elapsed, isActiveJob, retrainingApi, StepState, TrainingJob, trainingJobPercent } from "@/lib/retraining-api";
 import { trainingShare } from "@/components/extend-training/logic";
 
 function StepIcon({ state }: { state: StepState }) {
