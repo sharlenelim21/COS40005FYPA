@@ -21,10 +21,13 @@ import logger from "../services/logger";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
 import { resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
 import { normalizeLandmarkFrames, normalizeLandmarkJobResult } from "../utils/landmark_order";
+import { applyTemplateGuard } from "../middleware/template_guard";
+import { findViewableProject } from "../services/template_access";
 
 const memUpload = multer({ storage: multer.memoryStorage() });
 
 const router = express.Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 const serviceLocation = "LandmarkRoutes";
 
 const parseCompletedLandmarkJobResult = (job: any) => {
@@ -138,9 +141,10 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
-      // Owner or Admin may view landmark results.
-      const access = await userCanAccessProject(projectId, req.user!);
-      if (!access.allowed || !access.project) {
+      // Owner or Admin may view landmark results; anyone may view a template's (read-only).
+      // Jobs are looked up by project only — the viewer may not be who triggered them.
+      const viewable = await findViewableProject(projectId, req.user);
+      if (!viewable) {
         res.status(404).json({ success: false, message: "Project not found.", result: null });
         return;
       }
@@ -181,6 +185,9 @@ router.get(
         return;
       }
 
+      // Landmark jobs only: without the model filter, 10 newer completed jobs
+      // of any other kind pushed the saved landmark result out of this window
+      // and the page re-ran detection.
       const completedJobs = await jobModel
         .find({
           projectid: projectId,
@@ -231,11 +238,10 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = String(req.params.projectId);
-      // This route previously had no access check at all, and scoped jobs by the
-      // requesting user's own id (see /results above for why that's wrong whenever the
-      // viewer didn't personally trigger the job).
-      const access = await userCanAccessProject(projectId, req.user!);
-      if (!access.allowed || !access.project) {
+      // Owner, Admin, or anyone for a template. Jobs are scoped by project, not by
+      // the requesting user (see /results above for why).
+      const viewable = await findViewableProject(projectId, req.user);
+      if (!viewable) {
         res.status(404).json({ success: false, message: "Project not found.", jobs: [] });
         return;
       }

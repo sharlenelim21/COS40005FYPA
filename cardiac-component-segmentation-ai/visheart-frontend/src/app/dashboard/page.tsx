@@ -51,6 +51,7 @@ import { FileUploadDialog } from "@/components/upload/FileUploadDialog";
 import { SegmentationIndicator } from "@/components/dashboard/SegmentationIndicator";
 import { ReconstructionIndicator } from "@/components/dashboard/ReconstructionIndicator";
 import { EditableProjectCard } from "@/components/dashboard/EditableProjectCard";
+import { TemplatesTab } from "@/components/dashboard/TemplatesTab";
 
 // Helper function to format file size
 const formatFileSize = (bytes: number) => {
@@ -474,7 +475,7 @@ function DashboardPage() {
 
       {/* Main Dashboard Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="projects" className="relative">
             {user?.role === "user" || user?.role === "admin"
@@ -482,6 +483,7 @@ function DashboardPage() {
               : "Projects"}
           </TabsTrigger>
           <TabsTrigger value="jobs">Jobs</TabsTrigger>
+          <TabsTrigger value="templates">Templates</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -1185,6 +1187,11 @@ function DashboardPage() {
               </Card>
             )}
           </div>
+        </TabsContent>
+
+        {/* Templates Tab — read-only reference hearts */}
+        <TabsContent value="templates" className="space-y-4">
+          <TemplatesTab />
         </TabsContent>
       </Tabs>
 

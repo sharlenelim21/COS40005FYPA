@@ -4,6 +4,8 @@ import logger from "../services/logger";
 import LogError from "../utils/error_logger";
 import { isAuth } from "../services/passportjs";
 import { UserRole, userCanAccessProject } from "../services/database";
+import { applyTemplateGuard } from "../middleware/template_guard";
+import { findViewableProject } from "../services/template_access";
 import {
     advancePipeline,
     buildPipelineSteps,
@@ -14,6 +16,7 @@ import {
 } from "../services/pipeline_orchestrator";
 
 const router = Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 const serviceLocation = "PipelineRoutes";
 
 const asModel = (v: unknown): PipelineModelName | null =>
@@ -112,8 +115,7 @@ router.get("/:projectId", isAuth, async (req: Request, res: Response) => {
         if (!projectId) {
             return res.status(404).json({ message: "Project not found." });
         }
-        const access = await userCanAccessProject(projectId, req.user!);
-        if (!access.allowed || !access.project) {
+        if (!(await findViewableProject(projectId, req.user))) {
             return res.status(404).json({ message: "Project not found." });
         }
         const doc = await pipelineModel.findOne({ projectId }).sort({ createdAt: -1 }).lean();

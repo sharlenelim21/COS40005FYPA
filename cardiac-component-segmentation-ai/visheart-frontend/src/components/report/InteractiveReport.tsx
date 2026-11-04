@@ -14,7 +14,7 @@
  * measurement that wasn't computed.
  */
 
-import { FIXED_SCALE_NOTE, STRAIN_COLOR_SCALES, lvScaleKey, strainScaleFraction } from "@/lib/strainColorScale";
+import { FIXED_SCALE_NOTE, STRAIN_COLOR_SCALES, lvScaleKey, strainRampCss, strainRampHex, strainScaleFraction } from "@/lib/strainColorScale";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
@@ -84,33 +84,19 @@ const LEVEL_WORD: Record<string, string> = {
 
 type StrainType = "GRS" | "GCS";
 
-// Same red→green gradient the landmark-detection bullseye uses, so the two
-// plots read with one colour language. Red = weak contraction, green = strong.
-const STRAIN_GRADIENT = ["#d73027", "#fc8d59", "#fee08b", "#d9ef8b", "#91cf60", "#1a9850"] as const;
-
-function lerpHex(a: string, b: string, t: number): string {
-  const p = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-  const [ar, ag, ab] = p(a);
-  const [br, bg, bb] = p(b);
-  const to = (x: number) => Math.round(x).toString(16).padStart(2, "0");
-  return `#${to(ar + (br - ar) * t)}${to(ag + (bg - ag) * t)}${to(ab + (bb - ab) * t)}`;
-}
-
 /**
- * Colour by contraction strength on a continuous scale (matching the landmark
- * bullseye). GRS is positive (thickening) and GCS negative (shortening), so
- * both are normalised to "fraction of expected peak contraction": 0 → red,
- * 1 → green.
+ * Colour by contraction strength on a continuous scale — the same
+ * yellow → green → blue ramp the landmark-detection bullseye uses, so the
+ * two plots read with one colour language. GRS is positive (thickening) and
+ * GCS negative (shortening), so both are normalised to "fraction of expected
+ * peak contraction": 0 → yellow, 1 → blue.
  */
 function strainColor(v: number | null, type: StrainType): string {
   if (v === null || Number.isNaN(v)) return "#e5e7eb";
   // Position on the shared FIXED strain scale (lib/strainColorScale.ts) — the
   // same ranges every other strain chart uses, so a value's place on the
-  // red→green ramp is identical on every page and for every patient.
-  const t = strainScaleFraction(v, lvScaleKey(type));
-  const scaled = t * (STRAIN_GRADIENT.length - 1);
-  const i = Math.min(Math.floor(scaled), STRAIN_GRADIENT.length - 2);
-  return lerpHex(STRAIN_GRADIENT[i], STRAIN_GRADIENT[i + 1], scaled - i);
+  // ramp is identical on every page and for every patient.
+  return strainRampHex(strainScaleFraction(v, lvScaleKey(type)));
 }
 
 /**
@@ -1926,7 +1912,7 @@ export function InteractiveReport({
                 <div className="mx-auto mt-2 max-w-[240px]">
                   <div
                     className="h-2 w-full rounded-full border border-border"
-                    style={{ background: `linear-gradient(to right, ${STRAIN_GRADIENT.join(", ")})` }}
+                    style={{ background: strainRampCss() }}
                   />
                   <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground">
                     <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].worst}%</span>
@@ -2091,7 +2077,7 @@ export function InteractiveReport({
                 to render at a comparable size instead of looking small in the
                 unused margin. Fill/selection already animate the same way as
                 LV's own Bullseye (see rvRing's transition: "fill 200ms ease"
-                in CombinedVentricularChart.tsx) and use the same rdYlGn
+                in CombinedVentricularChart.tsx) and use the same strainRamp
                 color scale, so only size needed correcting here. */}
             <div onClick={(e) => e.stopPropagation()}>
               <div className="mb-1 text-center">

@@ -1,7 +1,7 @@
 // File: src/services/s3_handler.ts
 // Description: This module handles AWS S3 interactions, including uploading files, deleting objects, and extracting S3 keys from URLs.
 
-import { S3Client, PutObjectCommand, PutObjectCommandInput, DeleteObjectCommand, GetObjectCommand, GetObjectCommandOutput, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, PutObjectCommandInput, DeleteObjectCommand, GetObjectCommand, GetObjectCommandOutput, HeadObjectCommand, HeadBucketCommand, CreateBucketCommand, PutBucketPolicyCommand } from "@aws-sdk/client-s3";
 import { projectModel } from "../services/database";
 import logger from "./logger"; // Import your logger
 import fs from "fs";
@@ -11,6 +11,8 @@ const serviceLocation = "S3Handler";
 
 // Setup AWS S3 v3 client if STORAGE_MODE is s3
 let s3Client: S3Client | null = null;
+// ensureLocalBucket's shared run (declared up here: the connection check below calls it while this module loads).
+let bucketReady: Promise<void> | null = null;
 if (process.env.STORAGE_MODE === "s3") {
   if (!process.env.AWS_REGION) {
     logger.error(`${serviceLocation}: AWS_REGION environment variable is not set. S3 client cannot be initialized.`);
@@ -37,6 +39,7 @@ if (process.env.STORAGE_MODE === "s3") {
     // Check if S3 client is configured correctly - using an IIFE to allow await
     (async () => {
       try {
+        await ensureLocalBucket();
         const testKey = `_test/${Date.now()}.txt`;
         await s3Client!.send(new PutObjectCommand({
           Bucket: process.env.AWS_BUCKET_NAME!,
@@ -60,6 +63,43 @@ if (process.env.STORAGE_MODE === "s3") {
       logger.error(`${serviceLocation}: Unhandled error in S3 client verification:`, err);
     });
   }
+}
+
+/**
+ * Local MinIO only (S3_ENDPOINT set): create the bucket when it doesn't exist yet and give
+ * it anonymous read ("download") access — what docker-compose's minio-setup service did with
+ * `mc mb` + `mc anonymous set download`, until the minio/mc image stopped being published.
+ * Never touches a real AWS bucket. Every caller awaits the same run; a failed run is retried
+ * by the next caller.
+ */
+export function ensureLocalBucket(): Promise<void> {
+  const Bucket = process.env.AWS_BUCKET_NAME;
+  if (!s3Client || !Bucket || !process.env.S3_ENDPOINT) return Promise.resolve();
+  const client = s3Client;
+  bucketReady ??= (async () => {
+    try {
+      await client.send(new HeadBucketCommand({ Bucket }));
+      return; // already there
+    } catch (error: any) {
+      if (error?.$metadata?.httpStatusCode !== 404) throw error;
+    }
+    await client.send(new CreateBucketCommand({ Bucket }));
+    await client.send(new PutBucketPolicyCommand({
+      Bucket,
+      Policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          { Effect: "Allow", Principal: { AWS: ["*"] }, Action: ["s3:GetBucketLocation", "s3:ListBucket"], Resource: [`arn:aws:s3:::${Bucket}`] },
+          { Effect: "Allow", Principal: { AWS: ["*"] }, Action: ["s3:GetObject"], Resource: [`arn:aws:s3:::${Bucket}/*`] },
+        ],
+      }),
+    }));
+    logger.info(`${serviceLocation}: created bucket "${Bucket}" (anonymous read) on ${process.env.S3_ENDPOINT}`);
+  })().catch((error) => {
+    bucketReady = null;
+    throw error;
+  });
+  return bucketReady;
 }
 
 // Add a function to delete an S3 object for cleanup

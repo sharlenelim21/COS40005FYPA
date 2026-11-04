@@ -1,6 +1,6 @@
 "use client";
 
-import { lvScaleKey, strainScaleFraction, strainScaleMinMax } from "@/lib/strainColorScale";
+import { lvScaleKey, strainRampHex, strainRampStops, strainScaleFraction, strainScaleMinMax } from "@/lib/strainColorScale";
 import { SEGMENT_LABELS } from "@/lib/ahaSegments";
 import React, { useRef, useEffect, useCallback } from "react";
 
@@ -123,19 +123,16 @@ export function getDummyStrainData(
 
 // ── color helpers ─────────────────────────────────────────────────────────────
 
-// Same ramp as the 3D heart model: red(0) → yellow(0.5) → green(1)
-export function rdYlGn(t: number): string {
-  const r = t < 0.5 ? 1 : 1 - (t - 0.5) * 2;
-  const g = t < 0.5 ? t * 2 : 1;
-  const toHex = (x: number) =>
-    Math.round(Math.max(0, Math.min(255, x * 255))).toString(16).padStart(2, "0");
-  return `#${toHex(r)}${toHex(g)}00`;
+// Same ramp as the 3D heart model (lib/strainColorScale.ts):
+// yellow(0) → green(0.5) → blue(1)
+export function strainRamp(t: number): string {
+  return strainRampHex(t);
 }
 
 /** Text/swatch colour for a strain value on the shared FIXED scale
  *  (lib/strainColorScale.ts) — same colour as the bullseye for that value. */
 export function getStrainColor(strain: number, strainType: StrainType): string {
-  return rdYlGn(strainScaleFraction(strain, lvScaleKey(strainType)));
+  return strainRamp(strainScaleFraction(strain, lvScaleKey(strainType)));
 }
 
 // ── geometry helpers ──────────────────────────────────────────────────────────
@@ -269,12 +266,12 @@ export function StrainBullseyeChart({
 
   const val = (i: number) => data[i]?.strain ?? 0;
   const lbl = (i: number) => data[i]?.label ?? `Segment ${i + 1}`;
-  // Use rdYlGn normalised against the shared range — same function as 3D heart
+  // Use strainRamp normalised against the shared range — same function as 3D heart
   const col = (i: number) => {
     const v = val(i);
     if (v === 0) return "#444444"; // no measurement at this frame -- same grey as AhaBullseye / the 3D model
     const t = colMin === colMax ? 0.5 : Math.max(0, Math.min(1, (v - colMin) / (colMax - colMin)));
-    return rdYlGn(reverse ? 1 - t : t);
+    return strainRamp(reverse ? 1 - t : t);
   };
   const isSel = (seg1based: number) => selectedSegment === seg1based;
 
@@ -385,23 +382,7 @@ export function StrainBullseyeChart({
       {/* ── Colour scale bar ── */}
       <defs>
         <linearGradient id="strainBar" x1="0" x2="1" y1="0" y2="0">
-          {reverse ? (
-            <>
-              <stop offset="0%"   stopColor="#00ff00" />
-              <stop offset="25%"  stopColor="#80ff00" />
-              <stop offset="50%"  stopColor="#ffff00" />
-              <stop offset="75%"  stopColor="#ff8000" />
-              <stop offset="100%" stopColor="#ff0000" />
-            </>
-          ) : (
-            <>
-              <stop offset="0%"   stopColor="#ff0000" />
-              <stop offset="25%"  stopColor="#ff8000" />
-              <stop offset="50%"  stopColor="#ffff00" />
-              <stop offset="75%"  stopColor="#80ff00" />
-              <stop offset="100%" stopColor="#00ff00" />
-            </>
-          )}
+          {strainRampStops(reverse).map((s) => <stop key={s.offset} offset={s.offset} stopColor={s.color} />)}
         </linearGradient>
       </defs>
       <rect x="30" y="305" width="240" height="6" rx="3" fill="url(#strainBar)" opacity="0.9" />

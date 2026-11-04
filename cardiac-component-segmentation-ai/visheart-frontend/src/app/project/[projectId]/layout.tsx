@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ProjectProvider } from "@/context/ProjectContext";
+import { TemplateRouteGuard } from "@/components/project/TemplateRouteGuard";
 
 export default function ProjectLayout({ children }: { children: React.ReactNode }) {
   const { projectId } = useParams<{ projectId: string }>();
@@ -12,6 +13,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
       {projectId && (
         <ProjectProvider projectId={projectId}>
           <div className="min-h-screen w-full bg-background">
+            <TemplateRouteGuard />
             <div className="w-full">{children}</div>
           </div>
         </ProjectProvider>

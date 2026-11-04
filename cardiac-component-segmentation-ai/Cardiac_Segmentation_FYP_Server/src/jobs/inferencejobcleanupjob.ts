@@ -1,5 +1,6 @@
 import cron from 'node-cron';
-import { jobModel, projectModel, userModel, JobStatus } from '../services/database';
+import { jobModel, projectModel, userModel } from '../services/database';
+import { JobStatus } from '../types/database_types';
 import logger from '../services/logger';
 import cronstrue from 'cronstrue';
 
@@ -77,7 +78,19 @@ async function cleanupInferenceJobs(): Promise<void> {
         
         const thresholdDate = new Date(Date.now() - JOB_AGE_THRESHOLD_MS);
         logger.info(`${serviceLocation}: Deleting jobs updated before: ${thresholdDate.toISOString()}`);
-        
+
+        // Template projects ("template hearts") are permanent, read-only showcases:
+        // their landmark page reads the landmark model's result from the job
+        // document, so deleting their jobs would leave every template blank.
+        const templateProjectIds = (await projectModel.find({ isTemplate: true }).select('_id').lean())
+            .map((p) => p._id.toString());
+        if (templateProjectIds.length > 0) {
+            logger.info(`${serviceLocation}: Keeping the jobs of ${templateProjectIds.length} template project(s)`);
+        }
+
+        // Each project's newest completed landmark job (per segmentation model) is
+        // kept too: the landmark page reads the detection result from it, so
+        // deleting it made the page re-run the whole detection after 3 days.
         const keepLandmarkResults = await jobModel.aggregate<{ id: unknown }>([
             { $match: { model_used: /landmark/i, status: JobStatus.COMPLETED, result: { $exists: true, $ne: null } } },
             { $sort: { createdAt: -1 } },
@@ -87,6 +100,7 @@ async function cleanupInferenceJobs(): Promise<void> {
 
         const oldJobsResult = await jobModel.deleteMany({
             updatedAt: { $lt: thresholdDate },
+            projectid: { $nin: templateProjectIds },
             _id: { $nin: keepLandmarkResults.map((k) => k.id) },
         });
         

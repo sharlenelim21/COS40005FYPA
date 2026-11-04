@@ -51,7 +51,7 @@ export const REFERENCES = {
   bernard2018: {
     citation:
       "Bernard O, Lalande A, Zotti C, et al. Deep Learning Techniques for Automatic MRI Cardiac Multi-Structures Segmentation and Diagnosis: Is the Problem Solved? IEEE Trans Med Imaging. 2018;37(11):2514–2525.",
-    doi: "10.1109/TMI.2018.2837502",
+    url: "https://ieeexplore.ieee.org/document/8360453",
   },
   bazhutina2023: {
     citation:
@@ -175,13 +175,20 @@ export interface PatternTableBlock {
   refs: RefId[];
 }
 
+/** The template hearts, loaded live from the app (components/doc/medical/ReferenceHearts.tsx). */
+export interface ReferenceHeartsBlock {
+  kind: "referenceHearts";
+  note?: Claim;
+}
+
 export type ContentBlock =
   | CalloutBlock
   | RangeTableBlock
   | FigureBlock
   | VideoBlock
   | ConditionsBlock
-  | PatternTableBlock;
+  | PatternTableBlock
+  | ReferenceHeartsBlock;
 
 export interface GuideSection {
   id: string;
@@ -771,7 +778,7 @@ export const MEDICAL_GUIDE: MedicalGuide = {
                 },
               ],
               attribution:
-                "O. Bernard et al., “Deep Learning Techniques for Automatic MRI Cardiac Multi-structures Segmentation and Diagnosis: Is the Problem Solved?”, IEEE Transactions on Medical Imaging, vol. 37, no. 11, pp. 2514–2525, 2018. https://doi.org/10.1109/TMI.2018.2837502",
+                "O. Bernard et al., “Deep Learning Techniques for Automatic MRI Cardiac Multi-structures Segmentation and Diagnosis: Is the Problem Solved?”, IEEE Transactions on Medical Imaging, vol. 37, no. 11, pp. 2514–2525, 2018. https://ieeexplore.ieee.org/document/8360453",
               refs: ["bernard2018"],
             },
             {
@@ -806,6 +813,25 @@ export const MEDICAL_GUIDE: MedicalGuide = {
             },
           ],
         },
+        {
+          id: "reference-hearts",
+          title: "Reference hearts",
+          summary: [
+            {
+              text: "Six real hearts from a public cardiac MRI dataset show what these groups look like in numbers: one woman and one man each for normal, HCM and DCM. Their end-diastole and end-systole outlines are the dataset experts' own, and each heart meets its group's criteria from the table above. Select a heart to check it against each criterion, or open it in VisHeart to see its scan, 3D model and strain.",
+              refs: ["bernard2018"],
+            },
+          ],
+          blocks: [
+            {
+              kind: "referenceHearts",
+              note: {
+                text: "Volumes are indexed to each person's body surface area. Wall thickness is the thickest point of the left ventricular wall at end-diastole. The coloured rings show radial strain (GRS) for each AHA segment on VisHeart's fixed 0–80% scale: yellow means the wall barely thickens, blue means it thickens strongly. One fixed scale lets the hearts be compared; each heart's own page colours it by its own lowest and highest segment instead, so the colours there differ.",
+                refs: [],
+              },
+            },
+          ],
+        },
       ],
     },
   ],
@@ -831,6 +857,8 @@ function blockRefs(block: ContentBlock): RefId[] {
         ...block.conditions.flatMap((condition) => [...condition.summary.refs, ...claimRefs(condition.imagingFeatures)]),
         ...(block.note?.refs ?? []),
       ];
+    case "referenceHearts":
+      return block.note?.refs ?? [];
   }
 }
 

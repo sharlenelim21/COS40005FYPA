@@ -192,6 +192,11 @@ export interface LandmarkSidebarProps {
    *  drives the sidebar's own Full-cycle results display too now (see
    *  StrainTab's chamberFocus prop). Only meaningful on the Strain tab. */
   chamberFocus?: "combined" | "LV" | "RV";
+  /** Template heart: show results only — no re-run, upload, landmark editing
+   *  or strain computing (the server rejects those for templates anyway). */
+  readOnly?: boolean;
+  /** Template heart: how its masks / landmarks were made (templateInfo.landmarkNote). */
+  readOnlyNote?: string;
 }
 
 export function LandmarkSidebar({
@@ -243,6 +248,8 @@ export function LandmarkSidebar({
   onStrainTypeChange,
   strainCompute,
   chamberFocus = "LV",
+  readOnly = false,
+  readOnlyNote,
 }: LandmarkSidebarProps) {
   // Controlled by the page when provided (see activeTab prop) so a remount
   // can't desync the sidebar tab from the page's workspace; otherwise falls
@@ -337,7 +344,7 @@ export function LandmarkSidebar({
           (page.tsx) -- this just keeps the one thing that had no equivalent
           there: warning when a saved result predates per-frame detection and
           only covers some of the study's frames. */}
-      {hasPredictions && activeTab === "landmarks" && strainFrameCount > state.frameIds.length && (
+      {!readOnly && hasPredictions && activeTab === "landmarks" && strainFrameCount > state.frameIds.length && (
         <div className="px-4 py-2 border-b border-[var(--sidebar-border)] flex-shrink-0">
           <p className="text-[10px] leading-snug text-muted-foreground">
             This result only has landmarks for {state.frameIds.length} of {strainFrameCount} frames.{" "}
@@ -433,6 +440,8 @@ export function LandmarkSidebar({
             onHighlightLandmark={onHighlightLandmark}
             onReset={onReset}
             summaryStats={summaryStats}
+            readOnly={readOnly}
+            readOnlyNote={readOnlyNote}
           />
         )}
         {activeTab === "structure" && (
@@ -460,6 +469,7 @@ export function LandmarkSidebar({
               onModelChange={onModelChange}
               strainCompute={strainCompute}
               chamberFocus={chamberFocus}
+              readOnly={readOnly}
             />
           </div>
         )}
@@ -696,6 +706,8 @@ function LandmarksTab({
   onReset,
   summaryStats,
   activeModel,
+  readOnly = false,
+  readOnlyNote,
 }: {
   hasUnsavedLandmarkEdits?: boolean;
   isSavingLandmarks?: boolean;
@@ -735,6 +747,10 @@ function LandmarksTab({
   summaryStats?: React.ReactNode;
   /** Which segmentation model's mask is fed into the 2ch landmark model, when available. */
   activeModel?: "unet" | "medsam";
+  /** Template heart: hide deleting/placing landmarks and the replacement-file upload. */
+  readOnly?: boolean;
+  /** Template heart: how its masks / landmarks were made. */
+  readOnlyNote?: string;
 }) {
   const segModelLabel = activeModel === "medsam" ? "MedSAM" : "UNet";
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -744,9 +760,10 @@ function LandmarksTab({
       <div className="flex flex-col items-center justify-center text-center text-muted-foreground text-sm gap-3 py-8">
         <MapPin className="h-8 w-8 opacity-25" />
         <p className="text-sm leading-snug">
-          Landmark detection starts automatically when this page opens.
+          {readOnly ? "Loading the template's landmarks…" : "Landmark detection starts automatically when this page opens."}
         </p>
         {/* Optional replacement file section */}
+        {!readOnly && (
         <div className="w-full pt-2 border-t border-border">
           <p className="text-xs text-muted-foreground mb-2">
             Or use a different MRI file:
@@ -759,6 +776,7 @@ function LandmarksTab({
             onClearReplacementFile={onClearReplacementFile}
           />
         </div>
+        )}
       </div>
     );
   }
@@ -791,36 +809,50 @@ function LandmarksTab({
 
       {/* Section header */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-foreground">Detected Landmarks</h3>
+        <h3 className="text-sm font-medium text-foreground">{readOnly ? "RV Insertion Landmarks" : "Detected Landmarks"}</h3>
         <div className="flex items-center gap-1.5">
-          <SliceConfidenceDot
-            flag={prediction?.flag}
-            confidence={prediction?.confidence}
-            model_used={prediction?.model_used}
-            segModelLabel={segModelLabel}
-          />
+          {!readOnly && (
+            <SliceConfidenceDot
+              flag={prediction?.flag}
+              confidence={prediction?.confidence}
+              model_used={prediction?.model_used}
+              segModelLabel={segModelLabel}
+            />
+          )}
           <span className="text-xs text-muted-foreground tabular-nums">
             Slice {currentFrame + 1}
           </span>
         </div>
       </div>
 
+      {/* Template hearts: the points shown are the template's saved, checked
+          landmarks, so the landmark model's own per-slice confidence below
+          would describe points that aren't shown. The note says how this
+          template's masks and points were made (templateInfo.landmarkNote). */}
+      {readOnly && (
+        <p className="text-[11px] leading-snug text-muted-foreground -mt-2">
+          {readOnlyNote ?? "This template's RV insertion points are its saved, reviewed landmarks — not the landmark model's raw output."}
+        </p>
+      )}
+
       {/* Which mask is actually feeding this slice's detection — the dot above
           only surfaces this on hover, so it's easy to miss that a slice fell
           back to MRI-only (no mask available/valid) even with a model selected
           in the toggle above. */}
+      {!readOnly && (
       <p className="text-[11px] text-muted-foreground -mt-2">
         Segmentation mask fed to landmark model:{" "}
         <span className="font-medium text-foreground">
           {prediction?.model_used === "2ch" ? `${segModelLabel} (2ch)` : "None — MRI only (1ch fallback)"}
         </span>
       </p>
+      )}
 
       {/* Per-slice confidence overview. The single dot above only describes the
           slice currently in view, so there was no way to see which slices the
           detector was unsure about without scrubbing through all of them. This
           strip shows every slice at once and doubles as a jump target. */}
-      {allPredictions && allPredictions.length > 1 && (
+      {!readOnly && allPredictions && allPredictions.length > 1 && (
         <div className="rounded-lg border border-border bg-muted/20 p-2">
           <div className="mb-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -955,7 +987,7 @@ function LandmarksTab({
               ) : (
                 <span className="text-[10px] text-muted-foreground/40 shrink-0">—</span>
               )}
-              {onHighlightLandmark && (
+              {onHighlightLandmark && !(readOnly && !hasCoord) && (
                 <span
                   className={cn(
                     "text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0",
@@ -976,7 +1008,7 @@ function LandmarksTab({
                   {highlightedLandmarkId === def.id ? "clear" : hasCoord ? "focus" : "place"}
                 </span>
               )}
-              {hasCoord && (
+              {hasCoord && !readOnly && (
                 <span
                   role="button"
                   tabIndex={0}
@@ -1016,9 +1048,11 @@ function LandmarksTab({
         autoAlignAha={autoAlignAha}
         onToggleAutoAlignAha={onToggleAutoAlignAha}
         editableLandmarks={editableLandmarks}
-        onToggleEditableLandmarks={onToggleEditableLandmarks}
+        onToggleEditableLandmarks={readOnly ? undefined : onToggleEditableLandmarks}
+        hideEditToggle={readOnly}
       />
 
+      {!readOnly && (
       <div className="pt-3 border-t border-border">
         <p className="text-[11px] text-muted-foreground mb-2">Replace MRI file (optional):</p>
         <ReplacementFileRow
@@ -1029,10 +1063,11 @@ function LandmarksTab({
           onClearReplacementFile={onClearReplacementFile}
         />
       </div>
+      )}
 
       {/* Moved here when the Settings tab was removed — its other contents
           (inference summary, Re-run) already exist in the page header. */}
-      {onReset && (
+      {onReset && !readOnly && (
         <div className="pt-3 border-t border-border">
           <Button
             variant="ghost"
@@ -1063,6 +1098,7 @@ function DetectionSettingsPanel({
   editableLandmarks,
   onToggleEditableLandmarks,
   scope = "landmarks",
+  hideEditToggle = false,
 }: {
   showLabels: boolean;
   onToggleShowLabels: () => void;
@@ -1078,6 +1114,8 @@ function DetectionSettingsPanel({
   onToggleEditableLandmarks?: () => void;
   /** Which tab is rendering this — decides which toggles are relevant. */
   scope?: "landmarks" | "strain";
+  /** Template heart: drop the "Move/edit landmarks" switch. */
+  hideEditToggle?: boolean;
 }) {
   // Split by what each toggle actually affects: landmark point display/editing
   // vs. the strain overlay and AHA segment alignment.
@@ -1091,7 +1129,9 @@ function DetectionSettingsPanel({
         ]
       : [
           { label: "Show landmark labels", checked: showLabels, onCheckedChange: onToggleShowLabels },
-          { label: "Move/edit landmarks", checked: editableLandmarks, onCheckedChange: onToggleEditableLandmarks },
+          ...(hideEditToggle
+            ? []
+            : [{ label: "Move/edit landmarks", checked: editableLandmarks, onCheckedChange: onToggleEditableLandmarks }]),
         ];
 
   return (
@@ -1388,6 +1428,7 @@ function StrainTab({
   onModelChange,
   strainCompute,
   chamberFocus,
+  readOnly = false,
 }: {
   hasPredictions: boolean;
   currentFrame: number;
@@ -1397,6 +1438,8 @@ function StrainTab({
   activeModel: "unet" | "medsam";
   onModelChange?: (m: "unet" | "medsam") => void;
   strainCompute?: StrainComputeBundle;
+  /** Template heart: show stored results only — the compute controls are hidden. */
+  readOnly?: boolean;
   /** Which chamber(s) the main panel's 3D Heart is currently showing --
    * drives the Full-cycle results below too now, replacing what used to be
    * this tab's own independent LV/RV toggle (see the removed ventricleView
@@ -1802,6 +1845,7 @@ function StrainTab({
             seriesError={seriesError}
             seriesProgress={seriesProgress}
             onRunFullCycle={runStrainSeries}
+            readOnly={readOnly}
             hasFullCycleResult={usingRealSeries || usingRealRvSeries}
             strainIsStale={strainIsStale}
           />
@@ -1842,6 +1886,7 @@ function StrainTab({
           seriesError={seriesError}
           seriesProgress={seriesProgress}
           onRunFullCycle={runStrainSeries}
+          readOnly={readOnly}
           hasFullCycleResult={usingRealSeries || usingRealRvSeries}
           strainIsStale={strainIsStale}
         />
@@ -1881,7 +1926,7 @@ function StrainTab({
           The action itself lives on ComputeStrainCard's single recompute button
           (below) — this is just the indication, so the card isn't duplicated
           with a second button that does the exact same thing. */}
-      {strainIsStale && (
+      {strainIsStale && !readOnly && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
           <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
             <span className="font-semibold">Landmarks edited</span> since this strain was computed —
@@ -2186,6 +2231,7 @@ function ComputeStrainCard({
   seriesError,
   seriesProgress,
   onRunFullCycle,
+  readOnly = false,
   hasFullCycleResult,
   strainIsStale,
 }: {
@@ -2194,6 +2240,8 @@ function ComputeStrainCard({
   seriesError: string | null;
   seriesProgress?: number | null;
   onRunFullCycle: () => void;
+  /** Template heart: only the Quick ED→ES / Full cycle view switch is shown. */
+  readOnly?: boolean;
   hasFullCycleResult: boolean;
   /** Landmarks edited since the full-cycle result was computed — same button, just a note above it. */
   strainIsStale?: boolean;
@@ -2231,6 +2279,38 @@ function ComputeStrainCard({
     wasComputingRef.current = sc.isComputing;
     wasSeriesBusyRef.current = seriesBusy;
   }, [sc.isComputing, sc.error, seriesBusy, seriesError]);
+
+  // Template heart: the results are pre-computed, so only the choice of which
+  // stored result to view (single ED→ES pair or the full cycle) remains.
+  if (readOnly) {
+    return (
+      <div className="rounded-lg border border-border bg-muted/10 p-2.5 space-y-2">
+        <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+          View strain
+        </span>
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-0.5">
+          {(["quick", "full"] as const).map((scope) => (
+            <button
+              key={scope}
+              type="button"
+              onClick={() => sc.onScopeChange(scope)}
+              className={cn(
+                "rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+                sc.scope === scope ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {scope === "quick" ? "ED→ES" : "Full cycle"}
+            </button>
+          ))}
+        </div>
+        {sc.autoFrames && (
+          <p className="text-[9px] leading-relaxed text-muted-foreground">
+            End-diastole frame {sc.autoFrames.ed + 1}, end-systole frame {sc.autoFrames.es + 1} (auto-detected).
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-border bg-muted/10 p-2.5 space-y-2">

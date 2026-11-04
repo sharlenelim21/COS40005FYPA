@@ -48,18 +48,21 @@ function notComputedRow(modelLabel: string, totalColumns: number): string {
 const MODELS: Model[] = ["unet", "medsam"];
 const MODEL_LABEL: Record<Model, string> = { unet: "UNet", medsam: "MedSAM" };
 
-/** Max across the 17 AHA-segment ED wall-thickness values — same computation
- *  assembleDiseasePatternGateInputs does server-side for the HCM gate, and
- *  useProjectResults.ts duplicates client-side for the report's display.
- *  bullseye.segment_values is in PIXELS (see compute_bullseye_from_rle.py);
- *  spacing_mm[0] (in-plane dx) converts the max to real mm — without a known
+/** Maximal ED wall thickness — the value assembleDiseasePatternGateInputs uses
+ *  server-side for the HCM gate, and useProjectResults.ts duplicates
+ *  client-side for the report's display: heart metrics' ED-frame measurement
+ *  when present, otherwise the max across the 17 AHA-segment values.
+ *  bullseye.segment_values is in mm (unit "mm") or, on an older bullseye, in
+ *  PIXELS, which spacing_mm[0] (in-plane dx) converts — without a known
  *  spacing this must read as null, never a raw pixel count mislabeled mm. */
 function maxWallThicknessMm(d: MaskDoc): number | null {
+  const edMax = d.heartMetrics?.max_wall_thickness_mm;
+  if (typeof edMax === "number" && Number.isFinite(edMax)) return edMax;
   const vals = (d.bullseye?.segment_values ?? []).filter(
     (v): v is number => typeof v === "number" && Number.isFinite(v),
   );
-  const dx = d.heartMetrics?.spacing_mm?.[0];
-  return vals.length && typeof dx === "number" ? Math.max(...vals) * dx : null;
+  const toMm = d.bullseye?.unit === "mm" ? 1 : d.heartMetrics?.spacing_mm?.[0];
+  return vals.length && typeof toMm === "number" ? Math.max(...vals) * toMm : null;
 }
 
 export function buildResultsCsv(

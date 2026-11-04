@@ -31,8 +31,11 @@ import { generatePresignedGetUrlForBrowser, generatePresignedGetUrlForInternalSe
 import { extractS3KeyFromUrl, downloadFromS3, uploadMaskToS3 } from "../services/s3_handler";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client"; // Import fresh GPU server address function
 import { loadRvInsertionSlicesByFrame, resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
+import { applyTemplateGuard } from "../middleware/template_guard";
+import { findViewableProject } from "../services/template_access";
 
 const router = Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 
 // A project's owning Doctor (or an Admin) saves its segmentation directly. Every write requires
 // owner/admin access.
@@ -165,9 +168,9 @@ router.get("/segmentation-results/:projectId", isAuth, async (req: Request, res:
     logger.info(`${serviceLocation}: Received request to fetch segmentation masks for project ID: ${projectId}`);
     try {
         // This previously had no access check at all — any authenticated user who knew a
-        // projectId could read its masks. Owner or Admin may read.
-        const access = await userCanAccessProject(projectId, req.user!);
-        if (!access.allowed) {
+        // projectId could read its masks. Owner or Admin may read; anyone may read a template's.
+        const viewable = await findViewableProject(projectId, req.user);
+        if (!viewable) {
             return res.status(404).json({ success: false, message: "Project not found or access denied." });
         }
 
@@ -1511,6 +1514,11 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
         // 5. Look up RV insertion landmarks (same lookup as LV strain — shared,
         // model-independent alignment points)
         const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
+        // Both insertion points of every slice of the ED frame: the GPU picks
+        // the anterior one per slice (as for the LV) and uses it to decide
+        // which end of that slice's RV arc is anterior. ES reuses the ED
+        // layout, so the ES frame's landmarks are not needed.
+        const rvSlices = await resolveRvInsertionSlices(projectId, edFrameIndex);
 
         // 6. POST both NIfTI files to GPU
         const FormDataNode = require("form-data");
@@ -1525,6 +1533,7 @@ router.post("/compute-rv-strain-from-frames", isAuth, async (req: Request, res: 
             form.append("rv_insertion_2_x", String(lm2.x));
             form.append("rv_insertion_2_y", String(lm2.y));
         }
+        if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
 
         const gpuRes = await axios.post(`${gpuBaseUrl}/bullseye/compute-rv-strain`, form, {
             headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
@@ -1975,6 +1984,9 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
         };
 
         const { lm1, lm2 } = await resolveRvInsertionPoints(projectId);
+        // ED frame's per-slice landmarks — orient every slice's RV arc (see
+        // compute-rv-strain-from-frames). Every frame reuses the ED layout.
+        const rvSlices = await resolveRvInsertionSlices(projectId, edFrameIndex);
 
         const edPath = await buildNIfTI(edFrame, "ed");
         const FormDataNode = require("form-data");
@@ -1988,6 +2000,7 @@ router.post("/compute-rv-strain-series", isAuth, async (req: Request, res: Respo
                 form.append("es_file", fs.createReadStream(framePath), { filename: `${label}.nii.gz`, contentType: "application/gzip" });
                 if (lm1) { form.append("rv_insertion_1_x", String(lm1.x)); form.append("rv_insertion_1_y", String(lm1.y)); }
                 if (lm2) { form.append("rv_insertion_2_x", String(lm2.x)); form.append("rv_insertion_2_y", String(lm2.y)); }
+                if (rvSlices.length) form.append("rv_insertion_slices", JSON.stringify(rvSlices));
 
                 const r = await axios.post(`${gpuBaseUrl}/bullseye/compute-rv-strain`, form, {
                     headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
@@ -2150,9 +2163,11 @@ router.post("/trigger-bullseye/:maskId", isAuth, async (req: Request, res: Respo
             logger.warn(`SegmentationRoutes: trigger-bullseye frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 
-        // Per-frame RV cavity area — RLE-only, no GPU, no landmark data, same
-        // reasoning as the LV frame series above. See computeFrameRvAreaSeries.
-        computeFrameRvAreaSeries(maskId, frames, W, H).catch((err: any) => {
+        // Per-frame RV cavity area — RLE-only, no GPU, same reasoning as the
+        // LV frame series above. The project id lets it orient the RV wedges
+        // by the RV insertion landmarks, as the GPU RV strain does. See
+        // computeFrameRvAreaSeries.
+        computeFrameRvAreaSeries(maskId, frames, W, H, maskDoc.projectid?.toString()).catch((err: any) => {
             logger.warn(`SegmentationRoutes: trigger-bullseye RV frame-series async error for mask ${maskId}: ${err?.message}`);
         });
 
@@ -2247,24 +2262,24 @@ function assembleDiseasePatternGateInputs(
     const lvEdv: number | null = hm.EDV ?? null;
     const lvMassG: number | null = maskDoc?.heartMetrics?.LV_mass_g ?? null;
 
-    // bullseye.segment_values is in PIXELS, by design — both
-    // compute_bullseye_from_rle.py and the GPU's /bullseye/analyze route
-    // document this explicitly ("values in pixels"), since wall thickness is
-    // ray-cast in pixel-index space with no spacing input. Converting to real
-    // mm needs the project's own in-plane pixel spacing (heartMetrics.
-    // spacing_mm[0], the same dx compute_heart_metrics_from_rle.py already
-    // derives from the stored affine) — multiplying AFTER taking the max,
-    // since scaling is linear. Previously this was taken as mm with no
-    // conversion at all, silently comparing a pixel count against the HCM
-    // gate's 15mm clinical threshold (reported live, 2026-10).
+    // Bullseye wall thickness in mm. Bullseyes are stored in mm since bullseyeToMm
+    // (segmentation_export.ts, unit "mm"). An older one is in PIXELS (wall thickness
+    // is ray-cast in pixel-index space) and is converted with the project's own
+    // in-plane spacing (heartMetrics.spacing_mm[0], the dx compute_heart_metrics_from_rle.py
+    // derives from the stored affine) — after taking the max, since scaling is linear.
+    // Taking pixels as mm silently compared a pixel count against the HCM gate's 15mm
+    // clinical threshold (reported live, 2026-10).
+    const bullseye = maskDoc?.bullseye;
+    const inPlaneSpacingMm: number | null = maskDoc?.heartMetrics?.spacing_mm?.[0] ?? null;
+    const toMm: number | null = bullseye?.unit === "mm" ? 1 : inPlaneSpacingMm;
     // Prefer segment_values_max (true per-ray peak -- see bullseye_analysis.group_sectors_max)
     // over segment_values (sector-mean), since a sector average dilutes focal/asymmetric
     // hypertrophy and can understate true max wall thickness for exactly the HCM pattern this
     // gate checks for (reported live, 2026-10: a known-HCM patient measured 13.8mm against the
     // 15mm cutoff on the mean-based value). Falls back to segment_values on any mask computed
     // before segment_values_max existed -- not backfilled, so this field may be absent/empty.
-    const bullseyeValuesMax: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values_max;
-    const bullseyeValues: (number | null)[] | undefined = maskDoc?.bullseye?.segment_values;
+    const bullseyeValuesMax: (number | null)[] | undefined = bullseye?.segment_values_max;
+    const bullseyeValues: (number | null)[] | undefined = bullseye?.segment_values;
     const finiteMaxValues = (bullseyeValuesMax ?? []).filter(
         (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
     );
@@ -2273,10 +2288,17 @@ function assembleDiseasePatternGateInputs(
         : (bullseyeValues ?? []).filter(
             (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
         );
-    const inPlaneSpacingMm: number | null = maskDoc?.heartMetrics?.spacing_mm?.[0] ?? null;
-    const maxWallThicknessMm: number | null = finiteSegmentValues.length && inPlaneSpacingMm
-        ? Math.max(...finiteSegmentValues) * inPlaneSpacingMm
+    const bullseyeMaxWallMm: number | null = finiteSegmentValues.length && toMm
+        ? Math.max(...finiteSegmentValues) * toMm
         : null;
+    // Preferred for the HCM gate: the maximal wall thickness heart metrics measure on the
+    // ED frame itself (compute_heart_metrics_from_rle.py :: max_wall_thickness_px — per
+    // slice the 95th percentile of the ray thicknesses, max over slices; ACDC's criteria
+    // are in diastole). The stored bullseye is built from all frames merged, not ED, so
+    // its peak is only the fallback for heart metrics computed before that field existed.
+    const hmMaxWt = maskDoc?.heartMetrics?.max_wall_thickness_mm;
+    const maxWallThicknessMm: number | null =
+        typeof hmMaxWt === "number" && Number.isFinite(hmMaxWt) ? hmMaxWt : bullseyeMaxWallMm;
     // DCM's wall-thickness criterion is an upper bound ("stays thin" -- dilated/stretched
     // myocardium), the opposite question from HCM's lower bound ("is there a pathologically
     // thick spot anywhere"). Reusing maxWallThicknessMm's true-peak value here would make DCM
@@ -2291,8 +2313,8 @@ function assembleDiseasePatternGateInputs(
     const finiteMeanValues = (bullseyeValues ?? []).filter(
         (v: unknown): v is number => typeof v === "number" && Number.isFinite(v),
     );
-    const dcmWallThicknessMm: number | null = finiteMeanValues.length && inPlaneSpacingMm
-        ? Math.max(...finiteMeanValues) * inPlaneSpacingMm
+    const dcmWallThicknessMm: number | null = finiteMeanValues.length && toMm
+        ? Math.max(...finiteMeanValues) * toMm
         : null;
 
     const hmTop = maskDoc?.heartMetrics;

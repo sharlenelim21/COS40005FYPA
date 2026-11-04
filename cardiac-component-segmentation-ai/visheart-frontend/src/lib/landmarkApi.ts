@@ -23,7 +23,11 @@ const USE_STUB = process.env.NEXT_PUBLIC_LANDMARK_USE_STUB !== "false";
 const ENDPOINT = process.env.NEXT_PUBLIC_LANDMARK_ENDPOINT ?? "/landmark-detection";
 const DEFAULT_MODEL = "unetresnet34-landmark";
 const POLL_INTERVAL_MS = 3_000;
-const MAX_POLL_ATTEMPTS = 100;
+// Detection runs ~1.5 s per frame-slice on the GPU (8+ min for a 25-frame,
+// 12-slice scan) and a queued job first waits for the one ahead of it, so
+// polling only gives up once the job has stopped reporting any change.
+const POLL_STALL_TIMEOUT_MS = 15 * 60_000;
+const POLL_MAX_DURATION_MS = 60 * 60_000;
 const SEG_STALE_MINUTES: Record<"medsam" | "unet", number> = { medsam: 30, unet: 90 };
 const MASK_WRITE_GRACE_MS = 60_000;
 
@@ -512,11 +516,14 @@ async function pollLandmarkResult(
   projectId: string,
   jobUuid: string,
 ): Promise<LandmarkInferenceResponse> {
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+  const startedAt = Date.now();
+  let lastChangeAt = startedAt;
+  let lastJobState = "";
+  for (;;) {
     const response = await api.get<{
       success: boolean;
       result: LandmarkInferenceResponse | null;
-      job?: { status?: string; message?: string } | null;
+      job?: { status?: string; message?: string; progress?: number | null } | null;
       message?: string;
     }>(`${ENDPOINT}/results/${projectId}`, {
       params: { jobUuid },
@@ -533,6 +540,14 @@ async function pollLandmarkResult(
         response.data.job.message || "Landmark detection failed.",
       );
     }
+
+    const now = Date.now();
+    const jobState = `${response.data.job?.status ?? ""}:${response.data.job?.progress ?? ""}`;
+    if (jobState !== lastJobState) {
+      lastJobState = jobState;
+      lastChangeAt = now;
+    }
+    if (now - lastChangeAt > POLL_STALL_TIMEOUT_MS || now - startedAt > POLL_MAX_DURATION_MS) break;
 
     await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }

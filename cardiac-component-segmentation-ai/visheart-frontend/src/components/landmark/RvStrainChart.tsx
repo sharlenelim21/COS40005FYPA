@@ -1,8 +1,8 @@
 "use client";
 
-import { strainScaleMinMax } from "@/lib/strainColorScale";
+import { strainRampStops, strainScaleMinMax } from "@/lib/strainColorScale";
 import React from "react";
-import { rdYlGn, polarPoint, annularSectorPath } from "./StrainVisualization";
+import { strainRamp, polarPoint, annularSectorPath } from "./StrainVisualization";
 import type { RvStrainRegion } from "./StrainVisualization";
 
 /**
@@ -42,7 +42,7 @@ export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegion
     const v = val(i);
     if (v == null || v === 0) return "#94a3b8"; // slate — no data (or no change measured) for this region
     const t = colMin === colMax ? 0.5 : Math.max(0, Math.min(1, (v - colMin) / (colMax - colMin)));
-    return rdYlGn(1 - t);
+    return strainRamp(1 - t);
   };
   const isSel = (region1based: number) => selectedRegion === region1based;
 
@@ -105,11 +105,7 @@ export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegion
       {/* Colour scale bar */}
       <defs>
         <linearGradient id="rvStrainBar" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%"   stopColor="#00ff00" />
-          <stop offset="25%"  stopColor="#80ff00" />
-          <stop offset="50%"  stopColor="#ffff00" />
-          <stop offset="75%"  stopColor="#ff8000" />
-          <stop offset="100%" stopColor="#ff0000" />
+          {strainRampStops(true).map((s) => <stop key={s.offset} offset={s.offset} stopColor={s.color} />)}
         </linearGradient>
       </defs>
       <rect x="30" y="305" width="240" height="6" rx="3" fill="url(#rvStrainBar)" opacity="0.9" />

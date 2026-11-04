@@ -1,0 +1,22 @@
+{
+ "_id": {
+  "$oid": "6ad7547ace314ffc434ce38f"
+ },
+ "username": "visheart_templates",
+ "email": "templates@visheart.local",
+ "phone": "0000000000",
+ "role": "user",
+ "createdAt": {
+  "$date": {
+   "$numberLong": "1792496762660"
+  }
+ },
+ "updatedAt": {
+  "$date": {
+   "$numberLong": "1792496762660"
+  }
+ },
+ "__v": {
+  "$numberInt": "0"
+ }
+}

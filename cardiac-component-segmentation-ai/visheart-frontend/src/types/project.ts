@@ -65,6 +65,55 @@ export interface ProjectData {
     /** True for the owning User/Admin. */
     isOwner?: boolean;
     canRun?: boolean;
+    /** Template heart: a pre-computed reference project every user can view
+     *  but nobody can change (the server blocks writes; the UI hides editing). */
+    isTemplate?: boolean;
+    templateInfo?: TemplateInfo | null;
+    /** True for templates — the landmark page shows results only. */
+    readOnly?: boolean;
+}
+
+export interface TemplateInfo {
+    category: "NOR" | "HCM" | "DCM";
+    sex: "female" | "male";
+    subjectCode?: string;
+    age?: number;
+    heightCm?: number;
+    weightKg?: number;
+    edFrame?: number;
+    esFrame?: number;
+    order?: number;
+    /** How the template's masks / RV insertion points were made — shown on its read-only Landmarks tab. */
+    landmarkNote?: string;
+}
+
+/** One card on the dashboard's Templates tab (GET /project/get-template-projects). */
+export interface TemplateProjectSummary {
+    projectId: string;
+    name: string;
+    description?: string;
+    templateInfo: TemplateInfo | null;
+    dimensions?: { width: number; height: number; slices?: number; frames?: number };
+    metrics: {
+        lvef: number | null;
+        lvedv: number | null;
+        lvesv: number | null;
+        lvMass: number | null;
+        rvef: number | null;
+        /** Indexed to the subject's body surface area. */
+        lvedvi?: number | null;
+        lvmi?: number | null;
+        rvedvi?: number | null;
+        /** Thickest LV wall on the end-diastole frame (mm). */
+        maxWallThicknessMm?: number | null;
+        grs?: number | null;
+        gcs?: number | null;
+    };
+    /** LV radial strain (GRS, %) per AHA segment 1–17; null where not measured. */
+    strainSegments?: (number | null)[] | null;
+    healthStatus?: string | null;
+    /** Disease pattern gates met (ACDC groups): NOR_LV, NOR_RV, MINF, DCM, HCM, RV. */
+    patternGates?: string[];
 }
 
 /**

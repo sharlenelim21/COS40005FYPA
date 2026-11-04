@@ -1,5 +1,6 @@
 import axios, { AxiosError } from "axios";
 import { MetricData, S3Metrics, CostData } from "@/types/system-monitor";
+import type { TemplateProjectSummary } from "@/types/project";
 import { file } from "zod";
 
 // Create a pre-configured instance of axios.
@@ -182,6 +183,18 @@ export const projectApi = {
     } catch (error) {
       throw error;
     }
+  },
+
+  // Template hearts (read-only reference projects) for the dashboard's Templates tab
+  getTemplateProjects: async (): Promise<{ success: boolean; templates: TemplateProjectSummary[] }> => {
+    const response = await api.get("/project/get-template-projects");
+    return response.data;
+  },
+
+  // The same template summaries without sign-in (numbers only), for the public Medical Guide
+  getTemplateSummaries: async (): Promise<{ success: boolean; templates: TemplateProjectSummary[] }> => {
+    const response = await api.get("/project/template-summaries");
+    return response.data;
   },
 
   // Upload new project
