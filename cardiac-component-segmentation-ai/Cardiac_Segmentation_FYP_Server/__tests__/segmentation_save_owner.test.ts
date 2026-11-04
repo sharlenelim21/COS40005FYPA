@@ -1,15 +1,17 @@
 import express, { NextFunction, Request, Response } from 'express';
 import request from 'supertest';
 
-// The route file's services, replaced: only who owns the project and whether anything was written matter here.
+// The route file's services, replaced: only who may access the project and whether anything was written matter here.
 const database = {
   readProject: jest.fn(),
   readProjectSegmentationMask: jest.fn(),
   updateProjectSegmentationMask: jest.fn(),
   updateProject: jest.fn(),
+  userCanAccessProject: jest.fn(),
 };
 jest.mock('../src/services/database', () => ({
   ...database, jobModel: {}, userModel: {}, JobStatus: {}, projectSegmentationMaskModel: {}, projectLandmarkModel: {},
+  UserRole: jest.requireActual('../src/types/database_types').UserRole,
 }));
 jest.mock('../src/services/passportjs', () => {
   const pass = (_req: Request, _res: Response, next: NextFunction) => next();
@@ -29,24 +31,26 @@ import router from '../src/routes/segmentation_routes';
 
 const PROJECT = 'a'.repeat(24);
 
-function appFor(userId: string) {
+function appFor(userId: string, role = 'user') {
   const app = express();
   app.use(express.json());
   app.use((req: Request, _res: Response, next: NextFunction) => {
-    (req as unknown as { user: { _id: string } }).user = { _id: userId };
+    (req as unknown as { user: { _id: string; role: string } }).user = { _id: userId, role };
     next();
   });
   app.use('/segmentation', router);
   return app;
 }
 
-/** readProject(projectId, userId) finds the project only for its owner, as the userid filter does. */
+/** userCanAccessProject as the database has it since the role change (2026-10-21): the owner or an admin. */
 function ownedBy(owner: string) {
-  database.readProject.mockImplementation(async (_projectId: string, userId: string) =>
-    (userId === owner ? { success: true, projects: [{ _id: PROJECT, isSaved: true }] } : { success: true }));
+  database.userCanAccessProject.mockImplementation(async (_projectId: string, user: { _id: string; role: string }) => {
+    const allowed = user._id === owner || user.role === 'admin';
+    return { allowed, isOwner: user._id === owner, canRun: allowed };
+  });
 }
 
-describe("Saving a segmentation is for the project's owner only (BUG-017)", () => {
+describe("Saving a segmentation is for the project's owner or an admin only (BUG-017)", () => {
   beforeEach(() => jest.clearAllMocks());
 
   it("refuses another user's manual save before anything is written", async () => {
@@ -55,7 +59,7 @@ describe("Saving a segmentation is for the project's owner only (BUG-017)", () =
       .send({ frames: [], model: 'unet' });
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ success: false, message: "Only the project's owner can save its segmentation." });
-    expect(database.readProject).toHaveBeenCalledWith(PROJECT, 'u-other');
+    expect(database.userCanAccessProject).toHaveBeenCalledWith(PROJECT, { _id: 'u-other', role: 'user' });
     expect(database.readProjectSegmentationMask).not.toHaveBeenCalled();
     expect(database.updateProjectSegmentationMask).not.toHaveBeenCalled();
   });
@@ -64,6 +68,15 @@ describe("Saving a segmentation is for the project's owner only (BUG-017)", () =
     ownedBy('u-owner');
     database.readProjectSegmentationMask.mockResolvedValue({ success: false, message: 'Project does not exist' });
     const res = await request(appFor('u-owner')).put(`/segmentation/save-manual-segmentation/${PROJECT}`)
+      .send({ frames: [], model: 'unet' });
+    expect(res.status).not.toBe(403);
+    expect(database.readProjectSegmentationMask).toHaveBeenCalledWith(PROJECT);
+  });
+
+  it("lets an admin's manual save through to the masks", async () => {
+    ownedBy('u-owner');
+    database.readProjectSegmentationMask.mockResolvedValue({ success: false, message: 'Project does not exist' });
+    const res = await request(appFor('u-admin', 'admin')).put(`/segmentation/save-manual-segmentation/${PROJECT}`)
       .send({ frames: [], model: 'unet' });
     expect(res.status).not.toBe(403);
     expect(database.readProjectSegmentationMask).toHaveBeenCalledWith(PROJECT);
@@ -81,7 +94,7 @@ describe("Saving a segmentation is for the project's owner only (BUG-017)", () =
   });
 
   it('answers 500, not 403, when the project cannot be read', async () => {
-    database.readProject.mockResolvedValue({ success: false, message: 'Error reading projects.' });
+    database.userCanAccessProject.mockRejectedValue(new Error('database unavailable'));
     const res = await request(appFor('u-owner')).put(`/segmentation/save-manual-segmentation/${PROJECT}`)
       .send({ frames: [], model: 'unet' });
     expect(res.status).toBe(500);
