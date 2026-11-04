@@ -1,5 +1,6 @@
 import {
-  changedTrainingPixels, describeCase, maskQuery, MAX_SELECTION, parseSelection, trainingLabels, withTrainingPixelCounts,
+  changedTrainingPixels, describeCase, editSize, maskQuery, MAX_SELECTION, parseSelection, scanIdOf, trainingLabels,
+  withTrainingPixelCounts,
 } from '../src/services/training_export';
 import { selectTrainingSlices } from '../src/services/training_selection';
 
@@ -44,9 +45,11 @@ describe('Extend Training export helpers (plan WS13 R1)', () => {
     expect(row).toEqual({
       maskId: 'm-unet', projectId: 'p1', projectName: 'Patient 012', model: 'unet', aiMaskId: 'ai-m-unet',
       editedAt: '2026-09-26T05:00:00Z', height: 216, width: 256,
-      slices: [{ frameindex: 0, sliceindex: 3, pixelsChanged: 120, editedClasses: ['rv'] },
-               { frameindex: 0, sliceindex: 4, pixelsChanged: 900, editedClasses: ['rv', 'myo'] }],
+      slices: [{ frameindex: 0, sliceindex: 3, pixelsChanged: 120, editShare: null, structureChanged: false, editedClasses: ['rv'] },
+               { frameindex: 0, sliceindex: 4, pixelsChanged: 900, editShare: null, structureChanged: false,
+                 editedClasses: ['rv', 'myo'] }],
       pixelsChanged: 1020, structures: ['rv', 'myo'], shared: 1, frozen: null, ownerId: null, ownerName: null,
+      scanId: 'p1',
     });
     // With both selected, D5 gives frame 0 slice 4 to the later MedSAM save, as before.
     expect(both.selected.find(entry => entry.model === 'unet')!.slices).toHaveLength(1);
@@ -57,6 +60,15 @@ describe('Extend Training export helpers (plan WS13 R1)', () => {
     const owned = { ...project, userid: { toString: () => 'u-7' } };   // an ObjectId in the database
     const row = describeCase(owned, selectTrainingSlices([unet], 20).selected[0], [], null, 'dr-lee');
     expect([row.ownerId, row.ownerName]).toEqual(['u-7', 'dr-lee']);
+  });
+
+  it('names the scan by its file hash, so the same scan uploaded by two users counts once', () => {
+    const unet = mask('m-unet', 'unet', '2026-09-26T05:00:00Z', [[0, 3, 120, ['rv']]]);
+    const mine = { ...project, filehash: 'abc123' };
+    const theirs = { ...project, _id: 'p2', userid: 'u-9', filehash: 'abc123' };
+    expect(scanIdOf(mine)).toBe(scanIdOf(theirs));
+    expect(describeCase(theirs, selectTrainingSlices([unet], 20).selected[0], []).scanId).toBe('abc123');
+    expect(scanIdOf({ _id: 'p3' })).toBe('p3');   // no hash recorded: the project stands for itself
   });
 
   it('marks a case whose project is a frozen test patient, so Prepare can lock it', () => {
@@ -94,5 +106,34 @@ describe('Extend Training export helpers (plan WS13 R1)', () => {
     expect(recounted.editTracking.slices[0]).toMatchObject({ pixelsChanged: 3, pixelsChangedPerClass: 5 });
     expect(edited.editTracking.slices[0].pixelsChanged).toBe(5);
     expect(withTrainingPixelCounts(edited, undefined, 8)).toBe(edited);  // no AI result: the saved counts stand
+  });
+
+  it('measures an edit as a share of the heart in the AI result and the correction together (the 2% rule)', () => {
+    const ai = [{ class: 'rv', segmentationmaskcontents: '0 4' }];
+    const edited = [{ class: 'rv', segmentationmaskcontents: '0 2' }, { class: 'myo', segmentationmaskcontents: '2 3' }];
+    // Heart in either: pixels 0-4 (5); changed: 2, 3, 4 (3). MYO appears only in the correction.
+    expect(editSize(ai, edited, 8)).toEqual({ changed: 3, heart: 5, share: 0.6, structureChanged: true });
+    const grown = [{ class: 'rv', segmentationmaskcontents: '0 100' }];
+    expect(editSize(grown, [{ class: 'rv', segmentationmaskcontents: '0 101' }], 200))
+      .toEqual({ changed: 1, heart: 101, share: 1 / 101, structureChanged: false });
+    expect(editSize(undefined, undefined, 8)).toEqual({ changed: 0, heart: 0, share: null, structureChanged: false });
+  });
+
+  it('records the share on each recounted slice, and the selection keeps it at 2% or more', () => {
+    const frames = (entries: object[]) => [{ frameindex: 0, slices: [3, 4].map(sliceindex =>
+      ({ sliceindex, segmentationmasks: entries })) }];
+    const edited = { ...mask('m-unet', 'unet', '2026-09-26T05:00:00Z', [[0, 3, 1, ['rv']], [0, 4, 1, ['rv']]]),
+                     frames: frames([{ class: 'rv', segmentationmaskcontents: '0 101' }]) };
+    const ai = { _id: 'ai-m-unet', frames: [{ frameindex: 0, slices: [
+      { sliceindex: 3, segmentationmasks: [{ class: 'rv', segmentationmaskcontents: '0 100' }] },   // 1 of 101: under 1%
+      { sliceindex: 4, segmentationmasks: [{ class: 'rv', segmentationmaskcontents: '0 98' }] },    // 3 of 101: 3%
+    ] }] };
+    const recounted = withTrainingPixelCounts(edited, ai, 200);
+    expect(recounted.editTracking.slices[1]).toMatchObject({ pixelsChanged: 3, heartPixels: 101, structureChanged: false });
+    const { selected, skipped } = selectTrainingSlices([recounted], 20);
+    expect(selected[0].slices.map(s => s.sliceindex)).toEqual([4]);  // 3 px would fail the old 20-pixel rule
+    expect(skipped).toEqual({ slice_below_min_share: 1 });
+    const row = describeCase(project, selected[0], []);
+    expect(row.slices[0]).toMatchObject({ editShare: 3 / 101, structureChanged: false });
   });
 });

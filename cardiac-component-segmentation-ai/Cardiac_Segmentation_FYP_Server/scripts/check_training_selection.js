@@ -22,6 +22,7 @@
  *   [12] Differing corrections   (listed as a conflict, the later save suggested)
  *   [13] A reviewed choice       (overrides the suggestion)
  *   [14] An invalid choice       (ignored and counted)
+ *   [15] The 2% rule             (a measured share decides; a structure added counts; no share: 20 pixels)
  *
  * Run:  node scripts/check_training_selection.js
  * Exits 0 on all assertions passing, 1 otherwise.
@@ -221,6 +222,21 @@ function test_invalid_choice_ignored() {
 
 // ── Runner ───────────────────────────────────────────────────────────────────
 
+function test_two_percent_rule() {
+    console.log('\n[15] The 2% rule — a measured share decides; a structure added counts; no share: 20 pixels');
+    const m = mask('unet', '2026-09-15T10:00:00Z', [[0, 1, 50], [0, 2, 3], [0, 3, 2], [0, 4, 25], [0, 5, 5]]);
+    Object.assign(m.editTracking.slices[0], { editShare: 0.019 });                     // 50 px but under 2%
+    Object.assign(m.editTracking.slices[1], { editShare: 0.02 });                      // exactly 2%
+    Object.assign(m.editTracking.slices[2], { editShare: 0.001, structureChanged: true });
+    const out = selectTrainingSlices([m], MIN);
+    assert('keeps 2%, a structure change and a 25-pixel slice without a share',
+        isDeepStrictEqual(keys(out.selected[0]), [[0, 2], [0, 3], [0, 4]])
+            && out.skipped.slice_below_min_share === 1 && out.skipped.slice_below_min_pixels === 1,
+        show(out));
+    const strict = selectTrainingSlices([m], MIN, { minShare: 0.05 });
+    assert('minShare raises the bar', isDeepStrictEqual(keys(strict.selected[0]), [[0, 3], [0, 4]]), show(strict));
+}
+
 (async () => {
     try {
         test_one_unet_mask();
@@ -237,6 +253,7 @@ function test_invalid_choice_ignored() {
         test_conflict_listed_with_suggestion();
         test_choice_overrides_suggestion();
         test_invalid_choice_ignored();
+        test_two_percent_rule();
     } catch (err) {
         console.error('Runner crashed:', err);
         process.exit(2);

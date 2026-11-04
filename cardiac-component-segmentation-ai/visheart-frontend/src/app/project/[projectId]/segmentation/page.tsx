@@ -126,7 +126,12 @@ function SegmentationResultsPageInner() {
   // UI state
   const [activeLabel, setActiveLabel] = useState<AnatomicalLabel>("lvc");
   const [tool, setTool] = useState<DrawingTool>("brush");
-
+  // Bounding Box always calls MedSAM (medsam-inference-manual), whatever model is selected, and the
+  // CPU inference service skips loading MedSAM -- so the tool only works in NVIDIA GPU mode.
+  const boundingBoxDisabled = !gpuStatusLoading && !isGpuMode;
+  useEffect(() => {
+    if (boundingBoxDisabled && tool === "rectangle") setTool("brush");
+  }, [boundingBoxDisabled, tool]);
   const [brushSize, setBrushSize] = useState<number>(10);
   const [opacity, setOpacity] = useState<number>(1);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -595,11 +600,15 @@ function SegmentationResultsPageInner() {
         const status = String(job.status ?? "").toLowerCase();
         if (status !== "pending" && status !== "in_progress") return false;
 
-        // 4D reconstruction jobs share this collection and must not disable segmentation.
-        // Checked against `modelUsed`, NOT `segmentationModel`: a reconstruction job sets both,
-        // with segmentationModel naming the model whose masks it consumes, so filtering on that
-        // field alone reports every reconstruction as a MedSAM or UNet segmentation job.
-        if (String(job.modelUsed ?? "").toLowerCase() === "4d_reconstruction") return false;
+        // 4D reconstruction, strain and landmark jobs share this collection and must not disable
+        // segmentation (the server's NON_SEGMENTATION_JOBS in inference.ts). Checked against
+        // `modelUsed`, NOT `segmentationModel`: those jobs set both, with segmentationModel naming the
+        // model whose masks they read, so filtering on that field alone reports a strain calculation
+        // or a reconstruction as a MedSAM or UNet segmentation job ("Processing..." on this button).
+        const jobType = String(job.modelUsed ?? "").toLowerCase();
+        if (["4d_reconstruction", "strain_series", "rv_strain_series"].includes(jobType) || jobType.includes("landmark")) {
+          return false;
+        }
 
         const jobModelName = String(job.segmentationModel ?? "medsam").toLowerCase();
         if (jobModelName !== selectedModel) return false;
@@ -1304,21 +1313,6 @@ function SegmentationResultsPageInner() {
         </button>
         </div>
 
-        {/* A job the server says is running, that this page did not start -- typically because the
-            user reloaded while it was still going. Without this the disabled button looks broken:
-            nothing on screen explains why it cannot be clicked. Suppressed while this page is
-            driving a run, since that path prints its own progress message. */}
-        {serverJobRunning && !runSegmentationLoading && !runSegmentationError && (
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-            <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-            {serverJobRunning.status === "pending"
-              ? "Queued on the server"
-              : "Running on the server"}
-            {serverJobElapsedLabel ? ` — started ${serverJobElapsedLabel}` : ""}. You can leave this
-            page; it keeps running.
-          </span>
-        )}
-
         {/* Error message */}
         {runSegmentationError && (
           <div className="text-xs text-red-600 dark:text-red-400 ml-auto">
@@ -1401,6 +1395,7 @@ function SegmentationResultsPageInner() {
             onModelChange={handleModelSelect}
             isModelActive={hasMasks}
             isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
+            boundingBoxDisabled={boundingBoxDisabled}
           />
         </div>
       </div>
@@ -1537,6 +1532,7 @@ function SegmentationResultsPageInner() {
                 onModelChange={handleModelSelect}
                 isModelActive={hasMasks}
                 isModelRunning={runSegmentationLoading || Boolean(serverJobRunning)}
+                boundingBoxDisabled={boundingBoxDisabled}
               />
             </div>
           </ResizablePanel>
@@ -1556,7 +1552,7 @@ function SegmentationResultsPageInner() {
               </p>
               <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
                 <p className="text-sm text-amber-900 dark:text-amber-100">
-                  Re-running will dispatch a new GPU job and create a new mask document for this model. The other model&apos;s result is unaffected. Existing manual edits for this model will not be deleted, but the new AI output will appear alongside them.
+                  Re-running replaces this model&apos;s result, and <strong>deletes your saved corrections to it</strong>: they can no longer be used for training. The other model&apos;s result is unaffected.
                 </p>
               </div>
               <p className="text-xs text-muted-foreground">

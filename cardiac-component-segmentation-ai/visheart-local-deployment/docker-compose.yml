@@ -254,23 +254,27 @@ services:
   # ============================================
   # MinIO Object Storage (S3-compatible)
   # ============================================
+  # minio/minio and minio/mc were removed from Docker Hub (about Sept 2026), so a computer without
+  # cached copies could not start the stack. Bitnami's frozen legacy images replace them. They run as
+  # root so a minio_data volume made by the old image (owned by root) stays readable. This release has
+  # no web console, so port 9001 serves nothing.
   minio:
-    image: minio/minio:latest
+    image: bitnamilegacy/minio:latest
     container_name: visheart-minio
     restart: unless-stopped
+    user: "0"
     ports:
       - "9000:9000"  # API
-      - "9001:9001"  # Console
+      - "9001:9001"  # Console (not served by this image)
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
-    command: server /data --console-address ":9001"
     volumes:
-      - minio_data:/data
+      - minio_data:/bitnami/minio/data
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5

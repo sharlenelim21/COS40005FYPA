@@ -881,7 +881,9 @@ const projectReconstructionSchema = new Schema<IProjectReconstructionDocument>({
   // record is explicit; records written before this field existed have no value and are read
   // as LV by the readers, which is what they are.
   chamber: { type: String, required: false, default: ReconstructionChamber.LV, enum: Object.values(ReconstructionChamber) },
-
+  // 1-based frames that were built, when the user chose some (reconstruction_frames.ts); absent: every frame.
+  builtFrames: { type: [Number], required: false, default: undefined },
+  
   // File properties
   filename: { type: String, required: true }, // Server-generated unique filename
   filesize: { type: Number, required: true }, // Size of the reconstruction file in bytes
@@ -2301,6 +2303,8 @@ const jobSchema = new mongoose.Schema({
   // 4D reconstruction jobs only. Absent on every other job type, and on 4D jobs created before
   // this field existed -- both read as LV, which is what they were.
   chamber: { type: String, required: false, enum: Object.values(ReconstructionChamber) },
+  // 4D reconstruction of chosen frames only: the original frame (0-based) of each frame sent to the GPU.
+  frameMap: { type: [Number], required: false, default: undefined },
   model_used: { type: String, required: false }, // Compatibility field: model name as string (e.g., 'medsam' or 'unet')
   progress: { type: Number, required: false, min: 0, max: 100 },
 }, { timestamps: true });

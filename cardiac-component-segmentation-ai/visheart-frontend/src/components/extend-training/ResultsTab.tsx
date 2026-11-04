@@ -14,7 +14,7 @@ import {
   StructureKey, VersionAction, VersionResults,
 } from "@/lib/retraining-api";
 import { LABEL_COLORS } from "@/types/segmentation";
-import { changeTone, overallAccuracy, percent, points, verdict, whyNotSwitch } from "@/components/extend-training/logic";
+import { changeTone, overallAccuracy, percent, points, recipeLabel, verdict, whyNotSwitch } from "@/components/extend-training/logic";
 import { ExampleViewer } from "@/components/extend-training/ExampleViewer";
 import { TrainingProgress } from "@/components/extend-training/TrainingProgress";
 import { VersionsTable } from "@/components/extend-training/VersionsTable";
@@ -164,7 +164,7 @@ function VersionReview({ label, status, onReview, onAction }: {
             <CardDescription>
               {version.is_original
                 ? "The original model, shipped with VisHeart. Trained versions are compared with it."
-                : `Compared with ${against} on ${scans} scans neither was trained on${version.registered_at ? ` · made ${new Date(version.registered_at).toLocaleString()}` : ""}`}
+                : `Compared with ${against} on ${scans} scans neither was trained on${version.registered_at ? ` · made ${new Date(version.registered_at).toLocaleString()}` : ""}${recipeLabel(version.recipe) ? ` · method: ${recipeLabel(version.recipe)}` : ""}`}
             </CardDescription>
           </div>
           {version.status === "candidate" && <Badge variant="outline">Decision required</Badge>}

@@ -73,7 +73,8 @@ def make_loader(pairs, transform, preprocess, batch_size, shuffle, max_slices=No
     return loader, len(dataset)
 
 
-def run_epoch(model, loader, ce_loss, dice_loss, dice_metric, optimizer=None, encoder_frozen=True):
+def run_epoch(model, loader, ce_loss, dice_loss, dice_metric, optimizer=None, encoder_frozen=True, on_batch=None):
+    """on_batch(done, total), after each training batch: one whole-dataset epoch is long, so the page shows steps."""
     training = optimizer is not None
     model.train(training)
     if training and encoder_frozen:
@@ -93,13 +94,25 @@ def run_epoch(model, loader, ce_loss, dice_loss, dice_metric, optimizer=None, en
             total_loss += float(loss.item())
             total_dice += float(dice_metric(logits.detach(), masks, NUM_CLASSES))
             batches += 1
+            if training and on_batch:
+                on_batch(batches, len(loader))
     return {"loss": total_loss / max(1, batches), "dice": total_dice / max(1, batches)}
 
 
+def batch_printer(epoch, every=10):
+    """Prints {"epoch", "batch", "batches"} every `every` batches and at the last one, for the job's progress."""
+    def on_batch(done, total):
+        if done % every == 0 or done == total:
+            print(json.dumps({"epoch": epoch, "batch": done, "batches": total}), flush=True)
+    return on_batch
+
+
 def source_manifest(images_dir):
-    """The export, control or replay manifest sitting beside images/, if any, so a version names its exact data."""
-    for name in ("export_manifest.json", "control_manifest.json", "replay_manifest.json"):
-        candidate = Path(images_dir).resolve().parent / name
+    """The export, control or replay manifest sitting beside images/, or the whole set's one level up, if any, so a
+    version names its exact data."""
+    folder = Path(images_dir).resolve().parent
+    for candidate in [folder / name for name in ("export_manifest.json", "control_manifest.json", "replay_manifest.json")] \
+            + [folder.parent / "whole_manifest.json"]:
         if candidate.exists():
             return {"file": str(candidate), "sha256": sha256_file(candidate)}
     return None
@@ -184,7 +197,8 @@ def main(argv=None):
     best_dice, best_epoch, best_state, history = float("-inf"), None, None, []
     for epoch in range(1, args.epochs + 1):
         tick = time.time()
-        train = run_epoch(model, train_loader, ce_loss, dice_loss, multiclass_dice, optimizer, encoder_frozen)
+        train = run_epoch(model, train_loader, ce_loss, dice_loss, multiclass_dice, optimizer, encoder_frozen,
+                          on_batch=batch_printer(epoch))
         row = {"epoch": epoch, "train_loss": train["loss"], "train_dice": train["dice"]}
         if epoch % args.val_every == 0 or epoch == args.epochs:
             val = run_epoch(model, val_loader, ce_loss, dice_loss, multiclass_dice)

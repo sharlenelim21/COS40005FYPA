@@ -1,11 +1,16 @@
 """Build training NIfTI pairs from one saved editable mask, keeping only its tracked, corrected slices.
 
-stdin : {"source_nifti", "case_id", "out_dir", "plane": {"height", "width"}, "min_pixels",
+stdin : {"source_nifti", "case_id", "out_dir", "plane": {"height", "width"}, "min_share", "min_pixels",
          "tracked_slices": editTracking.slices, "frames": the saved editable mask's frames,
          "frozen_slices": optional frozen_guard.py index; a source volume with any frozen slice exports nothing}
 stdout: {"files": [...], "skipped": {...}[, "frozen_match": {...}]}  or  {"error": "..."}
 
 With {"check_frozen": true, "source_nifti", "frozen_slices"} it only checks: {"frozen_match": {...} or null}.
+
+The edit rule matches training_selection.ts (Jy's decision 2026-11-01): a tracked slice that carries "editShare"
+(changed pixels / heart pixels of the AI result and the correction together) counts when the share is at least
+min_share (default 0.02) or "structureChanged" is set (a structure added or removed); one without it (its AI result was
+not found) counts when "pixelsChanged" is at least min_pixels (default 20).
 """
 import json
 import sys
@@ -18,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import sha256_file  # noqa: E402
 
 CLASS_TO_LABEL = {"lvc": 3, "lv": 3, "myo": 2, "rv": 1}
+MIN_SHARE, MIN_PIXELS = 0.02, 20
 
 
 def decode_rle(rle, height, width):
@@ -40,11 +46,19 @@ def has_manual(entries):
                for e in entries)
 
 
-def select_slices(tracked, frames, min_pixels):
+def below_rule(tracked_slice, min_pixels, min_share):
+    """The skip reason when a tracked slice's edit is too small, else None."""
+    share = tracked_slice.get("editShare")
+    if share is not None:
+        return None if share >= min_share or tracked_slice.get("structureChanged") else "below_min_share"
+    return None if tracked_slice.get("pixelsChanged", 0) >= min_pixels else "below_min_pixels"
+
+
+def select_slices(tracked, frames, min_pixels=MIN_PIXELS, min_share=MIN_SHARE):
     saved = {(int(f.get("frameindex", 0)), int(s.get("sliceindex", 0))): s
              for f in frames or [] for s in f.get("slices") or []}
     chosen = {}
-    skipped = {"below_min_pixels": 0, "manual": 0, "excluded": 0, "missing": 0}
+    skipped = {"below_min_share": 0, "below_min_pixels": 0, "manual": 0, "excluded": 0, "missing": 0}
     for t in tracked or []:
         key = (int(t["frameindex"]), int(t["sliceindex"]))
         entries = (saved.get(key) or {}).get("segmentationmasks") or []
@@ -54,8 +68,8 @@ def select_slices(tracked, frames, min_pixels):
             skipped["excluded"] += 1
         elif (t.get("byClass") or {}).get("manual", 0) > 0 or has_manual(entries):
             skipped["manual"] += 1
-        elif t.get("pixelsChanged", 0) < min_pixels:
-            skipped["below_min_pixels"] += 1
+        elif below_rule(t, min_pixels, min_share):
+            skipped[below_rule(t, min_pixels, min_share)] += 1
         else:
             chosen.setdefault(key[0], []).append((key[1], entries))
     return {f: sorted(v, key=lambda item: item[0]) for f, v in sorted(chosen.items())}, skipped
@@ -97,7 +111,7 @@ def build(payload):
             return {"files": [], "skipped": {"frozen_test_patient": len(payload.get("tracked_slices") or [])},
                     "frozen_match": hit}
     chosen, skipped = select_slices(payload.get("tracked_slices"), payload.get("frames"),
-                                    int(payload.get("min_pixels", 20)))
+                                    int(payload.get("min_pixels", MIN_PIXELS)), float(payload.get("min_share", MIN_SHARE)))
     out = Path(payload["out_dir"])
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "masks").mkdir(parents=True, exist_ok=True)

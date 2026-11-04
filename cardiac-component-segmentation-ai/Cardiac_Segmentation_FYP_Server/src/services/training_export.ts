@@ -29,6 +29,8 @@ export interface CaseSlice {
     frameindex: number;
     sliceindex: number;
     pixelsChanged: number;
+    editShare: number | null; // changed / heart pixels of the AI result and the correction together
+    structureChanged: boolean;
     editedClasses: string[];
 }
 
@@ -48,6 +50,7 @@ export interface ExportCase {
     frozen: FrozenMatch | null; // the project is a frozen test patient: every export refuses it
     ownerId: string | null; // the project's owner: Prepare lists every user's cases, and only the owner edits one
     ownerName: string | null; // the owner's username, as the page shows it
+    scanId: string; // the uploaded scan (scanIdOf): two projects of the same scan count, and train, once
 }
 
 /**
@@ -71,14 +74,34 @@ export function trainingLabels(entries: MaskEntry[] | undefined, planeSize: numb
     return labels;
 }
 
+export interface EditSize {
+    changed: number; // pixels whose training label changed
+    heart: number; // pixels that are heart in the AI result or in the correction
+    share: number | null; // changed / heart, null when neither holds any heart
+    structureChanged: boolean; // a structure present on one side only
+}
+
+/** How large a correction is on one slice, against its AI result (the 2% rule, training_selection.ts). */
+export function editSize(aiEntries: MaskEntry[] | undefined, editedEntries: MaskEntry[] | undefined,
+                         planeSize: number): EditSize {
+    const before = trainingLabels(aiEntries, planeSize);
+    const after = trainingLabels(editedEntries, planeSize);
+    let changed = 0, heart = 0;
+    const present = [new Set<number>(), new Set<number>()];
+    for (let i = 0; i < planeSize; i++) {
+        if (before[i] !== after[i]) changed++;
+        if (before[i] || after[i]) heart++;
+        present[0].add(before[i]);
+        present[1].add(after[i]);
+    }
+    const structureChanged = [1, 2, 3].some(label => present[0].has(label) !== present[1].has(label));
+    return { changed, heart, share: heart > 0 ? changed / heart : null, structureChanged };
+}
+
 /** The pixels whose training label a correction changed. Edit tracking counts per class, so a moved pixel counts twice. */
 export function changedTrainingPixels(aiEntries: MaskEntry[] | undefined, editedEntries: MaskEntry[] | undefined,
                                       planeSize: number): number {
-    const before = trainingLabels(aiEntries, planeSize);
-    const after = trainingLabels(editedEntries, planeSize);
-    let changed = 0;
-    for (let i = 0; i < planeSize; i++) if (before[i] !== after[i]) changed++;
-    return changed;
+    return editSize(aiEntries, editedEntries, planeSize).changed;
 }
 
 interface FramedMask {
@@ -92,17 +115,18 @@ function entriesAt(mask: FramedMask, frameindex: number, sliceindex: number): Ma
 
 /**
  * A copy of `mask` whose tracked slices count the pixels whose training label changed, compared with its AI result,
- * so the 20-pixel rule, the page and the builder all use the pixels that train. The saved per-class count is kept
- * as pixelsChangedPerClass. Without the AI result the saved counts stand, and `mask` is returned as it is.
+ * and the share of the heart they make up (editShare, heartPixels, structureChanged), so the 2% rule, the page and the
+ * builder all use the pixels that train. The saved per-class count is kept as pixelsChangedPerClass. Without the AI
+ * result the saved counts stand, and `mask` is returned as it is (the 20-pixel fallback then applies).
  */
 export function withTrainingPixelCounts<M extends TrackedMask & FramedMask>(mask: M, aiMask: FramedMask | undefined,
                                                                          planeSize: number): M {
     if (!aiMask || !mask.editTracking?.slices) return mask;
     const slices = mask.editTracking.slices.map((slice: TrackedSlice) => {
         const frameindex = Number(slice.frameindex), sliceindex = Number(slice.sliceindex);
-        return { ...slice, pixelsChangedPerClass: slice.pixelsChanged,
-                 pixelsChanged: changedTrainingPixels(entriesAt(aiMask, frameindex, sliceindex),
-                                                      entriesAt(mask, frameindex, sliceindex), planeSize) };
+        const size = editSize(entriesAt(aiMask, frameindex, sliceindex), entriesAt(mask, frameindex, sliceindex), planeSize);
+        return { ...slice, pixelsChangedPerClass: slice.pixelsChanged, pixelsChanged: size.changed,
+                 heartPixels: size.heart, editShare: size.share, structureChanged: size.structureChanged };
     });
     return { ...mask, editTracking: { ...mask.editTracking, slices } };
 }
@@ -130,18 +154,28 @@ export function maskQuery(models: readonly string[], ownedProjectIds: string[] |
 }
 
 /**
+ * The scan a project holds: the SHA-256 of its uploaded file (`filehash`), else the project itself. The upload refuses
+ * the same file twice only within one user, so two users can each hold the same scan; it counts and trains once.
+ */
+export function scanIdOf(project: { _id?: unknown; filehash?: unknown }): string {
+    return project.filehash ? String(project.filehash) : String(project._id);
+}
+
+/**
  * One row of the Prepare tab. `own` is selectTrainingSlices([mask]).selected[0]; `conflicts` are the project's;
  * `frozen` is the frozen-set guard's match for the project's source volume, when the dry run checked it; `ownerName`
  * is the username of the project's owner (`project.userid`).
  */
 export function describeCase<M extends TrackedMask>(
-    project: { _id?: unknown; name?: unknown; userid?: unknown; dimensions?: { height?: number; width?: number } },
+    project: { _id?: unknown; name?: unknown; userid?: unknown; filehash?: unknown; dimensions?: { height?: number; width?: number } },
     own: SelectedMask<M>, conflicts: SliceConflict[], frozen: FrozenMatch | null = null,
     ownerName: string | null = null): ExportCase {
     const tracking = own.mask.editTracking ?? {};
     const slices = own.slices.map((slice: TrackedSlice) => ({
         frameindex: Number(slice.frameindex), sliceindex: Number(slice.sliceindex),
         pixelsChanged: Number(slice.pixelsChanged),
+        editShare: typeof slice.editShare === 'number' ? slice.editShare : null,
+        structureChanged: Boolean(slice.structureChanged),
         editedClasses: (Array.isArray(slice.editedClasses) ? (slice.editedClasses as unknown[]) : []).map(String),
     }));
     const keys = new Set(slices.map(slice => sliceKey(slice.frameindex, slice.sliceindex)));
@@ -155,6 +189,6 @@ export function describeCase<M extends TrackedMask>(
         slices, pixelsChanged: slices.reduce((sum, slice) => sum + slice.pixelsChanged, 0),
         structures: STRUCTURES.filter(name => slices.some(slice => slice.editedClasses.includes(name))),
         shared, frozen,
-        ownerId: project.userid ? String(project.userid) : null, ownerName,
+        ownerId: project.userid ? String(project.userid) : null, ownerName, scanId: scanIdOf(project),
     };
 }

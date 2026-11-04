@@ -44,13 +44,15 @@ export function DrawingPanel({
   zoomLevel = 1,
   setZoomLevel = () => {},
   onReset,
+  boundingBoxDisabled = false,
 }: DrawingPanelProps) {
   // Memoized tool selection handler
   const handleToolChange = React.useCallback((value: string) => {
+    if (value === 'rectangle' && boundingBoxDisabled) return;
     if (value && DRAWING_TOOLS.includes(value as DrawingTool)) {
       setTool(value as DrawingTool);
     }
-  }, [setTool]);
+  }, [setTool, boundingBoxDisabled]);
 
   // Optimized keyboard shortcut handler with cleanup
   useEffect(() => {
@@ -87,12 +89,15 @@ export function DrawingPanel({
           {DRAWING_TOOLS.map((toolKey) => {
             const config = TOOL_CONFIG[toolKey];
             const IconComponent = config.icon;
+            const isDisabled = toolKey === 'rectangle' && boundingBoxDisabled;
 
             return (
               <button
                 key={toolKey}
                 onClick={() => handleToolChange(toolKey)}
+                disabled={isDisabled}
                 aria-label={config.label}
+                title={isDisabled ? "Bounding Box uses MedSAM, which is only available with NVIDIA GPU." : undefined}
                 className={cn(
                   "h-16 flex flex-col items-center justify-center rounded-lg",
                   "border border-border transition-all",
@@ -292,7 +297,7 @@ export function DrawingPanel({
               <div>• <strong>Select:</strong> Move and select objects</div>
               <div>• <strong>Brush:</strong> Paint segmentation masks</div>
               <div>• <strong>Eraser:</strong> Remove mask pixels</div>
-              <div>• <strong>Bounding Box:</strong> Draw bounding box for AI-powered manual segmentation</div>
+              <div>• <strong>Bounding Box:</strong> Draw bounding box for AI-powered manual segmentation (MedSAM, NVIDIA GPU only)</div>
               <div>• <strong>Zoom:</strong> Enlarge the image</div>
               <div>• <strong>Pan:</strong> Navigate the canvas</div>
               <div>• <strong>Keyboard Shortcuts: ← → frames ↑ ↓ slices + - zoom</strong></div>

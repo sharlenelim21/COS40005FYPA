@@ -591,6 +591,8 @@ export const reconstructionApi = {
       // configured on the GPU service, and returns 503 when there is none rather than quietly
       // meshing the request with the LV model.
       chamber?: 'lv' | 'rv';
+      // 1-based frames to build; omitted builds every frame.
+      frames?: number[];
       parameters?: {
         num_iterations?: number;
         resolution?: number;

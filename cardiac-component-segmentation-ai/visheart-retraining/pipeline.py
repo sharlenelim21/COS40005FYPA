@@ -3,13 +3,18 @@
 1. Preparing data: copy the export builder and the frozen-set files into the app container, run the export dry run
    (stop if no corrected slice qualifies), run the export with the frozen-set guard, move it to <unet>/exports and
    check it again on the host.
-2. Training: train_candidate.py from the registry's original, the D7 recipe (plan WS12).
+2. Training: train_candidate.py from the registry's original, its default recipe: the whole dataset plus the
+   corrections, decoder only, one epoch (Jy's decision 2026-11-01; the D7 replay recipe is train_candidate.py's
+   rollback). Progress is reported per batch, since one whole-dataset epoch takes about 45 minutes on a CPU.
 3. Comparing with the current model: score the frozen set (seeded with the active version's saved scores when they
    exist, so only the new version is scored), then versions.py register and compare. Nothing is activated.
 4. Preparing example scans: render_examples.py predicts 9 frozen-set scans with both versions, for the Results tab
    (plan WS13 R1). It never fails the job, because the comparison is already complete.
 
 With an owner and a selection (R1), the dry run and the export keep only that user's chosen masks.
+Training needs at least MIN_PROJECTS corrected projects, each with a qualifying slice (Jy's decision 2026-11-02,
+decisions/retraining-edit-threshold-and-minimum-data.md: more patients, not more slices; Ankenbrand et al. 2021).
+RECOMMENDED_PROJECTS and FEW_SLICES only warn, on the page.
 """
 import datetime as dt
 import json
@@ -27,6 +32,7 @@ from common import UNET_ROOT, sha256_file  # noqa: E402
 from evaluate import atomic_write_json  # noqa: E402
 from frozen_guard import DEFAULT_INDEX  # noqa: E402
 from jobs import NO_WINDOW, Step, StepFailed, now  # noqa: E402
+from train_candidate import RECIPE  # noqa: E402
 
 def _default_docker_cmd() -> list:
     """Resolve a real path to the docker CLI instead of trusting bare "docker" to be on PATH.
@@ -54,11 +60,26 @@ def _default_docker_cmd() -> list:
     return ["docker"]  # last resort -- unchanged previous behaviour
 
 
-TRAIN_EPOCHS = 20  # train_candidate.py's default, passed explicitly so "epoch k of 20" on the page is always true
+TRAIN_EPOCHS = 1  # train_candidate.py's default for the whole recipe, passed explicitly so the page's count is true
+MIN_PROJECTS = 5           # below this, training does not start; a project counts only with a qualifying slice
+RECOMMENDED_PROJECTS = 7   # below this, the page warns
+FEW_SLICES = 10            # below this, the page warns: each correction is repeated more often (about 147x at 5)
 STEP_TITLES = {"prepare": "Preparing data", "train": "Training", "evaluate": "Comparing with the current model",
                "examples": "Preparing example scans"}
+# The Results tab can ask for a version's example scans (worker.py compare_examples) while its training is still
+# making them. Both write the same folder, so they take turns, and the second uses what the first made.
+EXAMPLES_LOCK = threading.Lock()
 NOTHING_QUALIFIES = "No corrected slices qualify for training yet. Correct a segmentation, save it, then train again."
 NOTHING_CHOSEN = "None of the chosen cases qualifies for training any more. Check the corrections again, then choose."
+
+
+def too_little(projects, slices):
+    """The refusal when a training set has too few projects, or None. The slice count is only reported."""
+    if projects >= MIN_PROJECTS:
+        return None
+    return (f"Too little data to train: {projects} project(s) and {slices} slice(s) qualify. Training needs at least "
+            f"{MIN_PROJECTS} corrected projects ({RECOMMENDED_PROJECTS} are recommended); more patients help more than "
+            "more slices.")
 BUILDER_FILES = ("build_training_volumes.py", "common.py", "frozen_guard.py")
 
 
@@ -168,6 +189,10 @@ def prepare(config, ctx, label, owner=None, selection=None):
         if slices == 0:
             shutil.rmtree(staged, ignore_errors=True)
             raise StepFailed(NOTHING_CHOSEN if selection else NOTHING_QUALIFIES)
+        refusal = too_little(int(dry["counts"]["projects"]), slices)
+        if refusal:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise StepFailed(refusal)
         ctx.run_command([*export_command(config, name), *scope, "--builder", "/tmp/retraining/build_training_volumes.py",
                          "--holdout", f"/tmp/retraining/{config.frozen_manifest.name}",
                          "--frozen-slices", f"/tmp/retraining/{config.frozen_index.name}"],
@@ -185,6 +210,9 @@ def prepare(config, ctx, label, owner=None, selection=None):
     if counts["slices"] < 1:
         raise StepFailed("Every corrected project was left out of the export (for example, it holds a frozen test "
                          "scan), so there is nothing to train on. The log lists the reasons.")
+    refusal = too_little(int(counts["projects"]), int(counts["slices"]))
+    if refusal:
+        raise StepFailed(f"{refusal} Some projects were left out of the export; the log lists the reasons.")
     ctx.run_command([config.python, config.tools / "frozen_guard.py", "check", "--index", config.frozen_index,
                      export / "images"],
                     failure="The frozen-set guard found a test scan in the export, so nothing was trained.")
@@ -192,22 +220,28 @@ def prepare(config, ctx, label, owner=None, selection=None):
 
 
 def epoch_progress(ctx):
+    """Epoch rows ({"epoch", "train_loss"}) set the finished epochs; batch rows ({"epoch", "batch", "batches"}) the
+    batches of the epoch under way (not "step": the job keeps its current step there)."""
     def on_line(line):
         line = line.strip()
-        if not (line.startswith("{") and '"train_loss"' in line):
+        if not (line.startswith("{") and ('"train_loss"' in line or '"batches"' in line)):
             return
         try:
             row = json.loads(line)
-        except ValueError:
+            if "batches" in row:
+                ctx.update(epoch=int(row["epoch"]) - 1, epochs=TRAIN_EPOCHS, batch=int(row["batch"]),
+                           batches=int(row["batches"]))
+            else:
+                ctx.update(epoch=int(row["epoch"]), epochs=TRAIN_EPOCHS)
+        except (ValueError, KeyError, TypeError):
             return
-        ctx.update(epoch=int(row["epoch"]), epochs=TRAIN_EPOCHS)
     return on_line
 
 
 def train(config, ctx, label):
     registry = versions.Registry(config.registry)
     base = registry.file(registry.data["original"])  # D7: every version is trained from the original
-    ctx.update(epoch=0, epochs=TRAIN_EPOCHS)
+    ctx.update(epoch=0, epochs=TRAIN_EPOCHS, recipe=RECIPE)
     ctx.run_command([config.python, config.tools / "train_candidate.py", "--export", ctx.values["export"],
                      "--label", label, "--base-checkpoint", base, "--epochs", TRAIN_EPOCHS,
                      "--output-dir", config.versions_dir, "--frozen-slices", config.frozen_index],
@@ -328,10 +362,15 @@ def render_examples_step(config, ctx, label):
         ctx.update(examples=dict(progress))
 
     try:
-        ctx.run_command([config.python, config.tools / "render_examples.py", "--label", label,
-                         "--report", ctx.values["report"], "--registry", config.registry,
-                         "--manifest", config.frozen_manifest, "--out", config.examples / label],
-                        on_line=on_line, failure="The example scans could not be prepared. The comparison is complete.")
+        with EXAMPLES_LOCK:
+            if (config.examples / label / "index.json").exists():
+                ctx.log("example scans already made for the Results tab")
+            else:
+                ctx.run_command([config.python, config.tools / "render_examples.py", "--label", label,
+                                 "--report", ctx.values["report"], "--registry", config.registry,
+                                 "--manifest", config.frozen_manifest, "--out", config.examples / label],
+                                on_line=on_line,
+                                failure="The example scans could not be prepared. The comparison is complete.")
         progress["ready"] = True
     except StepFailed as failure:
         progress["error"] = str(failure)
@@ -403,9 +442,11 @@ def simulated_steps(config, job, seconds_per_epoch=1.0):
     def train_sim(ctx):
         script = ("import json, time\n"
                   f"for epoch in range(1, {TRAIN_EPOCHS + 1}):\n"
-                  f"    time.sleep({pause})\n"
+                  "    for batch in range(10, 101, 10):\n"
+                  f"        time.sleep({pause} / 10)\n"
+                  "        print(json.dumps({'epoch': epoch, 'batch': batch, 'batches': 100}), flush=True)\n"
                   "    print(json.dumps({'epoch': epoch, 'train_loss': 1.0 / epoch}), flush=True)\n")
-        ctx.update(epoch=0, epochs=TRAIN_EPOCHS)
+        ctx.update(epoch=0, epochs=TRAIN_EPOCHS, recipe=RECIPE)
         ctx.run_command([config.python, "-c", script], on_line=epoch_progress(ctx))
 
     def evaluate_sim(ctx):

@@ -40,6 +40,8 @@ export interface CorrectionCase {
   /** The project's owner: every user sees every case, and only the owner edits it. */
   ownerId?: string | null;
   ownerName?: string | null;
+  /** The uploaded scan (its file hash): two users' projects of the same scan count, and train, once. */
+  scanId?: string | null;
 }
 
 export interface JobCase {
@@ -81,6 +83,9 @@ export interface TrainingJob {
     step?: string;
     epoch?: number;
     epochs?: number;
+    batch?: number;    // within the epoch under way
+    batches?: number;
+    recipe?: string;   // the training method, in words
     scored?: number;
     total?: number;
     scoring_active_first?: boolean;

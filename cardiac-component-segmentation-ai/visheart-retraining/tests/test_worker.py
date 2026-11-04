@@ -330,6 +330,7 @@ class Worker(unittest.TestCase):
             with self.assertRaises(jobs.JobError) as refused:
                 app.compare_examples("gone", "orig")
         self.assertEqual(made, ["cand"])                       # made once, and never for a deleted version
+        self.assertIs(app.compare_lock, pipeline.EXAMPLES_LOCK)   # training's example step and the page take turns
         comparison.assert_not_called()
         self.assertEqual((view["rendered"], again["rendered"]), (True, False))
         self.assertEqual(view["index"]["examples"][0]["case"], "c1.nii.gz")   # the page can show them at once

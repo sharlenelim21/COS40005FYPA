@@ -2018,6 +2018,12 @@ function ProjectPageInner() {
                               <p className="text-muted-foreground">ED Frame</p>
                               <p>Frame {edFrame}</p>
                             </div>
+                            {Array.isArray(recon.builtFrames) && recon.builtFrames.length > 0 && (
+                              <div>
+                                <p className="text-muted-foreground">Built frames</p>
+                                <p title={recon.builtFrames.join(", ")}>{recon.builtFrames.length} chosen</p>
+                              </div>
+                            )}
                             <div>
                               <p className="text-muted-foreground">Format</p>
                               <p className="uppercase">{recon.meshFormat || "GLB"}</p>

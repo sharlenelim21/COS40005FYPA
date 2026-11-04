@@ -56,7 +56,7 @@ class WorkerApp:
             plan = lambda job: steps(config, job)  # noqa: E731
         self.runner = jobs.JobRunner(self.store, plan)
         self.check_lock = threading.Lock()
-        self.compare_lock = threading.Lock()  # one comparison is prepared at a time
+        self.compare_lock = pipeline.EXAMPLES_LOCK  # one at a time, shared with training's example step
         self._integrity = None                 # (what it was computed from, the answer); see integrity()
         self.log_lock = threading.Lock()
         self.log_path = config.jobs / "worker.log"
