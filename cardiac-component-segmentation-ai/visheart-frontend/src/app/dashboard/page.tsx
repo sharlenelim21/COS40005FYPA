@@ -41,6 +41,7 @@ import {
   List,
   Edit,
   Trash2,
+  Crosshair,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -61,14 +62,19 @@ const formatFileSize = (bytes: number) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 };
 
-// Strain jobs share the segmentation jobs collection (jobType is still 'segmentation'), but aren't
-// one — same distinction project/[projectId]/page.tsx's STRAIN_JOB_LABELS/strainJobLabel already
-// make from modelUsed, kept here too since the dashboard builds its own job labels separately.
+// Strain and landmark jobs share the segmentation jobs collection (jobType is still
+// 'segmentation'), but aren't one — same distinction project/[projectId]/page.tsx's
+// jobDisplayName/strainJobLabel already make from modelUsed, kept here too since the
+// dashboard builds its own job labels separately. Landmark wasn't checked here at all
+// (only strain was), so every landmark job fell through to "Segmentation" (reported live,
+// 2026-11-07).
 const STRAIN_JOB_LABELS: Record<string, string> = {
   strain_series: "Strain Computation",
   rv_strain_series: "RV Strain Computation",
 };
+const isLandmarkJob = (job: { modelUsed?: string | null }): boolean => /landmark/i.test(String(job.modelUsed ?? ""));
 const jobTypeLabel = (job: { jobType: string; modelUsed?: string | null }): string => {
+  if (isLandmarkJob(job)) return "Landmark Detection";
   const strainLabel = STRAIN_JOB_LABELS[String(job.modelUsed ?? "").toLowerCase()];
   if (strainLabel) return strainLabel;
   return job.jobType === "segmentation" ? "Segmentation" : "4D Reconstruction";
@@ -696,11 +702,13 @@ function DashboardPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Badge 
-                          variant={job.jobType === 'segmentation' ? "secondary" : "outline"}
+                        <Badge
+                          variant={isLandmarkJob(job) ? "outline" : job.jobType === 'segmentation' ? "secondary" : "outline"}
                           className="text-xs"
                         >
-                          {job.jobType === 'segmentation' ? (
+                          {isLandmarkJob(job) ? (
+                            <><Crosshair className="h-3 w-3 mr-1" />LM</>
+                          ) : job.jobType === 'segmentation' ? (
                             <><Brain className="h-3 w-3 mr-1" />Seg</>
                           ) : (
                             <><Box className="h-3 w-3 mr-1" />4D</>

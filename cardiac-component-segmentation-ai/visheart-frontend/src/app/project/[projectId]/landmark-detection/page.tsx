@@ -291,6 +291,28 @@ export default function LandmarkDetectionPage() {
   useEffect(() => {
     if (!fullCycleJobIds || !projectId) return;
     let cancelled = false;
+    // Tracks which of the two job IDs have actually been SEEN (present in a
+    // getUserJobs response) at least once, keyed by jobId. A client-generated
+    // job ID exists the instant this effect starts, but the server doesn't
+    // write the Job record until its own route handler reaches that point --
+    // several awaits deep (mask lookup, NIfTI build, etc.). The very first
+    // poll tick(s) can land in that gap, where byId.get(jobId) is undefined
+    // for a job that hasn't been created YET, not one that has finished. The
+    // old code treated "not found" identically to "found and no longer
+    // pending", so it could conclude the whole compute was done (and
+    // immediately show whatever stale/empty data existed before the run)
+    // while both jobs were still legitimately queued -- reported live as
+    // "switch tabs mid-compute, it shows results before they're fully
+    // computed" and, in the worst case, no tab switch needed at all if the
+    // race landed on the very first tick (2026-11-07). A job only counts as
+    // finished once it has been seen at least once; until then, "not found"
+    // means "not created yet", not "done".
+    const seen = new Set<string>();
+    const startedAt = Date.now();
+    // Safety net: if a job is NEVER created (e.g. the server's createJob call
+    // itself failed) it would never be "seen" and this would poll forever --
+    // give up after a generous 5 minutes so the UI doesn't hang indefinitely.
+    const GIVE_UP_MS = 5 * 60 * 1000;
     const poll = async () => {
       let jobs: any[] = [];
       try {
@@ -302,8 +324,11 @@ export default function LandmarkDetectionPage() {
       const byId = new Map<string, any>((jobs ?? []).map((j: any) => [j.jobId, j]));
       const lvJob = byId.get(fullCycleJobIds.lv);
       const rvJob = byId.get(fullCycleJobIds.rv);
+      if (lvJob) seen.add(fullCycleJobIds.lv);
+      if (rvJob) seen.add(fullCycleJobIds.rv);
       const isPending = (j: any) => j && (j.status === "pending" || j.status === "in_progress");
-      if (isPending(lvJob) || isPending(rvJob)) {
+      const isUnresolved = (id: string, j: any) => isPending(j) || !seen.has(id);
+      if (Date.now() - startedAt < GIVE_UP_MS && (isUnresolved(fullCycleJobIds.lv, lvJob) || isUnresolved(fullCycleJobIds.rv, rvJob))) {
         const readings = [lvJob?.progress, rvJob?.progress].filter(
           (p): p is number => typeof p === "number" && p > 0,
         );
@@ -312,8 +337,8 @@ export default function LandmarkDetectionPage() {
         }
         return;
       }
-      // Neither job is pending/in_progress any more (done, failed, or aged out of the list) --
-      // the compute is over. Pick up whatever it produced and stop tracking it.
+      // Both jobs have been seen at least once and are no longer pending/in_progress (done,
+      // failed, or aged out of the list after finishing) -- the compute is actually over.
       if (!cancelled) {
         setFullCycleBusy(false);
         setFullCycleProgress(null);
