@@ -15,7 +15,16 @@ import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { SegmentationSidebar } from "@/components/segmentation/segmentation-sidebar";
 import type { AnatomicalLabel, HistoryEntry, DrawingTool } from "@/types/segmentation";
-import { generateMaskKey } from "@/types/segmentation";
+import {
+  generateMaskKey,
+  LABEL_SHORTCUT_KEYS,
+  TOOL_SHORTCUT_KEYS,
+  BRUSH_SIZE_DECREASE_KEY,
+  BRUSH_SIZE_INCREASE_KEY,
+  BRUSH_SIZE_MIN,
+  BRUSH_SIZE_MAX,
+} from "@/types/segmentation";
+import { isKeyForFocusedControl } from "@/lib/keyboard-shortcuts";
 import type * as ProjectTypes from "@/types/project";
 import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
 import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
@@ -38,6 +47,14 @@ const MODEL_OPTIONS = SEGMENTATION_MODEL_OPTIONS;
 
 const isValidModel = (v: string | null): v is SegmentationModelId =>
   v === "medsam" || v === "unet";
+
+// Reverse lookups for the keyboard shortcuts (pressed key, lower-cased -> label / tool).
+const LABEL_BY_SHORTCUT_KEY: Record<string, AnatomicalLabel> = Object.fromEntries(
+  (Object.entries(LABEL_SHORTCUT_KEYS) as [AnatomicalLabel, string][]).map(([label, key]) => [key.toLowerCase(), label])
+);
+const TOOL_BY_SHORTCUT_KEY: Record<string, DrawingTool> = Object.fromEntries(
+  (Object.entries(TOOL_SHORTCUT_KEYS) as [DrawingTool, string][]).map(([tool, key]) => [key.toLowerCase(), tool])
+);
 
 const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas").then((mod) => mod.ImageCanvas), {
   ssr: false,
@@ -1133,6 +1150,68 @@ function SegmentationResultsPageInner() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [hasUnsavedChanges, isSaving, handleSave]);
+
+  // Editing shortcuts: 1/2/3 active label, D/E draw/eraser, Q/W brush size, Ctrl+Z/Ctrl+Y
+  // undo/redo, Delete clears the active mask. They live here rather than in DrawingPanel because
+  // the page mounts the sidebar twice (the mobile layout is only CSS-hidden), so a listener in the
+  // panel ran twice per key press -- and it stopped working whenever the History tab was open.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isKeyForFocusedControl(event.target)) return;
+      // Browser autofill can dispatch keydown events without a key.
+      if (typeof event.key !== "string") return;
+
+      const key = event.key.toLowerCase();
+
+      if (event.ctrlKey || event.metaKey) {
+        if (event.altKey || event.shiftKey) return;
+        if (key === "z" && canUndo) {
+          event.preventDefault();
+          handleUndo();
+        } else if (key === "y" && canRedo) {
+          event.preventDefault();
+          handleRedo();
+        }
+        // Any other Ctrl/Cmd combination (Ctrl+W, Ctrl+D, Ctrl+1...) is left to the browser.
+        return;
+      }
+      if (event.altKey) return;
+
+      if (event.key === "Delete") {
+        if (event.shiftKey || !canClear) return;
+        event.preventDefault();
+        handleClear();
+        return;
+      }
+
+      const label = LABEL_BY_SHORTCUT_KEY[key];
+      if (label) {
+        event.preventDefault();
+        setActiveLabel(label);
+        return;
+      }
+
+      const shortcutTool = TOOL_BY_SHORTCUT_KEY[key];
+      if (shortcutTool) {
+        event.preventDefault();
+        setTool(shortcutTool);
+        return;
+      }
+
+      // Brush size only applies to Draw and Eraser, and the size slider is only visible then.
+      const sizeStep =
+        key === BRUSH_SIZE_INCREASE_KEY.toLowerCase() ? 1
+        : key === BRUSH_SIZE_DECREASE_KEY.toLowerCase() ? -1
+        : 0;
+      if (sizeStep !== 0 && (tool === "brush" || tool === "eraser")) {
+        event.preventDefault();
+        setBrushSize((size) => Math.min(BRUSH_SIZE_MAX, Math.max(BRUSH_SIZE_MIN, size + sizeStep)));
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [tool, canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear]);
 
   const handleHistoryExport = useCallback(() => {
     console.log("Export triggered from page level");

@@ -24,6 +24,25 @@ export const DRAWING_TOOLS = [
 ] as const;
 export type DrawingTool = typeof DRAWING_TOOLS[number];
 
+// Keyboard shortcuts on the segmentation page. The page's key handler and the on-screen key
+// hints both read these maps, so they can't drift apart. Label keys follow the left-to-right
+// order of the label cards (ANATOMICAL_LABELS).
+export const LABEL_SHORTCUT_KEYS: Record<AnatomicalLabel, string> = {
+  'lvc': '1',
+  'rv': '2',
+  'myo': '3',
+} as const;
+
+export const TOOL_SHORTCUT_KEYS: Partial<Record<DrawingTool, string>> = {
+  brush: 'D',
+  eraser: 'E',
+} as const;
+
+export const BRUSH_SIZE_DECREASE_KEY = 'Q';
+export const BRUSH_SIZE_INCREASE_KEY = 'W';
+export const BRUSH_SIZE_MIN = 1;
+export const BRUSH_SIZE_MAX = 50;
+
 // History entry interface with proper typing
 export interface HistoryEntry {
   id: string;

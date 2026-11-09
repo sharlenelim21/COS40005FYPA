@@ -61,6 +61,18 @@ export const LANDMARK_DEFINITIONS: LandmarkDefinition[] = [
   { id: "mid_anterior",   label: "Mid Anterior",   color: "#a78bfa", shape: "circle", priority: 4  },
 ];
 
+// Keyboard shortcuts on the landmark page's Landmarks tab. 1/2 focus the two RV insertion points
+// in the order the sidebar lists them. The page's key handler and the sidebar's hints both read
+// these, so they can't drift apart.
+export const LANDMARK_SHORTCUT_KEYS: Partial<Record<LandmarkDefinition["id"], string>> = {
+  rv_insertion_1: "1",
+  rv_insertion_2: "2",
+};
+export const LANDMARK_TOGGLE_LABELS_KEY = "L";
+/** Deletes the focused point (the Delete key also works). */
+export const LANDMARK_DELETE_KEY = "Q";
+export const LANDMARK_PLAY_KEY_NAME = "Space";
+
 export function getLandmarkCoord(
   pred: FramePrediction | null | undefined,
   id: string,
@@ -69,6 +81,21 @@ export function getLandmarkCoord(
   const val = (pred as unknown as Record<string, unknown>)[id];
   if (!Array.isArray(val) || val.length < 2) return undefined;
   return val as LandmarkCoord;
+}
+
+/**
+ * A landmark deleted from this slice but NOT saved yet: the raw AI prediction has it, the current
+ * (edited) prediction doesn't, and the last SAVED copy still does. This is the only window in
+ * which Restore is offered (sidebar button, or pressing the landmark's 1/2 key); once the deletion
+ * is saved, getting the point back is a fresh placement.
+ */
+export function isLandmarkPendingDelete(
+  id: string,
+  current: FramePrediction | null | undefined,
+  raw: FramePrediction | null | undefined,
+  saved: FramePrediction | null | undefined,
+): boolean {
+  return !getLandmarkCoord(current, id) && !!getLandmarkCoord(raw, id) && !!getLandmarkCoord(saved, id);
 }
 
 /**

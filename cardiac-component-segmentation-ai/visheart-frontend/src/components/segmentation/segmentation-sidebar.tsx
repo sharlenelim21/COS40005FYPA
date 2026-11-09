@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 
 // Import shared types and constants
 import type { SegmentationSidebarProps, AnatomicalLabel } from "@/types/segmentation";
-import { LABEL_COLORS, LABEL_NAMES, ANATOMICAL_LABELS } from "@/types/segmentation";
+import { LABEL_COLORS, LABEL_NAMES, ANATOMICAL_LABELS, LABEL_SHORTCUT_KEYS } from "@/types/segmentation";
 import type { SegmentationModelId } from "@/app/project/[projectId]/segmentation/page";
 import { DrawingPanel } from './drawing-panel';
 import { HistoryPanel } from './history-panel';
@@ -139,14 +139,17 @@ const ToolsAndMasksPanel = React.memo(({
             
             const isActive = activeLabel === label;
             const isVisible = visibleMasks.has(anatomicalLabel);
+            const shortcut = LABEL_SHORTCUT_KEYS[anatomicalLabel];
 
             return (
               <div key={maskKey} className="flex flex-col gap-1.5">
                 {/* Main selection button */}
                 <button
                   onClick={() => setActiveLabel(anatomicalLabel)}
+                  aria-keyshortcuts={shortcut}
+                  title={shortcut ? `${labelName} (${shortcut})` : undefined}
                   className={cn(
-                    "w-full p-2.5 rounded-lg border-2 transition-all flex flex-col items-center gap-2",
+                    "relative w-full p-2.5 rounded-lg border-2 transition-all flex flex-col items-center gap-2",
                     "hover:border-primary/50 hover:shadow-sm",
                     isActive 
                       ? "border-primary bg-primary/5 shadow-sm" 
@@ -155,6 +158,14 @@ const ToolsAndMasksPanel = React.memo(({
                   )}
                   aria-label={`Select ${labelName} as active mask`}
                 >
+                  {shortcut && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-1 right-1.5 font-mono text-[10px] leading-none text-muted-foreground"
+                    >
+                      {shortcut}
+                    </span>
+                  )}
                   {/* Color indicator dot */}
                   <div 
                     className={cn(

@@ -35,6 +35,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
+import { useCyclePlayback } from "@/hooks/useCyclePlayback";
 import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
@@ -47,13 +48,19 @@ import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceVie
 import { FrameSliceControls } from "@/components/landmark/FrameSliceControls";
 import {
   LANDMARK_DEFINITIONS,
+  LANDMARK_SHORTCUT_KEYS,
+  LANDMARK_TOGGLE_LABELS_KEY,
+  LANDMARK_DELETE_KEY,
   framePredictionsToLandmarkFrames,
+  getLandmarkCoord,
+  isLandmarkPendingDelete,
   landmarkFramesToEdits,
   normalizeRvInsertionOrder,
 } from "@/types/landmark";
+import { isKeyForFocusedControl, isArrowOrSpaceForFocusedControl } from "@/lib/keyboard-shortcuts";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
-import type { FramePrediction } from "@/types/landmark";
+import type { FramePrediction, LandmarkCoord } from "@/types/landmark";
 import { segmentationApi } from "@/lib/api";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
@@ -89,6 +96,11 @@ const MODEL_OPTIONS = [
 ] as const;
 
 type ModelId = typeof MODEL_OPTIONS[number]["value"];
+
+// Pressed key -> landmark id, for the 1/2 focus shortcuts.
+const LANDMARK_ID_BY_SHORTCUT_KEY: Record<string, string> = Object.fromEntries(
+  Object.entries(LANDMARK_SHORTCUT_KEYS).map(([id, key]) => [key, id]),
+);
 
 const AHA_SEGMENTS = [
   "Basal Anterior",
@@ -903,12 +915,23 @@ export default function LandmarkDetectionPage() {
     });
   }, [currentLandmarkEditKey, currentPrediction]);
 
+  // Each deleted point's edit from just before its delete, keyed "frame:slice|landmarkId", so
+  // Restore (button or 1/2 key) puts the point back where it was -- including a manual drag --
+  // rather than at the AI's position. hadEdit false = it was at the AI's position. Every delete
+  // overwrites its entry and a restore consumes it, so a leftover entry is never read.
+  const preDeleteEditsRef = useRef(new Map<string, { hadEdit: boolean; coord: LandmarkCoord | undefined }>());
+
   /** Deletes immediately (no undo-countdown window) — it's an edit like a move,
    *  so it dirties the save button right away instead of waiting 5s to commit. */
   const handleLandmarkDeleteRequest = useCallback((id: string) => {
     const sliceKey = currentLandmarkEditKey;
     setLandmarkEdits((prev) => {
       const existing = prev[sliceKey] ?? {};
+      // Remember the position being deleted (same value on every run of this updater).
+      preDeleteEditsRef.current.set(`${sliceKey}|${id}`, {
+        hadEdit: id in existing,
+        coord: (existing as Record<string, LandmarkCoord | undefined>)[id],
+      });
       const wasCollapsed = (currentPrediction?.flag === "collapsed_to_mean") && !("flag" in existing);
       return {
         ...prev,
@@ -922,17 +945,24 @@ export default function LandmarkDetectionPage() {
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
-  /** Restores a deleted landmark back to its original AI-predicted coordinate —
-   *  available any time the landmark is currently deleted, whether that
-   *  deletion has been saved yet or not (removing the delete edit itself is a
-   *  change from whatever is currently saved, so this dirties the save button
-   *  the same as deleting does). */
+  /** Restores a deleted landmark to where it was just before the delete: a
+   *  manually moved point goes back to its moved position, an untouched one to
+   *  the AI-predicted coordinate (removing the delete edit itself is a change
+   *  from whatever is currently saved, so this dirties the save button the same
+   *  as deleting does). */
   const handleUndoLandmarkDelete = useCallback((id: string) => {
+    const memoKey = `${currentLandmarkEditKey}|${id}`;
+    const beforeDelete = preDeleteEditsRef.current.get(memoKey);
+    preDeleteEditsRef.current.delete(memoKey);
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey];
       if (!existing || !(id in existing)) return prev;
       const rest = { ...existing };
-      delete (rest as Record<string, unknown>)[id];
+      if (beforeDelete?.hadEdit && beforeDelete.coord) {
+        (rest as Record<string, unknown>)[id] = beforeDelete.coord; // back to the manual position
+      } else {
+        delete (rest as Record<string, unknown>)[id]; // back to the AI's position
+      }
       const next = { ...prev };
       if (Object.keys(rest).length > 0) {
         next[currentLandmarkEditKey] = rest;
@@ -1061,6 +1091,112 @@ export default function LandmarkDetectionPage() {
     };
   }, [hasUnsavedLandmarkEdits, isSavingLandmarks, handleSaveLandmarks]);
 
+  // Landmarks-tab shortcuts: ←/→ frame, ↑/↓ slice, Space play/pause, 1/2 focus the anterior /
+  // inferior RV insertion point (or restore it if just deleted), Q (or Delete) removes the focused
+  // point from this slice, Esc unfocuses, L shows/hides labels. Registered once, here: the page renders the viewer and sidebar twice
+  // (the mobile layout is only CSS-hidden), so a listener inside them would run twice per key.
+  useEffect(() => {
+    if (workspace !== "landmarks" || !hasPredictions) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isKeyForFocusedControl(event.target)) return;
+      // Ctrl/Cmd/Alt combinations belong to the browser (Ctrl+S is handled above).
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (typeof event.key !== "string") return;
+      const key = event.key;
+      const isArrow = key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown";
+      // Holding a toggle key (Space, 1, 2, L) would flicker it on and off.
+      if (event.repeat && !isArrow) return;
+
+      const controlOwnsKey = isArrowOrSpaceForFocusedControl(event.target);
+
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        if (controlOwnsKey) return;
+        event.preventDefault();
+        const idx = state.frameIds.indexOf(state.landmarkFrame);
+        const nextFrameId = state.frameIds[idx + (key === "ArrowRight" ? 1 : -1)];
+        if (nextFrameId !== undefined) handleLandmarkFrameChange(nextFrameId);
+        return;
+      }
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        if (controlOwnsKey) return;
+        event.preventDefault();
+        if (key === "ArrowUp") handlePrevFrame();
+        else handleNextFrame();
+        return;
+      }
+      if (key === " ") {
+        if (controlOwnsKey) return;
+        // Always play/pause, even when a button has focus (Enter still presses buttons).
+        event.preventDefault();
+        handleTogglePlay();
+        return;
+      }
+
+      const landmarkId = LANDMARK_ID_BY_SHORTCUT_KEY[key];
+      if (landmarkId) {
+        // Just deleted (not saved yet): the key restores it, like the sidebar's Restore button,
+        // and keeps it focused so Q can delete it again.
+        if (
+          !readOnly &&
+          isLandmarkPendingDelete(landmarkId, adjustedCurrentPrediction, currentPrediction, savedCurrentPrediction)
+        ) {
+          event.preventDefault();
+          handleUndoLandmarkDelete(landmarkId);
+          setHighlightedLandmarkId(landmarkId);
+          return;
+        }
+        // Same rule as the sidebar's focus/place chip: a template has nothing to place.
+        if (readOnly && !getLandmarkCoord(adjustedCurrentPrediction, landmarkId)) return;
+        event.preventDefault();
+        setHighlightedLandmarkId((current) => (current === landmarkId ? null : landmarkId));
+        return;
+      }
+
+      if (key === "Delete" || key.toLowerCase() === LANDMARK_DELETE_KEY.toLowerCase()) {
+        // Only a focused point, only with "Move/edit landmarks" on, so a stray key press can't
+        // remove a point. Restore in the sidebar brings it back.
+        if (event.shiftKey || readOnly || !editableLandmarks || !highlightedLandmarkId) return;
+        if (!getLandmarkCoord(adjustedCurrentPrediction, highlightedLandmarkId)) return;
+        event.preventDefault();
+        handleLandmarkDeleteRequest(highlightedLandmarkId);
+        return;
+      }
+
+      if (key === "Escape") {
+        if (!highlightedLandmarkId) return;
+        event.preventDefault();
+        setHighlightedLandmarkId(null);
+        return;
+      }
+
+      if (key.toLowerCase() === LANDMARK_TOGGLE_LABELS_KEY.toLowerCase()) {
+        event.preventDefault();
+        setShowLabels((shown) => !shown);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    workspace,
+    hasPredictions,
+    state.frameIds,
+    state.landmarkFrame,
+    handleLandmarkFrameChange,
+    handlePrevFrame,
+    handleNextFrame,
+    handleTogglePlay,
+    readOnly,
+    editableLandmarks,
+    highlightedLandmarkId,
+    adjustedCurrentPrediction,
+    currentPrediction,
+    savedCurrentPrediction,
+    handleLandmarkDeleteRequest,
+    handleUndoLandmarkDelete,
+  ]);
+
   const bullseyeFrameCount =
     (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
       ? projectData.dimensions.frames
@@ -1068,14 +1204,32 @@ export default function LandmarkDetectionPage() {
       ? projectData.dimensions.slices
       : 1;
 
-  // Cardiac-cycle frame owned by the Strain tab's playback bar (in the sidebar)
-  // and mirrored here so the bullseye and 3D heart animate with it. Kept
-  // separate from `state.currentFrame`, which is the SLICE index used by the
-  // landmark viewer.
-  const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
-  // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (LandmarkSidebar advances
-  // strainPlaybackFrame every 1000 / playbackFps ms), so the heart moves continuously instead of jumping per frame.
-  const [strainPlaybackFps, setStrainPlaybackFps] = useState(4);
+  // Cardiac-cycle playback for the Structure/Strain tabs: the sidebar's "Frame" playback bar
+  // drives it, and the bullseye and 3D heart animate from the same frame. Kept separate from
+  // `state.currentFrame`, which is the SLICE index used by the landmark viewer.
+  const cyclePlayback = useCyclePlayback(projectData?.dimensions?.frames ?? 0);
+  const { frame: strainPlaybackFrame, fps: strainPlaybackFps, setPlaying: setCyclePlaying } = cyclePlayback;
+
+  // Structure/Strain-tab shortcut: Space plays/pauses the cardiac cycle while the sidebar shows its
+  // "Frame" playback bar (always on Structure; on Strain only in Full cycle scope -- same condition
+  // as the sidebar). The Landmarks tab's Space (slice playback) is handled in the effect above.
+  const cycleBarVisible =
+    hasPredictions && (workspace === "structure" || (workspace === "strain" && computeScope !== "quick"));
+  useEffect(() => {
+    if (!cycleBarVisible) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== " " || event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isKeyForFocusedControl(event.target) || isArrowOrSpaceForFocusedControl(event.target)) return;
+      // Always play/pause, even when a button has focus (Enter still presses buttons).
+      event.preventDefault();
+      setCyclePlaying((playing) => !playing);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [cycleBarVisible, setCyclePlaying]);
+  // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (the cycle
+  // advances every 1000 / fps ms), so the heart moves continuously instead of jumping per frame.
   const motionTransitionMs = Math.min(1000, 1000 / Math.max(strainPlaybackFps, 0.5));
 
 
@@ -1893,8 +2047,7 @@ export default function LandmarkDetectionPage() {
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
-            onStrainFrameChange={setStrainPlaybackFrame}
-            onStrainFpsChange={setStrainPlaybackFps}
+            cyclePlayback={cyclePlayback}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
@@ -2304,8 +2457,7 @@ export default function LandmarkDetectionPage() {
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
-                onStrainFrameChange={setStrainPlaybackFrame}
-            onStrainFpsChange={setStrainPlaybackFps}
+                cyclePlayback={cyclePlayback}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}

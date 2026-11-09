@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { Fragment, useState, useCallback, useMemo, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useProjectResults } from "@/hooks/useProjectResults";
-import { useProject } from "@/context/ProjectContext";
+import { REAL_TIME_BPM, type CyclePlayback } from "@/hooks/useCyclePlayback";
 import { computeStrainSeries, computeRvStrainSeries } from "@/lib/landmarkApi";
 import { segmentationApi } from "@/lib/api";
 import { JobProgress } from "@/components/ui/kinetic-progress";
@@ -39,7 +39,12 @@ import {
 } from "lucide-react";
 import {
   LANDMARK_DEFINITIONS,
+  LANDMARK_SHORTCUT_KEYS,
+  LANDMARK_TOGGLE_LABELS_KEY,
+  LANDMARK_PLAY_KEY_NAME,
+  LANDMARK_DELETE_KEY,
   getLandmarkCoord,
+  isLandmarkPendingDelete,
 } from "@/types/landmark";
 import type { LandmarkPageState, FramePrediction } from "@/types/landmark";
 import { getDummyStrainData, getStrainColor, type StrainType, type RealStrainResult, type RvStrainResult } from "@/components/landmark/StrainVisualization";
@@ -147,9 +152,8 @@ export interface LandmarkSidebarProps {
   visibleLandmarks: Set<string>;
   replacementFileError: string | null;
   confidentCount?: number;
-  onStrainFrameChange?: (frame: number) => void;
-  /** The cardiac-cycle playback speed (frames per second), reported so the page's 3D hearts ease at the same pace. */
-  onStrainFpsChange?: (fps: number) => void;
+  /** Cardiac-cycle playback for the Structure/Strain tabs, owned by the page (see useCyclePlayback). */
+  cyclePlayback: CyclePlayback;
   onTabChange?: (tab: "landmarks" | "structure" | "strain") => void;
   activeTab?: "landmarks" | "structure" | "strain";
   activeModel?: "unet" | "medsam";
@@ -208,8 +212,7 @@ export function LandmarkSidebar({
   visibleLandmarks,
   replacementFileError,
   confidentCount,
-  onStrainFrameChange,
-  onStrainFpsChange,
+  cyclePlayback,
   onTabChange,
   activeTab: activeTabProp,
   activeModel,
@@ -260,26 +263,20 @@ export function LandmarkSidebar({
   // Strain playback runs on its own axis: the cardiac CYCLE (frames), whereas
   // state.currentFrame/totalFrames track SLICES (landmark detection is per
   // slice). Keeping them separate is what fixes playback showing 1/10 on a
-  // 30-frame study.
-  //
-  // The frame index is reported upward (onStrainFrameChange) because the
-  // bullseye and 3D heart are rendered by the page, not here — without that
-  // they would keep animating on the slice index and disagree with this
-  // playback bar.
-  const { projectData: sidebarProject } = useProject();
-  const strainFrameCount = Math.max(sidebarProject?.dimensions?.frames ?? 0, 1);
-  const [strainFrame, setStrainFrame] = useState(0);
-  const [strainPlaying, setStrainPlaying] = useState(false);
-  useEffect(() => { onStrainFrameChange?.(strainFrame); }, [strainFrame, onStrainFrameChange]);
-
-  // The cardiac cycle has its own speed (the slice playback keeps state.playbackFps). Default 4 fps: slow enough to
-  // follow the walls (Jy, 2026-10-16: real time looked too fast to read). "Real time" = one cycle per heartbeat at
-  // REAL_TIME_BPM, since the scans carry no heart rate of their own (pixdim t is a placeholder 1); null selects it,
-  // so it follows the project's frame count.
-  const realTimeFps = (strainFrameCount * REAL_TIME_BPM) / 60;
-  const [strainFps, setStrainFps] = useState<number | null>(DEFAULT_CYCLE_FPS);
-  const strainPlaybackFps = strainFps ?? realTimeFps;
-  useEffect(() => { onStrainFpsChange?.(strainPlaybackFps); }, [strainPlaybackFps, onStrainFpsChange]);
+  // 30-frame study. The page owns the cycle playback (frame, play/pause, speed,
+  // timer) because it renders the bullseye and 3D heart from the same frame,
+  // and because it renders this sidebar twice.
+  const {
+    frameCount: strainFrameCount,
+    frame: strainFrame,
+    setFrame: setStrainFrame,
+    playing: strainPlaying,
+    setPlaying: setStrainPlaying,
+    fpsChoice: strainFps,
+    setFpsChoice: setStrainFps,
+    fps: strainPlaybackFps,
+    realTimeFps,
+  } = cyclePlayback;
 
   // Landmark and strain playback are independent loops (slices vs. frames).
   // Switching tabs pauses BOTH, so a loop started in one tab can't keep running
@@ -291,20 +288,8 @@ export function LandmarkSidebar({
       setLocalTab(key);
       onTabChange?.(key);
     },
-    [onTabChange, onTogglePlay, state.isPlaying],
+    [onTabChange, onTogglePlay, state.isPlaying, setStrainPlaying],
   );
-  useEffect(() => {
-    if (!strainPlaying || strainFrameCount < 2) return;
-    const id = setInterval(
-      () => setStrainFrame((f) => (f + 1) % strainFrameCount),
-      1000 / Math.max(strainPlaybackFps, 0.5),
-    );
-    return () => clearInterval(id);
-  }, [strainPlaying, strainFrameCount, strainPlaybackFps]);
-  // Keep the index valid if the project's frame count arrives late or changes.
-  useEffect(() => {
-    setStrainFrame((f) => Math.min(f, strainFrameCount - 1));
-  }, [strainFrameCount]);
   const [showCentroid, setShowCentroid] = useState(true);
   const [showRadialLines, setShowRadialLines] = useState(false);
   const [showStrainOverlay, setShowStrainOverlay] = useState(true);
@@ -363,6 +348,7 @@ export function LandmarkSidebar({
       {hasPredictions && activeTab === "landmarks" && (
         <PlaybackBar
           axisLabel="Slice"
+          playShortcut={LANDMARK_PLAY_KEY_NAME}
           currentFrame={state.currentFrame}
           totalFrames={state.totalFrames}
           isPlaying={state.isPlaying}
@@ -385,6 +371,7 @@ export function LandmarkSidebar({
           <div className="-mx-4 -mt-4 mb-4">
             <PlaybackBar
               axisLabel="Frame"
+              playShortcut={LANDMARK_PLAY_KEY_NAME}
               currentFrame={strainFrame}
               totalFrames={strainFrameCount}
               isPlaying={strainPlaying}
@@ -494,6 +481,7 @@ function PlaybackBar({
   onSliderChange,
   onPlaybackSpeedChange,
   axisLabel = "Frame",
+  playShortcut,
   realTimeFps,
   isRealTime = false,
   onRealTime,
@@ -502,6 +490,8 @@ function PlaybackBar({
   totalFrames: number;
   /** What the counter steps through — "Slice" for landmarks, "Frame" for strain. */
   axisLabel?: string;
+  /** Keyboard key that plays/pauses this bar (shown on the button), if it has one. */
+  playShortcut?: string;
   isPlaying: boolean;
   playbackFps: number;
   confidentCount: number;
@@ -541,9 +531,16 @@ function PlaybackBar({
           onClick={onTogglePlay}
           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-medium transition-colors"
           aria-label={isPlaying ? "Pause playback" : "Play frames"}
+          aria-keyshortcuts={playShortcut}
+          title={playShortcut ? `${isPlaying ? "Pause" : "Play"} (${playShortcut})` : undefined}
         >
           {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
           {isPlaying ? "Pause" : "Play"}
+          {playShortcut && (
+            <span aria-hidden="true" className="ml-1 font-mono text-[10px] font-normal opacity-70">
+              {playShortcut}
+            </span>
+          )}
         </button>
 
         {/* Next */}
@@ -617,11 +614,6 @@ function PlaybackBar({
     </div>
   );
 }
-
-/** "Real time" for the cardiac cycle: one cycle per heartbeat at this rate (a normal resting heart rate). */
-const REAL_TIME_BPM = 60;
-/** Default cardiac-cycle playback speed (frames per second). */
-const DEFAULT_CYCLE_FPS = 4;
 
 function stateSpeedClass(fps: number, currentFps?: number) {
   return currentFps === fps
@@ -919,9 +911,9 @@ function LandmarksTab({
           // deletion itself has been saved, the row falls back to the plain
           // "not detected" state below, and getting the point back is a fresh
           // manual placement (focus it, then click the image), not an undo.
-          const wasDetected = !!getLandmarkCoord(rawPrediction, def.id);
-          const isSavedCoordPresent = !!getLandmarkCoord(savedPrediction, def.id);
-          const isPendingDelete = !hasCoord && wasDetected && isSavedCoordPresent;
+          // Pressing the landmark's 1/2 key restores it too (handled by the page).
+          const isPendingDelete = isLandmarkPendingDelete(def.id, prediction, rawPrediction, savedPrediction);
+          const focusKey = LANDMARK_SHORTCUT_KEYS[def.id];
 
           if (isPendingDelete) {
             return (
@@ -929,6 +921,11 @@ function LandmarksTab({
                 key={def.id}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-dashed border-border/60 bg-transparent text-left"
               >
+                {focusKey && (
+                  <span aria-hidden="true" className="w-2 shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {focusKey}
+                  </span>
+                )}
                 <Trash2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 text-xs text-muted-foreground">
                   {def.fullLabel ?? def.label} removed from Slice {currentFrame + 1}
@@ -936,6 +933,8 @@ function LandmarksTab({
                 <button
                   type="button"
                   onClick={() => onUndoDeleteLandmark(def.id)}
+                  aria-keyshortcuts={focusKey}
+                  title={focusKey ? `Restore (${focusKey})` : undefined}
                   className="text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                 >
                   Restore
@@ -965,6 +964,12 @@ function LandmarksTab({
               )}
               aria-pressed={isVisible}
             >
+              {/* Focus shortcut (1/2) — the row click itself toggles visibility */}
+              {focusKey && (
+                <span aria-hidden="true" className="w-2 shrink-0 font-mono text-[10px] text-muted-foreground">
+                  {focusKey}
+                </span>
+              )}
               {/* Color dot */}
               <span
                 className="w-2.5 h-2.5 rounded-full flex-shrink-0"
@@ -995,8 +1000,8 @@ function LandmarksTab({
                   }}
                   title={
                     highlightedLandmarkId === def.id
-                      ? "Cancel"
-                      : hasCoord ? "Highlight this landmark" : "Place this landmark by clicking the image"
+                      ? "Cancel (Esc)"
+                      : `${hasCoord ? "Highlight this landmark" : "Place this landmark by clicking the image"}${focusKey ? ` (${focusKey})` : ""}`
                   }
                 >
                   {highlightedLandmarkId === def.id ? "clear" : hasCoord ? "focus" : "place"}
@@ -1017,11 +1022,15 @@ function LandmarksTab({
                       onDeleteLandmark(def.id);
                     }
                   }}
-                  className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                  title={`Delete ${def.fullLabel ?? def.label} from this slice`}
+                  className="shrink-0 flex items-center gap-1 rounded-full px-1.5 py-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                  title={`Delete ${def.fullLabel ?? def.label} from this slice${focusKey ? ` (focus with ${focusKey}, then ${LANDMARK_DELETE_KEY})` : ""}`}
                   aria-label={`Delete ${def.fullLabel ?? def.label} from this slice`}
                 >
                   <Trash2 className="h-3 w-3" />
+                  {/* Delete shortcut hint (Q, after focusing the point with 1/2) */}
+                  <span aria-hidden="true" className="font-mono text-[10px] leading-none">
+                    {LANDMARK_DELETE_KEY}
+                  </span>
                 </span>
               )}
             </button>
@@ -1045,6 +1054,8 @@ function LandmarksTab({
         onToggleEditableLandmarks={readOnly ? undefined : onToggleEditableLandmarks}
         hideEditToggle={readOnly}
       />
+
+      <LandmarkShortcutsHelp readOnly={readOnly} />
 
       {!readOnly && (
       <div className="pt-3 border-t border-border">
@@ -1113,7 +1124,7 @@ function DetectionSettingsPanel({
 }) {
   // Split by what each toggle actually affects: landmark point display/editing
   // vs. the strain overlay and AHA segment alignment.
-  const settings =
+  const settings: { label: string; checked: boolean; onCheckedChange?: () => void; shortcut?: string }[] =
     scope === "strain"
       ? [
           { label: "Show strain overlay", checked: showStrainOverlay, onCheckedChange: onToggleShowStrainOverlay },
@@ -1122,7 +1133,7 @@ function DetectionSettingsPanel({
           { label: "Show centroid", checked: showCentroid, onCheckedChange: onToggleShowCentroid },
         ]
       : [
-          { label: "Show landmark labels", checked: showLabels, onCheckedChange: onToggleShowLabels },
+          { label: "Show landmark labels", checked: showLabels, onCheckedChange: onToggleShowLabels, shortcut: LANDMARK_TOGGLE_LABELS_KEY },
           ...(hideEditToggle
             ? []
             : [{ label: "Move/edit landmarks", checked: editableLandmarks, onCheckedChange: onToggleEditableLandmarks }]),
@@ -1140,16 +1151,63 @@ function DetectionSettingsPanel({
             a pure view toggle and always has a handler. */}
         {settings.filter((setting) => setting.onCheckedChange).map((setting) => (
           <div key={setting.label} className="flex items-center justify-between gap-3">
-            <span className="text-xs text-foreground">{setting.label}</span>
+            <span className="text-xs text-foreground">
+              {setting.label}
+              {setting.shortcut && (
+                <span aria-hidden="true" className="ml-1.5 font-mono text-[10px] text-muted-foreground">
+                  {setting.shortcut}
+                </span>
+              )}
+            </span>
             <Switch
               checked={setting.checked}
               onCheckedChange={setting.onCheckedChange}
               aria-label={setting.label}
+              aria-keyshortcuts={setting.shortcut}
             />
           </div>
         ))}
       </div>
     </section>
+  );
+}
+
+/** Collapsed list of the Landmarks tab's keyboard shortcuts (handled in the landmark page). */
+function LandmarkShortcutsHelp({ readOnly }: { readOnly: boolean }) {
+  const focusKeys = LANDMARK_DEFINITIONS.filter((def) => LANDMARK_SHORTCUT_KEYS[def.id]);
+  const rows: [string, string][] = [
+    ["← / →", "Previous / next frame"],
+    ["↑ / ↓", "Previous / next slice"],
+    [LANDMARK_PLAY_KEY_NAME, "Play / pause slices"],
+    [
+      focusKeys.map((def) => LANDMARK_SHORTCUT_KEYS[def.id]).join(" / "),
+      readOnly
+        ? `Focus ${focusKeys.map((def) => def.label).join(" / ")} point (press again to unfocus)`
+        : `Focus ${focusKeys.map((def) => def.label).join(" / ")} point (press again to unfocus; restores it if just deleted)`,
+    ],
+    ...(readOnly
+      ? []
+      : ([[`${LANDMARK_DELETE_KEY} / Del`, "Delete the focused point from this slice (Move/edit on)"]] as [string, string][])),
+    ["Esc", "Unfocus"],
+    [LANDMARK_TOGGLE_LABELS_KEY, "Show / hide labels"],
+    ...(readOnly ? [] : ([["Ctrl+S", "Save landmark edits"]] as [string, string][])),
+  ];
+
+  return (
+    <details className="group rounded-lg border border-border bg-muted/20 px-3 py-2">
+      <summary className="flex cursor-pointer list-none items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-foreground [&::-webkit-details-marker]:hidden">
+        Keyboard shortcuts
+        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+        {rows.map(([keys, action]) => (
+          <Fragment key={keys}>
+            <dt className="font-mono text-foreground whitespace-nowrap">{keys}</dt>
+            <dd className="text-muted-foreground">{action}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </details>
   );
 }
 

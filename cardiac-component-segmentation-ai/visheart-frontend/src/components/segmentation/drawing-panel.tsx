@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react"; 
+import React from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Undo2, Redo2, Trash2, Brush, Eraser, MousePointer2, Square, Search, Move, RotateCcw } from "lucide-react";
@@ -12,14 +12,20 @@ import type {
   DrawingPanelProps, 
   DrawingTool
 } from "@/types/segmentation";
-import { 
-  DRAWING_TOOLS
+import {
+  DRAWING_TOOLS,
+  TOOL_SHORTCUT_KEYS,
+  BRUSH_SIZE_DECREASE_KEY,
+  BRUSH_SIZE_INCREASE_KEY,
+  BRUSH_SIZE_MIN,
+  BRUSH_SIZE_MAX,
 } from "@/types/segmentation";
 
-// Simplified tool configuration
+// Simplified tool configuration. The internal id stays 'brush' (saved history entries use it);
+// only the visible name is "Draw", to match its D shortcut.
 const TOOL_CONFIG: Record<DrawingTool, { icon: React.ComponentType<{className?: string}>; label: string }> = {
   select: { icon: MousePointer2, label: 'Select' },
-  brush: { icon: Brush, label: 'Brush' },
+  brush: { icon: Brush, label: 'Draw' },
   eraser: { icon: Eraser, label: 'Eraser' },
   rectangle: { icon: Square, label: 'Bounding Box' },
   zoom: { icon: Search, label: 'Zoom' },
@@ -54,31 +60,8 @@ export function DrawingPanel({
     }
   }, [setTool, boundingBoxDisabled]);
 
-  // Optimized keyboard shortcut handler with cleanup
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Handle Delete key for clear action (no modifier keys)
-      if (e.key === "Delete" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && canClear) {
-        e.preventDefault();
-        handleClear();
-        return;
-      }
-
-      // Only handle Ctrl/Cmd shortcuts if no other modifier keys
-      if (e.altKey || e.shiftKey) return;
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && canUndo) {
-        e.preventDefault();
-        handleUndo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y" && canRedo) {
-        e.preventDefault();
-        handleRedo();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear]);
+  // Keyboard shortcuts (Ctrl+Z/Y, Delete, D/E, Q/W, 1/2/3) are handled once by the segmentation
+  // page, not here: this panel is mounted twice and unmounts while the History tab is open.
 
   return (
     <div className="space-y-4">
@@ -90,6 +73,7 @@ export function DrawingPanel({
             const config = TOOL_CONFIG[toolKey];
             const IconComponent = config.icon;
             const isDisabled = toolKey === 'rectangle' && boundingBoxDisabled;
+            const shortcut = TOOL_SHORTCUT_KEYS[toolKey];
 
             return (
               <button
@@ -97,9 +81,16 @@ export function DrawingPanel({
                 onClick={() => handleToolChange(toolKey)}
                 disabled={isDisabled}
                 aria-label={config.label}
-                title={isDisabled ? "Bounding Box uses MedSAM, which is only available with NVIDIA GPU." : undefined}
+                aria-keyshortcuts={shortcut}
+                title={
+                  isDisabled
+                    ? "Bounding Box uses MedSAM, which is only available with NVIDIA GPU."
+                    : shortcut
+                    ? `${config.label} (${shortcut})`
+                    : undefined
+                }
                 className={cn(
-                  "h-16 flex flex-col items-center justify-center rounded-lg",
+                  "relative h-16 flex flex-col items-center justify-center rounded-lg",
                   "border border-border transition-all",
                   "hover:bg-primary/20",
                   "focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring",
@@ -109,6 +100,14 @@ export function DrawingPanel({
                     : "text-foreground"
                 )}
               >
+                {shortcut && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-1 right-1.5 font-mono text-[10px] leading-none text-muted-foreground"
+                  >
+                    {shortcut}
+                  </span>
+                )}
                 <IconComponent className="w-4 h-4 mb-1" />
                 <span className="hidden @xs:block text-xs font-medium">{config.label}</span>
               </button>
@@ -117,10 +116,10 @@ export function DrawingPanel({
         </div>
       </div>
 
-      {/* Brush Settings - Only show for relevant tools */}
+      {/* Draw & Erase Settings - Only show for relevant tools */}
       {(tool === 'brush' || tool === 'eraser') && (
         <div>
-          <h3 className="text-sm font-medium text-foreground mb-3">Brush Settings</h3>
+          <h3 className="text-sm font-medium text-foreground mb-3">Draw &amp; Erase Settings</h3>
           <div className="bg-muted rounded-lg border p-4 space-y-4">
             {/* Size and Opacity in one row */}
             <div className="grid grid-cols-2 gap-4">
@@ -129,6 +128,12 @@ export function DrawingPanel({
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-sm font-medium text-foreground">
                     Size
+                    <span
+                      className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground"
+                      title={`${BRUSH_SIZE_DECREASE_KEY} smaller, ${BRUSH_SIZE_INCREASE_KEY} bigger`}
+                    >
+                      {BRUSH_SIZE_DECREASE_KEY} / {BRUSH_SIZE_INCREASE_KEY}
+                    </span>
                   </label>
                   <span className="text-xs text-muted-foreground">
                     {brushSize}px
@@ -137,8 +142,8 @@ export function DrawingPanel({
                 <Slider
                   value={[brushSize]}
                   onValueChange={(v: number[]) => setBrushSize(v[0])}
-                  min={1}
-                  max={50}
+                  min={BRUSH_SIZE_MIN}
+                  max={BRUSH_SIZE_MAX}
                   step={1}
                   className="[&>span:first-child]:border [&>span:first-child]:border-border"
                 />
@@ -295,12 +300,19 @@ export function DrawingPanel({
           <AccordionContent className="pb-3">
             <div className="p-3 bg-muted rounded-lg border text-xs text-muted-foreground space-y-1.5">
               <div>• <strong>Select:</strong> Move and select objects</div>
-              <div>• <strong>Brush:</strong> Paint segmentation masks</div>
-              <div>• <strong>Eraser:</strong> Remove mask pixels</div>
+              <div>• <strong>Draw (D):</strong> Paint segmentation masks</div>
+              <div>• <strong>Eraser (E):</strong> Remove mask pixels</div>
               <div>• <strong>Bounding Box:</strong> Draw bounding box for AI-powered manual segmentation (MedSAM, NVIDIA GPU only)</div>
               <div>• <strong>Zoom:</strong> Enlarge the image</div>
               <div>• <strong>Pan:</strong> Navigate the canvas</div>
-              <div>• <strong>Keyboard Shortcuts: ← → frames ↑ ↓ slices + - zoom</strong></div>
+              <div className="pt-1.5 font-medium text-foreground">Keyboard shortcuts</div>
+              <div>• <strong>1 / 2 / 3:</strong> LV Cavity / RV / Myocardium</div>
+              <div>• <strong>D / E:</strong> Draw / Eraser</div>
+              <div>• <strong>Q / W:</strong> Smaller / bigger brush (Draw and Eraser)</div>
+              <div>• <strong>← →:</strong> Frames &nbsp;<strong>↑ ↓:</strong> Slices</div>
+              <div>• <strong>+ / −:</strong> Zoom &nbsp;<strong>R:</strong> Reset view</div>
+              <div>• <strong>Ctrl+Z / Ctrl+Y:</strong> Undo / Redo</div>
+              <div>• <strong>Del:</strong> Clear current mask &nbsp;<strong>Ctrl+S:</strong> Save</div>
             </div>
           </AccordionContent>
         </AccordionItem>
