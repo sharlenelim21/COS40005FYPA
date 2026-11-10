@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
+import { ProgressMeter } from "@/components/ui/kinetic-progress";
 import { elapsed, isActiveJob, retrainingApi, StepState, trainingJobPercent, TrainingJob } from "@/lib/retraining-api";
 import { trainingShare } from "@/components/extend-training/logic";
 
@@ -53,7 +53,7 @@ function StepDetail({ job, stepKey }: { job: TrainingJob; stepKey: string }) {
               ? "Preparing the training data (the whole training set and your corrections)"
               : `Epoch ${epoch} of ${progress.epochs}`}
         </p>
-        <Progress value={trainingShare(progress) * 100} />
+        <ProgressMeter value={trainingShare(progress) * 100} />
         {progress.recipe && <p className="text-xs text-muted-foreground">Method: {progress.recipe}</p>}
       </div>
     );
@@ -66,7 +66,7 @@ function StepDetail({ job, stepKey }: { job: TrainingJob; stepKey: string }) {
           {scored} of {progress.total} scans the model has never seen are scored
           {progress.scoring_active_first ? " (the model in use is scored first)" : ""}
         </p>
-        <Progress value={trainingJobPercent(job) ?? 0} />
+        <ProgressMeter value={trainingJobPercent(job) ?? 0} />
       </div>
     );
   }

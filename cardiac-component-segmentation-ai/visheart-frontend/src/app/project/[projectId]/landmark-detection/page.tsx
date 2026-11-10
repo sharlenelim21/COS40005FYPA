@@ -777,6 +777,7 @@ export default function LandmarkDetectionPage() {
     setLandmarkEdits({});
     setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
+    moveUndoStacksRef.current = {};
     handleRunDetection(model, landmarkSegModel);
   }, [handleRunDetection, landmarkSegModel]);
 
@@ -784,6 +785,7 @@ export default function LandmarkDetectionPage() {
     setLandmarkEdits({});
     setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
+    moveUndoStacksRef.current = {};
     handleRerunDetection(model, landmarkSegModel);
   }, [handleRerunDetection, landmarkSegModel]);
 
@@ -876,11 +878,31 @@ export default function LandmarkDetectionPage() {
   // True between a landmark's first move and its move-end (pointer up), so the
   // console coordinate log waits for the final position of a drag.
   const [isDraggingLandmark, setIsDraggingLandmark] = useState(false);
+  // Mirrors isDraggingLandmark but as a ref, so handleLandmarkMove always reads the live
+  // in-progress-drag flag instead of a stale closure value -- needed to tell "first move event of
+  // a new drag" (push an undo entry) apart from "still dragging" (don't push again per tick).
+  const isDraggingRef = useRef(false);
+  // Ctrl+Z undo stack for point MOVES only (not deletes, which keep their own Restore button/1-2
+  // key path unchanged) -- one stack per (frame, slice) key, so undoing a move on one frame can
+  // never reach into another, matching the "edits stay independent per slice" rule above. Cleared
+  // wherever landmarkEdits itself is wholesale-reset (frame/model switch, re-run, save).
+  const moveUndoStacksRef = useRef<Record<string, Array<{ id: string; hadEdit: boolean; coord: LandmarkCoord | undefined }>>>({});
 
   const handleLandmarkMove = useCallback((id: string, coord: [number, number]) => {
+    const isDragStart = !isDraggingRef.current;
+    isDraggingRef.current = true;
     setIsDraggingLandmark(true);
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey] ?? {};
+      if (isDragStart) {
+        const stack = moveUndoStacksRef.current[currentLandmarkEditKey] ?? [];
+        stack.push({
+          id,
+          hadEdit: id in existing,
+          coord: (existing as Record<string, LandmarkCoord | undefined>)[id],
+        });
+        moveUndoStacksRef.current[currentLandmarkEditKey] = stack;
+      }
       const wasCollapsed = (currentPrediction?.flag === "collapsed_to_mean") && !("flag" in existing);
       return {
         ...prev,
@@ -896,6 +918,7 @@ export default function LandmarkDetectionPage() {
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
   const handleLandmarkMoveEnd = useCallback(() => {
+    isDraggingRef.current = false;
     setIsDraggingLandmark(false);
     if (!currentPrediction) return;
     setLandmarkEdits((prev) => {
@@ -974,6 +997,35 @@ export default function LandmarkDetectionPage() {
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey]);
 
+  /** Ctrl+Z: steps back through this slice's own stack of recent point moves, one drag at a
+   *  time, landing back on the AI's position once the stack for this id runs out. Deletes are
+   *  deliberately untouched -- they keep their existing Restore button/1-2 key path. */
+  const handleUndoLastMove = useCallback(() => {
+    const stack = moveUndoStacksRef.current[currentLandmarkEditKey];
+    if (!stack || stack.length === 0) return;
+    const entry = stack.pop();
+    if (!entry) return;
+    setLandmarkEdits((prev) => {
+      const existing = prev[currentLandmarkEditKey];
+      if (!existing) return prev;
+      const rest = { ...existing };
+      if (entry.hadEdit && entry.coord) {
+        (rest as Record<string, unknown>)[entry.id] = entry.coord; // back to the move before this one
+      } else {
+        delete (rest as Record<string, unknown>)[entry.id]; // back to the AI's position
+      }
+      const next = { ...prev };
+      if (Object.keys(rest).length > 0) {
+        next[currentLandmarkEditKey] = rest;
+      } else {
+        delete next[currentLandmarkEditKey];
+      }
+      return next;
+    });
+    setHasUnsavedLandmarkEdits(true);
+    setHighlightedLandmarkId(entry.id);
+  }, [currentLandmarkEditKey]);
+
   const handleSaveLandmarks = useCallback(async () => {
     if (isSavingLandmarks || allPredictions.length === 0) return;
     setIsSavingLandmarks(true);
@@ -989,6 +1041,8 @@ export default function LandmarkDetectionPage() {
       });
       setHasUnsavedLandmarkEdits(false);
       setSavedLandmarkEdits(landmarkEdits);
+      // A saved move is no longer something a later Ctrl+Z should unwind past.
+      moveUndoStacksRef.current = {};
 
       // Landmark points just changed, so the stored AHA-17 bullseye is now stale.
       // Re-trigger bullseye for every editable mask — the backend prefers the
@@ -1083,13 +1137,22 @@ export default function LandmarkDetectionPage() {
         if (hasUnsavedLandmarkEdits && !isSavingLandmarks) {
           handleSaveLandmarks();
         }
+        return;
+      }
+      // Undo a point MOVE (not a delete -- that keeps its own Restore button/1-2 key).
+      // Same focused-control guard the other landmark shortcuts use, so a text field's own
+      // native undo wins instead of this firing underneath it.
+      if (event.ctrlKey && event.key === 'z') {
+        if (isKeyForFocusedControl(event.target) || readOnly || !editableLandmarks) return;
+        event.preventDefault();
+        handleUndoLastMove();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [hasUnsavedLandmarkEdits, isSavingLandmarks, handleSaveLandmarks]);
+  }, [hasUnsavedLandmarkEdits, isSavingLandmarks, handleSaveLandmarks, readOnly, editableLandmarks, handleUndoLastMove]);
 
   // Landmarks-tab shortcuts: ←/→ frame, ↑/↓ slice, Space play/pause, 1/2 focus the anterior /
   // inferior RV insertion point (or restore it if just deleted), Q (or Delete) removes the focused

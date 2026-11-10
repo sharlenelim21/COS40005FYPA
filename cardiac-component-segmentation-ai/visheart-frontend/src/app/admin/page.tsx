@@ -13,7 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
+import { ProgressMeter } from "@/components/ui/kinetic-progress";
 import {
   Users,
   Brain,
@@ -49,6 +49,9 @@ function RetrainingCard() {
   const job = status?.job;
   const running = isActiveJob(job);
   const percent = job ? trainingJobPercent(job) : null;
+  // Same label the running step shows on the full Extend Training page (e.g. "Training",
+  // "Evaluating"), so the dashboard card's badge reads consistently with it.
+  const runningStepTitle = job?.steps.find((s) => s.state === "running")?.title;
 
   return (
     <Card>
@@ -66,7 +69,7 @@ function RetrainingCard() {
       {job && (
         <CardContent className="space-y-2">
           <p className="text-sm font-medium capitalize">{job.state}</p>
-          {percent !== null && <Progress value={percent} />}
+          {percent !== null && <ProgressMeter value={percent} title={runningStepTitle} />}
           <Link href="/extend-training" className="text-sm text-blue-600 underline hover:text-blue-700 dark:text-blue-400">
             {running ? "View progress" : "Review in UNet Extend Training"}
           </Link>
