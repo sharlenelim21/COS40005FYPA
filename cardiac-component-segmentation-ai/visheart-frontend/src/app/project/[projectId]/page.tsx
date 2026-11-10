@@ -597,10 +597,15 @@ function ProjectPageInner() {
     pipeline.reconActive || stillBuilding("lv") || stillBuilding("rv") ||
     (hasActiveReconstructionJobs && !hasReconstructions);
   const landmarkRunning = pipeline.landmarkActive || !!landmarkSummary?.active;
-  const landmarkUnlocked = !isGuest && hasReconstructions;
+  // Requires !reconRunning too, not just hasReconstructions -- a project can have one chamber
+  // already finished (hasReconstructions true) while the OTHER chamber the user also requested
+  // is still building. Checking hasReconstructions alone let the Landmark Detection card/button
+  // unlock and actually run the moment the first chamber finished, regardless of what was still
+  // in flight (reported live, 2026-11-09).
+  const landmarkUnlocked = !isGuest && hasReconstructions && !reconRunning;
   const landmarkProgressState: "running" | "queued" = landmarkSummary?.active === "queued" && !pipeline.landmarkActive ? "queued" : "running";
   const landmarksDone = isGuest || landmarkSummary === null || landmarkSummary.hasCompleted;
-  const isPipelineComplete = hasMasks && hasReconstructions && landmarksDone;
+  const isPipelineComplete = hasMasks && hasReconstructions && !reconRunning && landmarksDone;
   const maskModelLabels = SEGMENTATION_MODEL_OPTIONS.filter((opt) => maskAvailabilityByModel[opt.value]).map((opt) => opt.label).join(", ");
 
   type StageKey = "segmentation" | "reconstruction" | "landmark";
@@ -610,7 +615,11 @@ function ProjectPageInner() {
   const derivedNextStage: StageKey | null =
     loading !== "done" || isGuest || !hasMasks
       ? null
-      : !hasReconstructions
+      : !hasReconstructions || reconRunning
+      // reconRunning on its own (not just paired with !hasReconstructions) covers the case where
+      // one chamber already finished but another the user also requested is still building --
+      // without it, this fell through to highlighting "landmark" as the next step while a
+      // reconstruction was still in flight.
       ? (reconRunning ? null : "reconstruction")
       : landmarkSummary && !landmarkSummary.hasCompleted && !landmarkRunning
       ? "landmark"
@@ -1134,6 +1143,28 @@ function ProjectPageInner() {
             <p>Build a 4D reconstruction before running landmark detection</p>
           </TooltipContent>
         </Tooltip>
+      ) : reconRunning ? (
+        // One chamber (LV or RV) can already be finished -- hasReconstructions true -- while the
+        // OTHER chamber the user also requested is still building. Without this branch the card
+        // fell through to the clickable Link below as soon as hasReconstructions flipped true,
+        // letting the user open landmark detection (and actually start it) while a reconstruction
+        // was still in flight (reported live, 2026-11-09).
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Landmark Detection</p>
+                  <p className="text-xs text-muted-foreground">Finish the current 4D reconstruction first</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Wait for the in-progress 4D reconstruction to finish before running landmark detection</p>
+          </TooltipContent>
+        </Tooltip>
       ) : landmarkRunning ? (
         <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
           <KineticButtonFill state={landmarkProgressState} value={landmarkSummary?.progress} label="Landmark detection running" />
@@ -1526,24 +1557,30 @@ function ProjectPageInner() {
 
               <div className="flex items-center gap-2">
                 <div className={`h-8 w-8 rounded-full flex items-center justify-center border ${
-                  hasReconstructions 
-                    ? 'bg-green-100 dark:bg-green-950/30 border-green-500' 
-                    : hasActiveReconstructionJobs
+                  // reconRunning checked BEFORE hasReconstructions: one chamber (LV or RV) can
+                  // already be done while the other one the user also requested is still
+                  // building -- hasReconstructions alone would show "Complete" here while the
+                  // badge directly below it (and the Landmark Detection card) still correctly
+                  // said "Processing" / locked, a visibly contradictory pair (reported live,
+                  // 2026-11-09).
+                  reconRunning
                     ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500'
+                    : hasReconstructions
+                    ? 'bg-green-100 dark:bg-green-950/30 border-green-500'
                     : hasMasks
                     ? 'bg-amber-100 dark:bg-amber-950/30 border-amber-500'
                     : 'bg-muted border-muted-foreground/30'
                 }`}>
                   <Box className={`h-4 w-4 ${
-                    hasReconstructions ? 'text-green-600' : hasActiveReconstructionJobs ? 'text-blue-600' : hasMasks ? 'text-amber-600' : 'text-muted-foreground'
+                    reconRunning ? 'text-blue-600' : hasReconstructions ? 'text-green-600' : hasMasks ? 'text-amber-600' : 'text-muted-foreground'
                   }`} />
                 </div>
                 <div className="hidden md:block">
                   <p className="text-xs font-medium">4D Model</p>
                   <p className="text-xs text-muted-foreground">
-                    {hasReconstructions ? 'Complete' : hasActiveReconstructionJobs ? 'Processing' : hasMasks ? 'Available' : 'Locked'}
+                    {reconRunning ? 'Processing' : hasReconstructions ? 'Complete' : hasMasks ? 'Available' : 'Locked'}
                   </p>
-                  {!hasReconstructions && hasActiveReconstructionJobs && <KineticProgress size="h-1" className="mt-1 w-16" label="Reconstruction running" />}
+                  {reconRunning && <KineticProgress size="h-1" className="mt-1 w-16" label="Reconstruction running" />}
                 </div>
               </div>
 

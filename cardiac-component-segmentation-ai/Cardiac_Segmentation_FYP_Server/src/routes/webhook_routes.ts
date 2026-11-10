@@ -118,6 +118,21 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
   }
 
   try {
+    // The GPU keeps computing even after the reconstruction this landmark job depends on is
+    // deleted mid-run -- deleting it only marks the Job record FAILED client-side
+    // (clearDependentLandmarkJobs in reconstruction_routes.ts), it cannot reach into the running
+    // GPU process and stop it. Without this guard, this callback would land later and silently
+    // flip that FAILED job back to COMPLETED, then fire a bullseye recompute using landmark
+    // coordinates for a reconstruction that no longer exists -- the user saw the landmark button
+    // go gray (job correctly marked failed) but the job kept visibly running, then its stale
+    // result overwrote the project's analysis anyway (reported live, 2026-11-09).
+    const existing = await readJob(gpuJobId);
+    if (existing.success && existing.job?.status === JobStatus.FAILED) {
+      logger.info(`${serviceLocation}: Ignoring landmark callback for job ${gpuJobId}: already marked failed (its reconstruction was likely deleted mid-run).`);
+      res.status(200).json({ message: `Job ${gpuJobId} already failed; callback ignored.` });
+      return;
+    }
+
     const status = req.body?.status;
     const success =
       status === "completed" ||
