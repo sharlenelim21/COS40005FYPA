@@ -1065,7 +1065,10 @@ export function InteractiveReport({
                   <span className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold ${
                     healthStatus.confidence === "low"
                       ? "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                      : "border border-border bg-muted text-muted-foreground"}`}>
+                      // Same emerald "normal" styling as the grade badge above (and LEVEL_BADGE
+                      // below) — the old plain grey/muted read as neutral-to-negative, not as
+                      // "this is fine" (reported live from user testing, 2026-11-11).
+                      : "border border-emerald-500/40 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"}`}>
                     {healthStatus.confidence === "low" && (
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
                     )}

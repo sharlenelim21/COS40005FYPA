@@ -1188,15 +1188,18 @@ function LandmarkShortcutsHelp({ readOnly }: { readOnly: boolean }) {
     ...(readOnly
       ? []
       : ([[`${LANDMARK_DELETE_KEY} / Del`, "Delete the focused point from this slice (Move/edit on)"]] as [string, string][])),
+    ...(readOnly ? [] : ([["Ctrl+Z", "Undo the last point move (not a delete — use Restore for that)"]] as [string, string][])),
     ["Esc", "Unfocus"],
     [LANDMARK_TOGGLE_LABELS_KEY, "Show / hide labels"],
     ...(readOnly ? [] : ([["Ctrl+S", "Save landmark edits"]] as [string, string][])),
   ];
 
   return (
-    <details className="group rounded-lg border border-border bg-muted/20 px-3 py-2">
+    // Highlighted via a blue BORDER, not colored text, so it's noticeable without reading as a
+    // status/severity color (2026-11-11).
+    <details className="group rounded-lg border-2 border-info/60 bg-muted/20 px-3 py-2">
       <summary className="flex cursor-pointer list-none items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-foreground [&::-webkit-details-marker]:hidden">
-        Keyboard shortcuts
+        Keyboard Shortcuts
         <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
@@ -2305,14 +2308,6 @@ function ComputeStrainCard({
   const segTitle = segBlocked ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined;
   const modelLabel = sc.strainModel === "unet" ? "UNet" : "MedSAM";
   const hasScopeResult = isQuick ? !!(sc.quickLvResult || sc.quickRvResult) : hasFullCycleResult;
-  const recomputeBusy = isQuick ? sc.isComputing : seriesBusy;
-  const recomputeDisabled =
-    recomputeBusy || segBlocked ||
-    (isQuick && sc.inputMode === "frames" && (sc.edFrameIdx === sc.esFrameIdx || sc.frameCount <= 1)) ||
-    (isQuick && sc.inputMode === "upload" && (!sc.edFile || !sc.esFile));
-  const onRecompute = isQuick
-    ? (sc.inputMode === "upload" ? sc.onComputeUpload : sc.onComputeFrames)
-    : onRunFullCycle;
 
   // Auto-collapses the config controls right after a compute finishes
   // successfully, so the (already-visible-elsewhere) results get the space
@@ -2397,22 +2392,25 @@ function ComputeStrainCard({
 
       {/* Full-cycle's own recompute lives on the single button below (Compute/Recompute all
           frames) — showing it here too for "full" scope just duplicated the same action under
-          a second label. Quick keeps this one since its own compute button only appears once
-          "Choose frames"/"Upload masks" is picked below, not as a persistent top-level action. */}
-      {hasScopeResult && isQuick && (
-        <span title={segTitle} className="block">
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 w-full text-[10px]"
-            disabled={recomputeDisabled}
-            onClick={onRecompute}
-          >
-            {recomputeBusy ? (
-              <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" />Recomputing…</span>
-            ) : `Recompute strain (ED → ES, ${modelLabel})`}
-          </Button>
-        </span>
+          a second label. Quick's own compute/recompute button (below, "Compute ED → ES") is
+          part of the expanded card, so this top-level shortcut is only shown while COLLAPSED --
+          once expanded, both buttons called the exact same onComputeFrames/onComputeUpload and
+          sat on screen together, reading as two buttons for one action (reported live, with a
+          screenshot, 2026-11-11). */}
+      {/* Opens the card to let the user see/adjust the ED->ES range before computing anything --
+          it used to call onRecompute directly, silently reusing whatever range was last used,
+          which could recompute against a range the user no longer remembered or wanted
+          (reported live, 2026-11-11). The real compute button lives below, once expanded. */}
+      {hasScopeResult && isQuick && collapsed && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 w-full text-[10px] justify-between"
+          onClick={() => setCollapsed(false)}
+        >
+          {`Recompute strain (ED → ES, ${modelLabel})`}
+          <ChevronDown className="h-3.5 w-3.5" />
+        </Button>
       )}
 
       {!collapsed && (

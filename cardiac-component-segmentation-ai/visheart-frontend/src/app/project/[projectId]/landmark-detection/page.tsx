@@ -1899,12 +1899,23 @@ export default function LandmarkDetectionPage() {
     return matches ? rvStrainResult : null;
   })();
 
+  // Leaving Full cycle must also stop its playback timer -- otherwise cyclePlayback keeps
+  // advancing currentFrame in the background (it's always wired into the 3D heart's motion
+  // mesh regardless of scope), so a Quick ED->ES result that's supposed to be a single frozen
+  // pair kept visibly deforming frame-by-frame, matching whatever Full cycle would be playing,
+  // because only switching SIDEBAR TABS paused it (handleTabChange above), not switching scope
+  // within the same Strain tab (reported live, with a recording, 2026-11-11).
+  const handleStrainScopeChange = useCallback((scope: "quick" | "full") => {
+    if (scope === "quick") setCyclePlaying(false);
+    setComputeScope(scope);
+  }, [setCyclePlaying]);
+
   // Bundled and passed to LandmarkSidebar's "Compute strain" card (Strain tab) —
   // a single prop instead of ~18 individual ones, since the card and the main
   // panel's visualization both need this same state/these same handlers.
   const strainCompute: StrainComputeBundle = {
     scope: computeScope,
-    onScopeChange: setComputeScope,
+    onScopeChange: handleStrainScopeChange,
     inputMode: strainInputMode,
     onInputModeChange: setStrainInputMode,
     edFrameIdx,
@@ -2018,7 +2029,7 @@ export default function LandmarkDetectionPage() {
               Re-run
             </Button>
             <Button
-              variant="outline"
+              variant="info"
               size="sm"
               className="text-xs gap-1.5"
               onClick={() => router.push(`/project/${projectId}/report`)}

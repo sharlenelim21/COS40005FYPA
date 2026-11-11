@@ -292,13 +292,14 @@ export function DrawingPanel({
           </AccordionContent>
         </AccordionItem>
 
-        {/* Tool Tips - Collapsed by default */}
-        <AccordionItem value="tooltips" className="border-none">
+        {/* Keyboard Shortcuts - Collapsed by default. Highlighted via a blue BORDER, not colored
+            text, so it's noticeable without reading as a status/severity color (2026-11-11). */}
+        <AccordionItem value="tooltips" className="rounded-lg border-2 border-info/60 px-2">
           <AccordionTrigger className="py-2 hover:no-underline [&[data-state=open]>svg]:rotate-180">
-            <h3 className="text-sm font-medium text-foreground">Tool Tips</h3>
+            <h3 className="text-sm font-medium text-foreground">Keyboard Shortcuts</h3>
           </AccordionTrigger>
           <AccordionContent className="pb-3">
-            <div className="p-3 bg-muted rounded-lg border text-xs text-muted-foreground space-y-1.5">
+            <div className="p-3 bg-muted rounded-lg text-xs text-muted-foreground space-y-1.5">
               <div>• <strong>Select:</strong> Move and select objects</div>
               <div>• <strong>Draw (D):</strong> Paint segmentation masks</div>
               <div>• <strong>Eraser (E):</strong> Remove mask pixels</div>

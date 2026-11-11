@@ -11,6 +11,7 @@ import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { inferDocModel as inferMaskModel, SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
+import { useProjectResults } from "@/hooks/useProjectResults";
 
 // UI Components
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -45,7 +46,8 @@ import {
   Crosshair,
   ChevronRight,
   Trash2,
-  Lock
+  Lock,
+  FileText
 } from "lucide-react";
 
 // Custom components
@@ -113,6 +115,17 @@ function ProjectPageInner() {
   const requestedBuildModel =
     buildModelParam === "medsam" || buildModelParam === "unet" ? buildModelParam : null;
   const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache, maskAvailabilityByModel } = useProject();
+  // Read-only (autoCompute: false) -- this page only needs to know whether the Report Page
+  // would actually have strain content to show, not to trigger any compute of its own.
+  const { byModel: strainByModel } = useProjectResults(projectId, "prefer-unet", { autoCompute: false });
+  // Either model, either a Quick ED->ES pair or a Full-cycle series -- matches exactly what the
+  // Report Page itself reads (report/page.tsx), so this gate tracks what it would actually show.
+  const hasAnyStrainResult = !!(
+    strainByModel.unet?.strain || strainByModel.unet?.strainSeries ||
+    strainByModel.unet?.rvStrain || strainByModel.unet?.rvStrainSeries ||
+    strainByModel.medsam?.strain || strainByModel.medsam?.strainSeries ||
+    strainByModel.medsam?.rvStrain || strainByModel.medsam?.rvStrainSeries
+  );
   // Glow "Start AI Segmentation" when there are no masks and no active jobs
   const glowStartSegmentation = loading === "done" && !hasMasks && (jobs ?? []).filter(j => j.status === ProjectTypes.JobStatus.PENDING || j.status === ProjectTypes.JobStatus.IN_PROGRESS).length === 0;
 
@@ -1787,7 +1800,36 @@ function ProjectPageInner() {
                         <p className="text-sm text-muted-foreground">All processing stages finished</p>
                       </div>
                     </div>
-                    {rerunHeaderButton}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <Button
+                                variant="info"
+                                size="sm"
+                                aria-label="Report Page"
+                                disabled={!hasAnyStrainResult}
+                                onClick={() => {
+                                  if (hasAnyStrainResult) router.push(`/project/${projectId}/report`);
+                                }}
+                              >
+                                <FileText className="h-4 w-4" />
+                                <span className="hidden sm:inline">Report Page</span>
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>
+                              {hasAnyStrainResult
+                                ? "Open the full results report"
+                                : "Not available — compute strain in Landmark Detection first"}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      {rerunHeaderButton}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">

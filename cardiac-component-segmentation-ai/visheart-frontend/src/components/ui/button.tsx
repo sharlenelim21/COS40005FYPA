@@ -11,6 +11,14 @@ const buttonVariants = cva(
       variant: {
         default:
           "bg-primary text-primary-foreground shadow-xs hover:bg-primary/90",
+        /** The VisHeart brand accent — for the handful of actions a user genuinely needs to
+         *  notice (e.g. "Report Page"), not a general-purpose alternative to `default`. */
+        brand:
+          "bg-brand text-brand-foreground shadow-xs hover:bg-brand/90",
+        /** A second "important action" accent (blue) — e.g. Report Page specifically. Border +
+         *  text only, not a solid fill, per direct request (2026-11-11). */
+        info:
+          "border-2 border-info text-info bg-background shadow-xs hover:bg-info/10 dark:bg-background",
         destructive:
           "bg-destructive text-white shadow-xs hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:

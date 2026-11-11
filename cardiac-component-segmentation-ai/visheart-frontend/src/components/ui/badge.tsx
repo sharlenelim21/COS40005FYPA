@@ -14,6 +14,10 @@ const badgeVariants = cva(
           "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
         destructive:
           "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
+        /** The VisHeart brand accent — for a badge that genuinely needs to stand out (e.g. an
+         *  "Updated" tag on the single most important help item), not everyday metadata tags. */
+        brand:
+          "border-transparent bg-brand text-brand-foreground hover:bg-brand/80",
         outline: "text-foreground",
       },
     },

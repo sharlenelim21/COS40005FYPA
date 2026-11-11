@@ -151,6 +151,7 @@ const ListItem = React.memo(function ListItem({
   isComingSoon = false,
   as = "li",
   className,
+  highlight = false,
   ...props
 }: React.ComponentPropsWithoutRef<"a"> & {
   href: string;
@@ -160,6 +161,9 @@ const ListItem = React.memo(function ListItem({
   isComingSoon?: boolean;
   as?: "li" | "div";
   className?: string;
+  /** Visually calls out the single most important item in this list (the brand accent, same
+   *  one used for "Report Page") — for the one thing most users actually need, not everything. */
+  highlight?: boolean;
 }) {
   const handleClick = (e: React.MouseEvent) => {
     if (isComingSoon) {
@@ -179,6 +183,7 @@ const ListItem = React.memo(function ListItem({
             "hover:bg-accent/50 hover:scale-[1.02] hover:shadow-md",
             "focus:bg-accent focus:text-accent-foreground",
             "hover:border-border/50 border border-transparent",
+            highlight && "border-brand/30 bg-brand/5 hover:bg-brand/10",
             isComingSoon && "cursor-not-allowed opacity-60",
           )}
           onClick={handleClick}
@@ -186,15 +191,18 @@ const ListItem = React.memo(function ListItem({
         >
           <div className="flex items-center space-x-3">
             {Icon && (
-              <div className="bg-primary/10 group-hover:bg-primary/20 flex-shrink-0 rounded-md p-2">
-                <Icon className="text-primary h-4 w-4" />
+              <div className={cn(
+                "flex-shrink-0 rounded-md p-2",
+                highlight ? "bg-brand/15 group-hover:bg-brand/25" : "bg-primary/10 group-hover:bg-primary/20",
+              )}>
+                <Icon className={cn("h-4 w-4", highlight ? "text-brand" : "text-primary")} />
               </div>
             )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center space-x-2">
-                <span className="group-hover:text-primary truncate text-base font-semibold">{title}</span>
+                <span className={cn("truncate text-base font-semibold", highlight ? "text-brand" : "group-hover:text-primary")}>{title}</span>
                 {badge && (
-                  <Badge variant="secondary" className="text-xs">
+                  <Badge variant={highlight ? "brand" : "secondary"} className="text-xs">
                     {badge}
                   </Badge>
                 )}
@@ -226,7 +234,7 @@ const HomeDropDown = React.memo(function HomeDropDown() {
       <NavigationMenuContent className="bg-background/95 border shadow-lg backdrop-blur-md">
         <div className="w-[400px] p-6">
           <ul className="flex flex-col space-y-3">
-            <ListItem href="/doc" title="User Guide" icon={FileText} badge="Updated" className="min-h-20">
+            <ListItem href="/doc" title="User Guide" icon={FileText} badge="Updated" highlight className="min-h-20">
               A work in progress guide on using VisHeart&apos;s features, tools, and best practices for cardiac imaging.
             </ListItem>
             <ListItem href="/sample" title="Sample NIfTI" icon={Download} className="min-h-16">
