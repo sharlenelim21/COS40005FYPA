@@ -469,6 +469,49 @@ export const MEDICAL_GUIDE: MedicalGuide = {
           ],
         },
         {
+          id: "strain",
+          title: "Strain",
+          summary: [
+            {
+              text: "Strain describes how much the heart muscle deforms as it contracts, for example how much it shortens or thickens compared with its relaxed state. It is reported as a percentage, and shortening is shown as a negative number, so a more negative value means more shortening.",
+              refs: ["scmr2025"],
+            },
+          ],
+          detail: [
+            {
+              text: "Circumferential strain (shortening around the ventricle) and radial strain (wall thickening) are measured on short-axis images. Longitudinal strain (base-to-apex shortening) is usually averaged over two-, three- and four-chamber long-axis views.",
+              refs: ["scmr2025"],
+            },
+            { text: "Strain is measured with tagged MRI or with feature tracking on standard cine images.", refs: ["scmr2025"] },
+            {
+              text: "Normal values depend strongly on the software used. For example, reported normal left ventricular global circumferential strain in men averages between −16.5% and −23.7% depending on the method.",
+              refs: ["scmr2025"],
+            },
+            { text: "In most studies, women have higher strain values than men, and strain decreases with age.", refs: ["scmr2025"] },
+            {
+              text: "Right ventricular strain can be measured in the longitudinal and circumferential directions, and as area strain: the change in the ventricle's inner surface area between end-diastole and end-systole.",
+              refs: ["tokodi2021"],
+            },
+            {
+              text: "When the right ventricle works against high pressure, such as in pulmonary hypertension, the inward movement of its free wall can be affected early, so it may show right ventricular dysfunction before global measures change.",
+              refs: ["tokodi2021"],
+            },
+          ],
+          blocks: [
+            {
+              kind: "callout",
+              variant: "info",
+              title: "About VisHeart's strain values",
+              body: [
+                {
+                  text: "VisHeart estimates radial and circumferential strain from changes in the radius of the heart wall across the heartbeat on short-axis images, and reports the peak values. This differs from the tagging and feature-tracking methods used in published studies, so VisHeart's strain values should not be compared directly with published normal ranges. For the right ventricle, VisHeart's strain approach draws on the ReVISION method.",
+                  refs: ["scmr2025", "tokodi2021"],
+                },
+              ],
+            },
+          ],
+        },
+        {
           id: "normal-ranges",
           title: "Normal ranges at a glance",
           summary: [],
@@ -519,297 +562,46 @@ export const MEDICAL_GUIDE: MedicalGuide = {
       ],
     },
     {
-      id: "visheart-strain-computation",
-      title: "VisHeart Strain Computation",
+      id: "aha-17-segment",
+      title: "The AHA 17-segment model",
       summary: [
         {
-          text: "Strain describes how much the heart muscle deforms as it contracts, for example how much it shortens or thickens compared with its relaxed state. It is reported as a percentage, and shortening is shown as a negative number, so a more negative value means more shortening.",
-          refs: ["scmr2025"],
+          text: "To describe where a problem is in the heart muscle, the left ventricle is divided into 17 standard segments defined by the American Heart Association. The model is widely used in clinical practice, for example to describe wall motion or locate damage from a heart attack.",
+          refs: ["cerqueira2002", "bazhutina2023"],
         },
       ],
       detail: [
         {
-          text: "Circumferential strain (shortening around the ventricle) and radial strain (wall thickening) are measured on short-axis images. Longitudinal strain (base-to-apex shortening) is usually averaged over two-, three- and four-chamber long-axis views.",
-          refs: ["scmr2025"],
+          text: "The left ventricle is divided along its long axis into basal, mid and apical levels: segments 1–6 are basal, 7–12 are mid, 13–16 are apical, and segment 17 is the apex.",
+          refs: ["bazhutina2023"],
         },
-        { text: "Strain is measured with tagged MRI or with feature tracking on standard cine images.", refs: ["scmr2025"] },
         {
-          text: "Normal values depend strongly on the software used. For example, reported normal left ventricular global circumferential strain in men averages between −16.5% and −23.7% depending on the method.",
-          refs: ["scmr2025"],
+          text: "Basal and mid segments each cover 60° around the ventricle; apical segments each cover 90°.",
+          refs: ["bazhutina2023"],
         },
-        { text: "In most studies, women have higher strain values than men, and strain decreases with age.", refs: ["scmr2025"] },
         {
-          text: "Right ventricular strain can be measured in the longitudinal and circumferential directions, and as area strain: the change in the ventricle's inner surface area between end-diastole and end-systole.",
+          text: "The segments are usually displayed as a flat 'bull's-eye' plot.",
+          refs: ["bazhutina2023"],
+        },
+        {
+          text: "Drawing the 17 segments by hand takes a lot of time, which is why automated methods are being developed. In one automated method, segment boundaries were less accurate near the apex than at the base.",
+          refs: ["bazhutina2023"],
+        },
+        {
+          text: "Unlike the left ventricle, the right ventricle has no generally accepted standard segmentation because of its complex shape. Research methods divide it in different ways; for example, the ReVISION method, developed for 3D echocardiography, uses 15 segments.",
           refs: ["tokodi2021"],
         },
-        {
-          text: "When the right ventricle works against high pressure, such as in pulmonary hypertension, the inward movement of its free wall can be affected early, so it may show right ventricular dysfunction before global measures change.",
-          refs: ["tokodi2021"],
-        },
+        { text: "VisHeart uses this model to label segments on the 3D reconstruction of the left ventricle.", refs: [] },
       ],
       blocks: [
         {
-          kind: "callout",
-          variant: "caution",
-          title: "Use VisHeart's strain values as VisHeart's own, not the published ranges above",
-          body: [
-            {
-              text: "The published ranges above come from tagged MRI or feature-tracking software, which measure strain differently from how VisHeart does. VisHeart's own strain values should not be compared directly against them — see the Left Ventricle and Right Ventricle sections below for how VisHeart actually computes its own strain.",
-              refs: ["scmr2025"],
-            },
-          ],
-        },
-      ],
-      subsections: [
-        {
-          id: "strain-lv",
-          title: "Left Ventricle",
-          summary: [{ text: "This section is still being written.", refs: [] }],
-          blocks: [
-            {
-              kind: "callout",
-              variant: "info",
-              title: "Coming soon",
-              body: [
-                { text: "An explanation of how VisHeart calculates LV strain will be added here.", refs: [] },
-              ],
-            },
-          ],
-        },
-        {
-          id: "strain-rv",
-          title: "Right Ventricle",
-          summary: [{ text: "This section is still being written.", refs: [] }],
-          blocks: [
-            {
-              kind: "callout",
-              variant: "info",
-              title: "Coming soon",
-              body: [
-                { text: "An explanation of how VisHeart calculates RV strain will be added here.", refs: [] },
-              ],
-            },
-          ],
-        },
-      ],
-    },
-    {
-      id: "bullseye-ray-casting",
-      title: "VisHeart's 2D Bullseye Ray-casting",
-      summary: [
-        {
-          text: "To fill in a bullseye plot, VisHeart needs one measurement for every segment, on every slice. It gets these by \"ray-casting\": on each slice, it shoots many straight measurement lines outward from a fixed reference point, like spokes on a wheel, and reads off what each line crosses. LV and RV are measured differently, because an RV mask has no separate wall layer the way the LV does.",
-          refs: [],
-        },
-      ],
-      subsections: [
-        {
-          id: "bullseye-ray-casting-lv",
-          title: "AHA-17 Segment (LV)",
-          summary: [
-            {
-              text: "To describe where a problem is in the heart muscle, the left ventricle is divided into 17 standard segments defined by the American Heart Association. The model is widely used in clinical practice, for example to describe wall motion or locate damage from a heart attack.",
-              refs: ["cerqueira2002", "bazhutina2023"],
-            },
-          ],
-          detail: [
-            {
-              text: "The left ventricle is divided along its long axis into basal, mid and apical levels: segments 1–6 are basal, 7–12 are mid, 13–16 are apical, and segment 17 is the apex.",
-              refs: ["bazhutina2023"],
-            },
-            {
-              text: "Basal and mid segments each cover 60° around the ventricle; apical segments each cover 90°.",
-              refs: ["bazhutina2023"],
-            },
-            {
-              text: "The segments are usually displayed as a flat 'bull's-eye' plot.",
-              refs: ["bazhutina2023"],
-            },
-            {
-              text: "Drawing the 17 segments by hand takes a lot of time, which is why automated methods are being developed. In one automated method, segment boundaries were less accurate near the apex than at the base.",
-              refs: ["bazhutina2023"],
-            },
-            {
-              text: "Unlike the left ventricle, the right ventricle has no generally accepted standard segmentation because of its complex shape. Research methods divide it in different ways; for example, the ReVISION method, developed for 3D echocardiography, uses 15 segments.",
-              refs: ["tokodi2021"],
-            },
-            {
-              text: "For the left ventricle, each ray measures wall thickness: how far it travels through heart muscle before it exits the other side.",
-              refs: [],
-            },
-            {
-              text: "On each slice, 360 rays are cast outward from that slice's LV cavity centre, one per degree, all the way around. Each ray walks outward pixel by pixel and records the first two points where it crosses from background into muscle and back out again — the distance between those two points is that ray's wall thickness.",
-              refs: [],
-            },
-            {
-              text: "The 360 rays are then grouped into the AHA's wedge-shaped segments in order: 6 wedges of 60° each for the basal and mid rings, 4 wedges of 90° each for the apical ring, and all 360 rays averaged into one value for the apex. Each slice is first sorted into a ring (basal, mid, apical or apex) by its position from base to apex; every slice in a ring is measured this same way, and the ring's segments are the average across all of that ring's slices.",
-              refs: [],
-            },
-            {
-              text: "The very first ray (0°) always starts at the same anatomical landmark — the point where the right ventricle meets the left on that slice — so segment 1 lines up the same way on every slice and every patient.",
-              refs: [],
-            },
-          ],
-          blocks: [
-            {
-              kind: "figure",
-              src: "/images/doc/AHA_Bullseye.jpg",
-              alt: "Bull's-eye diagram of the left ventricle divided into 17 numbered segments in three rings and a central apex.",
-              caption: `The American Heart Association 17-segment model of the left ventricle, divided into basal (1–6), mid (7–12) and apical (13–16) rings plus the apex (17). Segment names as used in VisHeart: ${SEGMENT_LABELS.map((label, index) => `${index + 1} ${label}`).join(", ")}.`,
-              attribution:
-                "Adapted from Hegeman, R. R. M. J. J. et al., Reference Values for Inward Displacement in the Normal Left Ventricle: A Novel Method of Regional Left Ventricular Function Assessment, Journal of Cardiovascular Development and Disease, 2023, Figure 3. CC BY 4.0. https://doi.org/10.3390/jcdd10120474",
-              refs: ["cerqueira2002", "bazhutina2023", "hegeman2023"],
-            },
-          ],
-        },
-        {
-          id: "bullseye-ray-casting-rv",
-          title: "9 Segment (RV)",
-          summary: [
-            {
-              text: "For the right ventricle, the rays still start from the left ventricle's own centre (so both chambers share one consistent reference point per slice), but sweep the opposite way around, and instead of measuring wall thickness, each ray simply checks whether it passes through the RV cavity at all.",
-              refs: [],
-            },
-          ],
-          detail: [
-            {
-              text: "An RV mask has only one class — cavity — with no separate wall layer to measure a thickness between, which is why this step works differently from the LV's.",
-              refs: [],
-            },
-            {
-              text: "The rays that do cross the RV cavity form one continuous arc; that arc is split into 3 equal sections, ordered the same way around the chamber as the LV's wedges. There are 3 rings (basal, mid, apical — no separate apex ring for the RV), 3 sections each, for 9 segments in total.",
-              refs: [],
-            },
-            {
-              text: "Each section's value is the RV cavity's angular area within that wedge, rather than a wall thickness — since there is no RV wall layer in the mask to measure one from.",
-              refs: [],
-            },
-          ],
-          blocks: [
-            {
-              kind: "callout",
-              variant: "caution",
-              title: "Research output only",
-              body: [
-                {
-                  text: "This ray-casting method is VisHeart's own research output, built and tested in-house. Treat RV bullseye values derived from it as indicative only, not diagnostic.",
-                  refs: [],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    },
-    {
-      id: "3d-segment-division",
-      title: "VisHeart's 3D Modelling",
-      summary: [
-        {
-          text: "The bullseye above is a flat, 2D summary. Separately, VisHeart's 3D heart model also needs every point on its surface to know which AHA segment it belongs to, so it can be coloured segment by segment. VisHeart currently gets there differently for each ventricle.",
-          refs: [],
-        },
-      ],
-      subsections: [
-        {
-          id: "3d-segment-division-lv",
-          title: "Left Ventricle 17 Segments",
-          summary: [
-            {
-              text: "The left ventricle's 3D model is labelled by comparing it against a single reference heart shape that was already divided into its 17 segments once, then letting every point on the patient's own model borrow its label from whichever point on that reference shape it lines up with most closely.",
-              refs: ["myronenko2010"],
-            },
-          ],
-          detail: [
-            {
-              text: "That reference shape is elastically warped — stretched and bent, not just rotated or resized — to line up with the patient's own reconstructed left ventricle, using an algorithm called Coherent Point Drift. Once the two shapes are aligned, each point on the patient's model is given the segment label of whichever point on the warped reference shape ends up closest to it.",
-              refs: ["myronenko2010"],
-            },
-            {
-              text: "If that alignment step doesn't produce a usable result, VisHeart falls back to a simpler, fixed geometric rule (dividing the shape by height and angle) instead of leaving the model unlabelled.",
-              refs: [],
-            },
-          ],
-        },
-        {
-          id: "3d-segment-division-rv",
-          title: "Right Ventricle 9 Segments",
-          summary: [
-            {
-              text: "The AHA standard above only covers the left ventricle. VisHeart gives the right ventricle 9 segments of its own, built on the same idea — extending the AHA model to the RV — but worked out and tested by the team in-house, not copied from any one published algorithm.",
-              refs: ["bazhutina2023"],
-            },
-          ],
-          detail: [
-            {
-              text: "Like the left ventricle, the right ventricle is first split into three levels from base to apex — basal, mid and apical — and each level is then divided into 3 segments going around it, for 9 in total. This follows published work that extends the AHA model to the RV the same way.",
-              refs: ["bazhutina2023"],
-            },
-            {
-              text: "To work out where those 3 segments fall at each level, VisHeart starts from the Right Ventricle Segmentation masks output: it finds the RV's own centre point on that slice, then draws a line straight through it, at a right angle to the direction pointing from the RV's centre towards the LV's centre (that direction is the septum — the wall between the two ventricles, and a natural, consistent landmark to anchor the cut to).",
-              refs: [],
-            },
-            {
-              text: "That line crosses the RV's outline at two points. The midpoint between the centre and each of those points becomes a cut — together, the two cuts split the level into Segment 1, 2 and 3, going around the RV in order.",
-              refs: [],
-            },
-            {
-              text: "Anchoring the cut to the septum this way means each slice's segments naturally line up with the slice above and below it, without needing any extra step to keep them consistent — a problem earlier in-house attempts, which cut based on the RV outline's own widest point instead of the septum, did run into.",
-              refs: [],
-            },
-            {
-              text: "The right ventricle's 3D model is labelled differently from the left's — not against a reference shape at all, but directly from the patient's own 2D slice-by-slice segments above: every point on the 3D model simply borrows the label of whichever already-labelled 2D point, from any slice, is nearest to it in space.",
-              refs: [],
-            },
-            {
-              text: "Every RV pixel on every slice already carries a segment label (1–9) from the per-slice construction above. Stacking all of those labelled points from every slice together builds one labelled point cloud in 3D space. Each point on the reconstructed RV surface then simply takes the label of whichever point in that cloud sits closest to it.",
-              refs: [],
-            },
-            {
-              text: "This replaced an earlier version of VisHeart's RV pipeline that labelled the 3D model the same reference-shape-warping way the left ventricle still does today. It was changed specifically for the RV because the reference shape's structure is comparatively flat, while a real patient's right ventricle is often more sharply curved — warping a flat reference onto a sharply curved shape tended to fragment a single segment into many small, disconnected pieces on the final model.",
-              refs: [],
-            },
-          ],
-          blocks: [
-            {
-              kind: "figure",
-              src: "/images/doc/rv_9segment_per_slice_steps.png",
-              alt: "Five panels showing one short-axis slice's RV and LV masks, the RV centre point and septal direction, the cutting line through the centre perpendicular to the septal direction, the two cut points, and the final Segment 1/2/3 labels in that slice.",
-              caption:
-                "How one short-axis slice's RV outline is split into its 3 segments: the LV's position sets the septal direction, and a line through the RV's own centre point, at a right angle to it, marks where the two cuts fall.",
-              attribution: "VisHeart internal methodology figure (representative patient slice).",
-              refs: [],
-            },
-            {
-              kind: "figure",
-              src: "/images/doc/rv_9segment_all_slices.png",
-              alt: "Eight short-axis slices from apex to base of the same study, each showing the RV outline split into Segment 1, 2 and 3 by the same septal-anchored cutting line.",
-              caption:
-                "The same construction applied to every slice of one study, apex to base — because the cut's direction follows each slice's own septal reference, segment identity stays consistent from one slice to the next with no extra adjustment.",
-              attribution: "VisHeart internal methodology figure.",
-              refs: [],
-            },
-            {
-              kind: "figure",
-              src: "/images/doc/rv_9segment_3d_fusion.png",
-              alt: "Two pairs of 3D plots: the segment-labelled points from every slice stacked together, and the same labels carried onto the final reconstructed RV surface, each shown from two camera angles.",
-              caption:
-                "The per-slice segment labels, stacked from every slice into a labelled point cloud, are then carried onto the reconstructed RV surface — each point on the surface takes its nearest labelled neighbour's segment — producing the final 9-segment 3D model.",
-              attribution: "VisHeart internal methodology figure.",
-              refs: [],
-            },
-            {
-              kind: "callout",
-              variant: "caution",
-              title: "Research output only",
-              body: [
-                {
-                  text: "This RV labelling method is part of VisHeart's own research pipeline, built and tested in-house. Treat RV 3D segment boundaries, and any measurement derived from them, as indicative only, not diagnostic.",
-                  refs: [],
-                },
-              ],
-            },
-          ],
+          kind: "figure",
+          src: "/images/doc/AHA_Bullseye.jpg",
+          alt: "Bull's-eye diagram of the left ventricle divided into 17 numbered segments in three rings and a central apex.",
+          caption: `The American Heart Association 17-segment model of the left ventricle, divided into basal (1–6), mid (7–12) and apical (13–16) rings plus the apex (17). Segment names as used in VisHeart: ${SEGMENT_LABELS.map((label, index) => `${index + 1} ${label}`).join(", ")}.`,
+          attribution:
+            "Adapted from Hegeman, R. R. M. J. J. et al., Reference Values for Inward Displacement in the Normal Left Ventricle: A Novel Method of Regional Left Ventricular Function Assessment, Journal of Cardiovascular Development and Disease, 2023, Figure 3. CC BY 4.0. https://doi.org/10.3390/jcdd10120474",
+          refs: ["cerqueira2002", "bazhutina2023", "hegeman2023"],
         },
       ],
     },

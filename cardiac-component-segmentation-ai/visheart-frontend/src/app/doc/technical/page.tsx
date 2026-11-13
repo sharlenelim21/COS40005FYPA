@@ -8,6 +8,7 @@ import { AccountsSection } from "@/components/doc/technical/AccountsSection";
 import { SegmentationSection } from "@/components/doc/technical/SegmentationSection";
 import { LandmarkDetectionSection } from "@/components/doc/technical/LandmarkDetectionSection";
 import { ReconstructionSection } from "@/components/doc/technical/ReconstructionSection";
+import { SegmentDivisionSection } from "@/components/doc/technical/SegmentDivisionSection";
 
 export const metadata: Metadata = {
   title: "Technical Guide | VisHeart",
@@ -19,6 +20,7 @@ const TOC: TocItem[] = [
   { id: "accounts", label: "Accounts" },
   { id: "how-it-works", label: "How Segmentation Works" },
   { id: "reconstruction", label: "How Reconstruction Works" },
+  { id: "segment-division", label: "How Segments Division on 3D Model Works" },
   { id: "landmark-detection", label: "How Landmark Detection Works" },
 ];
 
@@ -39,6 +41,9 @@ export default function TechnicalGuidePage() {
       </DocSection>
       <DocSection id="reconstruction">
         <ReconstructionSection />
+      </DocSection>
+      <DocSection id="segment-division">
+        <SegmentDivisionSection />
       </DocSection>
       <DocSection id="landmark-detection">
         <LandmarkDetectionSection />

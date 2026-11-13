@@ -2188,13 +2188,13 @@ function StrainTab({
  */
 /** Clickable "research output only" note for RV content in the Strain tab -- RV's 9-segment
  *  division (and, once documented, its strain calculation) is VisHeart's own research output,
- *  not a validated clinical standard like the LV's AHA model. Links straight to the Medical
+ *  not a validated clinical standard like the LV's AHA model. Links straight to the Technical
  *  Guide section explaining how it's actually built, opened in a new tab so it doesn't lose
  *  whatever the user was doing here. */
 export function RvResearchNote() {
   return (
     <Link
-      href="/doc/medical#3d-segment-division-rv"
+      href="/doc/technical#segment-division"
       target="_blank"
       rel="noopener noreferrer"
       className="inline-block text-[9px] font-medium text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400"
