@@ -83,6 +83,14 @@ function ExtendTrainingInner() {
   const [target, setTarget] = useState<SwitchTarget | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
   const previousJob = useRef<{ id: string; state: string } | null>(null);
+  // How many /status polls in a row have failed. A single failed poll (a transient
+  // host.docker.internal blip, or the worker's machine briefly too loaded under heavy local
+  // training to answer within the timeout) does NOT mean the service is actually down -- training
+  // itself keeps running regardless, so flashing "not available" on every one-off miss read as the
+  // banner randomly popping up and disappearing even while everything was working fine (reported
+  // live, 2026-11-12). Only surface it once a few polls in a row have failed.
+  const consecutiveOfflineRef = useRef(0);
+  const OFFLINE_THRESHOLD = 2;
   const autoChecked = useRef(false);
   const knownCases = useRef<string | null>(null);
   // The case ids seen as of the last check — lets the background re-check notify only about
@@ -99,9 +107,13 @@ function ExtendTrainingInner() {
   const refresh = useCallback(async (): Promise<RetrainingStatus | null> => {
     const reply = await retrainingApi.status();
     if (!reply.success || !reply.data) {
-      setOffline(reply.message || "The training service could not be reached.");
+      consecutiveOfflineRef.current += 1;
+      if (consecutiveOfflineRef.current >= OFFLINE_THRESHOLD) {
+        setOffline(reply.message || "The training service could not be reached.");
+      }
       return null;
     }
+    consecutiveOfflineRef.current = 0;
     setOffline(null);
     setStatus(reply.data);
     const job = reply.data.job;

@@ -36,7 +36,7 @@ import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { useCyclePlayback } from "@/hooks/useCyclePlayback";
-import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
+import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, RvResearchNote, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
 import { useMotionMesh } from "@/hooks/useMotionMesh";
@@ -1436,17 +1436,12 @@ export default function LandmarkDetectionPage() {
     }
   }, [activeModel, resultsByModel]);
 
-  // On first load with NO model in the URL, before any strain series exists yet for
-  // either model (so autoPickedSeriesModel below has nothing to go on), default to
-  // whichever model's editable mask was most recently created — e.g. the model that
-  // was just run via the one-click pipeline — rather than a hardcoded UNet preference.
-  // Without this, running MedSAM's landmark detection but landing here with no ?model=
-  // silently showed UNet's (older) mask/results instead whenever a UNet mask also
-  // existed for the project (reported live, 2026-10). Mongo ObjectIds are monotonic by
-  // creation time, so a plain string compare orders them without needing a timestamp
-  // field on the wire — same technique useProjectResults' own newerMaskAvailable uses.
-  // Superseded by autoPickedSeriesModel below once strain data exists for one model, a
-  // stronger signal of current interest than raw mask recency.
+  // On first load with NO model in the URL, before any strain series exists yet for either
+  // model (so autoPickedSeriesModel below has nothing to go on), default to UNet whenever it
+  // has an editable mask, falling back to MedSAM only when UNet has none (direct request,
+  // 2026-11-13 — both Structure and Strain should always land on UNet when it's available,
+  // not on whichever model was most recently touched). Superseded by autoPickedSeriesModel
+  // below once strain data exists for one model, which applies the same UNet-first rule.
   const autoPickedMaskModel = useRef(false);
   useEffect(() => {
     if (autoPickedMaskModel.current) return;
@@ -1454,10 +1449,9 @@ export default function LandmarkDetectionPage() {
     const unetId = resultsByModel?.unet?._id;
     const medsamId = resultsByModel?.medsam?._id;
     if (!unetId && !medsamId) return;
-    const preferred: "unet" | "medsam" =
-      unetId && medsamId
-        ? (String(medsamId) > String(unetId) ? "medsam" : "unet")
-        : unetId ? "unet" : "medsam";
+    // Always UNet when it has results, regardless of which model was touched more recently --
+    // direct request (2026-11-13), replacing the recency-based pick above.
+    const preferred: "unet" | "medsam" = unetId ? "unet" : "medsam";
     autoPickedMaskModel.current = true;
     if (preferred !== activeModel) {
       setActiveModel(preferred);
@@ -1475,13 +1469,9 @@ export default function LandmarkDetectionPage() {
     if (searchParams.get("model")) { autoPickedSeriesModel.current = true; return; }
     const { unet, medsam } = seriesAvailable;
     if (!unet && !medsam) return;
-    let preferred: "unet" | "medsam";
-    if (unet && medsam) {
-      preferred =
-        (seriesComputedAt.medsam ?? 0) > (seriesComputedAt.unet ?? 0) ? "medsam" : "unet";
-    } else {
-      preferred = unet ? "unet" : "medsam";
-    }
+    // Always UNet when it has series data, regardless of which was computed more recently --
+    // direct request (2026-11-13), replacing the recency-based pick above.
+    const preferred: "unet" | "medsam" = unet ? "unet" : "medsam";
     autoPickedSeriesModel.current = true;
     if (preferred !== activeModel) {
       setActiveModel(preferred);
@@ -1527,6 +1517,23 @@ export default function LandmarkDetectionPage() {
   // keeps the RV view's orientation stable across frames instead of
   // wobbling as LV's own per-frame alignment shifts.
   const lvAlignmentReconstruction = reconstructionsByModel?.[activeModel] ?? null;
+  const hasLvReconstruction = !!lvAlignmentReconstruction;
+  const hasRvReconstruction = structureRvMesh.available;
+
+  // Once it's known that exactly one chamber is actually reconstructed, default both the
+  // Structure tab's LV/RV toggle and the Strain tab's chamber focus to that chamber, instead of
+  // always starting on LV and leaving the user looking at a locked/empty panel (direct request,
+  // 2026-11-13). Runs once per project load -- a later manual click is never overridden.
+  const autoPickedChamberFocus = useRef(false);
+  useEffect(() => {
+    if (autoPickedChamberFocus.current) return;
+    if (!hasLvReconstruction && !hasRvReconstruction) return;
+    autoPickedChamberFocus.current = true;
+    if (hasLvReconstruction || !hasRvReconstruction) return; // LV available (or neither) -- the "LV" default already matches
+    setStructureVentricle("RV");
+    setChamberFocus("RV");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasLvReconstruction, hasRvReconstruction]);
 
   // Warm the LV reconstruction's motion build as soon as the page loads, the same way
   // structureRvMesh above does for RV. Without this, LV's motion only starts building
@@ -2128,6 +2135,8 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
+            hasLvReconstruction={hasLvReconstruction}
+            hasRvReconstruction={hasRvReconstruction}
             structureStats={currentFrameStructureStats}
             isPerFrame={!!frameThicknessValues}
             rvFacStats={currentFrameRvFacStats}
@@ -2538,6 +2547,8 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
+            hasLvReconstruction={hasLvReconstruction}
+            hasRvReconstruction={hasRvReconstruction}
             structureStats={currentFrameStructureStats}
             isPerFrame={!!frameThicknessValues}
             rvFacStats={currentFrameRvFacStats}
@@ -3307,6 +3318,17 @@ function StrainPreviewPanel({
   // Independent of the LV reconstruction above; RV has its own reconstruction record.
   const rvMesh = useRvPrototypeMesh(strainModel, currentFrame);
 
+  // Which chamber-focus options are selectable -- a chamber the user hasn't reconstructed yet
+  // (for this model) has no bullseye/3D model to show, so its button (and Combined, which needs
+  // both) is blurred with a reason on hover instead of silently rendering an empty panel if
+  // clicked (direct request, 2026-11-13).
+  const chamberDisabledOptions = useMemo(() => {
+    const reasons: Partial<Record<ChamberFocus, string>> = {};
+    if (!activeReconstruction) reasons.LV = "Reconstruct LV to view this";
+    if (!rvMesh.available) reasons.RV = "Reconstruct RV to view this";
+    return Object.keys(reasons).length > 0 ? reasons : undefined;
+  }, [activeReconstruction, rvMesh.available]);
+
   // LV 3D heart: smooth motion when built (the ED mesh with its ED labels, vertices moved per frame), otherwise this
   // frame's own mesh and labels as before -- labels always come with the mesh they belong to, and the previous mesh
   // stays on screen until the next is ready (no flicker during playback). See hooks/useMotionMesh.
@@ -3661,7 +3683,7 @@ function StrainPreviewPanel({
                 <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
               </div>
             </div>
-            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} className="mb-2 flex-shrink-0" />
+            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} disabledOptions={chamberDisabledOptions} className="mb-2 flex-shrink-0" />
             {/* Metric-type control, moved here (main panel, right under the
                 chamber toggle) from the sidebar's chart card -- same idea as
                 Quick ED->ES's own flat toggle (QuickCombinedStrainView, now
@@ -3977,6 +3999,9 @@ function RvFullCycleStrainTiles({
       <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
         RV Global Strain
       </p>
+      <div className="mb-1">
+        <RvResearchNote />
+      </div>
       <div className="grid grid-cols-2 gap-1">
         <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
         <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />

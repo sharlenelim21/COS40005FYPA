@@ -2,6 +2,7 @@
 
 import React, { Fragment, useState, useCallback, useMemo, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useProjectResults } from "@/hooks/useProjectResults";
 import { REAL_TIME_BPM, type CyclePlayback } from "@/hooks/useCyclePlayback";
@@ -9,6 +10,7 @@ import { computeStrainSeries, computeRvStrainSeries } from "@/lib/landmarkApi";
 import { segmentationApi } from "@/lib/api";
 import { JobProgress } from "@/components/ui/kinetic-progress";
 import { Button } from "@/components/ui/button";
+import { Tooltip as UiTooltip, TooltipContent as UiTooltipContent, TooltipTrigger as UiTooltipTrigger } from "@/components/ui/tooltip";
 import { Switch } from "@/components/ui/switch";
 import {
   CartesianGrid,
@@ -160,6 +162,9 @@ export interface LandmarkSidebarProps {
   onModelChange?: (m: "unet" | "medsam") => void;
   structureVentricle?: "LV" | "RV";
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
+  /** Whether this model has an LV / RV reconstruction at all -- see StructureTab's own doc. */
+  hasLvReconstruction?: boolean;
+  hasRvReconstruction?: boolean;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
   isPerFrame?: boolean;
   rvFacStats?: { global: number | null; rings: (number | null)[] } | null;
@@ -219,6 +224,8 @@ export function LandmarkSidebar({
   onModelChange,
   structureVentricle = "LV",
   onStructureVentricleChange,
+  hasLvReconstruction = true,
+  hasRvReconstruction = true,
   structureStats,
   isPerFrame,
   rvFacStats,
@@ -438,6 +445,8 @@ export function LandmarkSidebar({
             onModelChange={onModelChange}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={onStructureVentricleChange}
+            hasLvReconstruction={hasLvReconstruction}
+            hasRvReconstruction={hasRvReconstruction}
             structureStats={structureStats}
             isPerFrame={isPerFrame}
             rvFacStats={rvFacStats}
@@ -1352,6 +1361,8 @@ function StructureTab({
   isPerFrame,
   rvFacStats,
   isRvPerFrame,
+  hasLvReconstruction = true,
+  hasRvReconstruction = true,
 }: {
   hasPredictions: boolean;
   activeModel: "unet" | "medsam";
@@ -1369,6 +1380,11 @@ function StructureTab({
   /** True when rvFacStats tracks the currently playing frame (a real
    *  per-frame RV strain series exists); false for the single ED->ES snapshot. */
   isRvPerFrame?: boolean;
+  /** Whether this model actually has an LV / RV reconstruction to show -- the unavailable one's
+   *  button is blurred with a reason on hover instead of switching to an empty panel (direct
+   *  request, 2026-11-13). Default true so callers that don't pass these keep both enabled. */
+  hasLvReconstruction?: boolean;
+  hasRvReconstruction?: boolean;
 }) {
   const { projectId } = useParams<{ projectId: string }>();
   // Same per-model "is there a stored result at all" check the Strain tab's model
@@ -1397,21 +1413,38 @@ function StructureTab({
       </div>
 
       <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
-        {(["LV", "RV"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => onStructureVentricleChange?.(v)}
-            className={cn(
-              "rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
-              structureVentricle === v
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            {v}
-          </button>
-        ))}
+        {(["LV", "RV"] as const).map((v) => {
+          const available = v === "LV" ? hasLvReconstruction : hasRvReconstruction;
+          const button = (
+            <button
+              key={v}
+              type="button"
+              disabled={!available}
+              onClick={() => onStructureVentricleChange?.(v)}
+              className={cn(
+                "w-full rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
+                !available
+                  ? "cursor-not-allowed text-muted-foreground opacity-50"
+                  : structureVentricle === v
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              {v}
+            </button>
+          );
+          if (available) return button;
+          return (
+            <UiTooltip key={v}>
+              <UiTooltipTrigger asChild>
+                <span className="inline-block">{button}</span>
+              </UiTooltipTrigger>
+              <UiTooltipContent>
+                <p>Reconstruct {v} to view this</p>
+              </UiTooltipContent>
+            </UiTooltip>
+          );
+        })}
       </div>
 
       {!isLv ? (
@@ -2153,6 +2186,24 @@ function StrainTab({
  * this shows both chambers' values together with one flat toggle that picks
  * what colors the main panel's bullseye/3D heart.
  */
+/** Clickable "research output only" note for RV content in the Strain tab -- RV's 9-segment
+ *  division (and, once documented, its strain calculation) is VisHeart's own research output,
+ *  not a validated clinical standard like the LV's AHA model. Links straight to the Medical
+ *  Guide section explaining how it's actually built, opened in a new tab so it doesn't lose
+ *  whatever the user was doing here. */
+export function RvResearchNote() {
+  return (
+    <Link
+      href="/doc/medical#3d-segment-division-rv"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-block text-[9px] font-medium text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400"
+    >
+      Research output only — see how RV segments are calculated
+    </Link>
+  );
+}
+
 function QuickCombinedStrainView({
   strainCompute: sc,
   selectedStrainType,
@@ -2229,6 +2280,7 @@ function QuickCombinedStrainView({
             validated against a reference range.
           </p>
         </div>
+        <RvResearchNote />
         {rv ? (
           <div className="grid grid-cols-2 gap-2">
             <StrainMetricCard label="Peak GCS" value={fmtPct(rv.global_rv_strain)} strainType="GCS" valueNumber={rv.global_rv_strain ?? 0} loading={sc.isComputing} />
@@ -2307,7 +2359,6 @@ function ComputeStrainCard({
   const segBlocked = sc.segmentationRunning;
   const segTitle = segBlocked ? SEGMENTATION_RUNNING_STRAIN_MESSAGE : undefined;
   const modelLabel = sc.strainModel === "unet" ? "UNet" : "MedSAM";
-  const hasScopeResult = isQuick ? !!(sc.quickLvResult || sc.quickRvResult) : hasFullCycleResult;
 
   // Auto-collapses the config controls right after a compute finishes
   // successfully, so the (already-visible-elsewhere) results get the space
@@ -2370,11 +2421,11 @@ function ComputeStrainCard({
           <button
             type="button"
             onClick={() => setCollapsed((c) => !c)}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex h-8 w-8 items-center justify-center rounded text-foreground transition-colors hover:bg-muted"
             aria-label={collapsed ? "Show compute strain controls" : "Hide compute strain controls"}
             title={collapsed ? "Show" : "Hide"}
           >
-            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsed ? "" : "rotate-180")} />
+            <ChevronDown className={cn("h-5 w-5 transition-transform", collapsed ? "" : "rotate-180")} />
           </button>
         </div>
       </div>
@@ -2390,28 +2441,10 @@ function ComputeStrainCard({
         </div>
       )}
 
-      {/* Full-cycle's own recompute lives on the single button below (Compute/Recompute all
-          frames) — showing it here too for "full" scope just duplicated the same action under
-          a second label. Quick's own compute/recompute button (below, "Compute ED → ES") is
-          part of the expanded card, so this top-level shortcut is only shown while COLLAPSED --
-          once expanded, both buttons called the exact same onComputeFrames/onComputeUpload and
-          sat on screen together, reading as two buttons for one action (reported live, with a
-          screenshot, 2026-11-11). */}
-      {/* Opens the card to let the user see/adjust the ED->ES range before computing anything --
-          it used to call onRecompute directly, silently reusing whatever range was last used,
-          which could recompute against a range the user no longer remembered or wanted
-          (reported live, 2026-11-11). The real compute button lives below, once expanded. */}
-      {hasScopeResult && isQuick && collapsed && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 w-full text-[10px] justify-between"
-          onClick={() => setCollapsed(false)}
-        >
-          {`Recompute strain (ED → ES, ${modelLabel})`}
-          <ChevronDown className="h-3.5 w-3.5" />
-        </Button>
-      )}
+      {/* No separate "Recompute strain" shortcut button anymore -- the header's own chevron
+          (above) is the single way to open the card from its collapsed state, for both Quick
+          ED->ES and Full cycle alike (direct request, 2026-11-13; this used to show a redundant
+          button here only in Quick scope, see the removed comment this replaced). */}
 
       {!collapsed && (
       <>
@@ -2684,6 +2717,7 @@ function RvStrainPanel({
             : "RV GCS = % change in RV free-wall length per segment (short-axis). Computed, but not validated against a reference range yet."}
         </p>
       </div>
+      <RvResearchNote />
 
       {!usingRealRvSeries && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">

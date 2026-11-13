@@ -29,7 +29,9 @@ export function GuideSwitch() {
                   "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium transition-colors sm:px-3",
                   "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
                   active
-                    ? "bg-background text-foreground shadow-sm"
+                    ? guide.id === "technical"
+                      ? "bg-background text-info shadow-sm ring-1 ring-info/40"
+                      : "bg-background text-brand shadow-sm ring-1 ring-brand/40"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >

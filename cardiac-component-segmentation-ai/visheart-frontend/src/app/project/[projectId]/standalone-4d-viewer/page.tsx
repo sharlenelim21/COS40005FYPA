@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useProject, normalizeReconstructionChamber } from "@/context/ProjectContext";
 import { useAuth } from "@/context/auth-context";
 import { Button } from "@/components/ui/button";
@@ -284,7 +284,7 @@ export default function Standalone4DViewerPage() {
     {
       key: "rv" as const,
       label: "RV cavity",
-      color: "#2f9ed6",
+      color: "#e8743b",
       recon: rvReconstruction,
       visible: showRv,
       setVisible: setShowRv,
@@ -367,6 +367,85 @@ export default function Standalone4DViewerPage() {
       cancelled = true;
     };
   }, [showRv, rvReconstruction, currentFrame, getReconstructionGLB]);
+
+  // Preload EVERY frame of both visible chambers into the Three.js/drei cache before allowing
+  // playback, so the first pass through the whole cycle doesn't show a "Loading model..." spinner
+  // per frame (reads as flickering) -- only the lazy per-frame fetch above (which still runs
+  // normally once this has completed, now hitting an already-warm cache). Mirrors the proven
+  // technique ProjectContext.preloadAllThreeJSModels already uses (useGLTF.preload / OBJLoader),
+  // but scoped to BOTH chambers explicitly: that shared mechanism only ever targets a single
+  // "active" reconstruction resolved from this page's own URL params, which is LV only -- RV is a
+  // second, independent reconstruction record it never reaches (reported live with a screenshot
+  // from supervisor feedback, 2026-11-12).
+  const preparedReconstructionsRef = useRef<Set<string>>(new Set());
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [prepareProgress, setPrepareProgress] = useState<{ current: number; total: number } | null>(null);
+
+  useEffect(() => {
+    const targets: { reconstructionId: string; frames: number }[] = [];
+    if (showLv && lvReconstruction?.reconstructionId) {
+      targets.push({ reconstructionId: lvReconstruction.reconstructionId, frames: lvReconstruction.totalFrames || totalFrames });
+    }
+    if (showRv && rvReconstruction?.reconstructionId) {
+      targets.push({ reconstructionId: rvReconstruction.reconstructionId, frames: rvReconstruction.totalFrames || totalFrames });
+    }
+    const pending = targets.filter((t) => t.frames > 0 && !preparedReconstructionsRef.current.has(t.reconstructionId));
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const prepare = async () => {
+      setIsPreparing(true);
+      const total = pending.reduce((sum, t) => sum + t.frames, 0);
+      let done = 0;
+      setPrepareProgress({ current: 0, total });
+
+      const { useGLTF } = await import("@react-three/drei");
+      const { OBJLoader } = await import("three/examples/jsm/loaders/OBJLoader.js");
+      const objLoader = new OBJLoader();
+      const CONCURRENT = 3;
+
+      for (const target of pending) {
+        const frameIndices = Array.from({ length: target.frames }, (_, i) => i);
+        for (let i = 0; i < frameIndices.length; i += CONCURRENT) {
+          if (cancelled) return;
+          const batch = frameIndices.slice(i, i + CONCURRENT);
+          await Promise.all(
+            batch.map(async (frameIdx) => {
+              try {
+                const url = await getReconstructionGLB(frameIdx, undefined, target.reconstructionId);
+                if (!url || cancelled) return;
+                const isObj = url.split("?")[0].toLowerCase().endsWith(".obj");
+                if (isObj) {
+                  await new Promise<void>((resolve) => {
+                    objLoader.load(url, () => resolve(), undefined, () => resolve());
+                  });
+                } else {
+                  useGLTF.preload(url);
+                }
+              } catch {
+                // A single failed frame must not block the rest of the batch -- it just falls
+                // back to the existing lazy per-frame fetch/spinner for that one frame later.
+              } finally {
+                done += 1;
+                if (!cancelled) setPrepareProgress({ current: done, total });
+              }
+            }),
+          );
+        }
+        preparedReconstructionsRef.current.add(target.reconstructionId);
+      }
+
+      if (!cancelled) {
+        setIsPreparing(false);
+        setPrepareProgress(null);
+      }
+    };
+
+    void prepare();
+    return () => {
+      cancelled = true;
+    };
+  }, [showLv, showRv, lvReconstruction, rvReconstruction, totalFrames, getReconstructionGLB]);
 
   // Playback animation
   useEffect(() => {
@@ -578,6 +657,21 @@ export default function Standalone4DViewerPage() {
               // image if the sidebar is collapsed or the view is screenshotted.
               secondaryIsResearchOnly
             />
+
+            {/* First-run preload: covers up the per-frame "Loading model..." flicker with one
+                upfront processing step (see the preload effect above). */}
+            {isPreparing && (
+              <div className="absolute inset-0 z-30 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-sm">
+                <div className="flex flex-col items-center gap-2 text-foreground">
+                  <Loader2 className="h-7 w-7 animate-spin" />
+                  <span className="text-sm font-medium">
+                    Processing reconstruction…
+                    {prepareProgress ? ` ${prepareProgress.current}/${prepareProgress.total}` : ""}
+                  </span>
+                  <span className="text-xs text-muted-foreground">Playback will run smoothly once this finishes</span>
+                </div>
+              </div>
+            )}
           </div>
         </ResizablePanel>
 
@@ -659,8 +753,8 @@ export default function Standalone4DViewerPage() {
                     size="icon"
                     onClick={() => setIsPlaying(!isPlaying)}
                     className="h-10 w-10"
-                    title={isPlaying ? "Pause" : "Play"}
-                    disabled={totalFrames <= 1}
+                    title={isPreparing ? "Preparing the model…" : isPlaying ? "Pause" : "Play"}
+                    disabled={totalFrames <= 1 || isPreparing}
                   >
                     {isPlaying ? (
                       <Pause className="h-5 w-5" />

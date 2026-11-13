@@ -47,7 +47,7 @@ function TemplateCard({ t }: { t: TemplateProjectSummary }) {
               {bsa ? ` · BSA ${bsa.toFixed(2)} m²` : ""}
             </CardDescription>
           </div>
-          <Badge variant="outline" className="gap-1 whitespace-nowrap">
+          <Badge variant="outline" className="gap-1 whitespace-nowrap border-info text-info">
             <Lock className="h-3 w-3" /> Read-only
           </Badge>
         </div>

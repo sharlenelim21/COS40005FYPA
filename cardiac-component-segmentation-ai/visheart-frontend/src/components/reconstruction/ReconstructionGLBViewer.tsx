@@ -15,6 +15,9 @@ import * as THREE from "three";
 // Visualization settings interface
 interface ViewerSettings {
   modelColor: string;
+  /** RV's own editable color -- seeded from the `secondaryColor` prop, same as `modelColor`
+   *  (LV) is seeded from DEFAULT_SETTINGS. Only relevant when a secondary mesh is shown. */
+  secondaryModelColor: string;
   wireframe: boolean;
   showEdges: boolean;
   /** Average normals at shared vertices so shading crosses facet boundaries. Cosmetic only. */
@@ -56,6 +59,9 @@ class EnvironmentErrorBoundary extends Component<{ children: ReactNode; fallback
 // Default settings
 const DEFAULT_SETTINGS: ViewerSettings = {
   modelColor: '#c41e3a', // Cardiac tissue color
+  // Matches SECONDARY_DEFAULT_COLOR below -- "Reset to Defaults" overrides this with the actual
+  // secondaryColor prop (see its own onClick), this literal only matters when there's no prop.
+  secondaryModelColor: '#e8743b',
   wireframe: false,
   showEdges: false,
   smoothShading: true,
@@ -70,6 +76,7 @@ const DEFAULT_SETTINGS: ViewerSettings = {
 // Preset color palette for cardiac structures
 const COLOR_PRESETS = {
   'Red': '#c41e3a',
+  'Orange': '#e8743b',
   'Blue': '#4a90e2',
   'Green': '#09af00',
   'Purple': '#4a26fd',
@@ -482,9 +489,11 @@ interface ReconstructionGLBViewerProps {
   secondaryIsResearchOnly?: boolean;
 }
 
-// Distinct from the primary default (#c41e3a, deep red) so the two chambers are never confused
-// with each other, and readable against both light and dark backgrounds.
-const SECONDARY_DEFAULT_COLOR = '#2f9ed6';
+// A different shade from the primary default (#c41e3a, deep red) so the two chambers are never
+// confused with each other -- an orange-red, not blue, per direct request (2026-11-12). Both are
+// now independently user-editable from the Settings panel (see secondaryModelColor); this is only
+// the out-of-the-box value.
+const SECONDARY_DEFAULT_COLOR = '#e8743b';
 
 export function ReconstructionGLBViewer({ 
   modelUrl, 
@@ -503,7 +512,7 @@ export function ReconstructionGLBViewer({
   const [activePreset, setActivePreset] = useState<CameraPreset | null>(null);
   const [showPresets, setShowPresets] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [settings, setSettings] = useState<ViewerSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<ViewerSettings>(() => ({ ...DEFAULT_SETTINGS, secondaryModelColor: secondaryColor }));
 
   // Which chambers currently have REAL geometry in the scene, as opposed to which were requested.
   // <Center> keys off this rather than off the URLs: the URL changes every frame during playback,
@@ -644,7 +653,7 @@ export function ReconstructionGLBViewer({
           <div className="flex items-center gap-2">
             <span
               className="inline-block h-2.5 w-2.5 rounded-full border border-white/40"
-              style={{ backgroundColor: secondaryColor }}
+              style={{ backgroundColor: settings.secondaryModelColor }}
             />
             <span className="font-semibold">{secondaryLabel}</span>
           </div>
@@ -715,9 +724,9 @@ export function ReconstructionGLBViewer({
               </Button>
             </div>
 
-            {/* Model Color */}
+            {/* LV Model Color */}
             <div className="space-y-2">
-              <Label className="text-white text-xs">Model Color</Label>
+              <Label className="text-white text-xs">LV Model Color</Label>
               <Select
                 value={settings.modelColor}
                 onValueChange={(value: string) => setSettings({ ...settings, modelColor: value })}
@@ -743,6 +752,38 @@ export function ReconstructionGLBViewer({
                 className="w-full h-8 rounded cursor-pointer"
               />
             </div>
+
+            {/* RV Model Color -- only when the RV overlay is actually in play (same gating as
+                the RV legend row above). */}
+            {secondaryModelUrl && (
+              <div className="space-y-2">
+                <Label className="text-white text-xs">RV Model Color</Label>
+                <Select
+                  value={settings.secondaryModelColor}
+                  onValueChange={(value: string) => setSettings({ ...settings, secondaryModelColor: value })}
+                >
+                  <SelectTrigger className="w-full bg-white/10 border-white/20 text-white text-xs h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(COLOR_PRESETS).map(([name, color]) => (
+                      <SelectItem key={color} value={color} className="text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 rounded" style={{ backgroundColor: color }} />
+                          {name}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <input
+                  type="color"
+                  value={settings.secondaryModelColor}
+                  onChange={(e) => setSettings({ ...settings, secondaryModelColor: e.target.value })}
+                  className="w-full h-8 rounded cursor-pointer"
+                />
+              </div>
+            )}
 
             {/* Background */}
             <div className="space-y-2">
@@ -839,7 +880,7 @@ export function ReconstructionGLBViewer({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setSettings(DEFAULT_SETTINGS)}
+              onClick={() => setSettings({ ...DEFAULT_SETTINGS, secondaryModelColor: secondaryColor })}
               className="w-full text-xs mt-4 bg-white/10 border-white/20 hover:bg-white/20 text-white"
             >
               Reset to Defaults
@@ -937,7 +978,7 @@ export function ReconstructionGLBViewer({
             {secondaryModelUrl && (
               <Model
                 url={secondaryModelUrl}
-                settings={{ ...settings, modelColor: secondaryColor }}
+                settings={{ ...settings, modelColor: settings.secondaryModelColor }}
                 onReady={handleRvReady}
               />
             )}
