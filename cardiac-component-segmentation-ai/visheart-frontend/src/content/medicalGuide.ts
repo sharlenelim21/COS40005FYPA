@@ -101,7 +101,8 @@ export interface Claim {
   refs: RefId[];
 }
 
-export type CalloutVariant = "info" | "caution" | "disclaimer";
+/** "warning" is red: research-only output that must not be used clinically. */
+export type CalloutVariant = "info" | "caution" | "disclaimer" | "warning";
 
 export interface CalloutBlock {
   kind: "callout";
@@ -504,8 +505,12 @@ export const MEDICAL_GUIDE: MedicalGuide = {
               title: "About VisHeart's strain values",
               body: [
                 {
-                  text: "VisHeart estimates radial and circumferential strain from changes in the radius of the heart wall across the heartbeat on short-axis images, and reports the peak values. This differs from the tagging and feature-tracking methods used in published studies, so VisHeart's strain values should not be compared directly with published normal ranges. For the right ventricle, VisHeart's strain approach draws on the ReVISION method.",
-                  refs: ["scmr2025", "tokodi2021"],
+                  text: "On short-axis images, VisHeart estimates radial strain from the change in wall thickness and circumferential strain from the change in the length of the heart wall's borders, and reports the peak values. This differs from the tagging and feature-tracking methods used in published studies, so VisHeart's strain values should not be compared directly with published normal ranges.",
+                  refs: ["scmr2025"],
+                },
+                {
+                  text: "VisHeart's right ventricle strain uses a research method of our own, adapted from the left ventricle method and from the ReVISION method. The Technical Guide's 'How LV and RV Works' section explains how it is calculated.",
+                  refs: ["tokodi2021"],
                 },
               ],
             },

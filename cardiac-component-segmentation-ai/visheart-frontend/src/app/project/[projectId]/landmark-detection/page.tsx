@@ -36,7 +36,7 @@ import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { useCyclePlayback } from "@/hooks/useCyclePlayback";
-import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, RvResearchNote, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
+import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
 import { useMotionMesh } from "@/hooks/useMotionMesh";
@@ -76,6 +76,7 @@ import {
   type StrainComputedFor,
 } from "@/components/landmark/StrainVisualization";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
+import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
 import { AhaBullseye, BullseyeScaleBar, finiteRange, type BullseyeHover } from "@/components/landmark/AhaBullseye";
 import { landmarkApi, computeStrainFromFrames, computeRvStrainFromFrames } from "@/lib/landmarkApi";
 
@@ -3602,6 +3603,9 @@ function StrainPreviewPanel({
                 )}
               </div>
             </div>
+            {/* RV on screen (Combined or RV view) → red research-only notice at the
+                top of the panel, linking to the Technical Guide's RV method. */}
+            {chamberFocus !== "LV" && <RvResearchNotice compact className="mb-1 flex-shrink-0" />}
             <ZoomPanContainer className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
               {chamberFocus === "LV" ? (
                 <AhaBullseye
@@ -4000,7 +4004,7 @@ function RvFullCycleStrainTiles({
         RV Global Strain
       </p>
       <div className="mb-1">
-        <RvResearchNote />
+        <RvResearchNotice />
       </div>
       <div className="grid grid-cols-2 gap-1">
         <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />

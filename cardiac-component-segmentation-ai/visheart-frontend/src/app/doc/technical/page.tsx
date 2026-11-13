@@ -1,7 +1,14 @@
 import type { Metadata } from "next";
 import { GuideLayout } from "@/components/doc/GuideLayout";
 import { DocSection } from "@/components/doc/DocSection";
-import type { TocItem } from "@/components/doc/guides";
+import {
+  LV_RV_REFERENCES_ID,
+  LV_RV_SECTION_ID,
+  LV_RV_SHARED_STEPS_ID,
+  LV_STRAIN_METHOD_ID,
+  RV_STRAIN_METHOD_SECTION_ID,
+  type TocItem,
+} from "@/components/doc/guides";
 import { IntroductionSection } from "@/components/doc/technical/IntroductionSection";
 import { GettingStartedSection } from "@/components/doc/technical/GettingStartedSection";
 import { AccountsSection } from "@/components/doc/technical/AccountsSection";
@@ -9,6 +16,7 @@ import { SegmentationSection } from "@/components/doc/technical/SegmentationSect
 import { LandmarkDetectionSection } from "@/components/doc/technical/LandmarkDetectionSection";
 import { ReconstructionSection } from "@/components/doc/technical/ReconstructionSection";
 import { SegmentDivisionSection } from "@/components/doc/technical/SegmentDivisionSection";
+import { LvRvSection } from "@/components/doc/technical/LvRvSection";
 
 export const metadata: Metadata = {
   title: "Technical Guide | VisHeart",
@@ -22,6 +30,16 @@ const TOC: TocItem[] = [
   { id: "reconstruction", label: "How Reconstruction Works" },
   { id: "segment-division", label: "How Segments Division on 3D Model Works" },
   { id: "landmark-detection", label: "How Landmark Detection Works" },
+  {
+    id: LV_RV_SECTION_ID,
+    label: "How LV and RV Works",
+    children: [
+      { id: LV_RV_SHARED_STEPS_ID, label: "Shared steps" },
+      { id: LV_STRAIN_METHOD_ID, label: "LV: 17 segments" },
+      { id: RV_STRAIN_METHOD_SECTION_ID, label: "RV: 9 segments (research)" },
+      { id: LV_RV_REFERENCES_ID, label: "References" },
+    ],
+  },
 ];
 
 export default function TechnicalGuidePage() {
@@ -47,6 +65,9 @@ export default function TechnicalGuidePage() {
       </DocSection>
       <DocSection id="landmark-detection">
         <LandmarkDetectionSection />
+      </DocSection>
+      <DocSection id={LV_RV_SECTION_ID}>
+        <LvRvSection />
       </DocSection>
     </GuideLayout>
   );
