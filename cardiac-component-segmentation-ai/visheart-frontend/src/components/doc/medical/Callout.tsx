@@ -1,9 +1,18 @@
 import type { ReactNode } from "react";
-import { Info, ShieldAlert, TriangleAlert } from "lucide-react";
+import { FlaskConical, Info, ShieldAlert, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CalloutVariant } from "@/content/medicalGuide";
 
-const VARIANTS: Record<CalloutVariant, { icon: typeof Info; label: string; className: string; iconClassName: string }> = {
+interface VariantStyle {
+  icon: typeof Info;
+  label: string;
+  className: string;
+  iconClassName: string;
+  titleClassName?: string;
+  bodyClassName?: string;
+}
+
+const VARIANTS: Record<CalloutVariant, VariantStyle> = {
   info: {
     icon: Info,
     label: "Note",
@@ -22,6 +31,15 @@ const VARIANTS: Record<CalloutVariant, { icon: typeof Info; label: string; class
     className: "border-foreground/15 bg-muted/60 border-l-4 border-l-primary",
     iconClassName: "text-foreground",
   },
+  // Research-only output (e.g. RV strain): red, and the text is red too.
+  warning: {
+    icon: FlaskConical,
+    label: "Warning",
+    className: "border-red-300 bg-red-50 border-l-4 border-l-red-600 dark:border-red-800 dark:bg-red-950/40 dark:border-l-red-500",
+    iconClassName: "text-red-600 dark:text-red-400",
+    titleClassName: "text-red-700 dark:text-red-300",
+    bodyClassName: "text-red-800 dark:text-red-200",
+  },
 };
 
 interface CalloutProps {
@@ -32,7 +50,8 @@ interface CalloutProps {
 }
 
 export function Callout({ variant, title, children, className }: CalloutProps) {
-  const { icon: Icon, label, className: variantClassName, iconClassName } = VARIANTS[variant];
+  const { icon: Icon, label, className: variantClassName, iconClassName, titleClassName, bodyClassName } =
+    VARIANTS[variant];
   return (
     <aside
       role="note"
@@ -41,8 +60,8 @@ export function Callout({ variant, title, children, className }: CalloutProps) {
     >
       <Icon className={cn("mt-0.5 h-5 w-5 shrink-0", iconClassName)} aria-hidden="true" />
       <div className="min-w-0 space-y-1">
-        <p className="text-sm font-semibold">{title}</p>
-        <div className="text-muted-foreground space-y-1 text-sm">{children}</div>
+        <p className={cn("text-sm font-semibold", titleClassName)}>{title}</p>
+        <div className={cn("text-muted-foreground space-y-1 text-sm", bodyClassName)}>{children}</div>
       </div>
     </aside>
   );

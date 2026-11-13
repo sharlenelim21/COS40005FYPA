@@ -51,6 +51,7 @@ import { getDummyStrainData, getStrainColor, type StrainType, type RealStrainRes
 import { RegionalStrainByRegion, FullCycleChart, LVSegmentsLegend, buildDummyCycleSeries, ringForRvSegment } from "@/components/landmark/RegionalStrainCharts";
 import { DualFrameRangePicker } from "@/components/landmark/DualFrameRangePicker";
 import { rvTotalArea } from "@/lib/rvAreaMetrics";
+import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
 
 /**
  * Everything the sidebar's "Compute strain" card (Strain tab) needs to render
@@ -2220,12 +2221,7 @@ function QuickCombinedStrainView({
         <div className="flex items-center gap-1.5">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-foreground">RV Global Strain</h4>
         </div>
-        <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
-          <p className="text-[9px] leading-snug text-amber-800 dark:text-amber-300">
-            GCS (free-wall length) and GAS/FAC (cavity area) are computed as separate measures but not yet
-            validated against a reference range.
-          </p>
-        </div>
+        <RvResearchNotice detail="GCS (free-wall length) and GAS/FAC (cavity area) are separate measures and are never combined." />
         {rv ? (
           <div className="grid grid-cols-2 gap-2">
             <StrainMetricCard label="Peak GCS" value={fmtPct(rv.global_rv_strain)} strainType="GCS" valueNumber={rv.global_rv_strain ?? 0} loading={sc.isComputing} />
@@ -2679,13 +2675,13 @@ function RvStrainPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start gap-1.5 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5">
-        <p className="text-[9.5px] leading-snug text-amber-800 dark:text-amber-300">
-          {isGas
-            ? "RV GAS = % change in RV cavity area per segment (short-axis). Computed, but not validated against a reference range yet."
-            : "RV GCS = % change in RV free-wall length per segment (short-axis). Computed, but not validated against a reference range yet."}
-        </p>
-      </div>
+      <RvResearchNotice
+        detail={
+          isGas
+            ? "RV GAS = % change in RV cavity area per segment (short-axis)."
+            : "RV GCS = % change in RV free-wall length per segment (short-axis)."
+        }
+      />
 
       {!usingRealRvSeries && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5">

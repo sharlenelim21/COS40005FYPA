@@ -14,6 +14,15 @@ export const GUIDES: readonly GuideLink[] = [
 
 export const TECHNICAL_GUIDE_HREF = "/doc/technical";
 
+/** Technical Guide section "How LV and RV Works" (LV + RV strain methods) and its parts. */
+export const LV_RV_SECTION_ID = "how-lv-rv-works";
+export const LV_RV_SHARED_STEPS_ID = "lv-rv-shared-steps";
+export const LV_STRAIN_METHOD_ID = "lv-strain-method";
+/** The RV 9-segment research method. The Strain tab's "Research output only" notices link here. */
+export const RV_STRAIN_METHOD_SECTION_ID = "rv-strain-method";
+export const LV_RV_REFERENCES_ID = "lv-rv-references";
+export const RV_STRAIN_METHOD_HREF = `${TECHNICAL_GUIDE_HREF}#${RV_STRAIN_METHOD_SECTION_ID}`;
+
 export interface TocItem {
   id: string;
   label: string;
