@@ -25,13 +25,13 @@ export function AccountsSection() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-1/3 text-xs md:text-sm">
+                <TableHead className="w-1/3 text-sm md:text-lg">
                   Feature
                 </TableHead>
-                <TableHead className="text-center text-xs md:text-sm">
+                <TableHead className="text-center text-sm md:text-lg">
                   Guest Account
                 </TableHead>
-                <TableHead className="text-center text-xs md:text-sm">
+                <TableHead className="text-center text-sm md:text-lg">
                   User Account
                 </TableHead>
               </TableRow>
@@ -48,13 +48,13 @@ export function AccountsSection() {
                 ["Cloud Storage", "✗", "✓"],
               ].map(([feature, guest, user]) => (
                 <TableRow key={feature}>
-                  <TableCell className="font-medium text-xs md:text-sm">
+                  <TableCell className="font-medium text-sm md:text-lg">
                     {feature}
                   </TableCell>
-                  <TableCell className="text-center text-xs md:text-sm">
+                  <TableCell className="text-center text-sm md:text-lg">
                     {guest}
                   </TableCell>
-                  <TableCell className="text-center text-xs md:text-sm">
+                  <TableCell className="text-center text-sm md:text-lg">
                     {user}
                   </TableCell>
                 </TableRow>
@@ -75,11 +75,11 @@ export function AccountsSection() {
             </Badge>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground mb-4">
+            <p className="text-base text-muted-foreground mb-4">
               Perfect for trying out the platform and performing
               quick analysis tasks.
             </p>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-2 text-base">
               <li>• Immediate access without registration</li>
               <li>• Full segmentation capabilities</li>
               <li>• Limited to session-based work</li>
@@ -97,11 +97,11 @@ export function AccountsSection() {
             </Badge>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground mb-4">
+            <p className="text-base text-muted-foreground mb-4">
               Full platform access with data persistence and project
               management.
             </p>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-2 text-base">
               <li>• All guest features included</li>
               <li>• Save and organize projects</li>
               <li>• Access processing history</li>

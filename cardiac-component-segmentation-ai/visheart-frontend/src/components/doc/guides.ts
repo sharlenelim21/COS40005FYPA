@@ -13,6 +13,11 @@ export const GUIDES: readonly GuideLink[] = [
 ];
 
 export const TECHNICAL_GUIDE_HREF = "/doc/technical";
+export const MEDICAL_GUIDE_HREF = "/doc/medical";
+
+/** Medical Guide's "Disease patterns" subsection (medicalGuide.ts id: "disease-patterns"). */
+export const DISEASE_PATTERNS_SECTION_ID = "disease-patterns";
+export const DISEASE_PATTERNS_HREF = `${MEDICAL_GUIDE_HREF}#${DISEASE_PATTERNS_SECTION_ID}`;
 
 /** Technical Guide section "How LV and RV Works" (LV + RV strain methods) and its parts. */
 export const LV_RV_SECTION_ID = "how-lv-rv-works";

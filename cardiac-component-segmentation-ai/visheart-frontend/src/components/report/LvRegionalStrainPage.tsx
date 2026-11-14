@@ -13,6 +13,7 @@ export function LvRegionalStrainPage({
   pageNumber,
   totalPages,
   generatedAt,
+  modeLabel,
   grsFrames,
   gcsFrames,
   edFrameIndex,
@@ -23,6 +24,7 @@ export function LvRegionalStrainPage({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  modeLabel?: string;
   grsFrames: SeriesFrame[];
   gcsFrames: SeriesFrame[];
   edFrameIndex?: number | null;
@@ -37,6 +39,7 @@ export function LvRegionalStrainPage({
         pageNumber={pageNumber}
         totalPages={totalPages}
         generatedAt={generatedAt}
+        modeLabel={modeLabel}
         metricLabel="LV Regional GRS"
         columnLabels={SEGMENT_LABELS}
         frames={grsFrames}
@@ -55,6 +58,7 @@ export function LvRegionalStrainPage({
         pageNumber={pageNumber + grsPages}
         totalPages={totalPages}
         generatedAt={generatedAt}
+        modeLabel={modeLabel}
         metricLabel="LV Regional GCS"
         columnLabels={SEGMENT_LABELS}
         frames={gcsFrames}

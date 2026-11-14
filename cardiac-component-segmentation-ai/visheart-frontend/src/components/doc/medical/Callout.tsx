@@ -60,8 +60,8 @@ export function Callout({ variant, title, children, className }: CalloutProps) {
     >
       <Icon className={cn("mt-0.5 h-5 w-5 shrink-0", iconClassName)} aria-hidden="true" />
       <div className="min-w-0 space-y-1">
-        <p className={cn("text-sm font-semibold", titleClassName)}>{title}</p>
-        <div className={cn("text-muted-foreground space-y-1 text-sm", bodyClassName)}>{children}</div>
+        <p className={cn("text-base font-semibold", titleClassName)}>{title}</p>
+        <div className={cn("text-muted-foreground space-y-1 text-base", bodyClassName)}>{children}</div>
       </div>
     </aside>
   );

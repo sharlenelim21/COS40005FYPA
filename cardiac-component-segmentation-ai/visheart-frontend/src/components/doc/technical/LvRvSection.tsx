@@ -201,7 +201,7 @@ function StepCard({
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base md:text-lg">
           <div
-            className={cn(color, "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold text-white")}
+            className={cn(color, "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-base font-bold text-white")}
           >
             {step}
           </div>
@@ -218,12 +218,12 @@ function SubHeading({ children }: { children: ReactNode }) {
 }
 
 function Para({ children }: { children: ReactNode }) {
-  return <p className="text-muted-foreground text-sm leading-6">{children}</p>;
+  return <p className="text-muted-foreground text-base leading-6">{children}</p>;
 }
 
 function Steps({ children }: { children: ReactNode }) {
   return (
-    <ol className="text-muted-foreground list-decimal space-y-2 pl-5 text-sm leading-6 marker:font-semibold">{children}</ol>
+    <ol className="text-muted-foreground list-decimal space-y-2 pl-5 text-base leading-6 marker:font-semibold">{children}</ol>
   );
 }
 
@@ -242,7 +242,7 @@ function DiagramFigure({ diagram, alt, caption }: { diagram: DiagramId; alt: str
       <div className="bg-background rounded-md border p-3 shadow-sm md:p-4">
         <Diagram title={alt} />
       </div>
-      <figcaption className="text-muted-foreground mt-2 text-xs">{caption}</figcaption>
+      <figcaption className="text-muted-foreground mt-2 text-sm">{caption}</figcaption>
     </figure>
   );
 }
@@ -251,7 +251,7 @@ function ImageFigure({ src, alt, caption }: { src: string; alt: string; caption:
   return (
     <figure className="bg-muted/30 rounded-lg border p-2 md:p-4">
       <DocImage src={src} alt={alt} className="w-full h-auto rounded-md border shadow-sm bg-white" />
-      <figcaption className="text-muted-foreground mt-2 text-xs">{caption}</figcaption>
+      <figcaption className="text-muted-foreground mt-2 text-sm">{caption}</figcaption>
     </figure>
   );
 }
@@ -291,7 +291,7 @@ export function LvRvSection() {
       </div>
 
       <div className="bg-card overflow-hidden rounded-lg border p-2 md:p-4">
-        <p className="mb-3 px-2 text-sm font-medium">LV and RV strain at a glance</p>
+        <p className="mb-3 px-2 text-base font-medium">LV and RV strain at a glance</p>
         <Table className="min-w-[36rem]">
           <TableHeader>
             <TableRow>
@@ -452,7 +452,7 @@ export function LvRvSection() {
         </Para>
 
         <div className="bg-card overflow-hidden rounded-lg border p-2 md:p-4">
-          <p className="mb-3 px-2 text-sm font-medium">Where each part of the RV method comes from</p>
+          <p className="mb-3 px-2 text-base font-medium">Where each part of the RV method comes from</p>
           <Table className="min-w-[36rem]">
             <TableHeader>
               <TableRow>
@@ -661,7 +661,7 @@ export function LvRvSection() {
         <h3 id={`${LV_RV_REFERENCES_ID}-heading`} className="mb-3 text-lg font-semibold">
           References
         </h3>
-        <ol className="space-y-2 text-sm">
+        <ol className="space-y-2 text-base">
           {SECTION_REFS.map((id, index) => {
             const reference: Reference = REFERENCES[id];
             return (
@@ -673,7 +673,7 @@ export function LvRvSection() {
                 <span className="text-muted-foreground w-6 shrink-0 text-right tabular-nums">{index + 1}.</span>
                 <div className="min-w-0 space-y-1 break-words">
                   <p>{reference.citation}</p>
-                  <p className="text-xs">
+                  <p className="text-sm">
                     <ReferenceLink reference={reference} />
                   </p>
                 </div>

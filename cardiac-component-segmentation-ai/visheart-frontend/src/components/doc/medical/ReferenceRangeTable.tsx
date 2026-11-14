@@ -12,7 +12,7 @@ export function ReferenceRangeTable({ caption, groups, footnotes }: Omit<RangeTa
 
   return (
     <div className="bg-card rounded-lg border p-2 md:p-4">
-      <p id={captionId} className="mb-3 px-2 text-sm font-medium">
+      <p id={captionId} className="mb-3 px-2 text-base font-medium">
         <ContentText text={caption} />
       </p>
       <Table
@@ -35,7 +35,7 @@ export function ReferenceRangeTable({ caption, groups, footnotes }: Omit<RangeTa
               <TableHead
                 scope="rowgroup"
                 colSpan={COLUMN_COUNT}
-                className="text-muted-foreground h-8 text-xs font-semibold tracking-wide uppercase"
+                className="text-muted-foreground h-8 text-sm font-semibold tracking-wide uppercase"
               >
                 {group.label}
               </TableHead>
@@ -64,7 +64,7 @@ export function ReferenceRangeTable({ caption, groups, footnotes }: Omit<RangeTa
       </Table>
 
       {footnotes && footnotes.length > 0 && (
-        <div id={footnoteId} className="text-muted-foreground mt-3 space-y-1 border-t pt-3 text-xs">
+        <div id={footnoteId} className="text-muted-foreground mt-3 space-y-1 border-t pt-3 text-sm">
           {footnotes.map((note, index) => (
             <p key={index}>
               <span aria-hidden="true">* </span>

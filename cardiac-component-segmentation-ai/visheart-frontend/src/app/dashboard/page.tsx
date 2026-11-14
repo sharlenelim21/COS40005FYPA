@@ -600,7 +600,7 @@ function DashboardPage() {
               <ShowForAdmin fallback={null}>
                 <Link href="/admin">
                   <Button variant="outline" className="w-full justify-start">
-                    <Shield className="mr-2 h-4 w-4" />
+                    <Shield className="mr-2 h-4 w-4 text-blue-600 dark:text-blue-400" />
                     Admin Panel
                   </Button>
                 </Link>
@@ -894,7 +894,7 @@ function DashboardPage() {
                     onUpdate={refreshProjects}
                     onSave={handleSaveProject}
                     onDelete={handleDeleteProject}
-                    onExport={(projectId) => router.push(`/project/${projectId}/report`)}
+                    onExport={(projectId) => router.push(`/project/${projectId}/report?from=project`)}
                     segmentationIndicator={<SegmentationIndicator status={segmentationStatuses[project.projectId]} variant="badge" />}
                     reconstructionIndicator={<ReconstructionIndicator status={reconstructionStatuses[project.projectId]} variant="badge" />}
                     hasMasks={segmentationStatuses[project.projectId]?.hasMasks || false}
@@ -986,7 +986,7 @@ function DashboardPage() {
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
-                              onClick={() => router.push(`/project/${project.projectId}/report`)}
+                              onClick={() => router.push(`/project/${project.projectId}/report?from=project`)}
                               disabled={!segmentationStatuses[project.projectId]?.hasMasks}
                               title={
                                 segmentationStatuses[project.projectId]?.hasMasks

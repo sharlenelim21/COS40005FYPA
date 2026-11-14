@@ -21,15 +21,15 @@ export function ConditionCard({ condition }: { condition: Condition }) {
         <h3 id={headingId} className="text-base leading-snug font-semibold">
           {condition.name}
         </h3>
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-base">
           <ClaimText claim={condition.summary} />
         </p>
       </CardHeader>
       <CardContent className="px-5">
-        <p className="text-muted-foreground mb-2 text-xs font-semibold tracking-wide uppercase">
+        <p className="text-muted-foreground mb-2 text-sm font-semibold tracking-wide uppercase">
           Key imaging features
         </p>
-        <ul className="list-disc space-y-1.5 pl-4 text-sm">
+        <ul className="list-disc space-y-1.5 pl-4 text-base">
           {condition.imagingFeatures.map((feature, index) => (
             <li key={index}>
               <ClaimText claim={feature} />
@@ -50,7 +50,7 @@ export function ConditionGrid({ conditions, note }: { conditions: Condition[]; n
         ))}
       </div>
       {note && (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-sm">
           <ClaimText claim={note} />
         </p>
       )}

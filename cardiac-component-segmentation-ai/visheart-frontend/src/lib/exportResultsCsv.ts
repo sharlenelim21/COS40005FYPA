@@ -152,68 +152,6 @@ export function buildResultsCsv(
   }
   lines.push("");
 
-  // ── Health status ───────────────────────────────────────────────────────
-  lines.push(row("HEALTH STATUS (rule-based — not a diagnosis)"));
-  lines.push(row("Model", "Status", "Confidence", "Evidence"));
-  for (const m of present) {
-    const hs = byModel[m]!.healthStatus;
-    if (!hs) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
-    const evidence = (hs.evidence ?? []).map((e) => `${e.label}: ${e.detail}`).join(" | ");
-    lines.push(row(MODEL_LABEL[m], hs.status, hs.confidence, evidence));
-  }
-  lines.push("");
-
-  // ── RV Health status ────────────────────────────────────────────────────
-  // Mirrors the LV section above — same MaskDoc-stored shape (rvHealthStatus),
-  // just no severity gradient (see compute_rv_health_status.py: no validated
-  // CMR severity grading exists for RV function, so this is in/out-of-range
-  // only, never a gradient).
-  lines.push(row("RV HEALTH STATUS (rule-based — not a diagnosis; no severity grading, see disclaimer)"));
-  lines.push(row("Model", "Status", "Confidence", "Sex", "Evidence"));
-  for (const m of present) {
-    const rhs = byModel[m]!.rvHealthStatus;
-    if (!rhs) { lines.push(notComputedRow(MODEL_LABEL[m], 5)); continue; }
-    const evidence = (rhs.evidence ?? []).map((e) => `${e.label}: ${e.detail}`).join(" | ");
-    lines.push(row(MODEL_LABEL[m], rhs.status, rhs.confidence, rhs.sex, evidence));
-  }
-  lines.push("");
-
-  // ── Regional health status (advisory, never changes the overall grade) ──
-  lines.push(row("REGIONAL HEALTH STATUS (advisory — per-segment, doesn't change overall grade)"));
-  lines.push(row("Model", "Status", "Reduced segment count", "Summary"));
-  for (const m of present) {
-    const rhs = byModel[m]!.regionalHealthStatus;
-    if (!rhs) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
-    lines.push(row(MODEL_LABEL[m], rhs.status, rhs.reduced_count, rhs.summary));
-  }
-  lines.push("");
-
-  // ── Unified LV+RV Disease Pattern Gates (ACDC-based) ─────────────────────
-  // See compute_disease_pattern_gates.py for the full method.
-  lines.push(row("DISEASE PATTERN GATES — ACDC-based (not a diagnosis)"));
-  lines.push(row("Model", "Gate", "Met", "Rank (when 2+ gates co-fire)", "Reasons", "Criterion"));
-  for (const m of present) {
-    const pg = byModel[m]!.diseasePatternGates;
-    if (!pg) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
-    for (const g of pg.gates) {
-      lines.push(row(
-        MODEL_LABEL[m],
-        g.label,
-        g.met === true ? "Met" : g.met === false ? "Not met" : "Pending",
-        g.rank_label ?? "",
-        g.reasons.join(" | "),
-        g.criterion_text,
-      ));
-    }
-    if (pg.rv_severity) {
-      const notes = [pg.rv_severity.arvc_note, pg.rv_severity.pah_note, pg.rv_severity.generic_note]
-        .filter((n): n is string => !!n)
-        .join(" | ");
-      lines.push(row(MODEL_LABEL[m], "RV severity context", "", notes, ""));
-    }
-  }
-  lines.push("");
-
   // ── Per-segment strain (ED→ES) ──────────────────────────────────────────
   // The single ED→ES result carries per-segment GRS/GCS and wall thickness.
   lines.push(row("REGIONAL STRAIN — ED→ES (17 AHA segments)"));

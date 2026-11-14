@@ -30,8 +30,8 @@ function stats(values: (number | null)[] | undefined) {
 function StatSquare({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex-1 rounded-md border-2 border-gray-300 bg-gray-50 px-2 py-1.5 text-center">
-      <p className="text-[10px] uppercase tracking-wide text-gray-600">{label}</p>
-      <p className="font-mono text-[14px] font-bold text-gray-900">{value}</p>
+      <p className="text-[11px] uppercase tracking-wide text-gray-600">{label}</p>
+      <p className="font-mono text-[15px] font-bold text-gray-900">{value}</p>
     </div>
   );
 }
@@ -41,6 +41,7 @@ export function WallThicknessCavityAreaPage({
   pageNumber,
   totalPages,
   generatedAt,
+  modeLabel,
   edWallThicknessMm,
   edFrameIndex,
   rvFacRings,
@@ -51,6 +52,7 @@ export function WallThicknessCavityAreaPage({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  modeLabel?: string;
   /** Per-AHA-segment ED wall thickness (mm), 17 values — from the bullseye analysis. */
   edWallThicknessMm?: (number | null)[];
   edFrameIndex?: number | null;
@@ -71,21 +73,22 @@ export function WallThicknessCavityAreaPage({
       totalPages={totalPages}
       patientLabel={patientLabel}
       statusLabel="Complete"
+      modeLabel={modeLabel}
       title="Wall Thickness & Cavity Area"
       subtitle="LV wall thickness and RV cavity area — raw single-frame geometry"
       generatedAt={generatedAt}
     >
-      <p className="mb-2 text-[12px] leading-snug text-gray-600">
+      <p className="mb-2 text-[13px] leading-snug text-gray-600">
         Grouped together as the two chambers&apos; raw single-frame geometry, at end-diastole. See the next page
         for how each varies across the full cardiac cycle, and Regional Strain for the %-change deformation metrics.
       </p>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <p className="mb-1 text-[15px] font-extrabold text-gray-900">LV Wall Thickness (mm)</p>
+          <p className="mb-1 text-[16px] font-extrabold text-gray-900">LV Wall Thickness (mm)</p>
           {hasWt ? (
             <>
-              <p className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-gray-600">
+              <p className="mb-1.5 text-[13px] font-semibold uppercase tracking-wide text-gray-600">
                 End-diastole (ED) — frame {edFrameIndex ?? "—"}
               </p>
               <div className="mx-auto h-[220px] w-[220px]">
@@ -97,7 +100,7 @@ export function WallThicknessCavityAreaPage({
                 <StatSquare label="Mean" value={`${fmt(wtStats.mean)} mm`} />
                 <StatSquare label="SD" value={`${fmt(wtStats.sd)} mm`} />
               </div>
-              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[12px]">
                 {(edWallThicknessMm ?? []).map((v, i) => (
                   <div key={i} className="flex justify-between border-b border-dotted border-gray-300 py-0.5">
                     <span className="text-gray-600">{i + 1}. {SEGMENT_LABELS[i]}</span>
@@ -107,27 +110,27 @@ export function WallThicknessCavityAreaPage({
               </div>
             </>
           ) : (
-            <p className="py-8 text-center text-[12px] text-gray-600">
+            <p className="py-8 text-center text-[13px] text-gray-600">
               Not computed — run the bullseye analysis to populate this panel.
             </p>
           )}
         </div>
 
         <div className="relative rounded-lg border border-gray-300 p-2">
-          <p className="mb-1 text-[15px] font-extrabold text-gray-900">RV Cavity Area - FAC (%)</p>
+          <p className="mb-1 text-[16px] font-extrabold text-gray-900">RV Cavity Area - FAC (%)</p>
           {hasFac ? (
             <>
-              <p className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-gray-600">
+              <p className="mb-1.5 text-[13px] font-semibold uppercase tracking-wide text-gray-600">
                 ED (frame {edFrameIndex ?? "—"}) → ES (frame {rvEsFrameIndex ?? "—"})
               </p>
               <div className="mx-auto h-[220px] w-[220px]">
                 <RvRegionRing values={rvFacToNineWide(rvFacRings)} metric="FAC" />
               </div>
-              <p className="mt-2 text-[11px] leading-snug text-gray-600">
+              <p className="mt-2 text-[12px] leading-snug text-gray-600">
                 (ED area − ES area) / ED area, drawn per ring across its 3 RV-bullseye sections. Not the
                 echo 4-chamber FAC — no validated reference range.
               </p>
-              <table className="mt-2 w-full border-collapse text-[12px]">
+              <table className="mt-2 w-full border-collapse text-[13px]">
                 <thead>
                   <tr className="bg-teal-50">
                     <th className="border-b border-gray-300 px-2 py-1 text-left font-bold text-teal-800">Region</th>
@@ -148,7 +151,7 @@ export function WallThicknessCavityAreaPage({
               </div>
             </>
           ) : (
-            <p className="py-8 text-center text-[12px] text-gray-600">
+            <p className="py-8 text-center text-[13px] text-gray-600">
               Not computed — run RV strain (ED → ES) from the Strain tab. Results computed before GAS was added need recomputing.
             </p>
           )}

@@ -54,6 +54,7 @@ export function WallThicknessCyclePage({
   pageNumber,
   totalPages,
   generatedAt,
+  modeLabel,
   frames,
   rvFacFrames,
   edFrameIndex,
@@ -64,6 +65,7 @@ export function WallThicknessCyclePage({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  modeLabel?: string;
   frames: WtFrame[];
   rvFacFrames: RvFacFrame[];
   edFrameIndex?: number | null;
@@ -78,10 +80,12 @@ export function WallThicknessCyclePage({
   const rvChunks = chunk(rvFacFrames, FRAMES_PER_TABLE_PAGE);
   const hasRvFac = rvFacFrames.some((f) => f.rings.some((v) => v !== null));
 
+  // Displayed 1-based (idx + 1) to match the on-screen viewer's own convention
+  // (standalone-4d-viewer, etc.) -- the underlying frameIndex stays 0-based.
   const frameLabelFor = (idx: number) => {
-    if (idx === edFrameIndex) return `${idx} (ED)`;
-    if (idx === esFrameIndex) return `${idx} (ES)`;
-    return String(idx);
+    if (idx === edFrameIndex) return `${idx + 1} (ED)`;
+    if (idx === esFrameIndex) return `${idx + 1} (ES)`;
+    return String(idx + 1);
   };
 
   return (
@@ -92,11 +96,12 @@ export function WallThicknessCyclePage({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title="LV Wall Thickness Across the Cycle"
           subtitle="Every computed frame — end-diastole (ED) and end-systole (ES) marked"
           generatedAt={generatedAt}
         >
-          <p className="py-10 text-center text-[12px] text-gray-600">
+          <p className="py-10 text-center text-[14px] text-gray-600">
             Not computed — run the per-frame strain series to populate the LV wall-thickness cycle.
           </p>
         </ReportPageFrame>
@@ -109,6 +114,7 @@ export function WallThicknessCyclePage({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title={`LV Wall Thickness Across the Cycle${bullseyeChunks.length > 1 ? ` (${ci + 1} of ${bullseyeChunks.length})` : ""}`}
           subtitle="Every computed frame — end-diastole (ED) and end-systole (ES) marked"
           generatedAt={generatedAt}
@@ -119,7 +125,7 @@ export function WallThicknessCyclePage({
                 <div className="mx-auto h-[180px] w-[180px]">
                   <StrainBullseyeChart data={toSeries(f)} strainType="GRS" sharedMin={min} sharedMax={max} />
                 </div>
-                <p className="text-center text-[10px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
+                <p className="text-center text-[12px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
               </div>
             ))}
           </div>
@@ -133,12 +139,13 @@ export function WallThicknessCyclePage({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title={`LV Wall Thickness — All Segments & Frames${tableChunks.length > 1 ? ` (${ci + 1} of ${tableChunks.length})` : ""}`}
           subtitle="Wall thickness (mm), every AHA segment, every computed frame"
           generatedAt={generatedAt}
         >
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[9px]">
+            <table className="w-full border-collapse text-[11px]">
               <thead>
                 <tr className="bg-teal-50">
                   <th className="border-b border-gray-300 px-1 py-1 text-left font-bold text-teal-800">Frame</th>
@@ -164,7 +171,10 @@ export function WallThicknessCyclePage({
             </table>
           </div>
           {ci === tableChunks.length - 1 && (
-            <p className="mt-2 text-[11px] text-gray-600">S1–S17 are the 17 AHA segments, same order as the bullseye (basal 1–6, mid 7–12, apical 13–16, apex 17).</p>
+            <p className="mt-2 text-[13px] text-gray-600">
+              S1–S17 are the 17 AHA segments, same order as the bullseye (basal 1–6, mid 7–12, apical 13–16, apex 17).
+              Frame numbers are one-based.
+            </p>
           )}
         </ReportPageFrame>
       ))}
@@ -175,11 +185,12 @@ export function WallThicknessCyclePage({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title="RV Cavity Area (FAC) — Across the Cycle"
           subtitle="Short-axis RV fractional area change vs end-diastole, every computed frame"
           generatedAt={generatedAt}
         >
-          <p className="py-10 text-center text-[12px] text-gray-600">
+          <p className="py-10 text-center text-[14px] text-gray-600">
             Not computed — run the RV strain series (all frames) to populate RV FAC across the cycle.
           </p>
         </ReportPageFrame>
@@ -192,12 +203,13 @@ export function WallThicknessCyclePage({
               totalPages={totalPages}
               patientLabel={patientLabel}
               statusLabel="Complete"
+              modeLabel={modeLabel}
               title={`RV Cavity Area (FAC) — Across the Cycle${rvBullseyeChunks.length > 1 ? ` (${ci + 1} of ${rvBullseyeChunks.length})` : ""}`}
               subtitle="Short-axis RV fractional area change vs end-diastole, every computed frame"
               generatedAt={generatedAt}
             >
               {ci === 0 && (
-                <p className="mb-2 text-[12px] leading-snug text-gray-600">
+                <p className="mb-2 text-[14px] leading-snug text-gray-600">
                   FAC = (ED area − frame area) / ED area × 100, drawn per ring across its 3 RV-bullseye
                   sections (= −GAS). Short-axis MRI, not the echo 4-chamber FAC — no validated reference range.
                 </p>
@@ -208,7 +220,7 @@ export function WallThicknessCyclePage({
                     <div className="mx-auto h-[180px] w-[180px]">
                       <RvRegionRing values={rvFacToNineWide(f.rings)} metric="FAC" />
                     </div>
-                    <p className="text-center text-[8px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
+                    <p className="text-center text-[9px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
                   </div>
                 ))}
               </div>
@@ -222,16 +234,17 @@ export function WallThicknessCyclePage({
               totalPages={totalPages}
               patientLabel={patientLabel}
               statusLabel="Complete"
+              modeLabel={modeLabel}
               title={`RV Cavity Area (FAC) — All Values${all.length > 1 ? ` (${ci + 1} of ${all.length})` : ""}`}
               subtitle="Short-axis RV fractional area change vs end-diastole, every computed frame"
               generatedAt={generatedAt}
             >
               {ci === 0 && !hasRvFac && (
-                <div className="mb-2 rounded-md border border-dashed border-gray-300 bg-gray-50 px-2.5 py-1.5 text-[11px] text-gray-600">
+                <div className="mb-2 rounded-md border border-dashed border-gray-300 bg-gray-50 px-2.5 py-1.5 text-[13px] text-gray-600">
                   This RV strain series was computed before per-frame RV areas were stored — recompute the RV strain series to populate FAC.
                 </div>
               )}
-              <table className="w-full border-collapse text-[12px]">
+              <table className="w-full border-collapse text-[14px]">
                 <thead>
                   <tr className="bg-teal-50">
                     <th className="border-b border-gray-300 px-2 py-1 text-left font-bold text-teal-800">Frame</th>
@@ -254,6 +267,9 @@ export function WallThicknessCyclePage({
                   })}
                 </tbody>
               </table>
+              {ci === all.length - 1 && (
+                <p className="mt-2 text-[13px] text-gray-600">Frame numbers are one-based.</p>
+              )}
             </ReportPageFrame>
           ))}
         </>

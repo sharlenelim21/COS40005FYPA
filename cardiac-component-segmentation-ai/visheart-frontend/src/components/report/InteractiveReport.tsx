@@ -26,6 +26,9 @@ import { rvPeakGas as rvPeakGasOf, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 import type { Sex, Measurements, HealthStatus, DiseasePatternGates, Strain, StrainSeries, RegionalHealthStatus, RvRegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 import { RvResearchInfoIcon } from "@/components/landmark/RvResearchNotice";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import Link from "next/link";
+import { DISEASE_PATTERNS_HREF } from "@/components/doc/guides";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -270,6 +273,38 @@ function Card({ title, subtitle, icon, children, sectionRef, highlight, action }
 function fmt(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return v.toFixed(digits);
+}
+
+/**
+ * Small red "i" hover-card icon linking to a Medical/Technical Guide section — the general
+ * (non-RV-strain-specific) twin of RvResearchInfoIcon, for callouts like Disease Pattern
+ * Similarity that need "read more" without a permanent explanatory box taking up space.
+ */
+function GuideInfoLink({ href, description, linkLabel = "Read more" }: { href: string; description: string; linkLabel?: string }) {
+  return (
+    <HoverCard openDelay={100} closeDelay={100}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${description} — hover for details`}
+          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-red-600 dark:text-red-400"
+        >
+          <Info className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent side="top" className="w-60 border-red-500/50 bg-red-50 p-2.5 text-red-800 dark:bg-red-950/60 dark:text-red-200">
+        <p className="text-[11px] leading-snug">{description}</p>
+        <Link
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-semibold underline underline-offset-2 hover:no-underline"
+        >
+          {linkLabel}
+        </Link>
+      </HoverCardContent>
+    </HoverCard>
+  );
 }
 
 /**
@@ -1308,6 +1343,9 @@ export function InteractiveReport({
                 </div>
               )}
 
+              <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+                LV Health Status
+              </p>
               {/* Metric table. There is deliberately NO "Reference Range"
                   column — the normal band is drawn ON each bar as a bold
                   outlined zone, putting the reference where the value is
@@ -1502,7 +1540,7 @@ export function InteractiveReport({
                 return (
                   <div className="mt-4 border-t border-border pt-3">
                     <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      RV Health · advisory
+                      RV Health Status <span className="font-bold text-amber-600 dark:text-amber-400">· Advisory</span>
                     </p>
                     <table className="w-full table-fixed border-collapse">
                       <thead>
@@ -1678,7 +1716,7 @@ export function InteractiveReport({
                     >
                       <div className="flex items-center gap-2">
                         <h3 className="text-sm font-bold text-foreground">RV Regional Findings</h3>
-                        <span className="rounded border border-border px-1.5 py-0.5 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">
+                        <span className="rounded border border-amber-400/60 bg-amber-500/10 px-1.5 py-0.5 text-[12px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
                           Advisory
                         </span>
                       </div>
@@ -1779,7 +1817,12 @@ export function InteractiveReport({
               scoring that used to render here. */}
           <div className="mb-2 flex items-center justify-between">
             <p className="flex items-center gap-1.5 text-sm font-bold text-foreground">
-              <Info className="h-3.5 w-3.5 text-primary" /> Disease Pattern Similarity
+              Disease Pattern Similarity
+              <GuideInfoLink
+                href={DISEASE_PATTERNS_HREF}
+                description="These gates check published classification criteria, primarily the ACDC dataset's own grouping rules — not a validated disease likelihood or a diagnosis."
+                linkLabel="How it works — Medical Guide"
+              />
             </p>
             {recomputingPatternGates && (
               <span className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground">
@@ -1931,8 +1974,8 @@ export function InteractiveReport({
                   </div>
                 )}
 
-                <p className="mt-3 border-t border-border pt-2 text-[12px] leading-snug text-muted-foreground">
-                  {patternGates.disclaimer}
+                <p className="mt-3 border-t border-border pt-2 text-[12px] leading-snug text-muted-foreground" title={patternGates.disclaimer}>
+                  Research-based pattern screen, not a diagnosis — meeting a gate doesn&apos;t confirm it, and not meeting one doesn&apos;t exclude disease. Clinician interpretation required.
                 </p>
               </>
             ) : (
@@ -2072,7 +2115,6 @@ export function InteractiveReport({
                     <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].label}</span>
                     <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].best}%</span>
                   </div>
-                  <p className="mt-1 text-center text-[12px] leading-snug text-muted-foreground">{FIXED_SCALE_NOTE}</p>
                 </div>
               </div>
 

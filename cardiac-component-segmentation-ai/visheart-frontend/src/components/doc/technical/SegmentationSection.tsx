@@ -53,7 +53,7 @@ export function SegmentationSection() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base md:text-lg">
               <div
-                className={`w-8 h-8 rounded-full ${step.color} text-white flex items-center justify-center text-sm font-bold flex-shrink-0`}
+                className={`w-8 h-8 rounded-full ${step.color} text-white flex items-center justify-center text-base font-bold flex-shrink-0`}
               >
                 {step.num}
               </div>
@@ -61,7 +61,7 @@ export function SegmentationSection() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-base text-muted-foreground">
               {step.desc}
             </p>
             <div className="rounded-lg border bg-muted/30 p-2 md:p-4">
@@ -70,7 +70,7 @@ export function SegmentationSection() {
                 alt={step.alt}
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 {step.caption}
               </p>
             </div>
@@ -82,14 +82,14 @@ export function SegmentationSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               4
             </div>
             Upload Your Medical Images
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             The upload process is straightforward — simply drag and
             drop or click to browse for your medical imaging files.
           </p>
@@ -100,7 +100,7 @@ export function SegmentationSection() {
                 alt="Upload Dialog"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Upload dialog with drag-and-drop interface for
                 medical imaging files.
               </p>
@@ -111,7 +111,7 @@ export function SegmentationSection() {
                 alt="Upload Dialog with File"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Upload dialog showing selected file with metadata
                 and project configuration options.
               </p>
@@ -124,14 +124,14 @@ export function SegmentationSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               5
             </div>
             Project Management
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Once uploaded, your projects appear in the dashboard
             with detailed information and management options.
           </p>
@@ -142,7 +142,7 @@ export function SegmentationSection() {
                 alt="Project Card"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Project card showing uploaded project with &quot;No
                 Masks&quot; status, ready for segmentation.
               </p>
@@ -153,7 +153,7 @@ export function SegmentationSection() {
                 alt="Saved Project Card"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Project card showing saved project with persistent
                 storage status.
               </p>
@@ -166,14 +166,14 @@ export function SegmentationSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               6
             </div>
             Project Details &amp; AI Segmentation
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Access detailed project information and start the
             AI-powered segmentation process with a single click.
           </p>
@@ -184,7 +184,7 @@ export function SegmentationSection() {
                 alt="Project Overview"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Detailed project overview showing technical
                 specifications and segmentation controls.
               </p>
@@ -195,7 +195,7 @@ export function SegmentationSection() {
                 alt="Completed Segmentation"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Project view after successful segmentation showing
                 available masks and editing options.
               </p>
@@ -208,14 +208,14 @@ export function SegmentationSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               7
             </div>
             Preview Dataset (Raw MRI Viewer)
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             The Preview Dataset viewer lets you browse the raw medical
             images without any mask overlay. It&apos;s available from
             the project page at every stage — before segmentation,
@@ -228,16 +228,16 @@ export function SegmentationSection() {
               alt="MRI Viewer"
               className="w-full h-auto rounded-md border shadow-sm"
             />
-            <p className="text-xs text-muted-foreground mt-2">
+            <p className="text-sm text-muted-foreground mt-2">
               MRI viewer interface with frame navigation, zoom
               controls, and image display options.
             </p>
           </div>
           <div className="p-2 md:p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
-            <p className="text-sm font-medium mb-1">
+            <p className="text-base font-medium mb-1">
               📋 MRI Viewer Features
             </p>
-            <ul className="text-sm text-muted-foreground space-y-1">
+            <ul className="text-base text-muted-foreground space-y-1">
               <li>
                 • Frame-by-frame navigation through medical image
                 slices
@@ -261,14 +261,14 @@ export function SegmentationSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               8
             </div>
             Segmentation Viewer &amp; Manual Editing
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Once AI segmentation is complete, the segmentation
             viewer becomes available with advanced editing tools.
           </p>
@@ -278,17 +278,17 @@ export function SegmentationSection() {
               alt="Segmentation Viewer"
               className="w-full h-auto rounded-md border shadow-sm"
             />
-            <p className="text-xs text-muted-foreground mt-2">
+            <p className="text-sm text-muted-foreground mt-2">
               Segmentation viewer with precision drawing tools,
               brush settings, mask overlays, and full medical image
               access.
             </p>
           </div>
           <div className="p-2 md:p-4 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
-            <p className="text-sm font-medium mb-1">
+            <p className="text-base font-medium mb-1">
               🎨 Segmentation Viewer Features
             </p>
-            <ul className="text-sm text-muted-foreground space-y-1">
+            <ul className="text-base text-muted-foreground space-y-1">
               <li>
                 •{" "}
                 <strong>All MRI viewer capabilities</strong> — frame
@@ -309,10 +309,10 @@ export function SegmentationSection() {
             </ul>
           </div>
           <div className="p-2 md:p-4 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-            <p className="text-sm font-medium mb-1">
+            <p className="text-base font-medium mb-1">
               💡 Important Note
             </p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-base text-muted-foreground">
               The original medical images remain fully accessible in
               the segmentation viewer. You can toggle between viewing
               the raw medical data and the segmented masks, or view
@@ -374,17 +374,17 @@ export function SegmentationSection() {
                 className={`flex items-center gap-3 p-2 md:p-3 rounded-lg ${s.bg} border ${s.border}`}
               >
                 <div
-                  className={`w-6 h-6 rounded-full ${s.c} text-white flex items-center justify-center text-xs font-bold flex-shrink-0`}
+                  className={`w-6 h-6 rounded-full ${s.c} text-white flex items-center justify-center text-sm font-bold flex-shrink-0`}
                 >
                   {s.n}
                 </div>
-                <span className="text-xs md:text-sm">{s.text}</span>
+                <span className="text-sm md:text-lg">{s.text}</span>
               </div>
             ))}
           </div>
           <div className="p-2 md:p-4 rounded-lg bg-muted/50 border-l-4 border-primary">
-            <p className="text-sm font-medium mb-1">Pro Tip</p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-base font-medium mb-1">Pro Tip</p>
+            <p className="text-base text-muted-foreground">
               Register for a user account to save your projects
               permanently and access advanced project management
               features. Guest accounts provide full functionality but

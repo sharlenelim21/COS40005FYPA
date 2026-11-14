@@ -26,7 +26,7 @@ export function ReconstructionSection() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Reconstruction converts segmentation masks into 3D
             meshes of cardiac structures (myocardium). 4D
             reconstruction produces time-resolved mesh sequences
@@ -37,26 +37,26 @@ export function ReconstructionSection() {
           </p>
           <div className="grid gap-4">
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-medium flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-base font-medium flex-shrink-0">
                 3D
               </div>
               <div>
                 <h4 className="font-semibold">3D Reconstruction</h4>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-base text-muted-foreground">
                   Single mesh reconstruction generated from a MRI
                   scan with only one frame.
                 </p>
               </div>
             </div>
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-medium flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-base font-medium flex-shrink-0">
                 4D
               </div>
               <div>
                 <h4 className="font-semibold">
                   4D (Time-series) Reconstruction
                 </h4>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-base text-muted-foreground">
                   Mesh sequence generated for multiple frames to
                   capture cardiac motion across time.
                 </p>
@@ -70,14 +70,14 @@ export function ReconstructionSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               1
             </div>
             Starting a Reconstruction Job
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Ensure segmentation has been completed for your project
             first — reconstruction uses those results. Open the
             project and click{" "}
@@ -89,7 +89,7 @@ export function ReconstructionSection() {
               alt="Project reconstruction overview"
               className="w-full h-auto rounded-md border shadow-sm"
             />
-            <p className="text-xs text-muted-foreground mt-2">
+            <p className="text-sm text-muted-foreground mt-2">
               Project overview with Create 4D Reconstruction button
               to start the process.
             </p>
@@ -101,17 +101,17 @@ export function ReconstructionSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               2
             </div>
             Configure 4D Reconstruction
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Click <strong>Start Reconstruction</strong> to start reconstruction.
           </p>
-          <ul className="text-sm text-muted-foreground space-y-2">
+          <ul className="text-base text-muted-foreground space-y-2">
             <li>
               • <strong>Segmentation source</strong> — pick MedSAM or UNet. Only that model&apos;s mask is
               used. A card is greyed out if it has no segmentation yet, or marked &quot;In Use&quot; if it
@@ -136,7 +136,7 @@ export function ReconstructionSection() {
               alt="Configure 4D Reconstruction dialog"
               className="w-full h-auto rounded-md border shadow-sm"
             />
-            <p className="text-xs text-muted-foreground mt-2">
+            <p className="text-sm text-muted-foreground mt-2">
               Configure 4D Reconstruction dialog.
             </p>
           </div>            
@@ -147,19 +147,19 @@ export function ReconstructionSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               3
             </div>
             Inspect &amp; Visualize Results
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             After reconstruction completes, click{" "}
             <strong>View 4D</strong> to open the dedicated,
             full-screen 4D viewer with playback controls.
           </p>
-          <ul className="text-sm text-muted-foreground space-y-1">
+          <ul className="text-base text-muted-foreground space-y-1">
             <li>
               • Inspect the 4D model with playback controls, a frame
               slider, and adjustable playback speed to review cardiac
@@ -181,7 +181,7 @@ export function ReconstructionSection() {
               alt="Reconstruction results"
               className="w-full h-auto rounded-md border shadow-sm"
             />
-            <p className="text-xs text-muted-foreground mt-2">
+            <p className="text-sm text-muted-foreground mt-2">
               Reconstruction results showing completed 4D
               reconstruction with metadata and view options.
             </p>
@@ -192,16 +192,16 @@ export function ReconstructionSection() {
               alt="4D reconstruction viewer"
               className="w-full h-auto rounded-md border shadow-sm"
             />
-            <p className="text-xs text-muted-foreground mt-2">
+            <p className="text-sm text-muted-foreground mt-2">
               Interactive 4D viewer with playback timeline controls
               and a link to jump to the matching segmentation frame.
             </p>
           </div>
           <div className="p-2 md:p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 mt-4">
-            <p className="text-sm font-medium mb-1">
+            <p className="text-base font-medium mb-1">
               💡 Important Note
             </p>
-            <ul className="text-sm text-muted-foreground space-y-1">
+            <ul className="text-base text-muted-foreground space-y-1">
               <li>
                 • If you make changes to your segmentation masks,
                 you can{" "}
@@ -226,14 +226,14 @@ export function ReconstructionSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               4
             </div>
             Complete Project Details &amp; Management
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Access comprehensive project information including
             segmentation masks, reconstruction details, job history,
             metadata, and storage statistics all in one place.
@@ -245,7 +245,7 @@ export function ReconstructionSection() {
                 alt="Project details overview"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Comprehensive project details with metadata, storage
                 statistics, and segmentation/reconstruction
                 information.
@@ -257,17 +257,17 @@ export function ReconstructionSection() {
                 alt="Project management actions"
                 className="w-full h-auto rounded-md border shadow-sm"
               />
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-sm text-muted-foreground mt-2">
                 Project management panel with export and reset
                 options for easy data management.
               </p>
             </div>
           </div>
           <div className="p-2 md:p-4 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 mt-4">
-            <p className="text-sm font-medium mb-1">
+            <p className="text-base font-medium mb-1">
               ⚠️ Reset Masks Warning
             </p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-base text-muted-foreground">
               Using the <strong>Reset Masks</strong> option will
               permanently delete all segmentation masks and
               reconstruction data. This action cannot be undone.

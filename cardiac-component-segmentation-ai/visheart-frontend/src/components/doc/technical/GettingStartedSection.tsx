@@ -24,7 +24,7 @@ export function GettingStartedSection() {
           ariaLabel="Screen recording of the VisHeart workflow from upload to report."
           className="rounded-md border shadow-sm"
         />
-        <figcaption className="mt-2 text-xs text-muted-foreground">
+        <figcaption className="mt-2 text-sm text-muted-foreground">
           A walkthrough of VisHeart: uploading a scan, running segmentation,
           building the 4D model, detecting landmarks and viewing the report.
         </figcaption>
@@ -62,12 +62,12 @@ export function GettingStartedSection() {
               },
             ].map((step) => (
               <div key={step.n} className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-base font-medium flex-shrink-0">
                   {step.n}
                 </div>
                 <div>
                   <h4 className="font-semibold">{step.title}</h4>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-base text-muted-foreground">
                     {step.desc}
                   </p>
                 </div>
@@ -85,7 +85,7 @@ export function GettingStartedSection() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-2 text-base">
               <li>
                 • Modern web browser (Chrome, Firefox, Safari, Edge)
               </li>

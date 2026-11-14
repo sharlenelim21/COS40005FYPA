@@ -24,7 +24,7 @@ export function IntroductionSection() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Our platform combines state-of-the-art deep learning
             algorithms with user-friendly visualization tools to
             provide accurate cardiac structure segmentation from
@@ -32,38 +32,38 @@ export function IntroductionSection() {
           </p>
           <div className="grid gap-4">
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-medium flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-base font-medium flex-shrink-0">
                 AI
               </div>
               <div>
                 <h4 className="font-semibold">
                   AI-Powered Analysis
                 </h4>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-base text-muted-foreground">
                   Advanced neural networks trained on extensive
                   cardiac imaging datasets.
                 </p>
               </div>
             </div>
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-medium flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-base font-medium flex-shrink-0">
                 3D
               </div>
               <div>
                 <h4 className="font-semibold">3D Visualization</h4>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-base text-muted-foreground">
                   Interactive 3D rendering of cardiac structures for
                   comprehensive analysis.
                 </p>
               </div>
             </div>
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-medium flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-base font-medium flex-shrink-0">
                 ⚡
               </div>
               <div>
                 <h4 className="font-semibold">Fast Processing</h4>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-base text-muted-foreground">
                   Efficient algorithms that deliver results in
                   minutes, not hours.
                 </p>
@@ -79,7 +79,7 @@ export function IntroductionSection() {
             <CardTitle>Key Features</CardTitle>
           </CardHeader>
           <CardContent>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-2 text-base">
               <li>• Automated cardiac segmentation</li>
               <li>• Real-time 3D visualization</li>
               <li>• Multi-format support</li>
@@ -93,7 +93,7 @@ export function IntroductionSection() {
             <CardTitle>Target Users</CardTitle>
           </CardHeader>
           <CardContent>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-2 text-base">
               <li>• Cardiologists</li>
               <li>• Radiologists</li>
               <li>• Medical researchers</li>
@@ -107,7 +107,7 @@ export function IntroductionSection() {
             <CardTitle>Use Cases</CardTitle>
           </CardHeader>
           <CardContent>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-2 text-base">
               <li>• Diagnostic imaging</li>
               <li>• Treatment planning</li>
               <li>• Research studies</li>

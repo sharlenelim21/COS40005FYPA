@@ -20,7 +20,7 @@ export function TwoLayerSection({ id, title, level = 2, summary, detail, childre
 
         {detail && (
           <Collapsible className="group/detail bg-card rounded-lg border">
-            <CollapsibleTrigger className="hover:bg-muted/50 focus-visible:ring-ring flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none">
+            <CollapsibleTrigger className="hover:bg-muted/50 focus-visible:ring-ring flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-base font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none">
               <Stethoscope className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
               Clinical detail
               <span className="text-muted-foreground hidden font-normal sm:inline">· for clinicians</span>
@@ -30,7 +30,7 @@ export function TwoLayerSection({ id, title, level = 2, summary, detail, childre
               />
             </CollapsibleTrigger>
             <CollapsibleContent className="border-t px-4 py-4">
-              <div className="text-muted-foreground space-y-3 text-sm leading-6">{detail}</div>
+              <div className="text-muted-foreground space-y-3 text-base leading-6">{detail}</div>
             </CollapsibleContent>
           </Collapsible>
         )}

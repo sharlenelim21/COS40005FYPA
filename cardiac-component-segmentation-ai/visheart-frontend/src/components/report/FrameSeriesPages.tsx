@@ -33,6 +33,7 @@ export function FrameSeriesPages({
   pageNumber,
   totalPages,
   generatedAt,
+  modeLabel,
   metricLabel,
   columnLabels,
   frames,
@@ -49,6 +50,7 @@ export function FrameSeriesPages({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  modeLabel?: string;
   metricLabel: string;
   /** Column header per value index (AHA segment names, or RV region names). */
   columnLabels: string[];
@@ -76,10 +78,12 @@ export function FrameSeriesPages({
   const accentHeadText = theme === "amber" ? "text-amber-800" : "text-teal-800";
   const accentRowBg = theme === "amber" ? "bg-amber-50" : "bg-teal-50/50";
 
+  // Displayed 1-based (idx + 1) to match the on-screen viewer's own convention
+  // (standalone-4d-viewer, etc.) -- the underlying frameIndex stays 0-based.
   const frameLabelFor = (idx: number) => {
-    if (idx === edFrameIndex) return `${idx} (ED)`;
-    if (idx === esFrameIndex) return `${idx} (ES)`;
-    return String(idx);
+    if (idx === edFrameIndex) return `${idx + 1} (ED)`;
+    if (idx === esFrameIndex) return `${idx + 1} (ES)`;
+    return String(idx + 1);
   };
 
   if (!frames.length) {
@@ -89,11 +93,12 @@ export function FrameSeriesPages({
         totalPages={totalPages}
         patientLabel={patientLabel}
         statusLabel="Complete"
+        modeLabel={modeLabel}
         title={metricLabel}
         subtitle="Every computed frame"
         generatedAt={generatedAt}
       >
-        <p className="py-10 text-center text-[12px] text-gray-600">{emptyMessage}</p>
+        <p className="py-10 text-center text-[14px] text-gray-600">{emptyMessage}</p>
       </ReportPageFrame>
     );
   }
@@ -107,18 +112,19 @@ export function FrameSeriesPages({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title={`${metricLabel}${bullseyeChunks.length > 1 ? ` (${ci + 1} of ${bullseyeChunks.length})` : ""}`}
           subtitle="Every computed frame — end-diastole (ED) and end-systole (ES) marked"
           generatedAt={generatedAt}
         >
           {ci === 0 && bullseyeIntroNote && (
-            <p className="mb-2 text-[11px] leading-snug text-gray-600">{bullseyeIntroNote}</p>
+            <p className="mb-2 text-[13px] leading-snug text-gray-600">{bullseyeIntroNote}</p>
           )}
           <div className="grid grid-cols-3 gap-3">
             {frameChunk.map((f) => (
               <div key={f.frameIndex} className={`rounded-md border-2 p-1 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? accentBorder : "border-gray-300"}`}>
                 <div className="mx-auto h-[180px] w-[180px]">{renderBullseye(f.values)}</div>
-                <p className="text-center text-[10px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
+                <p className="text-center text-[12px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
               </div>
             ))}
           </div>
@@ -132,19 +138,20 @@ export function FrameSeriesPages({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title={`${metricLabel} — By Region & Frame${tableChunks.length > 1 ? ` (${ci + 1} of ${tableChunks.length})` : ""}`}
           subtitle="Every value, every computed frame"
           generatedAt={generatedAt}
         >
           {ci === 0 && tablePrototypeNote && (
-            <div className={`mb-2 rounded-md border border-dashed px-2.5 py-1.5 text-[11px] ${
+            <div className={`mb-2 rounded-md border border-dashed px-2.5 py-1.5 text-[13px] ${
               theme === "amber" ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-gray-50 text-gray-600"
             }`}>
               {tablePrototypeNote}
             </div>
           )}
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[9px]">
+            <table className="w-full border-collapse text-[11px]">
               <thead>
                 <tr className={accentHeadBg}>
                   <th className={`border-b border-gray-300 px-1 py-1 text-left font-bold ${accentHeadText}`}>Frame</th>
@@ -169,8 +176,9 @@ export function FrameSeriesPages({
             </table>
           </div>
           {ci === tableChunks.length - 1 && (
-            <p className="mt-2 text-[10px] text-gray-600">
+            <p className="mt-2 text-[12px] text-gray-600">
               {columnLabels.map((l, i) => `${i + 1}. ${l}`).join(" · ")}
+              {" "}Frame numbers are one-based.
             </p>
           )}
         </ReportPageFrame>

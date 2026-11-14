@@ -12,6 +12,7 @@ import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { inferDocModel as inferMaskModel, SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
 import { useProjectResults } from "@/hooks/useProjectResults";
+import { isReconstructionPreloaded, markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
 
 // UI Components
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -114,7 +115,7 @@ function ProjectPageInner() {
   const buildModelParam = searchParams.get("model");
   const requestedBuildModel =
     buildModelParam === "medsam" || buildModelParam === "unet" ? buildModelParam : null;
-  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache, maskAvailabilityByModel } = useProject();
+  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache, maskAvailabilityByModel, preloadAllModelURLs, preloadAllThreeJSModels } = useProject();
   // Read-only (autoCompute: false) -- this page only needs to know whether the Report Page
   // would actually have strain content to show, not to trigger any compute of its own.
   const { byModel: strainByModel } = useProjectResults(projectId, "prefer-unet", { autoCompute: false });
@@ -400,6 +401,40 @@ function ProjectPageInner() {
     refreshReconstructionJobs();
     refreshMasks({ silent: true });
   }, [projectId, refreshJobs, refreshReconstructionJobs, refreshMasks]);
+
+  // Proactively warm EVERY completed reconstruction's meshes into the Three.js/drei cache as soon
+  // as it shows up in the Reconstruction Details list below -- not just the one "active"
+  // reconstruction ProjectContext's own auto-preload effect resolves (which depends on URL params
+  // this page never sets, and on reconstructionMetadata matching whichever reconstruction just
+  // finished, which isn't guaranteed when a project has more than one). This is what makes "View
+  // 4D" actually land on a smooth, already-warm viewer most of the time: the user is still reading
+  // this card, not yet navigating, so this has real head start instead of racing the click.
+  // reconstructionPreloadCache (module-level, shared with the viewer) is what lets each side skip
+  // redoing the other's work. Reported live, 2026-11-14.
+  useEffect(() => {
+    const targets = (reconstructionResults ?? []).filter(
+      (recon: { reconstructionId?: string }) =>
+        recon?.reconstructionId && !isReconstructionPreloaded(recon.reconstructionId),
+    );
+    if (targets.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const recon of targets) {
+        if (cancelled) return;
+        const id = recon.reconstructionId as string;
+        try {
+          await preloadAllModelURLs(undefined, id);
+          await preloadAllThreeJSModels(undefined, id);
+          markReconstructionPreloaded(id);
+        } catch (error) {
+          console.error(`[Project] Background preload failed for reconstruction ${id}:`, error);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reconstructionResults, preloadAllModelURLs, preloadAllThreeJSModels]);
 
   // Clear starting state when segmentation jobs appear
   useEffect(() => {
@@ -1386,10 +1421,6 @@ function ProjectPageInner() {
     {} as Record<ProjectTypes.JobStatus, number>,
   );
 
-  // Get editable mask (the one users interact with)
-  const editableMask = undecodedMasks?.find((mask) => !mask.isMedSAMOutput);
-  const maskIsSaved = editableMask?.isSaved || false;
-
   // Use local state if available (for optimistic updates), otherwise use project data
   const currentProjectName = localProjectName !== null ? localProjectName : projectData.name;
   const currentProjectDescription = localProjectDescription !== null ? localProjectDescription : projectData.description || "";
@@ -1829,7 +1860,7 @@ function ProjectPageInner() {
                                 aria-label="Report Page"
                                 disabled={!hasAnyStrainResult}
                                 onClick={() => {
-                                  if (hasAnyStrainResult) router.push(`/project/${projectId}/report`);
+                                  if (hasAnyStrainResult) router.push(`/project/${projectId}/report?from=project`);
                                 }}
                               >
                                 <FileText className="h-4 w-4" />
@@ -1956,24 +1987,6 @@ function ProjectPageInner() {
                     <Layers className="h-4 w-4" />
                     Segmentation
                   </CardTitle>
-                  {hasMasks && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Badge variant={maskIsSaved ? "default" : "secondary"} className="cursor-help">
-                            {maskIsSaved ? "Masks Saved" : "Masks Unsaved"}
-                          </Badge>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="max-w-[220px] text-xs">
-                            {maskIsSaved
-                              ? "These masks have been confirmed in the Segmentation Editor."
-                              : "Separate from the project's own Saved status — open the Segmentation Editor and save at least once to confirm these masks."}
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
                 </div>
               </CardHeader>
               <CardContent>

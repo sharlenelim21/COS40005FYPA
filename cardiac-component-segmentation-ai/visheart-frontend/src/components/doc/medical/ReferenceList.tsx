@@ -26,7 +26,7 @@ function ReferenceLink({ reference }: { reference: Reference }) {
 
 export function ReferenceList() {
   return (
-    <ol className="space-y-2 text-sm">
+    <ol className="space-y-2 text-base">
       {CITED_REFERENCE_IDS.map((id, index) => {
         const reference: Reference = REFERENCES[id];
         return (
@@ -41,7 +41,7 @@ export function ReferenceList() {
               <p>
                 <ContentText text={reference.citation} />
               </p>
-              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                 <ReferenceLink reference={reference} />
                 <ReferenceBackLink refId={id} number={index + 1} />
               </p>

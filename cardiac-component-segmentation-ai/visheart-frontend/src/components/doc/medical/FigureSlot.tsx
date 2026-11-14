@@ -22,11 +22,11 @@ export function FigureSlot({ number, src, alt, caption, attribution, refs }: Fig
         <div
           role="img"
           aria-label={alt}
-          className="text-muted-foreground flex aspect-[16/9] max-h-72 w-full flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed p-4 text-center text-sm"
+          className="text-muted-foreground flex aspect-[16/9] max-h-72 w-full flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed p-4 text-center text-base"
         >
           <ImageIcon className="h-8 w-8" aria-hidden="true" />
           <span>Figure slot</span>
-          <span className="text-xs">
+          <span className="text-sm">
             <ContentText text={alt} />
           </span>
         </div>

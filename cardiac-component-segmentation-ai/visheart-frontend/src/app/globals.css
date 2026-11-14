@@ -154,7 +154,10 @@ button[type="submit"]:hover {
   /* Slightly brighter than the light-mode value for better pop against the dark background. */
   --brand: #ec4899;
   --brand-foreground: #ffffff;
-  --info: #3b82f6;
+  /* Same #2563eb (Tailwind blue-600) as light mode -- kept identical across themes so it always
+     matches the blue used elsewhere for this same "important action" accent (e.g. the Pipeline
+     Complete icon tile's text-blue-600), instead of shifting to a lighter blue-500 in dark mode. */
+  --info: #2563eb;
   --info-foreground: #ffffff;
 }
 

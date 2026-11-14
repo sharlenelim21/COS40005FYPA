@@ -16,6 +16,7 @@ export function RvRegionalStrainPage({
   pageNumber,
   totalPages,
   generatedAt,
+  modeLabel,
   gcsFrames,
   gasFrames,
   edFrameIndex,
@@ -26,6 +27,7 @@ export function RvRegionalStrainPage({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  modeLabel?: string;
   /** 9 values per frame (basal 1-3, mid 4-6, apical 7-9). */
   gcsFrames: SeriesFrame[];
   /** Same frames/order as gcsFrames; null values where GAS wasn't stored. */
@@ -43,6 +45,7 @@ export function RvRegionalStrainPage({
         pageNumber={pageNumber}
         totalPages={totalPages}
         generatedAt={generatedAt}
+        modeLabel={modeLabel}
         metricLabel="RV Regional GCS"
         columnLabels={RV_REGION_LABELS_9}
         frames={gcsFrames}
@@ -60,6 +63,7 @@ export function RvRegionalStrainPage({
         pageNumber={pageNumber + gcsPages}
         totalPages={totalPages}
         generatedAt={generatedAt}
+        modeLabel={modeLabel}
         metricLabel="RV Regional GAS"
         columnLabels={RV_REGION_LABELS_9}
         frames={gasFrames}

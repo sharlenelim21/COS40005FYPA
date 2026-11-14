@@ -749,6 +749,18 @@ export const MEDICAL_GUIDE: MedicalGuide = {
               text: "VisHeart compares a patient’s heart measurements with reference patterns of common heart conditions. These patterns follow the diagnostic groups used in the ACDC cardiac MRI dataset. Volumes are indexed to body surface area (mL/m²).",
               refs: ["bernard2018"],
             },
+            {
+              text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the numbers from the actual research paper that created and labelled the ACDC dataset (for example, ejection fraction below 40% for MINF). This replaces an earlier version of VisHeart that read these numbers from the ACDC Challenge website's own short summary instead, which turned out to differ from the paper in two places: it omits a wall-thickness requirement for DCM, and it treats a cardiac-mass figure as required for HCM when the paper's own wording makes it an incidental finding in some patients, not a requirement.",
+              refs: ["bernard2018"],
+            },
+            {
+              text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the resulting distribution of values against the dataset's official hand-labelled ground truth for the same group. Most features landed in a similar range for every condition — a few, such as DCM's ejection fraction and HCM's LVMI, showed a larger gap, consistent with comparing a smaller 10-patient sample against a 20-patient one — which overall supports using the pipeline's own numbers alongside the published literature, not as a replacement for it.",
+              refs: [],
+            },
+            {
+              text: "The normal (NOR) group is checked for both the left and right side of the heart, using the paper's own published NOR numbers for each. VisHeart still widens every number to the widest combination of three sources — this paper's own numbers, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group (plus, for the one measurement the paper gives no number for, a published meta-analysis of healthy adults) — so a genuinely healthy heart is not wrongly flagged just because of how one single source happened to measure it.",
+              refs: ["bernard2018", "zhan2024"],
+            },
           ],
           blocks: [
             {
@@ -802,21 +814,84 @@ export const MEDICAL_GUIDE: MedicalGuide = {
               ],
             },
             {
-              kind: "callout",
-              variant: "info",
-              title: "How VisHeart checks its own measurements against this research",
-              body: [
+              kind: "rangeTable",
+              caption: "The actual cut-offs VisHeart runs, after widening each published number as described above.",
+              groups: [
                 {
-                  text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the numbers from the actual research paper that created and labelled the ACDC dataset (for example, ejection fraction below 40% for MINF). This replaces an earlier version of VisHeart that read these numbers from the ACDC Challenge website's own short summary instead, which turned out to differ from the paper in two places: it omits a wall-thickness requirement for DCM, and it treats a cardiac-mass figure as required for HCM when the paper's own wording makes it an incidental finding in some patients, not a requirement.",
+                  label: "Normal (NOR) — left ventricle",
+                  rows: [
+                    { parameter: "Ejection fraction (EF)", men: "50.0–72.93", women: "50.0–72.93", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Max wall thickness", men: "6.22–12.00", women: "6.22–12.00", unit: "mm", refs: ["bernard2018"] },
+                    { parameter: "EDVI", men: "47.54–95.35", women: "47.54–95.35", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "LVMI", men: "36.94–76.00", women: "33.00–75.00", unit: "g/m²", refs: ["bernard2018", "zhan2024"] },
+                  ],
+                },
+                {
+                  label: "Normal (NOR) — right ventricle",
+                  rows: [
+                    { parameter: "RVEDVI", men: "51.65–111.38", women: "51.65–111.38", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "RVEF", men: "40.00–67.60", women: "40.00–67.60", unit: "%", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Myocardial infarction (MINF)",
+                  rows: [
+                    { parameter: "EF", men: "< 40.0", women: "< 40.0", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Regional contraction", men: "≥ 1 segment moderate/severe", women: "≥ 1 segment moderate/severe", unit: "criterion", refs: ["bernard2018"] },
+                    { parameter: "EDVI (informational only, not gating)", men: "> 100.0", women: "> 100.0", unit: "mL/m²", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Dilated cardiomyopathy (DCM)",
+                  rows: [
+                    { parameter: "EDVI", men: "> 100.0", women: "> 100.0", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "EF", men: "< 40.0", women: "< 40.0", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Max wall thickness (sector-mean)", men: "< 12.28", women: "< 12.28", unit: "mm", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Hypertrophic cardiomyopathy (HCM)",
+                  rows: [
+                    { parameter: "EF", men: "> 55.0", women: "> 55.0", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Max wall thickness (true-peak)", men: "> 15.0", women: "> 15.0", unit: "mm", refs: ["bernard2018"] },
+                    { parameter: "LVMI (informational only, not gating)", men: "> 110.0", women: "> 110.0", unit: "g/m²", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Abnormal right ventricle (ARV)",
+                  rows: [
+                    { parameter: "RVEDVI", men: "> 110.0", women: "> 100.0", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "RVEF", men: "< 40.0", women: "< 40.0", unit: "%", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "RV severity context — checked only once the ARV gate above is met",
+                  rows: [
+                    { parameter: "ARVC cohort — RVEDVI (mean ± SD)", men: "103.0 ± 26.0", women: "103.0 ± 26.0", unit: "mL/m²", refs: ["kubler2021"] },
+                    { parameter: "ARVC cohort — RVESVI (mean ± SD)", men: "56.0 ± 23.0", women: "56.0 ± 23.0", unit: "mL/m²", refs: ["kubler2021"] },
+                    { parameter: "ARVC cohort — RVEF (mean ± SD)", men: "46.0 ± 10.0", women: "46.0 ± 10.0", unit: "%", refs: ["kubler2021"] },
+                    { parameter: "PAH higher-risk band — RVEF", men: "< 37.0", women: "< 37.0", unit: "%", refs: ["escers2022"] },
+                    { parameter: "PAH higher-risk band — SVI", men: "< 26.0", women: "< 26.0", unit: "mL/m²", refs: ["escers2022"] },
+                    { parameter: "PAH higher-risk band — RVESVI", men: "> 54.0", women: "> 54.0", unit: "mL/m²", refs: ["escers2022"] },
+                  ],
+                },
+              ],
+              footnotes: [
+                {
+                  text: "The ARVC and PAH rows above are advisory severity context only, never a separate gate: VisHeart shows them only once the RV (ARV) gate above is already met, to give the clinician somewhere to look next, and they never change that gate's own met/not-met result.",
+                  refs: ["kubler2021", "escers2022"],
+                },
+                {
+                  text: "DCM reads the sector-mean wall-thickness statistic (average thickness per AHA segment, then across slices) since its criterion is an upper bound; HCM reads the true-peak statistic (the single thickest ray anywhere) since its criterion is a lower bound — the two conditions ask different questions of the same measurement, so they are not interchangeable.",
                   refs: ["bernard2018"],
                 },
                 {
-                  text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the results against the dataset's official hand-labelled ground truth for the same patients. The two agreed closely for every condition, which is evidence the pipeline's own numbers can be trusted, not a new diagnostic range.",
+                  text: "MINF's regional-contraction criterion has no published fixed count — VisHeart's own regional-health classifier supplies it (any single abnormal segment, irrespective of count), cross-checked against the wall-motion-scoring literature.",
                   refs: [],
                 },
                 {
-                  text: "The normal (NOR) group is checked for both the left and right side of the heart, using the paper's own published NOR numbers for each. VisHeart still widens every number to the widest combination of three sources — this paper's own numbers, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group (plus, for the one measurement the paper gives no number for, a published meta-analysis of healthy adults) — so a genuinely healthy heart is not wrongly flagged just because of how one single source happened to measure it.",
-                  refs: ["bernard2018", "zhan2024"],
+                  text: "LVMI for HCM and EDVI for MINF are shown for context only and are never required on their own for that gate to be met.",
+                  refs: ["bernard2018"],
                 },
               ],
             },

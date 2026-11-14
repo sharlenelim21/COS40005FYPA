@@ -2,23 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Source_Sans_3 } from "next/font/google";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { ExecutiveSummaryPage } from "@/components/report/ExecutiveSummaryPage";
-import { HeartMetricsPage } from "@/components/report/HeartMetricsPage";
 import { WallThicknessCavityAreaPage } from "@/components/report/WallThicknessCavityAreaPage";
 import { WallThicknessCyclePage, wallThicknessCyclePageCount } from "@/components/report/WallThicknessCyclePage";
 import { StrainAnalysisPage, strainAnalysisPageCount, type StrainAnalysisRow } from "@/components/report/StrainAnalysisPage";
 import { LvRegionalStrainPage, lvRegionalStrainPageCount } from "@/components/report/LvRegionalStrainPage";
 import { RvRegionalStrainPage, rvRegionalStrainPageCount } from "@/components/report/RvRegionalStrainPage";
-import { RvCavityGeometryPage, rvCavityGeometryPageCount } from "@/components/report/RvCavityGeometryPage";
-import { DiseasePatternSimilarityPage } from "@/components/report/DiseasePatternSimilarityPage";
-import { ReferenceCriteriaPage } from "@/components/report/ReferenceCriteriaPage";
-import { MethodologyPage } from "@/components/report/MethodologyPage";
 import { MriOverlayPage, mriOverlayPageCount } from "@/components/report/MriOverlayPage";
+import { LvWallThicknessEdEsPage } from "@/components/report/LvWallThicknessEdEsPage";
+import { RvCavityAreaEdEsPage } from "@/components/report/RvCavityAreaEdEsPage";
+import { LvStrainEdEsPage } from "@/components/report/LvStrainEdEsPage";
+import { RvStrainEdEsPage } from "@/components/report/RvStrainEdEsPage";
+import { MriOverlayEdEsPage } from "@/components/report/MriOverlayEdEsPage";
 import { useProjectResults, type Sex } from "@/hooks/useProjectResults";
 import { InteractiveReport } from "@/components/report/InteractiveReport";
 import { downloadResultsCsv } from "@/lib/exportResultsCsv";
@@ -39,6 +40,25 @@ const reportFont = Source_Sans_3({ subsets: ["latin"], weight: ["400", "500", "6
 export default function ReportPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Set by whoever linked here (?from=project — the project page's own
+  // Report Page button, and the dashboard/case-overview's report shortcuts)
+  // so the back button returns wherever the user actually came from instead
+  // of always assuming the Landmark Detection page. Reported live, 2026-11.
+  const cameFromProject = searchParams.get("from") === "project";
+  // Two export modes -- "default" (the short ED/ES-only review) is the mode's
+  // own name's implication and the initial value; "full" is today's existing
+  // full-cycle research report, unchanged. No persistent toolbar toggle: the
+  // reader picks a mode in the dialog the Print button opens (below), so this
+  // is plain local state rather than a `?mode=` URL push (switching modes must
+  // not re-navigate the page). `?mode=full` on the incoming URL still seeds
+  // the initial choice, for anyone who bookmarks/shares a direct link.
+  const [mode, setMode] = useState<"default" | "full">(searchParams.get("mode") === "full" ? "full" : "default");
+  // Print happens from the dialog's own buttons, one tick after `mode` is set
+  // (so the print-only DOM has re-rendered the chosen mode's pages before
+  // window.print() reads them) -- see the effect near handlePrint below.
+  const [printDialogOpen, setPrintDialogOpen] = useState(false);
+  const [pendingPrint, setPendingPrint] = useState(false);
   const { loading, error, projectData } = useProject();
   // One report, defaulting to the most-recently-computed model (no toggle) —
   // the reader gets a single authoritative view rather than choosing a model.
@@ -136,6 +156,24 @@ export default function ReportPage() {
     setTimeout(restore, 5000);
   };
 
+  // Fires window.print() one render after `mode` changes from the dialog
+  // below -- React state updates aren't synchronous, so calling handlePrint()
+  // in the same click handler that calls setMode() would read the PREVIOUS
+  // mode's print-only DOM. Runs on mount too (harmless: pendingPrint starts
+  // false), which is fine since it's a no-op until the dialog sets the flag.
+  useEffect(() => {
+    if (!pendingPrint) return;
+    setPendingPrint(false);
+    handlePrint();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, pendingPrint]);
+
+  const choosePrintMode = (next: "default" | "full") => {
+    setMode(next);
+    setPendingPrint(true);
+    setPrintDialogOpen(false);
+  };
+
   // Reads the exact BSA/height/weight/sex state entered on this page, so the
   // CSV includes the same indexed values (EDVI/ESVI/LVMI, RVEDVI/RVESVI) and
   // RV disease-pattern scores the printed report shows, instead of the
@@ -196,6 +234,24 @@ export default function ReportPage() {
   };
   const lvGrsFrames = sortedLvFrames.map((f) => ({ frameIndex: f.frameIndex, values: toSegmentValues(f.segments, "grs") }));
   const lvGcsFrames = sortedLvFrames.map((f) => ({ frameIndex: f.frameIndex, values: toSegmentValues(f.segments, "gcs") }));
+
+  // ── Default ("Summary (ED/ES)") report data — reuses the SAME stored Strain/RvStrain
+  // fields the full report already shows elsewhere; nothing computed here is new.
+  // `strain.segments[i].grs/gcs` already IS the ED→ES result (strain is 0% at ED
+  // by definition); `wt_ed_mm`/`wt_es_mm` are real, independently-stored geometry
+  // at both phases.
+  const lvEdWallThicknessMm = Array.from({ length: 17 }, (_, i) =>
+    strain?.segments?.find((s) => s.segment === i + 1)?.wt_ed_mm ?? null);
+  const lvEsWallThicknessMm = Array.from({ length: 17 }, (_, i) =>
+    strain?.segments?.find((s) => s.segment === i + 1)?.wt_es_mm ?? null);
+  const lvEsGcs = toSegmentValues(strain?.segments, "gcs");
+  const lvEsGrs = toSegmentValues(strain?.segments, "grs");
+  const rvEsGcs = Array.from({ length: 9 }, (_, i) => rvStrain?.regions?.find((r) => r.region === i + 1)?.gcs ?? null);
+  const rvEsGas = Array.from({ length: 9 }, (_, i) => rvStrain?.regions?.find((r) => r.region === i + 1)?.gas ?? null);
+  // RV has its OWN ED/ES selection, independent of LV's edFrame/esFrame above —
+  // shown separately rather than assumed to match (they can genuinely differ).
+  const rvEdFrame = rvStrain?.edFrameIndex ?? null;
+  const rvEsFrame = rvStrain?.esFrameIndex ?? null;
   const rvRegionFrames = (pick: (r: { strain: number | null; gas?: number | null }) => number | null | undefined) =>
     sortedRvFrames.map((f) => {
       const byRegion = new Map(f.regions.map((r) => [r.region, pick(r) ?? null]));
@@ -255,27 +311,53 @@ export default function ReportPage() {
   // own per-frame data needs (see each page's `*PageCount` helper) instead of
   // a fixed literal, since frame counts vary per project (and per how many
   // frames the user chose to compute strain for).
-  const wtCyclePages = wallThicknessCyclePageCount(wtFrames.length, rvFacFrames.length);
-  const strainPages = strainAnalysisPageCount(strainRows.length);
-  const lvRegionalPages = lvRegionalStrainPageCount(Math.max(lvGrsFrames.length, lvGcsFrames.length));
-  const rvRegionalPages = rvRegionalStrainPageCount(rvGcsFrames.length);
-  const rvCavityPages = rvCavityGeometryPageCount(rv?.rv_volumes_ml?.length ?? 0);
-  const mriPages = hasMriOverlay ? mriOverlayPageCount(totalFrames) : 0;
+  let totalPages: number;
+  let executiveSummaryPageNumber: number;
+  let wallThicknessPageNumber = 0;
+  let wallThicknessCyclePageNumber = 0;
+  let strainAnalysisPageNumber = 0;
+  let lvRegionalPageNumber = 0;
+  let rvRegionalPageNumber = 0;
+  let mriOverlayPageNumber = 0;
+  // Default mode's own single-page sections (no per-frame chunking needed).
+  let lvWallThicknessEdEsPageNumber = 0;
+  let rvCavityAreaEdEsPageNumber = 0;
+  let lvStrainEdEsPageNumber = 0;
+  let rvStrainEdEsPageNumber = 0;
+  let mriOverlayEdEsPageNumber = 0;
 
-  let nextPage = 1;
-  const executiveSummaryPageNumber = nextPage++;
-  const heartMetricsPageNumber = nextPage++;
-  const wallThicknessPageNumber = nextPage++;
-  const wallThicknessCyclePageNumber = nextPage; nextPage += wtCyclePages;
-  const strainAnalysisPageNumber = nextPage; nextPage += strainPages;
-  const lvRegionalPageNumber = nextPage; nextPage += lvRegionalPages;
-  const rvRegionalPageNumber = nextPage; nextPage += rvRegionalPages;
-  const rvCavityPageNumber = nextPage; nextPage += rvCavityPages;
-  const diseasePatternPageNumber = nextPage++;
-  const referenceCriteriaPageNumber = nextPage++;
-  const methodologyPageNumber = nextPage++;
-  const mriOverlayPageNumber = nextPage; nextPage += mriPages;
-  const totalPages = nextPage - 1;
+  if (mode === "full") {
+    // Running page count — each section claims as many physical sheets as its
+    // own per-frame data needs (see each page's `*PageCount` helper) instead of
+    // a fixed literal, since frame counts vary per project (and per how many
+    // frames the user chose to compute strain for).
+    const wtCyclePages = wallThicknessCyclePageCount(wtFrames.length, rvFacFrames.length);
+    const strainPages = strainAnalysisPageCount(strainRows.length);
+    const lvRegionalPages = lvRegionalStrainPageCount(Math.max(lvGrsFrames.length, lvGcsFrames.length));
+    const rvRegionalPages = rvRegionalStrainPageCount(rvGcsFrames.length);
+    const mriPages = hasMriOverlay ? mriOverlayPageCount(totalFrames) : 0;
+
+    let nextPage = 1;
+    executiveSummaryPageNumber = nextPage++;
+    wallThicknessPageNumber = nextPage++;
+    wallThicknessCyclePageNumber = nextPage; nextPage += wtCyclePages;
+    strainAnalysisPageNumber = nextPage; nextPage += strainPages;
+    lvRegionalPageNumber = nextPage; nextPage += lvRegionalPages;
+    rvRegionalPageNumber = nextPage; nextPage += rvRegionalPages;
+    mriOverlayPageNumber = nextPage; nextPage += mriPages;
+    totalPages = nextPage - 1;
+  } else {
+    // Default review: every section is exactly one physical page (ED+ES paired
+    // on the same sheet, not chunked per frame) — ~5-7 pages total.
+    let nextPage = 1;
+    executiveSummaryPageNumber = nextPage++;
+    lvWallThicknessEdEsPageNumber = nextPage++;
+    rvCavityAreaEdEsPageNumber = nextPage++;
+    lvStrainEdEsPageNumber = nextPage++;
+    rvStrainEdEsPageNumber = nextPage++;
+    if (hasMriOverlay) mriOverlayEdEsPageNumber = nextPage++;
+    totalPages = nextPage - 1;
+  }
 
   return (
     <div className="min-h-screen bg-muted/20 pb-16">
@@ -286,9 +368,14 @@ export default function ReportPage() {
           their real bottom edge every frame. */}
       <div className="vh-no-print sticky z-20 border-b border-border bg-background/95 backdrop-blur" style={{ top: clearance }}>
         <div className="flex items-center justify-between px-4 py-2.5">
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => router.push(`/project/${projectId}/landmark-detection`)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-xs"
+            onClick={() => router.push(cameFromProject ? `/project/${projectId}` : `/project/${projectId}/landmark-detection`)}
+          >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Back to Landmarks
+            {cameFromProject ? "Back to Project" : "Back to Landmarks"}
           </Button>
           <div className="text-center">
             <p className="text-xs font-semibold">Cardiac Functional Analysis Report</p>
@@ -301,13 +388,47 @@ export default function ReportPage() {
               <Download className="h-3.5 w-3.5" />
               Download CSV
             </Button>
-            <Button size="sm" className="gap-1.5 text-xs" onClick={handlePrint}>
+            <Button size="sm" className="gap-1.5 text-xs" onClick={() => setPrintDialogOpen(true)}>
               <Printer className="h-3.5 w-3.5" />
               Print / Save as PDF
             </Button>
           </div>
         </div>
       </div>
+
+      {/* Which report to print — asked here instead of a persistent header
+          toggle, per direct request (2026-11-14): the mode choice is a
+          one-time decision at export time, not a standing view setting. */}
+      <Dialog open={printDialogOpen} onOpenChange={setPrintDialogOpen}>
+        <DialogContent className="vh-no-print sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Which report do you want to print?</DialogTitle>
+            <DialogDescription>Choose a report, then the print/save-as-PDF dialog opens automatically.</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => choosePrintMode("default")}
+              className="rounded-lg border border-border p-3 text-left transition-colors hover:border-primary hover:bg-muted"
+            >
+              <p className="text-sm font-semibold text-foreground">Summary Report (ED/ES)</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Heart metrics and selected end-diastolic/end-systolic maps and tables.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => choosePrintMode("full")}
+              className="rounded-lg border border-border p-3 text-left transition-colors hover:border-primary hover:bg-muted"
+            >
+              <p className="text-sm font-semibold text-foreground">Full Research Report (All Frames)</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Complete analysis, including all-frame maps, full-cycle measurements, and detailed regional tables.
+              </p>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* A later segmentation run exists but hasn't been analysed, so the
           figures below come from an earlier run. Surfaced rather than silently
@@ -404,128 +525,157 @@ export default function ReportPage() {
               rvPeakGcs={rvPeakGcs}
               rvPeakGas={rvPeakGasValue}
               rvFac={rvPeakFacValue}
-              healthStatusText={healthStatus?.status ?? null}
-              rvHealthStatusText={rvHealthCurrent?.status ?? null}
-              phenotypeHeadline={patternGatesHeadline}
-              isRealData
-            />
-            <HeartMetricsPage
-              patientLabel={patientLabel}
-              pageNumber={heartMetricsPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              bsaM2={bsaM2}
-              heightCm={bsaM2 != null ? heightNum : null}
-              weightKg={bsaM2 != null ? weightNum : null}
-              edv={measurements?.EDV ?? null}
-              esv={measurements?.ESV ?? null}
-              ef={measurements?.EF ?? null}
-              strokeVolume={measurements?.StrokeVolume ?? null}
               lvMassG={lvVolumes?.LVMassG ?? null}
-              maxWallThicknessMm={lvVolumes?.MaxWallThicknessMm ?? null}
-              rvEdv={rv?.RVEDV ?? null}
-              rvEsv={rv?.RVESV ?? null}
-              rvEf={rv?.RVEF ?? null}
-              rvSv={rv?.RV_SV ?? null}
-              rvFac={rvPeakFacValue}
-              rvHealthStatus={rvHealthCurrent}
+              isRealData
+              mode={mode}
+              lvEdFrame={edFrame}
+              lvEsFrame={esFrame}
+              rvEdFrame={rvEdFrame}
+              rvEsFrame={rvEsFrame}
             />
-            <WallThicknessCavityAreaPage
-              patientLabel={patientLabel}
-              pageNumber={wallThicknessPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              edWallThicknessMm={doc?.bullseye?.segment_values}
-              edFrameIndex={edFrame}
-              rvFacRings={rvEdEsFacValues.rings}
-              rvFacGlobal={rvEdEsFacValues.global}
-              rvEsFrameIndex={rvStrain?.esFrameIndex ?? null}
-            />
-            <WallThicknessCyclePage
-              patientLabel={patientLabel}
-              pageNumber={wallThicknessCyclePageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              frames={wtFrames}
-              rvFacFrames={rvFacFrames}
-              edFrameIndex={edFrame}
-              esFrameIndex={esFrame}
-            />
-            <StrainAnalysisPage
-              patientLabel={patientLabel}
-              pageNumber={strainAnalysisPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              lvPeakGrs={measurements?.PeakGRS ?? null}
-              lvPeakGcs={measurements?.PeakGCS ?? null}
-              rvPeakGcs={rvPeakGcs}
-              rvPeakGas={rvPeakGasValue}
-              rvPeakSeptalGcs={rvPeakSeptalGcs(rvStrain, rvStrainSeries)}
-              rows={strainRows}
-            />
-            <LvRegionalStrainPage
-              patientLabel={patientLabel}
-              pageNumber={lvRegionalPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              grsFrames={lvGrsFrames}
-              gcsFrames={lvGcsFrames}
-              edFrameIndex={edFrame}
-              esFrameIndex={esFrame}
-            />
-            <RvRegionalStrainPage
-              patientLabel={patientLabel}
-              pageNumber={rvRegionalPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              gcsFrames={rvGcsFrames}
-              gasFrames={rvGasFrames}
-              edFrameIndex={edFrame}
-              esFrameIndex={esFrame}
-            />
-            <RvCavityGeometryPage
-              patientLabel={patientLabel}
-              pageNumber={rvCavityPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              rvEdv={rv?.RVEDV ?? null}
-              rvEsv={rv?.RVESV ?? null}
-              rvVolumesMl={rv?.rv_volumes_ml}
-            />
-            <DiseasePatternSimilarityPage
-              patientLabel={patientLabel}
-              pageNumber={diseasePatternPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-              patternGates={patternGates}
-            />
-            <ReferenceCriteriaPage
-              patientLabel={patientLabel}
-              pageNumber={referenceCriteriaPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-            />
-            <MethodologyPage
-              patientLabel={patientLabel}
-              pageNumber={methodologyPageNumber}
-              totalPages={totalPages}
-              generatedAt={generatedAt}
-            />
-            {hasMriOverlay && (
-              <MriOverlayPage
-                projectId={projectId}
-                patientLabel={patientLabel}
-                pageNumber={mriOverlayPageNumber}
-                totalPages={totalPages}
-                generatedAt={generatedAt}
-                maskDocId={doc?._id}
-                width={projectData?.dimensions?.width}
-                height={projectData?.dimensions?.height}
-                totalSlices={projectData?.dimensions?.slices}
-                totalFrames={totalFrames}
-                edFrame={edFrame}
-                esFrame={esFrame}
-              />
+            {mode === "full" ? (
+              <>
+                <WallThicknessCavityAreaPage
+                  patientLabel={patientLabel}
+                  pageNumber={wallThicknessPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Full Research (All Frames)"
+                  edWallThicknessMm={lvEdWallThicknessMm}
+                  edFrameIndex={edFrame}
+                  rvFacRings={rvEdEsFacValues.rings}
+                  rvFacGlobal={rvEdEsFacValues.global}
+                  rvEsFrameIndex={rvStrain?.esFrameIndex ?? null}
+                />
+                <WallThicknessCyclePage
+                  patientLabel={patientLabel}
+                  pageNumber={wallThicknessCyclePageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Full Research (All Frames)"
+                  frames={wtFrames}
+                  rvFacFrames={rvFacFrames}
+                  edFrameIndex={edFrame}
+                  esFrameIndex={esFrame}
+                />
+                <StrainAnalysisPage
+                  patientLabel={patientLabel}
+                  pageNumber={strainAnalysisPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Full Research (All Frames)"
+                  lvPeakGrs={measurements?.PeakGRS ?? null}
+                  lvPeakGcs={measurements?.PeakGCS ?? null}
+                  rvPeakGcs={rvPeakGcs}
+                  rvPeakGas={rvPeakGasValue}
+                  rvPeakSeptalGcs={rvPeakSeptalGcs(rvStrain, rvStrainSeries)}
+                  rows={strainRows}
+                />
+                <LvRegionalStrainPage
+                  patientLabel={patientLabel}
+                  pageNumber={lvRegionalPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Full Research (All Frames)"
+                  grsFrames={lvGrsFrames}
+                  gcsFrames={lvGcsFrames}
+                  edFrameIndex={edFrame}
+                  esFrameIndex={esFrame}
+                />
+                <RvRegionalStrainPage
+                  patientLabel={patientLabel}
+                  pageNumber={rvRegionalPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Full Research (All Frames)"
+                  gcsFrames={rvGcsFrames}
+                  gasFrames={rvGasFrames}
+                  edFrameIndex={edFrame}
+                  esFrameIndex={esFrame}
+                />
+                {hasMriOverlay && (
+                  <MriOverlayPage
+                    projectId={projectId}
+                    patientLabel={patientLabel}
+                    pageNumber={mriOverlayPageNumber}
+                    totalPages={totalPages}
+                    generatedAt={generatedAt}
+                    modeLabel="Full Research (All Frames)"
+                    maskDocId={doc?._id}
+                    width={projectData?.dimensions?.width}
+                    height={projectData?.dimensions?.height}
+                    totalSlices={projectData?.dimensions?.slices}
+                    totalFrames={totalFrames}
+                    edFrame={edFrame}
+                    esFrame={esFrame}
+                  />
+                )}
+              </>
+            ) : (
+              <>
+                <LvWallThicknessEdEsPage
+                  patientLabel={patientLabel}
+                  pageNumber={lvWallThicknessEdEsPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Summary (ED/ES)"
+                  edWallThicknessMm={lvEdWallThicknessMm}
+                  esWallThicknessMm={lvEsWallThicknessMm}
+                  edFrameIndex={edFrame}
+                  esFrameIndex={esFrame}
+                />
+                <RvCavityAreaEdEsPage
+                  patientLabel={patientLabel}
+                  pageNumber={rvCavityAreaEdEsPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Summary (ED/ES)"
+                  rvRegions={rvStrain?.regions}
+                  rvFacRings={rvEdEsFacValues.rings}
+                  rvFacGlobal={rvEdEsFacValues.global}
+                  edFrameIndex={rvEdFrame}
+                  esFrameIndex={rvEsFrame}
+                />
+                <LvStrainEdEsPage
+                  patientLabel={patientLabel}
+                  pageNumber={lvStrainEdEsPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Summary (ED/ES)"
+                  esGcs={lvEsGcs}
+                  esGrs={lvEsGrs}
+                  edFrameIndex={edFrame}
+                  esFrameIndex={esFrame}
+                />
+                <RvStrainEdEsPage
+                  patientLabel={patientLabel}
+                  pageNumber={rvStrainEdEsPageNumber}
+                  totalPages={totalPages}
+                  generatedAt={generatedAt}
+                  modeLabel="Summary (ED/ES)"
+                  esGcs={rvEsGcs}
+                  esGas={rvEsGas}
+                  septalGcs={rvStrain?.global_rv_septal_gcs ?? null}
+                  edFrameIndex={rvEdFrame}
+                  esFrameIndex={rvEsFrame}
+                />
+                {hasMriOverlay && (
+                  <MriOverlayEdEsPage
+                    projectId={projectId}
+                    patientLabel={patientLabel}
+                    pageNumber={mriOverlayEdEsPageNumber}
+                    totalPages={totalPages}
+                    generatedAt={generatedAt}
+                    modeLabel="Summary (ED/ES)"
+                    maskDocId={doc?._id}
+                    width={projectData?.dimensions?.width}
+                    height={projectData?.dimensions?.height}
+                    totalSlices={projectData?.dimensions?.slices}
+                    edFrame={edFrame}
+                    esFrame={esFrame}
+                  />
+                )}
+              </>
             )}
           </>
         )}

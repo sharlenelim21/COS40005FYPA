@@ -41,7 +41,7 @@ export function mriOverlayPageCount(totalFrames: number): number {
  * SVG illustration, so it prints identically to what `window.print()` sees on
  * screen and survives being embedded in a saved PDF.
  */
-async function renderFrame(
+export async function renderFrame(
   mriUrl: string,
   decodedMasks: Record<string, Uint8Array>,
   maskKeyPrefix: string,
@@ -102,6 +102,7 @@ export function MriOverlayPage({
   pageNumber,
   totalPages,
   generatedAt,
+  modeLabel,
   maskDocId,
   width,
   height,
@@ -116,6 +117,7 @@ export function MriOverlayPage({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  modeLabel?: string;
   /** `_id` of the editable mask document to pull raw RLE frames from — the
    *  hook's typed MaskDoc omits `frames`, so the raw doc is fetched separately
    *  and matched by this id. Always resolves to the newest saved mask (see
@@ -210,6 +212,7 @@ export function MriOverlayPage({
         totalPages={totalPages}
         patientLabel={patientLabel}
         statusLabel="Complete"
+        modeLabel={modeLabel}
         title="Segmentation Visualization"
         subtitle={subtitle}
         generatedAt={generatedAt}
@@ -235,6 +238,7 @@ export function MriOverlayPage({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title={`Segmentation Visualization${panelChunks.length > 1 ? ` (${ci + 1} of ${panelChunks.length})` : ""}`}
           subtitle={subtitle}
           generatedAt={generatedAt}
@@ -247,13 +251,21 @@ export function MriOverlayPage({
                   {/* eslint-disable-next-line @next/next/no-img-element -- static
                       raster snapshot baked once via canvas.toDataURL, not a
                       Next-optimized asset */}
+                  {/* ReportPageFrame's page height is min-h-[297mm], a FLOOR not a cap -- a
+                      natural-aspect MRI image can render taller than its column is wide, and at
+                      3 rows that was enough to overflow the available A4 height and spill onto a
+                      new physical page via print pagination, leaving the rest of that page blank
+                      before the next ReportPageFrame's own forced break kicked in (reported live,
+                      2026-11-14). max-h + object-contain caps each image to a budget that always
+                      leaves 3 rows + caption room on one sheet, regardless of the MRI's own aspect
+                      ratio, instead of letting it grow unbounded. */}
                   <img
                     src={p.dataUrl}
                     alt={`Frame ${p.frame} — MRI with segmentation overlay`}
-                    className={`w-full rounded-lg border-2 ${tag ? "border-teal-500" : "border-gray-300"}`}
+                    className={`w-full max-h-[62mm] object-contain rounded-lg border-2 ${tag ? "border-teal-500" : "border-gray-300"}`}
                   />
-                  <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-gray-900">
-                    Frame {p.frame}{tag && <span className="ml-1 rounded-full bg-teal-100 px-1.5 py-0.5 text-teal-700">{tag}</span>}
+                  <figcaption className="mt-1 text-[12px] font-bold uppercase tracking-wide text-gray-900">
+                    Frame {p.frame + 1}{tag && <span className="ml-1 rounded-full bg-teal-100 px-1.5 py-0.5 text-teal-700">{tag}</span>}
                   </figcaption>
                 </figure>
               );
@@ -266,13 +278,14 @@ export function MriOverlayPage({
                 {ANATOMICAL_LABELS.map((label) => (
                   <div key={label} className="flex items-center gap-1.5">
                     <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: LABEL_COLORS[label] }} />
-                    <span className="text-[11px] text-gray-600">{LABEL_NAMES[label]}</span>
+                    <span className="text-[12px] text-gray-600">{LABEL_NAMES[label]}</span>
                   </div>
                 ))}
               </div>
-              <p className="mt-2 text-[11px] leading-snug text-gray-600">
+              <p className="mt-2 text-[12px] leading-snug text-gray-600">
                 Overlay generated directly from the model&apos;s stored segmentation masks at the frame and slice
                 shown; not a schematic illustration. ED, Mid, and ES frames are outlined and tagged.
+                Frame numbers are one-based.
               </p>
             </div>
           )}
