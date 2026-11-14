@@ -6,6 +6,7 @@ import { HelpCircle, Loader2, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { isFaqHiddenRoute } from "@/lib/floating-widgets";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -17,7 +18,7 @@ interface FaqItem {
 export function FloatingFAQButton() {
   const pathname = usePathname();
   const isDocPage = pathname?.startsWith("/doc") ?? false;
-  const isAdminRoute = (pathname?.startsWith("/admin") || pathname?.startsWith("/extend-training")) ?? false;
+  const isAdminRoute = isFaqHiddenRoute(pathname);
 
   const [open, setOpen] = useState(false);
   const [senderName, setSenderName] = useState("");

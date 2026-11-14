@@ -1,8 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { Heart, Mail, MapPin } from "lucide-react";
-import { PreviousTeam } from "./previous-team";
+import { Heart, MapPin } from "lucide-react";
+import { FooterSection } from "./footer-section";
+import { CurrentTeamGrid } from "./current-team";
+import { PreviousTeamGrid } from "./previous-team";
+
+const NAV_LINKS = [
+  { href: "/", label: "Home" },
+  { href: "/about", label: "About Us" },
+  { href: "/doc", label: "User Guide" },
+  { href: "/sample", label: "Sample NIfTI files" },
+  { href: "/policy", label: "Privacy Policy" },
+] as const;
 
 export default function Footer({ minimal = false }: { minimal?: boolean }) {
   if (minimal) {
@@ -21,152 +31,52 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
           "container mx-auto" -- a fixed max-width diverges from it on wide monitors (1536px+),
           which is why the footer sat narrower/more inset than the cards above it. */}
       <div className="container mx-auto px-4 md:px-6 py-8">
-        {/* Main Content -- an explicit grid, not flex-wrap: flex-wrap let the wide Logo/Brand block
-            crowd "Contact Us"/"Team" off row 1 onto their own row, leaving a big empty gap to the
-            right of Navigation. A grid reserves a column for each of the 4 sections up front, so
-            nothing can push another section onto a different row by itself. */}
-        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 xl:grid-cols-4">
-          {/* Logo / Brand */}
-          <div className="min-w-0 space-y-4">
+        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="min-w-0 space-y-4 sm:col-span-2 lg:col-span-1">
             <div className="flex items-center space-x-2">
               <Heart className="h-8 w-8 text-primary" />
               <span className="text-2xl font-bold text-foreground">VisHeart</span>
             </div>
-            <p className="text-muted-foreground">
+            <p className="text-muted-foreground max-w-prose">
               Advanced AI-powered cardiac segmentation platform for medical imaging analysis. Developed at Swinburne University for research and clinical applications.
             </p>
-
-            {/* Location Section */}
-            <div className="space-y-2">
-              <div className="flex items-center space-x-2 text-sm">
-                <MapPin className="h-4 w-4 text-primary" />
-                <span className="font-medium text-foreground">Visit Us</span>
-              </div>
-              <div className="text-sm text-muted-foreground">
-                <p>Swinburne University of Technology Sarawak </p>
-                <p>Jalan Simpang Tiga, Kuching</p>
-                <p>Sarawak, Malaysia</p>
-                <a href="https://maps.google.com/?q=1.5315896,110.3568957" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary transition-colors underline">
-                  View on Google Maps
-                </a>
-              </div>
-            </div>
           </div>
 
-          {/* Navigation Links */}
+          <FooterSection id="footer-navigation" title="Navigation">
+            <nav aria-label="Footer" className="flex flex-col space-y-2">
+              {NAV_LINKS.map((link) => (
+                <Link key={link.href} href={link.href} className="text-sm text-muted-foreground hover:text-primary transition-colors">
+                  {link.label}
+                </Link>
+              ))}
+            </nav>
+          </FooterSection>
+
           <div className="min-w-0 space-y-3">
-            <h3 className="text-sm font-semibold text-foreground">Navigation</h3>
-            <div className="flex flex-col space-y-2">
-              <Link href="/" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                Home
-              </Link>
-              <Link href="/about" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                About Us
-              </Link>
-              <Link href="/doc" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                User Guide
-              </Link>
-              <Link href="/sample" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                Sample NIfTI files
-              </Link>
-              <Link href="/policy" className="text-sm text-muted-foreground hover:text-primary transition-colors">
-                Privacy Policy
-              </Link>
+            <div className="flex items-center space-x-2 text-sm">
+              <MapPin className="h-4 w-4 text-primary" />
+              <h3 className="font-semibold text-foreground">Visit Us</h3>
             </div>
-          </div>
-
-          {/* Contact Us Section */}
-          <div className="min-w-0 space-y-3">
-            <h3 className="text-sm font-semibold text-foreground">Contact Us</h3>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2 text-sm">
-                  <Mail className="h-4 w-4 text-primary" />
-                  <span className="font-medium text-foreground">Dr. Miko Chang M.L.</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Supervisor</div>
-                <div className="text-xs ml-6 break-all">
-                  <a href="mailto:mchang@swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    mchang@swinburne.edu.my
-                  </a>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2 text-sm">
-                  <Mail className="h-4 w-4 text-primary" />
-                  <span className="font-medium text-foreground">Kathy Wong H.Y.</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Co-Supervisor</div>
-                <div className="text-xs ml-6 break-all">
-                  <a href="mailto:hywong@swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    hywong@swinburne.edu.my
-                  </a>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2 text-sm">
-                  <Mail className="h-4 w-4 text-primary" />
-                  <span className="font-medium text-foreground">Sharlene Lim</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
-                <div className="text-xs ml-6 break-all">
-                  <a href="mailto:102783112@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    102783112@students.swinburne.edu.my
-                  </a>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2 text-sm">
-                  <Mail className="h-4 w-4 text-primary" />
-                  <span className="font-medium text-foreground">Ngui Jia Yi</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
-                <div className="text-xs ml-6 break-all">
-                  <a href="mailto:102783222@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    102783222@students.swinburne.edu.my
-                  </a>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Team Members Section */}
-          <div className="min-w-0 space-y-3">
-            <h3 aria-hidden="true" className="invisible hidden text-sm font-semibold text-foreground sm:block">Team</h3>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2 text-sm">
-                  <Mail className="h-4 w-4 text-primary" />
-                  <span className="font-medium text-foreground">Liew Mei Qi</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Software Developer</div>
-                <div className="text-xs ml-6 break-all">
-                  <a href="mailto:102780236@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    102780236@students.swinburne.edu.my
-                  </a>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2 text-sm">
-                  <Mail className="h-4 w-4 text-primary" />
-                  <span className="font-medium text-foreground">Stefani Lee Shi Huey</span>
-                </div>
-                <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
-                <div className="text-xs ml-6 break-all">
-                  <a href="mailto:102783196@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
-                    102783196@students.swinburne.edu.my
-                  </a>
-                </div>
-              </div>
+            <div className="text-sm text-muted-foreground">
+              <p>Swinburne University of Technology Sarawak </p>
+              <p>Jalan Simpang Tiga, Kuching</p>
+              <p>Sarawak, Malaysia</p>
+              <a href="https://maps.google.com/?q=1.5315896,110.3568957" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary transition-colors underline">
+                View on Google Maps
+              </a>
             </div>
           </div>
         </div>
 
-        <PreviousTeam />
+        <div className="mt-6 sm:mt-8 sm:space-y-8 sm:border-t sm:border-border sm:pt-6">
+          <FooterSection id="footer-current-team" title="Current Team">
+            <CurrentTeamGrid />
+          </FooterSection>
+
+          <FooterSection id="footer-previous-team" title="Previous Team" subtitle="Original VisHeart developers">
+            <PreviousTeamGrid />
+          </FooterSection>
+        </div>
 
         {/* Copyright */}
         <div className="mt-6 pt-6 border-t border-border text-center">

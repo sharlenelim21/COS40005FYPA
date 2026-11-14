@@ -60,8 +60,6 @@ function TemplateCard({ t }: { t: TemplateProjectSummary }) {
           <dd className="text-right font-medium tabular-nums">{fmt(t.metrics.lvedv, 0, " mL")}</dd>
           <dt className="text-muted-foreground">LV mass</dt>
           <dd className="text-right font-medium tabular-nums">{fmt(t.metrics.lvMass, 0, " g")}</dd>
-          <dt className="text-muted-foreground">RV ejection fraction</dt>
-          <dd className="text-right font-medium tabular-nums">{fmt(t.metrics.rvef, 0, "%")}</dd>
         </dl>
         <div className="mt-auto flex items-center justify-between gap-2">
           <span className="text-muted-foreground text-xs">

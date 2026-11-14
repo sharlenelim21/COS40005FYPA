@@ -57,7 +57,8 @@ import { LoadingProject } from "@/components/project/LoadingProject";
 import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
 import { useAuth } from "@/context/auth-context";
 import { AffineMatrixDisplay } from "@/components/ui/AffineMatrixDisplay";
-import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
+import { ReconstructionConfigDialog, ReconstructionConfig, type ReconstructionBatchConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
+import { toast } from "sonner";
 import { JobProgress, KineticButtonFill, KineticProgress, ProgressMeter, hasProgressReading, FinishingProgress, isFinishingReading } from "@/components/ui/kinetic-progress";
 import { buildReconstructionRequest } from "@/lib/reconstructionDefaults";
 import { useAutoPipelineChain, type PipelineSelection } from "@/hooks/useAutoPipelineChain";
@@ -65,6 +66,7 @@ import { StartPipelineDialog } from "@/components/project/StartPipelineDialog";
 import { ProjectMetaLine } from "@/components/project/ProjectMetaLine";
 import { ExportReconstructionButton } from "@/components/project/ExportReconstructionButton";
 import { landmarkApi } from "@/lib/landmarkApi";
+import { formatTrimmed } from "@/lib/format-utils";
 
 // Types
 import * as ProjectTypes from "@/types/project";
@@ -586,6 +588,8 @@ function ProjectPageInner() {
     refreshActiveReconstructionJobs,
   });
   const [showPipelineDialog, setShowPipelineDialog] = useState(false);
+  const jobsCardRef = useRef<HTMLDivElement>(null);
+  const [highlightJobs, setHighlightJobs] = useState(false);
   const [expandedJobGroups, setExpandedJobGroups] = useState<Set<string>>(() => new Set());
   // Trash-icon popup on a reconstruction card with both chambers: "Delete all" vs "Delete RV only".
   const [deleteChoiceOpen, setDeleteChoiceOpen] = useState(false);
@@ -991,6 +995,62 @@ function ProjectPageInner() {
       setIsStartingReconstruction(false);
     }
   };
+  const handleStartReconstructions = async (batch: ReconstructionBatchConfig) => {
+    const { targets, ...settings } = batch;
+    if (targets.length === 0) return;
+    if (targets.length === 1) {
+      await handleStartReconstruction({ ...settings, ...targets[0] });
+      return;
+    }
+
+    setIsStartingReconstruction(true);
+    setReconstructionError(null);
+    let started = 0;
+    let alreadyRunning = 0;
+    const failures: string[] = [];
+
+    for (const target of targets) {
+      const label = `${target.segmentationModel === "medsam" ? "MedSAM" : "UNet"} ${target.chamber.toUpperCase()}`;
+      try {
+        await reconstructionApi.startReconstruction(
+          projectId,
+          buildReconstructionRequest({ ...settings, ...target }, projectData.name),
+        );
+        started += 1;
+      } catch (error: unknown) {
+        const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response;
+        if (response?.status === 409) {
+          alreadyRunning += 1;
+        } else {
+          failures.push(`${label}: ${response?.data?.message || "could not start"}`);
+        }
+      }
+    }
+
+    setShowReconstructionDialog(false);
+    await refreshReconstructionJobs();
+    await refreshActiveReconstructionJobs();
+    setIsStartingReconstruction(false);
+
+    const summary = [
+      started ? `Started ${started}` : null,
+      alreadyRunning ? `${alreadyRunning} already running` : null,
+      failures.length ? `${failures.length} failed` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    if (failures.length) {
+      toast.error(summary, { description: failures.join("; ") });
+    } else {
+      toast.success(summary, { description: "They run one after another. Follow them in Processing Jobs." });
+    }
+
+    const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    jobsCardRef.current?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "center" });
+    setHighlightJobs(true);
+    window.setTimeout(() => setHighlightJobs(false), 2500);
+  };
+
   const STAGE_BUSY_CLASS = "relative overflow-hidden justify-start h-auto py-4 disabled:opacity-100";
   const segBusyText = segProgress
     ? "Available when it finishes"
@@ -1908,22 +1968,22 @@ function ProjectPageInner() {
 
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel X</p>
-                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.x || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.x || 0} mm`}>{formatTrimmed(projectData.voxelsize?.x, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Y</p>
-                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.y || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.y || 0} mm`}>{formatTrimmed(projectData.voxelsize?.y, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Z</p>
-                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.z || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.z || 0} mm`}>{formatTrimmed(projectData.voxelsize?.z, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Temporal</p>
-                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.t || 0} ms</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.t || 0} ms`}>{formatTrimmed(projectData.voxelsize?.t, 2)} ms</p>
                   </div>
                 </div>
 
@@ -2191,7 +2251,10 @@ function ProjectPageInner() {
 
 
             {/* Jobs Section - Redesigned */}
-            <Card className="gap-3">
+            <Card
+              ref={jobsCardRef}
+              className={`gap-3 transition-shadow duration-500 ${highlightJobs ? "ring-info ring-2 ring-offset-2" : ""}`}
+            >
               <CardHeader className="pb-0">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Activity className="h-4 w-4" />
@@ -2348,7 +2411,7 @@ function ProjectPageInner() {
       <ReconstructionConfigDialog
         open={showReconstructionDialog}
         onOpenChange={setShowReconstructionDialog}
-        onStart={handleStartReconstruction}
+        onStart={handleStartReconstructions}
         isLoading={isStartingReconstruction}
         totalFrames={projectData?.dimensions?.frames || 1}
         availableModels={availableReconstructionModels}

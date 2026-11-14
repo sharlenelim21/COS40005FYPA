@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import type { TooltipPayload } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw, XCircle, HelpCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -297,7 +298,7 @@ function RegionalCurveTooltip({
 }: {
   active?: boolean;
   label?: number | string;
-  payload?: { dataKey?: string | number; value?: number | string | null }[];
+  payload?: TooltipPayload;
   focus: number | null;
   dataKeyPrefix: "s" | "r";
   labelFor: (id: number) => string;
@@ -2043,7 +2044,7 @@ export function InteractiveReport({
             {/* Clicking anywhere in the chart area that isn't a wedge, a curve
                 or a control clears the selection. */}
             <div
-              className="grid grid-cols-1 gap-6 sm:grid-cols-[260px_1fr]"
+              className="grid grid-cols-1 gap-6 lg:grid-cols-[260px_1fr]"
               onClick={() => setSelectedSeg(null)}
             >
               <div>
@@ -2242,7 +2243,7 @@ export function InteractiveReport({
               : "No RV regional strain computed for this model yet — run RV strain from the Landmark Detection page."}
           </p>
         ) : (
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-[420px_1fr]">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[420px_1fr]">
             {/* Same crescent shape the Strain/Structure tabs draw RV with —
                 reused (not reimplemented) so no view can ever disagree, and
                 the two rings of real data (basal, mid) plus the honest

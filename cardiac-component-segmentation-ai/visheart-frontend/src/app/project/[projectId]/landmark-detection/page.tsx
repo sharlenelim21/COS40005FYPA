@@ -31,7 +31,6 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
@@ -79,6 +78,7 @@ import {
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 import { AhaBullseye, BullseyeScaleBar, finiteRange, type BullseyeHover } from "@/components/landmark/AhaBullseye";
 import { landmarkApi, computeStrainFromFrames, computeRvStrainFromFrames } from "@/lib/landmarkApi";
+import { UnsavedChangesDialog } from "@/components/common/UnsavedChangesDialog";
 
 const LandmarkSliceViewer = dynamic(
   () => import("@/components/landmark/LandmarkSliceViewer").then((m) => m.LandmarkSliceViewer),
@@ -208,6 +208,8 @@ export default function LandmarkDetectionPage() {
   // Templates tab): results only — nothing is run, recomputed or edited from
   // this page. The server rejects those requests for templates as well.
   const readOnly = !!(projectData?.readOnly || projectData?.isTemplate);
+  const lvOnly = !!projectData?.isTemplate;
+  const projectLoaded = !!projectData;
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const { user } = useAuth();
@@ -1528,13 +1530,15 @@ export default function LandmarkDetectionPage() {
   const autoPickedChamberFocus = useRef(false);
   useEffect(() => {
     if (autoPickedChamberFocus.current) return;
+    if (!projectLoaded) return;
     if (!hasLvReconstruction && !hasRvReconstruction) return;
     autoPickedChamberFocus.current = true;
+    if (lvOnly) return;
     if (hasLvReconstruction || !hasRvReconstruction) return; // LV available (or neither) -- the "LV" default already matches
     setStructureVentricle("RV");
     setChamberFocus("RV");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasLvReconstruction, hasRvReconstruction]);
+  }, [hasLvReconstruction, hasRvReconstruction, projectLoaded, lvOnly]);
 
   // Warm the LV reconstruction's motion build as soon as the page loads, the same way
   // structureRvMesh above does for RV. Without this, LV's motion only starts building
@@ -2152,6 +2156,7 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
+            lvOnly={lvOnly}
             hasLvReconstruction={hasLvReconstruction}
             hasRvReconstruction={hasRvReconstruction}
             structureStats={currentFrameStructureStats}
@@ -2457,6 +2462,7 @@ export default function LandmarkDetectionPage() {
                   fullCycleProgress={fullCycleProgress}
                   chamberFocus={chamberFocus}
                   onChamberFocusChange={setChamberFocus}
+                  lvOnly={lvOnly}
                   onFullCycleCombinedStrainChange={setFullCycleCombinedStrain}
                 />
               )}
@@ -2566,6 +2572,7 @@ export default function LandmarkDetectionPage() {
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
+            lvOnly={lvOnly}
             hasLvReconstruction={hasLvReconstruction}
             hasRvReconstruction={hasRvReconstruction}
             structureStats={currentFrameStructureStats}
@@ -2610,29 +2617,16 @@ export default function LandmarkDetectionPage() {
         </ResizablePanelGroup>
       </div>
 
-      <AlertDialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              Leaving now will lose your edits to these landmarks. Save first, or leave anyway?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Go back and save</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const action = pendingNavigation;
-                setPendingNavigation(null);
-                action?.();
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Leave anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <UnsavedChangesDialog
+        open={pendingNavigation !== null}
+        description="Leaving now will lose your edits to these landmarks. Save first, or leave anyway?"
+        onStay={() => setPendingNavigation(null)}
+        onLeave={() => {
+          const action = pendingNavigation;
+          setPendingNavigation(null);
+          action?.();
+        }}
+      />
     </div>
   );
 }
@@ -3244,6 +3238,7 @@ function StrainPreviewPanel({
   fullCycleProgress,
   chamberFocus,
   onChamberFocusChange,
+  lvOnly = false,
   onFullCycleCombinedStrainChange,
 }: {
   selectedStrainType: StrainType;
@@ -3284,6 +3279,7 @@ function StrainPreviewPanel({
    *  chamberFocus state's own comment. */
   chamberFocus: ChamberFocus;
   onChamberFocusChange: (focus: ChamberFocus) => void;
+  lvOnly?: boolean;
   /** Reports Combined + Full cycle's LV/RV Global Strain tile values up to the page, which
    *  passes them straight into LandmarkSidebar's fullCycleCombinedStrain -- those tiles moved
    *  there from this panel's own render (direct request, 2026-11-13), but the underlying
@@ -3782,7 +3778,7 @@ function StrainPreviewPanel({
                 <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">Synced</span>
               </div>
             </div>
-            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} disabledOptions={chamberDisabledOptions} className="mb-2 flex-shrink-0" />
+            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} disabledOptions={chamberDisabledOptions} allowedOptions={lvOnly ? ["LV"] : undefined} className="mb-2 flex-shrink-0" />
             {/* Metric-type control, moved here (main panel, right under the
                 chamber toggle) from the sidebar's chart card -- same idea as
                 Quick ED->ES's own flat toggle (QuickCombinedStrainView, now

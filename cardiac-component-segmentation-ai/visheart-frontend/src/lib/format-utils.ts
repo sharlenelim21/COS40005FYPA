@@ -50,3 +50,8 @@ export function fmt(v: number | null | undefined, digits = 2): string {
   if (v == null || !isFinite(v)) return "—";
   return v.toFixed(digits);
 }
+export function formatTrimmed(v: number | string | null | undefined, digits: number): string {
+  const n = Number(v);
+  if (v == null || v === "" || !Number.isFinite(n)) return "0";
+  return String(parseFloat(n.toFixed(digits)));
+}

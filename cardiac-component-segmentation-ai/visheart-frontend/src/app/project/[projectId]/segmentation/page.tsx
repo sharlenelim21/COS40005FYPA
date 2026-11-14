@@ -40,6 +40,7 @@ import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { useAuth } from "@/context/auth-context";
 import { inferDocModel, SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
 import type { SegmentationModelId } from "@/lib/segmentation-model-utils";
+import { UnsavedChangesDialog } from "@/components/common/UnsavedChangesDialog";
 
 export type { SegmentationModelId };
 
@@ -1703,29 +1704,16 @@ function SegmentationResultsPageInner() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              Leaving now will lose your edits to this mask. Save first, or leave anyway?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Go back and save</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const action = pendingNavigation;
-                setPendingNavigation(null);
-                action?.();
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Leave anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <UnsavedChangesDialog
+        open={pendingNavigation !== null}
+        description="Leaving now will lose your edits to this mask. Save first, or leave anyway?"
+        onStay={() => setPendingNavigation(null)}
+        onLeave={() => {
+          const action = pendingNavigation;
+          setPendingNavigation(null);
+          action?.();
+        }}
+      />
 
       </div>
 

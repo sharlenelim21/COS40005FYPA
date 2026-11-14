@@ -122,10 +122,10 @@ function SidebarContent({
               aria-current={isActive ? "page" : undefined}
               className={cn(
                 "relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
-                "focus-visible:ring-brand focus-visible:ring-2 focus-visible:outline-none",
+                "focus-visible:ring-info focus-visible:ring-2 focus-visible:outline-none",
                 isActive
-                  ? "bg-brand/10 dark:bg-brand/15 text-[color-mix(in_oklab,var(--brand)_80%,black)] dark:text-brand before:bg-brand font-semibold before:absolute before:inset-y-1.5 before:left-0 before:w-1 before:rounded-r-full"
-                  : "text-muted-foreground hover:bg-brand/5 hover:text-[color-mix(in_oklab,var(--brand)_80%,black)] dark:hover:bg-brand/10 dark:hover:text-brand",
+                  ? "bg-info/10 dark:bg-info/15 text-[color-mix(in_oklab,var(--info)_85%,black)] dark:text-[color-mix(in_oklab,var(--info)_80%,white)] before:bg-info font-semibold before:absolute before:inset-y-1.5 before:left-0 before:w-1 before:rounded-r-full"
+                  : "text-muted-foreground hover:bg-info/5 hover:text-[color-mix(in_oklab,var(--info)_85%,black)] dark:hover:bg-info/10 dark:hover:text-[color-mix(in_oklab,var(--info)_80%,white)]",
               )}
               title={item.description}
             >

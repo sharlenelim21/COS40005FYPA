@@ -162,6 +162,7 @@ export interface LandmarkSidebarProps {
   onModelChange?: (m: "unet" | "medsam") => void;
   structureVentricle?: "LV" | "RV";
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
+  lvOnly?: boolean;
   /** Whether this model has an LV / RV reconstruction at all -- see StructureTab's own doc. */
   hasLvReconstruction?: boolean;
   hasRvReconstruction?: boolean;
@@ -237,6 +238,7 @@ export function LandmarkSidebar({
   onModelChange,
   structureVentricle = "LV",
   onStructureVentricleChange,
+  lvOnly = false,
   hasLvReconstruction = true,
   hasRvReconstruction = true,
   structureStats,
@@ -459,6 +461,7 @@ export function LandmarkSidebar({
             onModelChange={onModelChange}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={onStructureVentricleChange}
+            lvOnly={lvOnly}
             hasLvReconstruction={hasLvReconstruction}
             hasRvReconstruction={hasRvReconstruction}
             structureStats={structureStats}
@@ -1443,6 +1446,7 @@ function StructureTab({
   onModelChange,
   structureVentricle,
   onStructureVentricleChange,
+  lvOnly = false,
   structureStats,
   isPerFrame,
   rvFacStats,
@@ -1455,6 +1459,7 @@ function StructureTab({
   onModelChange?: (m: "unet" | "medsam") => void;
   structureVentricle: "LV" | "RV";
   onStructureVentricleChange?: (v: "LV" | "RV") => void;
+  lvOnly?: boolean;
   structureStats?: { min: number | null; mean: number | null; max: number | null } | null;
   /** True when structureStats tracks the currently playing frame (a real
    *  per-frame strain series exists); false when it's the single ED-frame
@@ -1489,7 +1494,7 @@ function StructureTab({
     );
   }
 
-  const isLv = structureVentricle === "LV";
+  const isLv = lvOnly || structureVentricle === "LV";
   const unit = isLv ? "mm" : "mm²";
 
   return (
@@ -1499,7 +1504,7 @@ function StructureTab({
         <ModelToggle strainModel={activeModel} setStrainModel={(m) => onModelChange?.(m)} modelAvailable={modelAvailable} />
       </div>
 
-      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
+      {!lvOnly && <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/20 p-1">
         {(["LV", "RV"] as const).map((v) => {
           const available = v === "LV" ? hasLvReconstruction : hasRvReconstruction;
           const button = (
@@ -1532,7 +1537,7 @@ function StructureTab({
             </UiTooltip>
           );
         })}
-      </div>
+      </div>}
 
       {!isLv ? (
         rvFacStats && rvFacStats.global != null ? (

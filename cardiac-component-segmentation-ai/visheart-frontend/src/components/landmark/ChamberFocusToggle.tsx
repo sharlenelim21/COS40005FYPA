@@ -28,12 +28,14 @@ export function ChamberFocusToggle({
    *  to building that reconstruction instead of switching the focus. "combined" falls back to
    *  whichever of LV/RV is actually missing, since it needs both. */
   disabledOptions,
+  allowedOptions,
   className,
 }: {
   value: ChamberFocus;
   onChange: (focus: ChamberFocus) => void;
   disabled?: boolean;
   disabledOptions?: Partial<Record<ChamberFocus, ChamberUnavailable>>;
+  allowedOptions?: readonly ChamberFocus[];
   className?: string;
 }) {
   const router = useRouter();
@@ -41,18 +43,22 @@ export function ChamberFocusToggle({
   const combinedReason = disabledOptions?.combined ?? disabledOptions?.LV ?? disabledOptions?.RV;
   const reasonFor = (option: ChamberFocus): ChamberUnavailable | undefined =>
     option === "combined" ? combinedReason : disabledOptions?.[option];
+  const options = allowedOptions ? OPTIONS.filter((option) => allowedOptions.includes(option.value)) : OPTIONS;
+
+  if (options.length < 2) return null;
 
   return (
     <div
       role="group"
       aria-label="3D heart chamber focus"
       className={cn(
-        "grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/20 p-0.5",
+        "grid gap-1 rounded-lg border border-border bg-muted/20 p-0.5",
+        options.length === 2 ? "grid-cols-2" : "grid-cols-3",
         disabled && "pointer-events-none opacity-50",
         className,
       )}
     >
-      {OPTIONS.map((option) => {
+      {options.map((option) => {
         const reason = reasonFor(option.value);
         const button = (
           <button

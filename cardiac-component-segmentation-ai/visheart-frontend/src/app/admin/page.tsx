@@ -14,6 +14,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ProgressMeter } from "@/components/ui/kinetic-progress";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import type { JobState } from "@/lib/retraining-api";
 import {
   Users,
   Brain,
@@ -30,6 +33,15 @@ interface Stats {
 }
 
 const POLL_ACTIVE_MS = 5000;
+
+const JOB_STATE_BADGE: Record<JobState, { label: string; className: string }> = {
+  queued: { label: "Queued", className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300" },
+  running: { label: "Running", className: "bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300" },
+  succeeded: { label: "Completed", className: "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300" },
+  failed: { label: "Failed", className: "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300" },
+  cancelled: { label: "Cancelled", className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
+  interrupted: { label: "Interrupted", className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
+};
 const POLL_IDLE_MS = 30000;
 
 function RetrainingCard() {
@@ -54,11 +66,16 @@ function RetrainingCard() {
   const runningStepTitle = job?.steps.find((s) => s.state === "running")?.title;
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
+    <Card className="h-full">
+      <CardHeader className="pb-0">
         <CardTitle className="flex items-center gap-2 text-base">
           <RefreshCw className={`h-4 w-4 ${running ? "animate-spin" : ""}`} />
           UNet Retraining
+          {job && (
+            <Badge variant="outline" className={`ml-auto border-transparent ${JOB_STATE_BADGE[job.state]?.className ?? ""}`}>
+              {JOB_STATE_BADGE[job.state]?.label ?? job.state}
+            </Badge>
+          )}
         </CardTitle>
         <CardDescription>
           {job
@@ -67,12 +84,14 @@ function RetrainingCard() {
         </CardDescription>
       </CardHeader>
       {job && (
-        <CardContent className="space-y-2">
-          <p className="text-sm font-medium capitalize">{job.state}</p>
+        <CardContent className="flex flex-1 flex-col gap-3">
           {percent !== null && <ProgressMeter value={percent} title={runningStepTitle} />}
-          <Link href="/extend-training" className="text-sm text-blue-600 underline hover:text-blue-700 dark:text-blue-400">
-            {running ? "View progress" : "Review in UNet Extend Training"}
-          </Link>
+          <Button asChild variant="outline" size="sm" className="mt-auto w-full justify-between">
+            <Link href="/extend-training">
+              {running ? "View progress" : "Review in UNet Extend Training"}
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Link>
+          </Button>
         </CardContent>
       )}
     </Card>

@@ -133,12 +133,17 @@ export function ReferenceHearts({ note }: { note?: Claim }) {
     (templates ?? [])
       .filter((t) => t.templateInfo?.category === group)
       .sort((a, b) => (a.templateInfo?.order ?? 99) - (b.templateInfo?.order ?? 99));
+  const columnRows = 1 + (templates ? Math.max(1, ...GROUPS.map((g) => ofGroup(g.id).length)) : 2);
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-x-4 gap-y-3">
         {GROUPS.map((group) => (
-          <div key={group.id} className="min-w-0 space-y-3">
+          <div
+            key={group.id}
+            className="grid min-w-0 grid-rows-subgrid gap-3"
+            style={{ gridRow: `span ${columnRows}` }}
+          >
             <div>
               <h4 className="text-sm font-semibold">{group.name}</h4>
               <p className="text-muted-foreground text-xs">{group.gist}</p>
@@ -187,7 +192,7 @@ function HeartCard({
       aria-expanded={selected}
       aria-controls="reference-heart-detail"
       className={cn(
-        "bg-card grid w-full grid-cols-[4rem_minmax(0,1fr)] gap-3 rounded-lg border p-3 text-left transition-colors",
+        "bg-card grid h-full w-full grid-cols-[4rem_minmax(0,1fr)] items-start gap-3 rounded-lg border p-3 text-left transition-colors",
         "hover:border-foreground/30 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
         selected && "border-primary ring-primary ring-1",
       )}
@@ -198,13 +203,13 @@ function HeartCard({
         {template.templateInfo?.subjectCode && (
           <span className="text-muted-foreground block font-mono text-[11px]">{template.templateInfo.subjectCode}</span>
         )}
-        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
+        <dl className="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 text-xs">
           {CARD_METRICS[group].map((key) => {
             const value = template.metrics[key];
             return (
               <div key={key} className="contents">
                 <dt className="text-muted-foreground">{METRICS[key].short}</dt>
-                <dd className="font-medium tabular-nums">
+                <dd className="text-right font-medium whitespace-nowrap tabular-nums">
                   {typeof value === "number" ? `${fmt(value)} ${METRICS[key].unit}` : "—"}
                 </dd>
               </div>

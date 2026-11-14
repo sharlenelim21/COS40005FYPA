@@ -507,10 +507,9 @@ interface ReconstructionGLBViewerProps {
   onColorsChange?: (colors: { primary: string; secondary: string }) => void;
 }
 
-// A different shade from the primary default (#c41e3a, deep red) so the two chambers are never
-// confused with each other -- an orange-red, not blue, per direct request (2026-11-12). Both are
-// now independently user-editable from the Settings panel (see secondaryModelColor); this is only
-// the out-of-the-box value.
+// RV defaults to the "Orange" preset (DEFAULT_RV_COLOR, #FF3F00) so it is never confused with the
+// LV default (#c41e3a, deep red). Both are independently user-editable from the Settings panel (see
+// secondaryModelColor), and Reset to Defaults returns RV to Orange; this is only the out-of-the-box value.
 const SECONDARY_DEFAULT_COLOR = DEFAULT_RV_COLOR;
 
 export function ReconstructionGLBViewer({ 
@@ -763,7 +762,7 @@ export function ReconstructionGLBViewer({
         {/* Settings Panel */}
         {showSettings && (
           <div
-            className="vh-scrollbar-overlay absolute top-full right-0 mt-2 w-[min(18rem,calc(100cqw-1.5rem))] p-4 rounded-md bg-black/90 text-white text-xs space-y-4 overflow-y-auto"
+            className="vh-scrollbar-overlay vh-overlay-controls absolute top-full right-0 mt-2 w-[min(18rem,calc(100cqw-1.5rem))] p-4 rounded-md bg-black/90 text-white text-xs space-y-4 overflow-y-auto"
             style={{ maxHeight: settingsMaxHeight }}
           >
             <div className="flex items-center justify-between mb-2">
@@ -1057,8 +1056,8 @@ export function ReconstructionGLBViewer({
         </Suspense>
       </Canvas>
       
-      {/* Controls Info -- a nice-to-have hint, not essential; hidden on a narrow panel where it
-          would otherwise collide with the chamber legend on the opposite corner. */}
+      {/* Controls Info -- a nice-to-have hint, not essential. On a narrow or short viewer it
+          collapses to a "?" button, and it fades out while Settings or Views is open. */}
       <ViewerControlsHint compact={compactViewer} hidden={overlayOpen} />
     </div>
   );

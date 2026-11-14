@@ -7,22 +7,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import Link from "next/link";
 import { authApi } from "@/lib/api";
+import { DeleteAccountCard } from "@/components/profile/DeleteAccountCard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Toaster, toast } from "sonner";
 import { User, Shield, UserCheck, RefreshCw, AlertCircle } from "lucide-react";
 
@@ -44,7 +34,7 @@ const passwordSchema = z
   });
 
 export default function ProfilePage() {
-  const { user, loading, error, logout } = useAuth();
+  const { user, loading, error } = useAuth();
   const [userData, setUserData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -127,20 +117,6 @@ export default function ProfilePage() {
       toast.error(err.message || "An error occurred.");
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const handleDeleteAccount = async () => {
-    try {
-      const result = await authApi.deleteUser();
-      if (result.delete) {
-        toast.success("Account deleted successfully.");
-        logout();
-      } else {
-        toast.error(result.message || "Failed to delete account.");
-      }
-    } catch (err: any) {
-      toast.error(err.message || "An error occurred.");
     }
   };
 
@@ -340,31 +316,7 @@ export default function ProfilePage() {
               </CardContent>
             </Card>
 
-            <Card className="border-destructive">
-              <CardHeader>
-                <CardTitle className="text-destructive">Delete Account</CardTitle>
-                <CardDescription>Permanently delete your account and all associated data.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="destructive" className="w-full" disabled={isGuest}>
-                      Delete My Account
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This action cannot be undone. This will permanently delete your account and remove your data from our servers.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDeleteAccount}>Continue</AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </CardContent>
-            </Card>
+            <DeleteAccountCard username={user.username} role={user.role} isGuest={isGuest} />
           </div>
         </div>
       </div>

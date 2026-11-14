@@ -9,6 +9,7 @@ export interface PreviousTeamMember {
   role: string;
   photo?: string;
   linkedin?: string;
+  email?: string;
 }
 
 export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
@@ -19,6 +20,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     role: "Lead Developer",
     photo: "/images/about/pfp-james.jpg",
     linkedin: "",
+    email: "",
   },
   {
     key: "cla",
@@ -27,6 +29,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     role: "Backend Developer",
     photo: "/images/about/pfp-cla.jpg",
     linkedin: "",
+    email: "",
   },
   {
     key: "jas",
@@ -35,6 +38,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     role: "AWS Developer",
     photo: "/images/about/pfp-jes.jpg",
     linkedin: "",
+    email: "",
   },
   {
     key: "qh",
@@ -43,6 +47,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     role: "Frontend Developer",
     photo: "/images/about/pfp-qh.jpg",
     linkedin: "",
+    email: "",
   },
   {
     key: "zia",
@@ -51,6 +56,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     role: "ML Engineer",
     photo: "/images/about/pfp-zia.jpg",
     linkedin: "",
+    email: "",
   },
 ];
 

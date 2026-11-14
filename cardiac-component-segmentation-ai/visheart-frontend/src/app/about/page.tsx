@@ -1,129 +1,11 @@
 import React from "react";
-import Image, { StaticImageData } from "next/image";
-
-// Import images for about page
-import dr_miko_image from "../../../public/images/about/miko.jpg";
-import ms_kathy_image from "../../../public/images/about/kathy.jpg";
-import sharlene_image from "../../../public/images/about/pfp-shar.jpg";
-import shihuey_image from "../../../public/images/about/pfp-shi.jpg";
-import jiayi_image from "../../../public/images/about/pfp-jia.jpg";
-import meiqi_image from "../../../public/images/about/pfp-mei.jpg";
-
-interface MemberCardProps {
-  name: string;
-  role: string;
-  imageUrl: StaticImageData;
-  description: string;
-}
-
-const MemberCard: React.FC<MemberCardProps> = React.memo(
-  ({ name, role, imageUrl, description }) => (
-    <div className="group bg-card text-card-foreground relative overflow-hidden rounded-lg border shadow-sm transition-all duration-300 hover:shadow-xl">
-      <Image
-        src={imageUrl}
-        alt={name}
-        width={400}
-        height={400}
-        className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-105"
-      />
-      <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/80 to-transparent p-4 transition-all duration-300">
-        <div className="translate-y-8 transition-transform duration-300 group-hover:translate-y-0">
-          <h3 className="text-xl font-bold text-white">{name}</h3>
-          <p className="text-sm text-red-400">{role}</p>
-          <p className="mt-2 text-sm text-gray-300 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-            {description}
-          </p>
-        </div>
-      </div>
-    </div>
-  ),
-);
-
-MemberCard.displayName = "MemberCard";
+import { CURRENT_TEAM } from "@/data/currentTeam";
+import { PREVIOUS_TEAM, displayName } from "@/data/previousTeam";
+import { TeamProfileCard } from "@/components/team/TeamProfileCard";
 
 const AboutPage = () => {
-  const supervisors = [
-    {
-      name: "Dr. Miko",
-      role: "Project Supervisor",
-      imageUrl: dr_miko_image,
-      description:
-        "Overseeing the project's technical direction and ensuring academic rigor.",
-    },
-    {
-      name: "Ms. Kathy",
-      role: "Co-Supervisor",
-      imageUrl: ms_kathy_image,
-      description:
-        "Providing guidance on project management and user experience design.",
-    },
-  ];
-
-  const team = [
-    {
-      name: "Sharlene",
-      role: "Backend Developer",
-      imageUrl: sharlene_image,
-      description:
-        "Leading the team’s direction, overseeing technical decisions, and supporting system development with a focus on overall project coordination.",
-    },
-    {
-      name: "Shi Huey",
-      role: "Developer",
-      imageUrl: shihuey_image,
-      description:
-        "Supporting system development and implementation, with a focus on ensuring functionality, stability, and integration across components.",
-    },
-    {
-      name: "Jia Yi",
-      role: "Backend Developer",
-      imageUrl: jiayi_image,
-      description:
-        "Managing product requirements, prioritizing features, and ensuring alignment between client expectations and system development.",
-    },
-    {
-      name: "Mei Qi",
-      role: "Scrum Master",
-      imageUrl: meiqi_image,
-      description:
-        "Coordinating the team’s workflow, managing sprint progress, and ensuring smooth communication while contributing to frontend development and system integration.",
-    },
-    // {
-    //   name: "James",
-    //   role: "Lead Developer",  
-    //   imageUrl: james_image,
-    //   description:
-    //     "Architecting the backend, pioneering the architecture choice and integrating machine learning models.",
-    // },
-    // {
-    //   name: "Clarissa",
-    //   role: "Backend Developer",
-    //   imageUrl: clarissa_image,
-    //   description:
-    //     "Building the server-side logic and database infrastructure for robust performance.",
-    // },
-    // {
-    //   name: "Jesmine",
-    //   role: "AWS Developer",
-    //   imageUrl: jesmine_image,
-    //   description:
-    //     "Managing cloud infrastructure and deployment on AWS to ensure scalability and reliability.",
-    // },
-    // {
-    //   name: "Qian Hui",
-    //   role: "Frontend Developer",
-    //   imageUrl: qh_image,
-    //   description:
-    //     "Crafting a responsive and intuitive user interface for a seamless experience.",
-    // },
-    // {
-    //   name: "Zia",
-    //   role: "ML Engineer",
-    //   imageUrl: zia_image,
-    //   description:
-    //     "Implementing and optimizing the cardiac segmentation models for accuracy.",
-    // },
-  ];
+  const supervisors = CURRENT_TEAM.filter((member) => member.group === "supervisor");
+  const team = CURRENT_TEAM.filter((member) => member.group === "student");
 
   return (
     <div className="bg-background text-foreground">
@@ -158,7 +40,7 @@ const AboutPage = () => {
           </h2>
           <div className="mx-auto grid max-w-4xl grid-cols-1 gap-8 md:grid-cols-2">
             {supervisors.map((member) => (
-              <MemberCard key={member.name} {...member} />
+              <TeamProfileCard key={member.key} name={member.name} role={member.role} photo={member.photo} bio={member.bio} email={member.email} linkedin={member.linkedin} />
             ))}
           </div>
         </div>
@@ -168,10 +50,33 @@ const AboutPage = () => {
           <h2 className="mb-8 text-center text-3xl font-bold">Meet the Team</h2>
           <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
             {team.map((member) => (
-              <MemberCard key={member.name} {...member} />
+              <TeamProfileCard key={member.key} name={member.name} role={member.role} photo={member.photo} bio={member.bio} email={member.email} linkedin={member.linkedin} />
             ))}
           </div>
         </div>
+
+        <section aria-labelledby="about-previous-team" className="mt-20">
+          <h2 id="about-previous-team" className="mb-2 text-center text-3xl font-bold">
+            Previous Team
+          </h2>
+          <p className="text-muted-foreground text-center">Original VisHeart developers</p>
+          <p className="text-muted-foreground mx-auto mt-2 mb-8 max-w-2xl text-center">
+            VisHeart was first built by these developers. We thank them for the foundation our work continues from.
+          </p>
+          <ul className="flex flex-wrap justify-center gap-8">
+            {PREVIOUS_TEAM.map((member) => (
+              <li key={member.key} className="w-full sm:w-[calc((100%-2rem)/2)] lg:w-[calc((100%-4rem)/3)]">
+                <TeamProfileCard
+                  name={displayName(member)}
+                  role={member.role}
+                  photo={member.photo}
+                  email={member.email}
+                  linkedin={member.linkedin}
+                />
+              </li>
+            ))}
+          </ul>
+        </section>
       </div>
     </div>
   );

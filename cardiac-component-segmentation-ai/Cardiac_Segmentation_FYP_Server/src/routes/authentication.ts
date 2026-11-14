@@ -272,30 +272,43 @@ router.post("/delete",
   isAuthAndNotGuest,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      if (req.user && req.user._id) {
-        const userId = req.user._id;
-
-        // Clean up user data before deletion
-        await cleanupUserS3Storage(userId);
-
-        // Delete the user from the database
-        const deleteResult = await deleteUser(userId);
-
-        if (!deleteResult.success) {
-          res.status(400).json({ delete: false, message: deleteResult.message });
-          return;
-        }
-
-        logger.info(`${serviceLocation}: User ${userId} deleted successfully.`);
-        res.status(200).json({
-          delete: true,
-          message: "User deleted successfully.",
-        });
+      if (!req.user || !req.user._id) {
+        res.status(401).json({ delete: false, message: "Not signed in." });
+        return;
       }
+
+      const userId = req.user._id;
+
+      // Clean up user data before deletion
+      await cleanupUserS3Storage(userId);
+
+      // Delete the user from the database
+      const deleteResult = await deleteUser(userId);
+
+      if (!deleteResult.success) {
+        const reason = deleteResult.message ?? "";
+        logger.warn(`${serviceLocation}: User ${userId} could not be deleted: ${reason}`);
+        if (reason.startsWith("Cannot delete the last administrator")) {
+          res.status(400).json({ delete: false, message: "Cannot delete the last administrator account." });
+        } else if (reason.endsWith("does not exist.")) {
+          res.status(404).json({ delete: false, message: "Account not found. It may already have been deleted." });
+        } else {
+          res.status(500).json({ delete: false, message: "Internal error during user deletion." });
+        }
+        return;
+      }
+
+      logger.info(`${serviceLocation}: User ${userId} deleted successfully.`);
+      res.status(200).json({
+        delete: true,
+        message: "User deleted successfully.",
+      });
     }
     catch (error: unknown) {
       logger.error(`${serviceLocation}: Error during user deletion: ${error}`);
-      res.status(500).json({ message: "Internal error during user deletion." });
+      if (!res.headersSent) {
+        res.status(500).json({ delete: false, message: "Internal error during user deletion." });
+      }
     }
   }
 );

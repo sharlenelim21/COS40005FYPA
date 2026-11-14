@@ -16,9 +16,10 @@ import { BaseSegmentationMask } from "@/types/project";
 import { differences, editorHref, labelMap } from "@/components/extend-training/logic";
 import { ensureProjectImages, sliceImageUrl } from "@/components/extend-training/project-images";
 import { CHANGE_COLOR, LABEL_PALETTE, MaskLegend, Overlay, SliceCanvas } from "@/components/extend-training/SliceCanvas";
+import { CorrectedSliceGrid } from "@/components/extend-training/CorrectedSliceGrid";
 
 export const EDITED_KEY = "extend-training-edited"; // set when Edit opens the editor, so coming back checks again
-const IMAGE_HEIGHT = "66vh"; // the slice never makes the dialog taller than the window
+const IMAGE_HEIGHT = "min(60vh, calc(100dvh - var(--header-h) - 16rem))"; // the slice never makes the dialog taller than the window
 
 export function markEdited(): void {
   try {
@@ -111,135 +112,148 @@ export function CasePreview({ item, selected, locked, canEdit, onSelectedChange,
     return layers;
   }, [labels, view, highlight]);
 
+  const ownerLabel = canEdit ? "you" : item?.ownerName ?? "another user";
   const correctionName = canEdit ? "Your correction" : `${item?.ownerName ?? "Their"}${item?.ownerName ? "'s" : ""} correction`;
   const imageBox = item ? { maxWidth: `calc(${IMAGE_HEIGHT} * ${item.width / Math.max(item.height, 1)})` } : undefined;
+  const total = item?.slices.length ?? 0;
+
+  useEffect(() => {
+    if (!item) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='slider'], [role='radiogroup'], [role='group'][data-slot='toggle-group']")) return;
+      event.preventDefault();
+      setIndex(position => Math.max(0, Math.min(total - 1, position + (event.key === "ArrowLeft" ? -1 : 1))));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [item, total]);
 
   return (
     <Dialog open={item !== null} onOpenChange={open => { if (!open) onClose(); }}>
-      <DialogContent className="max-h-[94vh] overflow-y-auto sm:max-w-5xl">
+      <DialogContent className="flex w-[min(1200px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
         {item && current && (
           <>
-            <DialogHeader>
-              <DialogTitle>{item.projectName} · {MODEL_NAMES[item.model] ?? item.model}</DialogTitle>
+            <DialogHeader className="border-b px-6 pt-6 pb-4 pr-12">
+              <DialogTitle className="break-words">{item.projectName} · {MODEL_NAMES[item.model] ?? item.model}</DialogTitle>
               <DialogDescription>
                 {item.ownerName ? `Corrected by ${canEdit ? "you" : item.ownerName} · ` : ""}
                 {item.slices.length} corrected {item.slices.length === 1 ? "slice" : "slices"} ·{" "}
                 {item.pixelsChanged.toLocaleString()} pixels changed in all
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_16rem]">
-              <div className="flex items-start justify-center">
-                {problem ? (
-                  <Alert variant="destructive"><AlertDescription>{problem}</AlertDescription></Alert>
-                ) : masks ? (
-                  <div className="w-full" style={imageBox}>
-                    <SliceCanvas
-                      imageUrl={imageUrl}
-                      width={item.width}
-                      height={item.height}
-                      overlays={overlays}
-                      label={`${view === "ai" ? "AI result" : correctionName}, frame ${current.frameindex + 1}, slice ${current.sliceindex + 1}`}
-                    />
+
+            <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-4">
+              <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+                <div className="flex min-w-0 items-start justify-center md:sticky md:top-0 md:self-start">
+                  {problem ? (
+                    <Alert variant="destructive"><AlertDescription>{problem}</AlertDescription></Alert>
+                  ) : masks ? (
+                    <div className="w-full" style={imageBox}>
+                      <SliceCanvas
+                        imageUrl={imageUrl}
+                        width={item.width}
+                        height={item.height}
+                        overlays={overlays}
+                        label={`${view === "ai" ? "AI result" : correctionName}, frame ${current.frameindex + 1}, slice ${current.sliceindex + 1}`}
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex w-full items-center justify-center rounded-md bg-muted"
+                         style={{ ...imageBox, aspectRatio: `${item.width} / ${item.height}` }}>
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex min-w-0 flex-col gap-5">
+                  <div className="space-y-1">
+                    <p className="font-medium">Frame {current.frameindex + 1}, slice {current.sliceindex + 1}</p>
+                    <p className="text-sm text-muted-foreground break-words">
+                      {current.pixelsChanged.toLocaleString()} pixels changed
+                      {current.editedClasses.length
+                        ? ` (${current.editedClasses.map(name => CASE_STRUCTURE_NAMES[name] ?? name).join(", ")})`
+                        : ""}
+                    </p>
                   </div>
-                ) : (
-                  <div className="flex w-full items-center justify-center rounded-md bg-muted"
-                       style={{ ...imageBox, aspectRatio: `${item.width} / ${item.height}` }}>
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+
+                  <div className="space-y-2">
+                    <Heading>Show</Heading>
+                    <ToggleGroup type="single" variant="outline" size="sm" value={view} className="w-full"
+                                 onValueChange={value => { if (value) setView(value as View); }}>
+                      <ToggleGroupItem value="ai" disabled={!labels?.ai} className="min-w-0 flex-1">AI result</ToggleGroupItem>
+                      <ToggleGroupItem value="correction" className="min-w-0 flex-1">Correction</ToggleGroupItem>
+                    </ToggleGroup>
+                    <p className="text-muted-foreground truncate text-xs" title={correctionName}>
+                      Correction by {ownerLabel}
+                    </p>
+                    <label className="flex items-center justify-between gap-2 pt-1 text-sm">
+                      <span className="min-w-0">
+                        Highlight changes
+                        <span className="block text-xs text-muted-foreground">The pixels {canEdit ? "you" : "they"} changed, in yellow</span>
+                      </span>
+                      <Switch checked={highlight} onCheckedChange={setHighlight} disabled={!labels?.ai} />
+                    </label>
+                    {masks && !masks.ai && (
+                      <p className="text-xs text-muted-foreground">
+                        The AI result of this case was not kept, so only the correction can be shown.
+                      </p>
+                    )}
                   </div>
+
+                  <MaskLegend extras={highlight ? [{ label: "Changed pixels", color: "#facc15" }] : []} />
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Heading>Corrected slices</Heading>
+                      <span className="text-xs text-muted-foreground tabular-nums">{index + 1} / {total}</span>
+                    </div>
+                    <CorrectedSliceGrid slices={item.slices} selectedIndex={index} onSelect={setIndex} />
+                    <div className="flex items-center justify-between">
+                      <Button variant="ghost" size="sm" disabled={index === 0} onClick={() => setIndex(index - 1)}>
+                        <ChevronLeft className="mr-1 h-4 w-4" />
+                        Previous
+                      </Button>
+                      <span className="text-xs text-muted-foreground">← → keys</span>
+                      <Button variant="ghost" size="sm" disabled={index >= total - 1} onClick={() => setIndex(index + 1)}>
+                        Next
+                        <ChevronRight className="ml-1 h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 space-y-1">
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox checked={selected && !item.frozen} disabled={locked}
+                            onCheckedChange={value => onSelectedChange(value === true)} />
+                  Include this case in training
+                </label>
+                {item.frozen && (
+                  <p className="text-xs text-muted-foreground">
+                    This is a test scan: every new version is tested on it, so it is not used for training.
+                  </p>
+                )}
+                {!canEdit && (
+                  <p className="text-xs text-muted-foreground">
+                    Preview only: {item.ownerName ?? "another user"} owns this project, so only they can edit it.
+                  </p>
                 )}
               </div>
-
-              <div className="flex flex-col gap-5">
-                <div className="space-y-1">
-                  <p className="font-medium">Frame {current.frameindex + 1}, slice {current.sliceindex + 1}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {current.pixelsChanged.toLocaleString()} pixels changed
-                    {current.editedClasses.length
-                      ? ` (${current.editedClasses.map(name => CASE_STRUCTURE_NAMES[name] ?? name).join(", ")})`
-                      : ""}
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Heading>Show</Heading>
-                  <ToggleGroup type="single" variant="outline" size="sm" value={view} className="w-full"
-                               onValueChange={value => { if (value) setView(value as View); }}>
-                    <ToggleGroupItem value="ai" disabled={!labels?.ai} className="flex-1">AI result</ToggleGroupItem>
-                    <ToggleGroupItem value="correction" className="flex-1">{correctionName}</ToggleGroupItem>
-                  </ToggleGroup>
-                  <label className="flex items-center justify-between gap-2 pt-1 text-sm">
-                    <span>
-                      Highlight changes
-                      <span className="block text-xs text-muted-foreground">The pixels {canEdit ? "you" : "they"} changed, in yellow</span>
-                    </span>
-                    <Switch checked={highlight} onCheckedChange={setHighlight} disabled={!labels?.ai} />
-                  </label>
-                  {masks && !masks.ai && (
-                    <p className="text-xs text-muted-foreground">
-                      The AI result of this case was not kept, so only the correction can be shown.
-                    </p>
-                  )}
-                </div>
-
-                <MaskLegend extras={highlight ? [{ label: "Changed pixels", color: "#facc15" }] : []} />
-
-                <div className="space-y-2">
-                  <Heading>Corrected slices</Heading>
-                  <div className="flex flex-wrap gap-1.5">
-                    {item.slices.map((slice, position) => (
-                      <Button
-                        key={`${slice.frameindex}:${slice.sliceindex}`}
-                        size="sm"
-                        variant={position === index ? "default" : "outline"}
-                        className="h-7 px-2 text-xs tabular-nums"
-                        onClick={() => setIndex(position)}
-                        aria-label={`Frame ${slice.frameindex + 1}, slice ${slice.sliceindex + 1}`}
-                      >
-                        F{slice.frameindex + 1} · S{slice.sliceindex + 1}
-                      </Button>
-                    ))}
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Button variant="ghost" size="sm" disabled={index === 0} onClick={() => setIndex(index - 1)}>
-                      <ChevronLeft className="mr-1 h-4 w-4" />
-                      Previous
-                    </Button>
-                    <span className="text-xs text-muted-foreground tabular-nums">{index + 1} / {item.slices.length}</span>
-                    <Button variant="ghost" size="sm" disabled={index >= item.slices.length - 1} onClick={() => setIndex(index + 1)}>
-                      Next
-                      <ChevronRight className="ml-1 h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="mt-auto space-y-3 border-t pt-4">
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox checked={selected && !item.frozen} disabled={locked}
-                              onCheckedChange={value => onSelectedChange(value === true)} />
-                    Include this case in training
-                  </label>
-                  {item.frozen && (
-                    <p className="text-xs text-muted-foreground">
-                      This is a test scan: every new version is tested on it, so it is not used for training.
-                    </p>
-                  )}
-                  {!canEdit && (
-                    <p className="text-xs text-muted-foreground">
-                      Preview only: {item.ownerName ?? "another user"} owns this project, so only they can edit it.
-                    </p>
-                  )}
-                  <div className={canEdit ? "grid grid-cols-2 gap-2" : "grid gap-2"}>
-                    {canEdit && (
-                      <Button asChild variant="outline">
-                        <Link href={editorHref(item.projectId, item.model, current.frameindex, current.sliceindex)} onClick={markEdited}>
-                          <Pencil className="mr-2 h-4 w-4" />
-                          Edit slice
-                        </Link>
-                      </Button>
-                    )}
-                    <Button onClick={onClose}>Done</Button>
-                  </div>
-                </div>
+              <div className="flex shrink-0 gap-2">
+                {canEdit && (
+                  <Button asChild variant="outline">
+                    <Link href={editorHref(item.projectId, item.model, current.frameindex, current.sliceindex)} onClick={markEdited}>
+                      <Pencil className="mr-2 h-4 w-4" />
+                      Edit slice
+                    </Link>
+                  </Button>
+                )}
+                <Button onClick={onClose}>Done</Button>
               </div>
             </div>
           </>

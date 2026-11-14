@@ -1,7 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
 import { X, ChevronRight, ChevronLeft } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { isFaqHiddenRoute } from "@/lib/floating-widgets";
+
+const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 interface GuidancePanelAction {
   label: string;
@@ -32,6 +37,22 @@ export function GuidancePanel({
 
   const [dismissed, setDismissed] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const pathname = usePathname();
+  const faqVisible = !isFaqHiddenRoute(pathname);
+  const expandRef = useRef<HTMLButtonElement>(null);
+  const collapseRef = useRef<HTMLButtonElement>(null);
+  const moveFocus = useRef(false);
+
+  useEffect(() => {
+    if (!moveFocus.current) return;
+    moveFocus.current = false;
+    (collapsed ? expandRef : collapseRef).current?.focus();
+  }, [collapsed]);
+
+  const toggleCollapsed = (next: boolean) => {
+    moveFocus.current = true;
+    setCollapsed(next);
+  };
 
   useEffect(() => {
     try {
@@ -55,65 +76,89 @@ export function GuidancePanel({
 
   if (dismissed) return null;
 
+  const primaryIndex = actions.findIndex((action) => action.primary);
+
   return (
     <div
-      className="fixed z-40 flex items-center"
-      style={{ bottom: "24px", right: "0px" }}
+      role="status"
+      aria-live="polite"
+      className={cn("fixed right-0 z-40 flex items-end", faqVisible ? "bottom-[4.5rem]" : "bottom-4")}
     >
       {/* Collapsed tab */}
       {collapsed && (
         <button
-          onClick={() => setCollapsed(false)}
-          className="flex items-center gap-1 px-2 py-3 rounded-l-lg bg-foreground text-background text-xs font-medium shadow-lg hover:opacity-90 transition-opacity cursor-pointer border-none"
-          aria-label="Expand guidance panel"
+          ref={expandRef}
+          type="button"
+          onClick={() => toggleCollapsed(false)}
+          className={cn(
+            "flex cursor-pointer items-center gap-1 rounded-l-lg border border-r-0 border-primary/40 bg-primary px-2 py-3 text-xs font-medium text-primary-foreground shadow-lg transition-opacity hover:opacity-90",
+            focusRing,
+          )}
+          aria-label={`Expand guidance: ${title}`}
         >
-          <ChevronLeft className="h-3.5 w-3.5" />
+          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
         </button>
       )}
 
       {/* Expanded panel */}
       {!collapsed && (
-        <div className="w-[280px] rounded-l-xl border border-border bg-background shadow-xl mr-0">
+        <div
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.stopPropagation();
+            toggleCollapsed(true);
+          }}
+          className="relative w-80 max-w-[calc(100vw-1rem)] overflow-hidden rounded-l-xl border border-r-0 border-primary/40 bg-background shadow-lg motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-right motion-safe:duration-300"
+        >
+          <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-primary" />
           {/* Header */}
-          <div className="flex items-start justify-between p-3 pb-2">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">{icon}</span>
-              <div>
-                <p className="text-xs font-semibold text-foreground leading-snug">{title}</p>
-                {subtitle && <p className="text-[10px] text-muted-foreground leading-snug">{subtitle}</p>}
+          <div className="flex items-start justify-between gap-2 py-3 pr-2 pl-4">
+            <div className="flex min-w-0 items-start gap-2">
+              <span className="text-lg leading-none" aria-hidden="true">{icon}</span>
+              <div className="min-w-0">
+                <p className="text-sm leading-snug font-semibold text-foreground">{title}</p>
+                {subtitle && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{subtitle}</p>}
               </div>
             </div>
-            <div className="flex items-center gap-1 shrink-0 ml-1">
+            <div className="flex shrink-0 items-center gap-0.5">
               <button
-                onClick={() => setCollapsed(true)}
-                aria-label="Collapse panel"
-                className="p-0.5 text-muted-foreground hover:text-foreground bg-transparent border-none cursor-pointer"
+                ref={collapseRef}
+                type="button"
+                onClick={() => toggleCollapsed(true)}
+                aria-label="Collapse guidance panel"
+                title="Collapse (Esc)"
+                className={cn("cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground", focusRing)}
               >
-                <ChevronRight className="h-3.5 w-3.5" />
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
               </button>
               <button
+                type="button"
                 onClick={handleDismiss}
-                aria-label="Dismiss"
-                className="p-0.5 text-muted-foreground hover:text-foreground bg-transparent border-none cursor-pointer"
+                aria-label="Dismiss guidance panel"
+                title="Dismiss"
+                className={cn("cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground", focusRing)}
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
           </div>
 
           {/* Actions */}
-          <div className="flex flex-col gap-1.5 px-3 pb-3">
+          <div className="flex flex-col gap-2 pr-3 pb-3 pl-4">
             {actions.map((action, i) => (
               <button
                 key={i}
+                type="button"
                 onClick={() => handleAction(action)}
-                className={`flex items-center gap-2 w-full px-2.5 py-2 rounded-lg text-xs font-medium cursor-pointer border-none transition-colors text-left ${
-                  action.primary
-                    ? "bg-foreground text-background hover:opacity-90"
-                    : "bg-background text-foreground border border-border hover:bg-muted"
-                }`}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors",
+                  focusRing,
+                  i === primaryIndex
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : "border border-border bg-background text-foreground hover:bg-muted",
+                )}
               >
-                {action.icon && <span className="shrink-0">{action.icon}</span>}
+                {action.icon && <span className="shrink-0" aria-hidden="true">{action.icon}</span>}
                 {action.label}
               </button>
             ))}

@@ -28,7 +28,7 @@ import {
   useEffect,
   ReactNode,
 } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { authApi } from "@/lib/api";
 
 // Mirrors the backend's UserRole enum (Cardiac_Segmentation_FYP_Server/src/types/database_types.ts).
@@ -55,6 +55,8 @@ interface AuthContextType {
   checkAuthStatus: () => Promise<User | null>;
   revalidateSession: () => Promise<User | null>;
   clearAuth: () => void;
+  sessionEnding: boolean;
+  endSession: (redirectTo: string) => void;
 }
 
 const isSameUser = (a: User | null, b: User | null) =>
@@ -73,7 +75,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sessionEnding, setSessionEnding] = useState(false);
   const router = useRouter();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    setSessionEnding(false);
+  }, [pathname]);
 
   // Check auth status on mount
   // If no session, automatically log in as guest
@@ -121,6 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const authenticatedUser = await fetchUserData();
+      if (authenticatedUser) setSessionEnding(false);
       if (!authenticatedUser) {
         throw new Error(
           "Login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
@@ -150,6 +159,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await authApi.guestLogin();
       const authenticatedUser = await fetchUserData();
+      if (authenticatedUser) setSessionEnding(false);
       if (!authenticatedUser) {
         throw new Error(
           "Guest login succeeded but no active session was found. Please check browser cookie settings and backend session configuration.",
@@ -169,6 +179,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setError(null);
   }, []);
+
+  const endSession = useCallback(
+    (redirectTo: string) => {
+      setSessionEnding(true);
+      clearAuth();
+      router.replace(redirectTo);
+    },
+    [clearAuth, router],
+  );
 
   const revalidateSession = useCallback(async (): Promise<User | null> => {
     try {
@@ -195,9 +214,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.error("Logout request failed:", err);
       }
     } finally {
-      clearAuth();
       setLoading(false);
-      router.replace("/login");
+      endSession("/login");
     }
   };
 
@@ -213,6 +231,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         checkAuthStatus,
         revalidateSession,
         clearAuth,
+        sessionEnding,
+        endSession,
       }}
     >
       {children}

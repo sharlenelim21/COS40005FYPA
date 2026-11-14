@@ -37,7 +37,7 @@ export function ProtectedRoute({
   fallback,
   autoRedirect = true, // Default to true to redirect unauthenticated users to login
 }: ProtectedRouteProps) {
-  const { user, loading, revalidateSession } = useAuth();
+  const { user, loading, revalidateSession, sessionEnding } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [shouldRedirect, setShouldRedirect] = useState(false);
@@ -52,6 +52,7 @@ export function ProtectedRoute({
     if (!loading && autoRedirect) {
       if (!user) {
         setShouldRedirect(true);
+        if (sessionEnding) return;
         const currentPath = typeof window === "undefined" ? pathname : `${window.location.pathname}${window.location.search}`;
         router.replace(redirectTo === "/login" ? loginUrlFor(currentPath) : redirectTo);
       } else if (user && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
@@ -59,7 +60,7 @@ export function ProtectedRoute({
         router.push(redirectTo);
       }
     }
-  }, [user, loading, router, allowedRoles, redirectTo, autoRedirect, pathname]);
+  }, [user, loading, router, allowedRoles, redirectTo, autoRedirect, pathname, sessionEnding]);
 
   // Show loading state during auth check
   if (loading) {
