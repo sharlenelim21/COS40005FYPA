@@ -10,8 +10,23 @@ import { chunk, fmt } from "./print-utils";
 // grid itself mid-page, producing blank cells and duplicated frames across
 // the page break. Fixed sizing is what the report used before that
 // experiment and is print-safe.
+//
+// grid gap-2 / cell p-0.5 (not gap-3/p-1): a full 12-cell page measured
+// ~0.8mm over the 297mm A4 budget with the wider spacing when the caller
+// also supplies a bullseyeIntroNote on the first chunk (e.g. RV Regional
+// GCS's page) -- just enough overflow to push past ReportPageFrame's
+// min-height floor and spill onto an otherwise-blank next page (same
+// mechanism globals.css's own comment already describes for print margins,
+// but this is a genuine content-height overflow, measured directly in a
+// real browser rather than assumed). The tighter spacing measured ~6.6mm
+// clear instead.
 const FRAMES_PER_BULLSEYE_PAGE = 12;
-const FRAMES_PER_TABLE_PAGE = 45;
+// Measured directly (see the grid-spacing comment above for the same method):
+// a full page of 45 rows came out ~6.8mm over the 297mm A4 budget (40 rows
+// measured ~20mm clear) -- any project with more than 45 computed frames
+// would have hit the same blank-page-after overflow on this table page,
+// even though it wasn't the one actually reported.
+const FRAMES_PER_TABLE_PAGE = 40;
 
 export type SeriesFrame = { frameIndex: number; values: (number | null)[] };
 
@@ -120,9 +135,9 @@ export function FrameSeriesPages({
           {ci === 0 && bullseyeIntroNote && (
             <p className="mb-2 text-[13px] leading-snug text-gray-600">{bullseyeIntroNote}</p>
           )}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2">
             {frameChunk.map((f) => (
-              <div key={f.frameIndex} className={`rounded-md border-2 p-1 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? accentBorder : "border-gray-300"}`}>
+              <div key={f.frameIndex} className={`rounded-md border-2 p-0.5 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? accentBorder : "border-gray-300"}`}>
                 <div className="mx-auto h-[180px] w-[180px]">{renderBullseye(f.values)}</div>
                 <p className="text-center text-[12px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
               </div>

@@ -20,15 +20,15 @@ function DataTable({ rows }: { rows: { label: string; value: string; unit: strin
     <table className="w-full border-collapse text-[13.5px]">
       <thead>
         <tr className="bg-teal-50">
-          <th className="rounded-tl-md border-b border-gray-300 px-2.5 py-1.5 text-left font-bold uppercase tracking-wide text-teal-800">Metric</th>
-          <th className="border-b border-gray-300 px-2.5 py-1.5 text-right font-bold uppercase tracking-wide text-teal-800">Value</th>
-          <th className="rounded-tr-md border-b border-gray-300 px-2.5 py-1.5 text-right font-bold uppercase tracking-wide text-teal-800">Unit</th>
+          <th className="rounded-tl-md border-b border-gray-300 px-2.5 py-1 text-left font-bold uppercase tracking-wide text-teal-800">Metric</th>
+          <th className="border-b border-gray-300 px-2.5 py-1 text-right font-bold uppercase tracking-wide text-teal-800">Value</th>
+          <th className="rounded-tr-md border-b border-gray-300 px-2.5 py-1 text-right font-bold uppercase tracking-wide text-teal-800">Unit</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((r) => (
           <tr key={r.label}>
-            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-gray-900">
+            <td className="border-b border-gray-300/60 px-2.5 py-1 text-gray-900">
               <span className="flex items-center gap-1">
                 {r.label}
                 {r.researchInfo && <Info className="h-3 w-3 shrink-0 text-red-600" />}
@@ -39,8 +39,8 @@ function DataTable({ rows }: { rows: { label: string; value: string; unit: strin
                 </span>
               )}
             </td>
-            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-900">{r.value}</td>
-            <td className="border-b border-gray-300/60 px-2.5 py-1.5 text-right font-mono text-gray-600">{r.unit}</td>
+            <td className="border-b border-gray-300/60 px-2.5 py-1 text-right font-mono text-gray-900">{r.value}</td>
+            <td className="border-b border-gray-300/60 px-2.5 py-1 text-right font-mono text-gray-600">{r.unit}</td>
           </tr>
         ))}
       </tbody>
@@ -157,7 +157,7 @@ export function ExecutiveSummaryPage({
         </span>
       </div>
 
-      <section className="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-[13.5px]">
+      <section className="mb-2 grid grid-cols-2 gap-x-6 gap-y-1 text-[13.5px]">
         {[
           ["Patient / scan ID", patientLabel],
           ["Segmentation model", modelLabel],
@@ -182,7 +182,7 @@ export function ExecutiveSummaryPage({
           so a reader opening just this one page (or a printout of it alone)
           knows immediately which report they're holding and what's missing
           from it, if anything. */}
-      <p className={`mb-3 rounded-md border px-3 py-2 text-[13px] leading-snug ${
+      <p className={`mb-2 rounded-md border px-3 py-2 text-[13px] leading-snug ${
         mode === "default" ? "border-indigo-300 bg-indigo-50 text-indigo-900" : "border-gray-300 bg-gray-50 text-gray-700"
       }`}>
         {mode === "default"
@@ -191,7 +191,7 @@ export function ExecutiveSummaryPage({
       </p>
 
       {mode === "default" && (
-        <div className="mb-3 rounded-md border border-gray-300 bg-gray-50 p-2.5">
+        <div className="mb-2 rounded-md border border-gray-300 bg-gray-50 p-2.5">
           <p className="mb-1.5 text-[12px] font-bold uppercase tracking-wide text-gray-700">Selected Cardiac Phases</p>
           <table className="w-full border-collapse text-[13px]">
             <thead>
@@ -236,7 +236,7 @@ export function ExecutiveSummaryPage({
         </p>
       ) : (
         <>
-          <div className="mb-3 flex items-center justify-between gap-2 border-b border-dotted border-gray-300 py-1 text-[13.5px]">
+          <div className="mb-2 flex items-center justify-between gap-2 border-b border-dotted border-gray-300 py-1 text-[13.5px]">
             <span className="text-gray-600">Body surface area (BSA)</span>
             <span className={`font-mono font-medium ${bsaM2 != null ? "text-gray-900" : "italic text-gray-600"}`}>
               {bsaM2 != null ? `${bsaM2.toFixed(2)} m² (${heightCm?.toFixed(0)} cm, ${weightKg?.toFixed(0)} kg)` : "Not entered — indexed (…I) rows below are blank"}

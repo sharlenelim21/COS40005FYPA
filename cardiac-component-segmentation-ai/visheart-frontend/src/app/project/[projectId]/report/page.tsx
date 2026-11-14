@@ -119,17 +119,14 @@ export default function ReportPage() {
     return () => cancelAnimationFrame(rafId);
   }, []);
 
-  if (error) return <ErrorProject error={error} />;
-  if (loading !== "idle" && loading !== "done") return <LoadingProject loadingStage={loading} />;
-  if (!hasFreshData) {
-    return (
-      <div className="flex h-64 items-center justify-center gap-2 text-sm text-foreground">
-        <RefreshCw className="h-4 w-4 animate-spin" />
-        Loading latest results…
-      </div>
-    );
-  }
-
+  // `patientLabel`/`handlePrint`/the deferred-print effect below all moved up to
+  // HERE, before the loading/error/freshness guards -- they used to sit after
+  // those guards (same place they're used), but a `return` before a hook call
+  // means that hook isn't called on every render, which is exactly the Rules-
+  // of-Hooks violation React flagged live ("change in the order of Hooks") once
+  // the deferred-print useEffect was added after them. Hooks can never be
+  // conditional, so this effect (and the plain values/functions it depends on)
+  // must run unconditionally, above any early return. Reported live, 2026-11.
   const patientLabel = projectData?.name || projectId || "Unknown";
   const totalFrames = projectData?.dimensions?.frames || 9;
 
@@ -150,10 +147,23 @@ export default function ReportPage() {
       window.removeEventListener("afterprint", restore);
     };
     window.addEventListener("afterprint", restore);
-    window.print();
-    // Backstop in case `afterprint` never fires (some browser/PDF-export
-    // paths skip it) — by this point the dialog has already read the title.
-    setTimeout(restore, 5000);
+    // Double rAF: lets the browser actually PAINT the current print-only DOM
+    // (bullseye/ring SVGs especially) before window.print() snapshots it for
+    // pagination. Calling window.print() the instant a mode switch (or the
+    // print button) fires can race a layout/paint that hasn't settled yet --
+    // Chrome then paginates against a tree that's still shifting, and the
+    // page that was mid-reflow when it snapshotted comes out blank with the
+    // next page's content pushed past it. One rAF queues after the current
+    // frame's style/layout work; the second guarantees that first frame has
+    // actually been painted, not just scheduled. Reported live, 2026-11.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.print();
+        // Backstop in case `afterprint` never fires (some browser/PDF-export
+        // paths skip it) — by this point the dialog has already read the title.
+        setTimeout(restore, 5000);
+      });
+    });
   };
 
   // Fires window.print() one render after `mode` changes from the dialog
@@ -173,6 +183,17 @@ export default function ReportPage() {
     setPendingPrint(true);
     setPrintDialogOpen(false);
   };
+
+  if (error) return <ErrorProject error={error} />;
+  if (loading !== "idle" && loading !== "done") return <LoadingProject loadingStage={loading} />;
+  if (!hasFreshData) {
+    return (
+      <div className="flex h-64 items-center justify-center gap-2 text-sm text-foreground">
+        <RefreshCw className="h-4 w-4 animate-spin" />
+        Loading latest results…
+      </div>
+    );
+  }
 
   // Reads the exact BSA/height/weight/sex state entered on this page, so the
   // CSV includes the same indexed values (EDVI/ESVI/LVMI, RVEDVI/RVESVI) and
@@ -212,6 +233,19 @@ export default function ReportPage() {
   // ── Wall thickness ED frame / ED→ES/mid frames (page 3) ─────────────────────
   const edFrame = doc?.heartMetrics?.ed_frame ?? null;
   const esFrame = doc?.heartMetrics?.es_frame ?? null;
+  // The LV strain/wall-thickness SUMMARY values below (strain.segments[].gcs/
+  // grs/wt_ed_mm/wt_es_mm) are computed between strain.edFrameIndex/
+  // esFrameIndex -- whatever frames were actually passed to compute-strain-
+  // from-frames -- which is NOT guaranteed to equal heartMetrics.ed_frame/
+  // es_frame (the separately auto-detected "quick" ED/ES; see
+  // segmentation_routes.ts's own PeakGRS/PeakGCS backfill guard, which only
+  // fires when the two agree and logs a mismatch otherwise -- so they are
+  // already known to be able to differ). Labeling those values with
+  // heartMetrics' frames would show a true-looking but wrong frame number
+  // next to a still-correct value. Falls back to heartMetrics' auto-detect
+  // only when strain hasn't recorded its own frame choice (older results).
+  const lvStrainEdFrame = strain?.edFrameIndex ?? edFrame;
+  const lvStrainEsFrame = strain?.esFrameIndex ?? esFrame;
 
   // ── Per-frame series, sorted by the ACTUAL computed frame indices — a
   // project may have strain for every frame or only a chosen subset, so
@@ -528,8 +562,8 @@ export default function ReportPage() {
               lvMassG={lvVolumes?.LVMassG ?? null}
               isRealData
               mode={mode}
-              lvEdFrame={edFrame}
-              lvEsFrame={esFrame}
+              lvEdFrame={lvStrainEdFrame}
+              lvEsFrame={lvStrainEsFrame}
               rvEdFrame={rvEdFrame}
               rvEsFrame={rvEsFrame}
             />
@@ -542,7 +576,7 @@ export default function ReportPage() {
                   generatedAt={generatedAt}
                   modeLabel="Full Research (All Frames)"
                   edWallThicknessMm={lvEdWallThicknessMm}
-                  edFrameIndex={edFrame}
+                  edFrameIndex={lvStrainEdFrame}
                   rvFacRings={rvEdEsFacValues.rings}
                   rvFacGlobal={rvEdEsFacValues.global}
                   rvEsFrameIndex={rvStrain?.esFrameIndex ?? null}
@@ -621,8 +655,8 @@ export default function ReportPage() {
                   modeLabel="Summary (ED/ES)"
                   edWallThicknessMm={lvEdWallThicknessMm}
                   esWallThicknessMm={lvEsWallThicknessMm}
-                  edFrameIndex={edFrame}
-                  esFrameIndex={esFrame}
+                  edFrameIndex={lvStrainEdFrame}
+                  esFrameIndex={lvStrainEsFrame}
                 />
                 <RvCavityAreaEdEsPage
                   patientLabel={patientLabel}
@@ -644,8 +678,8 @@ export default function ReportPage() {
                   modeLabel="Summary (ED/ES)"
                   esGcs={lvEsGcs}
                   esGrs={lvEsGrs}
-                  edFrameIndex={edFrame}
-                  esFrameIndex={esFrame}
+                  edFrameIndex={lvStrainEdFrame}
+                  esFrameIndex={lvStrainEsFrame}
                 />
                 <RvStrainEdEsPage
                   patientLabel={patientLabel}

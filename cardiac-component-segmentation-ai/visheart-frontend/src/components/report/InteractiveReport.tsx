@@ -355,7 +355,7 @@ function RegionalCurveTooltip({
     if (v == null) return null;
     return (
       <div className="rounded-lg border border-border bg-popover px-3 py-2 text-[13px] text-popover-foreground shadow-md">
-        <p className="font-semibold text-muted-foreground">Frame {label}</p>
+        <p className="font-semibold text-muted-foreground">Frame {typeof label === "number" ? label + 1 : label}</p>
         <p className="mt-0.5 font-bold" style={{ color: colorFor(focus) }}>
           {labelFor(focus)}: {v.toFixed(1)}%
         </p>
@@ -369,7 +369,7 @@ function RegionalCurveTooltip({
   if (!rows.length) return null;
   return (
     <div className="max-h-64 overflow-y-auto rounded-lg border border-border bg-popover px-3 py-2 text-[12.5px] text-popover-foreground shadow-md">
-      <p className="mb-1 font-semibold text-muted-foreground">Frame {label}</p>
+      <p className="mb-1 font-semibold text-muted-foreground">Frame {typeof label === "number" ? label + 1 : label}</p>
       <div className="flex flex-col gap-0.5">
         {rows.map(([id, v]) => (
           <div key={id} className="flex items-center justify-between gap-4">
@@ -417,7 +417,7 @@ function PinnedFrameDetail({
   return (
     <div className="mt-2 rounded-lg border border-primary/40 bg-popover shadow-sm">
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <p className="text-[12.5px] font-semibold text-foreground">Pinned — Frame {frame}</p>
+        <p className="text-[12.5px] font-semibold text-foreground">Pinned — Frame {frame + 1}</p>
         <button
           type="button"
           onClick={onClose}
@@ -792,6 +792,19 @@ export function InteractiveReport({
 
   const hasStrainData = bullseyeValues.length > 0;
   const hasCurves = curves.length > 1;
+
+  /** LV twin of rvActiveSeriesFrame/rvActiveGlobal below -- the per-frame
+   *  global GRS/GCS value for whichever frame is hovered/pinned (falling
+   *  back to the stored ED→ES peak when there's no series to look a frame
+   *  up in), so the LV card can show the same live "Frame N LV GCS -X%"
+   *  readout the RV card already has. */
+  const activeSeriesFrame = useMemo(
+    () => strainSeries?.frames?.find((f) => f.frameIndex === activeFrame) ?? null,
+    [strainSeries, activeFrame],
+  );
+  const activeGlobal = activeSeriesFrame
+    ? (strainType === "GRS" ? activeSeriesFrame.global_grs ?? null : activeSeriesFrame.global_gcs ?? null)
+    : (strainType === "GRS" ? measurements?.PeakGRS ?? null : measurements?.PeakGCS ?? null);
 
   /**
    * The ONE selection shared by the findings buttons, the bullseye wedges and
@@ -2093,8 +2106,8 @@ export function InteractiveReport({
                 <div className="mb-1 text-center">
                   <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[12.5px] font-semibold text-primary">
                     {hoverFrame == null
-                      ? (defaultFrame != null ? `Peak · Frame ${defaultFrame}` : "Peak")
-                      : `Frame ${activeFrame}`}
+                      ? (defaultFrame != null ? `Peak · Frame ${defaultFrame + 1}` : "Peak")
+                      : `Frame ${(activeFrame as number) + 1}`}
                   </span>
                 </div>
                 <Bullseye
@@ -2119,8 +2132,30 @@ export function InteractiveReport({
               </div>
 
               <div>
+                <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+                  <div>
+                    <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {activeSeriesFrame ? `Frame ${(activeFrame as number) + 1} LV ${strainType}` : `Global LV ${strainType}`}
+                    </span>
+                    <span className="text-[20px] font-bold tabular-nums text-foreground">
+                      {fmt(activeGlobal)}
+                      <span className="ml-0.5 text-[12.5px] font-semibold text-muted-foreground">%</span>
+                    </span>
+                  </div>
+                  {strain?.edFrameIndex != null && strain?.esFrameIndex != null && (
+                    <div>
+                      <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Frames
+                      </span>
+                      <span className="text-[14px] font-semibold tabular-nums text-foreground">
+                        ED {strain.edFrameIndex + 1} → ES {strain.esFrameIndex + 1}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 {hasCurves ? (
-                  <>
+                  <div className="mt-3">
                     <ResponsiveContainer width="100%" height={280}>
                       <LineChart
                         data={curves}
@@ -2136,7 +2171,12 @@ export function InteractiveReport({
                         }}
                       >
                         <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
-                        <XAxis dataKey="frame" tick={{ fontSize: 12 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 12 }} />
+                        {/* Stored frame indices are 0-based; tickFormatter displays
+                            them 1-based to match every other frame number in the
+                            app (print pages, standalone-4d-viewer) -- display only,
+                            the underlying `frame` dataKey stays 0-based so lookups
+                            (curves.find, activeSeriesFrame, etc.) are unaffected. */}
+                        <XAxis dataKey="frame" tickFormatter={(v) => String(Number(v) + 1)} tick={{ fontSize: 12 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 12 }} />
                         <YAxis tick={{ fontSize: 12 }} label={{ value: "Strain (%)", angle: -90, position: "insideLeft", fontSize: 12 }} />
                         <ReferenceLine y={0} stroke="var(--border)" />
                         <Tooltip
@@ -2218,7 +2258,7 @@ export function InteractiveReport({
                         onClose={() => setPinnedFrame(null)}
                       />
                     )}
-                  </>
+                  </div>
                 ) : (
                   <div className="flex h-full min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-border p-6 text-center">
                     <p className="text-sm text-muted-foreground">Full-cycle curves need the per-frame strain series.</p>
@@ -2284,25 +2324,27 @@ export function InteractiveReport({
               : "No RV regional strain computed for this model yet — run RV strain from the Landmark Detection page."}
           </p>
         ) : (
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-[420px_1fr]">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-[260px_1fr]">
             {/* Same crescent shape the Strain/Structure tabs draw RV with —
                 reused (not reimplemented) so no view can ever disagree, and
                 the two rings of real data (basal, mid) plus the honest
-                "no data" apical ring read the same way everywhere. Sized
-                wider than the LV bullseye's own 260px column: this chart's
-                480x470 viewBox always reserves the LV-side canvas space even
-                when showLv is off, so the visible crescent needs a bigger box
-                to render at a comparable size instead of looking small in the
-                unused margin. Fill/selection already animate the same way as
-                LV's own Bullseye (see rvRing's transition: "fill 200ms ease"
-                in CombinedVentricularChart.tsx) and use the same strainRamp
-                color scale, so only size needed correcting here. */}
+                "no data" apical ring read the same way everywhere. Same
+                260px column as the LV card's own Bullseye, for the same
+                reason: CombinedVentricularChart's RV-only viewBox is now
+                cropped to the crescent itself (see RV_ONLY_VIEW_W in
+                CombinedVentricularChart.tsx), not the full LV+RV canvas, so
+                it no longer needs a wider box to read at a comparable size.
+                Shrinking this column also hands the curve chart beside it
+                the freed-up width. Fill/selection already animate the same
+                way as LV's own Bullseye (see rvRing's transition: "fill
+                200ms ease" in CombinedVentricularChart.tsx) and use the
+                same strainRamp color scale. */}
             <div onClick={(e) => e.stopPropagation()}>
               <div className="mb-1 text-center">
                 <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[12.5px] font-semibold text-primary">
                   {hoverRvFrame == null
-                    ? (rvDefaultFrame != null ? `Peak · Frame ${rvDefaultFrame}` : "ED→ES")
-                    : `Frame ${rvActiveFrame}`}
+                    ? (rvDefaultFrame != null ? `Peak · Frame ${rvDefaultFrame + 1}` : "ED→ES")
+                    : `Frame ${(rvActiveFrame as number) + 1}`}
                 </span>
               </div>
               <CombinedVentricularChart
@@ -2330,7 +2372,7 @@ export function InteractiveReport({
               <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                 <div>
                   <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {rvActiveSeriesFrame ? `Frame ${rvActiveFrame} RV ${rvMetricType}` : `Global RV ${rvMetricType}`}
+                    {rvActiveSeriesFrame ? `Frame ${(rvActiveFrame as number) + 1} RV ${rvMetricType}` : `Global RV ${rvMetricType}`}
                   </span>
                   <span className="text-[20px] font-bold tabular-nums text-foreground">
                     {fmt(rvActiveGlobal)}
@@ -2343,7 +2385,7 @@ export function InteractiveReport({
                       Frames
                     </span>
                     <span className="text-[14px] font-semibold tabular-nums text-foreground">
-                      ED {rvShown.edFrameIndex} → ES {rvShown.esFrameIndex}
+                      ED {rvShown.edFrameIndex + 1} → ES {rvShown.esFrameIndex + 1}
                     </span>
                   </div>
                 )}
@@ -2369,7 +2411,9 @@ export function InteractiveReport({
                       }}
                     >
                       <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
-                      <XAxis dataKey="frame" tick={{ fontSize: 12 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 12 }} />
+                      {/* Display-only +1 -- see the matching comment on the LV
+                          chart's own XAxis above. */}
+                      <XAxis dataKey="frame" tickFormatter={(v) => String(Number(v) + 1)} tick={{ fontSize: 12 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 12 }} />
                       <YAxis tick={{ fontSize: 12 }} label={{ value: `RV ${rvMetricType} (%)`, angle: -90, position: "insideLeft", fontSize: 12 }} />
                       <ReferenceLine y={0} stroke="var(--border)" />
                       <Tooltip

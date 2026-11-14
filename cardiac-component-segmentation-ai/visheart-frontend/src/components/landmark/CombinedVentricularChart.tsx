@@ -108,14 +108,28 @@ export function CombinedVentricularChart({
   // balance against, so re-centering on the LV circle alone (horizontally;
   // vertical stays the same so the Anterior/Inferior/colorbar spacing built
   // around CENTER.y is unaffected) instead of leaving it off to one side of
-  // empty space. RV-only isn't touched here -- it already centers correctly
-  // on its own.
-  const center = (showLv && !showRv) ? { x: VIEW_W / 2, y: CENTER.y } : CENTER;
+  // empty space. RV-only used to keep the shared CENTER too, which left the
+  // whole right half of the (LV+RV-sized) canvas empty since nothing was
+  // drawn there -- recentered on the crescent itself instead, with the
+  // viewBox narrowed to match (see RV_ONLY_VIEW_W below).
+  const rvOnly = showRv && !showLv;
+  const center = (showLv && !showRv)
+    ? { x: VIEW_W / 2, y: CENTER.y }
+    : rvOnly
+    ? { x: RV_BASAL_OUTER + 20, y: CENTER.y }
+    : CENTER;
   // How far out layout (the Inferior label, the color bars) should clear --
   // the RV crescent's outer radius when it's drawn, or just the LV circle's
   // when it's the only thing on screen (using the RV radius there left a
   // large, unbalanced gap between the LV circle and everything below it).
   const outerR = showRv ? RV_BASAL_OUTER : (LV_BASAL_OUTER + 4);
+  // RV-only viewBox width: just enough for the crescent (left-aligned, small
+  // padding) plus the color bar underneath it (barW=260, centered on
+  // center.x -- see showColorBars below), which is wider than the crescent
+  // itself and so is the actual right-edge constraint. Narrowing this (from
+  // the full 480 Combined canvas) also makes the chart render taller for the
+  // same container width, since the SVG keeps its viewBox aspect ratio.
+  const RV_ONLY_VIEW_W = rvOnly ? center.x + 130 + 26 : VIEW_W;
 
   // ── LV (right side — unchanged 17-segment geometry, recentered) ──────────
   // Fixed colour scales (lib/strainColorScale.ts), not this patient's own min/max.
@@ -219,7 +233,7 @@ export function CombinedVentricularChart({
     });
 
   return (
-    <svg viewBox={`0 0 ${VIEW_W} ${showColorBars ? VIEW_H : center.y + outerR + 36}`} className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`Combined LV/RV ${strainType} bullseye`}>
+    <svg viewBox={`0 0 ${RV_ONLY_VIEW_W} ${showColorBars ? VIEW_H : center.y + outerR + 36}`} className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`Combined LV/RV ${strainType} bullseye`}>
       {/* Background discs */}
       {showRv && <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />}
       {showLv && <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />}

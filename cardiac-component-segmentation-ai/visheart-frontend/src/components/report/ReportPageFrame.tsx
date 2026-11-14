@@ -45,7 +45,19 @@ export function ReportPageFrame({
     >
       <header className="mb-3 flex items-center justify-between border-b border-gray-300 pb-2">
         <div className="flex items-center gap-1.5 text-base font-bold">
-          <Image src="/visheart_logo.svg" alt="" width={18} height={18} className="h-[18px] w-[18px]" />
+          {/* priority -- disables next/image's default lazy-loading. This same
+              18x18 logo repeats on every one of the report's 6-32 pages;
+              without `priority`, the copies below the fold never trigger
+              their IntersectionObserver in a document the user never scrolls
+              before clicking Print, so they're still unloaded the moment
+              window.print() fires. Print DOES force lazy images to load, but
+              that load is async and can still be mid-flight when Chrome
+              paginates, shifting that one page's header height just enough
+              to spill its tail onto an otherwise-blank next page -- a likely
+              cause of the recurring blank-page reports, independent of (and
+              probably more consequential than) the print-paint-timing race
+              the double rAF in handlePrint already guards against. */}
+          <Image src="/visheart_logo.svg" alt="" width={18} height={18} priority className="h-[18px] w-[18px]" />
           VisHeart
         </div>
         <div className="flex items-center gap-1.5">
