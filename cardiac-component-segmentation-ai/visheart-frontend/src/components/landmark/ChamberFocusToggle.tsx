@@ -1,9 +1,17 @@
 "use client";
 
+import { useParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export type ChamberFocus = "combined" | "LV" | "RV";
+
+/** A chamber that isn't available yet -- the message explains why, and `chamber` says which one
+ *  (LV or RV) a click should go build, via the "Reconstruct {chamber} to view this" link. */
+export interface ChamberUnavailable {
+  message: string;
+  chamber: "LV" | "RV";
+}
 
 const OPTIONS: { value: ChamberFocus; label: string }[] = [
   { value: "combined", label: "Combined" },
@@ -16,20 +24,22 @@ export function ChamberFocusToggle({
   onChange,
   disabled = false,
   /** Per-option reason a chamber can't be selected yet (e.g. its reconstruction hasn't been
-   *  built) -- that option renders blurred/unclickable with this text on hover, instead of the
-   *  whole group being disabled. "combined" is disabled automatically whenever either LV or RV
-   *  is, since it needs both. */
+   *  built) -- that option renders blurred, with this reason on hover, and a click goes straight
+   *  to building that reconstruction instead of switching the focus. "combined" falls back to
+   *  whichever of LV/RV is actually missing, since it needs both. */
   disabledOptions,
   className,
 }: {
   value: ChamberFocus;
   onChange: (focus: ChamberFocus) => void;
   disabled?: boolean;
-  disabledOptions?: Partial<Record<ChamberFocus, string>>;
+  disabledOptions?: Partial<Record<ChamberFocus, ChamberUnavailable>>;
   className?: string;
 }) {
+  const router = useRouter();
+  const { projectId } = useParams<{ projectId: string }>();
   const combinedReason = disabledOptions?.combined ?? disabledOptions?.LV ?? disabledOptions?.RV;
-  const reasonFor = (option: ChamberFocus): string | undefined =>
+  const reasonFor = (option: ChamberFocus): ChamberUnavailable | undefined =>
     option === "combined" ? combinedReason : disabledOptions?.[option];
 
   return (
@@ -49,12 +59,13 @@ export function ChamberFocusToggle({
             key={option.value}
             type="button"
             aria-pressed={value === option.value}
-            disabled={!!reason}
-            onClick={() => onChange(option.value)}
+            onClick={() =>
+              reason ? router.push(`/project/${projectId}?build=${reason.chamber.toLowerCase()}`) : onChange(option.value)
+            }
             className={cn(
-              "w-full rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+              "w-full rounded-md px-2 py-1.5 text-[13px] font-medium transition-colors",
               reason
-                ? "cursor-not-allowed text-muted-foreground opacity-50"
+                ? "text-muted-foreground opacity-50 hover:opacity-80"
                 : value === option.value
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -66,14 +77,10 @@ export function ChamberFocusToggle({
         if (!reason) return button;
         return (
           <Tooltip key={option.value}>
-            <TooltipTrigger asChild>
-              {/* A disabled <button> doesn't fire hover events in most browsers, so the
-                  tooltip trigger wraps it in a span instead -- same pattern already used
-                  elsewhere in this app for a disabled-button-with-reason tooltip. */}
-              <span className="inline-block">{button}</span>
-            </TooltipTrigger>
+            <TooltipTrigger asChild>{button}</TooltipTrigger>
             <TooltipContent>
-              <p>{reason}</p>
+              <p className="font-medium">{reason.message}</p>
+              <p className="opacity-90">Click to reconstruct {reason.chamber}</p>
             </TooltipContent>
           </Tooltip>
         );

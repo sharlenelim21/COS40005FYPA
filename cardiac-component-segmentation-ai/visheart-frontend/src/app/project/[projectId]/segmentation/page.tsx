@@ -1514,8 +1514,8 @@ function SegmentationResultsPageInner() {
                       </div>
 
                       {rvReconstructionForModel && showRvInPanel && (
-                        <p className="mb-2 flex-shrink-0 text-[11px] leading-snug text-amber-600 dark:text-amber-500">
-                          RV reconstruction is for reference/research use only; not reliable for
+                        <p className="mb-2 flex-shrink-0 text-sm leading-snug text-amber-600 dark:text-amber-500">
+                          This is our own research output and is still under research; not reliable for
                           actual clinical diagnosis.
                         </p>
                       )}

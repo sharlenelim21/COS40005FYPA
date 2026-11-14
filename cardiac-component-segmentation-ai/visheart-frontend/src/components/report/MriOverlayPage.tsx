@@ -252,7 +252,7 @@ export function MriOverlayPage({
                     alt={`Frame ${p.frame} — MRI with segmentation overlay`}
                     className={`w-full rounded-lg border-2 ${tag ? "border-teal-500" : "border-gray-300"}`}
                   />
-                  <figcaption className="mt-1 text-[9px] font-bold uppercase tracking-wide text-gray-900">
+                  <figcaption className="mt-1 text-[11px] font-bold uppercase tracking-wide text-gray-900">
                     Frame {p.frame}{tag && <span className="ml-1 rounded-full bg-teal-100 px-1.5 py-0.5 text-teal-700">{tag}</span>}
                   </figcaption>
                 </figure>
@@ -266,11 +266,11 @@ export function MriOverlayPage({
                 {ANATOMICAL_LABELS.map((label) => (
                   <div key={label} className="flex items-center gap-1.5">
                     <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: LABEL_COLORS[label] }} />
-                    <span className="text-[8.5px] text-gray-600">{LABEL_NAMES[label]}</span>
+                    <span className="text-[11px] text-gray-600">{LABEL_NAMES[label]}</span>
                   </div>
                 ))}
               </div>
-              <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
+              <p className="mt-2 text-[11px] leading-snug text-gray-600">
                 Overlay generated directly from the model&apos;s stored segmentation masks at the frame and slice
                 shown; not a schematic illustration. ED, Mid, and ES frames are outlined and tagged.
               </p>

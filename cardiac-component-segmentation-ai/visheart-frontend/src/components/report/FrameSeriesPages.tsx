@@ -93,7 +93,7 @@ export function FrameSeriesPages({
         subtitle="Every computed frame"
         generatedAt={generatedAt}
       >
-        <p className="py-10 text-center text-[10px] text-gray-600">{emptyMessage}</p>
+        <p className="py-10 text-center text-[12px] text-gray-600">{emptyMessage}</p>
       </ReportPageFrame>
     );
   }
@@ -112,13 +112,13 @@ export function FrameSeriesPages({
           generatedAt={generatedAt}
         >
           {ci === 0 && bullseyeIntroNote && (
-            <p className="mb-2 text-[9.5px] leading-snug text-gray-600">{bullseyeIntroNote}</p>
+            <p className="mb-2 text-[11px] leading-snug text-gray-600">{bullseyeIntroNote}</p>
           )}
           <div className="grid grid-cols-3 gap-3">
             {frameChunk.map((f) => (
               <div key={f.frameIndex} className={`rounded-md border-2 p-1 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? accentBorder : "border-gray-300"}`}>
                 <div className="mx-auto h-[180px] w-[180px]">{renderBullseye(f.values)}</div>
-                <p className="text-center text-[8px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
+                <p className="text-center text-[10px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
               </div>
             ))}
           </div>
@@ -137,14 +137,14 @@ export function FrameSeriesPages({
           generatedAt={generatedAt}
         >
           {ci === 0 && tablePrototypeNote && (
-            <div className={`mb-2 rounded-md border border-dashed px-2.5 py-1.5 text-[9px] ${
+            <div className={`mb-2 rounded-md border border-dashed px-2.5 py-1.5 text-[11px] ${
               theme === "amber" ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-gray-50 text-gray-600"
             }`}>
               {tablePrototypeNote}
             </div>
           )}
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[7.5px]">
+            <table className="w-full border-collapse text-[9px]">
               <thead>
                 <tr className={accentHeadBg}>
                   <th className={`border-b border-gray-300 px-1 py-1 text-left font-bold ${accentHeadText}`}>Frame</th>
@@ -169,7 +169,7 @@ export function FrameSeriesPages({
             </table>
           </div>
           {ci === tableChunks.length - 1 && (
-            <p className="mt-2 text-[8.5px] text-gray-600">
+            <p className="mt-2 text-[10px] text-gray-600">
               {columnLabels.map((l, i) => `${i + 1}. ${l}`).join(" · ")}
             </p>
           )}

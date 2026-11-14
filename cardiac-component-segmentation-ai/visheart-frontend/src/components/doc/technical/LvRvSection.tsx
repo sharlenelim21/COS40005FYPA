@@ -10,6 +10,7 @@ import {
   RV_STRAIN_METHOD_SECTION_ID,
 } from "@/components/doc/guides";
 import { Callout } from "@/components/doc/medical/Callout";
+import { DocImage } from "@/components/doc/DocImage";
 import { FormulaList, type FormulaItem } from "@/components/doc/technical/FormulaList";
 import { REFERENCES, type Reference } from "@/content/medicalGuide";
 import { cn } from "@/lib/utils";
@@ -23,7 +24,7 @@ import { cn } from "@/lib/utils";
 // "Research output only" notices link to the RV card (RV_STRAIN_METHOD_SECTION_ID).
 
 // ── References (numbered in this order on this page) ─────────────────────────
-const SECTION_REFS = ["cerqueira2002", "tokodi2021", "scmr2025", "bernard2018"] as const;
+const SECTION_REFS = ["cerqueira2002", "tokodi2021", "scmr2025", "bernard2018", "myronenko2010", "bazhutina2023"] as const;
 type SectionRef = (typeof SECTION_REFS)[number];
 const refAnchor = (id: SectionRef) => `lv-rv-ref-${id}`;
 
@@ -246,6 +247,15 @@ function DiagramFigure({ diagram, alt, caption }: { diagram: DiagramId; alt: str
   );
 }
 
+function ImageFigure({ src, alt, caption }: { src: string; alt: string; caption: string }) {
+  return (
+    <figure className="bg-muted/30 rounded-lg border p-2 md:p-4">
+      <DocImage src={src} alt={alt} className="w-full h-auto rounded-md border shadow-sm bg-white" />
+      <figcaption className="text-muted-foreground mt-2 text-xs">{caption}</figcaption>
+    </figure>
+  );
+}
+
 function ReferenceLink({ reference }: { reference: Reference }) {
   const href = reference.doi !== undefined ? `https://doi.org/${reference.doi}` : reference.url;
   return (
@@ -382,6 +392,35 @@ export function LvRvSection() {
           caption="LV ray casting on a basal slice (schematic, anterior at the top, septum on the left). Wall thickness along each ray gives GRS; the joined border points give the three border lengths averaged for GCS."
         />
         <FormulaList caption="LV formulas" items={LV_FORMULAS} />
+
+        <SubHeading>How the 3D model is labelled</SubHeading>
+        <Para>
+          Separately from the bullseye above, VisHeart&apos;s 3D LV mesh also needs every point on its surface to
+          know which of the 17 segments it belongs to, so it can be coloured segment by segment. This is done by
+          comparing the patient&apos;s mesh against a single reference heart shape that was already divided into its
+          17 segments once, then letting every point on the patient&apos;s own mesh borrow its label from whichever
+          point on that reference shape it lines up with most closely.
+        </Para>
+        <Steps>
+          <Step title="Elastic warp">
+            The reference shape is elastically warped — stretched and bent, not just rotated or resized — to line up
+            with the patient&apos;s own reconstructed left ventricle, using an algorithm called Coherent Point Drift
+            <Cite ids={["myronenko2010"]} />.
+          </Step>
+          <Step title="Nearest-point label transfer">
+            Once the two shapes are aligned, each point on the patient&apos;s mesh is given the segment label of
+            whichever point on the warped reference shape ends up closest to it.
+          </Step>
+          <Step title="Fallback">
+            If that alignment step doesn&apos;t produce a usable result, VisHeart falls back to a simpler, fixed
+            geometric rule (dividing the shape by height and angle) instead of leaving the mesh unlabelled.
+          </Step>
+        </Steps>
+        <ImageFigure
+          src="/images/doc/lv_cpd_pipeline.png"
+          alt="Three-panel diagram: (1) the reference atlas's zone meshes, aligned into one coordinate frame; an arrow labelled 'CPD warp' points to (2) the patient's own mesh sampled into a dense point cloud; an arrow labelled 'label transfer' points to (3) the atlas meshes after Coherent Point Drift deformation, now aligned to the patient's shape."
+          caption="VisHeart labels the 3D LV mesh by elastically warping a reference atlas (1) onto the patient's own mesh, sampled into a dense point cloud for registration (2), using Coherent Point Drift — producing a deformed atlas aligned to the patient's shape (3). Each point on the patient's mesh then takes the segment label of whichever point on the deformed atlas ends up closest to it. Figures from VisHeart's own research notebook prototyping this method."
+        />
       </StepCard>
 
       {/* ── 3. RV (research) ────────────────────────────────────────────── */}
@@ -393,9 +432,10 @@ export function LvRvSection() {
       >
         <Callout variant="warning" title="Research output only: not for diagnosis">
           <p>
-            RV strain is still under research. The 9-segment RV bullseye is our own method, based on our
-            understanding of the published work and adapted from the LV method above. It has not been tested against
-            a reference standard such as feature-tracking MRI, 3D echocardiography or expert measurements.
+            This is our own research output and is still under research. The 9-segment RV bullseye, and the 3D mesh
+            labelling built on top of it, are our own method, based on our understanding of the published work and
+            adapted from the LV method above. Neither has been tested against a reference standard such as
+            feature-tracking MRI, 3D echocardiography or expert measurements.
           </p>
           <p>
             There are no normal ranges for these numbers. Use them to compare the segments of one heart, or one heart
@@ -517,6 +557,78 @@ export function LvRvSection() {
           <Cite ids={["tokodi2021"]} />.
         </Para>
         <FormulaList caption="RV formulas" items={RV_FORMULAS} />
+
+        <SubHeading>How the 3D model is labelled</SubHeading>
+        <Para>
+          The RV&apos;s 3D mesh is labelled differently from the LV&apos;s above —{" "}
+          <span className="font-semibold text-red-700 dark:text-red-400">
+            not against a reference atlas at all, since no validated RV atlas exists
+          </span>{" "}
+          — but built directly from the RV segmentation masks, slice by slice, then carried onto the 3D mesh.
+        </Para>
+        <SubHeading>Step 1 — Labelling one slice (the septal-anchored chord method)</SubHeading>
+        <Para>
+          On each short-axis slice, VisHeart starts from that slice&apos;s RV and LV segmentation masks and
+          constructs a single chord through the RV&apos;s own centre to split it into Seg1, Seg2 and Seg3 — an
+          extension of the AHA 17-segment model to the RV
+          <Cite ids={["bazhutina2023"]} />.
+        </Para>
+        <Steps>
+          <Step title="Find the centres">
+            From that slice&apos;s RV and LV masks, VisHeart finds the RV&apos;s own centre point and the LV&apos;s
+            centre point.
+          </Step>
+          <Step title="Septal direction">
+            The direction from the RV centre to the LV centre is the septum — the wall the two ventricles share —
+            which gives a consistent, patient-specific landmark to anchor the cut to on every slice.
+          </Step>
+          <Step title="The chord">
+            A line (the chord) is drawn through the RV&apos;s own centre point, at a right angle to the septal
+            direction. This chord crosses the RV&apos;s outline at two points, p1 and p2.
+          </Step>
+          <Step title="Halve the chord">
+            The midpoint between the centre and each of p1 and p2 becomes a cut point — q1 and q2 — perpendicular to
+            the chord.
+          </Step>
+          <Step title="Final per-pixel labels">
+            Together, q1 and q2 split the slice into three regions: Seg1, Seg2 and Seg3, going around the RV in
+            order. Every RV pixel on that slice is labelled by which of the three regions it falls in.
+          </Step>
+        </Steps>
+        <ImageFigure
+          src="/images/doc/rv_9segment_per_slice_steps.png"
+          alt="Five panels showing one short-axis slice's RV and LV masks, the RV centre point and septal direction, the cutting line through the centre perpendicular to the septal direction, the two cut points, and the final Segment 1/2/3 labels in that slice."
+          caption="The septal-anchored chord method on a real patient slice: (1) the RV and LV masks, (2) the RV's own centre point and the septal direction towards the LV's centre, (3) the chord through the RV centre, perpendicular to the septal direction, (4) halving the chord to the two cut points q1/q2, (5) the final per-pixel Seg1/Seg2/Seg3 labels."
+        />
+        <ImageFigure
+          src="/images/doc/rv_9segment_all_slices.png"
+          alt="Eight short-axis slices from apex to base of the same study, each showing the RV outline split into Segment 1, 2 and 3 by the same septal-anchored cutting line."
+          caption="The same construction applied to every slice of one study, apex to base — because the cut's direction follows each slice's own septal reference, segment identity stays consistent from one slice to the next with no extra adjustment."
+        />
+        <SubHeading>Step 2 — From per-slice labels to a labelled 3D mesh</SubHeading>
+        <Steps>
+          <Step title="Build the point cloud">
+            Every RV pixel on every slice already carries a segment label (Seg1–Seg3, combined with its basal/mid/
+            apical ring into R1–R9) from Step 1 above. Stacking all of those labelled points from every slice
+            together builds one labelled point cloud in 3D space.
+          </Step>
+          <Step title="Nearest-neighbour transfer">
+            Each point on the reconstructed RV surface then simply takes the label of whichever point in that cloud
+            sits closest to it — a nearest-neighbour lookup, not a warped-atlas alignment.
+          </Step>
+          <Step title="Why not the LV's atlas-warp method">
+            An earlier version of VisHeart&apos;s RV pipeline labelled the 3D mesh the same reference-shape-warping
+            way the LV still does above. It was changed specifically for the RV because the reference shape&apos;s
+            structure is comparatively flat, while a real patient&apos;s right ventricle is often more sharply
+            curved — warping a flat reference onto a sharply curved shape tended to fragment a single segment into
+            many small, disconnected pieces on the final mesh.
+          </Step>
+        </Steps>
+        <ImageFigure
+          src="/images/doc/rv_9segment_3d_fusion.png"
+          alt="Two pairs of 3D plots: the segment-labelled points from every slice stacked together, and the same labels carried onto the final reconstructed RV surface, each shown from two camera angles."
+          caption="The per-slice segment labels, stacked from every slice into a labelled point cloud, are then carried onto the reconstructed RV surface — each point on the surface takes its nearest labelled neighbour's segment — producing the final 9-segment 3D mesh."
+        />
 
         <SubHeading>Known limitations</SubHeading>
         <Callout variant="caution" title="Keep these in mind when reading any RV value">

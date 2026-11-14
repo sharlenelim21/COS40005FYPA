@@ -58,13 +58,13 @@ interface ProjectContextType {
   refreshReconstructions: () => Promise<void>;
 
   // NEW: URL Preloading for smooth playback
-  preloadAllModelURLs: (onProgress?: (current: number, total: number) => void) => Promise<number>;
+  preloadAllModelURLs: (onProgress?: (current: number, total: number) => void, reconstructionIdOverride?: string) => Promise<number>;
   isPreloading: boolean;
   preloadProgress: { current: number; total: number } | null;
   isFullyPreloaded: boolean;
 
   // NEW: Three.js Aggressive Preloading (parse all GLB models)
-  preloadAllThreeJSModels: (onProgress?: (current: number, total: number) => void) => Promise<number>;
+  preloadAllThreeJSModels: (onProgress?: (current: number, total: number) => void, reconstructionIdOverride?: string) => Promise<number>;
   isThreeJSPreloading: boolean;
   threeJSPreloadProgress: { current: number; total: number } | null;
 
@@ -704,8 +704,9 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
   // NEW: Preload all model URLs for smooth playback
   const preloadAllModelURLs = useCallback(
-    async (onProgress?: (current: number, total: number) => void): Promise<number> => {
-      if (!projectId || !activeReconstructionTarget?.reconstructionId) {
+    async (onProgress?: (current: number, total: number) => void, reconstructionIdOverride?: string): Promise<number> => {
+      const reconstructionId = reconstructionIdOverride ?? activeReconstructionTarget?.reconstructionId;
+      if (!projectId || !reconstructionId) {
         console.warn("[ProjectContext] ⚠️ Cannot preload URLs: missing projectId or reconstructionId");
         return 0;
       }
@@ -723,7 +724,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
         const count = await reconstructionCache.preloadAllModelURLs(
           projectId,
-          activeReconstructionTarget.reconstructionId,
+          reconstructionId,
           (current, total) => {
             // Update internal progress state
             setPreloadProgress({ current, total });
@@ -753,8 +754,9 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
 
   // NEW: Aggressive Three.js preloading - parse all GLB models into Three.js cache
   const preloadAllThreeJSModels = useCallback(
-    async (onProgress?: (current: number, total: number) => void): Promise<number> => {
-      if (!projectId || !activeReconstructionTarget?.reconstructionId) {
+    async (onProgress?: (current: number, total: number) => void, reconstructionIdOverride?: string): Promise<number> => {
+      const reconstructionId = reconstructionIdOverride ?? activeReconstructionTarget?.reconstructionId;
+      if (!projectId || !reconstructionId) {
         console.warn("[ProjectContext] ⚠️ Cannot preload Three.js models: missing projectId or reconstructionId");
         return 0;
       }
@@ -771,12 +773,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.log(`[ProjectContext] 🎮 Starting Three.js aggressive preload for all models...`);
 
         // First, ensure all URLs are preloaded
-        await preloadAllModelURLs();
+        await preloadAllModelURLs(undefined, reconstructionId);
 
         // Get all model URLs from cache
         const modelURLs = await reconstructionCache.getAllModelURLs(
           projectId,
-          activeReconstructionTarget.reconstructionId
+          reconstructionId
         );
 
         if (!modelURLs || modelURLs.length === 0) {
@@ -793,7 +795,17 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         // Import useGLTF from drei for proper React Three Fiber caching
         const { useGLTF } = await import('@react-three/drei');
 
-        // Dynamically import OBJLoader for OBJ files
+        // Dynamically import OBJLoader for OBJ files, and our own GLTFLoader for GLB ones --
+        // useGLTF.preload() is fire-and-forget by design (suspend-react's preload() discards
+        // its own return value), so awaiting it does NOT wait for the real fetch+parse to
+        // finish: this loop used to report "done" almost instantly while GLB downloads were
+        // still running in the background, so the per-frame spinner still fired during
+        // playback right after "preload complete" logged (same bug fixed in the standalone 4D
+        // viewer's own preload effect, 2026-11-13). Loading through our own GLTFLoader first
+        // makes this await real; useGLTF.preload() right after warms drei's cache so the later
+        // useGLTF() hook render doesn't redundantly refetch over the network.
+        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+        const gltfLoader = new GLTFLoader();
         const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
         const objLoader = new OBJLoader();
 
@@ -832,8 +844,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
                     );
                   });
                 } else {
-                  // For GLB/GLTF files, use useGLTF.preload() which integrates with React Three Fiber's cache
+                  // Load through our own GLTFLoader so this await is real (see note above),
+                  // then warm drei's own cache via useGLTF.preload() for the later hook render.
                   try {
+                    await new Promise<void>((resolve) => {
+                      gltfLoader.load(url, () => resolve(), undefined, () => resolve());
+                    });
                     useGLTF.preload(url);
                     loaded++;
                     setThreeJSPreloadProgress({ current: loaded, total });
@@ -1426,6 +1442,28 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.log(`[ProjectContext] ✅ Step 2 complete: ${threeJSCount} models parsed`);
 
         console.log(`[ProjectContext] 🎯 ZERO-LAG PRELOAD COMPLETE! All frames will load instantly.`);
+
+        // activeReconstructionTarget resolves to one chamber only -- usually LV. RV is a second,
+        // independent reconstruction record this effect would otherwise never reach, so the 4D
+        // viewer's own first playback still had to preload it itself (and still does, as a
+        // fallback/progress-UI owner) instead of it being ready the moment the reconstruction
+        // job finishes, wherever the user is in the app (reported live, 2026-11-13: "don't want
+        // to wait for it once it's done"). Same model as the active target, opposite chamber.
+        const activeChamber = normalizeReconstructionChamber(activeReconstructionTarget?.chamber);
+        const otherChamber = activeChamber === "lv" ? "rv" : "lv";
+        const activeModelNorm = normalizeReconstructionModel(activeReconstructionTarget?.segmentationModel);
+        const counterpart = (reconstructionResults ?? []).find(
+          (recon: any) => // eslint-disable-line @typescript-eslint/no-explicit-any
+            normalizeReconstructionChamber(recon?.chamber) === otherChamber &&
+            normalizeReconstructionModel(recon?.segmentationModel) === activeModelNorm &&
+            recon?.reconstructionId,
+        );
+        if (counterpart?.reconstructionId) {
+          console.log(`[ProjectContext] 🚀 Also preloading the ${otherChamber.toUpperCase()} reconstruction in the background...`);
+          const rvUrlCount = await preloadAllModelURLs(undefined, counterpart.reconstructionId);
+          const rvThreeJSCount = await preloadAllThreeJSModels(undefined, counterpart.reconstructionId);
+          console.log(`[ProjectContext] 🎯 ${otherChamber.toUpperCase()} preload complete: ${rvUrlCount} URLs, ${rvThreeJSCount} models parsed.`);
+        }
       } catch (error) {
         console.error(`[ProjectContext] ❌ Auto-preload failed:`, error);
       }
@@ -1435,7 +1473,7 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
     const timeoutId = setTimeout(autoPreloadComplete, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [activeReconstructionCacheKey, activeReconstructionTarget, projectId, preloadAllModelURLs, preloadAllThreeJSModels, reconstructionCacheReady, shouldSkipReconstructionPreload]);
+  }, [activeReconstructionCacheKey, activeReconstructionTarget, projectId, preloadAllModelURLs, preloadAllThreeJSModels, reconstructionCacheReady, reconstructionResults, shouldSkipReconstructionPreload]);
 
   // 5. Optimized final loading state management - set to done when all components are ready or there's an error
   useEffect(() => {

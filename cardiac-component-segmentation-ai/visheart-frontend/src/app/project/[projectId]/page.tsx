@@ -378,10 +378,28 @@ function ProjectPageInner() {
   );
 
   // Check if there are any active reconstruction jobs (memoized for use in effects)
-  const hasActiveReconstructionJobs = useMemo(() => 
+  const hasActiveReconstructionJobs = useMemo(() =>
     (reconstructionJobs || []).some(isActiveReconstructionJob),
     [reconstructionJobs]
   );
+
+  // Force a fresh job list AND mask list every time this page mounts.
+  // ProjectContext effectively fetches both just ONCE per provider instance
+  // (the layout shares one ProjectProvider across every /project/[id]/*
+  // route, and neither fetch re-runs just because a different page under it
+  // mounted) -- after that, they're kept current only by this page's own
+  // pollJobList interval (jobs) or whatever the mask/segmentation editor
+  // remembers to call (masks), neither of which runs while this page isn't
+  // mounted. If the user navigates away (e.g. to Preview Dataset, or to the
+  // mask editor to save edits) and comes back, this page could still show a
+  // stale "Start AI Segmentation" or "Unsaved" badge until a hard refresh
+  // remade the whole context. `silent` avoids a flash to "no masks" while
+  // the fresh ones load. Reported live, 2026-11.
+  useEffect(() => {
+    refreshJobs();
+    refreshReconstructionJobs();
+    refreshMasks({ silent: true });
+  }, [projectId, refreshJobs, refreshReconstructionJobs, refreshMasks]);
 
   // Clear starting state when segmentation jobs appear
   useEffect(() => {
@@ -1939,9 +1957,22 @@ function ProjectPageInner() {
                     Segmentation
                   </CardTitle>
                   {hasMasks && (
-                    <Badge variant={maskIsSaved ? "default" : "secondary"}>
-                      {maskIsSaved ? "Saved" : "Unsaved"}
-                    </Badge>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant={maskIsSaved ? "default" : "secondary"} className="cursor-help">
+                            {maskIsSaved ? "Masks Saved" : "Masks Unsaved"}
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-[220px] text-xs">
+                            {maskIsSaved
+                              ? "These masks have been confirmed in the Segmentation Editor."
+                              : "Separate from the project's own Saved status — open the Segmentation Editor and save at least once to confirm these masks."}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   )}
                 </div>
               </CardHeader>

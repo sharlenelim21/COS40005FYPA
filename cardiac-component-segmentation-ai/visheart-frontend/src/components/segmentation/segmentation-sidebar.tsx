@@ -476,14 +476,23 @@ export function SegmentationSidebar({
     setActiveTab(tabKey);
   }, []);
 
+  // Previously disabled with no edits made ("No Changes"), which meant the
+  // ONLY way to mark a project's masks as saved/confirmed was to make (and
+  // keep) at least one edit -- someone happy with the AI output as-is had no
+  // way to confirm it from here at all (reported live, 2026-11: "I already
+  // saved and didn't edit anything, but it still shows unsaved"). Clicking
+  // with no edits now saves the AI output as the editable mask verbatim --
+  // the same thing the project page's "Reset Masks" already does, just
+  // reachable from here too, and harmless to repeat (handleSave reports
+  // "no differences" when there's nothing new).
   const saveButtonConfig = useMemo(() => ({
     variant: (hasUnsavedChanges && !isSaving) ? "default" as const : "secondary" as const,
     text: isSaving
       ? "Saving..."
       : hasUnsavedChanges
       ? "Save Changes"
-      : "No Changes",
-    disabled: !hasUnsavedChanges || isSaving
+      : "Confirm Masks",
+    disabled: isSaving
   }), [hasUnsavedChanges, isSaving]);
 
   return (

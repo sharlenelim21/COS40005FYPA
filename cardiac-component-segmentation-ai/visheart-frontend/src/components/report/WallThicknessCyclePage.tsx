@@ -96,7 +96,7 @@ export function WallThicknessCyclePage({
           subtitle="Every computed frame — end-diastole (ED) and end-systole (ES) marked"
           generatedAt={generatedAt}
         >
-          <p className="py-10 text-center text-[10px] text-gray-600">
+          <p className="py-10 text-center text-[12px] text-gray-600">
             Not computed — run the per-frame strain series to populate the LV wall-thickness cycle.
           </p>
         </ReportPageFrame>
@@ -119,7 +119,7 @@ export function WallThicknessCyclePage({
                 <div className="mx-auto h-[180px] w-[180px]">
                   <StrainBullseyeChart data={toSeries(f)} strainType="GRS" sharedMin={min} sharedMax={max} />
                 </div>
-                <p className="text-center text-[8px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
+                <p className="text-center text-[10px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
               </div>
             ))}
           </div>
@@ -138,7 +138,7 @@ export function WallThicknessCyclePage({
           generatedAt={generatedAt}
         >
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[6.8px]">
+            <table className="w-full border-collapse text-[9px]">
               <thead>
                 <tr className="bg-teal-50">
                   <th className="border-b border-gray-300 px-1 py-1 text-left font-bold text-teal-800">Frame</th>
@@ -164,7 +164,7 @@ export function WallThicknessCyclePage({
             </table>
           </div>
           {ci === tableChunks.length - 1 && (
-            <p className="mt-2 text-[8.5px] text-gray-600">S1–S17 are the 17 AHA segments, same order as the bullseye (basal 1–6, mid 7–12, apical 13–16, apex 17).</p>
+            <p className="mt-2 text-[11px] text-gray-600">S1–S17 are the 17 AHA segments, same order as the bullseye (basal 1–6, mid 7–12, apical 13–16, apex 17).</p>
           )}
         </ReportPageFrame>
       ))}
@@ -179,7 +179,7 @@ export function WallThicknessCyclePage({
           subtitle="Short-axis RV fractional area change vs end-diastole, every computed frame"
           generatedAt={generatedAt}
         >
-          <p className="py-10 text-center text-[10px] text-gray-600">
+          <p className="py-10 text-center text-[12px] text-gray-600">
             Not computed — run the RV strain series (all frames) to populate RV FAC across the cycle.
           </p>
         </ReportPageFrame>
@@ -197,7 +197,7 @@ export function WallThicknessCyclePage({
               generatedAt={generatedAt}
             >
               {ci === 0 && (
-                <p className="mb-2 text-[9.5px] leading-snug text-gray-600">
+                <p className="mb-2 text-[12px] leading-snug text-gray-600">
                   FAC = (ED area − frame area) / ED area × 100, drawn per ring across its 3 RV-bullseye
                   sections (= −GAS). Short-axis MRI, not the echo 4-chamber FAC — no validated reference range.
                 </p>
@@ -227,11 +227,11 @@ export function WallThicknessCyclePage({
               generatedAt={generatedAt}
             >
               {ci === 0 && !hasRvFac && (
-                <div className="mb-2 rounded-md border border-dashed border-gray-300 bg-gray-50 px-2.5 py-1.5 text-[9px] text-gray-600">
+                <div className="mb-2 rounded-md border border-dashed border-gray-300 bg-gray-50 px-2.5 py-1.5 text-[11px] text-gray-600">
                   This RV strain series was computed before per-frame RV areas were stored — recompute the RV strain series to populate FAC.
                 </div>
               )}
-              <table className="w-full border-collapse text-[9px]">
+              <table className="w-full border-collapse text-[12px]">
                 <thead>
                   <tr className="bg-teal-50">
                     <th className="border-b border-gray-300 px-2 py-1 text-left font-bold text-teal-800">Frame</th>

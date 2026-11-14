@@ -12,7 +12,8 @@ import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { GuidancePanel } from "@/components/GuidancePanel";
-import { Layers, Crosshair, AlertTriangle } from "lucide-react";
+import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
+import { Layers, Crosshair } from "lucide-react";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -284,7 +285,7 @@ export default function Standalone4DViewerPage() {
     {
       key: "rv" as const,
       label: "RV cavity",
-      color: "#e8743b",
+      color: "#660000",
       recon: rvReconstruction,
       visible: showRv,
       setVisible: setShowRv,
@@ -308,8 +309,16 @@ export default function Standalone4DViewerPage() {
     }
 
     let cancelled = false;
+    // Once the preload pass above has warmed this reconstruction, resolving a
+    // frame's URL here is just a cache read -- but setIsLoadingModel(true)
+    // still guaranteed at least one render with the "Loading..." badge shown
+    // on EVERY frame advance during playback (the setState happens before
+    // the first await, regardless of how fast that await resolves), which is
+    // exactly what read as flickering even after preloading. Only show it
+    // for a reconstruction that genuinely hasn't been prepared yet.
+    const alreadyPrepared = preparedReconstructionsRef.current.has(lvReconstruction.reconstructionId);
     const loadModel = async () => {
-      setIsLoadingModel(true);
+      if (!alreadyPrepared) setIsLoadingModel(true);
       try {
         console.log(`[Standalone4DViewer] Loading LV model for frame ${currentFrame}...`);
         const url = await getReconstructionGLB(currentFrame, undefined, lvReconstruction.reconstructionId);
@@ -326,7 +335,7 @@ export default function Standalone4DViewerPage() {
         console.error(`[Standalone4DViewer] Error loading LV model:`, error);
         setReconstructionModelUrl(null);
       } finally {
-        if (!cancelled) setIsLoadingModel(false);
+        if (!cancelled && !alreadyPrepared) setIsLoadingModel(false);
       }
     };
 
@@ -400,7 +409,9 @@ export default function Standalone4DViewerPage() {
       setPrepareProgress({ current: 0, total });
 
       const { useGLTF } = await import("@react-three/drei");
+      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
       const { OBJLoader } = await import("three/examples/jsm/loaders/OBJLoader.js");
+      const gltfLoader = new GLTFLoader();
       const objLoader = new OBJLoader();
       const CONCURRENT = 3;
 
@@ -420,6 +431,17 @@ export default function Standalone4DViewerPage() {
                     objLoader.load(url, () => resolve(), undefined, () => resolve());
                   });
                 } else {
+                  // useGLTF.preload() is fire-and-forget by design (suspend-react's preload()
+                  // discards its own return value) -- awaiting it does NOT wait for the fetch+
+                  // parse to finish, so this loop was finishing almost instantly without the
+                  // real loads completing, and the per-frame spinner still fired during the
+                  // "first" pass once Play started (reported live, 2026-11-13). Load through our
+                  // own GLTFLoader first so this await is real, then warm drei's cache for the
+                  // later useGLTF() hook call so it doesn't redundantly refetch over the network
+                  // (it still re-parses once, but with no network latency left to wait on).
+                  await new Promise<void>((resolve) => {
+                    gltfLoader.load(url, () => resolve(), undefined, () => resolve());
+                  });
                   useGLTF.preload(url);
                 }
               } catch {
@@ -624,7 +646,7 @@ export default function Standalone4DViewerPage() {
   }
 
   return (
-    <div className="h-[90vh] flex flex-col">
+    <div className="h-[calc(100vh-4rem)] flex flex-col">
       {/* Resizable Layout */}
       <ResizablePanelGroup 
         direction="horizontal" 
@@ -691,8 +713,13 @@ export default function Standalone4DViewerPage() {
               layout conflict that gives scroll-anchoring something to "fix" in the
               first place. Letting the card size to its natural content height and
               scrolling the outer div instead avoids that entirely. */}
-          <div className="h-full overflow-y-auto p-4 [overflow-anchor:none]">
-            <Card>
+          <div className="h-full overflow-y-auto rounded-lg border p-4 [overflow-anchor:none]">
+            {/* border-0/shadow-none/bg-transparent: the OUTER div above now carries the
+                visible border, so this panel always reads as full-height and matches the
+                viewer panel's own bordered box on the left, regardless of whether the
+                Card's own (intentionally unstretched, see comment above) content is
+                shorter than the available space. */}
+            <Card className="border-0 bg-transparent shadow-none">
               <CardHeader>
                 <CardTitle className="text-base flex items-center justify-between">
                   <span>Playback Controls</span>
@@ -882,17 +909,7 @@ export default function Standalone4DViewerPage() {
                   )}
 
                   {rvReconstruction && (
-                    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-1">
-                      <p className="text-xs font-semibold flex items-start gap-1.5 text-amber-700 dark:text-amber-400">
-                        <AlertTriangle className="h-3.5 w-3.5 mt-[1px] shrink-0" />
-                        <span>RV reconstruction is for reference/research use only</span>
-                      </p>
-                      <p className="text-[11px] leading-relaxed text-muted-foreground">
-                        It is not reliable for actual clinical diagnosis. The RV shape model has not
-                        passed accuracy validation, so RV geometry, volumes and any measurement
-                        derived from them must not be used clinically or reported as a result.
-                      </p>
-                    </div>
+                    <RvResearchNotice subject="model" />
                   )}
 
                   {!showLv && !showRv && (

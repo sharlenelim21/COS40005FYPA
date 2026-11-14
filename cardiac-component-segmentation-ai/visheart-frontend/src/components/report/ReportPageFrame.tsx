@@ -34,7 +34,7 @@ export function ReportPageFrame({
   // boxed-in document.
   return (
     <section
-      className="vh-report-page mx-auto mb-8 flex w-[210mm] min-h-[297mm] flex-col bg-white p-6 text-[11px] leading-snug text-gray-900 print:mb-0"
+      className="vh-report-page mx-auto mb-8 flex w-[210mm] min-h-[297mm] flex-col bg-white p-6 text-[12.5px] leading-snug text-gray-900 print:mb-0"
       data-page={pageNumber}
     >
       <header className="mb-3 flex items-center justify-between border-b border-gray-300 pb-2">
@@ -43,19 +43,19 @@ export function ReportPageFrame({
           VisHeart
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="rounded-full border border-gray-300 px-2 py-0.5 text-[10px] text-gray-600">{patientLabel}</span>
-          <span className="rounded-full bg-emerald-600/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+          <span className="rounded-full border border-gray-300 px-2 py-0.5 text-[12px] text-gray-600">{patientLabel}</span>
+          <span className="rounded-full bg-emerald-600/10 px-2 py-0.5 text-[12px] font-semibold text-emerald-700">
             {statusLabel}
           </span>
         </div>
       </header>
 
-      <h2 className="text-[19px] font-extrabold tracking-tight text-gray-900">{title}</h2>
-      <p className="mb-3 text-[10.5px] text-gray-900/70">{subtitle}</p>
+      <h2 className="text-[20px] font-extrabold tracking-tight text-gray-900">{title}</h2>
+      <p className="mb-3 text-[12.5px] text-gray-900/70">{subtitle}</p>
 
       <div className="min-h-0 flex-1">{children}</div>
 
-      <footer className="mt-4 flex items-center justify-between border-t border-gray-300 pt-2 text-[8.5px] text-gray-600">
+      <footer className="mt-4 flex items-center justify-between border-t border-gray-300 pt-2 text-[11px] text-gray-600">
         <span>Generated {generatedAt}</span>
         <span>Page {pageNumber} of {totalPages}</span>
       </footer>

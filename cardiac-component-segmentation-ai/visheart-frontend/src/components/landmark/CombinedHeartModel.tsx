@@ -441,6 +441,12 @@ export function CombinedHeartModel({
     let lastFocused: { chamber: "lv" | "rv"; segment: number } | null = null;
     let focusTargetY: number | null = null;
     const FOCUS_LERP_RATE = 0.12;
+    // A newly-selected segment that's already roughly facing the camera (e.g.
+    // most segments are visible at once from a top-down view) doesn't need to
+    // be forcibly re-centered -- that read as unnecessary spinning when the
+    // user could already see it. Only rotate to reveal segments that are
+    // actually out of view (reported live, 2026-11).
+    const SKIP_ROTATE_THRESHOLD = Math.PI / 3; // ~60°
     const updateFocusRotation = (): boolean => {
       const lvSel = selectedLvSegmentRef.current ?? -1;
       const rvSel = selectedRvSegmentRef.current ?? -1;
@@ -452,7 +458,14 @@ export function CombinedHeartModel({
         if (current) {
           const state = current.chamber === "lv" ? lvStateRef.current : rvStateRef.current;
           const centroid = state?.centroidBySegment.get(current.segment);
-          focusTargetY = centroid ? -Math.atan2(centroid.x, centroid.z) : null;
+          const targetY = centroid ? -Math.atan2(centroid.x, centroid.z) : null;
+          if (targetY === null) {
+            focusTargetY = null;
+          } else {
+            let initialDelta = targetY - pivot.rotation.y;
+            initialDelta = ((initialDelta + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+            focusTargetY = Math.abs(initialDelta) > SKIP_ROTATE_THRESHOLD ? targetY : null;
+          }
         } else {
           focusTargetY = null;
         }

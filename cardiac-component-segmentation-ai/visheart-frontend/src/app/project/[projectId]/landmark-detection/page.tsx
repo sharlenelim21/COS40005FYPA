@@ -36,14 +36,15 @@ import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
 import { useCyclePlayback } from "@/hooks/useCyclePlayback";
-import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
+import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, LvFullCycleStrainTiles, RvFullCycleStrainTiles, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
+import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
 import { useMotionMesh } from "@/hooks/useMotionMesh";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { RV_SEGMENT_NAMES, RV_REGION_TO_SEGMENT3D, RV_SEGMENT3D_TO_REGION } from "@/components/landmark/heartColor";
 import { rvEdEsFac, rvFacSeries } from "@/lib/rvAreaMetrics";
-import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
+import { ChamberFocusToggle, type ChamberFocus, type ChamberUnavailable } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import { FrameSliceControls } from "@/components/landmark/FrameSliceControls";
 import {
@@ -76,7 +77,6 @@ import {
   type StrainComputedFor,
 } from "@/components/landmark/StrainVisualization";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
-import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
 import { AhaBullseye, BullseyeScaleBar, finiteRange, type BullseyeHover } from "@/components/landmark/AhaBullseye";
 import { landmarkApi, computeStrainFromFrames, computeRvStrainFromFrames } from "@/lib/landmarkApi";
 
@@ -1962,6 +1962,22 @@ export default function LandmarkDetectionPage() {
   // shows one loading state regardless of which of the two ran.
   const isComputeBusy = computeScope === "quick" ? isComputingStrain : fullCycleBusy;
 
+  // Full cycle + Combined chamber focus's LV/RV Global Strain tiles -- moved from
+  // StrainPreviewPanel's own render (a sibling of LandmarkSidebar, not an ancestor) into the
+  // sidebar instead (direct request, 2026-11-13). The underlying peak/current values are local
+  // to StrainPreviewPanel (it owns the full-cycle series), so it reports them up here through
+  // onFullCycleCombinedStrainChange whenever they change, the same lifting pattern already used
+  // for onFullCycleJobsStarted below.
+  const [fullCycleCombinedStrain, setFullCycleCombinedStrain] = useState<{
+    lv: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null };
+    rv: {
+      currentGcs: number | null; peakGcs: number | null;
+      currentGas: number | null; peakGas: number | null;
+      currentSeptal: number | null; peakSeptal: number | null;
+    };
+    loading?: boolean;
+  } | undefined>(undefined);
+
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
 
@@ -1975,7 +1991,7 @@ export default function LandmarkDetectionPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 gap-1.5 text-sm"
             onClick={() => navigateWithUnsavedGuard(() => router.push(readOnly ? "/dashboard?tab=templates" : `/project/${projectId}`))}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -1985,7 +2001,7 @@ export default function LandmarkDetectionPage() {
           <span className="text-sm font-medium truncate">{projectData.name}</span>
           {readOnly && (
             <span
-              className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+              className="inline-flex items-center gap-1 text-[12.5px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
               title="A pre-computed reference heart. You can explore every tab, but nothing can be changed or re-run."
             >
               Template · read-only
@@ -1993,7 +2009,7 @@ export default function LandmarkDetectionPage() {
           )}
           {!readOnly && <StatusBadge status={state.status} />}
           {hasPredictions && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400">
+            <span className="inline-flex items-center gap-1 text-[12.5px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400">
               <span className="h-1 w-1 rounded-full bg-blue-500 inline-block" />
               Landmarks Detected
             </span>
@@ -2003,7 +2019,7 @@ export default function LandmarkDetectionPage() {
         <div className="flex-1" />
 
         {/* Info pills */}
-        <div className="hidden md:flex items-center gap-4 text-[11px] text-muted-foreground">
+        <div className="hidden md:flex items-center gap-4 text-[13px] text-muted-foreground">
           {/* Slices and frames are different axes: landmark detection runs per
               slice, the cardiac cycle spans frames. state.totalFrames is a slice
               count despite its name, so label it as slices and take frames from
@@ -2028,7 +2044,7 @@ export default function LandmarkDetectionPage() {
           <div className="flex items-center gap-2 shrink-0">
             <Button
               size="sm"
-              className="text-xs gap-1.5"
+              className="text-sm gap-1.5"
               disabled={segmentationBlocksRuns}
               title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
               onClick={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
@@ -2039,7 +2055,7 @@ export default function LandmarkDetectionPage() {
             <Button
               variant="info"
               size="sm"
-              className="text-xs gap-1.5"
+              className="text-sm gap-1.5"
               onClick={() => router.push(`/project/${projectId}/report`)}
             >
               <FileText className="h-3.5 w-3.5" />
@@ -2057,7 +2073,7 @@ export default function LandmarkDetectionPage() {
           <span className="flex-1">{state.error}</span>
           {!readOnly && <button
             type="button"
-            className="text-xs underline hover:no-underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
+            className="text-sm underline hover:no-underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
             disabled={segmentationBlocksRuns}
             title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
             onClick={() => runUnlessSegmentationPending(() => runDetectionAndResetEdits(selectedModel))}
@@ -2172,6 +2188,7 @@ export default function LandmarkDetectionPage() {
             readOnly={readOnly}
             readOnlyNote={projectData?.templateInfo?.landmarkNote}
             chamberFocus={chamberFocus}
+            fullCycleCombinedStrain={fullCycleCombinedStrain}
           />
         </div>
       </div>
@@ -2201,7 +2218,7 @@ export default function LandmarkDetectionPage() {
                       control even though they shared state, and was just
                       redundant UI either way. */}
                   {structureVentricle === "LV" && bullseyeRecomputing && (
-                    <span className="text-[10px] font-medium text-muted-foreground animate-pulse">
+                    <span className="text-[12.5px] font-medium text-muted-foreground animate-pulse">
                       Recomputing with edits…
                     </span>
                   )}
@@ -2215,7 +2232,7 @@ export default function LandmarkDetectionPage() {
                     <button
                       type="button"
                       onClick={() => { bullseyeZoomResetRef.current?.(); heartZoomResetRef.current?.(); }}
-                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[12.5px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
                       title="Reset zoom on bullseye and 3D heart"
                     >
                       Reset View
@@ -2230,7 +2247,7 @@ export default function LandmarkDetectionPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">No landmark data yet</p>
-                    <p className="text-xs mt-1 opacity-70">
+                    <p className="text-sm mt-1 opacity-70">
                       Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the {structureVentricle === "LV" ? "Wall Thickness" : "RV Cavity Area (FAC)"} panel.
                     </p>
                   </div>
@@ -2251,12 +2268,12 @@ export default function LandmarkDetectionPage() {
                           yet for this project. */}
                       <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
                         <div className="mb-1 flex items-center justify-between flex-shrink-0">
-                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                             RV Bullseye
                           </p>
                         </div>
                         {rvFacAtReferenceFrame && (
-                          <p className="mb-1 flex-shrink-0 rounded bg-muted px-2 py-1 text-[10px] text-muted-foreground">
+                          <p className="mb-1 flex-shrink-0 rounded bg-muted px-2 py-1 text-[12.5px] text-muted-foreground">
                             Reference frame (ED): FAC is 0% here by definition — each segment&apos;s area is
                             compared with itself. Play the cycle or pick another frame to see FAC.
                           </p>
@@ -2288,8 +2305,8 @@ export default function LandmarkDetectionPage() {
                       {/* RIGHT: 3D heart model */}
                       <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
                         <div className="mb-1 flex items-center justify-between flex-shrink-0">
-                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+                          <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">Synced</span>
                         </div>
                         <div className="flex-1 min-h-0 w-full relative">
                           <ReconstructedHeartModel
@@ -2318,7 +2335,7 @@ export default function LandmarkDetectionPage() {
                           />
                           {structureRvTooltip && (
                             <div
-                              className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                              className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                               style={{ left: structureRvTooltip.x + 14, top: structureRvTooltip.y - 10 }}
                             >
                               <div className="font-semibold">{structureRvTooltip.label}</div>
@@ -2332,11 +2349,11 @@ export default function LandmarkDetectionPage() {
                             3D panel (AhaHeartProjection) so RV isn't missing
                             the control LV has. */}
                         <div className="flex items-center justify-center gap-2 px-2 py-1 flex-shrink-0">
-                          <p className="text-[9px] text-muted-foreground">Scroll or</p>
+                          <p className="text-[12px] text-muted-foreground">Scroll or</p>
                           <button
                             type="button"
                             aria-label="Zoom in"
-                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                             onClick={() => structureRvHeartZoomRef.current?.(-1)}
                           >
                             <ZoomIn className="h-3 w-3" />
@@ -2344,16 +2361,16 @@ export default function LandmarkDetectionPage() {
                           <button
                             type="button"
                             aria-label="Zoom out"
-                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                             onClick={() => structureRvHeartZoomRef.current?.(1)}
                           >
                             <ZoomOut className="h-3 w-3" />
                           </button>
-                          <p className="text-[9px] text-muted-foreground">to zoom</p>
+                          <p className="text-[12px] text-muted-foreground">to zoom</p>
                         </div>
                       </div>
                     </div>
-                    <p className="text-[9px] text-muted-foreground leading-relaxed flex-shrink-0 px-1">
+                    <p className="text-[12px] text-muted-foreground leading-relaxed flex-shrink-0 px-1">
                       The 3D mesh shape and 9-segment boundaries are from the real RV reconstruction. It's
                       colored by real per-segment FAC, synced with the bullseye on the left, once RV strain
                       has been computed for this project — until then it falls back to segment-identity
@@ -2363,7 +2380,7 @@ export default function LandmarkDetectionPage() {
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
                     <AlertCircle className="h-8 w-8 opacity-40" />
-                    <p className="max-w-[280px] text-xs leading-relaxed">
+                    <p className="max-w-[280px] text-sm leading-relaxed">
                       4D reconstruction for {activeModel === "unet" ? "UNet" : "MedSAM"} is unavailable — please
                       run it from the project page to see results.
                     </p>
@@ -2400,7 +2417,7 @@ export default function LandmarkDetectionPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-semibold text-foreground">Strain Preview</h3>
                   <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[12.5px] font-medium text-muted-foreground">
                     {activeModel === "unet" ? "UNet" : "MedSAM"}
                   </span>
                 </div>
@@ -2412,7 +2429,7 @@ export default function LandmarkDetectionPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">No landmark data yet</p>
-                    <p className="text-xs mt-1 opacity-70">
+                    <p className="text-sm mt-1 opacity-70">
                       Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate strain results.
                     </p>
                   </div>
@@ -2440,6 +2457,7 @@ export default function LandmarkDetectionPage() {
                   fullCycleProgress={fullCycleProgress}
                   chamberFocus={chamberFocus}
                   onChamberFocusChange={setChamberFocus}
+                  onFullCycleCombinedStrainChange={setFullCycleCombinedStrain}
                 />
               )}
             </div>
@@ -2462,7 +2480,7 @@ export default function LandmarkDetectionPage() {
                       <p className="text-sm font-medium text-foreground">
                         Preparing landmark detection
                       </p>
-                      <p className="text-xs text-muted-foreground mt-1">
+                      <p className="text-sm text-muted-foreground mt-1">
                         Detection starts automatically using the server default model.
                       </p>
                     </div>
@@ -2478,7 +2496,7 @@ export default function LandmarkDetectionPage() {
                       <KineticProgress tone="primary" size="h-2" className="w-56" label="Landmark detection running" />
                     )}
                     <p className="text-sm font-medium">Running landmark detection…</p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-sm text-muted-foreground mt-1">
                       This may take a moment
                     </p>
                   </div>
@@ -2584,6 +2602,7 @@ export default function LandmarkDetectionPage() {
             readOnly={readOnly}
             readOnlyNote={projectData?.templateInfo?.landmarkNote}
                 chamberFocus={chamberFocus}
+                fullCycleCombinedStrain={fullCycleCombinedStrain}
               />
             </div>
           </ResizablePanel>
@@ -2813,7 +2832,7 @@ function AhaBullseyePanel({
       {!previewMode && !activeReconstruction ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
           <AlertCircle className="h-8 w-8 opacity-40" />
-          <p className="max-w-[280px] text-xs leading-relaxed">
+          <p className="max-w-[280px] text-sm leading-relaxed">
             4D reconstruction for {modelLabel} is unavailable — please run it from the project page
             to see results.
           </p>
@@ -2824,20 +2843,20 @@ function AhaBullseyePanel({
             <Loader2 className="h-6 w-6 animate-spin" />
             {/* "Computing" only when the GPU is actually generating the bullseye;
                 otherwise we're just loading already-stored data. */}
-            <span className="text-xs">{isComputing ? "Computing bullseye…" : "Loading…"}</span>
+            <span className="text-sm">{isComputing ? "Computing bullseye…" : "Loading…"}</span>
           </div>
         </div>
       ) : !displayBullseyeData ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
-          <p className="text-xs text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             No bullseye data for this segmentation model yet.
           </p>
           {onCompute && (
             <button
               type="button"
               onClick={onCompute}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Compute Bullseye
@@ -2847,14 +2866,14 @@ function AhaBullseyePanel({
       ) : hasNoValidSegments ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
-          <p className="text-xs text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             Insufficient segmentation — no myocardium detected in any slice for this model.
           </p>
           {onCompute && (
             <button
               type="button"
               onClick={onCompute}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Recompute Bullseye
@@ -2866,10 +2885,10 @@ function AhaBullseyePanel({
           {/* LEFT: Bullseye chart */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Frame {Math.min(currentFrame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
               </p>
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">
                 {previewMode ? "Preview" : "Result"}
               </span>
             </div>
@@ -2891,7 +2910,7 @@ function AhaBullseyePanel({
             </ZoomPanContainer>
             {bullseyeTooltip && (
               <div
-                className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                 style={{ left: bullseyeTooltip.x + 14, top: bullseyeTooltip.y - 10 }}
               >
                 <div className="font-semibold">{bullseyeTooltip.name}</div>
@@ -2910,8 +2929,8 @@ function AhaBullseyePanel({
           {/* RIGHT: 3D heart model */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">Synced</span>
             </div>
             <AhaHeartProjection
               bullseyeData={displayBullseyeData}
@@ -2932,11 +2951,11 @@ function AhaBullseyePanel({
             />
             {/* Zoom hint + buttons */}
             <div className="flex items-center justify-center gap-2 px-2 py-1 flex-shrink-0">
-              <p className="text-[9px] text-muted-foreground">Scroll or</p>
+              <p className="text-[12px] text-muted-foreground">Scroll or</p>
               <button
                 type="button"
                 aria-label="Zoom in"
-                className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                 onClick={() => heartZoomRef.current?.(-1)}
               >
                 <ZoomIn className="h-3 w-3" />
@@ -2944,12 +2963,12 @@ function AhaBullseyePanel({
               <button
                 type="button"
                 aria-label="Zoom out"
-                className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                 onClick={() => heartZoomRef.current?.(1)}
               >
                 <ZoomOut className="h-3 w-3" />
               </button>
-              <p className="text-[9px] text-muted-foreground">to zoom</p>
+              <p className="text-[12px] text-muted-foreground">to zoom</p>
             </div>
           </div>
         </div>
@@ -2976,10 +2995,10 @@ function MetricTile({
         emphasized && "bg-primary/10 text-primary",
       )}
     >
-      <p className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-[12px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="font-mono text-sm font-semibold tabular-nums">
         {value}
-        <span className="ml-1 text-[9px] font-medium text-muted-foreground">{unit}</span>
+        <span className="ml-1 text-[12px] font-medium text-muted-foreground">{unit}</span>
       </p>
     </div>
   );
@@ -2999,7 +3018,7 @@ function EmptyAnalysisPreview({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col rounded-lg bg-background p-3">
       <div className="flex items-center justify-end">
-        <span className="text-[10px] font-mono text-muted-foreground">
+        <span className="text-[12.5px] font-mono text-muted-foreground">
           Frame {Math.min(frame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
         </span>
       </div>
@@ -3014,7 +3033,7 @@ function EmptyAnalysisPreview({
         ) : (
           <Activity className="h-8 w-8 opacity-25" />
         )}
-        <p className="max-w-[240px] text-xs leading-relaxed">{message}</p>
+        <p className="max-w-[240px] text-sm leading-relaxed">{message}</p>
       </div>
     </div>
   );
@@ -3083,7 +3102,7 @@ function AhaHeartProjection({
         />
         {heartTooltip && (
           <div
-            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
             style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
           >
             <div className="font-semibold">{AHA_SEGMENTS[heartTooltip.segment - 1] ?? `Segment ${heartTooltip.segment}`}</div>
@@ -3098,7 +3117,7 @@ function AhaHeartProjection({
     return (
       <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin opacity-50" />
-        <p className="max-w-[240px] text-xs leading-relaxed">
+        <p className="max-w-[240px] text-sm leading-relaxed">
           Your 4D reconstruction is processing, this usually takes 2-5 minutes. The real
           AHA-colored 3D model will appear here once it's done.
         </p>
@@ -3109,7 +3128,7 @@ function AhaHeartProjection({
   return (
     <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
       <AlertCircle className="h-8 w-8 opacity-40" />
-      <p className="max-w-[240px] text-xs leading-relaxed">
+      <p className="max-w-[240px] text-sm leading-relaxed">
         Please run <span className="font-medium text-foreground">MedSAM</span> or{" "}
         <span className="font-medium text-foreground">U-Net</span> 4D reconstruction to access this.
       </p>
@@ -3179,7 +3198,7 @@ function StrainHeartModel({
         />
         {heartTooltip && (
           <div
-            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
             style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
           >
             <div className="font-semibold">
@@ -3195,7 +3214,7 @@ function StrainHeartModel({
   return (
     <div className="w-full h-full relative flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
       <AlertCircle className="h-8 w-8 opacity-40" />
-      <p className="max-w-[240px] text-xs leading-relaxed">
+      <p className="max-w-[240px] text-sm leading-relaxed">
         Please run <span className="font-medium text-foreground">MedSAM</span> or{" "}
         <span className="font-medium text-foreground">U-Net</span> 4D reconstruction to access this.
       </p>
@@ -3225,6 +3244,7 @@ function StrainPreviewPanel({
   fullCycleProgress,
   chamberFocus,
   onChamberFocusChange,
+  onFullCycleCombinedStrainChange,
 }: {
   selectedStrainType: StrainType;
   currentFrame: number;
@@ -3264,6 +3284,19 @@ function StrainPreviewPanel({
    *  chamberFocus state's own comment. */
   chamberFocus: ChamberFocus;
   onChamberFocusChange: (focus: ChamberFocus) => void;
+  /** Reports Combined + Full cycle's LV/RV Global Strain tile values up to the page, which
+   *  passes them straight into LandmarkSidebar's fullCycleCombinedStrain -- those tiles moved
+   *  there from this panel's own render (direct request, 2026-11-13), but the underlying
+   *  peak/current values are computed here, where the full-cycle series already lives. */
+  onFullCycleCombinedStrainChange?: (data: {
+    lv: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null };
+    rv: {
+      currentGcs: number | null; peakGcs: number | null;
+      currentGas: number | null; peakGas: number | null;
+      currentSeptal: number | null; peakSeptal: number | null;
+    };
+    loading?: boolean;
+  } | undefined) => void;
 }) {
   // Compute controls (frame/upload pickers, model select, the actual
   // compute calls) live in the sidebar's "Compute strain" card now — this
@@ -3324,9 +3357,9 @@ function StrainPreviewPanel({
   // both) is blurred with a reason on hover instead of silently rendering an empty panel if
   // clicked (direct request, 2026-11-13).
   const chamberDisabledOptions = useMemo(() => {
-    const reasons: Partial<Record<ChamberFocus, string>> = {};
-    if (!activeReconstruction) reasons.LV = "Reconstruct LV to view this";
-    if (!rvMesh.available) reasons.RV = "Reconstruct RV to view this";
+    const reasons: Partial<Record<ChamberFocus, ChamberUnavailable>> = {};
+    if (!activeReconstruction) reasons.LV = { message: "Reconstruct LV to view this", chamber: "LV" };
+    if (!rvMesh.available) reasons.RV = { message: "Reconstruct RV to view this", chamber: "RV" };
     return Object.keys(reasons).length > 0 ? reasons : undefined;
   }, [activeReconstruction, rvMesh.available]);
 
@@ -3356,9 +3389,11 @@ function StrainPreviewPanel({
   // selectedSegment/selectedSeg3d/selectedRvRegion here would mean clicking
   // a segment on the Combined bullseye also highlighted it on the LV-only
   // or RV-only tab (and vice versa) since those all read the same state,
-  // even though the two views aren't showing the same thing. Combined's 3D
-  // panel (CombinedHeartModel) doesn't support click-to-select yet, so these
-  // only drive the Combined bullseye's own highlight for now.
+  // even though the two views aren't showing the same thing. Drives BOTH
+  // the Combined bullseye's and the Combined 3D model's highlight -- a click
+  // on either one clears the OTHER chamber's selection first (only one
+  // chamber is ever highlighted at a time), so switching from an LV segment
+  // to an RV one (or back) always wins instead of being silently ignored.
   const [selectedCombinedSegment, setSelectedCombinedSegment] = useState<number | null>(null);
   const [selectedCombinedRvRegion, setSelectedCombinedRvRegion] = useState<number | null>(null);
 
@@ -3415,6 +3450,52 @@ function StrainPreviewPanel({
         computedFor: { mode: "full-cycle", model: strainModel, edFrameIndex: realRvSeries?.edFrameIndex ?? 0 },
       } : null)
     : (rvStrainMatchesSelection ? rvStrainResult : null);
+
+  // Reports Combined + Full cycle's tile values up to the page (see
+  // onFullCycleCombinedStrainChange's own doc) -- undefined whenever those tiles
+  // wouldn't be shown (not Combined, or not Full cycle), so the sidebar renders
+  // nothing instead of stale numbers from the last time this WAS Combined.
+  //
+  // Deps are the PRIMITIVE numbers, not strainForDisplay/rvStrainForDisplay themselves --
+  // isFullCycle's branch above builds those as a fresh object literal every render
+  // regardless of whether the underlying frame data changed, so depending on the object
+  // reference made this effect (and the setState inside it) re-fire every render,
+  // triggering the parent re-render that recomputes a new object, forever: "Maximum
+  // update depth exceeded" (reported live, 2026-11-13).
+  const lvCurrentGrsForTiles = strainForDisplay?.global_grs ?? null;
+  const lvCurrentGcsForTiles = strainForDisplay?.global_gcs ?? null;
+  const rvCurrentGcsForTiles = rvStrainForDisplay?.global_rv_strain ?? null;
+  const rvCurrentGasForTiles = rvStrainForDisplay?.global_rv_gas ?? null;
+  const rvCurrentSeptalForTiles = rvStrainForDisplay?.global_rv_septal_gcs ?? null;
+  useEffect(() => {
+    if (chamberFocus !== "combined" || !isFullCycle) {
+      onFullCycleCombinedStrainChange?.(undefined);
+      return;
+    }
+    onFullCycleCombinedStrainChange?.({
+      lv: {
+        currentGrs: lvCurrentGrsForTiles,
+        currentGcs: lvCurrentGcsForTiles,
+        peakGrs: lvPeakGrs,
+        peakGcs: lvPeakGcs,
+      },
+      rv: {
+        currentGcs: rvCurrentGcsForTiles,
+        peakGcs: rvPeakGcs,
+        currentGas: rvCurrentGasForTiles,
+        peakGas: rvPeakGas,
+        currentSeptal: rvCurrentSeptalForTiles,
+        peakSeptal: rvPeakSeptalGcs,
+      },
+      loading: isComputeBusy,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    chamberFocus, isFullCycle,
+    lvCurrentGrsForTiles, lvCurrentGcsForTiles, lvPeakGrs, lvPeakGcs,
+    rvCurrentGcsForTiles, rvCurrentGasForTiles, rvCurrentSeptalForTiles, rvPeakGcs, rvPeakGas, rvPeakSeptalGcs,
+    isComputeBusy,
+  ]);
 
   // GCS and GAS are separate RV metrics (not combined). The bullseye reads
   // `strain`, so for GAS swap in each region's `gas`. Results computed before
@@ -3482,17 +3563,17 @@ function StrainPreviewPanel({
             sync with it. Labeled per-chamber (not a bare "GCS") since LV and
             RV each have their own independent metric toggle in the sidebar —
             this one never flips when you switch RV's toggle, by design. */}
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-medium text-muted-foreground">
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[12px] font-medium text-muted-foreground">
           LV {selectedStrainType}
         </span>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-medium text-muted-foreground">
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[12px] font-medium text-muted-foreground">
           RV {rvMetricType}
         </span>
 
         <div className="ml-auto flex items-center gap-1.5">
           {/* Source badge — only when real data exists */}
           {(realStrainData || rvStrainResult) && (
-            <span className="rounded-full px-2 py-0.5 text-[9px] font-medium shrink-0 bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400">
+            <span className="rounded-full px-2 py-0.5 text-[12px] font-medium shrink-0 bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400">
               {avgLm1 ? "Real · Aligned" : "Real"}
             </span>
           )}
@@ -3503,7 +3584,7 @@ function StrainPreviewPanel({
               wouldn't actually empty anything meaningful there. */}
           {!isFullCycle && (realStrainData || rvStrainResult) && (
             <button type="button" onClick={() => { onStrainResult(null); onRvStrainResult(null); }}
-              className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[9px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
+              className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[12px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
               Clear
             </button>
           )}
@@ -3521,7 +3602,7 @@ function StrainPreviewPanel({
           ) : (
             <>
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              <p className="text-xs font-medium text-muted-foreground">
+              <p className="text-sm font-medium text-muted-foreground">
                 {computeScope === "quick" ? "Computing…" : "Computing all frames…"}
               </p>
             </>
@@ -3545,7 +3626,7 @@ function StrainPreviewPanel({
                 <p className="font-semibold text-sm text-foreground">
                   No result for frame {currentFrame + 1}
                 </p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   A full-cycle series exists for this model, but it doesn&apos;t include
                   frame {currentFrame + 1} — scrub to a different frame, or recompute
                   (Full cycle → Compute all frames) if the study&apos;s frame count changed
@@ -3557,7 +3638,7 @@ function StrainPreviewPanel({
                 <p className="font-semibold text-sm text-foreground">
                   No result for this selection yet
                 </p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   A strain result exists, but not for the ED/ES frames and model currently
                   selected here (it may be a full-cycle result, or was computed for a
                   different pair). Use the sidebar&apos;s Strain tab to compute this pair.
@@ -3568,7 +3649,7 @@ function StrainPreviewPanel({
                 <p className="font-semibold text-sm text-foreground">
                   No strain computed yet
                 </p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   Use the <strong>Compute strain</strong> card in the sidebar&apos;s Strain tab to
                   compute LV and RV strain together from this project&apos;s already-saved
                   segmentation, or upload your own ED/ES masks in NIfTI format (.nii or .nii.gz;
@@ -3587,17 +3668,17 @@ function StrainPreviewPanel({
           {/* LEFT: combined 2D bullseye */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {chamberFocus === "combined" ? "LV + RV Bullseye" : chamberFocus === "LV" ? "LV Bullseye" : "RV Bullseye"}
               </p>
               <div className="flex items-center gap-1">
                 {chamberFocus !== "RV" && (
-                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">
                     LV {selectedStrainType}
                   </span>
                 )}
                 {chamberFocus !== "LV" && (
-                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">
                     RV {rvMetricType}
                   </span>
                 )}
@@ -3627,7 +3708,14 @@ function StrainPreviewPanel({
                 strainType={selectedStrainType}
                 selectedSegment={chamberFocus === "combined" ? selectedCombinedSegment : selectedSegment}
                 onSegmentClick={chamberFocus === "combined"
-                  ? (seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))
+                  ? (seg) => {
+                      // Combined view's 3D model only ever highlights one chamber at a time
+                      // (CombinedHeartModel's updateSelectionHighlight) -- clear the other
+                      // chamber's selection so a new click always wins, instead of being
+                      // silently ignored while an LV segment is still selected.
+                      setSelectedCombinedRvRegion(null);
+                      setSelectedCombinedSegment((prev) => (prev === seg ? null : seg));
+                    }
                   : handleSegClick}
                 onSegmentHover={setTooltip}
                 sharedMin={sharedMin}
@@ -3639,7 +3727,14 @@ function StrainPreviewPanel({
                 rvMax={rvRange.max}
                 showColorBars={false}
                 selectedRvRegion={chamberFocus === "combined" ? selectedCombinedRvRegion : selectedRvRegion}
-                onRvRegionClick={(region) => (chamberFocus === "combined" ? setSelectedCombinedRvRegion : setSelectedRvRegion)((prev) => (prev === region ? null : region))}
+                onRvRegionClick={(region) => {
+                  if (chamberFocus === "combined") {
+                    setSelectedCombinedSegment(null);
+                    setSelectedCombinedRvRegion((prev) => (prev === region ? null : region));
+                  } else {
+                    setSelectedRvRegion((prev) => (prev === region ? null : region));
+                  }
+                }}
                 onRvRegionHover={setTooltip}
                 showLv={chamberFocus === "combined"}
                 showRv
@@ -3670,7 +3765,7 @@ function StrainPreviewPanel({
             )}
             {rvGasMissing && (
               <div className="mt-1 flex-shrink-0 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1 text-center">
-                <p className="text-[8.5px] leading-snug text-amber-700 dark:text-amber-400">
+                <p className="text-[13px] leading-snug text-amber-700 dark:text-amber-400">
                   This RV result was computed before GAS was added — recompute RV strain to see GAS.
                 </p>
               </div>
@@ -3680,11 +3775,11 @@ function StrainPreviewPanel({
           {/* RIGHT: real 3D heart coloured by LV strain */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                 3D Heart {chamberFocus === "combined" ? "(LV + RV)" : `(${chamberFocus})`}
               </p>
               <div className="flex items-center gap-1">
-                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">Synced</span>
               </div>
             </div>
             <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} disabledOptions={chamberDisabledOptions} className="mb-2 flex-shrink-0" />
@@ -3701,12 +3796,12 @@ function StrainPreviewPanel({
               {chamberFocus !== "RV" && (
                 <>
                   <button type="button" onClick={() => onStrainTypeChange("GRS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       selectedStrainType === "GRS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "LV GRS" : "GRS"}
                   </button>
                   <button type="button" onClick={() => onStrainTypeChange("GCS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       selectedStrainType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "LV GCS" : "GCS"}
                   </button>
@@ -3715,12 +3810,12 @@ function StrainPreviewPanel({
               {chamberFocus !== "LV" && (
                 <>
                   <button type="button" onClick={() => onRvMetricTypeChange("GCS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       rvMetricType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "RV GCS" : "GCS"}
                   </button>
                   <button type="button" onClick={() => onRvMetricTypeChange("GAS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       rvMetricType === "GAS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "RV GAS" : "GAS"}
                   </button>
@@ -3778,7 +3873,7 @@ function StrainPreviewPanel({
                   />
                   {rvHeartTooltip && (
                     <div
-                      className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                      className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                       style={{ left: rvHeartTooltip.x + 14, top: rvHeartTooltip.y - 10 }}
                     >
                       <div className="font-semibold">
@@ -3787,7 +3882,7 @@ function StrainPreviewPanel({
                     </div>
                   )}
                 </div>
-                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                <p className="text-center text-[12px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
                 {/* Quick ED->ES already shows this same summary in the
@@ -3828,39 +3923,31 @@ function StrainPreviewPanel({
                     className="w-full h-full"
                     initialCameraDistance={8}
                     selectedLvSegment={selectedCombinedSegment ?? -1}
-                    onLvSegmentClick={(seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))}
+                    onLvSegmentClick={(seg) => {
+                      setSelectedCombinedRvRegion(null);
+                      setSelectedCombinedSegment((prev) => (prev === seg ? null : seg));
+                    }}
                     selectedRvSegment={selectedCombinedRvRegion != null ? RV_REGION_TO_SEGMENT3D[selectedCombinedRvRegion - 1] : -1}
                     onRvSegmentClick={(segment) => {
                       const region = RV_SEGMENT3D_TO_REGION[segment];
+                      setSelectedCombinedSegment(null);
                       setSelectedCombinedRvRegion((prev) => (prev === region ? null : region));
                     }}
                   />
                 </div>
-                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                <p className="text-center text-[12px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by {rvMetricType}
                   {!rvHasValues && " (segment identity — no RV strain computed yet)"}
+                  <span className="font-semibold text-red-700 dark:text-red-400"> · RV is research output, not validated</span>
                 </p>
-                {/* Quick ED->ES already shows this in the sidebar's
-                    QuickCombinedStrainView -- only Full cycle needs its own
-                    copy here (its sidebar shows the chart instead). */}
-                {isFullCycle && (
-                  <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                    <LvFullCycleStrainTiles
-                      currentGrs={strainForDisplay?.global_grs ?? null}
-                      currentGcs={strainForDisplay?.global_gcs ?? null}
-                      peakGrs={lvPeakGrs}
-                      peakGcs={lvPeakGcs}
-                      loading={isComputeBusy}
-                    />
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
-                  </div>
-                )}
+                {/* Full cycle's LV/RV Global Strain tiles moved to the sidebar for Combined
+                    (direct request, 2026-11-13) -- see LandmarkSidebar's fullCycleCombinedStrain. */}
               </>
             ) : chamberFocus !== "LV" ? (
               <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto px-1 py-1">
                 <div className="flex flex-col items-center justify-center gap-1.5 px-4 py-3 text-center text-muted-foreground">
                   <AlertCircle className="h-6 w-6 opacity-40" />
-                  <p className="max-w-[240px] text-[10px] leading-relaxed">
+                  <p className="max-w-[240px] text-[12.5px] leading-relaxed">
                     {chamberFocus === "RV"
                       ? "No RV reconstruction built yet for this model"
                       : "Combined view needs both an LV and an RV reconstruction for this model"} — showing values only.
@@ -3868,20 +3955,12 @@ function StrainPreviewPanel({
                 </div>
                 {/* Quick ED->ES already shows this in the sidebar's
                     QuickCombinedStrainView regardless of mesh availability --
-                    only Full cycle needs its own copy here. */}
-                {isFullCycle && (
-                  <>
-                    {chamberFocus === "combined" && (
-                      <LvFullCycleStrainTiles
-                        currentGrs={strainForDisplay?.global_grs ?? null}
-                        currentGcs={strainForDisplay?.global_gcs ?? null}
-                        peakGrs={lvPeakGrs}
-                        peakGcs={lvPeakGcs}
-                        loading={isComputeBusy}
-                      />
-                    )}
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
-                  </>
+                    only Full cycle needs its own copy here. Combined's own
+                    tiles moved to the sidebar (direct request, 2026-11-13),
+                    so only the RV tab's own (RV-only, not Combined) case
+                    still needs its copy here. */}
+                {isFullCycle && chamberFocus === "RV" && (
+                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
                 )}
               </div>
             ) : strainForDisplay ? (
@@ -3903,7 +3982,7 @@ function StrainPreviewPanel({
                     onReconstructionSegmentClick={handleSegClick}
                   />
                 </div>
-                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                <p className="text-center text-[12px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
                 {/* Quick ED->ES already shows this in the sidebar's
@@ -3921,7 +4000,7 @@ function StrainPreviewPanel({
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-center px-4">
-                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                <p className="text-[12.5px] text-muted-foreground leading-relaxed">
                   {activeReconstruction?.reconstructionId
                     ? `${strainModel === "unet" ? "UNet" : "MedSAM"} reconstruction found — click Compute Strain to view the 3D heart.`
                     : `No LV strain yet — run ${strainModel === "unet" ? "UNet" : "MedSAM"} 4D reconstruction first. RV-only results show on the left.`}
@@ -3936,7 +4015,7 @@ function StrainPreviewPanel({
       {/* Hover tooltip */}
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+          className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
           style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}>
           <div className="font-semibold">{tooltip.label}</div>
           <div>
@@ -3946,77 +4025,6 @@ function StrainPreviewPanel({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/** Small neutral stat tile — no color-coding, for values that aren't a
- *  strain % (wall thickness in mm, cavity area). */
-function KpiTile({ label, value, loading }: { label: string; value: string; loading?: boolean }) {
-  return (
-    <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-      <p className="text-[8px] text-muted-foreground">{label}</p>
-      {loading ? (
-        <div className="mx-auto mt-0.5 h-3 w-10 animate-pulse rounded bg-muted-foreground/20" />
-      ) : (
-        <p className="font-bold text-[10px]">{value}</p>
-      )}
-    </div>
-  );
-}
-
-
-/** Full-cycle's LV summary — CURRENT (at the scrubbed frame) + true PEAK
- *  (over the whole computed cycle) for both GRS and GCS, same idea as
- *  LvGlobalStrainMiniBlock's Quick-scope box but Quick only has one ED->ES
- *  pair so "current" isn't a meaningful separate concept there. */
-function LvFullCycleStrainTiles({
-  currentGrs, currentGcs, peakGrs, peakGcs, loading,
-}: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null; loading?: boolean }) {
-  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
-  return (
-    <div>
-      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">LV Global Strain</p>
-      <div className="grid grid-cols-2 gap-1">
-        <KpiTile label="Current GRS" value={fmt(currentGrs)} loading={loading} />
-        <KpiTile label="Peak GRS" value={fmt(peakGrs)} loading={loading} />
-        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
-        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
-      </div>
-    </div>
-  );
-}
-
-/** Full-cycle's RV summary — CURRENT + PEAK for free-wall GCS, GAS and septal
- *  GCS, each reported separately (real, unvalidated). Peak = most negative. */
-function RvFullCycleStrainTiles({
-  currentGcs, peakGcs, currentGas, peakGas, currentSeptal, peakSeptal, loading,
-}: {
-  currentGcs: number | null; peakGcs: number | null;
-  currentGas: number | null; peakGas: number | null;
-  currentSeptal: number | null; peakSeptal: number | null;
-  loading?: boolean;
-}) {
-  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
-  return (
-    <div>
-      <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-        RV Global Strain
-      </p>
-      <div className="mb-1">
-        <RvResearchNotice />
-      </div>
-      <div className="grid grid-cols-2 gap-1">
-        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
-        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
-        <KpiTile label="Current GAS" value={fmt(currentGas)} loading={loading} />
-        <KpiTile label="Peak GAS" value={fmt(peakGas)} loading={loading} />
-        {/* FAC = -GAS (rvAreaMetrics.ts) — same cavity-area measurement, opposite sign convention. */}
-        <KpiTile label="Current FAC" value={fmt(currentGas != null ? -currentGas : null)} loading={loading} />
-        <KpiTile label="Peak FAC" value={fmt(peakGas != null ? -peakGas : null)} loading={loading} />
-        <KpiTile label="Current Septal GCS" value={fmt(currentSeptal)} loading={loading} />
-        <KpiTile label="Peak Septal GCS" value={fmt(peakSeptal)} loading={loading} />
-      </div>
     </div>
   );
 }
@@ -4032,7 +4040,7 @@ function StatusBadge({ status }: { status: LandmarkPageState["status"] }) {
   const { label, cls } = map[status];
 
   return (
-    <span className={cn("inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full", cls)}>
+    <span className={cn("inline-flex items-center gap-1 text-[12.5px] font-medium px-1.5 py-0.5 rounded-full", cls)}>
       {status === "running" ? (
         <KineticProgress size="h-1" className="w-4" label="Landmark detection running" />
       ) : status === "done" ? (
@@ -4090,7 +4098,7 @@ function LandmarkSummaryStats({
       {stats.map((s) => (
         <span
           key={s.key}
-          className="inline-flex items-center gap-1 text-[9px] text-muted-foreground"
+          className="inline-flex items-center gap-1 text-[12px] text-muted-foreground"
         >
           <span className={cn("h-1.5 w-1.5 rounded-full flex-shrink-0", s.dot)} />
           <span className="font-semibold text-foreground tabular-nums">{s.value}/{nTotal}</span>
@@ -4121,13 +4129,13 @@ function LandmarkCoordsReadout({
   // A small table: x and y each get their own labelled column, so a value can
   // never be read as belonging to the other axis.
   return (
-    <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md bg-black/75 px-2.5 py-1.5 text-[11px] leading-5 text-white shadow-md">
-      <div className="text-[9px] font-semibold uppercase tracking-wider text-white/60">Coordinates (pixels)</div>
+    <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md bg-black/75 px-2.5 py-1.5 text-[13px] leading-5 text-white shadow-md">
+      <div className="text-[12px] font-semibold uppercase tracking-wider text-white/60">Coordinates (pixels)</div>
       <div className="grid grid-cols-[auto_auto_auto_auto] items-center gap-x-2">
         <span />
         <span />
-        <span className="text-right text-[10px] font-semibold text-white/60">x</span>
-        <span className="text-right text-[10px] font-semibold text-white/60">y</span>
+        <span className="text-right text-[12.5px] font-semibold text-white/60">x</span>
+        <span className="text-right text-[12.5px] font-semibold text-white/60">y</span>
         {rows.map((r) => (
           <Fragment key={r.label}>
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: r.color }} />
@@ -4143,7 +4151,7 @@ function LandmarkCoordsReadout({
           </Fragment>
         ))}
       </div>
-      <div className="mt-0.5 text-[9px] text-white/50">x = from left edge · y = from top edge</div>
+      <div className="mt-0.5 text-[12px] text-white/50">x = from left edge · y = from top edge</div>
     </div>
   );
 }
@@ -4166,7 +4174,7 @@ function LandmarkLegend({
             onClick={() => onToggle(def.id)}
             aria-pressed={on}
             className={cn(
-              "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] font-medium transition-all",
+              "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[12.5px] font-medium transition-all",
               on
                 ? "border-transparent text-white"
                 : "border-border bg-transparent text-muted-foreground/60",

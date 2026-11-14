@@ -19,12 +19,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
-import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw, XCircle, HelpCircle } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw, XCircle, HelpCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { rvPeakGas as rvPeakGasOf, rvPeakSeptalGcs } from "@/lib/rvAreaMetrics";
 import type { Sex, Measurements, HealthStatus, DiseasePatternGates, Strain, StrainSeries, RegionalHealthStatus, RvRegionalHealthStatus, RvMetrics, RvStrain, RvStrainSeries, RvHealthStatus } from "@/hooks/useProjectResults";
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
+import { RvResearchInfoIcon } from "@/components/landmark/RvResearchNotice";
 
 // AHA 17-segment ring layout: 6 basal, 6 mid, 4 apical, 1 apex.
 const RINGS = [
@@ -201,7 +202,7 @@ function Bullseye({
           {/* Segment number: with curves coloured by ring (4 hues, not 17),
               the number is how a reader identifies a specific segment. */}
           <text
-            x={mid.x} y={mid.y + 3} textAnchor="middle" fontSize={10} fontWeight={700}
+            x={mid.x} y={mid.y + 3} textAnchor="middle" fontSize={12} fontWeight={700}
             fill="#0b1220" style={{ pointerEvents: "none" }}
           >
             {segId}
@@ -227,12 +228,12 @@ function Bullseye({
         >
           <title>{`Apex: ${apex?.value === null || apex?.value === undefined ? "—" : `${apex.value.toFixed(1)}%`}`}</title>
         </circle>
-        <text x={cx} y={cy + 3} textAnchor="middle" fontSize={10} fontWeight={700} fill="#0b1220" style={{ pointerEvents: "none" }}>17</text>
+        <text x={cx} y={cy + 3} textAnchor="middle" fontSize={12} fontWeight={700} fill="#0b1220" style={{ pointerEvents: "none" }}>17</text>
       </g>
-      <text x={cx} y={16} textAnchor="middle" fontSize={11} className="fill-muted-foreground">Anterior</text>
-      <text x={cx} y={272} textAnchor="middle" fontSize={11} className="fill-muted-foreground">Inferior</text>
-      <text x={12} y={cy + 4} textAnchor="start" fontSize={11} className="fill-muted-foreground">Septal</text>
-      <text x={268} y={cy + 4} textAnchor="end" fontSize={11} className="fill-muted-foreground">Lateral</text>
+      <text x={cx} y={16} textAnchor="middle" fontSize={13} className="fill-muted-foreground">Anterior</text>
+      <text x={cx} y={272} textAnchor="middle" fontSize={13} className="fill-muted-foreground">Inferior</text>
+      <text x={12} y={cy + 4} textAnchor="start" fontSize={13} className="fill-muted-foreground">Septal</text>
+      <text x={268} y={cy + 4} textAnchor="end" fontSize={13} className="fill-muted-foreground">Lateral</text>
     </svg>
   );
 }
@@ -256,8 +257,8 @@ function Card({ title, subtitle, icon, children, sectionRef, highlight, action }
       <div className="mb-4 flex items-start gap-2.5">
         {icon && <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">{icon}</div>}
         <div className="min-w-0 flex-1">
-          <h2 className="text-[15px] font-bold text-foreground">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
+          <h2 className="text-[16px] font-bold text-foreground">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>
@@ -269,6 +270,143 @@ function Card({ title, subtitle, icon, children, sectionRef, highlight, action }
 function fmt(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return v.toFixed(digits);
+}
+
+/**
+ * Regional strain curve tooltip. With a segment/region focused (hovered or
+ * selected), shows ONLY that one's value — user-testing feedback: with
+ * 9-17 lines overlapping, a tooltip listing every series at once buried the
+ * one value the user actually wanted. With nothing focused, falls back to
+ * listing every segment/region's value (recharts' own default), so the
+ * "whole graph" overview still reads the same way it always did.
+ * `dataKeyPrefix` is "s" for LV segments, "r" for RV regions. Colors come
+ * from `colorFor` rather than the payload's own color/stroke field: each
+ * segment/region renders as TWO <Line>s sharing one dataKey (an invisible
+ * wide hit-line for easy clicking, plus the visible one), so the payload can
+ * contain a transparent duplicate for the same id -- reading its color back
+ * out of the payload could silently pick the invisible one.
+ */
+function RegionalCurveTooltip({
+  active,
+  label,
+  payload,
+  focus,
+  dataKeyPrefix,
+  labelFor,
+  colorFor,
+}: {
+  active?: boolean;
+  label?: number | string;
+  payload?: { dataKey?: string | number; value?: number | string | null }[];
+  focus: number | null;
+  dataKeyPrefix: "s" | "r";
+  labelFor: (id: number) => string;
+  colorFor: (id: number) => string;
+}) {
+  if (!active || !payload?.length) return null;
+
+  const byId = new Map<number, number | null>();
+  for (const p of payload) {
+    const key = String(p.dataKey ?? "");
+    if (!key.startsWith(dataKeyPrefix)) continue;
+    const id = Number(key.slice(dataKeyPrefix.length));
+    if (!Number.isFinite(id)) continue;
+    const v = p.value == null || p.value === "" ? null : Number(p.value);
+    if (!byId.has(id) || byId.get(id) == null) byId.set(id, v);
+  }
+
+  if (focus != null) {
+    const v = byId.get(focus);
+    if (v == null) return null;
+    return (
+      <div className="rounded-lg border border-border bg-popover px-3 py-2 text-[13px] text-popover-foreground shadow-md">
+        <p className="font-semibold text-muted-foreground">Frame {label}</p>
+        <p className="mt-0.5 font-bold" style={{ color: colorFor(focus) }}>
+          {labelFor(focus)}: {v.toFixed(1)}%
+        </p>
+      </div>
+    );
+  }
+
+  const rows = [...byId.entries()]
+    .filter((e): e is [number, number] => e[1] != null)
+    .sort((a, b) => a[0] - b[0]);
+  if (!rows.length) return null;
+  return (
+    <div className="max-h-64 overflow-y-auto rounded-lg border border-border bg-popover px-3 py-2 text-[12.5px] text-popover-foreground shadow-md">
+      <p className="mb-1 font-semibold text-muted-foreground">Frame {label}</p>
+      <div className="flex flex-col gap-0.5">
+        {rows.map(([id, v]) => (
+          <div key={id} className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
+              <span className="inline-block h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: colorFor(id) }} />
+              {labelFor(id)}
+            </span>
+            <span className="font-semibold tabular-nums">{v.toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pinned per-frame breakdown — the "stays put" answer to RegionalCurveTooltip's
+ * all-segments listing: that one is a hover tooltip, so scrolling it (the
+ * usual way to read a long list) moves the mouse and makes it vanish. This
+ * renders as ordinary DOM content below the chart instead, so it can be
+ * scrolled, read and left open regardless of where the mouse goes. Shares
+ * `curves`/`rvCurves` row shape ({ frame, [`${prefix}${id}`]: value }).
+ */
+function PinnedFrameDetail({
+  frame,
+  row,
+  dataKeyPrefix,
+  labelFor,
+  colorFor,
+  onClose,
+}: {
+  frame: number;
+  row: Record<string, number | null> | undefined;
+  dataKeyPrefix: "s" | "r";
+  labelFor: (id: number) => string;
+  colorFor: (id: number) => string;
+  onClose: () => void;
+}) {
+  const rows = Object.entries(row ?? {})
+    .filter(([k]) => k.startsWith(dataKeyPrefix) && k.slice(dataKeyPrefix.length).length > 0 && !Number.isNaN(Number(k.slice(dataKeyPrefix.length))))
+    .map(([k, v]) => [Number(k.slice(dataKeyPrefix.length)), v] as [number, number | null])
+    .filter((e): e is [number, number] => e[1] != null)
+    .sort((a, b) => a[0] - b[0]);
+  if (!rows.length) return null;
+  return (
+    <div className="mt-2 rounded-lg border border-primary/40 bg-popover shadow-sm">
+      <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+        <p className="text-[12.5px] font-semibold text-foreground">Pinned — Frame {frame}</p>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          title="Unpin"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-56 overflow-y-auto px-3 py-2">
+        <div className="flex flex-col gap-0.5 text-[12.5px]">
+          {rows.map(([id, v]) => (
+            <div key={id} className="flex items-center justify-between gap-4">
+              <span className="flex items-center gap-1.5 whitespace-nowrap text-muted-foreground">
+                <span className="inline-block h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: colorFor(id) }} />
+                {labelFor(id)}
+              </span>
+              <span className="font-semibold tabular-nums text-foreground">{v.toFixed(1)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -477,7 +615,7 @@ function confidenceReason(hs: HealthStatus): string {
 function EmptyState({ computing, error }: { computing?: boolean; error?: string | null }) {
   if (computing) {
     return (
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         Calculating metrics from the saved masks…
       </p>
@@ -485,13 +623,13 @@ function EmptyState({ computing, error }: { computing?: boolean; error?: string 
   }
   if (error) {
     return (
-      <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+      <p className="flex items-start gap-1.5 text-sm text-amber-700 dark:text-amber-400">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>{error}</span>
       </p>
     );
   }
-  return <p className="text-xs text-muted-foreground">Not computed for this model yet.</p>;
+  return <p className="text-sm text-muted-foreground">Not computed for this model yet.</p>;
 }
 
 export function InteractiveReport({
@@ -568,6 +706,12 @@ export function InteractiveReport({
   const [strainType, setStrainType] = useState<StrainType>("GCS");
   const [hoverSeg, setHoverSeg] = useState<number | null>(null);
   const [hoverFrame, setHoverFrame] = useState<number | null>(null);
+  /** Click a frame on the curve chart to pin its full per-segment breakdown
+   *  below it — a hover tooltip disappears the instant the mouse drifts off
+   *  while trying to scroll it, which made reading a many-segment frame in
+   *  detail impossible. The pinned panel is ordinary DOM content, not a
+   *  hover-tracked tooltip, so it stays put regardless of mouse movement. */
+  const [pinnedFrame, setPinnedFrame] = useState<number | null>(null);
   // RV's own metric toggle, mirroring LV's strainType above. GCS and GAS are
   // separate metrics (never combined); rvShown below resolves every region /
   // global value to the selected one.
@@ -676,13 +820,20 @@ export function InteractiveReport({
   }, [rvStrainSeries, rvStrain]);
 
   const hasRvCurves = rvCurves.length > 1;
-  /** Same precedence rule as the LV chart. */
-  const rvEmphasis = selectedRvRegion;
+  /** Hover preview for the RV curve lines — the RV twin of hoverSeg above,
+   *  added so the RV chart's lines get the same wide-hit-target + hover
+   *  preview treatment as the LV chart (user testing: RV lines read as
+   *  "too narrow to click" without it). */
+  const [hoverRvRegion, setHoverRvRegion] = useState<number | null>(null);
+  /** Same precedence rule as the LV chart: a click persists, hover only previews. */
+  const rvEmphasis = selectedRvRegion ?? hoverRvRegion;
 
   /** RV twin of hoverFrame/defaultFrame/activeFrame/bullseyeValues above —
    *  scrubbing the RV chart live-recolors the RV bullseye the same way
    *  hovering the LV chart does for the LV one. */
   const [hoverRvFrame, setHoverRvFrame] = useState<number | null>(null);
+  /** RV twin of pinnedFrame above. */
+  const [pinnedRvFrame, setPinnedRvFrame] = useState<number | null>(null);
   const rvDefaultFrame = rvStrainSeries?.peakFrameIndex ?? rvStrainSeries?.frames?.at(-1)?.frameIndex ?? null;
   const rvActiveFrame = hoverRvFrame ?? rvDefaultFrame;
   const rvActiveSeriesFrame = useMemo(
@@ -773,14 +924,14 @@ export function InteractiveReport({
   const rvPeakGas: number | null = rvPeakGasOf(rvStrain, rvStrainSeries);
   const hasRealRvGas = rvPeakGas != null;
 
-  const rvCards: { label: string; value: string; unit: string; indexed?: string; preview?: boolean }[] = [
+  const rvCards: { label: string; value: string; unit: string; indexed?: string; preview?: boolean; researchInfo?: boolean }[] = [
     { label: "RV Ejection Fraction (RVEF)", value: fmt(rv?.RVEF), unit: "%" },
     { label: "RV End-Diastolic Volume (RV EDV)", value: fmt(rv?.RVEDV), unit: "mL", indexed: indexedMlM2(rv?.RVEDV) },
     { label: "RV End-Systolic Volume (RV ESV)", value: fmt(rv?.RVESV), unit: "mL", indexed: indexedMlM2(rv?.RVESV) },
     { label: "RV Stroke Volume (RV SV)", value: fmt(rv?.RV_SV), unit: "mL", indexed: indexedMlM2(rv?.RV_SV) },
-    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%" },
-    { label: "RV Peak Global Area Strain (RV GAS)", value: fmt(rvPeakGas), unit: "%" },
-    { label: "RV Peak Septal GCS (septal-side border)", value: fmt(rvPeakSeptalGcs(rvStrain, rvStrainSeries)), unit: "%" },
+    { label: "RV Peak Global Circumferential Strain (RV GCS)", value: fmt(rvPeakGcs), unit: "%", researchInfo: true },
+    { label: "RV Peak Global Area Strain (RV GAS)", value: fmt(rvPeakGas), unit: "%", researchInfo: true },
+    { label: "RV Peak Septal GCS (septal-side border)", value: fmt(rvPeakSeptalGcs(rvStrain, rvStrainSeries)), unit: "%", researchInfo: true },
   ];
 
   // RV health status (graded by the backend). A stored result is shown only
@@ -857,9 +1008,9 @@ export function InteractiveReport({
     <div className="mx-auto max-w-5xl px-6 pb-16 pt-6">
       <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs text-muted-foreground">Cardiac Functional Analysis Report · Generated {generatedAt}</p>
+          <p className="text-sm text-muted-foreground">Cardiac Functional Analysis Report · Generated {generatedAt}</p>
           <h1 className="mt-1 text-[22px] font-extrabold text-foreground">Patient {patientLabel}</h1>
-          <p className="mt-0.5 text-[13px] text-muted-foreground">{scanSummary}</p>
+          <p className="mt-0.5 text-[14px] text-muted-foreground">{scanSummary}</p>
         </div>
         {/* BSA + sex — optional, screen-only. Lives up here (not inside the
             Cardiac Measurements card) since it feeds two downstream pipelines
@@ -871,26 +1022,26 @@ export function InteractiveReport({
             className="flex flex-wrap items-center gap-1.5 pt-0.5"
             title="Adds BSA-indexed volumes (EDVI/ESVI, RVEDVI/RVESVI) to the tiles below. Leave blank to show raw values only."
           >
-            <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">BSA</span>
+            <span className="text-[12px] font-medium uppercase tracking-wide text-muted-foreground">BSA</span>
             <span className="flex items-center gap-1">
               <Input
                 type="number" inputMode="decimal" min={0}
                 value={heightCm ?? ""} onChange={(e) => onHeightCmChange?.(e.target.value)}
                 placeholder="Height"
-                className="h-7 w-20 px-2 py-0 text-[9px] leading-none"
+                className="h-7 w-20 px-2 py-0 text-[12px] leading-none"
               />
-              <span className="text-[9px] text-muted-foreground">cm</span>
+              <span className="text-[12px] text-muted-foreground">cm</span>
             </span>
             <span className="flex items-center gap-1">
               <Input
                 type="number" inputMode="decimal" min={0}
                 value={weightKg ?? ""} onChange={(e) => onWeightKgChange?.(e.target.value)}
                 placeholder="Weight"
-                className="h-7 w-20 px-2 py-0 text-[9px] leading-none"
+                className="h-7 w-20 px-2 py-0 text-[12px] leading-none"
               />
-              <span className="text-[9px] text-muted-foreground">kg</span>
+              <span className="text-[12px] text-muted-foreground">kg</span>
             </span>
-            <span className="text-[11px] font-semibold tabular-nums text-foreground">
+            <span className="text-[12.5px] font-semibold tabular-nums text-foreground">
               {bsaM2 != null ? `${bsaM2.toFixed(2)} m²` : "—"}
             </span>
             <div className="inline-flex rounded-md border border-border bg-background p-0.5" title="Used for the NOR gate's sex-specific LV reference ranges and RV health status in Disease Pattern Gates.">
@@ -899,7 +1050,7 @@ export function InteractiveReport({
                   key={s}
                   type="button"
                   onClick={() => setPatientSex(s)}
-                  className={`rounded px-1.5 py-0.5 text-[9px] font-medium capitalize transition-colors ${
+                  className={`rounded px-1.5 py-0.5 text-[12px] font-medium capitalize transition-colors ${
                     patientSex === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                 >
                   {s === "unspecified" ? "Sex: —" : s}
@@ -923,10 +1074,10 @@ export function InteractiveReport({
             rows. Keeps the DOM order (and the print/screen-reader order)
             unchanged while giving the table the width it needs. */}
         <div className="border-b border-border p-4 lg:col-start-1 lg:row-start-1">
-          <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+          <p className="flex items-center gap-1.5 text-sm font-bold text-foreground">
             <Sparkles className="h-3.5 w-3.5 text-primary" /> Cardiac Measurements
           </p>
-          <p className="mb-2 mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <p className="mb-2 mt-0.5 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
             Left Ventricle
           </p>
           {/* 2×3 grid, sized to CONTENT. An earlier revision forced
@@ -942,20 +1093,20 @@ export function InteractiveReport({
               <div key={m.label} className="rounded-lg border border-border px-2.5 py-2">
                 <div className="flex items-start gap-1.5">
                   <Heart className="mt-[1px] h-3 w-3 shrink-0 text-muted-foreground" />
-                  <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                  <span className="text-[12.5px] font-semibold leading-snug text-muted-foreground">
                     {m.label}
                   </span>
                 </div>
-                <span className={`mt-1 block text-[17px] font-bold leading-none tracking-tight ${
+                <span className={`mt-1 block text-[18px] font-bold leading-none tracking-tight ${
                   m.accent ? "text-primary" : "text-foreground"}`}>
                   {m.value}
-                  <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
+                  <span className="ml-0.5 text-[12px] font-semibold text-muted-foreground">{m.unit}</span>
                 </span>
                 {/* BSA-indexed sub-value — only present when the report-screen
                     BSA card has been filled in; otherwise this line is absent
                     and the tile looks exactly as it did before BSA existed. */}
                 {m.indexed && (
-                  <span className="mt-0.5 block text-[9.5px] font-medium text-muted-foreground">{m.indexed}</span>
+                  <span className="mt-0.5 block text-[12px] font-medium text-muted-foreground">{m.indexed}</span>
                 )}
               </div>
             ))}
@@ -966,7 +1117,7 @@ export function InteractiveReport({
               no RV grading here, and RV volumes are not BSA-indexed. */}
           {hasRv && (
             <>
-              <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="mb-2 mt-4 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Right Ventricle
               </p>
               <div className="grid grid-cols-2 gap-2">
@@ -974,16 +1125,17 @@ export function InteractiveReport({
                   <div key={m.label} className={`rounded-lg border px-2.5 py-2 ${m.preview ? "border-dashed border-border bg-muted/20" : "border-border"}`}>
                     <div className="flex items-start gap-1.5">
                       <Heart className="mt-[1px] h-3 w-3 shrink-0 text-muted-foreground" />
-                      <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                      <span className="text-[12.5px] font-semibold leading-snug text-muted-foreground">
                         {m.label}{m.preview && <span className="ml-1 text-amber-600 dark:text-amber-400">preview</span>}
+                        {m.researchInfo && <RvResearchInfoIcon className="relative top-[-1px] ml-1" />}
                       </span>
                     </div>
-                    <span className={`mt-1 block text-[17px] font-bold leading-none tracking-tight ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
+                    <span className={`mt-1 block text-[18px] font-bold leading-none tracking-tight ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
                       {m.value}
-                      <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">{m.unit}</span>
+                      <span className="ml-0.5 text-[12px] font-semibold text-muted-foreground">{m.unit}</span>
                     </span>
                     {m.indexed && (
-                      <span className="mt-0.5 block text-[9.5px] font-medium text-muted-foreground">{m.indexed}</span>
+                      <span className="mt-0.5 block text-[12px] font-medium text-muted-foreground">{m.indexed}</span>
                     )}
                   </div>
                 ))}
@@ -994,20 +1146,20 @@ export function InteractiveReport({
                   new is measured. Both are flags for review, not findings. */}
               {(ratio !== null || sv !== null) && (
                 <>
-                  <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <p className="mb-2 mt-4 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                     Biventricular Relationship
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     {ratio !== null && (
                       <div className={`rounded-lg border px-2.5 py-2 ${
                         ratio >= 1.0 ? "border-amber-500/50 bg-amber-500/10" : "border-primary/40 bg-primary/5"}`}>
-                        <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                        <span className="text-[12.5px] font-semibold leading-snug text-muted-foreground">
                           RV:LV Volume Ratio (RV EDV ÷ LV EDV)
                         </span>
-                        <span className="mt-1 block text-[17px] font-bold leading-none tracking-tight text-foreground">
+                        <span className="mt-1 block text-[18px] font-bold leading-none tracking-tight text-foreground">
                           {ratio.toFixed(2)}
                         </span>
-                        <span className={`mt-1 block text-[9.5px] font-semibold leading-snug ${
+                        <span className={`mt-1 block text-[12px] font-semibold leading-snug ${
                           ratio >= 1.0 ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
                           {ratio >= 1.0 ? "RV enlarged relative to LV" : "RV smaller than LV"}
                         </span>
@@ -1016,14 +1168,14 @@ export function InteractiveReport({
                     {sv !== null && (
                       <div className={`rounded-lg border px-2.5 py-2 ${
                         sv.mismatch ? "border-amber-500/50 bg-amber-500/10" : "border-border"}`}>
-                        <span className="text-[10.5px] font-semibold leading-snug text-muted-foreground">
+                        <span className="text-[12.5px] font-semibold leading-snug text-muted-foreground">
                           SV Difference (RV SV − LV SV)
                         </span>
-                        <span className="mt-1 block text-[17px] font-bold leading-none tracking-tight text-foreground">
+                        <span className="mt-1 block text-[18px] font-bold leading-none tracking-tight text-foreground">
                           {sv.diff > 0 ? "+" : ""}{sv.diff.toFixed(1)}
-                          <span className="ml-0.5 text-[10px] font-semibold text-muted-foreground">mL</span>
+                          <span className="ml-0.5 text-[12px] font-semibold text-muted-foreground">mL</span>
                         </span>
-                        <span className={`mt-1 block text-[9.5px] font-semibold leading-snug ${
+                        <span className={`mt-1 block text-[12px] font-semibold leading-snug ${
                           sv.mismatch ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
                           {sv.mismatch
                             ? `Large mismatch (${sv.relPct.toFixed(0)} %) — possible shunt, valve leak, or segmentation error`
@@ -1039,7 +1191,7 @@ export function InteractiveReport({
         </div>
 
         <div className="border-b border-border p-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:border-b-0 lg:border-l">
-          <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+          <p className="flex items-center gap-1.5 text-sm font-bold text-foreground">
             <CheckCircle2 className="h-3.5 w-3.5 text-primary" /> Health Status
           </p>
           <div className="mb-2.5" />
@@ -1049,7 +1201,7 @@ export function InteractiveReport({
                   badge sits BESIDE the grade, never inside it — confidence
                   qualifies the grade, it doesn't change it. */}
               <div className="mb-2.5 flex flex-wrap items-center gap-2">
-                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold ${
                   healthStatus.status === "Healthy" ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
                   : healthStatus.status === "Mild" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
                   : healthStatus.status === "Moderate" ? "bg-orange-500/10 text-orange-700 dark:text-orange-400"
@@ -1062,7 +1214,7 @@ export function InteractiveReport({
                     `confidence` shows nothing rather than defaulting to "Low",
                     which would misreport the result. */}
                 {(healthStatus.confidence === "normal" || healthStatus.confidence === "low") && (
-                  <span className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                  <span className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-semibold ${
                     healthStatus.confidence === "low"
                       ? "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"
                       // Same emerald "normal" styling as the grade badge above (and LEVEL_BADGE
@@ -1080,7 +1232,7 @@ export function InteractiveReport({
               {/* Why it's low — so the badge isn't a mystery. Derived from the
                   two evidence lines that actually drive confidence. */}
               {healthStatus.confidence === "low" && (
-                <p className="mb-2.5 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
+                <p className="mb-2.5 text-[12.5px] leading-relaxed text-amber-700 dark:text-amber-400">
                   {confidenceReason(healthStatus)}
                 </p>
               )}
@@ -1094,15 +1246,15 @@ export function InteractiveReport({
                   segmented. */}
               {hasRv && (
                 <div className="mb-3 rounded-lg border border-border bg-muted/30 p-2.5">
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                     Biventricular Function
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                         LV Function
                       </span>
-                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[12.5px] font-semibold ${
                         healthStatus.status === "Healthy" ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
                         : healthStatus.status === "Mild" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
                         : healthStatus.status === "Moderate" ? "bg-orange-500/10 text-orange-700 dark:text-orange-400"
@@ -1112,25 +1264,25 @@ export function InteractiveReport({
                       </span>
                     </div>
                     <div>
-                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                         RV Function <span className="normal-case tracking-normal">· advisory</span>
                       </span>
                       {rvCurrent ? (
                         <>
                           <span
-                            className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${RV_STATUS_BADGE[rvCurrent.status] ?? RV_STATUS_BADGE["Not assessable"]}`}
+                            className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[12.5px] font-semibold ${RV_STATUS_BADGE[rvCurrent.status] ?? RV_STATUS_BADGE["Not assessable"]}`}
                             title={rvCurrent.disclaimer}
                           >
                             {rvCurrent.status}
                           </span>
                           {!rvSexChosen && (
-                            <span className="mt-0.5 block text-[9px] text-muted-foreground">
+                            <span className="mt-0.5 block text-[12px] text-muted-foreground">
                               No sex selected — checked against both sexes
                             </span>
                           )}
                         </>
                       ) : (
-                        <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                        <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[12.5px] font-semibold text-muted-foreground">
                           {recomputingRvHealthStatus ? "Updating…" : "Not graded yet"}
                         </span>
                       )}
@@ -1138,7 +1290,7 @@ export function InteractiveReport({
                   </div>
 
                   {sv !== null && (
-                    <span className={`mt-2 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10.5px] font-medium ${
+                    <span className={`mt-2 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[12.5px] font-medium ${
                       sv.mismatch
                         ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                         : "border-border bg-muted text-muted-foreground"}`}>
@@ -1149,7 +1301,7 @@ export function InteractiveReport({
                     </span>
                   )}
 
-                  <p className="mt-2 text-[9.5px] leading-snug text-muted-foreground">
+                  <p className="mt-2 text-[12px] leading-snug text-muted-foreground">
                     RV function is compared with sex-specific SCMR 2025 reference ranges — within or
                     outside range, not a severity grade. It does not affect the LV grade above.
                   </p>
@@ -1166,7 +1318,7 @@ export function InteractiveReport({
                 <thead>
                   <tr>
                     {([["Metric", "w-[29%]"], ["Result (this study)", "w-[43%]"], ["Interpretation", "w-[28%]"]] as const).map(([h, w]) => (
-                      <th key={h} className={`${w} px-1 pb-1.5 text-left align-top text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground`}>
+                      <th key={h} className={`${w} px-1 pb-1.5 text-left align-top text-[12px] font-bold uppercase tracking-wide text-muted-foreground`}>
                         {h}
                       </th>
                     ))}
@@ -1179,11 +1331,11 @@ export function InteractiveReport({
                     return (
                       <tr key={m.key} className="border-t border-border/60">
                         <td className="px-1 py-2 align-top">
-                          <span className="text-[11.5px] font-semibold leading-tight text-foreground">{m.name}</span>
+                          <span className="text-[13px] font-semibold leading-tight text-foreground">{m.name}</span>
                         </td>
                         <td className="px-1 py-2 align-top">
-                          <span className="text-[13px] font-bold tabular-nums text-foreground">
-                            {fmt(v)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">{m.unit}</span>
+                          <span className="text-[14px] font-bold tabular-nums text-foreground">
+                            {fmt(v)}<span className="ml-0.5 text-[12px] font-medium text-muted-foreground">{m.unit}</span>
                           </span>
                           {/* Zones: green = normal, amber = borderline, red =
                               far from normal. The normal band has no outline —
@@ -1218,7 +1370,7 @@ export function InteractiveReport({
                               />
                             )}
                           </div>
-                          <div className="mt-2 flex w-full min-w-[120px] max-w-[190px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
+                          <div className="mt-2 flex w-full min-w-[120px] max-w-[190px] justify-between text-[12.5px] tabular-nums text-muted-foreground">
                             <span>{m.min}</span>
                             <span className="text-foreground/70">normal {m.normal[0]}–{m.normal[1]}</span>
                             <span>{m.max}</span>
@@ -1230,13 +1382,13 @@ export function InteractiveReport({
                                the tooltip so nothing is lost. */
                             <span
                               title={interp.full}
-                              className={`text-[11px] font-semibold leading-tight ${
+                              className={`text-[12.5px] font-semibold leading-tight ${
                                 interp.level === "ok" ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}`}
                             >
                               {interp.text}
                             </span>
                           ) : (
-                            <span className="text-[11px] text-muted-foreground">—</span>
+                            <span className="text-[12.5px] text-muted-foreground">—</span>
                           )}
                         </td>
                       </tr>
@@ -1321,7 +1473,7 @@ export function InteractiveReport({
                 const verdict = (label: string, isVolume: boolean) =>
                   rvCurrent ? rvInterpretation(isVolume && volumesWithheld ? volumesWithheld : rvEvidence(label)) : pending;
 
-                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; full?: string; level: "ok" | "warn" | "unavailable" } | null; preview?: boolean }[] = [
+                const rows: { key: string; name: string; value: number | null; unit: string; min: number; max: number; normalLabel: string; zones: Zone[]; interp: { text: string; full?: string; level: "ok" | "warn" | "unavailable" } | null; preview?: boolean; researchInfo?: boolean }[] = [
                   { key: "RVEF", name: "RV Ejection Fraction (RVEF)", value: rv?.RVEF ?? null, unit: "%", min: 0, max: 100,
                     normalLabel: rvefBar.label, zones: rvefBar.zones,
                     interp: verdict("RV Ejection Fraction", false) },
@@ -1335,28 +1487,28 @@ export function InteractiveReport({
                   // reference range" caveat is carried in the interp text instead of a
                   // separate preview/prototype flag, same reason as GAS below.
                   { key: "PeakGCS_RV", name: "Peak Global Circumferential Strain", value: rvPeakGcs, unit: "%", min: -30, max: 0, normalLabel: "not validated",
-                    zones: [], interp: hasRealRvGcs
+                    zones: [], researchInfo: true, interp: hasRealRvGcs
                       ? { text: "No validated RV-specific reference range", level: "warn" }
                       : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" } },
                   // Real GAS (cavity-area % change, short-axis) — no validated RV
                   // reference range exists for this measure (methodology caveat,
                   // not a data-readiness flag — the value itself is real).
                   { key: "PeakGAS_RV", name: "Peak Global Area Strain", value: rvPeakGas, unit: "%", min: -60, max: 0, normalLabel: "not validated",
-                    zones: [], interp: hasRealRvGas
+                    zones: [], researchInfo: true, interp: hasRealRvGas
                       ? { text: "No validated RV-specific reference range", level: "warn" }
                       : { text: "Not yet computed — run RV strain from the Strain tab", level: "warn" } },
                 ];
 
                 return (
                   <div className="mt-4 border-t border-border pt-3">
-                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                       RV Health · advisory
                     </p>
                     <table className="w-full table-fixed border-collapse">
                       <thead>
                         <tr>
                           {([["Metric", "w-[29%]"], ["Result (this study)", "w-[43%]"], ["Interpretation", "w-[28%]"]] as const).map(([h, w]) => (
-                            <th key={h} className={`${w} px-1 pb-1.5 text-left align-top text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground`}>
+                            <th key={h} className={`${w} px-1 pb-1.5 text-left align-top text-[12px] font-bold uppercase tracking-wide text-muted-foreground`}>
                               {h}
                             </th>
                           ))}
@@ -1366,13 +1518,14 @@ export function InteractiveReport({
                         {rows.map((m) => (
                           <tr key={m.key} className="border-t border-border/60">
                             <td className="px-1 py-2 align-top">
-                              <span className="text-[11.5px] font-semibold leading-tight text-foreground">
-                                {m.name}{m.preview && <span className="ml-1 text-[9.5px] font-semibold text-amber-600 dark:text-amber-400">preview</span>}
+                              <span className="text-[13px] font-semibold leading-tight text-foreground">
+                                {m.name}{m.preview && <span className="ml-1 text-[12px] font-semibold text-amber-600 dark:text-amber-400">preview</span>}
+                                {m.researchInfo && <RvResearchInfoIcon className="relative top-[-1px] ml-1" />}
                               </span>
                             </td>
                             <td className="px-1 py-2 align-top">
-                              <span className={`text-[13px] font-bold tabular-nums ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
-                                {fmt(m.value)}<span className="ml-0.5 text-[10px] font-medium text-muted-foreground">{m.unit}</span>
+                              <span className={`text-[14px] font-bold tabular-nums ${m.preview ? "text-muted-foreground" : "text-foreground"}`}>
+                                {fmt(m.value)}<span className="ml-0.5 text-[12px] font-medium text-muted-foreground">{m.unit}</span>
                               </span>
                               <div className="relative mt-3 h-2.5 w-full min-w-[120px] max-w-[190px]">
                                 <div className="absolute inset-0 overflow-hidden rounded-full bg-muted">
@@ -1386,7 +1539,7 @@ export function InteractiveReport({
                                     style={{ left: `${pct(m.value, m.min, m.max)}%` }} title={`This study: ${fmt(m.value)} ${m.unit}`} />
                                 )}
                               </div>
-                              <div className="mt-2 flex w-full min-w-[120px] max-w-[190px] justify-between text-[8.5px] tabular-nums text-muted-foreground">
+                              <div className="mt-2 flex w-full min-w-[120px] max-w-[190px] justify-between text-[12.5px] tabular-nums text-muted-foreground">
                                 <span>{m.min}</span><span className="text-foreground/70">{m.zones.length ? `normal ${m.normalLabel}` : m.normalLabel}</span><span>{m.max}</span>
                               </div>
                             </td>
@@ -1394,33 +1547,33 @@ export function InteractiveReport({
                               {m.interp ? (
                                 <span
                                   title={m.interp.full || undefined}
-                                  className={`text-[11px] font-semibold leading-tight ${
+                                  className={`text-[12.5px] font-semibold leading-tight ${
                                     m.interp.level === "ok" ? "text-emerald-700 dark:text-emerald-400"
                                     : m.interp.level === "warn" ? "text-amber-700 dark:text-amber-400"
                                     : "text-muted-foreground"}`}
                                 >
                                   {m.interp.text}
                                 </span>
-                              ) : <span className="text-[11px] text-muted-foreground">—</span>}
+                              ) : <span className="text-[12.5px] text-muted-foreground">—</span>}
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    <p className="mt-2 text-[9px] leading-snug text-muted-foreground">
+                    <p className="mt-2 text-[12px] leading-snug text-muted-foreground">
                       RVEF, RVEDVI and RVESVI are compared with sex-specific reference ranges — within or
                       outside range, not a severity grade. With no sex selected, values are checked against
                       both sexes. Peak GCS and Peak GAS have no validated RV-specific reference range yet.
                       RV SV {fmt(rv?.RV_SV)} mL. Advisory only — does not affect the LV grade above.
                     </p>
                     {rvCurrent && rvCurrent.warnings.length > 0 && (
-                      <p className="mt-1 text-[9px] leading-snug text-muted-foreground">{rvCurrent.warnings.join(" ")}</p>
+                      <p className="mt-1 text-[12px] leading-snug text-muted-foreground">{rvCurrent.warnings.join(" ")}</p>
                     )}
                     {!rvCurrent && !recomputingRvHealthStatus && onRecomputeRvHealthStatus && (
                       <button
                         type="button"
                         onClick={() => onRecomputeRvHealthStatus(bsaM2 ?? null, rvSex)}
-                        className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                         title="Grade RV health status for the sex and BSA entered above"
                       >
                         <RotateCcw className="h-3.5 w-3.5" />
@@ -1437,7 +1590,7 @@ export function InteractiveReport({
               {healthStatus.evidence
                 ?.filter((e) => !METRIC_BARS.some((m) => m.evidenceLabel === e.label))
                 .map((e, i) => (
-                  <div key={i} className="mt-2 flex items-start gap-1.5 text-xs">
+                  <div key={i} className="mt-2 flex items-start gap-1.5 text-sm">
                     {e.level === "ok"
                       ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                       : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />}
@@ -1460,15 +1613,12 @@ export function InteractiveReport({
                   {regionalHealthStatus && (
                     <div title={regionalHealthStatus.disclaimer}>
                       <div className="flex items-center gap-2">
-                        <h3 className="text-xs font-bold text-foreground">LV Regional Findings</h3>
-                        <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
-                          Advisory
-                        </span>
+                        <h3 className="text-sm font-bold text-foreground">LV Regional Findings</h3>
                       </div>
 
                       {hasFindings ? (
                         <>
-                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <p className="mb-2 mt-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                             {showAllSegments ? "All Segments" : "Affected Segments"}
                           </p>
                           <div className="flex flex-wrap gap-1.5">
@@ -1486,10 +1636,10 @@ export function InteractiveReport({
                                     isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
                                   } ${quiet ? "bg-muted/40" : "bg-card"}`}
                                 >
-                                  <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
+                                  <span className={`block text-[16px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
                                     {idx}
                                   </span>
-                                  <span className={`mt-1 block text-[9px] font-semibold leading-none ${
+                                  <span className={`mt-1 block text-[12px] font-semibold leading-none ${
                                     lvl === "severe" ? "text-red-700 dark:text-red-400"
                                     : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
                                     : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
@@ -1500,11 +1650,11 @@ export function InteractiveReport({
                               );
                             })}
                           </div>
-                          <p className="mt-2 text-[11px] text-muted-foreground">{regionalHealthStatus.summary}</p>
+                          <p className="mt-2 text-[12.5px] text-muted-foreground">{regionalHealthStatus.summary}</p>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); setShowAllSegments((v) => !v); }}
-                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                            className="mt-1.5 text-[12.5px] font-medium text-primary hover:underline"
                           >
                             {showAllSegments ? "← Show affected only" : "View all segments →"}
                           </button>
@@ -1512,7 +1662,7 @@ export function InteractiveReport({
                       ) : (
                         /* status !== "ok", or no focal defect — keep the plain
                            advisory sentence rather than an empty button row. */
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-[12.5px] text-muted-foreground">
                           {regionalOk
                             ? regionalHealthStatus.summary
                             : "Regional assessment unavailable for this model."}
@@ -1527,15 +1677,15 @@ export function InteractiveReport({
                       title={rvRegionalHealthStatus?.disclaimer}
                     >
                       <div className="flex items-center gap-2">
-                        <h3 className="text-xs font-bold text-foreground">RV Regional Findings</h3>
-                        <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                        <h3 className="text-sm font-bold text-foreground">RV Regional Findings</h3>
+                        <span className="rounded border border-border px-1.5 py-0.5 text-[12px] font-bold uppercase tracking-wider text-muted-foreground">
                           Advisory
                         </span>
                       </div>
 
                       {hasRvFindings ? (
                         <>
-                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <p className="mb-2 mt-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                             {showAllRvSegments ? "All Regions" : "Affected Regions"}
                           </p>
                           <div className="flex flex-wrap gap-1.5">
@@ -1557,10 +1707,10 @@ export function InteractiveReport({
                                     isSel ? "border-primary ring-2 ring-primary/30" : "border-border"
                                   } ${quiet ? "bg-muted/40" : "bg-card"}`}
                                 >
-                                  <span className={`block text-[15px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
+                                  <span className={`block text-[16px] font-bold leading-none ${quiet ? "text-muted-foreground" : "text-foreground"}`}>
                                     {idx}
                                   </span>
-                                  <span className={`mt-1 block text-[9px] font-semibold leading-none ${
+                                  <span className={`mt-1 block text-[12px] font-semibold leading-none ${
                                     lvl === "severe" ? "text-red-700 dark:text-red-400"
                                     : lvl === "moderate" ? "text-orange-700 dark:text-orange-400"
                                     : lvl === "mild" ? "text-amber-700 dark:text-amber-400"
@@ -1571,40 +1721,40 @@ export function InteractiveReport({
                               );
                             })}
                           </div>
-                          <p className="mt-2 text-[11px] text-muted-foreground">{rvRegionalHealthStatus?.summary}</p>
+                          <p className="mt-2 text-[12.5px] text-muted-foreground">{rvRegionalHealthStatus?.summary}</p>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); setShowAllRvSegments((v) => !v); }}
-                            className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                            className="mt-1.5 text-[12.5px] font-medium text-primary hover:underline"
                           >
                             {showAllRvSegments ? "← Show affected only" : "View all regions →"}
                           </button>
                         </>
                       ) : rvRegionalHealthStatus ? (
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-[12.5px] text-muted-foreground">
                           {rvRegionalOk
                             ? rvRegionalHealthStatus.summary
                             : "Regional assessment unavailable for this model."}
                         </p>
                       ) : rvShown && rvShownHasData ? (
                         <>
-                          <p className="mb-2 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <p className="mb-2 mt-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                             Global RV {rvMetricType}
                           </p>
-                          <p className="text-[19px] font-bold tabular-nums text-foreground">
+                          <p className="text-[20px] font-bold tabular-nums text-foreground">
                             {fmt(rvShown.global_rv_strain)}
-                            <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
+                            <span className="ml-0.5 text-[12.5px] font-semibold text-muted-foreground">%</span>
                           </p>
                         </>
                       ) : (
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-[12.5px] text-muted-foreground">
                           No RV regional strain computed for this model yet.
                         </p>
                       )}
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); rvCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}
-                        className="mt-1.5 text-[11px] font-medium text-primary hover:underline"
+                        className="mt-1.5 text-[12.5px] font-medium text-primary hover:underline"
                       >
                         View full RV Regional Findings ↓
                       </button>
@@ -1628,17 +1778,17 @@ export function InteractiveReport({
               LV z-score similarity bars and RV ARVC/PAH/GENERAL prototype
               scoring that used to render here. */}
           <div className="mb-2 flex items-center justify-between">
-            <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+            <p className="flex items-center gap-1.5 text-sm font-bold text-foreground">
               <Info className="h-3.5 w-3.5 text-primary" /> Disease Pattern Similarity
             </p>
             {recomputingPatternGates && (
-              <span className="inline-flex items-center gap-1 text-[9.5px] font-medium text-muted-foreground">
+              <span className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" /> Updating…
               </span>
             )}
           </div>
           {recomputePatternGatesError && (
-            <p className="mb-2 text-[10px] text-red-600 dark:text-red-400">{recomputePatternGatesError}</p>
+            <p className="mb-2 text-[12px] text-red-600 dark:text-red-400">{recomputePatternGatesError}</p>
           )}
           {patternGates ? (
               <>
@@ -1648,7 +1798,7 @@ export function InteractiveReport({
                     which ACDC group a gate is (dropped the old per-group
                     color scheme, which implied a distinction — which group —
                     that read as more meaningful than it was). */}
-                <div className="mb-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[9px] text-muted-foreground">
+                <div className="mb-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-muted-foreground">
                   <span className="font-semibold text-muted-foreground/80">Met badge:</span>
                   <span className="inline-flex items-center gap-1">
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: MET_COLOR }} />
@@ -1678,7 +1828,7 @@ export function InteractiveReport({
                     return (
                     <div key={g.code} className="rounded-md border border-border p-2">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
+                        <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-foreground">
                           {g.met === true ? (
                             <CheckCircle2 className="h-3.5 w-3.5 shrink-0" style={{ color: isSecondaryMet ? MET_COLOR_SECONDARY_ICON : MET_COLOR }} />
                           ) : g.met === false ? (
@@ -1691,7 +1841,7 @@ export function InteractiveReport({
                         <span className="flex items-center gap-1">
                           {g.rank_label && (
                             <span
-                              className={`rounded-full px-1.5 py-0.5 text-[8.5px] font-semibold ${
+                              className={`rounded-full px-1.5 py-0.5 text-[12.5px] font-semibold ${
                                 g.rank_label === "Primary match"
                                   ? "border border-foreground/30 text-foreground"
                                   : "border border-border text-muted-foreground"
@@ -1702,7 +1852,7 @@ export function InteractiveReport({
                             </span>
                           )}
                           <span
-                            className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+                            className={`rounded-full px-1.5 py-0.5 text-[12px] font-bold uppercase tracking-wide ${
                               g.met === true ? (isSecondaryMet ? "border text-green-700 dark:text-green-400" : "text-white")
                               : g.met === false ? "border border-border text-muted-foreground"
                               : "border border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"}`}
@@ -1718,7 +1868,7 @@ export function InteractiveReport({
                           </span>
                           {g.resolved_from_partial_data && (
                             <span
-                              className="flex items-center gap-0.5 rounded-full border border-red-500/50 bg-red-500/15 px-1.5 py-0.5 text-[8.5px] font-semibold text-red-700 dark:text-red-400"
+                              className="flex items-center gap-0.5 rounded-full border border-red-500/50 bg-red-500/15 px-1.5 py-0.5 text-[12.5px] font-semibold text-red-700 dark:text-red-400"
                               title="This gate's result was decided from only some of its required values — the rest were unavailable, but couldn't have changed the outcome either way."
                             >
                               <AlertTriangle className="h-2.5 w-2.5" /> Partial data
@@ -1733,7 +1883,7 @@ export function InteractiveReport({
                             <li
                               key={i}
                               className={cn(
-                                "flex gap-1 text-[10px] leading-snug",
+                                "flex gap-1 text-[12px] leading-snug",
                                 isPartialNote ? "font-medium text-red-700 dark:text-red-400" : "text-muted-foreground",
                               )}
                             >
@@ -1743,7 +1893,7 @@ export function InteractiveReport({
                           );
                         })}
                       </ul>
-                      <p className="mt-1 text-[9px] italic leading-snug text-muted-foreground/70">{g.criterion_text}</p>
+                      <p className="mt-1 text-[12px] italic leading-snug text-muted-foreground/70">{g.criterion_text}</p>
                     </div>
                   );})}
                 </div>
@@ -1755,24 +1905,24 @@ export function InteractiveReport({
                     one score — see the Python module's own docstring for why. */}
                 {patternGates.rv_severity && (
                   <div className="mt-3 rounded-md border border-dashed border-border p-2">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <p className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                       RV gate met — severity context
                     </p>
                     <ul className="flex flex-col gap-1">
                       {patternGates.rv_severity.arvc_note && (
-                        <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                        <li className="flex gap-1 text-[12.5px] leading-snug text-muted-foreground">
                           <span className="text-muted-foreground/50">•</span>
                           <span>{patternGates.rv_severity.arvc_note}</span>
                         </li>
                       )}
                       {patternGates.rv_severity.pah_note && (
-                        <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                        <li className="flex gap-1 text-[12.5px] leading-snug text-muted-foreground">
                           <span className="text-muted-foreground/50">•</span>
                           <span>{patternGates.rv_severity.pah_note}</span>
                         </li>
                       )}
                       {patternGates.rv_severity.generic_note && (
-                        <li className="flex gap-1 text-[10.5px] leading-snug text-muted-foreground">
+                        <li className="flex gap-1 text-[12.5px] leading-snug text-muted-foreground">
                           <span className="text-muted-foreground/50">•</span>
                           <span>{patternGates.rv_severity.generic_note}</span>
                         </li>
@@ -1781,7 +1931,7 @@ export function InteractiveReport({
                   </div>
                 )}
 
-                <p className="mt-3 border-t border-border pt-2 text-[9px] leading-snug text-muted-foreground">
+                <p className="mt-3 border-t border-border pt-2 text-[12px] leading-snug text-muted-foreground">
                   {patternGates.disclaimer}
                 </p>
               </>
@@ -1808,7 +1958,7 @@ export function InteractiveReport({
               <button
                 type="button"
                 onClick={() => setSelectedSeg(null)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 title="Clear the selected segment"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
@@ -1821,7 +1971,7 @@ export function InteractiveReport({
                   key={t}
                   type="button"
                   onClick={() => setStrainType(t)}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                  className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
                     strainType === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                 >
                   {t}
@@ -1855,7 +2005,7 @@ export function InteractiveReport({
                   onClick={(e) => e.stopPropagation()}
                 >
                   <span
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[17px] font-bold text-[#0b1220]"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[18px] font-bold text-[#0b1220]"
                     style={{ background: strainColor(strainType === "GCS" ? selectedInfo.gcs : selectedInfo.grs, strainType) }}
                   >
                     {selectedInfo.idx}
@@ -1863,25 +2013,25 @@ export function InteractiveReport({
                   <div className="min-w-[150px] flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-bold text-foreground">{selectedInfo.label}</span>
-                      <span className="rounded-full border border-border px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <span className="rounded-full border border-border px-2 py-0.5 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                         {selectedInfo.region} ring
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    <p className="mt-0.5 text-[12.5px] text-muted-foreground">
                       Peak values measured end-diastole → end-systole.
                     </p>
                   </div>
                   <div className="flex items-center gap-5">
                     <div className="text-right">
-                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">Peak GCS</span>
-                      <span className="text-[15px] font-bold tabular-nums text-foreground">{fmt(selectedInfo.gcs)}%</span>
+                      <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">Peak GCS</span>
+                      <span className="text-[16px] font-bold tabular-nums text-foreground">{fmt(selectedInfo.gcs)}%</span>
                     </div>
                     <div className="text-right">
-                      <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">Peak GRS</span>
-                      <span className="text-[15px] font-bold tabular-nums text-foreground">{fmt(selectedInfo.grs)}%</span>
+                      <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">Peak GRS</span>
+                      <span className="text-[16px] font-bold tabular-nums text-foreground">{fmt(selectedInfo.grs)}%</span>
                     </div>
                     {selectedInfo.level && (
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${LEVEL_BADGE[selectedInfo.level] ?? "bg-muted text-muted-foreground"}`}>
+                      <span className={`rounded-full px-2.5 py-1 text-sm font-semibold ${LEVEL_BADGE[selectedInfo.level] ?? "bg-muted text-muted-foreground"}`}>
                         {LEVEL_WORD[selectedInfo.level] ?? selectedInfo.level}
                       </span>
                     )}
@@ -1898,7 +2048,7 @@ export function InteractiveReport({
             >
               <div>
                 <div className="mb-1 text-center">
-                  <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+                  <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[12.5px] font-semibold text-primary">
                     {hoverFrame == null
                       ? (defaultFrame != null ? `Peak · Frame ${defaultFrame}` : "Peak")
                       : `Frame ${activeFrame}`}
@@ -1917,12 +2067,12 @@ export function InteractiveReport({
                     className="h-2 w-full rounded-full border border-border"
                     style={{ background: strainRampCss() }}
                   />
-                  <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground">
+                  <div className="mt-0.5 flex justify-between text-[12px] text-muted-foreground">
                     <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].worst}%</span>
                     <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].label}</span>
                     <span>{STRAIN_COLOR_SCALES[lvScaleKey(strainType)].best}%</span>
                   </div>
-                  <p className="mt-1 text-center text-[9.5px] leading-snug text-muted-foreground">{FIXED_SCALE_NOTE}</p>
+                  <p className="mt-1 text-center text-[12px] leading-snug text-muted-foreground">{FIXED_SCALE_NOTE}</p>
                 </div>
               </div>
 
@@ -1937,12 +2087,27 @@ export function InteractiveReport({
                           if (e?.activeLabel !== undefined) setHoverFrame(Number(e.activeLabel));
                         }}
                         onMouseLeave={() => setHoverFrame(null)}
+                        onClick={(e: { activeLabel?: string | number }) => {
+                          if (e?.activeLabel === undefined) return;
+                          const frame = Number(e.activeLabel);
+                          setPinnedFrame((prev) => (prev === frame ? null : frame));
+                        }}
                       >
                         <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
-                        <XAxis dataKey="frame" tick={{ fontSize: 11 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 11 }} />
-                        <YAxis tick={{ fontSize: 11 }} label={{ value: "Strain (%)", angle: -90, position: "insideLeft", fontSize: 11 }} />
+                        <XAxis dataKey="frame" tick={{ fontSize: 12 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 12 }} label={{ value: "Strain (%)", angle: -90, position: "insideLeft", fontSize: 12 }} />
                         <ReferenceLine y={0} stroke="var(--border)" />
-                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                        <Tooltip
+                          content={(props) => (
+                            <RegionalCurveTooltip
+                              {...props}
+                              focus={emphasisSeg}
+                              dataKeyPrefix="s"
+                              labelFor={(seg) => segmentLabels.find((s) => s.segment === seg)?.label ?? `Segment ${seg}`}
+                              colorFor={(seg) => RING_COLOR_VAR[RING_OF(seg)]}
+                            />
+                          )}
+                        />
                         {/* Invisible wide hit-lines. A 1.4px stroke is almost
                             impossible to click; these give each curve a ~14px
                             target without changing what's drawn. Rendered
@@ -1978,7 +2143,7 @@ export function InteractiveReport({
                                 dataKey={`s${s.segment}`}
                                 name={s.label}
                                 stroke={RING_COLOR_VAR[RING_OF(s.segment)]}
-                                strokeWidth={isOn ? 3 : 1.4}
+                                strokeWidth={isOn ? 3 : 1.8}
                                 dot={false}
                                 opacity={dimmed ? 0.12 : 1}
                                 isAnimationActive={false}
@@ -1994,18 +2159,28 @@ export function InteractiveReport({
                         number on the bullseye and by the info box. */}
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
                       {(["basal", "mid", "apical", "apex"] as const).map((r) => (
-                        <span key={r} className="flex items-center gap-1.5 text-[10.5px] capitalize text-muted-foreground">
-                          <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: RING_COLOR_VAR[r] }} />
+                        <span key={r} className="flex items-center gap-1.5 text-[13px] capitalize text-muted-foreground">
+                          <span className="inline-block h-[8px] w-[8px] rounded-full" style={{ background: RING_COLOR_VAR[r] }} />
                           {r}
                         </span>
                       ))}
-                      <span className="text-[10.5px] text-muted-foreground/70">· click a curve or wedge to focus</span>
+                      <span className="text-[13px] text-muted-foreground/70">· click a curve or wedge to focus</span>
                     </div>
+                    {pinnedFrame != null && (
+                      <PinnedFrameDetail
+                        frame={pinnedFrame}
+                        row={curves.find((c) => c.frame === pinnedFrame)}
+                        dataKeyPrefix="s"
+                        labelFor={(seg) => segmentLabels.find((s) => s.segment === seg)?.label ?? `Segment ${seg}`}
+                        colorFor={(seg) => RING_COLOR_VAR[RING_OF(seg)]}
+                        onClose={() => setPinnedFrame(null)}
+                      />
+                    )}
                   </>
                 ) : (
                   <div className="flex h-full min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-border p-6 text-center">
                     <p className="text-sm text-muted-foreground">Full-cycle curves need the per-frame strain series.</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       The single ED→ES result is shown in the bullseye. Run the strain series to plot strain across the cardiac cycle.
                     </p>
                   </div>
@@ -2036,7 +2211,7 @@ export function InteractiveReport({
               <button
                 type="button"
                 onClick={() => setSelectedRvRegion(null)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 title="Clear the selected region"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
@@ -2049,16 +2224,14 @@ export function InteractiveReport({
                   key={t}
                   type="button"
                   onClick={() => setRvMetricType(t)}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                  className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
                     rvMetricType === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
                 >
                   {t}
                 </button>
               ))}
             </div>
-            <span className="rounded border border-border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
-              Advisory
-            </span>
+            <RvResearchInfoIcon label="Research output only" />
           </div>
         }
       >
@@ -2084,7 +2257,7 @@ export function InteractiveReport({
                 color scale, so only size needed correcting here. */}
             <div onClick={(e) => e.stopPropagation()}>
               <div className="mb-1 text-center">
-                <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
+                <span className="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-[12.5px] font-semibold text-primary">
                   {hoverRvFrame == null
                     ? (rvDefaultFrame != null ? `Peak · Frame ${rvDefaultFrame}` : "ED→ES")
                     : `Frame ${rvActiveFrame}`}
@@ -2114,20 +2287,20 @@ export function InteractiveReport({
             <div>
               <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
                 <div>
-                  <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {rvActiveSeriesFrame ? `Frame ${rvActiveFrame} RV ${rvMetricType}` : `Global RV ${rvMetricType}`}
                   </span>
-                  <span className="text-[19px] font-bold tabular-nums text-foreground">
+                  <span className="text-[20px] font-bold tabular-nums text-foreground">
                     {fmt(rvActiveGlobal)}
-                    <span className="ml-0.5 text-[11px] font-semibold text-muted-foreground">%</span>
+                    <span className="ml-0.5 text-[12.5px] font-semibold text-muted-foreground">%</span>
                   </span>
                 </div>
                 {rvShown.edFrameIndex != null && rvShown.esFrameIndex != null && (
                   <div>
-                    <span className="block text-[9.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <span className="block text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                       Frames
                     </span>
-                    <span className="text-[13px] font-semibold tabular-nums text-foreground">
+                    <span className="text-[14px] font-semibold tabular-nums text-foreground">
                       ED {rvShown.edFrameIndex} → ES {rvShown.esFrameIndex}
                     </span>
                   </div>
@@ -2139,7 +2312,7 @@ export function InteractiveReport({
                   another is selected. */}
               {hasRvCurves ? (
                 <div className="mt-3">
-                  <ResponsiveContainer width="100%" height={220}>
+                  <ResponsiveContainer width="100%" height={320}>
                     <LineChart
                       data={rvCurves}
                       margin={{ top: 8, right: 12, left: -12, bottom: 4 }}
@@ -2147,12 +2320,46 @@ export function InteractiveReport({
                         if (e?.activeLabel !== undefined) setHoverRvFrame(Number(e.activeLabel));
                       }}
                       onMouseLeave={() => setHoverRvFrame(null)}
+                      onClick={(e: { activeLabel?: string | number }) => {
+                        if (e?.activeLabel === undefined) return;
+                        const frame = Number(e.activeLabel);
+                        setPinnedRvFrame((prev) => (prev === frame ? null : frame));
+                      }}
                     >
                       <CartesianGrid stroke="var(--border)" strokeOpacity={0.4} />
-                      <XAxis dataKey="frame" tick={{ fontSize: 11 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} label={{ value: `RV ${rvMetricType} (%)`, angle: -90, position: "insideLeft", fontSize: 11 }} />
+                      <XAxis dataKey="frame" tick={{ fontSize: 12 }} label={{ value: "Cardiac frame", position: "insideBottom", offset: -2, fontSize: 12 }} />
+                      <YAxis tick={{ fontSize: 12 }} label={{ value: `RV ${rvMetricType} (%)`, angle: -90, position: "insideLeft", fontSize: 12 }} />
                       <ReferenceLine y={0} stroke="var(--border)" />
-                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                      <Tooltip
+                        content={(props) => (
+                          <RegionalCurveTooltip
+                            {...props}
+                            focus={rvEmphasis}
+                            dataKeyPrefix="r"
+                            labelFor={(region) => rvRegionLabels.find((r) => r.region === region)?.label ?? `Region ${region}`}
+                            colorFor={(region) => RING_COLOR_VAR[region <= 3 ? "basal" : region <= 6 ? "mid" : "apical"]}
+                          />
+                        )}
+                      />
+                      {/* Invisible wide hit-lines — same ~14px click target as
+                          the LV chart above, plus a hover preview so a click
+                          isn't the only way to find out a line is clickable. */}
+                      {rvRegionLabels.map((r) => (
+                        <Line
+                          key={`hit-${r.region}`}
+                          dataKey={`r${r.region}`}
+                          stroke="transparent"
+                          strokeWidth={14}
+                          dot={false}
+                          activeDot={false}
+                          isAnimationActive={false}
+                          legendType="none"
+                          style={{ cursor: "pointer" }}
+                          onClick={() => setSelectedRvRegion((cur) => (cur === r.region ? null : r.region))}
+                          onMouseEnter={() => setHoverRvRegion(r.region)}
+                          onMouseLeave={() => setHoverRvRegion(null)}
+                        />
+                      ))}
                       {[...rvRegionLabels]
                         .sort((a, b) => (a.region === rvEmphasis ? 1 : b.region === rvEmphasis ? -1 : 0))
                         .map((r) => {
@@ -2164,7 +2371,7 @@ export function InteractiveReport({
                               dataKey={`r${r.region}`}
                               name={r.label}
                               stroke={RING_COLOR_VAR[r.region <= 3 ? "basal" : r.region <= 6 ? "mid" : "apical"]}
-                              strokeWidth={isOn ? 3 : 1.4}
+                              strokeWidth={isOn ? 3 : 1.8}
                               dot={false}
                               opacity={dimmed ? 0.12 : 1}
                               isAnimationActive={false}
@@ -2177,7 +2384,7 @@ export function InteractiveReport({
                   </ResponsiveContainer>
                 </div>
               ) : (
-                <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-center text-[11px] text-muted-foreground">
+                <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-center text-[12.5px] text-muted-foreground">
                   Full-cycle RV curves need the per-frame RV strain series. The single ED→ES
                   result is shown in the bullseye.
                 </p>
@@ -2192,28 +2399,29 @@ export function InteractiveReport({
                   validated cutoff, so tinting it would imply one. */}
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
                 {(["basal", "mid", "apical"] as const).map((band) => (
-                  <span key={band} className="flex items-center gap-1.5 text-[10.5px] capitalize text-muted-foreground">
-                    <span className="inline-block h-[7px] w-[7px] rounded-full" style={{ background: RING_COLOR_VAR[band] }} />
+                  <span key={band} className="flex items-center gap-1.5 text-[13px] capitalize text-muted-foreground">
+                    <span className="inline-block h-[8px] w-[8px] rounded-full" style={{ background: RING_COLOR_VAR[band] }} />
                     {band}
                   </span>
                 ))}
-                <span className="text-[10.5px] text-muted-foreground/70">· click a region or curve to focus</span>
+                <span className="text-[13px] text-muted-foreground/70">· click a region or curve to focus</span>
               </div>
-
-              <p className="mt-3 text-[10px] leading-snug text-muted-foreground">
-                <span className="font-semibold text-foreground">Exploratory only.</span>{" "}
-                9 RV free-wall segments (basal / mid / apical × 3), rays cast from the LV centre. GCS is
-                the % change in RV free-wall length and GAS the % change in RV cavity area
-                between end-diastole and end-systole. Negative values mean contraction (the
-                healthy direction). No severity threshold is applied and this does not contribute
-                to any health-status grade.
-              </p>
+              {pinnedRvFrame != null && (
+                <PinnedFrameDetail
+                  frame={pinnedRvFrame}
+                  row={rvCurves.find((c) => c.frame === pinnedRvFrame)}
+                  dataKeyPrefix="r"
+                  labelFor={(region) => rvRegionLabels.find((r) => r.region === region)?.label ?? `Region ${region}`}
+                  colorFor={(region) => RING_COLOR_VAR[region <= 3 ? "basal" : region <= 6 ? "mid" : "apical"]}
+                  onClose={() => setPinnedRvFrame(null)}
+                />
+              )}
             </div>
           </div>
         )}
       </Card>
 
-      <p className="mt-6 text-center text-[11.5px] text-muted-foreground">
+      <p className="mt-6 text-center text-[13px] text-muted-foreground">
         Generated for clinical decision support only. Health Status is a rule-based assessment and
         Disease Pattern Similarity is a similarity comparison — neither is a diagnosis. Final
         interpretation remains the responsibility of the treating clinician.

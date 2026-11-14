@@ -33,7 +33,7 @@ function LineChart({
       {gridVals.map((v) => (
         <g key={v}>
           <line x1={pad} x2={width - pad} y1={scaleY(v)} y2={scaleY(v)} stroke="#d1d5db" strokeWidth={1} />
-          <text x={2} y={scaleY(v) + 3} fontSize={9} fill="#4b5563">{v}%</text>
+          <text x={2} y={scaleY(v) + 3} fontSize={11} fill="#4b5563">{v}%</text>
         </g>
       ))}
       {curves.map((c, ci) => {
@@ -102,8 +102,8 @@ export function StrainAnalysisPage({
       subtitle="Global strain, left and right ventricle"
       generatedAt={generatedAt}
     >
-      <h3 className="mb-1.5 text-[14px] font-extrabold text-gray-900">Global Strain — Peak Values</h3>
-      <table className="mb-1 w-full border-collapse text-[10.5px]">
+      <h3 className="mb-1.5 text-[15px] font-extrabold text-gray-900">Global Strain — Peak Values</h3>
+      <table className="mb-1 w-full border-collapse text-[12.5px]">
         <thead>
           <tr className="bg-teal-50">
             <th className="border-b border-gray-300 px-2.5 py-1.5 text-left font-bold uppercase tracking-wide text-teal-800">Chamber</th>
@@ -133,20 +133,20 @@ export function StrainAnalysisPage({
           </tr>
         </tbody>
       </table>
-      <p className="mb-3 text-[8.5px] leading-snug text-gray-600">
+      <p className="mb-3 text-[11px] leading-snug text-gray-600">
         ¹ RV GCS (% change in free-wall length), RV GAS (% change in cavity area) and RV septal GCS
         (% change in the RV septal-side border length, one segment per ring) are measured from the RV bullseye and
         reported separately, but have no published reference range and are not clinically validated.
       </p>
 
-      <h3 className="mb-1.5 text-[14px] font-extrabold text-gray-900">Full-Cycle Strain</h3>
+      <h3 className="mb-1.5 text-[15px] font-extrabold text-gray-900">Full-Cycle Strain</h3>
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-lg border border-gray-300 p-2">
-          <p className="mb-1 flex items-center gap-1.5 text-[10.5px] font-bold text-gray-900">
+          <p className="mb-1 flex items-center gap-1.5 text-[12.5px] font-bold text-gray-900">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
             LV — GRS / GCS
           </p>
-          <div className="mb-1 flex gap-3 text-[9px] text-gray-600">
+          <div className="mb-1 flex gap-3 text-[11px] text-gray-600">
             <span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-[#2c5f68]" />LV GRS</span>
             <span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-[#c1573f]" />LV GCS</span>
           </div>
@@ -156,15 +156,15 @@ export function StrainAnalysisPage({
               { points: lvGcsByFrame ?? [], color: "#c1573f" },
             ]} />
           ) : (
-            <p className="py-10 text-center text-[9.5px] text-gray-600">Not computed — run the per-frame strain series.</p>
+            <p className="py-10 text-center text-[12px] text-gray-600">Not computed — run the per-frame strain series.</p>
           )}
         </div>
         <div className="rounded-lg border border-gray-300 p-2">
-          <p className="mb-1 flex items-center gap-1.5 text-[10.5px] font-bold text-gray-900">
+          <p className="mb-1 flex items-center gap-1.5 text-[12.5px] font-bold text-gray-900">
             <span className="h-1.5 w-1.5 rounded-full bg-teal-600" />
             RV — GCS / GAS
           </p>
-          <div className="mb-1 flex gap-3 text-[9px] text-gray-600">
+          <div className="mb-1 flex gap-3 text-[11px] text-gray-600">
             <span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-[#2c5f68]" />RV GCS¹</span>
             <span className="flex items-center gap-1"><span className="h-0.5 w-3 bg-[#7c3aed]" />RV GAS¹</span>
           </div>
@@ -174,11 +174,11 @@ export function StrainAnalysisPage({
               { points: rvGasByFrame, color: "#7c3aed" },
             ]} />
           ) : (
-            <p className="py-10 text-center text-[9.5px] text-gray-600">Not computed — run RV strain from the Strain tab.</p>
+            <p className="py-10 text-center text-[12px] text-gray-600">Not computed — run RV strain from the Strain tab.</p>
           )}
         </div>
       </div>
-      <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
+      <p className="mt-2 text-[11px] leading-snug text-gray-600">
         ¹ Real per-frame data, but no published reference range, so not clinically validated.
       </p>
     </ReportPageFrame>
@@ -194,7 +194,7 @@ export function StrainAnalysisPage({
         subtitle="Global strain, every computed frame"
         generatedAt={generatedAt}
       >
-        <table className="w-full border-collapse text-[9px]">
+        <table className="w-full border-collapse text-[10.5px]">
           <thead>
             <tr className="bg-teal-50">
               <th className="border-b border-gray-300 px-2 py-1 text-left font-bold uppercase tracking-wide text-teal-800">Frame</th>
@@ -219,7 +219,7 @@ export function StrainAnalysisPage({
           </tbody>
         </table>
         {ci === rowChunks.length - 1 && (
-          <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
+          <p className="mt-2 text-[11px] leading-snug text-gray-600">
             ¹ Real per-frame data (9-segment RV bullseye), but no published reference range, so not
             clinically validated.
           </p>

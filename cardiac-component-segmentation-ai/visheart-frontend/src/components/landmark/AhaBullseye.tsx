@@ -182,20 +182,20 @@ export function BullseyeScaleBar({
   // version ate enough vertical space to visibly shrink the bullseye above
   // it, reported live as "the bullseyes look too small" (2026-10).
   return (
-    <div className="flex-shrink-0 pt-1 space-y-0.5">
-      {title && <p className="text-[8.5px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>}
+    <div className="flex-shrink-0 pt-1 space-y-1">
+      {title && <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>}
       <div className="flex items-center gap-1.5">
-        <span className="text-[8px] text-muted-foreground tabular-nums">{min.toFixed(1)}</span>
-        <div className="h-1 flex-1 rounded-full" style={{ background: bullseyeGradientCss(reverse), border: "1px solid hsl(var(--border))" }} />
-        <span className="text-[8px] text-muted-foreground tabular-nums">{max.toFixed(1)}</span>
+        <span className="text-[12px] text-muted-foreground tabular-nums">{min.toFixed(1)}</span>
+        <div className="h-1.5 flex-1 rounded-full" style={{ background: bullseyeGradientCss(reverse), border: "1px solid hsl(var(--border))" }} />
+        <span className="text-[12px] text-muted-foreground tabular-nums">{max.toFixed(1)}</span>
       </div>
-      <div className="flex justify-between gap-1 text-[8px] leading-tight">
+      <div className="flex justify-between gap-1 text-[12px] leading-tight">
         <span className="text-muted-foreground">Min <span className="font-semibold tabular-nums text-foreground">{min.toFixed(1)}{u}</span></span>
         <span className="text-muted-foreground">Mean <span className="font-semibold tabular-nums text-primary">{(mean ?? 0).toFixed(1)}{u}</span> <span className="opacity-70">({meanPct}%)</span></span>
         <span className="text-muted-foreground">Max <span className="font-semibold tabular-nums text-foreground">{max.toFixed(1)}{u}</span></span>
       </div>
       {missingCount > 0 && (
-        <p className="text-[8px] text-amber-600 dark:text-amber-400">
+        <p className="text-[12px] text-amber-600 dark:text-amber-400">
           ⚠ {missingCount} segment{missingCount > 1 ? "s" : ""} missing
         </p>
       )}

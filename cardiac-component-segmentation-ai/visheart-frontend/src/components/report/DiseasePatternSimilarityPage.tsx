@@ -34,15 +34,15 @@ export function DiseasePatternSimilarityPage({
       subtitle="Which ACDC diagnostic-group criteria the measurements meet — not a diagnosis"
       generatedAt={generatedAt}
     >
-      <h3 className="mb-1.5 flex items-center gap-1.5 text-[14px] font-extrabold text-emerald-700">
+      <h3 className="mb-1.5 flex items-center gap-1.5 text-[15px] font-extrabold text-emerald-700">
         <HeartPulse className="h-4 w-4" strokeWidth={2.5} />Disease Pattern Gates
-        <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-gray-600">ACDC-based</span>
+        <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gray-600">ACDC-based</span>
       </h3>
       {patternGates ? (
         <div className="rounded-lg border border-gray-300 p-3">
           {/* "Met" is always green — solid for the Primary/sole match,
               lighter for a co-firing "Also meets" gate. See MET_COLOR above. */}
-          <div className="mb-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[8px] text-gray-600">
+          <div className="mb-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-gray-600">
             <span className="font-semibold text-gray-700">Met badge:</span>
             <span className="inline-flex items-center gap-1">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: MET_COLOR }} />
@@ -68,7 +68,7 @@ export function DiseasePatternSimilarityPage({
               return (
               <div key={g.code} className="rounded border border-gray-200 p-1.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1 text-[10.5px] font-semibold text-gray-900">
+                  <span className="flex items-center gap-1 text-[12.5px] font-semibold text-gray-900">
                     {g.met === true ? (
                       <CheckCircle2 className="h-3 w-3 shrink-0" style={{ color: isSecondaryMet ? MET_COLOR_SECONDARY_ICON : MET_COLOR }} />
                     ) : g.met === false ? (
@@ -80,16 +80,16 @@ export function DiseasePatternSimilarityPage({
                   </span>
                   <span className="flex items-center gap-1">
                     {g.rank_label && (
-                      <span className="rounded-full border border-gray-400 px-1 py-0.5 text-[7.5px] font-semibold text-gray-700">
+                      <span className="rounded-full border border-gray-400 px-1 py-0.5 text-[10px] font-semibold text-gray-700">
                         {g.rank_label}
                       </span>
                     )}
-                    <span className="text-[8.5px] font-bold uppercase tracking-wide text-gray-600">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-gray-600">
                       {g.met === true ? "Met" : g.met === false ? "Not met" : "Pending"}
                     </span>
                     {g.resolved_from_partial_data && (
                       <span
-                        className="flex items-center gap-0.5 rounded-full border border-red-400 bg-red-50 px-1 py-0.5 text-[7.5px] font-semibold text-red-700"
+                        className="flex items-center gap-0.5 rounded-full border border-red-400 bg-red-50 px-1 py-0.5 text-[10px] font-semibold text-red-700"
                         title="This gate's result was decided from only some of its required values — the rest were unavailable, but couldn't have changed the outcome either way."
                       >
                         <AlertTriangle className="h-2 w-2" /> Partial data
@@ -101,19 +101,19 @@ export function DiseasePatternSimilarityPage({
                   {g.reasons.map((r, i) => {
                     const isPartialNote = r.startsWith("Resolved from ") || r.startsWith("Pending — the missing");
                     return (
-                      <li key={i} className={isPartialNote ? "text-[9px] font-semibold text-red-700" : "text-[9px] text-gray-600"}>
+                      <li key={i} className={isPartialNote ? "text-[11px] font-semibold text-red-700" : "text-[11px] text-gray-600"}>
                         {r}
                       </li>
                     );
                   })}
                 </ul>
-                <p className="mt-0.5 text-[8.5px] italic leading-snug text-gray-500">{g.criterion_text}</p>
+                <p className="mt-0.5 text-[11px] italic leading-snug text-gray-500">{g.criterion_text}</p>
               </div>
               );
             })}
           </div>
           {patternGates.rv_severity && (
-            <div className="mt-2 border-t border-dashed border-gray-300 pt-2 text-[9px] text-gray-600">
+            <div className="mt-2 border-t border-dashed border-gray-300 pt-2 text-[11px] text-gray-600">
               <span className="font-semibold text-gray-900">RV gate met — severity context:</span>
               <ul className="mt-1 list-disc space-y-0.5 pl-4">
                 {patternGates.rv_severity.arvc_note && <li>{patternGates.rv_severity.arvc_note}</li>}
@@ -122,12 +122,12 @@ export function DiseasePatternSimilarityPage({
               </ul>
             </div>
           )}
-          <p className="mt-2 border-t border-dashed border-gray-300 pt-2 text-[9px] italic text-gray-600">
+          <p className="mt-2 border-t border-dashed border-gray-300 pt-2 text-[11px] italic text-gray-600">
             {patternGates.disclaimer}
           </p>
         </div>
       ) : (
-        <p className="py-6 text-center text-[10px] text-gray-600">Not computed for this project yet.</p>
+        <p className="py-6 text-center text-[12px] text-gray-600">Not computed for this project yet.</p>
       )}
     </ReportPageFrame>
   );

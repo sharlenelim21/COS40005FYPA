@@ -17,8 +17,8 @@ function RefTable({
 }) {
   return (
     <section className="mb-3">
-      <p className="mb-1 text-[10px] font-bold text-gray-900">{caption}</p>
-      <table className="w-full border-collapse text-[9px]">
+      <p className="mb-1 text-[12px] font-bold text-gray-900">{caption}</p>
+      <table className="w-full border-collapse text-[10.5px]">
         <thead>
           <tr className="bg-gray-100">
             {columns.map((c) => (
@@ -40,7 +40,7 @@ function RefTable({
           ))}
         </tbody>
       </table>
-      <p className="mt-1 text-[8px] leading-snug text-gray-600">{cite}</p>
+      <p className="mt-1 text-[10px] leading-snug text-gray-600">{cite}</p>
     </section>
   );
 }
@@ -191,13 +191,13 @@ export function ReferenceCriteriaPage({
         cite={<>Kübler et al., <em>Int J Cardiovasc Imaging</em> 2021;37:2501–2515. Shown only as context once a gate is already met — not used to decide whether it's met.</>}
       />
 
-      <p className="mb-3 text-[8.5px] leading-snug text-gray-600">
+      <p className="mb-3 text-[11px] leading-snug text-gray-600">
         <strong>Informational only, not gating:</strong> Peak GRS/GCS (geometric mask deformation, not
         conventional strain). &ldquo;Several myocardial segments&rdquo; (MINF/HCM) has no published numeric
         definition — see Methodology.
       </p>
 
-      <p className="mt-2 text-[8.5px] leading-snug text-gray-600">
+      <p className="mt-2 text-[11px] leading-snug text-gray-600">
         Published diagnostic criteria and risk ranges, for context alongside the values on earlier pages — not a
         standalone verdict.
       </p>

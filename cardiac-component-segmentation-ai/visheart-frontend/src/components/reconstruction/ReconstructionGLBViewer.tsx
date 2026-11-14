@@ -61,7 +61,7 @@ const DEFAULT_SETTINGS: ViewerSettings = {
   modelColor: '#c41e3a', // Cardiac tissue color
   // Matches SECONDARY_DEFAULT_COLOR below -- "Reset to Defaults" overrides this with the actual
   // secondaryColor prop (see its own onClick), this literal only matters when there's no prop.
-  secondaryModelColor: '#e8743b',
+  secondaryModelColor: '#660000',
   wireframe: false,
   showEdges: false,
   smoothShading: true,
@@ -76,7 +76,8 @@ const DEFAULT_SETTINGS: ViewerSettings = {
 // Preset color palette for cardiac structures
 const COLOR_PRESETS = {
   'Red': '#c41e3a',
-  'Orange': '#e8743b',
+  'Blood Red': '#660000',
+  'Orange': '#FF3F00',
   'Blue': '#4a90e2',
   'Green': '#09af00',
   'Purple': '#4a26fd',
@@ -493,7 +494,7 @@ interface ReconstructionGLBViewerProps {
 // confused with each other -- an orange-red, not blue, per direct request (2026-11-12). Both are
 // now independently user-editable from the Settings panel (see secondaryModelColor); this is only
 // the out-of-the-box value.
-const SECONDARY_DEFAULT_COLOR = '#e8743b';
+const SECONDARY_DEFAULT_COLOR = '#660000';
 
 export function ReconstructionGLBViewer({ 
   modelUrl, 
