@@ -13,6 +13,7 @@ import { ErrorProject } from "@/components/project/ErrorProject";
 import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { GuidancePanel } from "@/components/GuidancePanel";
 import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
+import { isReconstructionPreloaded, markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
 import { Layers, Crosshair } from "lucide-react";
 import {
   ResizablePanelGroup,
@@ -316,7 +317,9 @@ export default function Standalone4DViewerPage() {
     // the first await, regardless of how fast that await resolves), which is
     // exactly what read as flickering even after preloading. Only show it
     // for a reconstruction that genuinely hasn't been prepared yet.
-    const alreadyPrepared = preparedReconstructionsRef.current.has(lvReconstruction.reconstructionId);
+    const alreadyPrepared =
+      preparedReconstructionsRef.current.has(lvReconstruction.reconstructionId) ||
+      isReconstructionPreloaded(lvReconstruction.reconstructionId);
     const loadModel = async () => {
       if (!alreadyPrepared) setIsLoadingModel(true);
       try {
@@ -386,6 +389,13 @@ export default function Standalone4DViewerPage() {
   // "active" reconstruction resolved from this page's own URL params, which is LV only -- RV is a
   // second, independent reconstruction record it never reaches (reported live with a screenshot
   // from supervisor feedback, 2026-11-12).
+  //
+  // Checked against reconstructionPreloadCache (module-level, not page-local) first: if
+  // ProjectContext's own background preload already finished warming a reconstruction while the
+  // user was elsewhere (e.g. still on the project page right after 4D reconstruction completed),
+  // this page trusts that instead of blocking Play behind its own redundant "Processing
+  // reconstruction..." pass again -- the whole point of asking for this to start earlier,
+  // reported live, 2026-11-14.
   const preparedReconstructionsRef = useRef<Set<string>>(new Set());
   const [isPreparing, setIsPreparing] = useState(false);
   const [prepareProgress, setPrepareProgress] = useState<{ current: number; total: number } | null>(null);
@@ -397,6 +407,11 @@ export default function Standalone4DViewerPage() {
     }
     if (showRv && rvReconstruction?.reconstructionId) {
       targets.push({ reconstructionId: rvReconstruction.reconstructionId, frames: rvReconstruction.totalFrames || totalFrames });
+    }
+    for (const target of targets) {
+      if (isReconstructionPreloaded(target.reconstructionId)) {
+        preparedReconstructionsRef.current.add(target.reconstructionId);
+      }
     }
     const pending = targets.filter((t) => t.frames > 0 && !preparedReconstructionsRef.current.has(t.reconstructionId));
     if (pending.length === 0) return;
@@ -455,6 +470,7 @@ export default function Standalone4DViewerPage() {
           );
         }
         preparedReconstructionsRef.current.add(target.reconstructionId);
+        markReconstructionPreloaded(target.reconstructionId);
       }
 
       if (!cancelled) {
@@ -678,6 +694,14 @@ export default function Standalone4DViewerPage() {
               // Marks RV as research-only on the canvas itself, so the warning stays with the
               // image if the sidebar is collapsed or the view is screenshotted.
               secondaryIsResearchOnly
+              // The viewer's own "loading model" overlay only knows a frame is ready once ITS
+              // OWN onReady fires -- one render after first displaying that frame, even when the
+              // preload pass below already fully warmed it. That one-render flash on every new
+              // frame is exactly the "first run flickers, replays are smooth" symptom (replays
+              // reuse frames this viewer has already rendered once, so they skip it) -- suppress
+              // it once our own preload pass has finished, since every frame is already warm by
+              // then regardless of whether this viewer has personally rendered it yet.
+              skipLoadingOverlay={!isPreparing}
             />
 
             {/* First-run preload: covers up the per-frame "Loading model..." flicker with one

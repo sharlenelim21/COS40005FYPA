@@ -488,6 +488,17 @@ interface ReconstructionGLBViewerProps {
   secondaryLabel?: string;
   secondaryColor?: string;
   secondaryIsResearchOnly?: boolean;
+  /**
+   * Suppresses the "loading model" overlay below even for a url this viewer instance has never
+   * personally rendered before. `lvReadyUrls`/`rvReadyUrls` only learn a url is ready from this
+   * component's OWN onReady callback firing, which happens one render after the url prop changes
+   * -- a real wait the very first time a url is genuinely being fetched, but still a one-frame
+   * flash even when a caller has already preloaded every frame into the Three.js/drei cache ahead
+   * of time (the cache doesn't know anything about this component's own bookkeeping). Pass true
+   * once the caller's own preload pass has completed, so first-playback-pass "flicker" doesn't
+   * show for data that's already fully warm (reported live with before/after recordings, 2026-11).
+   */
+  skipLoadingOverlay?: boolean;
 }
 
 // A different shade from the primary default (#c41e3a, deep red) so the two chambers are never
@@ -505,6 +516,7 @@ export function ReconstructionGLBViewer({
   secondaryLabel = "RV cavity",
   secondaryColor = SECONDARY_DEFAULT_COLOR,
   secondaryIsResearchOnly = false,
+  skipLoadingOverlay = false,
 }: ReconstructionGLBViewerProps) {
   // useTheme hook ensures component re-renders when theme changes (needed for responsive background)
   useTheme();
@@ -598,7 +610,7 @@ export function ReconstructionGLBViewer({
   // the per-frame fix below was needed only for frames truly new to this session.
   const lvPending = !!modelUrl && !lvReadyUrls.has(modelUrl);
   const rvPending = !!secondaryModelUrl && !rvReadyUrls.has(secondaryModelUrl);
-  const showLoadingOverlay = lvPending || rvPending;
+  const showLoadingOverlay = !skipLoadingOverlay && (lvPending || rvPending);
 
   // Either chamber alone is a valid view -- hiding LV to inspect RV on its own must still render.
   if (!modelUrl && !secondaryModelUrl) {

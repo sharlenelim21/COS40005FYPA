@@ -5,6 +5,7 @@ import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
 import { decodeSegmentationMasks } from "@/lib/decode-RLE";
 import { tarImageCache } from "@/lib/tar-image-cache";
 import { reconstructionCache } from "@/lib/reconstruction-cache";
+import { markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
 import { getModelMaskAvailability } from "@/lib/segmentation-model-utils";
 import type { SegmentationModelId } from "@/lib/segmentation-model-utils";
 import * as ProjectTypes from "@/types/project";
@@ -875,6 +876,9 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
         console.log(`[ProjectContext] ✅ Preloaded ${loaded}/${total} models into Three.js cache`);
         console.log(`[ProjectContext] 🎯 All models should now load instantly when displayed!`);
         setThreeJSPreloadProgress(null);
+        // Lets the standalone 4D viewer (or anything else) trust this reconstruction is already
+        // warm and skip redoing its own preload pass -- see reconstructionPreloadCache.ts.
+        markReconstructionPreloaded(reconstructionId);
 
         return loaded;
       } catch (error) {
