@@ -160,7 +160,7 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
   const canStart = reason === null && !starting && status.training.allowed;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {running && (
         <Alert>
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -173,7 +173,7 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
       )}
 
       <Card>
-        <CardContent className="flex flex-col gap-6 p-6 md:flex-row md:items-center md:justify-between">
+        <CardContent className="flex flex-col gap-4 px-5 py-0 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1">
             <p className="text-sm font-medium text-muted-foreground">Selected for training</p>
             <p className="text-3xl font-semibold tabular-nums">

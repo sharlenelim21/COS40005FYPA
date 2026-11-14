@@ -58,13 +58,16 @@ import { LoadingProject } from "@/components/project/LoadingProject";
 import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
 import { useAuth } from "@/context/auth-context";
 import { AffineMatrixDisplay } from "@/components/ui/AffineMatrixDisplay";
-import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
+import { ReconstructionConfigDialog, ReconstructionConfig, type ReconstructionBatchConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
+import { toast } from "sonner";
 import { JobProgress, KineticButtonFill, KineticProgress, ProgressMeter, hasProgressReading, FinishingProgress, isFinishingReading } from "@/components/ui/kinetic-progress";
 import { buildReconstructionRequest } from "@/lib/reconstructionDefaults";
 import { useAutoPipelineChain, type PipelineSelection } from "@/hooks/useAutoPipelineChain";
 import { StartPipelineDialog } from "@/components/project/StartPipelineDialog";
+import { ProjectMetaLine } from "@/components/project/ProjectMetaLine";
 import { ExportReconstructionButton } from "@/components/project/ExportReconstructionButton";
 import { landmarkApi } from "@/lib/landmarkApi";
+import { formatTrimmed } from "@/lib/format-utils";
 
 // Types
 import * as ProjectTypes from "@/types/project";
@@ -620,6 +623,8 @@ function ProjectPageInner() {
     refreshActiveReconstructionJobs,
   });
   const [showPipelineDialog, setShowPipelineDialog] = useState(false);
+  const jobsCardRef = useRef<HTMLDivElement>(null);
+  const [highlightJobs, setHighlightJobs] = useState(false);
   const [expandedJobGroups, setExpandedJobGroups] = useState<Set<string>>(() => new Set());
   // Trash-icon popup on a reconstruction card with both chambers: "Delete all" vs "Delete RV only".
   const [deleteChoiceOpen, setDeleteChoiceOpen] = useState(false);
@@ -1025,6 +1030,62 @@ function ProjectPageInner() {
       setIsStartingReconstruction(false);
     }
   };
+  const handleStartReconstructions = async (batch: ReconstructionBatchConfig) => {
+    const { targets, ...settings } = batch;
+    if (targets.length === 0) return;
+    if (targets.length === 1) {
+      await handleStartReconstruction({ ...settings, ...targets[0] });
+      return;
+    }
+
+    setIsStartingReconstruction(true);
+    setReconstructionError(null);
+    let started = 0;
+    let alreadyRunning = 0;
+    const failures: string[] = [];
+
+    for (const target of targets) {
+      const label = `${target.segmentationModel === "medsam" ? "MedSAM" : "UNet"} ${target.chamber.toUpperCase()}`;
+      try {
+        await reconstructionApi.startReconstruction(
+          projectId,
+          buildReconstructionRequest({ ...settings, ...target }, projectData.name),
+        );
+        started += 1;
+      } catch (error: unknown) {
+        const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response;
+        if (response?.status === 409) {
+          alreadyRunning += 1;
+        } else {
+          failures.push(`${label}: ${response?.data?.message || "could not start"}`);
+        }
+      }
+    }
+
+    setShowReconstructionDialog(false);
+    await refreshReconstructionJobs();
+    await refreshActiveReconstructionJobs();
+    setIsStartingReconstruction(false);
+
+    const summary = [
+      started ? `Started ${started}` : null,
+      alreadyRunning ? `${alreadyRunning} already running` : null,
+      failures.length ? `${failures.length} failed` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    if (failures.length) {
+      toast.error(summary, { description: failures.join("; ") });
+    } else {
+      toast.success(summary, { description: "They run one after another. Follow them in Processing Jobs." });
+    }
+
+    const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    jobsCardRef.current?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "center" });
+    setHighlightJobs(true);
+    window.setTimeout(() => setHighlightJobs(false), 2500);
+  };
+
   const STAGE_BUSY_CLASS = "relative overflow-hidden justify-start h-auto py-4 disabled:opacity-100";
   const segBusyText = segProgress
     ? "Available when it finishes"
@@ -1532,6 +1593,13 @@ function ProjectPageInner() {
                     {currentProjectDescription || "No description provided."}
                   </p>
                 )}
+
+                <ProjectMetaLine
+                  projectId={projectId}
+                  frames={projectData.dimensions?.frames}
+                  slices={projectData.dimensions?.slices}
+                  filesizeBytes={projectData.filesize}
+                />
               </div>
             </div>
 
@@ -1920,48 +1988,33 @@ function ProjectPageInner() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
                   {/* Dimensions */}
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Dimensions</p>
-                    <p className="text-sm font-mono">
+                    <p className="text-sm font-mono whitespace-nowrap">
                       {projectData.dimensions?.width} × {projectData.dimensions?.height}
                     </p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Frames</p>
-                    <p className="text-sm font-semibold">{projectData.dimensions?.frames || 0}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Slices</p>
-                    <p className="text-sm font-semibold">{projectData.dimensions?.slices || 0}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">File Size</p>
-                    <p className="text-sm font-semibold">{(projectData.filesize / 1024 / 1024).toFixed(2)} MB</p>
                   </div>
 
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel X</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.x || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.x || 0} mm`}>{formatTrimmed(projectData.voxelsize?.x, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Y</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.y || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.y || 0} mm`}>{formatTrimmed(projectData.voxelsize?.y, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Z</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.z || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.z || 0} mm`}>{formatTrimmed(projectData.voxelsize?.z, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Temporal</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.t || 0} ms</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.t || 0} ms`}>{formatTrimmed(projectData.voxelsize?.t, 2)} ms</p>
                   </div>
                 </div>
 
@@ -1978,10 +2031,10 @@ function ProjectPageInner() {
           </div>
 
           {/* Right Column - Status Panels */}
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* Masks Section - Redesigned */}
-            <Card>
-              <CardHeader className="pb-3">
+            <Card className="gap-3">
+              <CardHeader className="pb-0">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
                     <Layers className="h-4 w-4" />
@@ -2043,8 +2096,8 @@ function ProjectPageInner() {
 
             {/* Reconstruction Details Section - result/history only */}
             {hasReconstructions && reconstructionRows.length > 0 && (
-              <Card>
-                <CardHeader className="pb-3">
+              <Card className="gap-3">
+                <CardHeader className="pb-0">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Box className="h-4 w-4" />
@@ -2211,8 +2264,11 @@ function ProjectPageInner() {
 
 
             {/* Jobs Section - Redesigned */}
-            <Card>
-              <CardHeader className="pb-3">
+            <Card
+              ref={jobsCardRef}
+              className={`gap-3 transition-shadow duration-500 ${highlightJobs ? "ring-info ring-2 ring-offset-2" : ""}`}
+            >
+              <CardHeader className="pb-0">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Activity className="h-4 w-4" />
                   Processing Jobs
@@ -2368,7 +2424,7 @@ function ProjectPageInner() {
       <ReconstructionConfigDialog
         open={showReconstructionDialog}
         onOpenChange={setShowReconstructionDialog}
-        onStart={handleStartReconstruction}
+        onStart={handleStartReconstructions}
         isLoading={isStartingReconstruction}
         totalFrames={projectData?.dimensions?.frames || 1}
         availableModels={availableReconstructionModels}

@@ -63,11 +63,15 @@ export default function Header() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  useEffect(() => {
+    document.documentElement.style.setProperty("--header-h", `${isScrolled ? HEADER_HEIGHT_SCROLLED : HEADER_HEIGHT_NORMAL}px`);
+  }, [isScrolled]);
+
   return (
     <>
       <header
         className={cn(
-          "fixed top-0 right-0 left-0 z-[60]",
+          "fixed top-0 right-0 left-0 z-40",
           "supports-[backdrop-filter]:bg-background/60 border-b backdrop-blur-md",
           "flex items-center",
           isScrolled ? "bg-background/95 border-border/80 h-10 shadow-sm" : "bg-background/50 border-border/40 h-16",
@@ -81,14 +85,21 @@ export default function Header() {
                 <div className="relative flex h-10 w-10 flex-shrink-0 items-center justify-center">
                   <Image
                     src={visheartLogo}
-                    width={32}
-                    height={32}
+                    width={36}
+                    height={36}
                     alt="VisHeart Logo"
                     className={cn("transition-transform duration-200 ease-in-out", isScrolled ? "scale-90" : "scale-100")}
                     priority // Since it's above fold
                   />
                 </div>
-                <span className="bg-gradient-to-r from-red-500 to-pink-500 bg-clip-text text-xl font-bold whitespace-nowrap text-transparent">VisHeart</span>
+                <span
+                  className={cn(
+                    "bg-gradient-to-r from-red-500 to-pink-500 bg-clip-text font-bold whitespace-nowrap text-transparent",
+                    isScrolled ? "text-xl" : "text-2xl",
+                  )}
+                >
+                  VisHeart
+                </span>
               </Link>
             </div>
 
@@ -227,7 +238,7 @@ const HomeDropDown = React.memo(function HomeDropDown() {
     <NavigationMenuItem>
       <NavigationMenuTrigger className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 h-10 bg-transparent px-4 py-2">
         <div className="flex items-center space-x-2">
-          <Info className="h-4 w-4" />
+          <Info className="size-[18px]" />
           <span>Help</span>
         </div>
       </NavigationMenuTrigger>
@@ -263,7 +274,7 @@ const ProfileDropDown = React.memo(function ProfileDropDown() {
       <NavigationMenuItem>
         <NavigationMenuTrigger className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 h-10 bg-transparent px-4 py-2">
           <div className="flex items-center space-x-2">
-            <User className="h-4 w-4" />
+            <User className="size-[18px]" />
             <span>Profile</span>
           </div>
         </NavigationMenuTrigger>
@@ -278,9 +289,9 @@ const ProfileDropDown = React.memo(function ProfileDropDown() {
     // Show login button that redirects to /login page
     return (
       <NavigationMenuItem>
-        <Link href="/login" className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 flex h-10 items-center rounded-md bg-transparent px-4 py-2">
+        <Link href="/login" className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 flex h-10 items-center rounded-md bg-transparent px-4 py-2 text-sm font-medium">
           <div className="flex items-center space-x-2">
-            <User className="h-4 w-4" />
+            <User className="size-[18px]" />
             <span>Sign In</span>
           </div>
         </Link>

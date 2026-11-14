@@ -91,6 +91,15 @@ export const REFERENCES = {
     citation: "DrJanaOfficial. Cardiac cycle animation. Wikimedia Commons. CC BY-SA 4.0.",
     url: "https://commons.wikimedia.org/w/index.php?curid=54393545",
   },
+  kocica2006: {
+    citation:
+      "Kocica MJ, Corno AF, Carreras-Costa F, et al. The helical ventricular myocardial band: global, three-dimensional, functional architecture of the ventricular myocardium. Eur J Cardiothorac Surg. 2006;29 Suppl 1:S21–S40.",
+    doi: "10.1016/j.ejcts.2006.03.011",
+  },
+  physrep2017: {
+    citation: "Hoffman JIE. Will the real ventricular architecture please stand up? Physiol Rep. 2017;5(18):e13404.",
+    doi: "10.14814/phy2.13404",
+  },
 } as const satisfies Record<string, Reference>;
 
 export type RefId = keyof typeof REFERENCES;
@@ -499,6 +508,42 @@ export const MEDICAL_GUIDE: MedicalGuide = {
             },
           ],
           blocks: [
+            {
+              kind: "callout",
+              variant: "info",
+              title: "The helical heart: why the ventricle twists",
+              body: [
+                {
+                  text: "The muscle fibres of the ventricles are not arranged in simple rings. They run in a helix that changes direction through the wall: a left-handed helix in the outer layer (subepicardium), mostly circumferential fibres running around the ventricle in the middle of the wall, and a right-handed helix in the inner layer (subendocardium).",
+                  refs: ["kocica2006", "physrep2017"],
+                },
+                {
+                  text: "The Spanish anatomist Francisco Torrent-Guasp described the ventricles as one continuous helical band of muscle that can be unrolled from the heart, as shown in the figure below.",
+                  refs: ["kocica2006"],
+                },
+                {
+                  text: "Because the outer and inner helices wind in opposite directions, the left ventricle twists as it contracts in systole and untwists in early diastole. This three-dimensional motion is why the heart's deformation is described in three directions: radial strain (wall thickening), circumferential strain (shortening around the ventricle) and longitudinal strain (shortening from base to apex).",
+                  refs: ["kocica2006"],
+                },
+                {
+                  text: "VisHeart reports global radial strain (GRS) and global circumferential strain (GCS) from short-axis images. It does not measure longitudinal strain.",
+                  refs: [],
+                },
+                {
+                  text: "The single-band model is still debated: some researchers describe the myocardium as a continuous three-dimensional mesh of fibres rather than one band that unrolls.",
+                  refs: ["physrep2017"],
+                },
+              ],
+            },
+            {
+              kind: "figure",
+              src: "/images/doc/Helical_Heart.jpg",
+              alt: "Photographs of a dissected heart at successive stages of being unrolled, from the intact ventricles to a single long, twisted strip of muscle.",
+              caption: "Unrolling the helical ventricular myocardial band (Torrent-Guasp model).",
+              attribution:
+                "Ballester-Rodés M., 'Helical Heart', Wise Traditions (Weston A. Price Foundation), Fall 2025. © Weston A. Price Foundation. https://www.westonaprice.org/health-topics/helical-heart/",
+              refs: ["kocica2006"],
+            },
             {
               kind: "callout",
               variant: "info",

@@ -10,6 +10,8 @@ import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useTheme } from "next-themes";
+import { cn } from "@/lib/utils";
+import { ViewerControlsHint } from "@/components/reconstruction/ViewerControlsHint";
 import * as THREE from "three";
 
 // Visualization settings interface
@@ -56,12 +58,15 @@ class EnvironmentErrorBoundary extends Component<{ children: ReactNode; fallback
   }
 }
 
+export const DEFAULT_LV_COLOR = '#c41e3a';
+export const DEFAULT_RV_COLOR = '#FF3F00';
+
 // Default settings
 const DEFAULT_SETTINGS: ViewerSettings = {
-  modelColor: '#c41e3a', // Cardiac tissue color
+  modelColor: DEFAULT_LV_COLOR, // Cardiac tissue color
   // Matches SECONDARY_DEFAULT_COLOR below -- "Reset to Defaults" overrides this with the actual
   // secondaryColor prop (see its own onClick), this literal only matters when there's no prop.
-  secondaryModelColor: '#660000',
+  secondaryModelColor: DEFAULT_RV_COLOR,
   wireframe: false,
   showEdges: false,
   smoothShading: true,
@@ -499,13 +504,13 @@ interface ReconstructionGLBViewerProps {
    * show for data that's already fully warm (reported live with before/after recordings, 2026-11).
    */
   skipLoadingOverlay?: boolean;
+  onColorsChange?: (colors: { primary: string; secondary: string }) => void;
 }
 
-// A different shade from the primary default (#c41e3a, deep red) so the two chambers are never
-// confused with each other -- an orange-red, not blue, per direct request (2026-11-12). Both are
-// now independently user-editable from the Settings panel (see secondaryModelColor); this is only
-// the out-of-the-box value.
-const SECONDARY_DEFAULT_COLOR = '#660000';
+// RV defaults to the "Orange" preset (DEFAULT_RV_COLOR, #FF3F00) so it is never confused with the
+// LV default (#c41e3a, deep red). Both are independently user-editable from the Settings panel (see
+// secondaryModelColor), and Reset to Defaults returns RV to Orange; this is only the out-of-the-box value.
+const SECONDARY_DEFAULT_COLOR = DEFAULT_RV_COLOR;
 
 export function ReconstructionGLBViewer({ 
   modelUrl, 
@@ -517,6 +522,7 @@ export function ReconstructionGLBViewer({
   secondaryColor = SECONDARY_DEFAULT_COLOR,
   secondaryIsResearchOnly = false,
   skipLoadingOverlay = false,
+  onColorsChange,
 }: ReconstructionGLBViewerProps) {
   // useTheme hook ensures component re-renders when theme changes (needed for responsive background)
   useTheme();
@@ -526,6 +532,28 @@ export function ReconstructionGLBViewer({
   const [showPresets, setShowPresets] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<ViewerSettings>(() => ({ ...DEFAULT_SETTINGS, secondaryModelColor: secondaryColor }));
+  const [viewerSize, setViewerSize] = useState<{ width: number; height: number } | null>(null);
+  const hasAnyModel = !!(modelUrl || secondaryModelUrl);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setViewerSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasAnyModel]);
+
+  useEffect(() => {
+    onColorsChange?.({ primary: settings.modelColor, secondary: settings.secondaryModelColor });
+  }, [onColorsChange, settings.modelColor, settings.secondaryModelColor]);
+
+  const overlayOpen = showSettings || showPresets;
+  const compactViewer = !!viewerSize && (viewerSize.width < 560 || viewerSize.height < 380);
+  const settingsMaxHeight = viewerSize ? Math.max(160, Math.floor(viewerSize.height - 64)) : undefined;
+  const fadeWhileOverlayOpen = cn("motion-safe:transition-opacity motion-safe:duration-200", overlayOpen && "pointer-events-none opacity-0");
 
   // Which chambers currently have REAL geometry in the scene, as opposed to which were requested.
   // <Center> keys off this rather than off the URLs: the URL changes every frame during playback,
@@ -642,7 +670,7 @@ export function ReconstructionGLBViewer({
       )}
 
       {/* Frame Badge */}
-      <div className="absolute bottom-3 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-xs font-semibold">
+      <div className={cn("absolute bottom-3 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-xs font-semibold", fadeWhileOverlayOpen)} aria-hidden={overlayOpen}>
         Frame {frame}
       </div>
 
@@ -653,7 +681,7 @@ export function ReconstructionGLBViewer({
           mesh on screen, which is exactly when saying so matters most. The research-only marker
           travels with the legend so the warning is on the image itself, not only beside it. */}
       {secondaryModelUrl && (
-        <div className="absolute bottom-14 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-[11px] space-y-1.5 max-w-[140px] @sm:max-w-[240px]">
+        <div className={cn("absolute bottom-14 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-[11px] space-y-1.5 max-w-[140px] @sm:max-w-[240px]", fadeWhileOverlayOpen)} aria-hidden={overlayOpen}>
           {modelUrl && (
             <div className="flex items-center gap-2">
               <span
@@ -683,12 +711,17 @@ export function ReconstructionGLBViewer({
       )}
 
       {/* Camera Preset Buttons */}
-      <div className="absolute top-3 right-3 z-10 space-y-2">
+      <div className="absolute top-3 right-3 z-20">
+        <div className="relative">
         <div className="flex gap-2">
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => setShowPresets(!showPresets)}
+            aria-expanded={showPresets}
+            onClick={() => {
+              setShowPresets(!showPresets);
+              setShowSettings(false);
+            }}
             className="bg-black/70 hover:bg-black/90 text-white text-xs px-2 @xs:px-3"
           >
             <AlertCircle className="h-3 w-3 @xs:mr-1" />
@@ -698,7 +731,11 @@ export function ReconstructionGLBViewer({
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => setShowSettings(!showSettings)}
+            aria-expanded={showSettings}
+            onClick={() => {
+              setShowSettings(!showSettings);
+              setShowPresets(false);
+            }}
             className="bg-black/70 hover:bg-black/90 text-white text-xs px-2 @xs:px-3"
           >
             <Settings className="h-3 w-3 @xs:mr-1" />
@@ -707,7 +744,7 @@ export function ReconstructionGLBViewer({
         </div>
         
         {showPresets && (
-          <div className="grid grid-cols-2 gap-1 p-2 rounded-md bg-black/70 text-white text-[10px]">
+          <div className="absolute top-full right-0 mt-2 grid w-max grid-cols-2 gap-1 p-2 rounded-md bg-black/70 text-white text-[10px]">
             {Object.keys(CAMERA_PRESETS).map((preset) => (
               <Button
                 key={preset}
@@ -724,7 +761,10 @@ export function ReconstructionGLBViewer({
 
         {/* Settings Panel */}
         {showSettings && (
-          <div className="w-72 p-4 rounded-md bg-black/90 text-white text-xs space-y-4 max-h-[500px] overflow-y-auto">
+          <div
+            className="vh-scrollbar-overlay vh-overlay-controls absolute top-full right-0 mt-2 w-[min(18rem,calc(100cqw-1.5rem))] p-4 rounded-md bg-black/90 text-white text-xs space-y-4 overflow-y-auto"
+            style={{ maxHeight: settingsMaxHeight }}
+          >
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold text-sm">Visualization Settings</h3>
               <Button
@@ -900,6 +940,7 @@ export function ReconstructionGLBViewer({
             </Button>
           </div>
         )}
+        </div>
       </div>
       
       <Canvas 
@@ -1015,14 +1056,9 @@ export function ReconstructionGLBViewer({
         </Suspense>
       </Canvas>
       
-      {/* Controls Info -- a nice-to-have hint, not essential; hidden on a narrow panel where it
-          would otherwise collide with the chamber legend on the opposite corner. */}
-      <div className="absolute bottom-3 right-3 z-10 hidden @sm:block px-3 py-2 rounded-md bg-black/70 text-white text-xs">
-        <p className="font-semibold">Controls:</p>
-        <p>Left Click+Drag: Rotate</p>
-        <p>Right Click+Drag: Pan</p>
-        <p>Scroll: Zoom</p>
-      </div>
+      {/* Controls Info -- a nice-to-have hint, not essential. On a narrow or short viewer it
+          collapses to a "?" button, and it fades out while Settings or Views is open. */}
+      <ViewerControlsHint compact={compactViewer} hidden={overlayOpen} />
     </div>
   );
 }

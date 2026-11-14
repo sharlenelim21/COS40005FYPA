@@ -250,7 +250,7 @@ export const uploadToS3 = async (
   }
 };
 
-export const cleanupUserS3Storage = async (userId: string): Promise<void> => {
+export const cleanupUserS3Storage = async (userId: string): Promise<boolean> => {
   const serviceLocation = "S3Handler - Cleanup User S3 Storage";
   try {
     logger.info(`${serviceLocation}: Starting S3 cleanup for user ${userId}.`);
@@ -259,7 +259,7 @@ export const cleanupUserS3Storage = async (userId: string): Promise<void> => {
     const projects = await projectModel.find({ userid: userId, isSaved: false }).lean();
     if (!projects || projects.length === 0) {
       logger.info(`${serviceLocation}: No unsaved projects found for user ${userId}.`);
-      return;
+      return true;
     }
 
     // Step 2: Collect all S3 keys from the projects
@@ -276,16 +276,20 @@ export const cleanupUserS3Storage = async (userId: string): Promise<void> => {
     }
 
     // Step 3: Delete all S3 files
+    let allSucceeded = true;
     for (const key of s3Keys) {
       const success = await deleteFromS3(key);
       if (!success) {
+        allSucceeded = false;
         logger.warn(`${serviceLocation}: Failed to delete S3 file with key ${key}.`);
       }
     }
 
     logger.info(`${serviceLocation}: S3 cleanup completed for user ${userId}.`);
+    return allSucceeded;
   } catch (error) {
     logger.error(`${serviceLocation}: Error during S3 cleanup for user ${userId}:`, error);
+    return false;
   }
 };
 

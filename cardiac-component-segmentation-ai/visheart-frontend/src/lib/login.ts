@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import { useRouter } from "next/navigation";
+import { readNextParam } from "@/lib/safeNext";
 
 export function useLogin(redirectTo: string = "#") {
   const [username, setUsername] = useState("");
@@ -27,7 +28,7 @@ export function useLogin(redirectTo: string = "#") {
         // the pipeline dashboard every other role lands on -- same rule ProtectedRoute's
         // RegistrationOnly already applies on a route-mount recheck, but that never fires here
         // since this push already navigates away before it would run.
-        router.push(authenticatedUser.role === "admin" ? "/admin" : redirectTo);
+        router.push(readNextParam() ?? (authenticatedUser.role === "admin" ? "/admin" : redirectTo));
       }
     } catch (error) {
       // Reset redirecting state on error
@@ -47,7 +48,7 @@ export function useLogin(redirectTo: string = "#") {
       // Set redirecting state to prevent login screen flash
       if (redirectTo !== "#") {
         setIsRedirecting(true);
-        router.push(authenticatedUser.role === "admin" ? "/admin" : redirectTo);
+        router.push(readNextParam() ?? (authenticatedUser.role === "admin" ? "/admin" : redirectTo));
       }
     } catch (error) {
       // Reset redirecting state on error

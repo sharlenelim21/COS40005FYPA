@@ -6,6 +6,7 @@ import { HelpCircle, Loader2, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { isFaqHiddenRoute } from "@/lib/floating-widgets";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -17,6 +18,7 @@ interface FaqItem {
 export function FloatingFAQButton() {
   const pathname = usePathname();
   const isDocPage = pathname?.startsWith("/doc") ?? false;
+  const isAdminRoute = isFaqHiddenRoute(pathname);
 
   const [open, setOpen] = useState(false);
   const [senderName, setSenderName] = useState("");
@@ -104,12 +106,14 @@ export function FloatingFAQButton() {
     }
   };
 
+  if (isAdminRoute) return null;
+
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 z-50 inline-flex h-11 items-center gap-2 rounded-full border border-border bg-background px-4 text-sm font-medium shadow-lg transition-colors hover:bg-muted"
+        className="fixed bottom-4 right-4 z-40 inline-flex h-11 items-center gap-2 rounded-full border border-border bg-background px-4 text-sm font-medium shadow-lg transition-colors hover:bg-muted"
         aria-label="Open FAQ"
       >
         <HelpCircle className="h-4 w-4" />
@@ -117,7 +121,7 @@ export function FloatingFAQButton() {
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="max-h-[86vh] w-full max-w-[640px] overflow-y-auto rounded-lg border bg-background shadow-lg">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-6 py-4">
               <div>

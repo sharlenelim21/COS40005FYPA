@@ -246,7 +246,7 @@ export function ResultsTab({ status, reviewing, onReview, onAction, onChanged, o
 }) {
   const running = isActiveJob(status.job);
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {status.problem && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
@@ -261,7 +261,7 @@ export function ResultsTab({ status, reviewing, onReview, onAction, onChanged, o
         <VersionReview key={reviewing} label={reviewing} status={status} onReview={onReview} onAction={onAction} />
       ) : !running && (
         <Card>
-          <CardContent className="flex flex-col items-start gap-3 p-6">
+          <CardContent className="flex flex-col items-start gap-3 px-5 py-0">
             <p className="font-medium">No new version to review yet.</p>
             <p className="text-sm text-muted-foreground">
               Choose the corrected cases on the Prepare tab and train a new version. Its results appear here.

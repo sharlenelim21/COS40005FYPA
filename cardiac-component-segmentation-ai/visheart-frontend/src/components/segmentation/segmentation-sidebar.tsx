@@ -594,7 +594,7 @@ export function SegmentationSidebar({
       </div>
 
       {/* Sidebar Content with proper error boundaries */}
-      <div className="flex-1 flex flex-col p-4 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4 pb-16">
         {activeTab === 'tools' && (
           <ToolsAndMasksPanel
             decodedMasks={decodedMasks}

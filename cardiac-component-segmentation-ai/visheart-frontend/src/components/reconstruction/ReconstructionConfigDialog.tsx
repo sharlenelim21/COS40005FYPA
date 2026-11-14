@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -10,22 +10,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { AlertTriangle, CheckCircle2, Eye, Loader2, Sparkles } from "lucide-react";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import { ChevronDown, Settings, Sparkles, AlertTriangle, Eye, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+  CHAMBER_LABELS,
+  MODEL_LABELS,
+  ReconstructionTargetGrid,
+  TARGET_CHAMBERS,
+  TARGET_MODELS,
+  targetKey,
+  type CellState,
+  type TargetKey,
+} from "@/components/reconstruction/ReconstructionTargetGrid";
+import { ReconstructionAdvancedSettings, type AdvancedValues } from "@/components/reconstruction/ReconstructionAdvancedSettings";
 
 // Latent-fit iterations, per processing unit. The fit is measurably under-converged at the old
 // default of 30: LV myocardial volume swings 23.7% between ED and ES against a 6.8% floor set by
@@ -41,6 +37,7 @@ import { cn } from "@/lib/utils";
 // ~7.2 min, inside the budget, and still recovers most of the accuracy.
 const ITERATIONS_GPU = 200;
 const ITERATIONS_CPU = 120;
+const SECONDS_PER_ITERATION_FRAME = { gpu: 0.014, cpu: 0.081 };
 
 export type ReconstructionSegmentationModel = "medsam" | "unet";
 
@@ -57,10 +54,14 @@ export interface ReconstructionConfig {
   chamber: ReconstructionChamber;
 }
 
+export interface ReconstructionBatchConfig extends AdvancedValues {
+  targets: { segmentationModel: ReconstructionSegmentationModel; chamber: ReconstructionChamber }[];
+}
+
 interface ReconstructionConfigDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onStart: (config: ReconstructionConfig) => void;
+  onStart: (config: ReconstructionBatchConfig) => void;
   isLoading?: boolean;
   totalFrames?: number; // Total number of frames in the project
   /**
@@ -90,7 +91,7 @@ interface ReconstructionConfigDialogProps {
    */
   gpuAvailable?: boolean;
   existingReconstructionsByModel?: Partial<Record<ReconstructionSegmentationModel, string>>;
-  onViewReconstruction?: (model: ReconstructionSegmentationModel, reconstructionId?: string) => void;
+  onViewReconstruction?: (model: ReconstructionSegmentationModel, reconstructionId?: string, chamber?: ReconstructionChamber) => void;
   /**
    * Models that already have an RV reconstruction. Tracked separately from `blockedModels`
    * (which is LV) because the two chambers occupy independent slots.
@@ -111,16 +112,9 @@ interface ReconstructionConfigDialogProps {
   defaultChamber?: ReconstructionChamber;
 }
 
-const MODEL_META: Record<ReconstructionSegmentationModel, { label: string; description: string }> = {
-  medsam: {
-    label: "MedSAM",
-    description: "GPU-accelerated bounding-box segmentation",
-  },
-  unet: {
-    label: "UNet",
-    description: "End-to-end neural segmentation, runs on CPU or GPU",
-  },
-};
+function plural(count: number, word: string) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
 
 export function ReconstructionConfigDialog({
   open,
@@ -139,11 +133,7 @@ export function ReconstructionConfigDialog({
   buildingRvModels,
   defaultChamber,
 }: ReconstructionConfigDialogProps) {
-  // LV unless the caller explicitly asked otherwise. RV stays a deliberate choice.
-  const [chamber, setChamber] = useState<ReconstructionChamber>(defaultChamber ?? "lv");
-  const [exportFormat, setExportFormat] = useState<"obj" | "glb">("glb");
-  const [edFrame, setEdFrame] = useState(1);
-  const [numIterations, setNumIterations] = useState(gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU);
+  const defaultIterations = gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU;
   // 32 was the original default and is too coarse: at N=32 the marching-cubes facets are ~17x
   // larger by area than at N=128, which flat-shades into what looks like holes in a closed
   // surface. 64 (the default from 2026-09 onward) still under-renders a small RV segment as a
@@ -152,60 +142,41 @@ export function ReconstructionConfigDialog({
   // was barely visible at N=64 but clearly visible at the notebook's own N=128 equivalent on the
   // same patient. 128 is now the default; this stays opt-in/advanced (not forced), so a user who
   // wants the old fast-but-coarse behavior can still dial it back down.
-  const [resolution, setResolution] = useState(128);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advanced, setAdvanced] = useState<AdvancedValues>({
+    exportFormat: "glb",
+    edFrame: 1,
+    numIterations: defaultIterations,
+    resolution: 128,
+  });
+  const [selected, setSelected] = useState<Set<TargetKey>>(() => new Set());
 
-  // Derive a stable Set for membership checks.
-  const availableSet = useMemo(
-    () => new Set<ReconstructionSegmentationModel>(availableModels ?? []),
-    [availableModels]
+  const availableSet = useMemo(() => new Set(availableModels ?? []), [availableModels]);
+  const blocked = useMemo(
+    () => ({ lv: new Set(blockedModels ?? []), rv: new Set(blockedRvModels ?? []) }),
+    [blockedModels, blockedRvModels],
   );
-  // Occupancy is per chamber: an existing LV reconstruction must not block creating the RV one,
-  // and vice versa.
-  const blockedSet = useMemo(
-    () => new Set<ReconstructionSegmentationModel>(
-      (chamber === "rv" ? blockedRvModels : blockedModels) ?? []
-    ),
-    [blockedModels, blockedRvModels, chamber]
-  );
-
-  const buildingSet = useMemo(
-    () => new Set<ReconstructionSegmentationModel>(
-      (chamber === "rv" ? buildingRvModels : buildingModels) ?? []
-    ),
-    [buildingModels, buildingRvModels, chamber]
+  const building = useMemo(
+    () => ({ lv: new Set(buildingModels ?? []), rv: new Set(buildingRvModels ?? []) }),
+    [buildingModels, buildingRvModels],
   );
 
-  // Choose an initial model: prefer the caller's default if available,
-  // otherwise fall back to whichever model is available, otherwise the
-  // canonical MedSAM (the dialog will still show the empty-state banner
-  // and Start will be disabled).
-  const initialModel: ReconstructionSegmentationModel = useMemo(() => {
-    if (defaultSelectedModel && availableSet.has(defaultSelectedModel) && !blockedSet.has(defaultSelectedModel)) {
-      return defaultSelectedModel;
-    }
-    if (availableSet.has("medsam") && !blockedSet.has("medsam")) return "medsam";
-    if (availableSet.has("unet") && !blockedSet.has("unet")) return "unet";
-    return defaultSelectedModel ?? "medsam";
-  }, [availableSet, blockedSet, defaultSelectedModel]);
+  const cellState = useCallback(
+    (model: ReconstructionSegmentationModel, chamber: ReconstructionChamber): CellState => {
+      if (blocked[chamber].has(model)) return { kind: "built" };
+      if (building[chamber].has(model)) return { kind: "building" };
+      if (!availableSet.has(model)) return !gpuAvailable && model === "medsam" ? { kind: "gpu-required" } : { kind: "no-masks" };
+      return { kind: "available" };
+    },
+    [availableSet, blocked, building, gpuAvailable],
+  );
 
-  const [selectedModel, setSelectedModel] =
-    useState<ReconstructionSegmentationModel>(initialModel);
-
-  // Re-sync the model selection whenever the dialog re-opens or the
-  // available set changes (e.g. user just finished a UNet run while
-  // the dialog was closed).
-  useEffect(() => {
-    if (!open) return;
-    setSelectedModel(initialModel);
-  }, [open, initialModel]);
-
-  // Reopening resets to the caller's chamber, defaulting to LV, so an RV run is never repeated
-  // by accident just because the dialog was left on RV last time.
-  useEffect(() => {
-    if (!open) return;
-    setChamber(defaultChamber ?? "lv");
-  }, [open, defaultChamber]);
+  const buildableKeys = useMemo(
+    () =>
+      TARGET_MODELS.flatMap((model) =>
+        TARGET_CHAMBERS.filter((chamber) => cellState(model, chamber).kind === "available").map((chamber) => targetKey(model, chamber)),
+      ),
+    [cellState],
+  );
 
   // Re-applies the iteration default for whichever processing unit is currently reported, on open
   // and whenever that report changes. The status poll starts at gpuAvailable=false and flips to
@@ -214,472 +185,194 @@ export function ReconstructionConfigDialog({
   // that window is small, and being wrong about the device is the worse failure.
   useEffect(() => {
     if (!open) return;
-    setNumIterations(gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU);
-  }, [open, gpuAvailable]);
+    setAdvanced((prev) => ({ ...prev, numIterations: defaultIterations }));
+  }, [open, defaultIterations]);
 
-  const noModelsAvailable = availableSet.size === 0;
-  const noCreatableModels = (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
-    (model) => !availableSet.has(model) || blockedSet.has(model),
-  );
-  // Same "nothing left to build" check as noCreatableModels, but for a GIVEN chamber rather than
-  // whichever one is currently selected -- so the chamber cards below can show the same
-  // already-built state the model cards already do, instead of letting you switch to a chamber
-  // where every model is already occupied with no indication anything is wrong until Start
-  // silently disables itself.
-  const chamberFullyOccupied = useCallback(
-    (ch: ReconstructionChamber) => {
-      const blocked = new Set<ReconstructionSegmentationModel>(
-        (ch === "rv" ? blockedRvModels : blockedModels) ?? [],
-      );
-      return (["medsam", "unet"] as ReconstructionSegmentationModel[]).every(
-        (model) => !availableSet.has(model) || blocked.has(model),
-      );
-    },
-    [availableSet, blockedModels, blockedRvModels],
-  );
-  const selectedIsBuilding = buildingSet.has(selectedModel);
-  const startDisabled =
-    isLoading || noModelsAvailable || noCreatableModels || !availableSet.has(selectedModel)
-    || blockedSet.has(selectedModel) || selectedIsBuilding;
+  // Reopening resets to the caller's chamber, defaulting to LV, so an RV run is never repeated
+  // by accident just because the dialog was left on RV last time.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    const justOpened = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!justOpened) return;
+    const chamber = defaultChamber ?? "lv";
+    const preferredModels = [defaultSelectedModel, ...TARGET_MODELS].filter(Boolean) as ReconstructionSegmentationModel[];
+    const first = preferredModels.map((model) => targetKey(model, chamber)).find((key) => buildableKeys.includes(key));
+    setSelected(new Set(first ? [first] : []));
+  }, [open, defaultChamber, defaultSelectedModel, buildableKeys]);
 
-  const handleStart = () => {
-    if (startDisabled) return;
-    onStart({
-      exportFormat,
-      edFrame,
-      numIterations,
-      resolution,
-      segmentationModel: selectedModel,
-      chamber,
+  const toggle = (key: TargetKey, checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
     });
   };
 
+  const selectedTargets = [...selected]
+    .filter((key) => buildableKeys.includes(key))
+    .map((key) => {
+      const [segmentationModel, chamber] = key.split(":") as [ReconstructionSegmentationModel, ReconstructionChamber];
+      return { segmentationModel, chamber };
+    });
+  const lvCount = selectedTargets.filter((target) => target.chamber === "lv").length;
+  const rvCount = selectedTargets.length - lvCount;
+  const anyRvSelected = rvCount > 0;
+  const minutes = Math.max(
+    1,
+    Math.round(
+      (selectedTargets.length * totalFrames * advanced.numIterations * SECONDS_PER_ITERATION_FRAME[gpuAvailable ? "gpu" : "cpu"]) / 60,
+    ),
+  );
+
+  const noModelsAvailable = availableSet.size === 0;
+  const nothingToBuild = !noModelsAvailable && buildableKeys.length === 0;
+  const startDisabledReason = isLoading
+    ? null
+    : noModelsAvailable
+      ? "Run MedSAM or UNet segmentation first."
+      : selectedTargets.length === 0
+        ? "Select at least one reconstruction."
+        : null;
+
+  const handleStart = () => {
+    if (isLoading || selectedTargets.length === 0) return;
+    onStart({ ...advanced, targets: selectedTargets });
+  };
+
+  const viewTarget = (model: ReconstructionSegmentationModel, chamber: ReconstructionChamber) =>
+    onViewReconstruction?.(model, chamber === "lv" ? existingReconstructionsByModel?.[model] : undefined, chamber);
+
+  const builtOrBuilding = TARGET_MODELS.flatMap((model) =>
+    TARGET_CHAMBERS.map((chamber) => ({ model, chamber, state: cellState(model, chamber) })).filter(
+      (item) => item.state.kind === "built" || item.state.kind === "building",
+    ),
+  );
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
-        <DialogHeader>
+      <DialogContent className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+        <DialogHeader className="border-b px-6 pt-6 pb-4">
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
-            Configure 4D Reconstruction
+            {nothingToBuild ? "All reconstructions are built" : "Configure 4D Reconstruction"}
           </DialogTitle>
           <DialogDescription>
-            Configure the parameters for generating your 4D cardiac reconstruction
+            {nothingToBuild
+              ? "Every reconstruction that can be built for this project already exists or is being built."
+              : "Choose which reconstructions to build."}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
-          {/* Segmentation source (model) — choose which cached segmentation
-              the reconstruction will consume. Disabled cards represent
-              models with no editable mask available for this project. */}
-          <div className="space-y-2">
-            <Label>Segmentation source</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {(["medsam", "unet"] as ReconstructionSegmentationModel[]).map((m) => {
-                const hasSegmentation = availableSet.has(m);
-                const isBlocked = blockedSet.has(m);
-                const isAvailable = hasSegmentation && !isBlocked;
-                const isSelected = selectedModel === m;
-                return (
-                  <div
-                    key={m}
-                    role="button"
-                    tabIndex={isAvailable && !isLoading ? 0 : -1}
-                    onClick={() => isAvailable && setSelectedModel(m)}
-                    onKeyDown={(event) => {
-                      if (!isAvailable || isLoading) return;
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setSelectedModel(m);
-                      }
-                    }}
-                    aria-pressed={isSelected}
-                    aria-disabled={!isAvailable || isLoading}
-                    title={
-                      isBlocked
-                        ? `A 4D reconstruction already exists for ${MODEL_META[m].label}. Delete the existing result before creating a new one.`
-                        : isAvailable
-                        ? `Use cached ${MODEL_META[m].label} segmentation as input`
-                        : (!gpuAvailable && m === "medsam")
-                        ? "MedSAM requires an NVIDIA GPU. Only UNet is available in CPU mode."
-                        : `No cached segmentation found for ${MODEL_META[m].label}. Run ${MODEL_META[m].label} segmentation first.`
-                    }
-                    className={cn(
-                      "rounded-lg border px-3 py-3 text-left transition-colors",
-                      isAvailable
-                        ? "hover:bg-muted/40"
-                        : isBlocked
-                        ? "bg-primary/5"
-                        : "opacity-50 cursor-not-allowed",
-                      isSelected && isAvailable
-                        ? "border-primary ring-2 ring-primary/30 bg-primary/5"
-                        : "border-border"
-                    )}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">{MODEL_META[m].label}</span>
-                      {isBlocked && (
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                          In Use
-                        </span>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          {nothingToBuild ? (
+            <>
+              <ul className="space-y-2">
+                {builtOrBuilding.map(({ model, chamber, state }) => (
+                  <li key={targetKey(model, chamber)} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                    <span className="flex min-w-0 items-center gap-2 text-sm">
+                      {state.kind === "built" ? (
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
+                      ) : (
+                        <Loader2 className="text-muted-foreground h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
                       )}
-                      {!hasSegmentation && (
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                          Unavailable
-                        </span>
-                      )}
-                      {isAvailable && isSelected && (
-                        <span className="text-[10px] uppercase tracking-wide text-primary">
-                          Selected
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {MODEL_META[m].description}
-                    </div>
-                    {isBlocked && (
-                      <div className="mt-2 flex items-end justify-between gap-2">
-                        <span className="text-[11px] text-muted-foreground">
-                          Delete existing 4D result first
-                        </span>
-                        {onViewReconstruction && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            className="h-7 gap-1 border border-primary/40 bg-primary px-2 text-[11px] font-semibold text-primary-foreground shadow-sm hover:bg-primary/90"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onViewReconstruction(m, existingReconstructionsByModel?.[m]);
-                            }}
-                          >
-                            <Eye className="h-3 w-3" />
-                            View 4D
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                    {!hasSegmentation && (
-                      <div className="text-[11px] text-muted-foreground mt-1.5">
-                        {!gpuAvailable && m === "medsam"
-                          ? "GPU required"
-                          : "No cached segmentation"}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {noModelsAvailable ? (
-              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                <div className="text-xs text-amber-900 dark:text-amber-100">
-                  <p className="font-medium">No segmentation result available</p>
-                  <p className="mt-1">
-                    Run MedSAM or UNet segmentation on this project first, then
-                    return here to start a reconstruction.
-                  </p>
-                </div>
-              </div>
-            ) : noCreatableModels ? (
-              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                <div className="text-xs text-amber-900 dark:text-amber-100">
-                  <p className="font-medium">All 4D reconstruction slots are in use</p>
-                  <p className="mt-1">
-                    A 4D reconstruction already exists for this model. Delete the existing result before creating a new one.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Reconstruction will only use the editable mask for the selected
-                model. The other model&apos;s data is ignored.
-              </p>
-            )}
-          </div>
-
-          {/* Chamber selection. LV is the clinical product and the default; RV is a separate,
-              research-only reconstruction of the same scan. Choosing RV surfaces the accuracy
-              warning here, before the job is submitted, as well as later in the viewer. */}
-          <div className="space-y-2">
-            <Label>Chamber</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                {
-                  value: "lv" as ReconstructionChamber,
-                  title: "LV myocardium",
-                  blurb: "Standard 4D reconstruction",
-                },
-                {
-                  value: "rv" as ReconstructionChamber,
-                  title: "RV cavity",
-                  blurb: "Research / reference only",
-                },
-              ]).map((option) => {
-                const isSelected = chamber === option.value;
-                // A chamber with every model already reconstructed has nothing left to build --
-                // switching to it just to find that out at the Start button is the bug being
-                // fixed here, so it's disabled up front, same treatment the model cards already
-                // get when they're individually occupied.
-                const isOccupied = chamberFullyOccupied(option.value);
-                const isDisabled = isLoading || isOccupied;
-                return (
-                  <div
-                    key={option.value}
-                    role="button"
-                    tabIndex={isDisabled ? -1 : 0}
-                    aria-disabled={isDisabled}
-                    onClick={() => !isDisabled && setChamber(option.value)}
-                    onKeyDown={(event) => {
-                      if (isDisabled) return;
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setChamber(option.value);
-                      }
-                    }}
-                    title={
-                      isOccupied
-                        ? `A 4D reconstruction already exists for every segmentation model in this chamber. Delete an existing result to build another one here.`
-                        : undefined
-                    }
-                    className={cn(
-                      "rounded-lg border p-3 transition-colors",
-                      isLoading
-                        ? "cursor-not-allowed opacity-60"
-                        : isOccupied
-                        ? "cursor-not-allowed opacity-50 bg-muted/30"
-                        : "cursor-pointer",
-                      isSelected && !isOccupied
-                        ? option.value === "rv"
-                          ? "border-amber-500 bg-amber-500/10"
-                          : "border-primary bg-primary/5"
-                        : "border-border hover:border-primary/50",
-                    )}
-                  >
-                    <p className="text-sm font-medium flex items-center gap-1.5">
-                      {option.value === "rv" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
-                      {option.title}
-                      {isOccupied && (
-                        <span className="ml-auto text-[10px] font-normal text-muted-foreground">Already built</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{option.blurb}</p>
-                  </div>
-                );
-              })}
-            </div>
-            {chamber === "rv" && (
-              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs space-y-1">
-                <p className="font-semibold flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  RV reconstruction is not validated for clinical use
-                </p>
-                {/* Deliberately one line. The long version pushed the Start/Cancel buttons out of
-                    the dialog on shorter screens, which is a worse outcome than a terse warning --
-                    a warning nobody can scroll past to act on is not protecting anyone. The full
-                    text still appears in the viewer sidebar and on the canvas legend, and the
-                    record is named "RV (Research Only)" so the label survives anywhere else. */}
-                <p className="text-muted-foreground">
-                  Research and reference only — not for clinical diagnosis or measurement.
-                  Created as a separate reconstruction; it does not replace the LV result.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Export Format Selection */}
-          <div className="space-y-2">
-            <Label htmlFor="format">Export Format</Label>
-            <Select
-              value={exportFormat}
-              onValueChange={(value: string) => setExportFormat(value as "obj" | "glb")}
-            >
-              <SelectTrigger id="format">
-                <SelectValue placeholder="Select format" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="glb">
-                  <div className="flex flex-col items-start">
-                    <span className="font-medium">GLB (Recommended)</span>
-                    <span className="text-xs text-muted-foreground">
-                      Binary glTF 2.0 - Optimized for web, smaller file size
+                      <span className="truncate">
+                        {MODEL_LABELS[model]} · {CHAMBER_LABELS[chamber]}
+                      </span>
                     </span>
-                  </div>
-                </SelectItem>
-                <SelectItem value="obj">
-                  <div className="flex flex-col items-start">
-                    <span className="font-medium">OBJ (Wavefront)</span>
-                    <span className="text-xs text-muted-foreground">
-                      Plain text format - Widely supported, human-readable
-                    </span>
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              GLB format provides better performance and smaller file sizes for web viewing
-            </p>
-          </div>
-
-          {/* ED Frame Selection */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="edFrame">End-Diastole (ED) Frame</Label>
-              <span className="text-sm font-mono text-muted-foreground">
-                Frame {edFrame}
-              </span>
-            </div>
-            <Input
-              id="edFrame"
-              type="number"
-              min={1}
-              max={totalFrames}
-              step={1}
-              value={edFrame}
-              onChange={(e) => setEdFrame(Math.max(1, Math.min(totalFrames, parseInt(e.target.value) || 1)))}
-              className="font-mono"
-            />
-            <p className="text-xs text-muted-foreground">
-              Select the cardiac end-diastole frame for 4D reconstruction (1-{totalFrames}).
-              This frame represents the relaxed state of the cardiac cycle.
-            </p>
-          </div>
-
-          {/* Advanced Settings */}
-          <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" className="w-full justify-between px-0">
-                <span className="flex items-center gap-2">
-                  <Settings className="h-4 w-4" />
-                  Advanced Settings
-                </span>
-                <ChevronDown
-                  className={`h-4 w-4 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
-                />
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="space-y-4 pt-4">
-              {/* SDF Optimizer Iterations */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="iterations">SDF Optimizer Iterations</Label>
-                  <span className="text-sm font-mono text-muted-foreground">
-                    {numIterations}
-                  </span>
-                </div>
-                <Input
-                  id="iterations"
-                  type="number"
-                  min={10}
-                  max={200}
-                  step={10}
-                  value={numIterations}
-                  onChange={(e) =>
-                    setNumIterations(parseInt(e.target.value) || (gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU))
-                  }
-                  className="font-mono"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Number of optimization iterations for latent code fitting (10-200).
-                  Below ~120 the fit is measurably under-converged and chamber volumes are off by
-                  around 30%. Measured cost per iteration per frame: ~0.014s on GPU, ~0.081s on
-                  CPU. Default on this system: {gpuAvailable ? ITERATIONS_GPU : ITERATIONS_CPU}
-                  ({gpuAvailable ? "GPU" : "CPU"}).
-                  {!gpuAvailable && (
-                    <>
-                      {" "}
-                      Raising this on CPU can push a 30-frame job past 10 minutes, after which the
-                      viewer stops watching for it -- the job still finishes, but you will need to
-                      reload to see it.
-                    </>
-                  )}
-                </p>
-              </div>
-
-              {/* Marching Cubes Resolution */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="resolution">Marching Cubes Resolution</Label>
-                  <span className="text-sm font-mono text-muted-foreground">
-                    {resolution}
-                  </span>
-                </div>
-                <Input
-                  id="resolution"
-                  type="number"
-                  min={32}
-                  max={256}
-                  step={32}
-                  value={resolution}
-                  onChange={(e) => setResolution(parseInt(e.target.value) || 32)}
-                  className="font-mono"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Mesh generation resolution (32-256). Higher values create more detailed
-                  meshes but increase processing time and file size. Default: 128
-                </p>
-              </div>
-
-              {/* Warning for high values */}
-              {resolution > 128 && (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                  <Settings className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                    {state.kind === "built" && onViewReconstruction ? (
+                      <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={() => viewTarget(model, chamber)}>
+                        <Eye className="h-3 w-3" aria-hidden="true" />
+                        View 4D
+                      </Button>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">Building…</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-muted-foreground text-xs">To rebuild, delete that model&apos;s reconstruction from the project page: &quot;Delete RV only&quot; frees the RV, &quot;Delete All&quot; removes both LV and RV.</p>
+            </>
+          ) : (
+            <>
+              {noModelsAvailable && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
                   <div className="text-xs text-amber-900 dark:text-amber-100">
-                    <p className="font-medium">High performance settings detected</p>
-                    <p className="mt-1">
-                      These settings will significantly increase processing time and may
-                      require more GPU memory. Use with caution.
-                    </p>
+                    <p className="font-medium">No segmentation result available</p>
+                    <p className="mt-1">Run MedSAM or UNet segmentation on this project first, then return here to start a reconstruction.</p>
                   </div>
                 </div>
               )}
-            </CollapsibleContent>
-          </Collapsible>
+
+              <ReconstructionTargetGrid
+                cellState={cellState}
+                selected={selected}
+                onToggle={toggle}
+                onView={onViewReconstruction ? viewTarget : undefined}
+                disabled={isLoading}
+              />
+
+              {anyRvSelected && (
+                <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+                  <p className="flex items-center gap-1.5 font-semibold text-amber-700 dark:text-amber-400">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    RV reconstruction is not validated for clinical use
+                  </p>
+                  <p className="text-muted-foreground">
+                    Research and reference only — not for clinical diagnosis or measurement. Created as a separate
+                    reconstruction; it does not replace the LV result.
+                  </p>
+                </div>
+              )}
+
+              {selectedTargets.length > 0 && (
+                <div className="bg-muted/40 space-y-1 rounded-lg p-3 text-sm" aria-live="polite">
+                  <p className="font-medium">
+                    You&apos;ll run {plural(selectedTargets.length, "reconstruction")} (
+                    {[lvCount ? `${lvCount} LV` : null, rvCount ? `${rvCount} RV` : null].filter(Boolean).join(", ")})
+                  </p>
+                  <p className="text-muted-foreground text-xs">GPU jobs run one after another.</p>
+                  <p className="text-muted-foreground text-xs">≈ {minutes} min, excluding mesh export</p>
+                </div>
+              )}
+
+              <ReconstructionAdvancedSettings
+                values={advanced}
+                onChange={setAdvanced}
+                totalFrames={totalFrames}
+                gpuAvailable={gpuAvailable}
+                defaultIterations={defaultIterations}
+                disabled={isLoading}
+              />
+            </>
+          )}
         </div>
 
-        {/* Says why Start is unavailable. A disabled button with no explanation reads as broken,
-            and the fix here ("wait") is the opposite of the fix for an existing result ("delete"). */}
-        {selectedIsBuilding && (
-          <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-            <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
-            <span>
-              A {chamber === "rv" ? "RV" : "4D"} reconstruction for{" "}
-              {selectedModel === "medsam" ? "MedSAM" : "UNet"} is already being built. It appears in
-              the viewer by itself when it finishes — no need to start another.
-            </span>
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isLoading}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={handleStart}
-            disabled={startDisabled}
-            title={
-              noModelsAvailable
-                ? "No segmentation result available — run MedSAM or UNet first"
-                : blockedSet.has(selectedModel)
-                ? `A 4D reconstruction already exists for ${MODEL_META[selectedModel].label}. Delete it before creating a new one.`
-                : noCreatableModels
-                ? "All 4D reconstruction slots are already in use"
-                : !availableSet.has(selectedModel)
-                ? `No cached ${MODEL_META[selectedModel].label} segmentation. Pick an available model.`
-                : undefined
-            }
-          >
-            {isLoading
-              ? "Starting..."
-              : `Start Reconstruction${
-                  availableSet.has(selectedModel)
-                    ? ` (${MODEL_META[selectedModel].label})`
-                    : ""
-                }`}
-          </Button>
+        <DialogFooter className="flex-col-reverse gap-2 border-t px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+          {nothingToBuild ? (
+            <Button className="sm:ml-auto" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          ) : (
+            <>
+              <p className="text-muted-foreground text-xs" aria-live="polite">
+                {startDisabledReason}
+              </p>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>
+                  Cancel
+                </Button>
+                <Button onClick={handleStart} disabled={isLoading || selectedTargets.length === 0}>
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {isLoading
+                    ? "Starting…"
+                    : `Start ${selectedTargets.length > 1 ? `${selectedTargets.length} reconstructions` : "reconstruction"}`}
+                </Button>
+              </div>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

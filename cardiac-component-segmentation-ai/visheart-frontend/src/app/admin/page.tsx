@@ -14,6 +14,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ProgressMeter } from "@/components/ui/kinetic-progress";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import type { JobState } from "@/lib/retraining-api";
 import {
   Users,
   Brain,
@@ -30,6 +33,15 @@ interface Stats {
 }
 
 const POLL_ACTIVE_MS = 5000;
+
+const JOB_STATE_BADGE: Record<JobState, { label: string; className: string }> = {
+  queued: { label: "Queued", className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300" },
+  running: { label: "Running", className: "bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300" },
+  succeeded: { label: "Completed", className: "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300" },
+  failed: { label: "Failed", className: "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300" },
+  cancelled: { label: "Cancelled", className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
+  interrupted: { label: "Interrupted", className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
+};
 const POLL_IDLE_MS = 30000;
 
 function RetrainingCard() {
@@ -54,11 +66,16 @@ function RetrainingCard() {
   const runningStepTitle = job?.steps.find((s) => s.state === "running")?.title;
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
+    <Card className="h-full">
+      <CardHeader className="pb-0">
         <CardTitle className="flex items-center gap-2 text-base">
           <RefreshCw className={`h-4 w-4 ${running ? "animate-spin" : ""}`} />
           UNet Retraining
+          {job && (
+            <Badge variant="outline" className={`ml-auto border-transparent ${JOB_STATE_BADGE[job.state]?.className ?? ""}`}>
+              {JOB_STATE_BADGE[job.state]?.label ?? job.state}
+            </Badge>
+          )}
         </CardTitle>
         <CardDescription>
           {job
@@ -67,12 +84,14 @@ function RetrainingCard() {
         </CardDescription>
       </CardHeader>
       {job && (
-        <CardContent className="space-y-2">
-          <p className="text-sm font-medium capitalize">{job.state}</p>
+        <CardContent className="flex flex-1 flex-col gap-3">
           {percent !== null && <ProgressMeter value={percent} title={runningStepTitle} />}
-          <Link href="/extend-training" className="text-sm text-blue-600 underline hover:text-blue-700 dark:text-blue-400">
-            {running ? "View progress" : "Review in UNet Extend Training"}
-          </Link>
+          <Button asChild variant="outline" size="sm" className="mt-auto w-full justify-between">
+            <Link href="/extend-training">
+              {running ? "View progress" : "Review in UNet Extend Training"}
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Link>
+          </Button>
         </CardContent>
       )}
     </Card>
@@ -121,7 +140,7 @@ function RoleBreakdownDonut({ stats }: { stats: Stats }) {
         <CardTitle className="text-base">User Roles</CardTitle>
         <CardDescription>Every account, by role</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col items-center justify-center gap-8 pb-8 sm:flex-row sm:items-center sm:gap-10">
+      <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 pb-4 sm:flex-row sm:items-center sm:gap-8">
         <div
           className="relative h-40 w-40 shrink-0 rounded-full"
           style={total > 0 ? { background: `conic-gradient(${gradientStops})` } : undefined}
@@ -185,7 +204,7 @@ const quickLinks = [
 function StatCard({ icon: Icon, label, value, color, className }: { icon: React.ComponentType<{ className?: string }>; label: string; value: number | null; color: string; className?: string }) {
   return (
     <Card className={className}>
-      <CardContent className="flex h-full items-center gap-4 p-5">
+      <CardContent className="flex h-full items-center gap-4 px-5 py-0">
         <div className={`rounded-lg p-2.5 ${color}`}>
           <Icon className="h-5 w-5" />
         </div>
@@ -240,7 +259,7 @@ export default function AdminPageHome() {
   }, []);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Welcome back, {user?.username}</h1>
         <p className="text-muted-foreground">Here&apos;s what&apos;s happening across VisHeart.</p>
@@ -265,13 +284,13 @@ export default function AdminPageHome() {
       {/* Quick links */}
       <div>
         <h2 className="mb-4 text-lg font-semibold">Quick Access</h2>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {quickLinks.map((link) => {
             const Icon = link.icon;
             return (
               <Link key={link.href} href={link.href}>
                 <Card className="group h-full transition-all hover:-translate-y-0.5 hover:shadow-md">
-                  <CardContent className="flex items-start gap-4 p-5">
+                  <CardContent className="flex items-start gap-4 px-5 py-0">
                     <div className={`rounded-lg p-2.5 ${link.color}`}>
                       <Icon className="h-5 w-5" />
                     </div>

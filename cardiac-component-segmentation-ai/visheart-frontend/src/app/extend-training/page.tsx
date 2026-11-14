@@ -249,7 +249,7 @@ function ExtendTrainingInner() {
     : status ? reviewLabel(status.versions, status.job?.result?.label) : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <h1 className="flex items-center gap-2 text-2xl font-semibold">

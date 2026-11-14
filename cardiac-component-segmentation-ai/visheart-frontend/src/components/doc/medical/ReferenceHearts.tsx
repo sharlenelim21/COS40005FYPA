@@ -114,14 +114,14 @@ export function ReferenceHearts({ note }: { note?: Claim }) {
 
   if (failed) {
     return (
-      <p className="text-muted-foreground rounded-lg border border-dashed p-4 text-base">
+      <p className="text-muted-foreground rounded-lg border border-dashed p-4 text-sm">
         The reference hearts could not be loaded. Check that VisHeart&apos;s server is running, then reload the page.
       </p>
     );
   }
   if (templates && templates.length === 0) {
     return (
-      <p className="text-muted-foreground rounded-lg border border-dashed p-4 text-base">
+      <p className="text-muted-foreground rounded-lg border border-dashed p-4 text-sm">
         No reference hearts are installed yet.
       </p>
     );
@@ -133,15 +133,20 @@ export function ReferenceHearts({ note }: { note?: Claim }) {
     (templates ?? [])
       .filter((t) => t.templateInfo?.category === group)
       .sort((a, b) => (a.templateInfo?.order ?? 99) - (b.templateInfo?.order ?? 99));
+  const columnRows = 1 + (templates ? Math.max(1, ...GROUPS.map((g) => ofGroup(g.id).length)) : 2);
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-x-4 gap-y-3">
         {GROUPS.map((group) => (
-          <div key={group.id} className="min-w-0 space-y-3">
+          <div
+            key={group.id}
+            className="grid min-w-0 grid-rows-subgrid gap-3"
+            style={{ gridRow: `span ${columnRows}` }}
+          >
             <div>
-              <h4 className="text-base font-semibold">{group.name}</h4>
-              <p className="text-muted-foreground text-sm">{group.gist}</p>
+              <h4 className="text-sm font-semibold">{group.name}</h4>
+              <p className="text-muted-foreground text-xs">{group.gist}</p>
             </div>
             {templates
               ? ofGroup(group.id).map((t) => (
@@ -161,7 +166,7 @@ export function ReferenceHearts({ note }: { note?: Claim }) {
       {selected && isGroup(selectedGroup) && <HeartDetail template={selected} group={selectedGroup} />}
 
       {note && (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-xs">
           <ClaimText claim={note} />
         </p>
       )}
@@ -187,24 +192,24 @@ function HeartCard({
       aria-expanded={selected}
       aria-controls="reference-heart-detail"
       className={cn(
-        "bg-card grid w-full grid-cols-[4rem_minmax(0,1fr)] gap-3 rounded-lg border p-3 text-left transition-colors",
+        "bg-card grid h-full w-full grid-cols-[4rem_minmax(0,1fr)] items-start gap-3 rounded-lg border p-3 text-left transition-colors",
         "hover:border-foreground/30 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
         selected && "border-primary ring-primary ring-1",
       )}
     >
       <StrainBullseye segments={template.strainSegments} size={64} />
       <span className="min-w-0">
-        <span className="block text-base font-semibold">{personLabel(template)}</span>
+        <span className="block text-sm font-semibold">{personLabel(template)}</span>
         {template.templateInfo?.subjectCode && (
           <span className="text-muted-foreground block font-mono text-[11px]">{template.templateInfo.subjectCode}</span>
         )}
-        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-sm">
+        <dl className="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 text-xs">
           {CARD_METRICS[group].map((key) => {
             const value = template.metrics[key];
             return (
               <div key={key} className="contents">
                 <dt className="text-muted-foreground">{METRICS[key].short}</dt>
-                <dd className="font-medium tabular-nums">
+                <dd className="text-right font-medium whitespace-nowrap tabular-nums">
                   {typeof value === "number" ? `${fmt(value)} ${METRICS[key].unit}` : "—"}
                 </dd>
               </div>
@@ -234,7 +239,7 @@ function HeartDetail({ template, group }: { template: TemplateProjectSummary; gr
     >
       <div className="space-y-3">
         <div>
-          <p className="text-muted-foreground text-sm font-semibold tracking-wide uppercase">{groupName}</p>
+          <p className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">{groupName}</p>
           <p className="text-base font-semibold">{personLabel(template)}</p>
         </div>
         <StrainBullseye segments={template.strainSegments} size={128} />
@@ -275,7 +280,7 @@ function HeartDetail({ template, group }: { template: TemplateProjectSummary; gr
           <CriterionRow key={c.key} criterion={c} value={template.metrics[c.key]} />
         ))}
         {alsoMeets.length > 0 && (
-          <p className="text-muted-foreground border-t pt-3 text-sm">
+          <p className="text-muted-foreground border-t pt-3 text-xs">
             This heart also meets the {alsoMeets.join(" and ")} criteria. A heart can meet more than one group&apos;s
             criteria; in the ACDC dataset each patient was given one label.
           </p>
@@ -296,8 +301,8 @@ function CriterionRow({ criterion, value }: { criterion: Criterion; value: numbe
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
       <div className="min-w-0">
-        <p className="text-base font-medium">{metric.name}</p>
-        <p className="text-muted-foreground text-sm">{rule}</p>
+        <p className="text-sm font-medium">{metric.name}</p>
+        <p className="text-muted-foreground text-xs">{rule}</p>
       </div>
       {criterion.optional ? (
         <Badge variant="outline" className="font-medium">
@@ -337,7 +342,7 @@ function CriterionScale({ criterion, value }: { criterion: Criterion; value: num
       aria-label={`${metric.name}: ${fmt(value)} ${metric.unit}; limit ${criterion.op === ">" ? "above" : "below"} ${criterion.threshold} ${metric.unit}`}
     >
       <span
-        className="absolute top-0 text-sm font-semibold whitespace-nowrap tabular-nums"
+        className="absolute top-0 text-xs font-semibold whitespace-nowrap tabular-nums"
         style={{ left: `${dot}%`, transform: shift(dot) }}
       >
         {fmt(value)} {metric.unit}
