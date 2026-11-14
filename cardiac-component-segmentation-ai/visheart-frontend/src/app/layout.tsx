@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 // import { Geist, Geist_Mono } from "next/font/google";
 import "@/app/globals.css";
 import Script from "next/script";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 
 // const geistSans = Geist({
 //   variable: "--font-geist-sans",
@@ -45,7 +47,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
       <head>
         {/* Google Analytics */}
         <Script src="https://www.googletagmanager.com/gtag/js?id=G-PMKGYM2DRZ" strategy="afterInteractive" />

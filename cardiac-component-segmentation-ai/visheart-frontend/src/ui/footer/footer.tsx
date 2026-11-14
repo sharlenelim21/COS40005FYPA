@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Heart, Mail, MapPin } from "lucide-react";
+import { PreviousTeam } from "./previous-team";
 
 export default function Footer({ minimal = false }: { minimal?: boolean }) {
   if (minimal) {
@@ -24,9 +25,9 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
             crowd "Contact Us"/"Team" off row 1 onto their own row, leaving a big empty gap to the
             right of Navigation. A grid reserves a column for each of the 4 sections up front, so
             nothing can push another section onto a different row by itself. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 xl:grid-cols-4">
           {/* Logo / Brand */}
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="flex items-center space-x-2">
               <Heart className="h-8 w-8 text-primary" />
               <span className="text-2xl font-bold text-foreground">VisHeart</span>
@@ -53,7 +54,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
           </div>
 
           {/* Navigation Links */}
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <h3 className="text-sm font-semibold text-foreground">Navigation</h3>
             <div className="flex flex-col space-y-2">
               <Link href="/" className="text-sm text-muted-foreground hover:text-primary transition-colors">
@@ -75,7 +76,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
           </div>
 
           {/* Contact Us Section */}
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <h3 className="text-sm font-semibold text-foreground">Contact Us</h3>
             <div className="space-y-3">
               <div className="space-y-1">
@@ -84,7 +85,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
                   <span className="font-medium text-foreground">Dr. Miko Chang M.L.</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Supervisor</div>
-                <div className="text-xs ml-6">
+                <div className="text-xs ml-6 break-all">
                   <a href="mailto:mchang@swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     mchang@swinburne.edu.my
                   </a>
@@ -97,7 +98,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
                   <span className="font-medium text-foreground">Kathy Wong H.Y.</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Co-Supervisor</div>
-                <div className="text-xs ml-6">
+                <div className="text-xs ml-6 break-all">
                   <a href="mailto:hywong@swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     hywong@swinburne.edu.my
                   </a>
@@ -110,7 +111,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
                   <span className="font-medium text-foreground">Sharlene Lim</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
-                <div className="text-xs ml-6">
+                <div className="text-xs ml-6 break-all">
                   <a href="mailto:102783112@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783112@students.swinburne.edu.my
                   </a>
@@ -123,7 +124,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
                   <span className="font-medium text-foreground">Ngui Jia Yi</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
-                <div className="text-xs ml-6">
+                <div className="text-xs ml-6 break-all">
                   <a href="mailto:102783222@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783222@students.swinburne.edu.my
                   </a>
@@ -133,8 +134,8 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
           </div>
 
           {/* Team Members Section */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground invisible">Team</h3>
+          <div className="min-w-0 space-y-3">
+            <h3 aria-hidden="true" className="invisible hidden text-sm font-semibold text-foreground sm:block">Team</h3>
             <div className="space-y-3">
               <div className="space-y-1">
                 <div className="flex items-center space-x-2 text-sm">
@@ -142,7 +143,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
                   <span className="font-medium text-foreground">Liew Mei Qi</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Software Developer</div>
-                <div className="text-xs ml-6">
+                <div className="text-xs ml-6 break-all">
                   <a href="mailto:102780236@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102780236@students.swinburne.edu.my
                   </a>
@@ -155,7 +156,7 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
                   <span className="font-medium text-foreground">Stefani Lee Shi Huey</span>
                 </div>
                 <div className="text-xs text-muted-foreground ml-6">Backend Developer</div>
-                <div className="text-xs ml-6">
+                <div className="text-xs ml-6 break-all">
                   <a href="mailto:102783196@students.swinburne.edu.my" className="text-muted-foreground hover:text-primary transition-colors">
                     102783196@students.swinburne.edu.my
                   </a>
@@ -164,6 +165,8 @@ export default function Footer({ minimal = false }: { minimal?: boolean }) {
             </div>
           </div>
         </div>
+
+        <PreviousTeam />
 
         {/* Copyright */}
         <div className="mt-6 pt-6 border-t border-border text-center">

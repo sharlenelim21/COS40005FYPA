@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { AdminOnly } from "@/components/ProtectedRoute";
 import { useAuth } from "@/context/auth-context";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 
 interface NavigationItem {
   title: string;
@@ -101,7 +102,7 @@ function SidebarContent({
         <Link
           href="/dashboard"
           onClick={onNavigate}
-          className="flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+          className="flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           title="Go to the clinical VisHeart Dashboard"
         >
           <Heart className="h-4 w-4 flex-shrink-0 text-red-500" />
@@ -109,7 +110,7 @@ function SidebarContent({
         </Link>
       </div>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+      <nav aria-label="Admin" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {adminNavigation.map((item) => {
           const isActive = item.href === "/admin" ? pathname === "/admin" : pathname.startsWith(item.href);
           const Icon = item.icon;
@@ -118,11 +119,13 @@ function SidebarContent({
               key={item.href}
               href={item.href}
               onClick={onNavigate}
+              aria-current={isActive ? "page" : undefined}
               className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+                "relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+                "focus-visible:ring-brand focus-visible:ring-2 focus-visible:outline-none",
                 isActive
-                  ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-brand/10 dark:bg-brand/15 text-[color-mix(in_oklab,var(--brand)_80%,black)] dark:text-brand before:bg-brand font-semibold before:absolute before:inset-y-1.5 before:left-0 before:w-1 before:rounded-r-full"
+                  : "text-muted-foreground hover:bg-brand/5 hover:text-[color-mix(in_oklab,var(--brand)_80%,black)] dark:hover:bg-brand/10 dark:hover:text-brand",
               )}
               title={item.description}
             >
@@ -163,31 +166,30 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   return (
     <AdminOnly>
-      <div className="flex min-h-screen bg-gray-50/30 dark:bg-gray-950/30">
+      <div className="flex min-h-[calc(100dvh-var(--header-h))] bg-gray-50/30 dark:bg-gray-950/30">
         {/* Desktop sidebar */}
         <aside className="hidden w-64 flex-shrink-0 border-r bg-background md:block">
-          <div className="sticky top-0 h-screen">
+          <div className="sticky top-[var(--header-h)] h-[calc(100dvh-var(--header-h))]">
             <SidebarContent pathname={pathname} />
           </div>
         </aside>
 
         {/* Mobile sidebar overlay */}
-        {mobileOpen && (
-          <div className="fixed inset-0 z-50 md:hidden">
-            <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
-            <aside className="absolute inset-y-0 left-0 w-64 bg-background shadow-xl">
-              <SidebarContent pathname={pathname} onNavigate={() => setMobileOpen(false)} onClose={() => setMobileOpen(false)} />
-            </aside>
-          </div>
-        )}
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetContent side="left" className="w-64 gap-0 p-0 md:hidden">
+            <SheetTitle className="sr-only">Admin menu</SheetTitle>
+            <SidebarContent pathname={pathname} onNavigate={() => setMobileOpen(false)} />
+          </SheetContent>
+        </Sheet>
 
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Top bar */}
-          <div className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur">
+          <div className="sticky top-[var(--header-h)] z-10 border-b bg-background/95 backdrop-blur">
             <div className="flex items-center gap-3 px-4 py-3 sm:px-6">
               <button
                 type="button"
-                className="rounded-md p-1.5 hover:bg-muted md:hidden"
+                className="focus-visible:ring-ring rounded-md p-1.5 hover:bg-muted focus-visible:ring-2 focus-visible:outline-none md:hidden"
+                aria-expanded={mobileOpen}
                 onClick={() => setMobileOpen(true)}
                 aria-label="Open admin menu"
               >
@@ -219,7 +221,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
           {/* Content */}
           <main className="flex-1 px-4 py-6 sm:px-6 sm:py-8">
-            <div className="mx-auto max-w-6xl">{children}</div>
+            <div className="mx-auto max-w-[1600px]">{children}</div>
           </main>
         </div>
       </div>

@@ -1244,7 +1244,7 @@ function SegmentationResultsPageInner() {
   }
 
   return (
-    <div className="h-full w-full bg-background flex flex-col">
+    <div className="h-[calc(100dvh-var(--header-h))] min-h-[32rem] w-full bg-background flex flex-col">
       {/* Back to Project Button, and back to UNet Extend Training when the editor was opened from there */}
       <div className="flex flex-wrap gap-2 px-4 pt-3 pb-2">
         <Button
@@ -1492,7 +1492,7 @@ function SegmentationResultsPageInner() {
               {(reconstructionMetadataForModel || rvReconstructionForModel) && (
                 <>
                   <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
-                    <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
+                    <div className="h-full w-full bg-background p-4 flex flex-col">
                       <div className="flex items-center justify-between mb-2 flex-shrink-0 gap-2">
                         <h3 className="text-sm font-semibold">
                           {reconstructionMetadataForModel
@@ -1540,7 +1540,7 @@ function SegmentationResultsPageInner() {
 
               {/* 2D Canvas (Right) */}
               <ResizablePanel defaultSize={65}>
-                <div className="w-full relative bg-muted/40 p-4 flex items-center justify-center" style={{ height: 'calc(100vh - 120px)' }}>
+                <div className="h-full w-full relative bg-muted/40 p-4 flex items-center justify-center">
                   <ImageCanvas
                     projectData={projectData}
                     decodedMasks={safeDecodedMasks}

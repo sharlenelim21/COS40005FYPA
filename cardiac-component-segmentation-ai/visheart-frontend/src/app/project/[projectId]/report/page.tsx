@@ -1,7 +1,6 @@
      "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Source_Sans_3 } from "next/font/google";
 import { useParams, useRouter } from "next/navigation";
 import { useProject } from "@/context/ProjectContext";
 import { Button } from "@/components/ui/button";
@@ -30,11 +29,6 @@ import { ArrowLeft, ArrowUp, Printer, Download, AlertTriangle, RefreshCw } from 
 // strain, RV cavity volume, MRI overlay) now render as many physical A4
 // sheets as their per-frame data needs — see each page's own `*PageCount`
 // helper — so the running page numbering below is computed, not hardcoded.
-
-// Source Sans 3 — designed for documents/UI at small sizes, noticeably more
-// legible than the app's unstyled system-font fallback once printed. Scoped
-// to just the report so the rest of the app's typography is untouched.
-const reportFont = Source_Sans_3({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
 
 export default function ReportPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -365,7 +359,7 @@ export default function ReportPage() {
 
       {/* Print presentation — the paginated A4 sheets. Kept in the DOM so
           window.print() needs no re-render, but hidden on screen. */}
-      <div id="vh-report-root" className={`${reportFont.className} vh-print-only px-4 pt-6`}>
+      <div id="vh-report-root" className="vh-print-only px-4 pt-6">
         {!hasRealData ? (
           // Match the screen's empty state instead of printing placeholder
           // numbers, so a report can never be exported with fabricated values.

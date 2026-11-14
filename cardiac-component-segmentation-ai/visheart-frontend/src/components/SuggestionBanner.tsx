@@ -52,7 +52,7 @@ export function SuggestionBanner({
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className={`fixed z-[9998] overflow-hidden rounded-xl shadow-lg transition-all duration-200 ${
+      className={`fixed z-40 overflow-hidden rounded-xl shadow-lg transition-all duration-200 ${
         hovered
           ? "w-[272px] border border-border bg-background"
           : "w-12 h-12 bg-foreground cursor-pointer animate-pulse shadow-lg shadow-foreground/40"

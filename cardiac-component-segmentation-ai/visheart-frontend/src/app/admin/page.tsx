@@ -121,7 +121,7 @@ function RoleBreakdownDonut({ stats }: { stats: Stats }) {
         <CardTitle className="text-base">User Roles</CardTitle>
         <CardDescription>Every account, by role</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col items-center justify-center gap-8 pb-8 sm:flex-row sm:items-center sm:gap-10">
+      <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 pb-4 sm:flex-row sm:items-center sm:gap-8">
         <div
           className="relative h-40 w-40 shrink-0 rounded-full"
           style={total > 0 ? { background: `conic-gradient(${gradientStops})` } : undefined}
@@ -185,7 +185,7 @@ const quickLinks = [
 function StatCard({ icon: Icon, label, value, color, className }: { icon: React.ComponentType<{ className?: string }>; label: string; value: number | null; color: string; className?: string }) {
   return (
     <Card className={className}>
-      <CardContent className="flex h-full items-center gap-4 p-5">
+      <CardContent className="flex h-full items-center gap-4 px-5 py-0">
         <div className={`rounded-lg p-2.5 ${color}`}>
           <Icon className="h-5 w-5" />
         </div>
@@ -240,7 +240,7 @@ export default function AdminPageHome() {
   }, []);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Welcome back, {user?.username}</h1>
         <p className="text-muted-foreground">Here&apos;s what&apos;s happening across VisHeart.</p>
@@ -265,13 +265,13 @@ export default function AdminPageHome() {
       {/* Quick links */}
       <div>
         <h2 className="mb-4 text-lg font-semibold">Quick Access</h2>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {quickLinks.map((link) => {
             const Icon = link.icon;
             return (
               <Link key={link.href} href={link.href}>
                 <Card className="group h-full transition-all hover:-translate-y-0.5 hover:shadow-md">
-                  <CardContent className="flex items-start gap-4 p-5">
+                  <CardContent className="flex items-start gap-4 px-5 py-0">
                     <div className={`rounded-lg p-2.5 ${link.color}`}>
                       <Icon className="h-5 w-5" />
                     </div>

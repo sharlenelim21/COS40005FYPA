@@ -1086,7 +1086,7 @@ export function ImageCanvas({
         </div>
 
         {/* Ctrl / Pan hint badge */}
-        <div className="absolute left-4 bottom-4 z-40">
+        <div className="absolute left-4 bottom-4 z-30">
           <Badge
             variant={isPanningState ? "default" : "secondary"}
             className={cn( "px-2 py-1 text-xs font-medium shadow", )}
@@ -1096,7 +1096,7 @@ export function ImageCanvas({
         </div>
 
         {/* Keyboard shortcuts hint badges */}
-        <div className="absolute right-4 bottom-4 z-40 flex flex-row gap-2">
+        <div className="absolute right-4 bottom-4 z-30 flex flex-row gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <Badge

@@ -17,9 +17,10 @@
 "use client";
 
 import { useAuth } from "@/context/auth-context";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { loginUrlFor, readNextParam } from "@/lib/safeNext";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -36,21 +37,29 @@ export function ProtectedRoute({
   fallback,
   autoRedirect = true, // Default to true to redirect unauthenticated users to login
 }: ProtectedRouteProps) {
-  const { user, loading } = useAuth();
+  const { user, loading, revalidateSession } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [shouldRedirect, setShouldRedirect] = useState(false);
+  const hasUser = !!user;
+
+  useEffect(() => {
+    if (loading || !hasUser) return;
+    void revalidateSession();
+  }, [pathname, loading, hasUser, revalidateSession]);
 
   useEffect(() => {
     if (!loading && autoRedirect) {
       if (!user) {
         setShouldRedirect(true);
-        router.push(redirectTo);
+        const currentPath = typeof window === "undefined" ? pathname : `${window.location.pathname}${window.location.search}`;
+        router.replace(redirectTo === "/login" ? loginUrlFor(currentPath) : redirectTo);
       } else if (user && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
         setShouldRedirect(true);
         router.push(redirectTo);
       }
     }
-  }, [user, loading, router, allowedRoles, redirectTo, autoRedirect]);
+  }, [user, loading, router, allowedRoles, redirectTo, autoRedirect, pathname]);
 
   // Show loading state during auth check
   if (loading) {
@@ -142,8 +151,8 @@ export function RegistrationOnly({ children, redirectTo = "/dashboard" }: { chil
     if (!loading && user && user.role !== "guest") {
       // Admin's landing page is the Admin Panel (oversight is their primary job here),
       // not the pipeline dashboard every other role lands on.
-      const target = redirectTo === "/dashboard" && user.role === "admin" ? "/admin" : redirectTo;
-      router.push(target);
+      const roleDefault = redirectTo === "/dashboard" && user.role === "admin" ? "/admin" : redirectTo;
+      router.push(readNextParam() ?? roleDefault);
     }
   }, [user, loading, router, redirectTo]);
 

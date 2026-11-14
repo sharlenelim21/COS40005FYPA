@@ -294,7 +294,7 @@ export function DrawingPanel({
 
         {/* Keyboard Shortcuts - Collapsed by default. Highlighted via a blue BORDER, not colored
             text, so it's noticeable without reading as a status/severity color (2026-11-11). */}
-        <AccordionItem value="tooltips" className="rounded-lg border-2 border-info/60 px-2">
+        <AccordionItem value="tooltips" className="border-info bg-info/5 rounded-lg border-2 px-2">
           <AccordionTrigger className="py-2 hover:no-underline [&[data-state=open]>svg]:rotate-180">
             <h3 className="text-sm font-medium text-foreground">Keyboard Shortcuts</h3>
           </AccordionTrigger>

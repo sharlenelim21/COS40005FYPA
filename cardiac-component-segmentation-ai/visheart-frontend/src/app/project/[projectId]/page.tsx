@@ -62,6 +62,7 @@ import { JobProgress, KineticButtonFill, KineticProgress, ProgressMeter, hasProg
 import { buildReconstructionRequest } from "@/lib/reconstructionDefaults";
 import { useAutoPipelineChain, type PipelineSelection } from "@/hooks/useAutoPipelineChain";
 import { StartPipelineDialog } from "@/components/project/StartPipelineDialog";
+import { ProjectMetaLine } from "@/components/project/ProjectMetaLine";
 import { ExportReconstructionButton } from "@/components/project/ExportReconstructionButton";
 import { landmarkApi } from "@/lib/landmarkApi";
 
@@ -1501,6 +1502,13 @@ function ProjectPageInner() {
                     {currentProjectDescription || "No description provided."}
                   </p>
                 )}
+
+                <ProjectMetaLine
+                  projectId={projectId}
+                  frames={projectData.dimensions?.frames}
+                  slices={projectData.dimensions?.slices}
+                  filesizeBytes={projectData.filesize}
+                />
               </div>
             </div>
 
@@ -1889,48 +1897,33 @@ function ProjectPageInner() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
                   {/* Dimensions */}
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Dimensions</p>
-                    <p className="text-sm font-mono">
+                    <p className="text-sm font-mono whitespace-nowrap">
                       {projectData.dimensions?.width} × {projectData.dimensions?.height}
                     </p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Frames</p>
-                    <p className="text-sm font-semibold">{projectData.dimensions?.frames || 0}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Slices</p>
-                    <p className="text-sm font-semibold">{projectData.dimensions?.slices || 0}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">File Size</p>
-                    <p className="text-sm font-semibold">{(projectData.filesize / 1024 / 1024).toFixed(2)} MB</p>
                   </div>
 
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel X</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.x || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.x || 0} mm</p>
                   </div>
                   
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Y</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.y || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.y || 0} mm</p>
                   </div>
                   
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Z</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.z || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.z || 0} mm</p>
                   </div>
                   
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Temporal</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.t || 0} ms</p>
+                    <p className="text-sm font-mono whitespace-nowrap">{projectData.voxelsize?.t || 0} ms</p>
                   </div>
                 </div>
 
@@ -1947,10 +1940,10 @@ function ProjectPageInner() {
           </div>
 
           {/* Right Column - Status Panels */}
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* Masks Section - Redesigned */}
-            <Card>
-              <CardHeader className="pb-3">
+            <Card className="gap-3">
+              <CardHeader className="pb-0">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
                     <Layers className="h-4 w-4" />
@@ -2030,8 +2023,8 @@ function ProjectPageInner() {
 
             {/* Reconstruction Details Section - result/history only */}
             {hasReconstructions && reconstructionRows.length > 0 && (
-              <Card>
-                <CardHeader className="pb-3">
+              <Card className="gap-3">
+                <CardHeader className="pb-0">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Box className="h-4 w-4" />
@@ -2198,8 +2191,8 @@ function ProjectPageInner() {
 
 
             {/* Jobs Section - Redesigned */}
-            <Card>
-              <CardHeader className="pb-3">
+            <Card className="gap-3">
+              <CardHeader className="pb-0">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Activity className="h-4 w-4" />
                   Processing Jobs

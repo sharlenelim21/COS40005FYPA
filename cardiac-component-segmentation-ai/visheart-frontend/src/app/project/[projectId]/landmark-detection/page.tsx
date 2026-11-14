@@ -2335,7 +2335,7 @@ export default function LandmarkDetectionPage() {
                           />
                           {structureRvTooltip && (
                             <div
-                              className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
+                              className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                               style={{ left: structureRvTooltip.x + 14, top: structureRvTooltip.y - 10 }}
                             >
                               <div className="font-semibold">{structureRvTooltip.label}</div>
@@ -2910,7 +2910,7 @@ function AhaBullseyePanel({
             </ZoomPanContainer>
             {bullseyeTooltip && (
               <div
-                className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
+                className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                 style={{ left: bullseyeTooltip.x + 14, top: bullseyeTooltip.y - 10 }}
               >
                 <div className="font-semibold">{bullseyeTooltip.name}</div>
@@ -3102,7 +3102,7 @@ function AhaHeartProjection({
         />
         {heartTooltip && (
           <div
-            className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
+            className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
             style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
           >
             <div className="font-semibold">{AHA_SEGMENTS[heartTooltip.segment - 1] ?? `Segment ${heartTooltip.segment}`}</div>
@@ -3198,7 +3198,7 @@ function StrainHeartModel({
         />
         {heartTooltip && (
           <div
-            className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
+            className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
             style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
           >
             <div className="font-semibold">
@@ -3873,7 +3873,7 @@ function StrainPreviewPanel({
                   />
                   {rvHeartTooltip && (
                     <div
-                      className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
+                      className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                       style={{ left: rvHeartTooltip.x + 14, top: rvHeartTooltip.y - 10 }}
                     >
                       <div className="font-semibold">
@@ -4015,7 +4015,7 @@ function StrainPreviewPanel({
       {/* Hover tooltip */}
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
+          className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
           style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}>
           <div className="font-semibold">{tooltip.label}</div>
           <div>

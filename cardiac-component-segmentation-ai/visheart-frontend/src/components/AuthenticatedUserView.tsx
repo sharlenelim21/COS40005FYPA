@@ -115,7 +115,7 @@ export const AuthenticatedUserView = () => {
     <>
     {/* Unsaved projects warning modal */}
     {showModal && (
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
         <div className="mx-4 w-full max-w-sm rounded-xl border border-border bg-background p-6 shadow-xl">
           <div className="mb-4 flex items-start gap-3">
             <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-950">

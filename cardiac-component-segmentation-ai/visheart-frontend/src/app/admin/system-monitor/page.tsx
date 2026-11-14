@@ -649,7 +649,7 @@ export default function SystemMonitorPage() {
                 <CardHeader>
                   <CardTitle>Current GPU Server Configuration</CardTitle>
                 </CardHeader>
-                <CardContent className="p-4 sm:p-6">
+                <CardContent className="px-4 py-0 sm:px-5">
                   {isEditingConfig ? (
                     <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
                       <div>

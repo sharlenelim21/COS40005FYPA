@@ -10,7 +10,7 @@ import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
-import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
+import { ReconstructionGLBViewer, DEFAULT_LV_COLOR, DEFAULT_RV_COLOR } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { GuidancePanel } from "@/components/GuidancePanel";
 import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
 import { isReconstructionPreloaded, markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
@@ -257,6 +257,7 @@ export default function Standalone4DViewerPage() {
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(500); // ms per frame
+  const [chamberColors, setChamberColors] = useState({ primary: DEFAULT_LV_COLOR, secondary: DEFAULT_RV_COLOR });
 
   // Sending the user to the project page rather than starting the job here on purpose: that page
   // owns mask availability, GPU availability and the duplicate check. Starting a job from the
@@ -276,7 +277,7 @@ export default function Standalone4DViewerPage() {
     {
       key: "lv" as const,
       label: "LV myocardium",
-      color: "#c41e3a",
+      color: chamberColors.primary,
       recon: lvReconstruction,
       visible: showLv,
       setVisible: setShowLv,
@@ -286,7 +287,7 @@ export default function Standalone4DViewerPage() {
     {
       key: "rv" as const,
       label: "RV cavity",
-      color: "#660000",
+      color: chamberColors.secondary,
       recon: rvReconstruction,
       visible: showRv,
       setVisible: setShowRv,
@@ -662,7 +663,7 @@ export default function Standalone4DViewerPage() {
   }
 
   return (
-    <div className="h-[calc(100vh-4rem)] flex flex-col">
+    <div className="flex h-[calc(100dvh-var(--header-h))] min-h-0 flex-col overflow-hidden">
       {/* Resizable Layout */}
       <ResizablePanelGroup 
         direction="horizontal" 
@@ -702,6 +703,7 @@ export default function Standalone4DViewerPage() {
               // it once our own preload pass has finished, since every frame is already warm by
               // then regardless of whether this viewer has personally rendered it yet.
               skipLoadingOverlay={!isPreparing}
+              onColorsChange={setChamberColors}
             />
 
             {/* First-run preload: covers up the per-frame "Loading model..." flicker with one
@@ -844,14 +846,19 @@ export default function Standalone4DViewerPage() {
                     </span>
                   </div>
                   <Slider
-                    value={[playbackSpeed]}
-                    onValueChange={(value) => setPlaybackSpeed(value[0])}
-                    min={100}
-                    max={2000}
-                    step={100}
+                    value={[1000 / playbackSpeed]}
+                    onValueChange={(value) => setPlaybackSpeed(Math.round(1000 / value[0]))}
+                    min={0.5}
+                    max={10}
+                    step={0.5}
                     className="w-full"
                     disabled={totalFrames <= 1}
+                    aria-label="Playback speed, frames per second"
                   />
+                  <div className="text-muted-foreground flex justify-between text-xs">
+                    <span>Slow</span>
+                    <span>Fast</span>
+                  </div>
                 </div>
 
                 {/* Chambers.

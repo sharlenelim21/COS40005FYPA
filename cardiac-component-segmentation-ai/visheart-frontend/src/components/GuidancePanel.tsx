@@ -57,7 +57,7 @@ export function GuidancePanel({
 
   return (
     <div
-      className="fixed z-[9999] flex items-center"
+      className="fixed z-40 flex items-center"
       style={{ bottom: "24px", right: "0px" }}
     >
       {/* Collapsed tab */}

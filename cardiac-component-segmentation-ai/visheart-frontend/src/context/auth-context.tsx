@@ -22,11 +22,13 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useState,
   useEffect,
   ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 import { authApi } from "@/lib/api";
 
 // Mirrors the backend's UserRole enum (Cardiac_Segmentation_FYP_Server/src/types/database_types.ts).
@@ -51,7 +53,19 @@ interface AuthContextType {
   guestLogin: () => Promise<User>;
   logout: () => Promise<void>;
   checkAuthStatus: () => Promise<User | null>;
+  revalidateSession: () => Promise<User | null>;
+  clearAuth: () => void;
 }
+
+const isSameUser = (a: User | null, b: User | null) =>
+  a === b || (!!a && !!b && a._id === b._id && a.role === b.role && a.username === b.username && a.updatedAt === b.updatedAt);
+
+const isExpectedLogoutError = (err: unknown) => {
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  const code = (err as { code?: string })?.code;
+  const message = (err as { message?: string })?.message;
+  return status === 401 || status === 403 || !status || code === "ERR_NETWORK" || message === "Network Error";
+};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -59,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
   // Check auth status on mount
   // If no session, automatically log in as guest
@@ -150,17 +165,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const clearAuth = useCallback(() => {
+    setUser(null);
+    setError(null);
+  }, []);
+
+  const revalidateSession = useCallback(async (): Promise<User | null> => {
+    try {
+      const response = await authApi.fetchUser();
+      const fresh: User | null = response?.fetch && response.user ? response.user : null;
+      setUser((current) => (isSameUser(current, fresh) ? current : fresh));
+      return fresh;
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 401 || status === 403) {
+        setUser(null);
+        return null;
+      }
+      return null;
+    }
+  }, []);
+
   const logout = async () => {
     setLoading(true);
     try {
       await authApi.logout();
-      setUser(null);
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.message || "Logout failed";
-      setError(errorMessage);
-      throw err;
+    } catch (err) {
+      if (!isExpectedLogoutError(err)) {
+        console.error("Logout request failed:", err);
+      }
     } finally {
+      clearAuth();
       setLoading(false);
+      router.replace("/login");
     }
   };
 
@@ -174,6 +211,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         guestLogin,
         logout,
         checkAuthStatus,
+        revalidateSession,
+        clearAuth,
       }}
     >
       {children}
