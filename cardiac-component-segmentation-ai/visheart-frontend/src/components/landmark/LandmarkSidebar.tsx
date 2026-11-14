@@ -1222,13 +1222,10 @@ function LandmarkShortcutsHelp({ readOnly }: { readOnly: boolean }) {
   ];
 
   return (
-    // Highlighted via a blue BORDER, not colored text, so it's noticeable without reading as a
-    // status/severity color (2026-11-11).
-    <details className="group rounded-lg border-2 border-info/60 bg-muted/20 px-3 py-2">
-      <summary className="flex cursor-pointer list-none items-center justify-between text-[13px] font-semibold uppercase tracking-wide text-foreground [&::-webkit-details-marker]:hidden">
+    <div className="rounded-lg border-2 border-border bg-muted/20 px-3 py-2">
+      <p className="text-[13px] font-semibold uppercase tracking-wide text-foreground">
         Keyboard Shortcuts
-        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
-      </summary>
+      </p>
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
         {rows.map(([keys, action]) => (
           <Fragment key={keys}>
@@ -1237,7 +1234,7 @@ function LandmarkShortcutsHelp({ readOnly }: { readOnly: boolean }) {
           </Fragment>
         ))}
       </dl>
-    </details>
+    </div>
   );
 }
 

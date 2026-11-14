@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import { figureNumber, type ContentBlock, type GuideSection } from "@/content/medicalGuide";
 import { Callout } from "@/components/doc/medical/Callout";
 import { ClaimParagraphs, ClaimText } from "@/components/doc/medical/Citation";
@@ -24,6 +26,17 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
                 </li>
               ))}
             </ul>
+          )}
+          {block.readMoreHref && (
+            <Link
+              href={block.readMoreHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 text-sm font-semibold underline underline-offset-2 hover:no-underline"
+            >
+              {block.readMoreLabel ?? "Read more"}
+              <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
           )}
         </Callout>
       );

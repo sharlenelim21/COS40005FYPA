@@ -27,6 +27,8 @@ export const LV_STRAIN_METHOD_ID = "lv-strain-method";
 export const RV_STRAIN_METHOD_SECTION_ID = "rv-strain-method";
 export const LV_RV_REFERENCES_ID = "lv-rv-references";
 export const RV_STRAIN_METHOD_HREF = `${TECHNICAL_GUIDE_HREF}#${RV_STRAIN_METHOD_SECTION_ID}`;
+/** The whole "How LV and RV Works" section (both methods) -- for callouts covering LV and RV together, where RV_STRAIN_METHOD_HREF alone would skip the LV half. */
+export const LV_RV_SECTION_HREF = `${TECHNICAL_GUIDE_HREF}#${LV_RV_SECTION_ID}`;
 
 export interface TocItem {
   id: string;

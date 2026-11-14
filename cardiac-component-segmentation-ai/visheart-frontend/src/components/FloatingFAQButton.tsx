@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { isFaqHiddenRoute } from "@/lib/floating-widgets";
+import { useAuth } from "@/context/auth-context";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -17,8 +18,11 @@ interface FaqItem {
 
 export function FloatingFAQButton() {
   const pathname = usePathname();
+  const { user } = useAuth();
   const isDocPage = pathname?.startsWith("/doc") ?? false;
-  const isAdminRoute = isFaqHiddenRoute(pathname);
+  // Admins are who the FAQ messages get sent TO, so there's no one for the admin's own widget to
+  // ask -- hidden everywhere for that role, not just on /admin routes.
+  const isAdminRoute = isFaqHiddenRoute(pathname) || user?.role === "admin";
 
   const [open, setOpen] = useState(false);
   const [senderName, setSenderName] = useState("");

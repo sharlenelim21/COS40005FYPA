@@ -59,7 +59,7 @@ class EnvironmentErrorBoundary extends Component<{ children: ReactNode; fallback
 }
 
 export const DEFAULT_LV_COLOR = '#c41e3a';
-export const DEFAULT_RV_COLOR = '#FF3F00';
+export const DEFAULT_RV_COLOR = '#660000';
 
 // Default settings
 const DEFAULT_SETTINGS: ViewerSettings = {
@@ -507,9 +507,9 @@ interface ReconstructionGLBViewerProps {
   onColorsChange?: (colors: { primary: string; secondary: string }) => void;
 }
 
-// RV defaults to the "Orange" preset (DEFAULT_RV_COLOR, #FF3F00) so it is never confused with the
+// RV defaults to the "Blood Red" preset (DEFAULT_RV_COLOR, #660000) so it is never confused with the
 // LV default (#c41e3a, deep red). Both are independently user-editable from the Settings panel (see
-// secondaryModelColor), and Reset to Defaults returns RV to Orange; this is only the out-of-the-box value.
+// secondaryModelColor), and Reset to Defaults returns RV to Blood Red; this is only the out-of-the-box value.
 const SECONDARY_DEFAULT_COLOR = DEFAULT_RV_COLOR;
 
 export function ReconstructionGLBViewer({ 

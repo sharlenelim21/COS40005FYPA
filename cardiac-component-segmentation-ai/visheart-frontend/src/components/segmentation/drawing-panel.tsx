@@ -292,32 +292,27 @@ export function DrawingPanel({
           </AccordionContent>
         </AccordionItem>
 
-        {/* Keyboard Shortcuts - Collapsed by default. Highlighted via a blue BORDER, not colored
-            text, so it's noticeable without reading as a status/severity color (2026-11-11). */}
-        <AccordionItem value="tooltips" className="border-info bg-info/5 rounded-lg border-2 px-2">
-          <AccordionTrigger className="py-2 hover:no-underline [&[data-state=open]>svg]:rotate-180">
-            <h3 className="text-sm font-medium text-foreground">Keyboard Shortcuts</h3>
-          </AccordionTrigger>
-          <AccordionContent className="pb-3">
-            <div className="p-3 bg-muted rounded-lg text-xs text-muted-foreground space-y-1.5">
-              <div>• <strong>Select:</strong> Move and select objects</div>
-              <div>• <strong>Draw (D):</strong> Paint segmentation masks</div>
-              <div>• <strong>Eraser (E):</strong> Remove mask pixels</div>
-              <div>• <strong>Bounding Box:</strong> Draw bounding box for AI-powered manual segmentation (MedSAM, NVIDIA GPU only)</div>
-              <div>• <strong>Zoom:</strong> Enlarge the image</div>
-              <div>• <strong>Pan:</strong> Navigate the canvas</div>
-              <div className="pt-1.5 font-medium text-foreground">Keyboard shortcuts</div>
-              <div>• <strong>1 / 2 / 3:</strong> LV Cavity / RV / Myocardium</div>
-              <div>• <strong>D / E:</strong> Draw / Eraser</div>
-              <div>• <strong>Q / W:</strong> Smaller / bigger brush (Draw and Eraser)</div>
-              <div>• <strong>← →:</strong> Frames &nbsp;<strong>↑ ↓:</strong> Slices</div>
-              <div>• <strong>+ / −:</strong> Zoom &nbsp;<strong>R:</strong> Reset view</div>
-              <div>• <strong>Ctrl+Z / Ctrl+Y:</strong> Undo / Redo</div>
-              <div>• <strong>Del:</strong> Clear current mask &nbsp;<strong>Ctrl+S:</strong> Save</div>
-            </div>
-          </AccordionContent>
-        </AccordionItem>
       </Accordion>
+
+      <div className="rounded-lg border-2 border-border px-2 py-2">
+        <h3 className="text-sm font-medium text-foreground">Keyboard Shortcuts</h3>
+        <div className="mt-2 space-y-1.5 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
+          <div>• <strong>Select:</strong> Move and select objects</div>
+          <div>• <strong>Draw (D):</strong> Paint segmentation masks</div>
+          <div>• <strong>Eraser (E):</strong> Remove mask pixels</div>
+          <div>• <strong>Bounding Box:</strong> Draw bounding box for AI-powered manual segmentation (MedSAM, NVIDIA GPU only)</div>
+          <div>• <strong>Zoom:</strong> Enlarge the image</div>
+          <div>• <strong>Pan:</strong> Navigate the canvas</div>
+          <div className="pt-1.5 font-medium text-foreground">Keyboard shortcuts</div>
+          <div>• <strong>1 / 2 / 3:</strong> LV Cavity / RV / Myocardium</div>
+          <div>• <strong>D / E:</strong> Draw / Eraser</div>
+          <div>• <strong>Q / W:</strong> Smaller / bigger brush (Draw and Eraser)</div>
+          <div>• <strong>← →:</strong> Frames &nbsp;<strong>↑ ↓:</strong> Slices</div>
+          <div>• <strong>+ / −:</strong> Zoom &nbsp;<strong>R:</strong> Reset view</div>
+          <div>• <strong>Ctrl+Z / Ctrl+Y:</strong> Undo / Redo</div>
+          <div>• <strong>Del:</strong> Clear current mask &nbsp;<strong>Ctrl+S:</strong> Save</div>
+        </div>
+      </div>
     </div>
   );
 }

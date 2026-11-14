@@ -6,6 +6,7 @@ import { decodeSegmentationMasks } from "@/lib/decode-RLE";
 import { tarImageCache } from "@/lib/tar-image-cache";
 import { reconstructionCache } from "@/lib/reconstruction-cache";
 import { markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
+import { warmupReconstructionFrame } from "@/components/reconstruction/ReconstructionWarmupHost";
 import { getModelMaskAvailability } from "@/lib/segmentation-model-utils";
 import type { SegmentationModelId } from "@/lib/segmentation-model-utils";
 import * as ProjectTypes from "@/types/project";
@@ -852,6 +853,12 @@ export function ProjectProvider({ children, projectId }: ProjectProviderProps) {
                       gltfLoader.load(url, () => resolve(), undefined, () => resolve());
                     });
                     useGLTF.preload(url);
+                    // Forces a real (hidden) GPU draw of this frame too -- useGLTF.preload() only
+                    // warms the JS-side parsed geometry, never asks a renderer to actually draw
+                    // it, so without this the GPU-side buffer upload/shader compile was still
+                    // happening lazily the first time the standalone viewer showed this frame for
+                    // real (see ReconstructionWarmupHost.tsx).
+                    await warmupReconstructionFrame(url);
                     loaded++;
                     setThreeJSPreloadProgress({ current: loaded, total });
                     if (onProgress) onProgress(loaded, total);

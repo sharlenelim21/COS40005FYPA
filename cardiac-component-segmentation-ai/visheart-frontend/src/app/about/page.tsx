@@ -48,9 +48,14 @@ const AboutPage = () => {
         {/* Team Section */}
         <div>
           <h2 className="mb-8 text-center text-3xl font-bold">Meet the Team</h2>
-          <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          {/* flex-wrap + justify-center (not grid) so a trailing partial row
+              centers itself instead of hugging the left edge, regardless of
+              how many members end up in this list. */}
+          <div className="flex flex-wrap justify-center gap-8">
             {team.map((member) => (
-              <TeamProfileCard key={member.key} name={member.name} role={member.role} photo={member.photo} bio={member.bio} email={member.email} linkedin={member.linkedin} />
+              <div key={member.key} className="w-full sm:w-[calc(50%-1rem)] lg:w-[calc(33.333%-1.334rem)]">
+                <TeamProfileCard name={member.name} role={member.role} photo={member.photo} bio={member.bio} email={member.email} linkedin={member.linkedin} />
+              </div>
             ))}
           </div>
         </div>

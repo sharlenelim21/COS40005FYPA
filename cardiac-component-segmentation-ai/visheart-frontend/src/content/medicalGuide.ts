@@ -1,5 +1,6 @@
 import type { DocVideoMode } from "@/components/doc/DocVideo";
 import { SEGMENT_LABELS } from "@/lib/ahaSegments";
+import { LV_RV_SECTION_HREF } from "@/components/doc/guides";
 
 export type Reference = {
   citation: string;
@@ -119,6 +120,9 @@ export interface CalloutBlock {
   title: string;
   body: Claim[];
   list?: Claim[];
+  /** Optional "Read more" link, e.g. to the Technical Guide's matching method section. */
+  readMoreHref?: string;
+  readMoreLabel?: string;
 }
 
 export interface RangeRow {
@@ -558,6 +562,8 @@ export const MEDICAL_GUIDE: MedicalGuide = {
                   refs: ["tokodi2021"],
                 },
               ],
+              readMoreHref: LV_RV_SECTION_HREF,
+              readMoreLabel: "How LV and RV strain is calculated",
             },
           ],
         },

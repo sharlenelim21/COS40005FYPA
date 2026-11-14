@@ -14,6 +14,7 @@ import { ReconstructionGLBViewer, DEFAULT_LV_COLOR, DEFAULT_RV_COLOR } from "@/c
 import { GuidancePanel } from "@/components/GuidancePanel";
 import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
 import { isReconstructionPreloaded, markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
+import { warmupReconstructionFrame } from "@/components/reconstruction/ReconstructionWarmupHost";
 import { Layers, Crosshair } from "lucide-react";
 import {
   ResizablePanelGroup,
@@ -401,6 +402,25 @@ export default function Standalone4DViewerPage() {
   const [isPreparing, setIsPreparing] = useState(false);
   const [prepareProgress, setPrepareProgress] = useState<{ current: number; total: number } | null>(null);
 
+  // Computed synchronously from render, not from the preload effect's own setIsPreparing --
+  // isPreparing only flips true a render AFTER lvReconstruction/rvReconstruction first resolve
+  // (useEffect runs after paint), so on the render(s) in between, isPreparing is still its stale
+  // `false` default even though nothing has actually been confirmed warm yet. That gap let
+  // skipLoadingOverlay turn off the viewer's own cover before prepare() ever started, exposing a
+  // blank canvas with no "Loading..." text for a frame or two on a genuinely-fresh reconstruction
+  // (reported live, 2026-11-14 -- right after "4D reconstruction ready!", before ProjectContext's
+  // background preload had a chance to run). This has no such gap: it's available the moment the
+  // reconstruction ids themselves are.
+  const reconstructionsNeedPrep = useMemo(() => {
+    const targets: string[] = [];
+    if (showLv && lvReconstruction?.reconstructionId) targets.push(lvReconstruction.reconstructionId);
+    if (showRv && rvReconstruction?.reconstructionId) targets.push(rvReconstruction.reconstructionId);
+    if (targets.length === 0) return false;
+    return !targets.every(
+      (id) => preparedReconstructionsRef.current.has(id) || isReconstructionPreloaded(id),
+    );
+  }, [showLv, showRv, lvReconstruction, rvReconstruction, isPreparing]);
+
   useEffect(() => {
     const targets: { reconstructionId: string; frames: number }[] = [];
     if (showLv && lvReconstruction?.reconstructionId) {
@@ -459,6 +479,11 @@ export default function Standalone4DViewerPage() {
                     gltfLoader.load(url, () => resolve(), undefined, () => resolve());
                   });
                   useGLTF.preload(url);
+                  // See ReconstructionWarmupHost.tsx -- forces a real (hidden) GPU draw too, not
+                  // just the fetch+parse above, so this fallback pass is a genuine full warm-up
+                  // when it's the one that ends up running (normally ProjectContext's own pass,
+                  // on the project page, already covers this before the user gets here).
+                  await warmupReconstructionFrame(url);
                 }
               } catch {
                 // A single failed frame must not block the rest of the batch -- it just falls
@@ -702,7 +727,7 @@ export default function Standalone4DViewerPage() {
               // reuse frames this viewer has already rendered once, so they skip it) -- suppress
               // it once our own preload pass has finished, since every frame is already warm by
               // then regardless of whether this viewer has personally rendered it yet.
-              skipLoadingOverlay={!isPreparing}
+              skipLoadingOverlay={!reconstructionsNeedPrep}
               onColorsChange={setChamberColors}
             />
 

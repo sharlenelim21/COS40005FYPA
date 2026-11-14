@@ -2375,12 +2375,6 @@ export default function LandmarkDetectionPage() {
                         </div>
                       </div>
                     </div>
-                    <p className="text-[12px] text-muted-foreground leading-relaxed flex-shrink-0 px-1">
-                      The 3D mesh shape and 9-segment boundaries are from the real RV reconstruction. It's
-                      colored by real per-segment FAC, synced with the bullseye on the left, once RV strain
-                      has been computed for this project — until then it falls back to segment-identity
-                      colors (the analysis notebook's palette).
-                    </p>
                   </div>
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
