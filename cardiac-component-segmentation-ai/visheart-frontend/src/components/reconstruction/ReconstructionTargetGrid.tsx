@@ -31,13 +31,7 @@ interface ReconstructionTargetGridProps {
   disabled?: boolean;
 }
 
-function UnavailableReason({
-  state,
-  onView,
-}: {
-  state: CellState;
-  onView?: () => void;
-}) {
+function UnavailableReason({ state }: { state: CellState }) {
   switch (state.kind) {
     case "no-masks":
       return <span className="text-muted-foreground text-xs">No masks — run segmentation</span>;
@@ -51,17 +45,10 @@ function UnavailableReason({
         </span>
       );
     case "built":
-      return (
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-          <span className="text-muted-foreground">Built</span>
-          {onView && (
-            <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={onView}>
-              <Eye className="h-3 w-3" aria-hidden="true" />
-              View 4D
-            </Button>
-          )}
-        </span>
-      );
+      // No per-cell "View 4D" here -- LV and RV for the same model open the same combined
+      // viewer, so a button in both columns just duplicated the same action. One button on
+      // the model's row label (below) covers both.
+      return <span className="text-muted-foreground text-xs">Built</span>;
     default:
       return null;
   }
@@ -78,9 +65,31 @@ export function ReconstructionTargetGrid({ cellState, selected, onToggle, onView
           </span>
         ))}
       </div>
-      {TARGET_MODELS.map((model) => (
+      {TARGET_MODELS.map((model) => {
+        // One "View" for the whole row, not one per chamber column: LV and RV for the same
+        // model open the same combined viewer, so whichever is built first is enough to view
+        // from -- prefer LV's id (the viewer's real identifier) when both are built.
+        const lvBuilt = cellState(model, "lv").kind === "built";
+        const rvBuilt = cellState(model, "rv").kind === "built";
+        const viewableChamber = lvBuilt ? "lv" : rvBuilt ? "rv" : null;
+        return (
         <div key={model} className="grid grid-cols-[5.5rem_repeat(2,minmax(0,1fr))] border-b last:border-b-0">
-          <span className="flex items-center px-3 py-3 text-sm font-medium">{MODEL_LABELS[model]}</span>
+          <div className="flex items-center justify-between gap-1 px-3 py-3">
+            <span className="text-sm font-medium">{MODEL_LABELS[model]}</span>
+            {viewableChamber && onView && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-6 w-6 shrink-0 p-0"
+                onClick={() => onView(model, viewableChamber)}
+                title="View 4D"
+              >
+                <Eye className="h-3 w-3" aria-hidden="true" />
+                <span className="sr-only">View 4D ({MODEL_LABELS[model]})</span>
+              </Button>
+            )}
+          </div>
           {TARGET_CHAMBERS.map((chamber) => {
             const key = targetKey(model, chamber);
             const state = cellState(model, chamber);
@@ -111,13 +120,14 @@ export function ReconstructionTargetGrid({ cellState, selected, onToggle, onView
                     </Label>
                   </div>
                 ) : (
-                  <UnavailableReason state={state} onView={onView ? () => onView(model, chamber) : undefined} />
+                  <UnavailableReason state={state} />
                 )}
               </div>
             );
           })}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

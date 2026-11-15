@@ -19,7 +19,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     fullName: FULL_NAME_PLACEHOLDER,
     role: "Lead Developer",
     photo: "/images/about/pfp-james.jpg",
-    linkedin: "",
+    linkedin: "https://www.linkedin.com/in/james-muking-2ba515313/",
     email: "",
   },
   {
@@ -28,7 +28,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     fullName: FULL_NAME_PLACEHOLDER,
     role: "Backend Developer",
     photo: "/images/about/pfp-cla.jpg",
-    linkedin: "",
+    linkedin: "https://www.linkedin.com/in/clarissa-wong-tech/",
     email: "",
   },
   {
@@ -37,7 +37,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     fullName: FULL_NAME_PLACEHOLDER,
     role: "AWS Developer",
     photo: "/images/about/pfp-jes.jpg",
-    linkedin: "",
+    linkedin: "https://www.linkedin.com/in/jesmineting/",
     email: "",
   },
   {
@@ -46,7 +46,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     fullName: FULL_NAME_PLACEHOLDER,
     role: "Frontend Developer",
     photo: "/images/about/pfp-qh.jpg",
-    linkedin: "",
+    linkedin: "https://www.linkedin.com/in/qian-hui-yee-2773262b8/",
     email: "",
   },
   {
@@ -55,7 +55,7 @@ export const PREVIOUS_TEAM: readonly PreviousTeamMember[] = [
     fullName: FULL_NAME_PLACEHOLDER,
     role: "ML Engineer",
     photo: "/images/about/pfp-zia.jpg",
-    linkedin: "",
+    linkedin: "https://www.linkedin.com/in/zia-tan-4064562b7/",
     email: "",
   },
 ];

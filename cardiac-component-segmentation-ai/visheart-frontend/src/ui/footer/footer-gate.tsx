@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import Footer from "./footer";
 
-const MINIMAL_FOOTER_PREFIXES: readonly string[] = [];
+const MINIMAL_FOOTER_PREFIXES: readonly string[] = ["/admin", "/extend-training"];
 
 /** Keeps the root layout a server component — this is the only piece that needs the
  *  current path, to show the full site footer everywhere except the admin-only pages
