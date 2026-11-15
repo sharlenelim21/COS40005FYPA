@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import type { TooltipPayload } from "recharts";
 import { CheckCircle2, AlertTriangle, Info, Sparkles, Heart, Loader2, RotateCcw, XCircle, HelpCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -332,7 +333,7 @@ function RegionalCurveTooltip({
 }: {
   active?: boolean;
   label?: number | string;
-  payload?: { dataKey?: string | number; value?: number | string | null }[];
+  payload?: TooltipPayload;
   focus: number | null;
   dataKeyPrefix: "s" | "r";
   labelFor: (id: number) => string;

@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { TeamContactLinks } from "@/components/team/TeamMemberCard";
+import { TeamContactLinks } from "@/components/team/TeamContactLinks";
 import { initials } from "@/data/previousTeam";
 
 export interface TeamProfileCardProps {
