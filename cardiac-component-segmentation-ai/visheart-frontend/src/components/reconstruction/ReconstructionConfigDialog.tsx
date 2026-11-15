@@ -10,10 +10,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, CheckCircle2, Eye, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, Loader2, Sparkles } from "lucide-react";
 import {
-  CHAMBER_LABELS,
-  MODEL_LABELS,
   ReconstructionTargetGrid,
   TARGET_CHAMBERS,
   TARGET_MODELS,
@@ -232,7 +230,9 @@ export function ReconstructionConfigDialog({
     ? null
     : noModelsAvailable
       ? "Run MedSAM or UNet segmentation first."
-      : selectedTargets.length === 0
+      : nothingToBuild
+        ? "Everything is built or building. To rebuild, use Delete RV only or Delete All on the project page."
+        : selectedTargets.length === 0
         ? "Select at least one reconstruction."
         : null;
 
@@ -244,135 +244,87 @@ export function ReconstructionConfigDialog({
   const viewTarget = (model: ReconstructionSegmentationModel, chamber: ReconstructionChamber) =>
     onViewReconstruction?.(model, chamber === "lv" ? existingReconstructionsByModel?.[model] : undefined, chamber);
 
-  const builtOrBuilding = TARGET_MODELS.flatMap((model) =>
-    TARGET_CHAMBERS.map((chamber) => ({ model, chamber, state: cellState(model, chamber) })).filter(
-      (item) => item.state.kind === "built" || item.state.kind === "building",
-    ),
-  );
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
         <DialogHeader className="border-b px-6 pt-6 pb-4">
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
-            {nothingToBuild ? "All reconstructions are built" : "Configure 4D Reconstruction"}
+            Configure 4D Reconstruction
           </DialogTitle>
-          <DialogDescription>
-            {nothingToBuild
-              ? "Every reconstruction that can be built for this project already exists or is being built."
-              : "Choose which reconstructions to build."}
-          </DialogDescription>
+          <DialogDescription>Choose which reconstructions to build.</DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
-          {nothingToBuild ? (
-            <>
-              <ul className="space-y-2">
-                {builtOrBuilding.map(({ model, chamber, state }) => (
-                  <li key={targetKey(model, chamber)} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                    <span className="flex min-w-0 items-center gap-2 text-sm">
-                      {state.kind === "built" ? (
-                        <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
-                      ) : (
-                        <Loader2 className="text-muted-foreground h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
-                      )}
-                      <span className="truncate">
-                        {MODEL_LABELS[model]} · {CHAMBER_LABELS[chamber]}
-                      </span>
-                    </span>
-                    {state.kind === "built" && onViewReconstruction ? (
-                      <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={() => viewTarget(model, chamber)}>
-                        <Eye className="h-3 w-3" aria-hidden="true" />
-                        View 4D
-                      </Button>
-                    ) : (
-                      <span className="text-muted-foreground text-xs">Building…</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <p className="text-muted-foreground text-xs">To rebuild, delete that model&apos;s reconstruction from the project page: &quot;Delete RV only&quot; frees the RV, &quot;Delete All&quot; removes both LV and RV.</p>
-            </>
-          ) : (
-            <>
-              {noModelsAvailable && (
-                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-                  <div className="text-xs text-amber-900 dark:text-amber-100">
-                    <p className="font-medium">No segmentation result available</p>
-                    <p className="mt-1">Run MedSAM or UNet segmentation on this project first, then return here to start a reconstruction.</p>
-                  </div>
-                </div>
-              )}
+          {noModelsAvailable && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+              <div className="text-xs text-amber-900 dark:text-amber-100">
+                <p className="font-medium">No segmentation result available</p>
+                <p className="mt-1">Run MedSAM or UNet segmentation on this project first, then return here to start a reconstruction.</p>
+              </div>
+            </div>
+          )}
 
-              <ReconstructionTargetGrid
-                cellState={cellState}
-                selected={selected}
-                onToggle={toggle}
-                onView={onViewReconstruction ? viewTarget : undefined}
-                disabled={isLoading}
-              />
+          <ReconstructionTargetGrid
+            cellState={cellState}
+            selected={selected}
+            onToggle={toggle}
+            onView={onViewReconstruction ? viewTarget : undefined}
+            disabled={isLoading}
+          />
 
-              {anyRvSelected && (
-                <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
-                  <p className="flex items-center gap-1.5 font-semibold text-amber-700 dark:text-amber-400">
-                    <AlertTriangle className="h-3.5 w-3.5" />
-                    RV reconstruction is not validated for clinical use
-                  </p>
-                  <p className="text-muted-foreground">
-                    Research and reference only — not for clinical diagnosis or measurement. Created as a separate
-                    reconstruction; it does not replace the LV result.
-                  </p>
-                </div>
-              )}
+          {anyRvSelected && (
+            <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+              <p className="flex items-center gap-1.5 font-semibold text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                RV reconstruction is not validated for clinical use
+              </p>
+              <p className="text-muted-foreground">
+                Research and reference only — not for clinical diagnosis or measurement. Created as a separate
+                reconstruction; it does not replace the LV result.
+              </p>
+            </div>
+          )}
 
-              {selectedTargets.length > 0 && (
-                <div className="bg-muted/40 space-y-1 rounded-lg p-3 text-sm" aria-live="polite">
-                  <p className="font-medium">
-                    You&apos;ll run {plural(selectedTargets.length, "reconstruction")} (
-                    {[lvCount ? `${lvCount} LV` : null, rvCount ? `${rvCount} RV` : null].filter(Boolean).join(", ")})
-                  </p>
-                  <p className="text-muted-foreground text-xs">GPU jobs run one after another.</p>
-                  <p className="text-muted-foreground text-xs">≈ {minutes} min, excluding mesh export</p>
-                </div>
-              )}
+          {selectedTargets.length > 0 && (
+            <div className="bg-muted/40 space-y-1 rounded-lg p-3 text-sm" aria-live="polite">
+              <p className="font-medium">
+                You&apos;ll run {plural(selectedTargets.length, "reconstruction")} (
+                {[lvCount ? `${lvCount} LV` : null, rvCount ? `${rvCount} RV` : null].filter(Boolean).join(", ")})
+              </p>
+              <p className="text-muted-foreground text-xs">GPU jobs run one after another.</p>
+              <p className="text-muted-foreground text-xs">≈ {minutes} min, excluding mesh export</p>
+            </div>
+          )}
 
-              <ReconstructionAdvancedSettings
-                values={advanced}
-                onChange={setAdvanced}
-                totalFrames={totalFrames}
-                gpuAvailable={gpuAvailable}
-                defaultIterations={defaultIterations}
-                disabled={isLoading}
-              />
-            </>
+          {!nothingToBuild && (
+            <ReconstructionAdvancedSettings
+              values={advanced}
+              onChange={setAdvanced}
+              totalFrames={totalFrames}
+              gpuAvailable={gpuAvailable}
+              defaultIterations={defaultIterations}
+              disabled={isLoading}
+            />
           )}
         </div>
 
         <DialogFooter className="flex-col-reverse gap-2 border-t px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-          {nothingToBuild ? (
-            <Button className="sm:ml-auto" onClick={() => onOpenChange(false)}>
-              Close
+          <p className="text-muted-foreground text-xs" aria-live="polite">
+            {startDisabledReason}
+          </p>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>
+              {nothingToBuild ? "Close" : "Cancel"}
             </Button>
-          ) : (
-            <>
-              <p className="text-muted-foreground text-xs" aria-live="polite">
-                {startDisabledReason}
-              </p>
-              <div className="flex flex-col-reverse gap-2 sm:flex-row">
-                <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>
-                  Cancel
-                </Button>
-                <Button onClick={handleStart} disabled={isLoading || selectedTargets.length === 0}>
-                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {isLoading
-                    ? "Starting…"
-                    : `Start ${selectedTargets.length > 1 ? `${selectedTargets.length} reconstructions` : "reconstruction"}`}
-                </Button>
-              </div>
-            </>
-          )}
+            <Button onClick={handleStart} disabled={isLoading || selectedTargets.length === 0}>
+              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isLoading
+                ? "Starting…"
+                : `Start ${selectedTargets.length > 1 ? `${selectedTargets.length} reconstructions` : "reconstruction"}`}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
