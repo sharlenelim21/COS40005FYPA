@@ -3,7 +3,8 @@
     Builds the VisHeart Windows installer.
 
 .DESCRIPTION
-    Full   = for a new PC: app, models and the UNet Extend Training data pack (needs -PackPath).
+    Full   = for a new PC: app, models and the UNet Extend Training data pack (needs -PackPath; the pack is
+             verified in place and packed into the installer from there).
     Update = for a PC that already has VisHeart: app and models only; the training pack and every per-PC file
              (passwords, trained models, jobs, exports) stay as they are.
 
@@ -104,14 +105,12 @@ try {
     Write-Host ("    {0} files, {1:N2} GB" -f $selection.Count, ($bytes / 1GB))
 
     if ($Variant -eq 'Full') {
-        Step 'Copying and verifying the training data pack'
-        $packTarget = Join-Path $staging 'cardiac-component-segmentation-ai\visheart-training-data'
-        & robocopy $PackPath $packTarget /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Host
-        if ($LASTEXITCODE -ge 8) { Stop-Build "Copying the training pack failed (robocopy exit $LASTEXITCODE)." }
+        # The pack goes into the installer straight from -PackPath (no 4 GB copy); check it file by file first.
+        Step 'Verifying the training data pack'
         $python = if (Get-Command py -ErrorAction SilentlyContinue) { @('py', '-3') } else { @('python') }
         $packer = Join-Path $appRoot 'visheart-retraining\pack_training_data.py'
-        & $python[0] @($python | Select-Object -Skip 1) $packer verify $packTarget
-        if ($LASTEXITCODE -ne 0) { Stop-Build 'The copied training pack failed pack_training_data.py verify.' }
+        & $python[0] @($python | Select-Object -Skip 1) $packer verify $PackPath
+        if ($LASTEXITCODE -ne 0) { Stop-Build 'The training pack failed pack_training_data.py verify; make a new pack.' }
     }
 
     Step 'Writing release.env'
@@ -123,7 +122,9 @@ try {
     if (-not $iscc) { Stop-Build 'Inno Setup 6.5.2+ not found (ISCC.exe). Install it with: winget install -e --id JRSoftware.InnoSetup' }
     $target = Join-Path $outDir "VisHeart-$Variant-$version"
     if (Test-Path $target) { Remove-Item -Recurse -Force $target }
-    & $iscc "/DVariant=$Variant" "/DAppVersion=$version" "/DStagingDir=$staging" "/O$target" (Join-Path $installerDir 'visheart.iss')
+    $isccArgs = @("/DVariant=$Variant", "/DAppVersion=$version", "/DStagingDir=$staging", "/O$target")
+    if ($Variant -eq 'Full') { $isccArgs += "/DPackDir=$((Resolve-Path $PackPath).Path)" }
+    & $iscc @isccArgs (Join-Path $installerDir 'visheart.iss')
     if ($LASTEXITCODE -ne 0) { Stop-Build "Inno Setup failed (exit $LASTEXITCODE)." }
 
     Step "Done: $target"
