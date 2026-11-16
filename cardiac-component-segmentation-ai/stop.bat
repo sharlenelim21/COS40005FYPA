@@ -10,20 +10,23 @@ echo Stopping VisHeart from root directory...
 echo Navigating to visheart-local-deployment...
 echo.
 
+set "NO_PAUSE="
+if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
+
 cd /d "%~dp0visheart-local-deployment"
 
 if not exist "stop.bat" (
     echo ERROR: visheart-local-deployment\stop.bat not found!
     echo Please ensure you are running this from the monorepo root directory.
-    pause
+    if not defined NO_PAUSE pause
     exit /b 1
 )
 
-call stop.bat
+call stop.bat %*
 
 if errorlevel 1 (
     echo.
     echo Error: Failed to stop VisHeart
-    pause
+    if not defined NO_PAUSE pause
     exit /b 1
 )
