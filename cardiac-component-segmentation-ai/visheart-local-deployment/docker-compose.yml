@@ -1,7 +1,7 @@
 # Docker Compose for LOCAL Deployment - Combined Container Version
 
 x-gpu-environment: &gpu-env
-  JWT_SECRET: dev-gpu-secret
+  JWT_SECRET: ${VH_JWT_SECRET:-dev-gpu-secret}
   YOLO_MODEL_NAME: 24April2025-single-stage-usethis.pt
   MEDSAM_MODEL_NAME: medsam_vit_b.pth
   FOURD_RECONSTRUCTION_MODEL_NAME: fourd_model_epoch_250.pth
@@ -11,7 +11,7 @@ x-gpu-environment: &gpu-env
   # An absolute path is honoured as-is, which keeps the weights out of the shared git repo.
   # RV output is RESEARCH/REFERENCE ONLY and is not validated for clinical use.
   FOURD_RV_MODEL_NAME: /app/app/models/fourd_rv_epoch_50.pth
-  GPU_ACCESS_SECRET: HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75
+  GPU_ACCESS_SECRET: ${VH_GPU_ACCESS_SECRET:-HMYNJC4IJESDY25BAIUPB43ZS3GDNXMPDOKQW24IL4Z5T2U3KOZBP43GEJLZHY75}
   SERVER_USERNAME: visheart-gpu-inference
   ALLOWED_NODE_USERNAME: visheart-node-server
   ENV_TYPE: development
@@ -35,15 +35,15 @@ services:
   # ============================================
   visheart-app:
     # image: sharlene21/visheart-local:1.5.0
-    image: sharlene21/visheart-local:1.5.0
+    image: ${VH_APP_IMAGE:-sharlene21/visheart-local:1.5.0}
     container_name: visheart-local
     extra_hosts:
       # Docker Desktop provides host.docker.internal; Linux Docker Engine needs this line (harmless on Desktop).
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     ports:
-      - "3000:3000"  # Frontend
-      - "5000:5000"  # Backend API
+      - "${VH_BIND:+${VH_BIND}:}3000:3000"  # Frontend
+      - "${VH_BIND:+${VH_BIND}:}5000:5000"  # Backend API
     environment:
       # ========== Backend Configuration ==========
       NODE_ENV: development
@@ -60,15 +60,17 @@ services:
       # and deleted the just-uploaded S3 TAR on every reconstruction
       # (reported live, 2026-10). The mongodb service below now runs as a
       # single-node replica set (rs0) to actually support this.
-      MONGODB_URI: mongodb://admin:P%40ssw0rd123%21@mongodb:27017/visheart?authSource=admin&replicaSet=rs0
+      MONGODB_URI: mongodb://admin:${VH_MONGO_PASSWORD_URL:-P%40ssw0rd123%21}@mongodb:27017/visheart?authSource=admin&replicaSet=rs0
       
       # Redis Configuration
       REDIS_HOST: redis
       REDIS_PORT: 6379
       
       # Session Configuration
-      SESSION_SECRET: LOCAL-SESSION-SECRET-CHANGE-IN-PRODUCTION-12345
+      SESSION_SECRET: ${VH_SESSION_SECRET:-LOCAL-SESSION-SECRET-CHANGE-IN-PRODUCTION-12345}
       SESSION_NAME: visheart.sid
+      # Password of the "admin" account the backend creates on first start (database.ts).
+      ADMIN_PASS: ${VH_ADMIN_PASS:-P@ssw0rd123!}
       SESSION_MAX_AGE: 86400000
       
       # S3/MinIO Configuration
@@ -76,11 +78,11 @@ services:
       AWS_BUCKET_NAME: visheart-bucket
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin123
+      AWS_SECRET_ACCESS_KEY: ${VH_MINIO_PASSWORD:-minioadmin123}
       S3_ENDPOINT: http://minio:9000
       S3_PUBLIC_URL: http://localhost:9000
       S3_ACCESS_KEY_ID: minioadmin
-      S3_SECRET_ACCESS_KEY: minioadmin123
+      S3_SECRET_ACCESS_KEY: ${VH_MINIO_PASSWORD:-minioadmin123}
       S3_FORCE_PATH_STYLE: "true"
       
       # GPU Service Configuration
@@ -97,11 +99,11 @@ services:
       LOCAL_GPU_API_URL: http://gpu:8001
       MEDSAM_USE_LOCALHOST: "true"
       MEDSAM_LOCAL_BASE_URL: http://gpu:8001
-      GPU_JWT_SECRET: dev-gpu-secret
+      GPU_JWT_SECRET: ${VH_GPU_JWT_SECRET:-dev-gpu-secret}
       GPU_SERVER_URL: gpu
       GPU_SERVER_PORT: 8001
       GPU_SERVER_SSL: "false"
-      GPU_SERVER_AUTH_JWT_SECRET: dev-gpu-secret
+      GPU_SERVER_AUTH_JWT_SECRET: ${VH_GPU_SERVER_AUTH_JWT_SECRET:-dev-gpu-secret}
       GPU_SERVER_ID_FOR_GPU_SERVER: visheart-node
       GPU_SERVER_IDENTITY: visheart-gpu
       GPU_SERVER_JWT_REFRESH_INTERVAL: 480000
@@ -118,13 +120,18 @@ services:
       NEXT_PUBLIC_ENV: development
       NEXT_PUBLIC_LANDMARK_USE_STUB: "false"
       NEXT_PUBLIC_LANDMARK_ENDPOINT: /landmark-detection
-      ADMIN_SUPPORT_EMAIL: "meiqiliew334@gmail.com"
-      SMTP_FROM: meiqiliew334@gmail.com
-      SMTP_HOST: "smtp.gmail.com"
+      # FAQ "send a message" mail. No credentials live in this file: an installed copy
+      # gets them from release.env (installer/smtp.release.env, git-ignored). A developer
+      # can put VH_SUPPORT_EMAIL / VH_SMTP_USER / VH_SMTP_PASS in a local, git-ignored
+      # release.env. Without an SMTP user, SMTP_HOST stays empty and the backend only
+      # logs FAQ messages (support_routes.ts) instead of failing to send them.
+      ADMIN_SUPPORT_EMAIL: "${VH_SUPPORT_EMAIL:-}"
+      SMTP_FROM: "${VH_SUPPORT_EMAIL:-}"
+      SMTP_HOST: "${VH_SMTP_USER:+smtp.gmail.com}"
       SMTP_PORT: "465"
       SMTP_SECURE: "true"
-      SMTP_USER: "meiqiliew334@gmail.com"
-      SMTP_PASS: "ysyy fkyn xsoz jhvf"
+      SMTP_USER: "${VH_SMTP_USER:-}"
+      SMTP_PASS: "${VH_SMTP_PASS:-}"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -203,10 +210,10 @@ services:
     # by the mongodb-keyfile-init service above if it doesn't already exist.
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/data/configdb/mongo-keyfile"]
     ports:
-      - "27017:27017"
+      - "${VH_BIND:+${VH_BIND}:}27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: P@ssw0rd123!
+      MONGO_INITDB_ROOT_PASSWORD: ${VH_MONGO_PASSWORD:-P@ssw0rd123!}
       MONGO_INITDB_DATABASE: visheart
     volumes:
       - mongodb_data:/data/db
@@ -219,7 +226,7 @@ services:
       # error is swallowed so the check still falls through to the ping),
       # so nothing else needs a separate one-shot init step. Reports
       # healthy only once the single node has actually become PRIMARY.
-      test: ["CMD-SHELL", "mongosh -u \"admin\" -p \"P@ssw0rd123!\" --authenticationDatabase admin --quiet --eval \"try { rs.status() } catch(e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }; quit(db.hello().isWritablePrimary ? 0 : 1)\""]
+      test: ["CMD-SHELL", "mongosh -u \"admin\" -p \"${VH_MONGO_PASSWORD:-P@ssw0rd123!}\" --authenticationDatabase admin --quiet --eval \"try { rs.status() } catch(e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }; quit(db.hello().isWritablePrimary ? 0 : 1)\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -238,7 +245,7 @@ services:
     # nodemon) can reach it at localhost:6379 — every other dependency
     # (Mongo, MinIO, GPU) already had a host port, only Redis didn't.
     ports:
-      - "6379:6379"
+      - "${VH_BIND:+${VH_BIND}:}6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -258,16 +265,16 @@ services:
   # root so a minio_data volume made by the old image (owned by root) stays readable. This release has
   # no web console, so port 9001 serves nothing.
   minio:
-    image: bitnamilegacy/minio:latest
+    image: ${VH_MINIO_IMAGE:-bitnamilegacy/minio:latest}
     container_name: visheart-minio
     restart: unless-stopped
     user: "0"
     ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Console (not served by this image)
+      - "${VH_BIND:+${VH_BIND}:}9000:9000"  # API
+      - "${VH_BIND:+${VH_BIND}:}9001:9001"  # Console (not served by this image)
     environment:
       MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_ROOT_PASSWORD: ${VH_MINIO_PASSWORD:-minioadmin123}
     volumes:
       - minio_data:/bitnami/minio/data
     networks:
@@ -283,7 +290,7 @@ services:
   # MinIO Bucket Setup
   # ============================================
   minio-setup:
-    image: bitnamilegacy/minio-client:latest
+    image: ${VH_MINIO_CLIENT_IMAGE:-bitnamilegacy/minio-client:latest}
     container_name: visheart-minio-setup
     depends_on:
       minio:
@@ -291,9 +298,9 @@ services:
     # Retry: the first connection was once refused although MinIO already reported healthy.
     entrypoint: >
       /bin/sh -c "
-      until mc alias set myminio http://minio:9000 minioadmin minioadmin123; do sleep 2; done;
+      until mc alias set myminio http://minio:9000 minioadmin ${VH_MINIO_PASSWORD:-minioadmin123}; do sleep 2; done;
       mc mb myminio/visheart-bucket --ignore-existing;
-      mc anonymous set download myminio/visheart-bucket;
+      mc anonymous set ${VH_MINIO_ANON:-download} myminio/visheart-bucket;
       exit 0;
       "
     networks:
@@ -303,7 +310,7 @@ services:
   # GPU Inference Service (PROFILE: CPU)
   # ============================================
   gpu-cpu:
-    image: sharlene21/visheart-gpu:latest
+    image: ${VH_GPU_IMAGE:-sharlene21/visheart-gpu:latest}
     container_name: visheart-gpu-cpu
     extra_hosts:
       # Docker Desktop provides host.docker.internal; Linux Docker Engine needs this line (harmless on Desktop).
@@ -314,7 +321,7 @@ services:
       # The prebuilt image's start_server.py binds uvicorn on port 8001.
       # If you rebuild the GPU image from local source (which uses 8011),
       # bump both this mapping and the visheart-app env block in lockstep.
-      - "8001:8001"
+      - "${VH_BIND:+${VH_BIND}:}8001:8001"
     environment:
       <<: *gpu-env
       USE_GPU: "false"
@@ -390,7 +397,7 @@ services:
   # GPU Inference Service (PROFILE: NVIDIA)
   # ============================================
   gpu-nvidia:
-    image: sharlene21/visheart-gpu:latest
+    image: ${VH_GPU_IMAGE:-sharlene21/visheart-gpu:latest}
     container_name: visheart-gpu-nvidia
     extra_hosts:
       # Docker Desktop provides host.docker.internal; Linux Docker Engine needs this line (harmless on Desktop).
@@ -399,7 +406,7 @@ services:
     restart: unless-stopped
     ports:
       # See gpu-cpu service for the 8001-vs-8011 explanation.
-      - "8001:8001"
+      - "${VH_BIND:+${VH_BIND}:}8001:8001"
     deploy:
       resources:
         reservations:
