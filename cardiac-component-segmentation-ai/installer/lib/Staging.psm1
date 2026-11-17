@@ -69,13 +69,22 @@ function Get-StagingSelection {
     return $result.ToArray()
 }
 
-function Test-ImageOnRegistry {
-    # True when the registry has this reference. `docker manifest inspect` asks the registry directly, so the
-    # Docker daemon does not have to be running.
-    param([string]$Reference)
+function Invoke-ManifestInspect([string]$Reference) {
+    # Exit code of `docker manifest inspect`, which asks the registry directly (no running Docker daemon needed).
     $ErrorActionPreference = 'Continue'
     & docker manifest inspect $Reference *> $null
-    return ($LASTEXITCODE -eq 0)
+    return $LASTEXITCODE
+}
+
+function Test-ImageOnRegistry {
+    # True when the registry has this reference. Tries three times, so a dropped connection or a Docker Hub rate
+    # limit does not fail the build.
+    param([string]$Reference, [int]$DelaySec = 10)
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        if ((Invoke-ManifestInspect $Reference) -eq 0) { return $true }
+        if ($attempt -lt 3 -and $DelaySec -gt 0) { Start-Sleep -Seconds $DelaySec }
+    }
+    return $false
 }
 
 function Test-PinnedReference([string]$Reference) {

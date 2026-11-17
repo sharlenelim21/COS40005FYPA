@@ -74,7 +74,8 @@ try {
     } else {
         $bad = @(Test-ReleaseImages $images)
         if ($bad.Count -gt 0) {
-            Stop-Build ("Image $($bad[0]) is not on Docker Hub or is not pinned. Ask the team lead to push it, or fix installer/release.json." +
+            Stop-Build ("Image $($bad[0]) is not pinned, or Docker Hub did not confirm it after three tries. Check the internet " +
+                "connection and run again; if it still fails, ask the team lead to push the image or fix installer/release.json." +
                 $(if ($bad.Count -gt 1) { " Also: " + ($bad[1..($bad.Count - 1)] -join ', ') } else { '' }))
         }
     }

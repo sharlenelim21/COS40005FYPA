@@ -113,6 +113,26 @@ Describe 'Get-StagingSelection' {
     Remove-Item -Recurse -Force $repo
 }
 
+Describe 'Test-ImageOnRegistry' {
+    # A dropped connection or a Docker Hub rate limit must not fail a release build that takes an hour.
+    Context 'the registry fails twice, then answers' {
+        $global:VhInspectCalls = 0
+        Mock -ModuleName Staging Invoke-ManifestInspect { $global:VhInspectCalls++; if ($global:VhInspectCalls -lt 3) { 1 } else { 0 } }
+        It 'retries and reports the image as present' {
+            Test-ImageOnRegistry 'example/app:1.0' -DelaySec 0 | Should Be $true
+            $global:VhInspectCalls | Should Be 3
+        }
+    }
+
+    Context 'the image is really missing' {
+        Mock -ModuleName Staging Invoke-ManifestInspect { 1 }
+        It 'gives up after three tries' {
+            Test-ImageOnRegistry 'example/app:1.0' -DelaySec 0 | Should Be $false
+            Assert-MockCalled -ModuleName Staging Invoke-ManifestInspect -Times 3 -Exactly -Scope It
+        }
+    }
+}
+
 Describe 'Test-ReleaseImages' {
     Mock -ModuleName Staging Test-ImageOnRegistry { $Reference -ne 'sharlene21/visheart-gpu:9.9.9' }
 
