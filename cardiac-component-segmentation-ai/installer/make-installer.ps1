@@ -61,6 +61,10 @@ try {
             Stop-Build "$model is missing from visheart-inference-gpu\app\models (it is not in git); copy it there first."
         }
     }
+    $unexpected = @(Get-UnexpectedModelFiles $repoRoot)
+    if ($unexpected.Count -gt 0) {
+        Stop-Build ("visheart-inference-gpu\app\models holds files that are not shipped models (a test or trained model?). Move them out of that folder, then build again:`n  " + ($unexpected -join "`n  "))
+    }
     if ($Variant -eq 'Full' -and -not (Test-ModelMatchesPack (Join-Path $models 'unet.pth') $PackPath)) {
         Stop-Build 'unet.pth does not match the training pack (PACKED.json). Re-pack with pack_training_data.py or ship the matching model.'
     }

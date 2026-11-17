@@ -73,6 +73,7 @@ class PackTrainingData(unittest.TestCase):
         write(root / "evidence" / "run-1" / "public-cand.json", json.dumps(report).encode("utf-8"))
         write(root / "evidence" / "run-1" / "notes.md", b"private notes")
         write(root / "examples" / "cand" / "index.json", b"{}")
+        write(root / "examples" / "orig" / "index.json", b"{}")
         write(root / "examples" / "cand" / "0" / "image_0.png", b"png")
         write(root / "jobs" / "worker.log", b"log")
         write(root / "exports" / "export.npz", b"export")
@@ -88,12 +89,11 @@ class PackTrainingData(unittest.TestCase):
         v2 = "2023_FRGS_HeartDigitalTwin/segmentation/v2-unet"
         self.assertEqual(chosen, sorted([
             "versions/registry.json", "versions/frozen_holdout.json", "versions/frozen_slices.npz",
-            "versions/orig.pth", "versions/cand.pth", "versions/cand.json",
+            "versions/orig.pth",
             f"{v2}/train_runner.py", f"{v2}/requirements.txt", f"{v2}/models/unet2d.py", f"{v2}/utils/preprocess.py",
             f"{v2}/data/testing-acdc/images/p1.nii.gz", f"{v2}/data/testing-acdc/masks/p1_gt.nii.gz",
             f"{v2}/data/training-acdc/images/p2.nii.gz",
-            "evaluations/cand-public.json", "evaluations/from-evidence-run-1-public-cand.json",
-            "examples/cand/index.json", "examples/cand/0/image_0.png",
+            "evaluations/from-evidence-run-1-public-cand.json", "examples/orig/index.json",
             "repo-models/unet.pth",
         ]))
 
@@ -101,16 +101,44 @@ class PackTrainingData(unittest.TestCase):
         manifest = packing.pack(self.root, self.out, self.v2, log=lambda *_: None)
         self.assertEqual(manifest["old_root"], str(self.root))
         self.assertEqual(manifest["old_models_dir"], str(self.models))
-        self.assertEqual(len(manifest["files"]), 18)
+        self.assertEqual(len(manifest["files"]), 14)
         self.assertTrue((self.out / packing.PACK_MANIFEST).exists())
         self.assertFalse((self.out / "evidence").exists())               # only the reports, copied into evaluations
         self.assertEqual(packing.verify(self.out), [])
-        (self.out / "versions" / "cand.pth").write_bytes(b"damaged in transit")
-        (self.out / "examples" / "cand" / "index.json").unlink()
+        (self.out / "versions" / "orig.pth").write_bytes(b"damaged in transit")
+        (self.out / "examples" / "orig" / "index.json").unlink()
         problems = packing.verify(self.out)
         self.assertEqual(len(problems), 2)
-        self.assertTrue(any("versions/cand.pth" in problem for problem in problems))
-        self.assertTrue(any("examples/cand/index.json" in problem and "missing" in problem for problem in problems))
+        self.assertTrue(any("versions/orig.pth" in problem for problem in problems))
+        self.assertTrue(any("examples/orig/index.json" in problem and "missing" in problem for problem in problems))
+
+    def test_trained_versions_stay_on_the_computer_that_trained_them(self):
+        registry_file = self.root / "versions" / "registry.json"
+        registry = json.loads(registry_file.read_text(encoding="utf-8"))
+        registry["active"] = "cand"
+        registry["history"] = [{"action": "switch", "label": "cand"}]
+        registry_file.write_text(json.dumps(registry), encoding="utf-8")
+        packing.pack(self.root, self.out, self.v2, log=lambda *_: None)
+        packed = json.loads((self.out / "versions" / "registry.json").read_text(encoding="utf-8"))
+        self.assertEqual(list(packed["versions"]), ["orig"])
+        self.assertEqual(packed["active"], "orig")
+        self.assertEqual(packed["history"], [])
+        self.assertFalse((self.out / "versions" / "cand.pth").exists())
+        self.assertEqual(packing.verify(self.out), [])
+        self.assertEqual(json.loads(registry_file.read_text(encoding="utf-8"))["active"], "cand")   # the source is untouched
+
+    def test_an_old_pack_that_holds_trained_versions_does_not_verify(self):
+        packing.pack(self.root, self.out, self.v2, log=lambda *_: None)
+        registry_file = self.out / "versions" / "registry.json"
+        registry = json.loads(registry_file.read_text(encoding="utf-8"))
+        registry["versions"]["test-loop"] = {"file": "test-loop.pth", "sha256": "0" * 64, "status": "candidate"}
+        registry_file.write_text(json.dumps(registry), encoding="utf-8")
+        manifest = json.loads((self.out / packing.PACK_MANIFEST).read_text(encoding="utf-8"))
+        manifest["files"]["versions/registry.json"] = sha256_file(registry_file)
+        (self.out / packing.PACK_MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+        problems = packing.verify(self.out)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("test-loop", problems[0])
 
     def test_it_never_packs_into_a_folder_that_holds_something(self):
         write(self.out / "keep.txt", b"someone's file")

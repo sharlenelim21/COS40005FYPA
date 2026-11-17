@@ -33,6 +33,29 @@ $script:ExcludedDirPaths = @(
 )
 # Files that are per PC or secret, never shipped.
 $script:ExcludedFileNames = @('secrets.env', 'release.env', '.env', 'FIRST-LOGIN.txt', 'database.owner')
+# The only files and folders in visheart-inference-gpu\app\models that ship. Anything else there (a test checkpoint,
+# a version trained on the build PC) stops the build, so it can never reach users. Keep in step with the
+# "app/models" lines of visheart-inference-gpu\.dockerignore, which keep the same files out of the GPU image.
+$script:ShippedModelNames = @(
+    '24April2025-single-stage-usethis.engine', '24April2025-single-stage-usethis.onnx',
+    '24April2025-single-stage-usethis.pt', 'fourd_model_epoch_250.pth', 'fourd_rv_epoch_50.pth',
+    'medsam_vit_b.pth', 'unet.pth', 'atlas', 'atlas_rv'
+)
+
+function Get-ShippedModelNames { return $script:ShippedModelNames }
+
+function Get-UnexpectedModelFiles {
+    # Names of the files and folders in app\models that would ship but are not shipped models. The folders staging
+    # already leaves out (active, the atlas backup) are not reported.
+    param([string]$RepoRoot)
+    $modelsRel = "$($script:App)\visheart-inference-gpu\app\models"
+    $models = Join-Path $RepoRoot $modelsRel
+    if (-not (Test-Path $models)) { return @() }
+    return @(Get-ChildItem -LiteralPath $models -Force | Where-Object {
+        $script:ShippedModelNames -notcontains $_.Name -and
+        -not (Test-Excluded (Join-Path $modelsRel $_.Name) $_.PSIsContainer)
+    } | ForEach-Object { $_.Name })
+}
 
 function Test-Excluded([string]$Relative, [bool]$IsDirectory) {
     $name = Split-Path -Leaf $Relative
@@ -176,5 +199,5 @@ function Find-InnoCompiler {
     return $unknown
 }
 
-Export-ModuleMember -Function Get-StagingSelection, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack,
+Export-ModuleMember -Function Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack,
     Write-ReleaseEnv, Get-InnoCandidates, Get-FileVersion, Find-InnoCompiler

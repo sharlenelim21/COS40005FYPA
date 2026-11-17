@@ -26,7 +26,7 @@ Find the folder you changed, then do what the table says.
 | `visheart-frontend` (any page or component) | **not shipped as files.** The frontend is built into the Docker image `sharlene21/visheart-local` | Build and push a new image, then name it in `release.json` (section 3). |
 | Backend `package.json` (a new npm package) | the image holds `node_modules` | New image (section 3). |
 | GPU Python packages (`requirements`) | the image holds them | New GPU image, pushed with a version tag; put it in `release.json` as `VH_GPU_IMAGE` (section 3). |
-| `app/models/*.pth` | shipped from the build PC's folder (the models are not in git) | Put the new file in `visheart-inference-gpu/app/models` on the build PC. Do **not** replace `unet.pth`: it is UNet Extend Training's registered original, and an update never overwrites it. |
+| `app/models/*.pth` | shipped from the build PC's folder (the models are not in git) | Put the new file in `visheart-inference-gpu/app/models` on the build PC, and add its name to `$ShippedModelNames` in `installer/lib/Staging.psm1` **and** to the `app/models` lines of `visheart-inference-gpu/.dockerignore`. Only listed files ship or go into the GPU image. Do **not** replace `unet.pth`: it is UNet Extend Training's registered original, and an update never overwrites it. |
 | UNet Extend Training data (versions, datasets) | in the Full installer only, from the training pack | Make a new pack (section 4) and build a Full installer. |
 
 ## 2. One-time setup of the build PC
@@ -90,12 +90,19 @@ Then build the Full installer with `-PackPath F:\visheart-training-pack`. The `u
 one the pack was made with; `make-installer` checks this. An Update installer never ships the pack, and a PC that
 already has a pack keeps its own.
 
+The pack holds the **original version only**. Versions trained on your PC (candidates, test runs, the one in use)
+stay on your PC: the packed registry lists the original alone, in use, so every installed PC starts clean and shows
+only the versions it trains itself. A pack made before this rule still lists trained versions; it does not verify,
+and `make-installer` refuses it. Make a new pack.
+
 ## 5. When the build stops
 
 | Message | Meaning |
 |---|---|
 | `These shipped files have uncommitted changes` | Commit or stash the listed files. |
 | `<model> is missing from visheart-inference-gpu\app\models` | Copy the model files from the team's drive (section 2). |
+| `app\models holds files that are not shipped models` | A test or trained model is in that folder. Move it out. A real new model: see section 1. |
+| `The training pack failed pack_training_data.py verify` | If it lists `versions trained on another computer`, the pack is from before trained versions were left out. Make a new pack (section 4). |
 | `unet.pth does not match the training pack` | Make a new pack, or use the `unet.pth` the pack was made with. |
 | `Image ... is not pinned, or Docker Hub did not confirm it` | Check the internet connection. If it still fails, the image in `release.json` was never pushed, or it uses `latest`. |
 | `installer/smtp.release.env` missing or incomplete | Create it (section 2). |

@@ -54,7 +54,8 @@ Add `-ReplaceOriginalModel` to replace a different `unet.pth` without asking. It
 ## Before a demo
 
 - Run `start.bat` and wait for "The training service is running on http://127.0.0.1:8010".
-- Open UNet Extend Training. The Results tab should list the versions, with the original in use.
+- Open UNet Extend Training. The Results tab should list only the original version, in use. Versions trained on the
+  computer that made the pack stay there; a pack that still holds them (made before this rule) does not verify.
 - Training runs on the CPU and takes about 40 minutes for the default recipe. Start it early, or show a version that
   has already been trained.
 - Training uses the corrections saved by the account that is signed in, from the database this VisHeart uses.

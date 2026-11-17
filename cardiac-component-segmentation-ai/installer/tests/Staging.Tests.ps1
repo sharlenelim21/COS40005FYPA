@@ -114,6 +114,29 @@ Describe 'Get-StagingSelection' {
     Remove-Item -Recurse -Force $repo
 }
 
+Describe 'Get-UnexpectedModelFiles' {
+    It 'the usual models folder has nothing unexpected' {
+        $repo = New-FakeRepo
+        @(Get-UnexpectedModelFiles $repo).Count | Should Be 0
+        Remove-Item -Recurse -Force $repo
+    }
+
+    It 'a trained or test model in the models folder is reported' {
+        $repo = New-FakeRepo
+        $models = Join-Path $repo 'cardiac-component-segmentation-ai\visheart-inference-gpu\app\models'
+        Set-Content (Join-Path $models 'unet-ft-loop1.pth') 'x'
+        New-Item -ItemType Directory (Join-Path $models 'experiments') -Force | Out-Null
+        Set-Content (Join-Path $models 'experiments\try.pth') 'x'
+        $found = @(Get-UnexpectedModelFiles $repo | Sort-Object)
+        ($found -join ', ') | Should Be 'experiments, unet-ft-loop1.pth'
+        Remove-Item -Recurse -Force $repo
+    }
+
+    It 'every shipped model name is a plain file or folder name' {
+        foreach ($name in (Get-ShippedModelNames)) { $name | Should Not Match '[\\/*?]' }
+    }
+}
+
 Describe 'Test-ImageOnRegistry' {
     # A dropped connection or a Docker Hub rate limit must not fail a release build that takes an hour.
     Context 'the registry fails twice, then answers' {
