@@ -214,4 +214,21 @@ Describe 'Find-InnoCompiler' {
         Mock -ModuleName Staging Get-FileVersion { if ($Path -like 'C:\new\*') { [version]'6.5.4' } else { [version]'6.2.0' } }
         Find-InnoCompiler | Should Be 'C:\new\ISCC.exe'
     }
+
+    # Inno Setup 6.7 ships ISCC.exe with no version resource (it reads as 0.0.0); visheart.iss checks the version itself.
+    Context 'a compiler without version information' {
+        Mock -ModuleName Staging Get-InnoCandidates { @('C:\unknown\ISCC.exe') }
+        Mock -ModuleName Staging Get-FileVersion { [version]'0.0.0' }
+        It 'is accepted' {
+            Find-InnoCompiler | Should Be 'C:\unknown\ISCC.exe'
+        }
+    }
+
+    Context 'a known 6.5.2+ compiler and one without version information' {
+        Mock -ModuleName Staging Get-InnoCandidates { @('C:\unknown\ISCC.exe', 'C:\new\ISCC.exe') }
+        Mock -ModuleName Staging Get-FileVersion { if ($Path -like 'C:\new\*') { [version]'6.5.4' } else { [version]'0.0.0' } }
+        It 'prefers the known one' {
+            Find-InnoCompiler | Should Be 'C:\new\ISCC.exe'
+        }
+    }
 }

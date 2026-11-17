@@ -4,6 +4,7 @@
 
 $stopBat = Join-Path (Split-Path -Parent $PSScriptRoot) 'stop.bat'
 $rootStopBat = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'stop.bat'
+$rootStartBat = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'start.bat'
 
 # A tiny console program standing in for docker.exe: it appends "docker <command line args>" to the file named in
 # VH_STUB_LOG and exits 1, as docker does when Docker Desktop is not running.
@@ -31,6 +32,9 @@ function New-StopTree([switch]$WithEnvFiles, [switch]$TrainingRunning) {
     New-Item -ItemType Directory $deploy, $bin | Out-Null
     Copy-Item $stopBat $deploy
     Copy-Item $rootStopBat $root
+    Copy-Item $rootStartBat $root
+    # Stub deployment start.bat: records that the top-level start.bat reached it, and with which arguments.
+    Set-Content (Join-Path $deploy 'start.bat') "@echo deploy-start %*>> `"$root\calls.txt`"" -Encoding ASCII
     # Stub docker.exe (an .exe like the real one: a batch file calling a .cmd without `call` would never return).
     Copy-Item $script:DockerStubExe (Join-Path $bin 'docker.exe')
     if ($WithEnvFiles) {
@@ -56,6 +60,8 @@ function Invoke-StopBat([string]$Root, [string]$Arguments, [string]$Script = 'vi
     $psi.EnvironmentVariables['PATH'] = "$Root\bin;" + $env:PATH
     $psi.EnvironmentVariables.Remove('STOP_TRAINING')
     $psi.EnvironmentVariables['VH_STUB_LOG'] = "$Root\calls.txt"
+    # Some shells set this, and then cmd no longer runs a bare "stop.bat" from the current folder.
+    $psi.EnvironmentVariables['NoDefaultCurrentDirectoryInExePath'] = '1'
     $p = [System.Diagnostics.Process]::Start($psi)
     $outTask = $p.StandardOutput.ReadToEndAsync()
     $finished = $p.WaitForExit(20000)
@@ -79,7 +85,8 @@ Describe 'stop.bat' {
         $root = New-StopTree
         try {
             $r = Invoke-StopBat $root ''
-            $r.Finished | Should Be $false
+            # Whether pause blocks on a redirected stdin depends on the host, so check that it ran.
+            $r.Output -match 'Press any key' | Should Be $true
         } finally { Remove-Item -Recurse -Force $root }
     }
 
@@ -119,6 +126,18 @@ Describe 'stop.bat' {
             $r = Invoke-StopBat $root '--no-pause' 'stop.bat'
             $r.Finished | Should Be $true
             $r.ExitCode | Should Be 1
+            @($r.Calls | Where-Object { $_ -like 'docker compose*down*' }).Count -gt 0 | Should Be $true
+        } finally { Remove-Item -Recurse -Force $root }
+    }
+}
+
+Describe 'top-level start.bat' {
+    It 'runs visheart-local-deployment\start.bat with the same arguments' {
+        $root = New-StopTree
+        try {
+            $r = Invoke-StopBat $root '--cpu' 'start.bat'
+            $r.Finished | Should Be $true
+            @($r.Calls | Where-Object { $_ -eq 'deploy-start --cpu' }).Count | Should Be 1
         } finally { Remove-Item -Recurse -Force $root }
     }
 }

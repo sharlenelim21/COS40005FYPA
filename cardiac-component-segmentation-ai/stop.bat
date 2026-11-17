@@ -22,7 +22,7 @@ if not exist "stop.bat" (
     exit /b 1
 )
 
-call stop.bat %*
+call "%~dp0visheart-local-deployment\stop.bat" %*
 
 if errorlevel 1 (
     echo.

@@ -156,10 +156,15 @@ function Get-FileVersion([string]$Path) {
 
 function Find-InnoCompiler {
     # Path of an ISCC.exe from Inno Setup 6.5.2 or later (needed for installers over 2 GB), or $null.
+    # Inno Setup 6.7+ ships ISCC.exe with no version resource (0.0.0): such a compiler is used only when no
+    # known-good one exists, and visheart.iss then refuses to compile on anything older than 6.5.2.
+    $unknown = $null
     foreach ($candidate in Get-InnoCandidates) {
-        if ((Get-FileVersion $candidate) -ge [version]'6.5.2') { return $candidate }
+        $version = Get-FileVersion $candidate
+        if ($version -ge [version]'6.5.2') { return $candidate }
+        if ($version -eq [version]'0.0.0' -and -not $unknown) { $unknown = $candidate }
     }
-    return $null
+    return $unknown
 }
 
 Export-ModuleMember -Function Get-StagingSelection, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack,

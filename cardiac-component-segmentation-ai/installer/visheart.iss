@@ -3,6 +3,9 @@
 ; Full installs the app, models and the UNet Extend Training data pack; Update installs the app and models only.
 ; Both share one AppId, so a newer installer upgrades an existing install in place.
 
+#if Ver < EncodeVer(6, 5, 2)
+  #error Inno Setup 6.5.2 or later is needed (older versions cannot build installers over 2 GB).
+#endif
 #ifndef Variant
   #define Variant "Update"
 #endif
