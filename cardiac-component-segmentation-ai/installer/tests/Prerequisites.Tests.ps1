@@ -84,6 +84,23 @@ Describe 'Get-VisHeartPrerequisites' {
             $c.Message | Should Match '40 GB'
         }
     }
+
+    # An update over an existing install: its images and training data already take their space.
+    Context 'updating an existing install with 20 GB free' {
+        Mock Get-FreeSpaceGB { 20 }
+        It 'does not block' {
+            (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:' -ExistingInstall) 'disk').Status | Should Be 'ok'
+        }
+    }
+
+    Context 'updating an existing install with 5 GB free' {
+        Mock Get-FreeSpaceGB { 5 }
+        It 'blocks and asks for 10 GB' {
+            $c = Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:' -ExistingInstall) 'disk'
+            $c.Status | Should Be 'block'
+            $c.Message | Should Match '10 GB'
+        }
+    }
 }
 
 Describe 'Test-VisHeartPrerequisites.ps1 output' {

@@ -15,6 +15,7 @@ __pycache__/
 
 # One-click installer: per-PC and release secrets, build output
 cardiac-component-segmentation-ai/visheart-local-deployment/secrets.env
+cardiac-component-segmentation-ai/visheart-local-deployment/database.owner
 cardiac-component-segmentation-ai/visheart-local-deployment/release.env
 cardiac-component-segmentation-ai/installer/smtp.release.env
 cardiac-component-segmentation-ai/installer/out/

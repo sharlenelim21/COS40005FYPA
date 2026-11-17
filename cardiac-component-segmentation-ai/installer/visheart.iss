@@ -56,12 +56,16 @@ CloseApplications=no
 Name: "{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\temp_exports"; Flags: uninsneveruninstall
 
 [Files]
-Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; unet.pth is UNet Extend Training's registered original: the training data checks it by hash, so an install never
+; replaces one that is already there (versions.py never rewrites it either).
+Source: "{#StagingDir}\*"; DestDir: "{app}"; Excludes: "{#AppSub}\visheart-inference-gpu\app\models\unet.pth"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\{#AppSub}\visheart-inference-gpu\app\models\unet.pth"; DestDir: "{app}\{#AppSub}\visheart-inference-gpu\app\models"; Flags: onlyifdoesntexist
 #if Variant == "Full"
 ; Installed once: on a PC that already has the pack, the existing files (and the versions trained since) are kept.
 Source: "{#PackDir}\*"; DestDir: "{app}\{#AppSub}\visheart-training-data"; Flags: recursesubdirs createallsubdirs onlyifdoesntexist uninsneveruninstall
 #endif
 Source: "scripts\New-VisHeartSecrets.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "scripts\Protect-VisHeartFolder.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "scripts\Test-VisHeartPrerequisites.ps1"; Flags: dontcopy
 Source: "INSTALL.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -111,18 +115,32 @@ begin
   end;
 end;
 
+{ Folder of an existing VisHeart install (written by Inno Setup when it was installed), or ''. }
+function ExistingInstallDir(): String;
+begin
+  if not RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5}_is1',
+      'Inno Setup: App Path', Result) or not DirExists(Result) then
+    Result := '';
+end;
+
 { Runs installer\scripts\Test-VisHeartPrerequisites.ps1 and decides whether setup may continue. }
 function InitializeSetup(): Boolean;
 var
   Lines: TArrayOfString;
   I, Code: Integer;
-  Line, Name, Status, Blocks, Notes, OutFile: String;
+  Line, Name, Status, Blocks, Notes, OutFile, Existing, Drive: String;
 begin
   Result := True;
   ExtractTemporaryFile('Test-VisHeartPrerequisites.ps1');
   OutFile := ExpandConstant('{tmp}\prerequisites.txt');
+  { An update needs far less free space: the existing install's images and data already take theirs. }
+  Existing := ExistingInstallDir();
+  if Existing <> '' then
+    Drive := ExtractFileDrive(Existing) + ' -ExistingInstall'
+  else
+    Drive := 'C:';
   if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' +
-      ExpandConstant('{tmp}\Test-VisHeartPrerequisites.ps1') + '" -InstallDrive C: -OutText "' + OutFile + '"',
+      ExpandConstant('{tmp}\Test-VisHeartPrerequisites.ps1') + '" -InstallDrive ' + Drive + ' -OutText "' + OutFile + '"',
       '', SW_HIDE, ewWaitUntilTerminated, Code) or not LoadStringsFromFile(OutFile, Lines) then begin
     SuppressibleMsgBox('The VisHeart system check could not run (Windows PowerShell). Setup cannot continue.',
       mbCriticalError, MB_OK, IDOK);
@@ -225,6 +243,14 @@ begin
       '', SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
     SuppressibleMsgBox('VisHeart could not create its passwords (secrets.env). Run installer\New-VisHeartSecrets.ps1 in ' +
       ExpandConstant('{app}') + ' before starting VisHeart, or run this installer again.', mbError, MB_OK, IDOK);
+
+  { Only administrators and docker-users may change VisHeart, and other accounts cannot read its passwords. Done last,
+    after Docker Desktop (which creates docker-users) and secrets.env exist; repeated on every update. }
+  WizardForm.StatusLabel.Caption := 'Protecting the VisHeart folder...';
+  if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\Protect-VisHeartFolder.ps1') +
+      '" -AppDir "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
+    Code := -1;
+  Log('Protect-VisHeartFolder exit code: ' + IntToStr(Code));
 end;
 
 function NeedRestart(): Boolean;
@@ -277,12 +303,15 @@ begin
       if FileExists(Deploy + '\release.env') then Args := Args + ' --env-file "' + Deploy + '\release.env"';
       if FileExists(Deploy + '\secrets.env') then Args := Args + ' --env-file "' + Deploy + '\secrets.env"';
       Args := Args + ' --profile cpu --profile gpu down -v --remove-orphans';
-      if not Exec(ExpandConstant('{cmd}'), Args, Deploy, SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
-        SuppressibleMsgBox('Docker Desktop is not running, so the VisHeart database and stored files could not be deleted. ' +
-          'To delete them later, start Docker Desktop and run:' + #13#10#13#10 +
-          'docker volume rm visheart-local-deployment_mongodb_data visheart-local-deployment_mongodb_config ' +
-          'visheart-local-deployment_redis_data visheart-local-deployment_minio_data visheart-local-deployment_temp_jpeg ' +
-          'visheart-local-deployment_temp_mesh visheart-local-deployment_temp_upload', mbInformation, MB_OK, IDOK);
+      if not Exec(ExpandConstant('{cmd}'), Args, Deploy, SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then begin
+        { The database is still there, so keep everything, its passwords (secrets.env) above all: deleting them would
+          leave a database that a new install of VisHeart cannot open. }
+        DeleteData := False;
+        SuppressibleMsgBox('Docker Desktop is not running, so the VisHeart database could not be deleted. VisHeart''s data ' +
+          'and passwords have been kept in ' + ExpandConstant('{app}') + ', and installing VisHeart again on this PC finds them.' + #13#10#13#10 +
+          'To delete everything: install VisHeart again, start Docker Desktop, then uninstall and choose Yes.',
+          mbInformation, MB_OK, IDOK);
+      end;
     end;
   end;
 

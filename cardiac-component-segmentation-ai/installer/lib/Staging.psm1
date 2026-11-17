@@ -32,7 +32,7 @@ $script:ExcludedDirPaths = @(
     "$($script:App)\visheart-retraining\jobs"
 )
 # Files that are per PC or secret, never shipped.
-$script:ExcludedFileNames = @('secrets.env', 'release.env', '.env', 'FIRST-LOGIN.txt')
+$script:ExcludedFileNames = @('secrets.env', 'release.env', '.env', 'FIRST-LOGIN.txt', 'database.owner')
 
 function Test-Excluded([string]$Relative, [bool]$IsDirectory) {
     $name = Split-Path -Leaf $Relative

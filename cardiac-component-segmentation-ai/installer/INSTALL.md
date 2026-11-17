@@ -34,8 +34,8 @@ After your first login, change the admin password, then delete `FIRST-LOGIN.txt`
 
 ## Updates
 
-Run the newer **VisHeart-Update-<version>.exe** on the same PC. Your patients, accounts, passwords and trained models
-are kept.
+Run the newer **VisHeart-Update-<version>.exe** on the same PC; it needs at least 10 GB free. Your patients, accounts,
+passwords and trained models are kept.
 
 ## Another Windows account
 
@@ -52,8 +52,14 @@ Use **Uninstall VisHeart** in the Start menu, or Windows Settings > Apps. The un
 all VisHeart data:
 
 - **No (default):** patients, accounts and trained models are kept. Installing VisHeart again finds them.
-- **Yes:** everything is deleted and cannot be recovered. Docker Desktop must be running for the database to be
-  deleted.
+- **Yes:** everything is deleted and cannot be recovered. Docker Desktop must be running; if it is not, nothing is
+  deleted and the uninstaller tells you how to finish later.
+
+Only administrators and members of `docker-users` can change the `C:\VisHeart` folder, and other Windows accounts cannot
+read VisHeart's passwords or training data.
+
+If **Start VisHeart** says this PC already has a VisHeart database made by another copy of VisHeart, that data belongs to
+an earlier or developer copy. Ask the VisHeart team before deleting it.
 
 Docker Desktop, WSL2 and Python stay installed; remove them in Windows Settings > Apps if no other program needs them.
 

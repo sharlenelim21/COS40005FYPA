@@ -103,6 +103,14 @@ try {
     $envArgs = @(Get-ComposeEnvArgs $scriptDir)
     if ($envArgs.Count -gt 0) { Write-Log 'Using the installed settings (release.env / secrets.env).' }
 
+    $database = Test-DatabaseVolume $scriptDir
+    if (-not $database.Ok) {
+        Write-Log "This PC already has a VisHeart database ($($database.Volume)) that was made by another copy of VisHeart, with other passwords, so this copy cannot open it."
+        Write-Log "If that data is not needed, delete it (this cannot be undone) in a Command Prompt with:  cd /d `"$scriptDir`" && docker compose --profile cpu --profile gpu down -v  then start VisHeart again."
+        Write-Log 'If it is needed, ask the VisHeart team before doing anything.'
+        exit 7
+    }
+
     if ($ForceCpu) {
         Write-Log 'CPU mode requested (--cpu); skipping GPU detection.'
         $gpuAvailable = $false

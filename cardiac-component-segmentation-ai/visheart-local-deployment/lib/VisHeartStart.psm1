@@ -83,4 +83,25 @@ function Invoke-FirstPull {
     return (Invoke-Docker ($ComposeArgs + @('pull', '--include-deps') + $Services) -Show)
 }
 
-Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull
+function Test-DatabaseVolume {
+    # An installed copy makes new passwords on this PC, but MongoDB keeps the ones its data volume was first created
+    # with. The volume name comes from this folder's name, so a developer copy or an earlier install whose data was
+    # kept without its passwords leaves a volume this copy cannot open. database.owner records that this copy made
+    # its volume; it is written before the first start, so a start that fails halfway is not mistaken for a stranger.
+    # Returns @{ Ok; Volume }.
+    param([string]$DeploymentDir)
+    $project = (Split-Path -Leaf $DeploymentDir).ToLowerInvariant()
+    $volume = "${project}_mongodb_data"
+    $owner = Join-Path $DeploymentDir 'database.owner'
+    if (-not (Test-Path (Join-Path $DeploymentDir 'secrets.env')) -or (Test-Path $owner)) {
+        return @{ Ok = $true; Volume = $volume }
+    }
+    if ((Invoke-Docker @('volume', 'inspect', $volume)) -eq 0) {
+        return @{ Ok = $false; Volume = $volume }
+    }
+    Set-Content -LiteralPath $owner ("Database volume $volume was created by this VisHeart install. Do not delete this file.") -Encoding ASCII
+    return @{ Ok = $true; Volume = $volume }
+}
+
+Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
+    Test-DatabaseVolume

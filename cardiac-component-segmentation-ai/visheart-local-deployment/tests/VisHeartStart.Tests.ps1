@@ -157,3 +157,61 @@ Describe 'Invoke-FirstPull' {
         Invoke-FirstPull $composeArgs @('visheart-app', 'gpu-cpu') | Should Be 18
     }
 }
+
+# An installed copy makes new passwords, but MongoDB keeps the ones its data volume was first created with. A volume
+# left by a developer copy (same folder name, so same volume) or by an earlier install would lock VisHeart out.
+Describe 'Test-DatabaseVolume' {
+    function New-DeployDir([switch]$Installed, [switch]$Marker) {
+        $dir = Join-Path $env:TEMP ("vh-db-" + [guid]::NewGuid()) | Join-Path -ChildPath 'visheart-local-deployment'
+        New-Item -ItemType Directory $dir | Out-Null
+        if ($Installed) { Set-Content (Join-Path $dir 'secrets.env') 'VH_MONGO_PASSWORD=x' }
+        if ($Marker) { Set-Content (Join-Path $dir 'database.owner') 'x' }
+        return $dir
+    }
+
+    Context 'a developer copy (no secrets.env)' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'is fine and asks Docker nothing' {
+            $dir = New-DeployDir
+            try {
+                (Test-DatabaseVolume $dir).Ok | Should Be $true
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It
+            } finally { Remove-Item -Recurse -Force (Split-Path -Parent $dir) }
+        }
+    }
+
+    Context 'an installed copy whose volume does not exist yet' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 1 }
+        It 'is fine, and records that this copy owns the database it is about to create' {
+            $dir = New-DeployDir -Installed
+            try {
+                (Test-DatabaseVolume $dir).Ok | Should Be $true
+                Test-Path (Join-Path $dir 'database.owner') | Should Be $true
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -eq 'volume inspect visheart-local-deployment_mongodb_data' }
+            } finally { Remove-Item -Recurse -Force (Split-Path -Parent $dir) }
+        }
+    }
+
+    Context 'an installed copy that already owns its database' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'is fine' {
+            $dir = New-DeployDir -Installed -Marker
+            try { (Test-DatabaseVolume $dir).Ok | Should Be $true }
+            finally { Remove-Item -Recurse -Force (Split-Path -Parent $dir) }
+        }
+    }
+
+    Context 'an installed copy finding a database it did not create' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'stops and names the volume' {
+            $dir = New-DeployDir -Installed
+            try {
+                $r = Test-DatabaseVolume $dir
+                $r.Ok | Should Be $false
+                $r.Volume | Should Be 'visheart-local-deployment_mongodb_data'
+                Test-Path (Join-Path $dir 'database.owner') | Should Be $false
+            } finally { Remove-Item -Recurse -Force (Split-Path -Parent $dir) }
+        }
+    }
+}
