@@ -233,6 +233,15 @@ Describe 'Write-ReleaseEnv' {
         $map.Count | Should Be 9
     }
 
+    It 'release env names the installed version and where to check for a newer one' {
+        $out = Join-Path $dir 'release-version.env'
+        Write-ReleaseEnv $images $smtp $out -Version '1.0.3' -UpdateUrl 'https://example.test/latest.json'
+        $map = @{}
+        foreach ($line in [IO.File]::ReadAllLines($out)) { if ($line -match '^([A-Z_]+)=(.*)$') { $map[$Matches[1]] = $Matches[2] } }
+        $map['VH_VERSION'] | Should Be '1.0.3'
+        $map['VH_UPDATE_URL'] | Should Be 'https://example.test/latest.json'
+    }
+
     It 'a missing SMTP file stops with a named error' {
         { Write-ReleaseEnv $images (Join-Path $dir 'nope.env') (Join-Path $dir 'x.env') } | Should Throw 'smtp.release.env'
     }

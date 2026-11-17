@@ -47,7 +47,8 @@ After your first login, change the admin password, then delete `FIRST-LOGIN.txt`
 
 ## Updates
 
-When the team tells you there is a new version:
+When the team tells you there is a new version, or **Start VisHeart** shows a "VisHeart update available" popup
+(it checks the team's GitHub page each time it starts; VisHeart keeps running either way):
 
 1. Download the newest `VisHeart-Update-<version>` folder from the Google Drive folder and unzip it into one folder,
    as above. It is about 600 MB.

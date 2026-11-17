@@ -103,5 +103,40 @@ function Test-DatabaseVolume {
     return @{ Ok = $true; Volume = $volume }
 }
 
+function Invoke-UpdateFeed {
+    # The published latest.json, as an object. Throws when it cannot be read.
+    param([string]$Url, [int]$TimeoutSec)
+    # Windows PowerShell 5.1 may not offer TLS 1.2 by default, and GitHub refuses anything older.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    return Invoke-RestMethod -Uri $Url -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+}
+
+function Get-UpdateNotice {
+    # @{ Version; Download; Note } when the team has published a newer VisHeart than this installed copy, else $null.
+    # Only an installed copy checks (its release.env names its version and where to look). The check never stops
+    # VisHeart from starting: no internet, a slow network or a bad latest.json all mean "no notice".
+    param([string]$DeploymentDir, [int]$TimeoutSec = 5)
+    $releaseEnv = Join-Path $DeploymentDir 'release.env'
+    if (-not (Test-Path $releaseEnv)) { return $null }
+    $values = @{}
+    foreach ($line in Get-Content $releaseEnv) {
+        if ($line -match '^\s*([A-Z_]+)=(.*)$') { $values[$Matches[1]] = $Matches[2].Trim() }
+    }
+    if (-not $values['VH_VERSION'] -or -not $values['VH_UPDATE_URL']) { return $null }
+    try {
+        $feed = Invoke-UpdateFeed -Url $values['VH_UPDATE_URL'] -TimeoutSec $TimeoutSec
+        $latest = [version]([string]$feed.version)
+        $installed = [version]$values['VH_VERSION']
+    } catch {
+        return $null
+    }
+    if ($latest -le $installed) { return $null }
+    $download = [string]$feed.download
+    if ($download -notmatch '^https://') { $download = $null }
+    $note = ([string]$feed.note).Trim()
+    if ($note.Length -gt 300) { $note = $note.Substring(0, 300) }
+    return @{ Version = [string]$feed.version; Download = $download; Note = $note }
+}
+
 Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
-    Test-DatabaseVolume
+    Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice

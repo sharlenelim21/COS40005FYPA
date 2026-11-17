@@ -150,7 +150,8 @@ function Read-EnvValues([string]$Path) {
 function Write-ReleaseEnv {
     # release.env is shipped and replaced on every update: pinned images, the support mail account, and the
     # settings that keep an installed copy private to this PC.
-    param([hashtable]$Images, [string]$SmtpEnvPath, [string]$OutPath)
+    # Version and UpdateUrl let Start VisHeart tell the user when the team publishes a newer version.
+    param([hashtable]$Images, [string]$SmtpEnvPath, [string]$OutPath, [string]$Version, [string]$UpdateUrl)
     if (-not (Test-Path $SmtpEnvPath)) {
         throw "installer\smtp.release.env not found ($SmtpEnvPath). Copy smtp.release.env.example to smtp.release.env and fill in the team support account; without it the FAQ cannot send mail."
     }
@@ -166,6 +167,8 @@ function Write-ReleaseEnv {
     foreach ($key in @('VH_SUPPORT_EMAIL', 'VH_SMTP_USER', 'VH_SMTP_PASS')) { $lines += "$key=$($smtp[$key])" }
     $lines += 'VH_BIND=127.0.0.1'      # patient data: nothing is reachable from other computers
     $lines += 'VH_MINIO_ANON=none'     # no anonymous downloads from the storage bucket
+    if ($Version) { $lines += "VH_VERSION=$Version" }
+    if ($UpdateUrl) { $lines += "VH_UPDATE_URL=$UpdateUrl" }
     $utf8 = New-Object System.Text.UTF8Encoding($false)   # compose rejects a byte order mark
     [IO.File]::WriteAllText($OutPath, (($lines -join "`r`n") + "`r`n"), $utf8)
 }

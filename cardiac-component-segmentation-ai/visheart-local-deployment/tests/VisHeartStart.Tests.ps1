@@ -215,3 +215,89 @@ Describe 'Test-DatabaseVolume' {
         }
     }
 }
+
+Describe 'Get-UpdateNotice' {
+    function New-ReleaseDir([string]$Version, [string]$Url = 'https://example.test/latest.json') {
+        $dir = Join-Path $env:TEMP ("vh-upd-" + [guid]::NewGuid())
+        New-Item -ItemType Directory $dir | Out-Null
+        $lines = @('VH_APP_IMAGE=a/app:1')
+        if ($Version) { $lines += "VH_VERSION=$Version" }
+        if ($Url) { $lines += "VH_UPDATE_URL=$Url" }
+        Set-Content (Join-Path $dir 'release.env') $lines -Encoding ASCII
+        return $dir
+    }
+
+    Context 'a developer copy (no release.env)' {
+        Mock -ModuleName VisHeartStart Invoke-UpdateFeed { throw 'must not be called' }
+        It 'never checks' {
+            $dir = Join-Path $env:TEMP ("vh-upd-" + [guid]::NewGuid())
+            New-Item -ItemType Directory $dir | Out-Null
+            try {
+                Get-UpdateNotice $dir | Should BeNullOrEmpty
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-UpdateFeed -Times 0 -Scope It
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'a newer version is published' {
+        Mock -ModuleName VisHeartStart Invoke-UpdateFeed {
+            [pscustomobject]@{ version = '1.0.10'; download = 'https://drive.google.com/x'; note = 'Fixes the export.' } }
+        It 'returns the new version, its link and note' {
+            $dir = New-ReleaseDir '1.0.9'
+            try {
+                $n = Get-UpdateNotice $dir
+                $n.Version | Should Be '1.0.10'
+                $n.Download | Should Be 'https://drive.google.com/x'
+                $n.Note | Should Be 'Fixes the export.'
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-UpdateFeed -Times 1 -Scope It -ParameterFilter { $Url -eq 'https://example.test/latest.json' }
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'the published version is not newer' {
+        Mock -ModuleName VisHeartStart Invoke-UpdateFeed { [pscustomobject]@{ version = '1.0.0'; download = 'https://x' } }
+        It 'returns nothing for the same or an older version' {
+            foreach ($installed in @('1.0.0', '1.2.0')) {
+                $dir = New-ReleaseDir $installed
+                try { Get-UpdateNotice $dir | Should BeNullOrEmpty }
+                finally { Remove-Item -Recurse -Force $dir }
+            }
+        }
+    }
+
+    Context 'the check cannot complete' {
+        Mock -ModuleName VisHeartStart Invoke-UpdateFeed { throw 'offline' }
+        It 'returns nothing when the feed cannot be read' {
+            $dir = New-ReleaseDir '1.0.0'
+            try { Get-UpdateNotice $dir | Should BeNullOrEmpty }
+            finally { Remove-Item -Recurse -Force $dir }
+        }
+        It 'returns nothing without a version or an address in release.env' {
+            foreach ($dir in @((New-ReleaseDir '' 'https://example.test/latest.json'), (New-ReleaseDir '1.0.0' ''))) {
+                try { Get-UpdateNotice $dir | Should BeNullOrEmpty }
+                finally { Remove-Item -Recurse -Force $dir }
+            }
+        }
+    }
+
+    Context 'the feed holds a bad version or link' {
+        Mock -ModuleName VisHeartStart Invoke-UpdateFeed { [pscustomobject]@{ version = 'soon'; download = 'https://x' } }
+        It 'ignores a version that is not a number' {
+            $dir = New-ReleaseDir '1.0.0'
+            try { Get-UpdateNotice $dir | Should BeNullOrEmpty }
+            finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'the feed links somewhere that is not https' {
+        Mock -ModuleName VisHeartStart Invoke-UpdateFeed { [pscustomobject]@{ version = '2.0.0'; download = 'file://C:/x.exe' } }
+        It 'still tells about the version but drops the link' {
+            $dir = New-ReleaseDir '1.0.0'
+            try {
+                $n = Get-UpdateNotice $dir
+                $n.Version | Should Be '2.0.0'
+                $n.Download | Should BeNullOrEmpty
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+}

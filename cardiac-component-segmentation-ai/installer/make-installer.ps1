@@ -120,7 +120,8 @@ try {
 
     Step 'Writing release.env'
     Write-ReleaseEnv $images (Join-Path $installerDir 'smtp.release.env') `
-        (Join-Path $staging 'cardiac-component-segmentation-ai\visheart-local-deployment\release.env')
+        (Join-Path $staging 'cardiac-component-segmentation-ai\visheart-local-deployment\release.env') `
+        -Version $version -UpdateUrl ([string]$release.updateUrl)
 
     Step 'Compiling the installer'
     $iscc = Find-InnoCompiler

@@ -79,6 +79,11 @@ The build PC is the computer that makes the installers. It needs:
 6. **Upload.** Put the whole `VisHeart-<Variant>-<version>` folder in the team's VisHeart Google Drive folder. The
    `.exe` does not work without its `.bin` files. Remove or rename older versions, so users pick the newest.
 7. **Tell the users** which version to download, and whether it is an Update or needs a Full install.
+8. **Publish the update notice**, only after step 6, so the link works. Edit `installer/latest.json`: set `version` to
+   the new `installer/VERSION`, `download` to the https link of the Google Drive folder, and `note` to one or two
+   sentences. Commit it and get it onto the `main` branch on GitHub. Each installed PC reads that file when someone
+   runs **Start VisHeart** (`updateUrl` in `release.json`) and shows a popup when the version is newer than its own.
+   Without internet, or while the file is not on `main`, there is simply no popup; starting is never blocked.
 
 ## 4. A new training data pack (Full installer only)
 
