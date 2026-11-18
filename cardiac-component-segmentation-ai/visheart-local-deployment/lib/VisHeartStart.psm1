@@ -114,11 +114,17 @@ function Remove-OtherCopyContainers {
     param([string]$DeploymentDir)
     if (-not (Test-Path (Join-Path $DeploymentDir 'release.env'))) { return @() }
     $project = Get-ComposeProjectName $DeploymentDir
-    if ((Invoke-Docker @('ps', '-a', '--filter', 'name=visheart-', '--format',
-            '{{.Names}}|{{.Label "com.docker.compose.project"}}')) -ne 0) { return @() }
+    # {{.Labels}}, not {{.Label "com.docker.compose.project"}}: Windows PowerShell 5.1 strips double quotes inside
+    # native arguments, which broke that template ("function "com" not defined").
+    if ((Invoke-Docker @('ps', '-a', '--filter', 'name=visheart-', '--format', '{{.Names}}|{{.Labels}}')) -ne 0) {
+        Write-Host "Could not list VisHeart containers: $((Get-LastDockerOutput) -join ' ')"
+        return @()
+    }
     $removed = @()
     foreach ($line in @(Get-LastDockerOutput)) {
-        $name, $owner = ([string]$line).Split('|', 2)
+        $name, $labels = ([string]$line).Split('|', 2)
+        $owner = ''
+        if ($labels -match '(?:^|,)com\.docker\.compose\.project=([^,]*)') { $owner = $Matches[1] }
         if (-not $name -or $owner -eq $project) { continue }
         if ((Invoke-Docker @('rm', '-f', $name)) -eq 0) { $removed += $name }
     }

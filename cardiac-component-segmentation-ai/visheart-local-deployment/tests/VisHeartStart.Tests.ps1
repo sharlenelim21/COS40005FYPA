@@ -255,7 +255,9 @@ Describe 'Remove-OtherCopyContainers' {
     Context 'an installed copy on a PC that also has a developer copy' {
         Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
         Mock -ModuleName VisHeartStart Get-LastDockerOutput {
-            @('visheart-local|visheart-local-deployment', 'visheart-redis|visheart', 'visheart-minio|') }
+            @('visheart-local|com.docker.compose.service=visheart-app,com.docker.compose.project=visheart-local-deployment',
+              'visheart-redis|com.docker.compose.project=visheart,com.docker.compose.service=redis',
+              'visheart-minio|') }
         It 'removes the containers that are not its own (their data volumes stay) and keeps its own' {
             $dir = New-Dir -Installed
             try {
@@ -269,6 +271,10 @@ Describe 'Remove-OtherCopyContainers' {
                     ($Arguments -join ' ') -eq 'rm -f visheart-redis' }
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
                     ($Arguments -join ' ') -match '\bvolume\b|-v\b' }
+                # Windows PowerShell 5.1 strips double quotes inside native arguments, so docker got a broken
+                # --format template ('function "com" not defined'; found testing the installer, 2026-11-18).
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -match '"' }
             } finally { Remove-Item -Recurse -Force $dir }
         }
     }
