@@ -98,3 +98,35 @@ Describe 'docker-compose.yml with the installed env file' {
         $config.services.'gpu-cpu'.environment.GPU_ACCESS_SECRET | Should Be $fixture['VH_GPU_ACCESS_SECRET']
     }
 }
+
+Describe 'mounts inside read-only mounts' {
+    # Docker cannot create a mount point inside a read-only bind mount ("mkdirat ... read-only file system"), so the
+    # host folder must exist first. Initialize-BackendFolders (start.ps1) creates them; this finds every such mount in
+    # docker-compose.yml, so a new one cannot be forgotten.
+    Import-Module (Join-Path $deploymentDir 'lib\VisHeartStart.psm1') -Force
+    $config = Get-ComposeConfig
+    $needed = @()
+    foreach ($svc in $config.services.PSObject.Properties) {
+        $vols = @($svc.Value.volumes | Where-Object { $_ })
+        $readOnly = @($vols | Where-Object { $_.type -eq 'bind' -and $_.read_only })
+        foreach ($v in $vols) {
+            foreach ($r in $readOnly) {
+                $prefix = $r.target.TrimEnd('/') + '/'
+                if ($v -ne $r -and $v.target.StartsWith($prefix)) {
+                    $needed += [IO.Path]::GetFullPath((Join-Path $r.source ($v.target.Substring($prefix.Length) -replace '/', '\')))
+                }
+            }
+        }
+    }
+
+    It 'finds the five known ones' {
+        @($needed | Sort-Object -Unique).Count | Should Be 5
+    }
+
+    It 'Initialize-BackendFolders creates the host folder of every one' {
+        $created = @((Initialize-BackendFolders $deploymentDir).Folders | ForEach-Object { [IO.Path]::GetFullPath($_) })
+        foreach ($path in ($needed | Sort-Object -Unique)) {
+            ($created -contains $path) | Should Be $true
+        }
+    }
+}

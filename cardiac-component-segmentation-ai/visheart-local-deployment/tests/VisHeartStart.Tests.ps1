@@ -421,17 +421,22 @@ Describe 'Remove-VisHeartDocker' {
 }
 
 Describe 'Initialize-BackendFolders' {
+    # <base>\UNETRESNET34 and <base>\cardiac-component-segmentation-ai\{visheart-local-deployment, Cardiac_...\dist},
+    # as in the repository and an installed copy.
     function New-Tree([switch]$Built) {
-        $root = Join-Path $env:TEMP ("vh-bf-" + [guid]::NewGuid())
-        $deploy = Join-Path $root 'visheart-local-deployment'
+        $base = Join-Path $env:TEMP ("vh-bf-" + [guid]::NewGuid())
+        $app = Join-Path $base 'cardiac-component-segmentation-ai'
+        $deploy = Join-Path $app 'visheart-local-deployment'
         New-Item -ItemType Directory $deploy | Out-Null
-        $dist = Join-Path $root 'Cardiac_Segmentation_FYP_Server\dist'
+        $dist = Join-Path $app 'Cardiac_Segmentation_FYP_Server\dist'
         New-Item -ItemType Directory $dist | Out-Null
+        New-Item -ItemType Directory (Join-Path $base 'UNETRESNET34') | Out-Null
         if ($Built) { Set-Content (Join-Path $dist 'index.js') '//' }
         return $deploy
     }
+    function Get-Base($deploy) { Split-Path -Parent (Split-Path -Parent $deploy) }
 
-    It 'creates the folders docker-compose.yml mounts volumes on, inside the read-only dist mount' {
+    It 'creates the folders docker-compose.yml mounts volumes on inside read-only mounts' {
         $deploy = New-Tree -Built
         try {
             (Initialize-BackendFolders $deploy).Built | Should Be $true
@@ -439,18 +444,13 @@ Describe 'Initialize-BackendFolders' {
             foreach ($name in 'temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports') {
                 Test-Path (Join-Path $dist $name) -PathType Container | Should Be $true
             }
-        } finally { Remove-Item -Recurse -Force (Split-Path -Parent $deploy) }
+            Test-Path (Join-Path (Get-Base $deploy) 'UNETRESNET34\checkpoints') -PathType Container | Should Be $true
+        } finally { Remove-Item -Recurse -Force (Get-Base $deploy) }
     }
 
     It 'says when the backend was never built' {
         $deploy = New-Tree
         try { (Initialize-BackendFolders $deploy).Built | Should Be $false }
-        finally { Remove-Item -Recurse -Force (Split-Path -Parent $deploy) }
-    }
-
-    It 'every folder it creates is one docker-compose.yml mounts under dist' {
-        $compose = Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'docker-compose.yml') -Raw
-        $mounted = @([regex]::Matches($compose, '/app/backend/dist/(temp_\w+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-        ($mounted -join ',') | Should Be 'temp_exports,temp_jpeg,temp_mesh,temp_upload'
+        finally { Remove-Item -Recurse -Force (Get-Base $deploy) }
     }
 }

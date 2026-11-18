@@ -204,13 +204,17 @@ function Initialize-BackendFolders {
     # docker-compose.yml mounts the backend's dist folder read-only and puts Docker volumes on dist\temp_jpeg,
     # temp_mesh, temp_upload and temp_exports. Docker cannot create those folders inside a read-only mount ("mkdirat
     # ... read-only file system"), and dist is built, not in git, so a fresh copy lacks them. Creates them, and
-    # returns @{ Built } saying whether the backend was built (dist\index.js exists).
+    # The same holds for UNETRESNET34\checkpoints (a volume inside the read-only UNETRESNET34 mount of the GPU
+    # service): the installer does not ship it and an older git copy has none. Compose.Tests.ps1 finds every such
+    # mount in docker-compose.yml and checks that it is listed here.
+    # Returns @{ Built; Folders }: whether the backend was built (dist\index.js exists), and the folders made sure of.
     param([string]$DeploymentDir)
-    $dist = Join-Path (Split-Path -Parent $DeploymentDir) 'Cardiac_Segmentation_FYP_Server\dist'
-    foreach ($name in @('temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports')) {
-        New-Item -ItemType Directory -Force (Join-Path $dist $name) | Out-Null
-    }
-    return @{ Built = (Test-Path (Join-Path $dist 'index.js')) }
+    $app = Split-Path -Parent $DeploymentDir
+    $dist = Join-Path $app 'Cardiac_Segmentation_FYP_Server\dist'
+    $folders = @(@('temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports') | ForEach-Object { Join-Path $dist $_ })
+    $folders += Join-Path (Split-Path -Parent $app) 'UNETRESNET34\checkpoints'
+    foreach ($folder in $folders) { New-Item -ItemType Directory -Force $folder | Out-Null }
+    return @{ Built = (Test-Path (Join-Path $dist 'index.js')); Folders = $folders }
 }
 
 Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
