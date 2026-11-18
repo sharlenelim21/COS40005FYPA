@@ -72,7 +72,8 @@ all VisHeart data:
 
 - **No (default):** patients, accounts, trained models and the downloaded images are kept. Installing VisHeart
   again finds them and starts quickly.
-- **Yes:** everything is deleted and cannot be recovered, including the downloaded VisHeart images (about 25 GB). Docker Desktop must be running; if it is not, nothing is
+- **Yes:** everything is deleted and cannot be recovered, including the downloaded VisHeart images (about 25 GB).
+  The uninstaller starts Docker Desktop itself when it is not running. If Docker Desktop cannot start, nothing is
   deleted and the uninstaller tells you how to finish later.
 
 Docker Desktop, WSL2 and Python stay installed; remove them in Windows Settings > Apps if no other program needs them.

@@ -111,6 +111,12 @@ try {
         exit 7
     }
 
+    if (-not (Initialize-BackendFolders $scriptDir).Built) {
+        Write-Log 'The backend is not built (Cardiac_Segmentation_FYP_Server\dist\index.js is missing).'
+        Write-Log 'In a Command Prompt run:  cd /d "..\Cardiac_Segmentation_FYP_Server" && pnpm install && pnpm build  then start VisHeart again.'
+        exit 8
+    }
+
     foreach ($name in @(Remove-OtherCopyContainers $scriptDir)) {
         Write-Log "Removed container '$name' left by another copy of VisHeart (its data is kept)."
     }

@@ -376,21 +376,25 @@ begin
     { Stop VisHeart (and a running training) without waiting for a key press. }
     if FileExists(Deploy + '\stop.bat') then
       Exec(ExpandConstant('{cmd}'), '/c ""' + Deploy + '\stop.bat" --no-pause"', Deploy, SW_HIDE, ewWaitUntilTerminated, Code);
-    if DeleteData then begin
-      Args := '/c docker compose';
-      if FileExists(Deploy + '\release.env') then Args := Args + ' --env-file "' + Deploy + '\release.env"';
-      if FileExists(Deploy + '\secrets.env') then Args := Args + ' --env-file "' + Deploy + '\secrets.env"';
-      { -v deletes the data volumes; --rmi all also deletes the downloaded VisHeart images (about 25 GB). }
-      Args := Args + ' --profile cpu --profile gpu down -v --rmi all --remove-orphans';
-      if not Exec(ExpandConstant('{cmd}'), Args, Deploy, SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then begin
-        { The database is still there, so keep everything, its passwords (secrets.env) above all: deleting them would
-          leave a database that a new install of VisHeart cannot open. }
-        DeleteData := False;
-        SuppressibleMsgBox('Docker Desktop is not running, so the VisHeart database could not be deleted. VisHeart''s data ' +
-          'and passwords have been kept in ' + ExpandConstant('{app}') + ', and installing VisHeart again on this PC finds them.' + #13#10#13#10 +
-          'To delete everything: install VisHeart again, start Docker Desktop, then uninstall and choose Yes.',
-          mbInformation, MB_OK, IDOK);
-      end;
+    { Remove VisHeart from Docker. Remove-VisHeartDocker starts Docker Desktop first when it is not running, so the
+      containers never stay behind pointing at this deleted folder. Yes also removes the data volumes and the
+      downloaded images (about 25 GB). }
+    UninstallProgressForm.StatusLabel.Caption := 'Removing VisHeart from Docker (this can take a few minutes)...';
+    Args := '-NoProfile -ExecutionPolicy Bypass -Command "Import-Module ''' + Deploy + '\lib\VisHeartStart.psm1''; ' +
+      'exit (Remove-VisHeartDocker ''' + Deploy + '''';
+    if DeleteData then Args := Args + ' -DeleteData';
+    Args := Args + ')"';
+    if not Exec(PowerShellExe(), Args, Deploy, SW_HIDE, ewWaitUntilTerminated, Code) then Code := -1;
+    Log('Remove-VisHeartDocker exit code: ' + IntToStr(Code));
+    if DeleteData and (Code <> 0) then begin
+      { The database is still there, so keep everything, its passwords (secrets.env) above all: deleting them would
+        leave a database that a new install of VisHeart cannot open. }
+      DeleteData := False;
+      SuppressibleMsgBox('Docker Desktop could not be started, so the VisHeart database could not be deleted. VisHeart''s ' +
+        'data and passwords have been kept in ' + ExpandConstant('{app}') + ', and installing VisHeart again on this PC ' +
+        'finds them.' + #13#10#13#10 +
+        'To delete everything: install VisHeart again, start Docker Desktop, then uninstall and choose Yes.',
+        mbInformation, MB_OK, IDOK);
     end;
   end;
 

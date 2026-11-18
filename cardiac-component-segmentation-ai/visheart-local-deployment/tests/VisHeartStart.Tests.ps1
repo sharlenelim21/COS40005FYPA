@@ -359,3 +359,92 @@ Describe 'Get-UpdateNotice' {
         }
     }
 }
+
+Describe 'Remove-VisHeartDocker' {
+    $dir = Join-Path $env:TEMP ("vh-rm-" + [guid]::NewGuid())
+    New-Item -ItemType Directory $dir | Out-Null
+    Set-Content (Join-Path $dir 'release.env') 'COMPOSE_PROJECT_NAME=visheart' -Encoding ASCII
+    $compose = Join-Path $dir 'docker-compose.yml'
+
+    Context 'Docker Desktop cannot be started' {
+        Mock -ModuleName VisHeartStart Wait-DockerReady { [pscustomobject]@{ Ready = $false; Reason = 'timeout' } }
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'removes nothing and says Docker was not ready' {
+            Remove-VisHeartDocker $dir -DeleteData | Should Be 2
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It
+        }
+    }
+
+    Context 'keeping the data' {
+        Mock -ModuleName VisHeartStart Wait-DockerReady { [pscustomobject]@{ Ready = $true; Reason = 'ok' } }
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'removes the containers of this copy only, and keeps volumes and images' {
+            Remove-VisHeartDocker $dir | Should Be 0
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -eq "compose -f $compose --env-file $(Join-Path $dir 'release.env') --profile cpu --profile gpu down --remove-orphans" }
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -match ' -v|--rmi|^rm ' }
+        }
+    }
+
+    Context 'deleting everything' {
+        Mock -ModuleName VisHeartStart Wait-DockerReady { [pscustomobject]@{ Ready = $true; Reason = 'ok' } }
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { @('abc123', 'def456') }
+        It 'removes containers, data volumes and downloaded images, then any visheart container left behind' {
+            Remove-VisHeartDocker $dir -DeleteData | Should Be 0
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -match 'down --remove-orphans -v --rmi all$' }
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -eq 'ps -aq --filter name=visheart-' }
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -eq 'rm -f abc123 def456' }
+        }
+    }
+
+    Context 'compose cannot remove the data' {
+        Mock -ModuleName VisHeartStart Wait-DockerReady { [pscustomobject]@{ Ready = $true; Reason = 'ok' } }
+        Mock -ModuleName VisHeartStart Invoke-Docker { if ($Arguments[0] -eq 'compose') { 1 } else { 0 } }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { @() }
+        It 'reports the failure, so the uninstaller keeps the passwords' {
+            Remove-VisHeartDocker $dir -DeleteData | Should Be 1
+        }
+    }
+
+    Remove-Item -Recurse -Force $dir
+}
+
+Describe 'Initialize-BackendFolders' {
+    function New-Tree([switch]$Built) {
+        $root = Join-Path $env:TEMP ("vh-bf-" + [guid]::NewGuid())
+        $deploy = Join-Path $root 'visheart-local-deployment'
+        New-Item -ItemType Directory $deploy | Out-Null
+        $dist = Join-Path $root 'Cardiac_Segmentation_FYP_Server\dist'
+        New-Item -ItemType Directory $dist | Out-Null
+        if ($Built) { Set-Content (Join-Path $dist 'index.js') '//' }
+        return $deploy
+    }
+
+    It 'creates the folders docker-compose.yml mounts volumes on, inside the read-only dist mount' {
+        $deploy = New-Tree -Built
+        try {
+            (Initialize-BackendFolders $deploy).Built | Should Be $true
+            $dist = Join-Path (Split-Path -Parent $deploy) 'Cardiac_Segmentation_FYP_Server\dist'
+            foreach ($name in 'temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports') {
+                Test-Path (Join-Path $dist $name) -PathType Container | Should Be $true
+            }
+        } finally { Remove-Item -Recurse -Force (Split-Path -Parent $deploy) }
+    }
+
+    It 'says when the backend was never built' {
+        $deploy = New-Tree
+        try { (Initialize-BackendFolders $deploy).Built | Should Be $false }
+        finally { Remove-Item -Recurse -Force (Split-Path -Parent $deploy) }
+    }
+
+    It 'every folder it creates is one docker-compose.yml mounts under dist' {
+        $compose = Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'docker-compose.yml') -Raw
+        $mounted = @([regex]::Matches($compose, '/app/backend/dist/(temp_\w+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        ($mounted -join ',') | Should Be 'temp_exports,temp_jpeg,temp_mesh,temp_upload'
+    }
+}

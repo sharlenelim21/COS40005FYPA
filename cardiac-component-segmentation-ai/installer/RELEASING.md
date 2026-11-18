@@ -115,5 +115,7 @@ and `make-installer` refuses it. Make a new pack.
 
 ## 6. Developers who only run VisHeart from git
 
-Nothing changes for you. Run `start.bat` and `stop.bat` as before. They use the defaults in `docker-compose.yml`
+Run `start.bat` and `stop.bat` as before. Build the backend once after cloning (`pnpm install` and `pnpm build` in
+`Cardiac_Segmentation_FYP_Server`): `dist` is not in git, and `start.bat` stops and says so when it is missing. It
+creates the `dist	emp_*` folders Docker mounts volumes on. They use the defaults in `docker-compose.yml`
 and do not need `release.env` or `secrets.env`.

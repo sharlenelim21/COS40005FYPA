@@ -175,5 +175,38 @@ function Get-UpdateNotice {
     return @{ Version = [string]$feed.version; Download = $download; Note = $note }
 }
 
+function Remove-VisHeartDocker {
+    # Used by the uninstaller. Starts Docker Desktop when it is not running (the old uninstaller skipped the clean-up
+    # then, leaving containers that point at the deleted install folder). Keeping the data removes this copy's
+    # containers only. -DeleteData also removes its data volumes and downloaded images, then any container named
+    # visheart-* that is left (one started by hand, or one an earlier version made).
+    # Returns 0 when done, 2 when Docker could not be started, otherwise compose's exit code (data not removed).
+    param([string]$DeploymentDir, [switch]$DeleteData)
+    if (-not (Wait-DockerReady).Ready) { return 2 }
+    $arguments = @('compose', '-f', (Join-Path $DeploymentDir 'docker-compose.yml')) + @(Get-ComposeEnvArgs $DeploymentDir) +
+        @('--profile', 'cpu', '--profile', 'gpu', 'down', '--remove-orphans')
+    if ($DeleteData) { $arguments += @('-v', '--rmi', 'all') }
+    $code = Invoke-Docker $arguments
+    if ($DeleteData -and (Invoke-Docker @('ps', '-aq', '--filter', 'name=visheart-')) -eq 0) {
+        $left = @(Get-LastDockerOutput | Where-Object { $_ })
+        if ($left.Count -gt 0) { Invoke-Docker (@('rm', '-f') + $left) | Out-Null }
+    }
+    return $code
+}
+
+function Initialize-BackendFolders {
+    # docker-compose.yml mounts the backend's dist folder read-only and puts Docker volumes on dist\temp_jpeg,
+    # temp_mesh, temp_upload and temp_exports. Docker cannot create those folders inside a read-only mount ("mkdirat
+    # ... read-only file system"), and dist is built, not in git, so a fresh copy lacks them. Creates them, and
+    # returns @{ Built } saying whether the backend was built (dist\index.js exists).
+    param([string]$DeploymentDir)
+    $dist = Join-Path (Split-Path -Parent $DeploymentDir) 'Cardiac_Segmentation_FYP_Server\dist'
+    foreach ($name in @('temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports')) {
+        New-Item -ItemType Directory -Force (Join-Path $dist $name) | Out-Null
+    }
+    return @{ Built = (Test-Path (Join-Path $dist 'index.js')) }
+}
+
 Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
-    Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers
+    Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
+    Remove-VisHeartDocker, Initialize-BackendFolders

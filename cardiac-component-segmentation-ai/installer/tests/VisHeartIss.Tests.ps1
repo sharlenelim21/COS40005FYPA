@@ -26,8 +26,14 @@ Describe 'visheart.iss rules' {
 
     It 'when the database cannot be deleted, uninstall keeps the data and its passwords' {
         $step = Get-PascalFunction 'CurUninstallStepChanged'
-        # DeleteData is switched off inside the branch where docker compose down -v failed.
-        $step | Should Match "(?s)down -v.*if not Exec\(.*\(Code <> 0\) then begin.*DeleteData := False"
+        # DeleteData is switched off inside the branch where Remove-VisHeartDocker -DeleteData failed.
+        $step | Should Match "(?s)Remove-VisHeartDocker.*-DeleteData.*if DeleteData and \(Code <> 0\) then begin.*DeleteData := False"
+    }
+
+    It 'uninstall cleans Docker through Remove-VisHeartDocker, which starts Docker Desktop when it is not running' {
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Match "VisHeartStart\.psm1"
+        $step | Should Not Match "docker compose"
     }
 
     It 'the install folder is protected after the passwords are made' {
