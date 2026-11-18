@@ -57,13 +57,22 @@ function UnavailableReason({ state }: { state: CellState }) {
 export function ReconstructionTargetGrid({ cellState, selected, onToggle, onView, disabled = false }: ReconstructionTargetGridProps) {
   return (
     <div role="group" aria-label="Reconstructions to build" className="overflow-hidden rounded-lg border">
-      <div className="bg-muted/40 grid grid-cols-[5.5rem_repeat(2,minmax(0,1fr))] border-b text-xs font-medium">
+      {/* 4th column is View-only, next to RV -- it used to share the narrow 5.5rem label column
+          with the model name ("MedSAM" + the button), which clipped against the column's own
+          border for the longer "MedSAM" label (reported live, 2026-11-18). Its own column has
+          room regardless of how long the model name is.
+          Fixed width (not `auto`) is load-bearing: the header and each model row are separate
+          grid containers, so an `auto` column sizes to each row's OWN content -- empty in the
+          header, button-sized in the body -- which left the 1fr columns different widths per
+          row and the vertical dividers out of alignment (reported live, 2026-11-18). */}
+      <div className="bg-muted/40 grid grid-cols-[5.5rem_repeat(2,minmax(0,1fr))_3.5rem] border-b text-xs font-medium">
         <span className="px-3 py-2" />
         {TARGET_CHAMBERS.map((chamber) => (
           <span key={chamber} className="border-l px-3 py-2">
             {CHAMBER_LABELS[chamber]}
           </span>
         ))}
+        <span className="border-l px-3 py-2" />
       </div>
       {TARGET_MODELS.map((model) => {
         // One "View" for the whole row, not one per chamber column: LV and RV for the same
@@ -73,22 +82,9 @@ export function ReconstructionTargetGrid({ cellState, selected, onToggle, onView
         const rvBuilt = cellState(model, "rv").kind === "built";
         const viewableChamber = lvBuilt ? "lv" : rvBuilt ? "rv" : null;
         return (
-        <div key={model} className="grid grid-cols-[5.5rem_repeat(2,minmax(0,1fr))] border-b last:border-b-0">
-          <div className="flex items-center justify-between gap-1 px-3 py-3">
+        <div key={model} className="grid grid-cols-[5.5rem_repeat(2,minmax(0,1fr))_3.5rem] border-b last:border-b-0">
+          <div className="flex items-center px-3 py-3">
             <span className="text-sm font-medium">{MODEL_LABELS[model]}</span>
-            {viewableChamber && onView && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-6 w-6 shrink-0 p-0"
-                onClick={() => onView(model, viewableChamber)}
-                title="View 4D"
-              >
-                <Eye className="h-3 w-3" aria-hidden="true" />
-                <span className="sr-only">View 4D ({MODEL_LABELS[model]})</span>
-              </Button>
-            )}
           </div>
           {TARGET_CHAMBERS.map((chamber) => {
             const key = targetKey(model, chamber);
@@ -125,6 +121,20 @@ export function ReconstructionTargetGrid({ cellState, selected, onToggle, onView
               </div>
             );
           })}
+          <div className="flex items-center justify-center border-l px-2 py-3">
+            {viewableChamber && onView && (
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 w-7 shrink-0 bg-foreground p-0 text-background hover:bg-foreground/80"
+                onClick={() => onView(model, viewableChamber)}
+                title="View 4D"
+              >
+                <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="sr-only">View 4D ({MODEL_LABELS[model]})</span>
+              </Button>
+            )}
+          </div>
         </div>
         );
       })}

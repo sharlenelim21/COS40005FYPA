@@ -110,8 +110,14 @@ RUN if [ -f src/python/requirements.txt ]; then \
 WORKDIR /app
 COPY visheart-local-deployment/ecosystem.config.js ./ecosystem.config.js
 
-# Create necessary directories
-RUN mkdir -p /app/logs backend/src/temp_upload backend/src/temp_jpeg backend/src/temp_mesh
+# Create necessary directories -- these are also docker-compose.yml's volume mount targets
+# (/app/backend/dist/temp_*). If they don't already exist as real directories in the image,
+# Docker has to auto-create the mountpoint at container start instead, which fails with
+# "read-only file system" on some hosts (reported live from a client machine, 2026-11-18) --
+# baking them in here means that auto-create path is never needed, on any machine. This used to
+# say `backend/src/temp_*`, which doesn't match where the app actually runs from (`dist/`) or
+# what docker-compose.yml mounts onto, so it never actually created the directories compose needed.
+RUN mkdir -p /app/logs backend/dist/temp_upload backend/dist/temp_jpeg backend/dist/temp_mesh backend/dist/temp_exports
 
 # Set runtime environment variables for LOCAL deployment
 ENV NODE_ENV=development
