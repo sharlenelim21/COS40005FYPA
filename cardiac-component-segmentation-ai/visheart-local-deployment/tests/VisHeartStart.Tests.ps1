@@ -454,3 +454,33 @@ Describe 'Initialize-BackendFolders' {
         finally { Remove-Item -Recurse -Force (Get-Base $deploy) }
     }
 }
+
+Describe 'Get-BusyPorts' {
+    # VisHeart's own containers hold their ports through Docker's processes; only another program is a problem.
+    Context 'Docker holds 3000 and 9000, another program holds 5000' {
+        Mock -ModuleName VisHeartStart Get-PortListeners {
+            @([pscustomobject]@{ Port = 3000; Process = 'com.docker.backend'; Id = 10 },
+              [pscustomobject]@{ Port = 9000; Process = 'wslrelay'; Id = 11 },
+              [pscustomobject]@{ Port = 5000; Process = 'node'; Id = 4321 })
+        }
+        It 'names only the other program, with its process id' {
+            $busy = @(Get-BusyPorts)
+            $busy.Count | Should Be 1
+            $busy[0].Port | Should Be 5000
+            $busy[0].Process | Should Be 'node'
+            $busy[0].Id | Should Be 4321
+        }
+    }
+
+    Context 'nothing else listens' {
+        Mock -ModuleName VisHeartStart Get-PortListeners { @() }
+        It 'returns nothing' { @(Get-BusyPorts).Count | Should Be 0 }
+    }
+
+    It 'checks the ports a user cannot do without: web page, backend, file storage, GPU service' {
+        Mock -ModuleName VisHeartStart Get-PortListeners { @() }
+        Get-BusyPorts | Out-Null
+        Assert-MockCalled -ModuleName VisHeartStart Get-PortListeners -Times 1 -Scope It -ParameterFilter {
+            ($Ports -join ',') -eq '3000,5000,9000,8001' }
+    }
+}

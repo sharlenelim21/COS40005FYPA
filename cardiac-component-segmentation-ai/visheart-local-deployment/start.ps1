@@ -121,6 +121,15 @@ try {
         Write-Log "Removed container '$name' left by another copy of VisHeart (its data is kept)."
     }
 
+    $busy = @(Get-BusyPorts)
+    if ($busy.Count -gt 0) {
+        foreach ($b in $busy) {
+            Write-Log "Port $($b.Port) is used by another program: $($b.Process) (process id $($b.Id)). VisHeart needs this port."
+        }
+        Write-Log 'Close that program (or stop it in Task Manager > Details, by its process id), then start VisHeart again.'
+        exit 9
+    }
+
     if ($ForceCpu) {
         Write-Log 'CPU mode requested (--cpu); skipping GPU detection.'
         $gpuAvailable = $false

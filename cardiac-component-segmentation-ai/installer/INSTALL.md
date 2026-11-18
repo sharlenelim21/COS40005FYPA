@@ -92,6 +92,8 @@ Docker Desktop, WSL2 and Python stay installed; remove them in Windows Settings 
   ```
 - **Who can see VisHeart's files.** Only administrators and members of `docker-users` can change the `C:\VisHeart`
   folder. Other Windows accounts cannot read VisHeart's passwords or training data.
+- **"Port 5000 is used by another program".** VisHeart needs ports 3000, 5000, 9000 and 8001. Start VisHeart names
+  the program that holds one; close it (or end it in Task Manager > Details by its process id), then start again.
 - **A developer copy (from git) on the same PC.** The installed VisHeart keeps its own containers and database, so
   the two do not mix. Start VisHeart removes the developer copy's containers (not its data) so it can start; the
   developer copy's `start.bat` creates them again. Only one of the two can run at a time.

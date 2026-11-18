@@ -217,6 +217,26 @@ function Initialize-BackendFolders {
     return @{ Built = (Test-Path (Join-Path $dist 'index.js')); Folders = $folders }
 }
 
-Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
+function Get-PortListeners {
+    # The programs listening on the given TCP ports: @{ Port; Process; Id }.
+    param([int[]]$Ports)
+    foreach ($c in @(Get-NetTCPConnection -State Listen -LocalPort $Ports -ErrorAction SilentlyContinue)) {
+        $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue
+        [pscustomobject]@{ Port = [int]$c.LocalPort; Process = [string]$p.ProcessName; Id = [int]$c.OwningProcess }
+    }
+}
+
+function Get-BusyPorts {
+    # Ports VisHeart must have (3000 web page and 5000 backend, both built into the app image; 9000 file storage, which
+    # the browser downloads from; 8001 GPU service) that another program holds. VisHeart's own containers hold theirs
+    # through Docker's processes, which are not a problem. MongoDB and Redis are left out: an installed copy lets Docker
+    # pick free ports for them. Returns @{ Port; Process; Id } per busy port.
+    $docker = @('com.docker.backend', 'com.docker.proxy', 'wslrelay', 'vpnkit', 'docker-proxy', 'dockerd')
+    @(Get-PortListeners -Ports @(3000, 5000, 9000, 8001)) |
+        Where-Object { $docker -notcontains $_.Process } |
+        Sort-Object Port -Unique
+}
+
+Export-ModuleMember -Function Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
     Remove-VisHeartDocker, Initialize-BackendFolders
