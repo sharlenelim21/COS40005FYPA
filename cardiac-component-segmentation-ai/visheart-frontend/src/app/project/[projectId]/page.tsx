@@ -11,6 +11,8 @@ import { projectApi, segmentationApi, reconstructionApi } from "@/lib/api";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { inferDocModel as inferMaskModel, SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
 import { useActiveReconstructionJobs } from "@/hooks/useActiveReconstructionJobs";
+import { useProjectResults } from "@/hooks/useProjectResults";
+import { isReconstructionPreloaded, markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
 
 // UI Components
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -46,7 +48,7 @@ import {
   ChevronRight,
   Trash2,
   Lock,
-  AlertTriangle
+  FileText
 } from "lucide-react";
 
 // Custom components
@@ -56,13 +58,16 @@ import { LoadingProject } from "@/components/project/LoadingProject";
 import { ShowForUser, ShowForRegisteredUser } from "@/components/RoleGuard";
 import { useAuth } from "@/context/auth-context";
 import { AffineMatrixDisplay } from "@/components/ui/AffineMatrixDisplay";
-import { ReconstructionConfigDialog, ReconstructionConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
+import { ReconstructionConfigDialog, ReconstructionConfig, type ReconstructionBatchConfig } from "@/components/reconstruction/ReconstructionConfigDialog";
+import { toast } from "sonner";
 import { JobProgress, KineticButtonFill, KineticProgress, ProgressMeter, hasProgressReading, FinishingProgress, isFinishingReading } from "@/components/ui/kinetic-progress";
 import { buildReconstructionRequest } from "@/lib/reconstructionDefaults";
 import { useAutoPipelineChain, type PipelineSelection } from "@/hooks/useAutoPipelineChain";
 import { StartPipelineDialog } from "@/components/project/StartPipelineDialog";
+import { ProjectMetaLine } from "@/components/project/ProjectMetaLine";
 import { ExportReconstructionButton } from "@/components/project/ExportReconstructionButton";
 import { landmarkApi } from "@/lib/landmarkApi";
+import { formatTrimmed } from "@/lib/format-utils";
 
 // Types
 import * as ProjectTypes from "@/types/project";
@@ -90,6 +95,15 @@ const isActiveRecentJob = (job: ProjectTypes.UserJob): boolean => {
 const isActiveSegmentationJob = isActiveRecentJob;
 const isActiveReconstructionJob = isActiveRecentJob;
 
+// Strain jobs share the jobs collection and carry segmentationModel (the masks they read), but are not
+// segmentations: the same split as the server's NON_SEGMENTATION_JOBS in inference.ts. Keyed by model_used.
+const STRAIN_JOB_LABELS: Record<string, string> = {
+  strain_series: "Strain Computation",
+  rv_strain_series: "RV Strain Computation",
+};
+const strainJobLabel = (job: ProjectTypes.UserJob): string | undefined =>
+  STRAIN_JOB_LABELS[String(job.modelUsed ?? "").toLowerCase()];
+
 function ProjectPageInner() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
@@ -104,7 +118,18 @@ function ProjectPageInner() {
   const buildModelParam = searchParams.get("model");
   const requestedBuildModel =
     buildModelParam === "medsam" || buildModelParam === "unet" ? buildModelParam : null;
-  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache, maskAvailabilityByModel } = useProject();
+  const { loading, projectData, error, hasMasks, undecodedMasks, jobs, reconstructionJobs, jobsError, refreshMasks, refreshJobs, refreshReconstructionJobs, hasReconstructions, reconstructionMetadata, reconstructionResults, reconstructionsByModel, refreshReconstructions, clearProjectCache, clearReconstructionCache, maskAvailabilityByModel, preloadAllModelURLs, preloadAllThreeJSModels } = useProject();
+  // Read-only (autoCompute: false) -- this page only needs to know whether the Report Page
+  // would actually have strain content to show, not to trigger any compute of its own.
+  const { byModel: strainByModel } = useProjectResults(projectId, "prefer-unet", { autoCompute: false });
+  // Either model, either a Quick ED->ES pair or a Full-cycle series -- matches exactly what the
+  // Report Page itself reads (report/page.tsx), so this gate tracks what it would actually show.
+  const hasAnyStrainResult = !!(
+    strainByModel.unet?.strain || strainByModel.unet?.strainSeries ||
+    strainByModel.unet?.rvStrain || strainByModel.unet?.rvStrainSeries ||
+    strainByModel.medsam?.strain || strainByModel.medsam?.strainSeries ||
+    strainByModel.medsam?.rvStrain || strainByModel.medsam?.rvStrainSeries
+  );
   // Glow "Start AI Segmentation" when there are no masks and no active jobs
   const glowStartSegmentation = loading === "done" && !hasMasks && (jobs ?? []).filter(j => j.status === ProjectTypes.JobStatus.PENDING || j.status === ProjectTypes.JobStatus.IN_PROGRESS).length === 0;
 
@@ -357,10 +382,62 @@ function ProjectPageInner() {
   );
 
   // Check if there are any active reconstruction jobs (memoized for use in effects)
-  const hasActiveReconstructionJobs = useMemo(() => 
+  const hasActiveReconstructionJobs = useMemo(() =>
     (reconstructionJobs || []).some(isActiveReconstructionJob),
     [reconstructionJobs]
   );
+
+  // Force a fresh job list AND mask list every time this page mounts.
+  // ProjectContext effectively fetches both just ONCE per provider instance
+  // (the layout shares one ProjectProvider across every /project/[id]/*
+  // route, and neither fetch re-runs just because a different page under it
+  // mounted) -- after that, they're kept current only by this page's own
+  // pollJobList interval (jobs) or whatever the mask/segmentation editor
+  // remembers to call (masks), neither of which runs while this page isn't
+  // mounted. If the user navigates away (e.g. to Preview Dataset, or to the
+  // mask editor to save edits) and comes back, this page could still show a
+  // stale "Start AI Segmentation" or "Unsaved" badge until a hard refresh
+  // remade the whole context. `silent` avoids a flash to "no masks" while
+  // the fresh ones load. Reported live, 2026-11.
+  useEffect(() => {
+    refreshJobs();
+    refreshReconstructionJobs();
+    refreshMasks({ silent: true });
+  }, [projectId, refreshJobs, refreshReconstructionJobs, refreshMasks]);
+
+  // Proactively warm EVERY completed reconstruction's meshes into the Three.js/drei cache as soon
+  // as it shows up in the Reconstruction Details list below -- not just the one "active"
+  // reconstruction ProjectContext's own auto-preload effect resolves (which depends on URL params
+  // this page never sets, and on reconstructionMetadata matching whichever reconstruction just
+  // finished, which isn't guaranteed when a project has more than one). This is what makes "View
+  // 4D" actually land on a smooth, already-warm viewer most of the time: the user is still reading
+  // this card, not yet navigating, so this has real head start instead of racing the click.
+  // reconstructionPreloadCache (module-level, shared with the viewer) is what lets each side skip
+  // redoing the other's work. Reported live, 2026-11-14.
+  useEffect(() => {
+    const targets = (reconstructionResults ?? []).filter(
+      (recon: { reconstructionId?: string }) =>
+        recon?.reconstructionId && !isReconstructionPreloaded(recon.reconstructionId),
+    );
+    if (targets.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const recon of targets) {
+        if (cancelled) return;
+        const id = recon.reconstructionId as string;
+        try {
+          await preloadAllModelURLs(undefined, id);
+          await preloadAllThreeJSModels(undefined, id);
+          markReconstructionPreloaded(id);
+        } catch (error) {
+          console.error(`[Project] Background preload failed for reconstruction ${id}:`, error);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reconstructionResults, preloadAllModelURLs, preloadAllThreeJSModels]);
 
   // Clear starting state when segmentation jobs appear
   useEffect(() => {
@@ -546,7 +623,13 @@ function ProjectPageInner() {
     refreshActiveReconstructionJobs,
   });
   const [showPipelineDialog, setShowPipelineDialog] = useState(false);
+  const jobsCardRef = useRef<HTMLDivElement>(null);
+  const [highlightJobs, setHighlightJobs] = useState(false);
   const [expandedJobGroups, setExpandedJobGroups] = useState<Set<string>>(() => new Set());
+  // Trash-icon popup on a reconstruction card with both chambers: "Delete all" vs "Delete RV only".
+  const [deleteChoiceOpen, setDeleteChoiceOpen] = useState(false);
+  const [deleteChoiceCard, setDeleteChoiceCard] = useState<{ recon: any; rvCompanion: any; model: "medsam" | "unet" } | null>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const [expandedReconDetails, setExpandedReconDetails] = useState<Set<string>>(() => new Set());
   const [landmarkSummary, setLandmarkSummary] = useState<{ active: "running" | "queued" | null; hasCompleted: boolean; progress: number | null } | null>(null);
   const refreshLandmarkSummary = useCallback(async () => {
     if (!projectId || isGuest) return;
@@ -562,7 +645,7 @@ function ProjectPageInner() {
     return () => clearInterval(timer);
   }, [landmarkSummary?.active, pipeline.landmarkActive, refreshLandmarkSummary]);
   const activeSegJobs = (jobs ?? []).filter(
-    (j) => isActiveSegmentationJob(j) && !/4d_reconstruction|landmark/i.test(String(j.modelUsed ?? "")),
+    (j) => isActiveSegmentationJob(j) && !/4d_reconstruction|landmark/i.test(String(j.modelUsed ?? "")) && !strainJobLabel(j),
   );
   const segRunning = pipeline.segActive || activeSegJobs.length > 0;
   const segProgressState: "running" | "queued" =
@@ -585,10 +668,15 @@ function ProjectPageInner() {
     pipeline.reconActive || stillBuilding("lv") || stillBuilding("rv") ||
     (hasActiveReconstructionJobs && !hasReconstructions);
   const landmarkRunning = pipeline.landmarkActive || !!landmarkSummary?.active;
-  const landmarkUnlocked = !isGuest && hasReconstructions;
+  // Requires !reconRunning too, not just hasReconstructions -- a project can have one chamber
+  // already finished (hasReconstructions true) while the OTHER chamber the user also requested
+  // is still building. Checking hasReconstructions alone let the Landmark Detection card/button
+  // unlock and actually run the moment the first chamber finished, regardless of what was still
+  // in flight (reported live, 2026-11-09).
+  const landmarkUnlocked = !isGuest && hasReconstructions && !reconRunning;
   const landmarkProgressState: "running" | "queued" = landmarkSummary?.active === "queued" && !pipeline.landmarkActive ? "queued" : "running";
   const landmarksDone = isGuest || landmarkSummary === null || landmarkSummary.hasCompleted;
-  const isPipelineComplete = hasMasks && hasReconstructions && landmarksDone;
+  const isPipelineComplete = hasMasks && hasReconstructions && !reconRunning && landmarksDone;
   const maskModelLabels = SEGMENTATION_MODEL_OPTIONS.filter((opt) => maskAvailabilityByModel[opt.value]).map((opt) => opt.label).join(", ");
 
   type StageKey = "segmentation" | "reconstruction" | "landmark";
@@ -598,7 +686,11 @@ function ProjectPageInner() {
   const derivedNextStage: StageKey | null =
     loading !== "done" || isGuest || !hasMasks
       ? null
-      : !hasReconstructions
+      : !hasReconstructions || reconRunning
+      // reconRunning on its own (not just paired with !hasReconstructions) covers the case where
+      // one chamber already finished but another the user also requested is still building --
+      // without it, this fell through to highlighting "landmark" as the next step while a
+      // reconstruction was still in flight.
       ? (reconRunning ? null : "reconstruction")
       : landmarkSummary && !landmarkSummary.hasCompleted && !landmarkRunning
       ? "landmark"
@@ -665,6 +757,8 @@ function ProjectPageInner() {
   const jobDisplayName = (job: ProjectTypes.UserJob) => {
     const kind = String(job.modelUsed ?? "").toLowerCase();
     if (kind.includes("landmark")) return `${modelName(job.segmentationModel)} Landmark Detection`;
+    const strainLabel = strainJobLabel(job);
+    if (strainLabel) return `${modelName(job.segmentationModel)} ${strainLabel}`;
     if (kind.includes("4d_reconstruction")) {
       const chamber = job.chamber ? normalizeReconstructionChamber(job.chamber).toUpperCase() : reconstructionChamberById.get(job.jobId);
       return `${modelName(job.segmentationModel)}${chamber ? ` · ${chamber}` : ""} Reconstruction`;
@@ -936,6 +1030,62 @@ function ProjectPageInner() {
       setIsStartingReconstruction(false);
     }
   };
+  const handleStartReconstructions = async (batch: ReconstructionBatchConfig) => {
+    const { targets, ...settings } = batch;
+    if (targets.length === 0) return;
+    if (targets.length === 1) {
+      await handleStartReconstruction({ ...settings, ...targets[0] });
+      return;
+    }
+
+    setIsStartingReconstruction(true);
+    setReconstructionError(null);
+    let started = 0;
+    let alreadyRunning = 0;
+    const failures: string[] = [];
+
+    for (const target of targets) {
+      const label = `${target.segmentationModel === "medsam" ? "MedSAM" : "UNet"} ${target.chamber.toUpperCase()}`;
+      try {
+        await reconstructionApi.startReconstruction(
+          projectId,
+          buildReconstructionRequest({ ...settings, ...target }, projectData.name),
+        );
+        started += 1;
+      } catch (error: unknown) {
+        const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response;
+        if (response?.status === 409) {
+          alreadyRunning += 1;
+        } else {
+          failures.push(`${label}: ${response?.data?.message || "could not start"}`);
+        }
+      }
+    }
+
+    setShowReconstructionDialog(false);
+    await refreshReconstructionJobs();
+    await refreshActiveReconstructionJobs();
+    setIsStartingReconstruction(false);
+
+    const summary = [
+      started ? `Started ${started}` : null,
+      alreadyRunning ? `${alreadyRunning} already running` : null,
+      failures.length ? `${failures.length} failed` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    if (failures.length) {
+      toast.error(summary, { description: failures.join("; ") });
+    } else {
+      toast.success(summary, { description: "They run one after another. Follow them in Processing Jobs." });
+    }
+
+    const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    jobsCardRef.current?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "center" });
+    setHighlightJobs(true);
+    window.setTimeout(() => setHighlightJobs(false), 2500);
+  };
+
   const STAGE_BUSY_CLASS = "relative overflow-hidden justify-start h-auto py-4 disabled:opacity-100";
   const segBusyText = segProgress
     ? "Available when it finishes"
@@ -1120,6 +1270,28 @@ function ProjectPageInner() {
             <p>Build a 4D reconstruction before running landmark detection</p>
           </TooltipContent>
         </Tooltip>
+      ) : reconRunning ? (
+        // One chamber (LV or RV) can already be finished -- hasReconstructions true -- while the
+        // OTHER chamber the user also requested is still building. Without this branch the card
+        // fell through to the clickable Link below as soon as hasReconstructions flipped true,
+        // letting the user open landmark detection (and actually start it) while a reconstruction
+        // was still in flight (reported live, 2026-11-09).
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size="lg" variant="outline" disabled className="justify-start h-auto py-4 opacity-60 cursor-not-allowed">
+              <div className="flex items-center gap-3 w-full">
+                <Lock className="h-5 w-5 text-muted-foreground" />
+                <div className="text-left flex-1">
+                  <p className="font-semibold">Landmark Detection</p>
+                  <p className="text-xs text-muted-foreground">Finish the current 4D reconstruction first</p>
+                </div>
+              </div>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Wait for the in-progress 4D reconstruction to finish before running landmark detection</p>
+          </TooltipContent>
+        </Tooltip>
       ) : landmarkRunning ? (
         <Button disabled variant="outline" size="lg" className={STAGE_BUSY_CLASS}>
           <KineticButtonFill state={landmarkProgressState} value={landmarkSummary?.progress} label="Landmark detection running" />
@@ -1258,6 +1430,26 @@ function ProjectPageInner() {
     }
   };
 
+  // "Delete all" from the trash-icon choice popup: both chambers of this model in one call,
+  // rather than deleting the LV and RV reconstructions one at a time.
+  const handleDeleteAllForModel = async (segmentationModel: "medsam" | "unet") => {
+    setIsDeletingReconstruction(true);
+    try {
+      await reconstructionApi.deleteModelReconstruction(projectId, segmentationModel);
+      setDeleteChoiceOpen(false);
+      setDeleteChoiceCard(null);
+      await refreshReconstructions();
+    } catch (error: unknown) {
+      console.error("[Project] ❌ Error deleting reconstructions for model:", error);
+      alert(
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        "Failed to delete reconstructions. Please try again."
+      );
+    } finally {
+      setIsDeletingReconstruction(false);
+    }
+  };
+
   const processJobs: ProjectTypes.UserJob[] = [];
   const earlierRunsByJobId = new Map<string, ProjectTypes.UserJob[]>();
   const latestByProcess = new Map<string, ProjectTypes.UserJob>();
@@ -1266,6 +1458,8 @@ function ProjectPageInner() {
     const model = String(job.segmentationModel ?? "").toLowerCase() === "unet" ? "unet" : "medsam";
     const key = kind.includes("landmark")
       ? `landmark:${model}`
+      : strainJobLabel(job)
+      ? `strain:${kind}:${model}`
       : kind.includes("4d_reconstruction")
       ? `recon:${model}:${normalizeReconstructionChamber(job.chamber ?? reconstructionChamberById.get(job.jobId))}`
       : `seg:${model}`;
@@ -1287,10 +1481,6 @@ function ProjectPageInner() {
     },
     {} as Record<ProjectTypes.JobStatus, number>,
   );
-
-  // Get editable mask (the one users interact with)
-  const editableMask = undecodedMasks?.find((mask) => !mask.isMedSAMOutput);
-  const maskIsSaved = editableMask?.isSaved || false;
 
   // Use local state if available (for optimistic updates), otherwise use project data
   const currentProjectName = localProjectName !== null ? localProjectName : projectData.name;
@@ -1403,16 +1593,13 @@ function ProjectPageInner() {
                     {currentProjectDescription || "No description provided."}
                   </p>
                 )}
-                
-                <div className="flex items-center gap-4 text-xs text-muted-foreground pt-1">
-                  <span className="font-mono">{projectId}</span>
-                  <Separator orientation="vertical" className="h-3" />
-                  <span>{projectData.dimensions?.frames || 0} frames</span>
-                  <span>·</span>
-                  <span>{projectData.dimensions?.slices || 0} slices</span>
-                  <span>·</span>
-                  <span>{(projectData.filesize / 1024 / 1024).toFixed(2)} MB</span>
-                </div>
+
+                <ProjectMetaLine
+                  projectId={projectId}
+                  frames={projectData.dimensions?.frames}
+                  slices={projectData.dimensions?.slices}
+                  filesizeBytes={projectData.filesize}
+                />
               </div>
             </div>
 
@@ -1500,24 +1687,30 @@ function ProjectPageInner() {
 
               <div className="flex items-center gap-2">
                 <div className={`h-8 w-8 rounded-full flex items-center justify-center border ${
-                  hasReconstructions 
-                    ? 'bg-green-100 dark:bg-green-950/30 border-green-500' 
-                    : hasActiveReconstructionJobs
+                  // reconRunning checked BEFORE hasReconstructions: one chamber (LV or RV) can
+                  // already be done while the other one the user also requested is still
+                  // building -- hasReconstructions alone would show "Complete" here while the
+                  // badge directly below it (and the Landmark Detection card) still correctly
+                  // said "Processing" / locked, a visibly contradictory pair (reported live,
+                  // 2026-11-09).
+                  reconRunning
                     ? 'bg-blue-100 dark:bg-blue-950/30 border-blue-500'
+                    : hasReconstructions
+                    ? 'bg-green-100 dark:bg-green-950/30 border-green-500'
                     : hasMasks
                     ? 'bg-amber-100 dark:bg-amber-950/30 border-amber-500'
                     : 'bg-muted border-muted-foreground/30'
                 }`}>
                   <Box className={`h-4 w-4 ${
-                    hasReconstructions ? 'text-green-600' : hasActiveReconstructionJobs ? 'text-blue-600' : hasMasks ? 'text-amber-600' : 'text-muted-foreground'
+                    reconRunning ? 'text-blue-600' : hasReconstructions ? 'text-green-600' : hasMasks ? 'text-amber-600' : 'text-muted-foreground'
                   }`} />
                 </div>
                 <div className="hidden md:block">
                   <p className="text-xs font-medium">4D Model</p>
                   <p className="text-xs text-muted-foreground">
-                    {hasReconstructions ? 'Complete' : hasActiveReconstructionJobs ? 'Processing' : hasMasks ? 'Available' : 'Locked'}
+                    {reconRunning ? 'Processing' : hasReconstructions ? 'Complete' : hasMasks ? 'Available' : 'Locked'}
                   </p>
-                  {!hasReconstructions && hasActiveReconstructionJobs && <KineticProgress size="h-1" className="mt-1 w-16" label="Reconstruction running" />}
+                  {reconRunning && <KineticProgress size="h-1" className="mt-1 w-16" label="Reconstruction running" />}
                 </div>
               </div>
 
@@ -1724,7 +1917,36 @@ function ProjectPageInner() {
                         <p className="text-sm text-muted-foreground">All processing stages finished</p>
                       </div>
                     </div>
-                    {rerunHeaderButton}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <Button
+                                variant="info"
+                                size="sm"
+                                aria-label="Report Page"
+                                disabled={!hasAnyStrainResult}
+                                onClick={() => {
+                                  if (hasAnyStrainResult) router.push(`/project/${projectId}/report?from=project`);
+                                }}
+                              >
+                                <FileText className="h-4 w-4" />
+                                <span className="hidden sm:inline">Report Page</span>
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>
+                              {hasAnyStrainResult
+                                ? "Open the full results report"
+                                : "Not available — compute strain in Landmark Detection first"}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      {rerunHeaderButton}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -1766,48 +1988,33 @@ function ProjectPageInner() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
                   {/* Dimensions */}
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Dimensions</p>
-                    <p className="text-sm font-mono">
+                    <p className="text-sm font-mono whitespace-nowrap">
                       {projectData.dimensions?.width} × {projectData.dimensions?.height}
                     </p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Frames</p>
-                    <p className="text-sm font-semibold">{projectData.dimensions?.frames || 0}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Slices</p>
-                    <p className="text-sm font-semibold">{projectData.dimensions?.slices || 0}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">File Size</p>
-                    <p className="text-sm font-semibold">{(projectData.filesize / 1024 / 1024).toFixed(2)} MB</p>
                   </div>
 
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel X</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.x || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.x || 0} mm`}>{formatTrimmed(projectData.voxelsize?.x, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Y</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.y || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.y || 0} mm`}>{formatTrimmed(projectData.voxelsize?.y, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Voxel Z</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.z || 0} mm</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.z || 0} mm`}>{formatTrimmed(projectData.voxelsize?.z, 3)} mm</p>
                   </div>
-                  
+
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">Temporal</p>
-                    <p className="text-sm font-mono">{projectData.voxelsize?.t || 0} ms</p>
+                    <p className="text-sm font-mono whitespace-nowrap" title={`${projectData.voxelsize?.t || 0} ms`}>{formatTrimmed(projectData.voxelsize?.t, 2)} ms</p>
                   </div>
                 </div>
 
@@ -1824,20 +2031,15 @@ function ProjectPageInner() {
           </div>
 
           {/* Right Column - Status Panels */}
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* Masks Section - Redesigned */}
-            <Card>
-              <CardHeader className="pb-3">
+            <Card className="gap-3">
+              <CardHeader className="pb-0">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
                     <Layers className="h-4 w-4" />
                     Segmentation
                   </CardTitle>
-                  {hasMasks && (
-                    <Badge variant={maskIsSaved ? "default" : "secondary"}>
-                      {maskIsSaved ? "Saved" : "Unsaved"}
-                    </Badge>
-                  )}
                 </div>
               </CardHeader>
               <CardContent>
@@ -1894,8 +2096,8 @@ function ProjectPageInner() {
 
             {/* Reconstruction Details Section - result/history only */}
             {hasReconstructions && reconstructionRows.length > 0 && (
-              <Card>
-                <CardHeader className="pb-3">
+              <Card className="gap-3">
+                <CardHeader className="pb-0">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Box className="h-4 w-4" />
@@ -1915,92 +2117,32 @@ function ProjectPageInner() {
                     const resolution = recon.metadata?.resolution;
                     const iterations = recon.metadata?.numIterations;
                     const processingTime = recon.metadata?.reconstructionTime;
+                    const chamberLabel = isRvOnly ? "RV" : rvCompanion ? "LV + RV" : "LV";
+                    const title = `4D Reconstruction - Job ${(recon.reconstructionId || "").slice(0, 8)}`;
+                    // RV's own fields when this card's LV reconstruction has an RV sibling (item 1:
+                    // these previously only ever showed the LV reconstruction's own values).
+                    const rvResolution = rvCompanion?.metadata?.resolution;
+                    const rvIterations = rvCompanion?.metadata?.numIterations;
+                    const rvProcessingTime = rvCompanion?.metadata?.reconstructionTime;
+
+                    const detailsOpen = expandedReconDetails.has(recon.reconstructionId);
 
                     return (
-                      <div key={recon.reconstructionId} className={`rounded-lg border p-4 space-y-3 ${isRvOnly ? "border-amber-500/40" : ""}`}>
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0 space-y-2">
+                      <div key={recon.reconstructionId} className="rounded-lg border text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+                          <div className="min-w-0 flex-1 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <p className="font-semibold truncate">{recon.name || "4D Reconstruction"}</p>
+                              <p className="font-semibold truncate">{title}</p>
                               <Badge variant="outline">{formatReconstructionModel(model)}</Badge>
-                              <Badge variant="secondary">{recon.status || "Ready"}</Badge>
-                              {isRvOnly && (
-                                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-                                  RV · research only
-                                </Badge>
-                              )}
+                              <Badge
+                                variant="outline"
+                                className={chamberLabel === "LV + RV" ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400" : ""}
+                              >
+                                {chamberLabel}
+                              </Badge>
                             </div>
-                            <div className="grid gap-3 text-sm sm:grid-cols-2">
-                              <div>
-                                <p className="text-xs text-muted-foreground">Segmentation Model Used</p>
-                                <p>{formatReconstructionModel(model)}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Updated</p>
-                                <p>{formatDateTime(recon.updatedAt || recon.createdAt)}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">ED Frame</p>
-                                <p className="font-mono">Frame {edFrame}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Export Format</p>
-                                <p className="font-mono uppercase">{recon.meshFormat || "GLB"}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Size</p>
-                                <p>{formatFileSize(recon.meshFileSize)}</p>
-                              </div>
-                              {(resolution || iterations) && (
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Resolution / Iterations</p>
-                                  <p className="font-mono">
-                                    {resolution ? `${resolution}^3` : "N/A"} / {iterations ?? "N/A"}
-                                  </p>
-                                </div>
-                              )}
-                              {processingTime && (
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Processing Time</p>
-                                  <p>{processingTime.toFixed(1)}s</p>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* An RV reconstruction exists for this model, so "View 4D" opens both
-                                chambers. Said here rather than as a second card, because it is the
-                                same scan — but it must be said, since the RV mesh is research-only
-                                and the user has not opened the viewer yet. */}
-                            {rvCompanion && (
-                              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
-                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs leading-relaxed text-muted-foreground">
-                                    <span className="font-medium text-foreground">Includes RV.</span>{" "}
-                                    Opening 4D shows the RV cavity alongside the LV, and either can be
-                                    hidden there. RV is for reference/research only — not reliable for
-                                    clinical diagnosis.
-                                  </p>
-                                  {isProjectOwner && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => {
-                                        setSelectedReconstructionForDeletion(rvCompanion);
-                                        setDeleteModelDialogOpen(true);
-                                      }}
-                                      className="h-auto p-0 mt-1.5 text-xs text-destructive hover:text-destructive hover:bg-transparent hover:underline"
-                                    >
-                                      <Trash2 className="h-3 w-3 mr-1" />
-                                      Delete RV only
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-                            )}
                           </div>
-
-                          <div className="flex flex-wrap gap-2 lg:justify-end">
+                          <div className="flex items-center gap-2 shrink-0">
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger asChild>
@@ -2019,20 +2161,100 @@ function ProjectPageInner() {
                             </TooltipProvider>
                             {isProjectOwner && (
                               <Button
-                                size="sm"
                                 variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                aria-label={`Delete ${title}`}
                                 onClick={() => {
-                                  setSelectedReconstructionForDeletion(recon);
-                                  setDeleteModelDialogOpen(true);
+                                  if (rvCompanion) {
+                                    setDeleteChoiceCard({ recon, rvCompanion, model: (model === "medsam" || model === "unet" ? model : "unet") });
+                                    setDeleteChoiceOpen(true);
+                                  } else {
+                                    setSelectedReconstructionForDeletion(recon);
+                                    setDeleteModelDialogOpen(true);
+                                  }
                                 }}
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
                               >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Delete
+                                <Trash2 className="h-4 w-4" />
                               </Button>
                             )}
                           </div>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedReconDetails((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(recon.reconstructionId)) next.delete(recon.reconstructionId);
+                              else next.add(recon.reconstructionId);
+                              return next;
+                            })
+                          }
+                          className="flex w-full items-center gap-1 border-t px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/50"
+                          aria-expanded={detailsOpen}
+                        >
+                          <ChevronRight className={`h-3 w-3 transition-transform ${detailsOpen ? "rotate-90" : ""}`} />
+                          Details
+                        </button>
+                        {detailsOpen && (
+                          <div className="border-t bg-muted/20 p-3">
+                            {/* One table for every field, LV-only fields included, so everything lines
+                                up on the same column edges instead of a separate grid above a separate
+                                table (item: "align the frame/export/model used with the table"). */}
+                            <div className="rounded-md border overflow-hidden">
+                              <table className="w-full text-xs">
+                                {rvCompanion && (
+                                  <thead>
+                                    <tr className="bg-muted/40 text-muted-foreground">
+                                      <th className="px-2 py-1 text-left font-medium"> </th>
+                                      <th className="px-2 py-1 text-left font-medium">LV</th>
+                                      <th className="px-2 py-1 text-left font-medium">RV</th>
+                                    </tr>
+                                  </thead>
+                                )}
+                                <tbody className="divide-y">
+                                  <tr>
+                                    <td className="px-2 py-1 text-muted-foreground">ED Frame</td>
+                                    <td className="px-2 py-1 font-mono" colSpan={rvCompanion ? 2 : 1}>Frame {edFrame}</td>
+                                  </tr>
+                                  <tr>
+                                    <td className="px-2 py-1 text-muted-foreground">Export Format</td>
+                                    <td className="px-2 py-1 font-mono uppercase" colSpan={rvCompanion ? 2 : 1}>{recon.meshFormat || "GLB"}</td>
+                                  </tr>
+                                  <tr>
+                                    <td className="px-2 py-1 text-muted-foreground">Model Used</td>
+                                    <td className="px-2 py-1" colSpan={rvCompanion ? 2 : 1}>{formatReconstructionModel(model)}</td>
+                                  </tr>
+                                  <tr>
+                                    <td className="px-2 py-1 text-muted-foreground">Updated</td>
+                                    <td className="px-2 py-1">{formatDateTime(recon.updatedAt || recon.createdAt)}</td>
+                                    {rvCompanion && <td className="px-2 py-1">{formatDateTime(rvCompanion.updatedAt || rvCompanion.createdAt)}</td>}
+                                  </tr>
+                                  <tr>
+                                    <td className="px-2 py-1 text-muted-foreground">Size</td>
+                                    <td className="px-2 py-1">{formatFileSize(recon.meshFileSize)}</td>
+                                    {rvCompanion && <td className="px-2 py-1">{formatFileSize(rvCompanion.meshFileSize)}</td>}
+                                  </tr>
+                                  {(resolution || iterations || rvResolution || rvIterations) && (
+                                    <tr>
+                                      <td className="px-2 py-1 text-muted-foreground">Resolution / Iter.</td>
+                                      <td className="px-2 py-1 font-mono">{resolution ? `${resolution}^3` : "N/A"} / {iterations ?? "N/A"}</td>
+                                      {rvCompanion && <td className="px-2 py-1 font-mono">{rvResolution ? `${rvResolution}^3` : "N/A"} / {rvIterations ?? "N/A"}</td>}
+                                    </tr>
+                                  )}
+                                  {(processingTime || rvProcessingTime) && (
+                                    <tr>
+                                      <td className="px-2 py-1 text-muted-foreground">Processing Time</td>
+                                      <td className="px-2 py-1">{processingTime ? `${processingTime.toFixed(1)}s` : "N/A"}</td>
+                                      {rvCompanion && <td className="px-2 py-1">{rvProcessingTime ? `${rvProcessingTime.toFixed(1)}s` : "N/A"}</td>}
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -2042,8 +2264,11 @@ function ProjectPageInner() {
 
 
             {/* Jobs Section - Redesigned */}
-            <Card>
-              <CardHeader className="pb-3">
+            <Card
+              ref={jobsCardRef}
+              className={`gap-3 transition-shadow duration-500 ${highlightJobs ? "ring-info ring-2 ring-offset-2" : ""}`}
+            >
+              <CardHeader className="pb-0">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Activity className="h-4 w-4" />
                   Processing Jobs
@@ -2107,7 +2332,7 @@ function ProjectPageInner() {
                     </div>
 
                     {/* Job List - Compact */}
-                    <ScrollArea className="h-32">
+                    <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-48">
                       <TooltipProvider>
                       <div className="space-y-2">
                         {processJobs.map((job, index) => {
@@ -2199,7 +2424,7 @@ function ProjectPageInner() {
       <ReconstructionConfigDialog
         open={showReconstructionDialog}
         onOpenChange={setShowReconstructionDialog}
-        onStart={handleStartReconstruction}
+        onStart={handleStartReconstructions}
         isLoading={isStartingReconstruction}
         totalFrames={projectData?.dimensions?.frames || 1}
         availableModels={availableReconstructionModels}
@@ -2215,6 +2440,50 @@ function ProjectPageInner() {
       />
 
       {/* Delete Model Reconstruction Confirmation Dialog */}
+      {/* Trash-icon popup on a reconstruction card that has both chambers: pick which to delete
+          in one step, rather than a submenu with two separate "Delete" items. */}
+      <AlertDialog open={deleteChoiceOpen} onOpenChange={setDeleteChoiceOpen}>
+        <AlertDialogContent>
+          <AlertDialogCancel
+            disabled={isDeletingReconstruction}
+            className="absolute top-4 right-4 h-7 w-7 rounded-xs border-none p-0 opacity-70 shadow-none transition-opacity hover:opacity-100 hover:bg-transparent"
+            aria-label="Cancel"
+          >
+            <X className="h-4 w-4" />
+          </AlertDialogCancel>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete 4D Reconstruction</AlertDialogTitle>
+            <AlertDialogDescription>
+              This scan has both an LV and an RV reconstruction. What do you want to delete? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              disabled={isDeletingReconstruction}
+              onClick={() => {
+                if (!deleteChoiceCard) return;
+                setDeleteChoiceOpen(false);
+                setSelectedReconstructionForDeletion(deleteChoiceCard.rvCompanion);
+                setDeleteModelDialogOpen(true);
+              }}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete RV only
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={isDeletingReconstruction}
+              onClick={() => deleteChoiceCard && handleDeleteAllForModel(deleteChoiceCard.model)}
+            >
+              {isDeletingReconstruction ? <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
+              Delete All
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={deleteModelDialogOpen} onOpenChange={setDeleteModelDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

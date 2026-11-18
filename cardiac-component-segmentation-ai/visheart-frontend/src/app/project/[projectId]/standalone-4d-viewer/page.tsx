@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useProject, normalizeReconstructionChamber } from "@/context/ProjectContext";
 import { useAuth } from "@/context/auth-context";
 import { Button } from "@/components/ui/button";
@@ -10,9 +10,11 @@ import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
-import { ReconstructionGLBViewer } from "@/components/reconstruction/ReconstructionGLBViewer";
+import { ReconstructionGLBViewer, DEFAULT_LV_COLOR, DEFAULT_RV_COLOR } from "@/components/reconstruction/ReconstructionGLBViewer";
 import { GuidancePanel } from "@/components/GuidancePanel";
-import { Layers, Crosshair, AlertTriangle } from "lucide-react";
+import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
+import { isReconstructionPreloaded, markReconstructionPreloaded } from "@/lib/reconstructionPreloadCache";
+import { Layers, Crosshair } from "lucide-react";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -255,6 +257,7 @@ export default function Standalone4DViewerPage() {
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(500); // ms per frame
+  const [chamberColors, setChamberColors] = useState({ primary: DEFAULT_LV_COLOR, secondary: DEFAULT_RV_COLOR });
 
   // Sending the user to the project page rather than starting the job here on purpose: that page
   // owns mask availability, GPU availability and the duplicate check. Starting a job from the
@@ -274,7 +277,7 @@ export default function Standalone4DViewerPage() {
     {
       key: "lv" as const,
       label: "LV myocardium",
-      color: "#c41e3a",
+      color: chamberColors.primary,
       recon: lvReconstruction,
       visible: showLv,
       setVisible: setShowLv,
@@ -284,7 +287,7 @@ export default function Standalone4DViewerPage() {
     {
       key: "rv" as const,
       label: "RV cavity",
-      color: "#2f9ed6",
+      color: chamberColors.secondary,
       recon: rvReconstruction,
       visible: showRv,
       setVisible: setShowRv,
@@ -308,8 +311,18 @@ export default function Standalone4DViewerPage() {
     }
 
     let cancelled = false;
+    // Once the preload pass above has warmed this reconstruction, resolving a
+    // frame's URL here is just a cache read -- but setIsLoadingModel(true)
+    // still guaranteed at least one render with the "Loading..." badge shown
+    // on EVERY frame advance during playback (the setState happens before
+    // the first await, regardless of how fast that await resolves), which is
+    // exactly what read as flickering even after preloading. Only show it
+    // for a reconstruction that genuinely hasn't been prepared yet.
+    const alreadyPrepared =
+      preparedReconstructionsRef.current.has(lvReconstruction.reconstructionId) ||
+      isReconstructionPreloaded(lvReconstruction.reconstructionId);
     const loadModel = async () => {
-      setIsLoadingModel(true);
+      if (!alreadyPrepared) setIsLoadingModel(true);
       try {
         console.log(`[Standalone4DViewer] Loading LV model for frame ${currentFrame}...`);
         const url = await getReconstructionGLB(currentFrame, undefined, lvReconstruction.reconstructionId);
@@ -326,7 +339,7 @@ export default function Standalone4DViewerPage() {
         console.error(`[Standalone4DViewer] Error loading LV model:`, error);
         setReconstructionModelUrl(null);
       } finally {
-        if (!cancelled) setIsLoadingModel(false);
+        if (!cancelled && !alreadyPrepared) setIsLoadingModel(false);
       }
     };
 
@@ -367,6 +380,111 @@ export default function Standalone4DViewerPage() {
       cancelled = true;
     };
   }, [showRv, rvReconstruction, currentFrame, getReconstructionGLB]);
+
+  // Preload EVERY frame of both visible chambers into the Three.js/drei cache before allowing
+  // playback, so the first pass through the whole cycle doesn't show a "Loading model..." spinner
+  // per frame (reads as flickering) -- only the lazy per-frame fetch above (which still runs
+  // normally once this has completed, now hitting an already-warm cache). Mirrors the proven
+  // technique ProjectContext.preloadAllThreeJSModels already uses (useGLTF.preload / OBJLoader),
+  // but scoped to BOTH chambers explicitly: that shared mechanism only ever targets a single
+  // "active" reconstruction resolved from this page's own URL params, which is LV only -- RV is a
+  // second, independent reconstruction record it never reaches (reported live with a screenshot
+  // from supervisor feedback, 2026-11-12).
+  //
+  // Checked against reconstructionPreloadCache (module-level, not page-local) first: if
+  // ProjectContext's own background preload already finished warming a reconstruction while the
+  // user was elsewhere (e.g. still on the project page right after 4D reconstruction completed),
+  // this page trusts that instead of blocking Play behind its own redundant "Processing
+  // reconstruction..." pass again -- the whole point of asking for this to start earlier,
+  // reported live, 2026-11-14.
+  const preparedReconstructionsRef = useRef<Set<string>>(new Set());
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [prepareProgress, setPrepareProgress] = useState<{ current: number; total: number } | null>(null);
+
+  useEffect(() => {
+    const targets: { reconstructionId: string; frames: number }[] = [];
+    if (showLv && lvReconstruction?.reconstructionId) {
+      targets.push({ reconstructionId: lvReconstruction.reconstructionId, frames: lvReconstruction.totalFrames || totalFrames });
+    }
+    if (showRv && rvReconstruction?.reconstructionId) {
+      targets.push({ reconstructionId: rvReconstruction.reconstructionId, frames: rvReconstruction.totalFrames || totalFrames });
+    }
+    for (const target of targets) {
+      if (isReconstructionPreloaded(target.reconstructionId)) {
+        preparedReconstructionsRef.current.add(target.reconstructionId);
+      }
+    }
+    const pending = targets.filter((t) => t.frames > 0 && !preparedReconstructionsRef.current.has(t.reconstructionId));
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const prepare = async () => {
+      setIsPreparing(true);
+      const total = pending.reduce((sum, t) => sum + t.frames, 0);
+      let done = 0;
+      setPrepareProgress({ current: 0, total });
+
+      const { useGLTF } = await import("@react-three/drei");
+      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+      const { OBJLoader } = await import("three/examples/jsm/loaders/OBJLoader.js");
+      const gltfLoader = new GLTFLoader();
+      const objLoader = new OBJLoader();
+      const CONCURRENT = 3;
+
+      for (const target of pending) {
+        const frameIndices = Array.from({ length: target.frames }, (_, i) => i);
+        for (let i = 0; i < frameIndices.length; i += CONCURRENT) {
+          if (cancelled) return;
+          const batch = frameIndices.slice(i, i + CONCURRENT);
+          await Promise.all(
+            batch.map(async (frameIdx) => {
+              try {
+                const url = await getReconstructionGLB(frameIdx, undefined, target.reconstructionId);
+                if (!url || cancelled) return;
+                const isObj = url.split("?")[0].toLowerCase().endsWith(".obj");
+                if (isObj) {
+                  await new Promise<void>((resolve) => {
+                    objLoader.load(url, () => resolve(), undefined, () => resolve());
+                  });
+                } else {
+                  // useGLTF.preload() is fire-and-forget by design (suspend-react's preload()
+                  // discards its own return value) -- awaiting it does NOT wait for the fetch+
+                  // parse to finish, so this loop was finishing almost instantly without the
+                  // real loads completing, and the per-frame spinner still fired during the
+                  // "first" pass once Play started (reported live, 2026-11-13). Load through our
+                  // own GLTFLoader first so this await is real, then warm drei's cache for the
+                  // later useGLTF() hook call so it doesn't redundantly refetch over the network
+                  // (it still re-parses once, but with no network latency left to wait on).
+                  await new Promise<void>((resolve) => {
+                    gltfLoader.load(url, () => resolve(), undefined, () => resolve());
+                  });
+                  useGLTF.preload(url);
+                }
+              } catch {
+                // A single failed frame must not block the rest of the batch -- it just falls
+                // back to the existing lazy per-frame fetch/spinner for that one frame later.
+              } finally {
+                done += 1;
+                if (!cancelled) setPrepareProgress({ current: done, total });
+              }
+            }),
+          );
+        }
+        preparedReconstructionsRef.current.add(target.reconstructionId);
+        markReconstructionPreloaded(target.reconstructionId);
+      }
+
+      if (!cancelled) {
+        setIsPreparing(false);
+        setPrepareProgress(null);
+      }
+    };
+
+    void prepare();
+    return () => {
+      cancelled = true;
+    };
+  }, [showLv, showRv, lvReconstruction, rvReconstruction, totalFrames, getReconstructionGLB]);
 
   // Playback animation
   useEffect(() => {
@@ -545,7 +663,7 @@ export default function Standalone4DViewerPage() {
   }
 
   return (
-    <div className="h-[90vh] flex flex-col">
+    <div className="flex h-[calc(100dvh-var(--header-h))] min-h-0 flex-col overflow-hidden">
       {/* Resizable Layout */}
       <ResizablePanelGroup 
         direction="horizontal" 
@@ -577,7 +695,31 @@ export default function Standalone4DViewerPage() {
               // Marks RV as research-only on the canvas itself, so the warning stays with the
               // image if the sidebar is collapsed or the view is screenshotted.
               secondaryIsResearchOnly
+              // The viewer's own "loading model" overlay only knows a frame is ready once ITS
+              // OWN onReady fires -- one render after first displaying that frame, even when the
+              // preload pass below already fully warmed it. That one-render flash on every new
+              // frame is exactly the "first run flickers, replays are smooth" symptom (replays
+              // reuse frames this viewer has already rendered once, so they skip it) -- suppress
+              // it once our own preload pass has finished, since every frame is already warm by
+              // then regardless of whether this viewer has personally rendered it yet.
+              skipLoadingOverlay={!isPreparing}
+              onColorsChange={setChamberColors}
             />
+
+            {/* First-run preload: covers up the per-frame "Loading model..." flicker with one
+                upfront processing step (see the preload effect above). */}
+            {isPreparing && (
+              <div className="absolute inset-0 z-30 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-sm">
+                <div className="flex flex-col items-center gap-2 text-foreground">
+                  <Loader2 className="h-7 w-7 animate-spin" />
+                  <span className="text-sm font-medium">
+                    Processing reconstruction…
+                    {prepareProgress ? ` ${prepareProgress.current}/${prepareProgress.total}` : ""}
+                  </span>
+                  <span className="text-xs text-muted-foreground">Playback will run smoothly once this finishes</span>
+                </div>
+              </div>
+            )}
           </div>
         </ResizablePanel>
 
@@ -597,8 +739,13 @@ export default function Standalone4DViewerPage() {
               layout conflict that gives scroll-anchoring something to "fix" in the
               first place. Letting the card size to its natural content height and
               scrolling the outer div instead avoids that entirely. */}
-          <div className="h-full overflow-y-auto p-4 [overflow-anchor:none]">
-            <Card>
+          <div className="h-full overflow-y-auto rounded-lg border p-4 [overflow-anchor:none]">
+            {/* border-0/shadow-none/bg-transparent: the OUTER div above now carries the
+                visible border, so this panel always reads as full-height and matches the
+                viewer panel's own bordered box on the left, regardless of whether the
+                Card's own (intentionally unstretched, see comment above) content is
+                shorter than the available space. */}
+            <Card className="border-0 bg-transparent shadow-none">
               <CardHeader>
                 <CardTitle className="text-base flex items-center justify-between">
                   <span>Playback Controls</span>
@@ -659,8 +806,8 @@ export default function Standalone4DViewerPage() {
                     size="icon"
                     onClick={() => setIsPlaying(!isPlaying)}
                     className="h-10 w-10"
-                    title={isPlaying ? "Pause" : "Play"}
-                    disabled={totalFrames <= 1}
+                    title={isPreparing ? "Preparing the model…" : isPlaying ? "Pause" : "Play"}
+                    disabled={totalFrames <= 1 || isPreparing}
                   >
                     {isPlaying ? (
                       <Pause className="h-5 w-5" />
@@ -699,14 +846,19 @@ export default function Standalone4DViewerPage() {
                     </span>
                   </div>
                   <Slider
-                    value={[playbackSpeed]}
-                    onValueChange={(value) => setPlaybackSpeed(value[0])}
-                    min={100}
-                    max={2000}
-                    step={100}
+                    value={[1000 / playbackSpeed]}
+                    onValueChange={(value) => setPlaybackSpeed(Math.round(1000 / value[0]))}
+                    min={0.5}
+                    max={10}
+                    step={0.5}
                     className="w-full"
                     disabled={totalFrames <= 1}
+                    aria-label="Playback speed, frames per second"
                   />
+                  <div className="text-muted-foreground flex justify-between text-xs">
+                    <span>Slow</span>
+                    <span>Fast</span>
+                  </div>
                 </div>
 
                 {/* Chambers.
@@ -788,17 +940,7 @@ export default function Standalone4DViewerPage() {
                   )}
 
                   {rvReconstruction && (
-                    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-1">
-                      <p className="text-xs font-semibold flex items-start gap-1.5 text-amber-700 dark:text-amber-400">
-                        <AlertTriangle className="h-3.5 w-3.5 mt-[1px] shrink-0" />
-                        <span>RV reconstruction is for reference/research use only</span>
-                      </p>
-                      <p className="text-[11px] leading-relaxed text-muted-foreground">
-                        It is not reliable for actual clinical diagnosis. The RV shape model has not
-                        passed accuracy validation, so RV geometry, volumes and any measurement
-                        derived from them must not be used clinically or reported as a result.
-                      </p>
-                    </div>
+                    <RvResearchNotice subject="model" />
                   )}
 
                   {!showLv && !showRv && (
@@ -833,13 +975,13 @@ export default function Standalone4DViewerPage() {
                       <div>
                         <p className="text-muted-foreground">Resolution</p>
                         <p className="font-mono">
-                          {activeReconstruction.metadata?.resolution || 32}³
+                          {activeReconstruction.metadata?.resolution ? `${activeReconstruction.metadata.resolution}³` : "—"}
                         </p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Iterations</p>
                         <p className="font-mono">
-                          {activeReconstruction.metadata?.numIterations || 30}
+                          {activeReconstruction.metadata?.numIterations ?? "—"}
                         </p>
                       </div>
                     </div>

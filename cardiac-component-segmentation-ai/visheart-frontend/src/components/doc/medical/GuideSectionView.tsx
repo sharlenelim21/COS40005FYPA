@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import { figureNumber, type ContentBlock, type GuideSection } from "@/content/medicalGuide";
 import { Callout } from "@/components/doc/medical/Callout";
 import { ClaimParagraphs, ClaimText } from "@/components/doc/medical/Citation";
@@ -5,6 +7,7 @@ import { ConditionGrid } from "@/components/doc/medical/ConditionCard";
 import { ContentText } from "@/components/doc/medical/ContentText";
 import { DiseasePatternTable } from "@/components/doc/medical/DiseasePatternTable";
 import { FigureSlot } from "@/components/doc/medical/FigureSlot";
+import { ReferenceHearts } from "@/components/doc/medical/ReferenceHearts";
 import { ReferenceRangeTable } from "@/components/doc/medical/ReferenceRangeTable";
 import { TwoLayerSection } from "@/components/doc/medical/TwoLayerSection";
 import { VideoSlot } from "@/components/doc/medical/VideoSlot";
@@ -24,6 +27,17 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
               ))}
             </ul>
           )}
+          {block.readMoreHref && (
+            <Link
+              href={block.readMoreHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 text-sm font-semibold underline underline-offset-2 hover:no-underline"
+            >
+              {block.readMoreLabel ?? "Read more"}
+              <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
+          )}
         </Callout>
       );
     case "rangeTable":
@@ -36,6 +50,8 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
       return <ConditionGrid conditions={block.conditions} note={block.note} />;
     case "patternTable":
       return <DiseasePatternTable {...block} />;
+    case "referenceHearts":
+      return <ReferenceHearts note={block.note} />;
   }
 }
 

@@ -99,7 +99,8 @@ configureSessionHandling();
  * Middleware to check if the user is authenticated
  */
 const isAuth = (req: Request, res: Response, next: NextFunction): void => {
-  logger.info(`${serviceLocation}: Authenticated User: ${req.user ? JSON.stringify(req.user) : 'undefined'}`);
+  // Id only: the full user object carries personal data (email, phone) and was written on every request.
+  logger.debug(`${serviceLocation}: Authenticated User ID: ${(req.user as { _id?: unknown } | undefined)?._id ?? 'undefined'}`);
   if (req.isAuthenticated()) {
     return next();
   }

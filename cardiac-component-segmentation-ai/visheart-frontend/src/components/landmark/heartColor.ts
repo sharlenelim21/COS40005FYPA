@@ -1,9 +1,10 @@
 import * as THREE from "three";
+import { strainRampRgb } from "@/lib/strainColorScale";
 
-export function rdYlGn(t: number): THREE.Color {
-  const r = t < 0.5 ? 1 : 1 - (t - 0.5) * 2;
-  const g = t < 0.5 ? t * 2 : 1;
-  return new THREE.Color(r, g, 0);
+/** The shared strain ramp (lib/strainColorScale.ts) as a THREE.Color. */
+export function strainRamp(t: number): THREE.Color {
+  const [r, g, b] = strainRampRgb(t);
+  return new THREE.Color(r, g, b);
 }
 
 /** "No data" grey -- identical to the bullseye's #444444 so a missing segment matches in 2D and 3D. */
@@ -12,7 +13,7 @@ export function valueToColor(value: number | null | undefined, min: number, max:
   if (value == null || !Number.isFinite(value) || value === 0 || max === min) return new THREE.Color(0.267, 0.267, 0.267);
   let t = Math.max(0, Math.min(1, (value - min) / (max - min)));
   if (reverse) t = 1 - t;
-  return rdYlGn(t);
+  return strainRamp(t);
 }
 
 const DEBUG_SEGMENT_COLORS: readonly [number, number, number][] = [

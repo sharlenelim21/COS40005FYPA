@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { decodeSegmentationMasks } from "@/lib/decode-RLE";
 import { cn } from "@/lib/utils";
+import { isKeyForFocusedControl } from "@/lib/keyboard-shortcuts";
 import { useMaskRendering } from "@/hooks/useMaskRendering";
 
 // Import shared types and constants
@@ -275,12 +276,14 @@ export function ImageCanvas({
       if (ev.key === 'Control' || ev.ctrlKey) {
         if (!isCtrlPressed) setIsCtrlPressed(true);
       }
+      // Zoom/reset badges only light up for the plain keys the canvas acts on (not Ctrl+R etc.)
+      const plainKey = !ev.ctrlKey && !ev.metaKey && !ev.altKey;
       // Track zoom keys for zoom feedback
-      if (ev.key === '+' || ev.key === '=' || ev.key === '-' || ev.key === '_') {
+      if (plainKey && (ev.key === '+' || ev.key === '=' || ev.key === '-' || ev.key === '_')) {
         if (!isZoomKeyPressed) setIsZoomKeyPressed(true);
       }
       // Track reset key for reset feedback
-      if (ev.key === 'r' || ev.key === 'R') {
+      if (plainKey && (ev.key === 'r' || ev.key === 'R')) {
         if (!isResetKeyPressed) setIsResetKeyPressed(true);
       }
     };
@@ -383,9 +386,10 @@ export function ImageCanvas({
   // Keyboard shortcut handling for frame/slice navigation and zoom
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Only trigger if not focused on input/textarea/select
-      const tag = (event.target as HTMLElement)?.tagName?.toLowerCase();
-      if (["input", "textarea", "select"].includes(tag)) return;
+      // Not while typing in a box, using an open dropdown or a dialog.
+      if (isKeyForFocusedControl(event.target)) return;
+      // Ctrl/Cmd/Alt combinations belong to the browser (Ctrl+R reload, Ctrl+= / Ctrl+- page zoom).
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
 
       if (event.key === "ArrowLeft") {
         event.preventDefault();
@@ -1082,7 +1086,7 @@ export function ImageCanvas({
         </div>
 
         {/* Ctrl / Pan hint badge */}
-        <div className="absolute left-4 bottom-4 z-40">
+        <div className="absolute left-4 bottom-4 z-30">
           <Badge
             variant={isPanningState ? "default" : "secondary"}
             className={cn( "px-2 py-1 text-xs font-medium shadow", )}
@@ -1092,7 +1096,7 @@ export function ImageCanvas({
         </div>
 
         {/* Keyboard shortcuts hint badges */}
-        <div className="absolute right-4 bottom-4 z-40 flex flex-row gap-2">
+        <div className="absolute right-4 bottom-4 z-30 flex flex-row gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <Badge

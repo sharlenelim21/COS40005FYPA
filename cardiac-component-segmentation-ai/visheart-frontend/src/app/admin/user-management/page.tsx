@@ -176,6 +176,7 @@ const UserTableRow = React.memo(
       [user.username, onDelete],
     );
     const isCurrentUser = currentUser?.username === user.username;
+    const isTemplateAccount = user.username === "visheart_templates";
 
     return (
       <TableRow key={user._id}>
@@ -219,9 +220,9 @@ const UserTableRow = React.memo(
                 <Button
                   variant="destructive"
                   size="sm"
-                  disabled={isCurrentUser}
+                  disabled={isCurrentUser || isTemplateAccount}
                   className="h-8 w-8 p-0"
-                  title="Delete user"
+                  title={isTemplateAccount ? "This account holds the template data and cannot be deleted" : "Delete user"}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>

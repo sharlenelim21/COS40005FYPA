@@ -139,8 +139,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      #gpu:
-      #  condition: service_started
       # GPU dependency removed so profiles can boot dynamically without crashing
     volumes:
       - ../Cardiac_Segmentation_FYP_Server/dist:/app/backend/dist:ro
@@ -152,10 +150,14 @@ services:
       - temp_upload:/app/backend/dist/temp_upload
       # Stays a bind mount: the UNet Extend Training worker on the host reads the exports from here.
       - ../Cardiac_Segmentation_FYP_Server/dist/temp_exports:/app/backend/dist/temp_exports
+      # Template hearts committed to the repo (template_tool.py export); the backend
+      # loads any that this machine doesn't have yet on start-up (template_seed.ts).
+      - ./seed:/app/seed:ro
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/", "&&", "curl", "-f", "http://localhost:5000/"]
+      # CMD-SHELL so "&&" is run by a shell; in the exec ("CMD") form it was passed to curl as a URL argument.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:3000/ && curl -fsS -o /dev/null http://localhost:5000/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -286,25 +288,9 @@ services:
       retries: 5
       start_period: 20s
 
-  # ============================================
-  # MinIO Bucket Setup
-  # ============================================
-  minio-setup:
-    image: ${VH_MINIO_CLIENT_IMAGE:-bitnamilegacy/minio-client:latest}
-    container_name: visheart-minio-setup
-    depends_on:
-      minio:
-        condition: service_healthy
-    # Retry: the first connection was once refused although MinIO already reported healthy.
-    entrypoint: >
-      /bin/sh -c "
-      until mc alias set myminio http://minio:9000 minioadmin ${VH_MINIO_PASSWORD:-minioadmin123}; do sleep 2; done;
-      mc mb myminio/visheart-bucket --ignore-existing;
-      mc anonymous set ${VH_MINIO_ANON:-download} myminio/visheart-bucket;
-      exit 0;
-      "
-    networks:
-      - visheart-network
+  # The bucket (visheart-bucket, anonymous read) is created by the backend on start-up
+  # (s3_handler.ts ensureLocalBucket). It used to be a minio-setup service running the
+  # minio/mc image, which Docker Hub no longer serves, so `docker compose up` failed.
 
   # ============================================
   # GPU Inference Service (PROFILE: CPU)

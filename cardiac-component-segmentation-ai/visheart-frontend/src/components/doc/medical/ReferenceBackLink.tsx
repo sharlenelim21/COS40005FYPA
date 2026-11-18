@@ -38,7 +38,7 @@ export function ReferenceBackLink({ refId, number }: { refId: string; number: nu
       onClick={goBack}
       aria-label={`Back to where reference ${number} is cited`}
       title="Back to text"
-      className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm text-xs underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+      className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm text-sm underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none"
     >
       <CornerLeftUp className="h-3 w-3" aria-hidden="true" />
       Back to text

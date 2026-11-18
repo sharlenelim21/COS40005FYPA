@@ -272,10 +272,11 @@ export function useUserStats(projects: Project[], recentJobs: Job[]) {
 
   useEffect(() => {
     const fetchStats = async () => {
-      if (projects.length === 0 && recentJobs.length === 0) {
-        return;
-      }
-
+      // No early return on empty projects/jobs: that previously skipped setUserStats entirely,
+      // so after deleting every project the stat cards kept showing their last non-empty values
+      // instead of resetting to 0 -- everything below already handles empty arrays correctly
+      // (completedSegmentations/completedReconstructions are already guarded by
+      // projects.length > 0, and the reduce/filter calls below are no-ops on []).
       const pendingJobsCount = recentJobs.filter(
         (job) => job.status === "pending",
       ).length;

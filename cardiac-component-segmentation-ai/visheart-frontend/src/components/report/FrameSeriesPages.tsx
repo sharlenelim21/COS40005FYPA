@@ -10,8 +10,23 @@ import { chunk, fmt } from "./print-utils";
 // grid itself mid-page, producing blank cells and duplicated frames across
 // the page break. Fixed sizing is what the report used before that
 // experiment and is print-safe.
+//
+// grid gap-2 / cell p-0.5 (not gap-3/p-1): a full 12-cell page measured
+// ~0.8mm over the 297mm A4 budget with the wider spacing when the caller
+// also supplies a bullseyeIntroNote on the first chunk (e.g. RV Regional
+// GCS's page) -- just enough overflow to push past ReportPageFrame's
+// min-height floor and spill onto an otherwise-blank next page (same
+// mechanism globals.css's own comment already describes for print margins,
+// but this is a genuine content-height overflow, measured directly in a
+// real browser rather than assumed). The tighter spacing measured ~6.6mm
+// clear instead.
 const FRAMES_PER_BULLSEYE_PAGE = 12;
-const FRAMES_PER_TABLE_PAGE = 45;
+// Measured directly (see the grid-spacing comment above for the same method):
+// a full page of 45 rows came out ~6.8mm over the 297mm A4 budget (40 rows
+// measured ~20mm clear) -- any project with more than 45 computed frames
+// would have hit the same blank-page-after overflow on this table page,
+// even though it wasn't the one actually reported.
+const FRAMES_PER_TABLE_PAGE = 40;
 
 export type SeriesFrame = { frameIndex: number; values: (number | null)[] };
 
@@ -33,6 +48,7 @@ export function FrameSeriesPages({
   pageNumber,
   totalPages,
   generatedAt,
+  modeLabel,
   metricLabel,
   columnLabels,
   frames,
@@ -49,6 +65,7 @@ export function FrameSeriesPages({
   pageNumber: number;
   totalPages: number;
   generatedAt: string;
+  modeLabel?: string;
   metricLabel: string;
   /** Column header per value index (AHA segment names, or RV region names). */
   columnLabels: string[];
@@ -76,10 +93,12 @@ export function FrameSeriesPages({
   const accentHeadText = theme === "amber" ? "text-amber-800" : "text-teal-800";
   const accentRowBg = theme === "amber" ? "bg-amber-50" : "bg-teal-50/50";
 
+  // Displayed 1-based (idx + 1) to match the on-screen viewer's own convention
+  // (standalone-4d-viewer, etc.) -- the underlying frameIndex stays 0-based.
   const frameLabelFor = (idx: number) => {
-    if (idx === edFrameIndex) return `${idx} (ED)`;
-    if (idx === esFrameIndex) return `${idx} (ES)`;
-    return String(idx);
+    if (idx === edFrameIndex) return `${idx + 1} (ED)`;
+    if (idx === esFrameIndex) return `${idx + 1} (ES)`;
+    return String(idx + 1);
   };
 
   if (!frames.length) {
@@ -89,11 +108,12 @@ export function FrameSeriesPages({
         totalPages={totalPages}
         patientLabel={patientLabel}
         statusLabel="Complete"
+        modeLabel={modeLabel}
         title={metricLabel}
         subtitle="Every computed frame"
         generatedAt={generatedAt}
       >
-        <p className="py-10 text-center text-[10px] text-gray-600">{emptyMessage}</p>
+        <p className="py-10 text-center text-[14px] text-gray-600">{emptyMessage}</p>
       </ReportPageFrame>
     );
   }
@@ -107,18 +127,19 @@ export function FrameSeriesPages({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title={`${metricLabel}${bullseyeChunks.length > 1 ? ` (${ci + 1} of ${bullseyeChunks.length})` : ""}`}
           subtitle="Every computed frame — end-diastole (ED) and end-systole (ES) marked"
           generatedAt={generatedAt}
         >
           {ci === 0 && bullseyeIntroNote && (
-            <p className="mb-2 text-[9.5px] leading-snug text-gray-600">{bullseyeIntroNote}</p>
+            <p className="mb-2 text-[13px] leading-snug text-gray-600">{bullseyeIntroNote}</p>
           )}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2">
             {frameChunk.map((f) => (
-              <div key={f.frameIndex} className={`rounded-md border-2 p-1 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? accentBorder : "border-gray-300"}`}>
+              <div key={f.frameIndex} className={`rounded-md border-2 p-0.5 ${f.frameIndex === edFrameIndex || f.frameIndex === esFrameIndex ? accentBorder : "border-gray-300"}`}>
                 <div className="mx-auto h-[180px] w-[180px]">{renderBullseye(f.values)}</div>
-                <p className="text-center text-[8px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
+                <p className="text-center text-[12px] font-bold text-gray-900">Frame {frameLabelFor(f.frameIndex)}</p>
               </div>
             ))}
           </div>
@@ -132,19 +153,20 @@ export function FrameSeriesPages({
           totalPages={totalPages}
           patientLabel={patientLabel}
           statusLabel="Complete"
+          modeLabel={modeLabel}
           title={`${metricLabel} — By Region & Frame${tableChunks.length > 1 ? ` (${ci + 1} of ${tableChunks.length})` : ""}`}
           subtitle="Every value, every computed frame"
           generatedAt={generatedAt}
         >
           {ci === 0 && tablePrototypeNote && (
-            <div className={`mb-2 rounded-md border border-dashed px-2.5 py-1.5 text-[9px] ${
+            <div className={`mb-2 rounded-md border border-dashed px-2.5 py-1.5 text-[13px] ${
               theme === "amber" ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-gray-50 text-gray-600"
             }`}>
               {tablePrototypeNote}
             </div>
           )}
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[7.5px]">
+            <table className="w-full border-collapse text-[11px]">
               <thead>
                 <tr className={accentHeadBg}>
                   <th className={`border-b border-gray-300 px-1 py-1 text-left font-bold ${accentHeadText}`}>Frame</th>
@@ -169,8 +191,9 @@ export function FrameSeriesPages({
             </table>
           </div>
           {ci === tableChunks.length - 1 && (
-            <p className="mt-2 text-[8.5px] text-gray-600">
+            <p className="mt-2 text-[12px] text-gray-600">
               {columnLabels.map((l, i) => `${i + 1}. ${l}`).join(" · ")}
+              {" "}Frame numbers are one-based.
             </p>
           )}
         </ReportPageFrame>

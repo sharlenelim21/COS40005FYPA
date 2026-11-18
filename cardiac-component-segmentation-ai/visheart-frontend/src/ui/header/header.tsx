@@ -63,11 +63,15 @@ export default function Header() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  useEffect(() => {
+    document.documentElement.style.setProperty("--header-h", `${isScrolled ? HEADER_HEIGHT_SCROLLED : HEADER_HEIGHT_NORMAL}px`);
+  }, [isScrolled]);
+
   return (
     <>
       <header
         className={cn(
-          "fixed top-0 right-0 left-0 z-[60]",
+          "fixed top-0 right-0 left-0 z-40",
           "supports-[backdrop-filter]:bg-background/60 border-b backdrop-blur-md",
           "flex items-center",
           isScrolled ? "bg-background/95 border-border/80 h-10 shadow-sm" : "bg-background/50 border-border/40 h-16",
@@ -81,14 +85,21 @@ export default function Header() {
                 <div className="relative flex h-10 w-10 flex-shrink-0 items-center justify-center">
                   <Image
                     src={visheartLogo}
-                    width={32}
-                    height={32}
+                    width={36}
+                    height={36}
                     alt="VisHeart Logo"
                     className={cn("transition-transform duration-200 ease-in-out", isScrolled ? "scale-90" : "scale-100")}
                     priority // Since it's above fold
                   />
                 </div>
-                <span className="bg-gradient-to-r from-red-500 to-pink-500 bg-clip-text text-xl font-bold whitespace-nowrap text-transparent">VisHeart</span>
+                <span
+                  className={cn(
+                    "bg-gradient-to-r from-red-500 to-pink-500 bg-clip-text font-bold whitespace-nowrap text-transparent",
+                    isScrolled ? "text-xl" : "text-2xl",
+                  )}
+                >
+                  VisHeart
+                </span>
               </Link>
             </div>
 
@@ -151,6 +162,7 @@ const ListItem = React.memo(function ListItem({
   isComingSoon = false,
   as = "li",
   className,
+  highlight = false,
   ...props
 }: React.ComponentPropsWithoutRef<"a"> & {
   href: string;
@@ -160,6 +172,9 @@ const ListItem = React.memo(function ListItem({
   isComingSoon?: boolean;
   as?: "li" | "div";
   className?: string;
+  /** Visually calls out the single most important item in this list (the brand accent, same
+   *  one used for "Report Page") — for the one thing most users actually need, not everything. */
+  highlight?: boolean;
 }) {
   const handleClick = (e: React.MouseEvent) => {
     if (isComingSoon) {
@@ -179,6 +194,7 @@ const ListItem = React.memo(function ListItem({
             "hover:bg-accent/50 hover:scale-[1.02] hover:shadow-md",
             "focus:bg-accent focus:text-accent-foreground",
             "hover:border-border/50 border border-transparent",
+            highlight && "border-brand/30 bg-brand/5 hover:bg-brand/10",
             isComingSoon && "cursor-not-allowed opacity-60",
           )}
           onClick={handleClick}
@@ -186,15 +202,18 @@ const ListItem = React.memo(function ListItem({
         >
           <div className="flex items-center space-x-3">
             {Icon && (
-              <div className="bg-primary/10 group-hover:bg-primary/20 flex-shrink-0 rounded-md p-2">
-                <Icon className="text-primary h-4 w-4" />
+              <div className={cn(
+                "flex-shrink-0 rounded-md p-2",
+                highlight ? "bg-brand/15 group-hover:bg-brand/25" : "bg-primary/10 group-hover:bg-primary/20",
+              )}>
+                <Icon className={cn("h-4 w-4", highlight ? "text-brand" : "text-primary")} />
               </div>
             )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center space-x-2">
-                <span className="group-hover:text-primary truncate text-base font-semibold">{title}</span>
+                <span className={cn("truncate text-base font-semibold", highlight ? "text-brand" : "group-hover:text-primary")}>{title}</span>
                 {badge && (
-                  <Badge variant="secondary" className="text-xs">
+                  <Badge variant={highlight ? "brand" : "secondary"} className="text-xs">
                     {badge}
                   </Badge>
                 )}
@@ -219,14 +238,14 @@ const HomeDropDown = React.memo(function HomeDropDown() {
     <NavigationMenuItem>
       <NavigationMenuTrigger className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 h-10 bg-transparent px-4 py-2">
         <div className="flex items-center space-x-2">
-          <Info className="h-4 w-4" />
+          <Info className="size-[18px]" />
           <span>Help</span>
         </div>
       </NavigationMenuTrigger>
       <NavigationMenuContent className="bg-background/95 border shadow-lg backdrop-blur-md">
         <div className="w-[400px] p-6">
           <ul className="flex flex-col space-y-3">
-            <ListItem href="/doc" title="User Guide" icon={FileText} badge="Updated" className="min-h-20">
+            <ListItem href="/doc" title="User Guide" icon={FileText} badge="Updated" highlight className="min-h-20">
               A work in progress guide on using VisHeart&apos;s features, tools, and best practices for cardiac imaging.
             </ListItem>
             <ListItem href="/sample" title="Sample NIfTI" icon={Download} className="min-h-16">
@@ -255,7 +274,7 @@ const ProfileDropDown = React.memo(function ProfileDropDown() {
       <NavigationMenuItem>
         <NavigationMenuTrigger className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 h-10 bg-transparent px-4 py-2">
           <div className="flex items-center space-x-2">
-            <User className="h-4 w-4" />
+            <User className="size-[18px]" />
             <span>Profile</span>
           </div>
         </NavigationMenuTrigger>
@@ -270,9 +289,9 @@ const ProfileDropDown = React.memo(function ProfileDropDown() {
     // Show login button that redirects to /login page
     return (
       <NavigationMenuItem>
-        <Link href="/login" className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 flex h-10 items-center rounded-md bg-transparent px-4 py-2">
+        <Link href="/login" className="group hover:bg-accent/50 data-[state=open]:bg-accent/50 flex h-10 items-center rounded-md bg-transparent px-4 py-2 text-sm font-medium">
           <div className="flex items-center space-x-2">
-            <User className="h-4 w-4" />
+            <User className="size-[18px]" />
             <span>Sign In</span>
           </div>
         </Link>

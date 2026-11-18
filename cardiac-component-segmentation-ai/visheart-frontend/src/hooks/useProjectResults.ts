@@ -86,10 +86,13 @@ export type HeartMetrics = {
   es_frame?: number;
   LV_mass_g?: number | null;
   /** [dx, dy, dz] mm, derived from the project's affine — see
-   *  compute_heart_metrics_from_rle.py. dx (in-plane spacing) is what
-   *  converts bullseye.segment_values (pixels) into a real-mm wall
-   *  thickness; see MaxWallThicknessMm below. */
+   *  compute_heart_metrics_from_rle.py. dx (in-plane spacing) converts an
+   *  older bullseye stored in pixels into a real-mm wall thickness; see
+   *  MaxWallThicknessMm below. */
   spacing_mm?: (number | null)[];
+  /** Maximal ED wall thickness (mm): per slice the 95th percentile of the ray
+   *  thicknesses on the ED frame, max over slices. The HCM gate prefers it. */
+  max_wall_thickness_mm?: number | null;
   warnings?: string[];
   /** Set by the backend on every write — lets a forced recompute detect that a
    *  NEW result landed rather than just seeing the old one still present. */
@@ -386,14 +389,14 @@ export type MaskDoc = {
   strainSeries?: StrainSeries;
   rvStrain?: RvStrain;
   rvStrainSeries?: RvStrainSeries;
-  /** Per-AHA-segment ED wall thickness, in PIXELS — see
-   *  compute_bullseye_from_rle.py (no spacing input, by design). Max across
-   *  segments, multiplied by heartMetrics.spacing_mm[0], is this mask's
-   *  real-mm MaxWallThicknessMm, the same value assembleDiseasePatternGateInputs
+  /** Per-AHA-segment wall thickness: in mm (unit "mm", the server's
+   *  bullseyeToMm) or, on a bullseye stored before that, in PIXELS — see
+   *  compute_bullseye_from_rle.py. Its max is the fallback for
+   *  MaxWallThicknessMm, the same value assembleDiseasePatternGateInputs
    *  (segmentation_routes.ts) computes server-side for Disease Pattern
    *  Similarity's HCM gate. Surfaced here too so the report can show it as an
    *  actual metric, not just feed it silently into that one downstream score. */
-  bullseye?: { segment_values?: (number | null)[]; segment_values_max?: (number | null)[]; computed_at?: string };
+  bullseye?: { segment_values?: (number | null)[]; segment_values_max?: (number | null)[]; unit?: string; computed_at?: string };
 };
 
 export type Model = "unet" | "medsam";
@@ -482,8 +485,28 @@ function notifyMasksRefreshed(projectId: string, exclude: () => void) {
   }
 }
 
-export function invalidateProjectResults(projectId: string) {
+export async function invalidateProjectResults(projectId: string) {
   masksCache.delete(projectId);
+  // Re-fetch and repopulate the cache here, rather than only deleting it and
+  // relying on a subscribed `useProjectResults` instance to notice and
+  // refetch (notifyMasksRefreshed below). The usual caller of this function
+  // is the page-level full-cycle-compute poll, which fires AFTER the owning
+  // tab (e.g. Strain) may already have been switched away from and unmounted
+  // — at that instant there is no subscriber to react to the notification at
+  // all. The cache was then left empty with nothing left to repopulate it
+  // until something else happened to remount a consumer, which read as
+  // "compute finished, but the result stays stale until I hit refresh"
+  // (reported live, 2026-11) even though a hard refresh always showed the
+  // correct, already-persisted data. Fetching here guarantees the shared
+  // cache is correct before any future mount reads it, independent of
+  // whether anyone happened to be subscribed at this exact moment.
+  try {
+    const res = await segmentationApi.getSegmentationResults(projectId);
+    const editable = ((res.segmentations ?? []) as MaskDoc[]).filter((m) => !m.isMedSAMOutput);
+    masksCache.set(projectId, editable);
+  } catch {
+    // Leave the cache empty — the next mount's own fetch will retry.
+  }
   notifyMasksRefreshed(projectId, () => {});
 }
 
@@ -1014,13 +1037,16 @@ export function useProjectResults(
           // does server-side for the disease pattern gates' HCM gate (see
           // segmentation_routes.ts) — duplicated here client-side so the report
           // can show the number itself, not just its downstream effect on a score.
-          // bullseye.segment_values{,_max} is in PIXELS (see compute_bullseye_from_rle.py);
-          // spacing_mm[0] (in-plane dx) converts the max to real mm — without a
-          // known spacing this must read as null, never a raw pixel count mislabeled mm.
-          // Prefers segment_values_max (true per-ray peak, not sector-mean) when present, same
-          // fallback-to-segment_values reasoning as the server-side version (not every mask has
-          // been recomputed since this field was added).
+          // Prefers heart metrics' ED-frame maximal wall thickness, as the server does.
+          // Otherwise the bullseye max: bullseye.segment_values{,_max} is in mm (unit "mm")
+          // or, on an older bullseye, in PIXELS, which spacing_mm[0] (in-plane dx)
+          // converts — without a known spacing this must read as null, never a raw pixel
+          // count mislabeled mm. Prefers segment_values_max (true per-ray peak, not
+          // sector-mean) when present, same fallback-to-segment_values reasoning as the
+          // server-side version (not every mask has been recomputed since this field was added).
           MaxWallThicknessMm: (() => {
+            const edMax = doc.heartMetrics?.max_wall_thickness_mm;
+            if (typeof edMax === "number" && Number.isFinite(edMax)) return edMax;
             const maxVals = (doc.bullseye?.segment_values_max ?? []).filter(
               (v): v is number => typeof v === "number" && Number.isFinite(v),
             );
@@ -1029,8 +1055,8 @@ export function useProjectResults(
               : (doc.bullseye?.segment_values ?? []).filter(
                   (v): v is number => typeof v === "number" && Number.isFinite(v),
                 );
-            const dx = doc.heartMetrics?.spacing_mm?.[0];
-            return vals.length && typeof dx === "number" ? Math.max(...vals) * dx : null;
+            const toMm = doc.bullseye?.unit === "mm" ? 1 : doc.heartMetrics?.spacing_mm?.[0];
+            return vals.length && typeof toMm === "number" ? Math.max(...vals) * toMm : null;
           })(),
         }
       : undefined,

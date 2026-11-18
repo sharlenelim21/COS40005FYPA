@@ -96,9 +96,9 @@ function evByLabel(out, label) {
 // ── Scenarios ────────────────────────────────────────────────────────────────
 
 function test_healthy() {
-    console.log('\n[1] Healthy — EF 64 %, EDV 150 mL, PeakGCS -20 %, PeakGRS 35 %');
+    console.log('\n[1] Healthy — EF 64 %, EDV 150 mL, PeakGCS -20 %, PeakGRS 35 %, max wall 9 mm');
     const payload = {
-        measurements: { EF: 64, EDV: 150, ESV: 54, StrokeVolume: 96, PeakGRS: 35, PeakGCS: -20 },
+        measurements: { EF: 64, EDV: 150, ESV: 54, StrokeVolume: 96, PeakGRS: 35, PeakGCS: -20, MaxWallThicknessMm: 9 },
         heart_metrics_warnings: [],
     };
     const res = runPython(payload);
@@ -113,7 +113,8 @@ function test_healthy() {
     assert('EDV evidence level=ok',          evByLabel(out, 'End-Diastolic Volume')?.level === 'ok');
     assert('Peak GCS evidence level=ok',     evByLabel(out, 'Peak GCS')?.level === 'ok');
     assert('Peak GRS evidence level=ok',     evByLabel(out, 'Peak GRS')?.level === 'ok');
-    assert('features_used has all four',     ['EF','EDV','PeakGCS','PeakGRS'].every(k => out.features_used?.includes(k)));
+    assert('Wall Thickness evidence level=ok', evByLabel(out, 'Wall Thickness')?.level === 'ok');
+    assert('features_used has all five',     ['EF','EDV','PeakGCS','PeakGRS','MaxWallThicknessMm'].every(k => out.features_used?.includes(k)));
     assert('features_missing is empty',      (out.features_missing ?? []).length === 0);
     assert('warnings[] is empty',            (out.warnings ?? []).length === 0);
     assert('disclaimer mentions not diagnosis', /not a diagnosis/i.test(out.disclaimer ?? ''));
@@ -358,6 +359,25 @@ function test_legacy_caller_without_volume_signals() {
     assert('reason says structured signals were missing',   /no structured volume signals/i.test(sup?.detail ?? ''), sup?.detail);
 }
 
+function test_hcm_wall_thickness() {
+    console.log('\n[13] ACDC wall-thickness rule — normal EF but max wall >= 15 mm (HCM) is not Healthy');
+    const run = (wt, ef = 64) => safeJson(runPython({
+        measurements: { EF: ef, EDV: 150, ESV: 54, StrokeVolume: 96, PeakGRS: 35, PeakGCS: -20, MaxWallThicknessMm: wt },
+        heart_metrics_warnings: [],
+        volume_signals: { voxel_mm3: 12, duplicate_slices: [] },
+    }).stdout);
+    const hcm = run(17.4);
+    console.log('  ->', JSON.stringify({ status: hcm.status, grade_from_ef: hcm.grade_from_ef, warnings: hcm.warnings }));
+    assert('17.4 mm: status = Mild',                 hcm.status === 'Mild', hcm.status);
+    assert('17.4 mm: grade_from_ef stays Healthy',   hcm.grade_from_ef === 'Healthy', hcm.grade_from_ef);
+    assert('17.4 mm: wall evidence warn',            evByLabel(hcm, 'Wall Thickness')?.level === 'warn');
+    assert('17.4 mm: warning names the HCM rule',    (hcm.warnings ?? []).some(w => /ACDC HCM criterion/.test(w)));
+    const borderline = run(13);
+    assert('13 mm: warn line but grade unchanged',   borderline.status === 'Healthy' && evByLabel(borderline, 'Wall Thickness')?.level === 'warn');
+    const lowEf = run(17.4, 40);
+    assert('EF 40 + 17.4 mm: EF grade (Moderate) kept', lowEf.status === 'Moderate', lowEf.status);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 (function main() {
@@ -376,6 +396,7 @@ function test_legacy_caller_without_volume_signals() {
         test_structured_volume_problems_still_suppress();
         test_rv_duplicate_does_not_suppress_lv();
         test_legacy_caller_without_volume_signals();
+        test_hcm_wall_thickness();
     } catch (err) {
         console.error('Runner crashed:', err);
         process.exit(2);

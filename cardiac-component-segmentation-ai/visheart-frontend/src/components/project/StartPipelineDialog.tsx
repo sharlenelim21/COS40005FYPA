@@ -51,7 +51,9 @@ export function StartPipelineDialog({
   existing,
   building,
 }: StartPipelineDialogProps) {
-  const defaultModel: Model = gpuAvailable ? "medsam" : "unet";
+  // Always UNet by default, regardless of GPU availability -- direct request (2026-11-13),
+  // replacing the earlier "MedSAM when a GPU is available" default.
+  const defaultModel: Model = "unet";
   const [segModels, setSegModels] = useState<Set<Model>>(new Set([defaultModel]));
   const [combos, setCombos] = useState<Set<string>>(new Set());
   const [runLandmark, setRunLandmark] = useState(false);

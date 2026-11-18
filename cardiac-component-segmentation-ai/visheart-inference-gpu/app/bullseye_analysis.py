@@ -26,6 +26,7 @@ Coordinates and angles
 How the file is organised
 -------------------------
 LV — AHA 17 segments (wall thickness, and the lengths used for GRS / GCS)
+    stack_runs_apex_first(mask_3d)              -> bool  slice 0 at the apex? (decides the ring order)
     classify_slices(mask_3d)                    -> list[str]  basal/mid/apical/apex/none
     compute_centroid(slice_mask, class_label=3) -> (cx, cy) | (None, None)
     ray_cast_thickness(...)                     -> wall thickness per ray
@@ -124,19 +125,47 @@ _MIN_MYO_PIXELS = 50
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# classify_slices
+# stack_runs_apex_first / classify_slices
 # ─────────────────────────────────────────────────────────────────────────────
+
+def stack_runs_apex_first(
+    mask_3d: np.ndarray,
+    min_myo_pixels: int = _MIN_MYO_PIXELS,
+) -> bool:
+    """
+    True when slice 0 of the stack is at the APEX (slices run apex → base),
+    False for the usual base → apex order.
+
+    Scans differ: ACDC stores the base first, but most M&Ms scans store the
+    apex first (checked against their NIfTI headers). This is decided from the
+    mask, so it also works when the header carries no orientation (ACDC): the
+    base end of the LV is the wider one, so the mean LV area (cavity +
+    myocardium) of the first third of the LV slices is compared with the last
+    third's. The 3D reconstruction decides its slice order the same way
+    (decide_orient in dependencies/get_P.py).
+    """
+    valid = [
+        i for i in range(mask_3d.shape[2])
+        if int(np.sum(mask_3d[:, :, i] == _MYO_CLASS)) >= min_myo_pixels
+    ]
+    if len(valid) < 3:
+        return False
+    areas = [int(np.sum((mask_3d[:, :, i] == _MYO_CLASS) | (mask_3d[:, :, i] == 3))) for i in valid]
+    k = max(1, len(valid) // 3)
+    return float(np.mean(areas[-k:])) > float(np.mean(areas[:k]))
+
 
 def classify_slices(
     mask_3d: np.ndarray,
     min_myo_pixels: int = _MIN_MYO_PIXELS,
+    apex_first: bool | None = None,
 ) -> list[str]:
     """
     Label every slice in a 3-D mask as basal / mid / apical / apex / none.
 
     Slices with fewer than `min_myo_pixels` myocardium (class 2) pixels are
-    labelled "none". The remaining (valid) slices are taken in index order,
-    assumed to run base → apex:
+    labelled "none". The remaining (valid) slices are taken in base → apex
+    order (index order, reversed when the stack runs apex first):
         last 1 slice (2 when there are 15+ valid slices)  → "apex"
         the rest, split into three roughly equal groups   → "basal", "mid", "apical"
     With fewer than 4 valid slices the later rings are left empty.
@@ -145,6 +174,9 @@ def classify_slices(
     ----------
     mask_3d : ndarray, shape (H, W, N_slices), uint8
     min_myo_pixels : pixel-count threshold
+    apex_first : whether slice 0 is at the apex; None = decide from this mask
+        (stack_runs_apex_first). To compare two frames (strain), decide it
+        once, on the ED mask, and pass it for both.
 
     Returns
     -------
@@ -160,6 +192,10 @@ def classify_slices(
     n_valid = len(valid)
     if n_valid == 0:
         return labels
+    if apex_first is None:
+        apex_first = stack_runs_apex_first(mask_3d, min_myo_pixels)
+    if apex_first:
+        valid = valid[::-1]
 
     # 1 apex slice for short stacks, 2 for longer stacks
     n_apex = 2 if n_valid >= 15 else 1
@@ -631,8 +667,9 @@ def classify_rv_slices(
     Label every slice as basal / mid / apical / none for the RV bullseye.
 
     Slices with at least `min_rv_pixels` RV (class 1) pixels are split into
-    three even thirds by index (base → apex, same slice ordering as
-    classify_slices). Unlike the LV there is no separate apex ring.
+    three even thirds, base → apex (same slice order as classify_slices: the
+    stack is reversed when it runs apex first, decided from the LV — see
+    stack_runs_apex_first). Unlike the LV there is no separate apex ring.
     """
     n_slices = mask_3d.shape[2]
     labels: list[str] = ["none"] * n_slices
@@ -640,6 +677,8 @@ def classify_rv_slices(
         i for i in range(n_slices)
         if int(np.sum(mask_3d[:, :, i] == _RV_CLASS)) >= min_rv_pixels
     ]
+    if stack_runs_apex_first(mask_3d):
+        valid = valid[::-1]
     for k, sl in enumerate(valid):
         labels[sl] = _RV_RINGS[min(k * 3 // len(valid), 2)]
     return labels
@@ -767,9 +806,10 @@ def rv_arc_sections(
 
     Section order: 0 = inferior end, n_sections-1 = anterior end, matching
     the frontend crescent (CombinedVentricularChart: Seg1 inferior → Seg3
-    anterior). The anterior end is the arc end nearer rv_insertion_1 (the
-    anterior RV insertion point, or mask_to_rv_regions' estimate of it when
-    there is no landmark). With no point at all, the anterior end is taken to
+    anterior). The anterior end is the arc end nearer rv_insertion_1 (this
+    slice's anterior RV insertion point when per-slice landmarks are given,
+    else the single landmark point, or mask_to_rv_regions' estimate of it
+    when there is no landmark). With no point at all, the anterior end is taken to
     be the LOWER-angle end of the arc — the same side the LV landmark rule
     expects the anterior insertion on (the RV is on its increasing-angle side).
     """
@@ -1158,6 +1198,8 @@ def mask_to_17_segments(
     rv_insertion_1: tuple[float, float] | None = None,
     rv_insertion_2: tuple[float, float] | None = None,
     anterior_by_slice: dict[int, tuple[float, float]] | None = None,
+    apex_first: bool | None = None,
+    slice_labels: list[str] | None = None,
 ) -> dict:
     """
     Convert a 3-D segmentation mask (one cardiac frame) to 17 AHA segment
@@ -1204,6 +1246,13 @@ def mask_to_17_segments(
         is non-empty it takes precedence over rv_insertion_1. To compare two
         frames (strain), pass the SAME dict to both calls — the strain route
         selects it once, on the ED mask.
+    apex_first : whether slice 0 is at the apex (see classify_slices); None =
+        decide from this mask. The strain route decides it on the ED mask and
+        passes it for both frames.
+    slice_labels : the slice → ring layout to use instead of classifying this
+        mask (step 1), or None. The strain route passes ED's layout (the
+        "slice_labels" of the ED call) for the ES frame, so each ring compares
+        the same slices; a slice with no LV at ES then just drops out of its ring.
 
     Returns
     -------
@@ -1230,8 +1279,9 @@ def mask_to_17_segments(
                                  measured from
         "alignment_points_by_ring" : {ring: [x, y]} | None — the point of each ring when
                                  per-slice landmarks were used
+        "slice_labels"         : list[str] — the slice → ring layout used (basal/mid/apical/apex/none)
     """
-    labels = classify_slices(mask_3d)
+    labels = list(slice_labels) if slice_labels is not None else classify_slices(mask_3d, apex_first=apex_first)
 
     # Per-slice landmarks → one point per ring.
     ring_points = _ring_alignment_points(labels, anterior_by_slice) if anterior_by_slice else {}
@@ -1417,6 +1467,7 @@ def mask_to_17_segments(
         "alignment_points_by_ring": (
             {r: [p[0], p[1]] for r, p in ring_points.items()} if ring_points else None
         ),
+        "slice_labels": labels,
     }
 
 
@@ -1429,6 +1480,7 @@ def mask_to_rv_regions(
     rv_insertion_1: tuple[float, float] | None = None,
     rv_insertion_2: tuple[float, float] | None = None,
     layout: dict | None = None,
+    anterior_by_slice: dict[int, tuple[float, float]] | None = None,
 ) -> dict:
     """
     Convert a 3-D segmentation mask to the 9-segment RV bullseye:
@@ -1452,11 +1504,23 @@ def mask_to_rv_regions(
     mask_3d : ndarray, shape (H, W, N_slices)
         Values: 0=background, 1=RV, 2=myocardium, 3=LV cavity.
     rv_insertion_1 : (x, y) anterior RV insertion point, or None — orients
-        the sections (see rv_arc_sections). When None it is estimated from
-        the RV in this mask (estimate_anterior_rv_insertion).
+        the sections (see rv_arc_sections). When None (and no
+        `anterior_by_slice`) it is estimated from the RV in this mask
+        (estimate_anterior_rv_insertion).
     rv_insertion_2 : not used in any calculation; kept for signature parity
         with mask_to_17_segments.
     layout : {"labels", "sections"} from a previous call, or None.
+    anterior_by_slice : {slice index: (x, y)} — the anterior insertion point
+        of each slice, already chosen by select_anterior_insertions (on the
+        ED mask). When it is non-empty it replaces rv_insertion_1: a slice
+        with its own point is oriented by it; a slice without one uses
+        rv_arc_sections' no-point default (lower-angle end = anterior) —
+        the same rule select_anterior_insertions chooses the points by, so
+        every slice follows one rule. (Borrowing a neighbouring slice's point
+        instead was tested and flipped an apical slice the wrong way, because
+        the RV shifts between slices.) It only matters when the layout is
+        made (the ED call); with `layout` given it only changes the
+        informational alignment_angle_deg.
 
     Returns
     -------
@@ -1484,9 +1548,15 @@ def mask_to_rv_regions(
     # same estimate the LV pipeline uses), so the sections are still ordered
     # inferior → anterior instead of relying on a fixed guess.
     alignment_source = "landmark"
-    if rv_insertion_1 is None:
+    if not anterior_by_slice and rv_insertion_1 is None:
         rv_insertion_1 = estimate_anterior_rv_insertion(mask_3d)
         alignment_source = "rv-mask" if rv_insertion_1 is not None else "fixed-angle"
+
+    # The point that orients each slice's arc: with per-slice landmarks, the
+    # slice's own anterior point (None → the default end); otherwise the one
+    # rv_insertion_1 for every slice.
+    def _orientation_point(sl_idx: int) -> tuple[float, float] | None:
+        return anterior_by_slice.get(sl_idx) if anterior_by_slice else rv_insertion_1
 
     if layout is None:
         labels = classify_rv_slices(mask_3d)
@@ -1497,7 +1567,7 @@ def mask_to_rv_regions(
             cx, cy = centroids[sl_idx]
             _, outer = ray_cast_rv_hits(mask_3d[:, :, sl_idx], cx, cy, start_angle_rad=start_angle)
             slice_sections[sl_idx] = rv_arc_sections(
-                ~np.isnan(outer[:, 0]), cx, cy, start_angle, rv_insertion_1
+                ~np.isnan(outer[:, 0]), cx, cy, start_angle, _orientation_point(sl_idx)
             )
         layout = {"labels": labels, "sections": slice_sections}
 
@@ -1529,9 +1599,10 @@ def mask_to_rv_regions(
     # depend on it, and the frontend does not rotate its charts by it.
     alignment_angle: float | None = None
     for sl_idx, lbl in enumerate(labels):
-        if lbl != "none" and centroids[sl_idx] is not None:
+        point = _orientation_point(sl_idx)
+        if lbl != "none" and centroids[sl_idx] is not None and (point is not None or not anterior_by_slice):
             alignment_angle = compute_alignment_angle(
-                *centroids[sl_idx], rv_insertion_1, rv_insertion_2, "basal"
+                *centroids[sl_idx], point, rv_insertion_2, "basal"
             )
             break
 

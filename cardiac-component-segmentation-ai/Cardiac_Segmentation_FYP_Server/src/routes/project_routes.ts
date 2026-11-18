@@ -27,9 +27,12 @@ import { deleteProject } from "../services/database"; // Import deleteProject fu
 
 import logger from "../services/logger"; // Import Winston Logger
 import LogError from "../utils/error_logger"; // Import error logging utility
+import { applyTemplateGuard } from "../middleware/template_guard";
+import { findViewableProject, listTemplateProjects } from "../services/template_access";
 
 const serviceLocation = "API(Upload)";
 const router = express.Router();
+applyTemplateGuard(router); // template projects are read-only for everyone but their owner
 
 const toSingleString = (value: string | string[] | undefined): string | undefined =>
   Array.isArray(value) ? value[0] : value;
@@ -49,10 +52,10 @@ router.get(
     }
 
     try {
-      // Owner or Admin may view a project's info.
-      const access = await userCanAccessProject(projectId, req.user!);
-      if (access.allowed && access.project) {
-        const project = access.project;
+      // Owner or Admin may view a project's info; anyone may view a template (read-only).
+      const viewable = await findViewableProject(projectId, req.user);
+      if (viewable) {
+        const project = viewable.project;
         return res.status(200).json({
           success: true,
           project: {
@@ -65,10 +68,15 @@ router.get(
             dimensions: project.dimensions,
             voxelsize: project.voxelsize,
             affineMatrix: project.affineMatrix,
-            isOwner: access.isOwner,
-            canRun: access.canRun,
+            isOwner: viewable.isOwner,
+            canRun: !viewable.readOnly,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
+            isTemplate: !!project.isTemplate,
+            templateInfo: project.templateInfo ?? null,
+            // Templates are shown read-only to everyone, including their owner;
+            // the owner can still change them through the API (to rebuild them).
+            readOnly: !!project.isTemplate,
           },
         });
       } else {
@@ -82,6 +90,36 @@ router.get(
         success: false,
         message: "An error occurred while fetching the project information.",
       });
+    }
+  }
+);
+
+// Template hearts for the dashboard's Templates tab — every logged-in user.
+router.get(
+  "/get-template-projects",
+  isAuth,
+  async (_req: Request, res: Response) => {
+    try {
+      const templates = await listTemplateProjects();
+      return res.status(200).json({ success: true, templates });
+    } catch (error) {
+      LogError(error as Error, serviceLocation, "Error listing template projects");
+      return res.status(500).json({ success: false, message: "Failed to load templates.", templates: [] });
+    }
+  }
+);
+
+// The same template summaries for the Medical Guide's "Reference hearts", which is
+// public: no sign-in, numbers only (opening a template itself still needs sign-in).
+router.get(
+  "/template-summaries",
+  async (_req: Request, res: Response) => {
+    try {
+      const templates = await listTemplateProjects();
+      return res.status(200).json({ success: true, templates });
+    } catch (error) {
+      LogError(error as Error, serviceLocation, "Error listing template summaries");
+      return res.status(500).json({ success: false, message: "Failed to load templates.", templates: [] });
     }
   }
 );
@@ -555,14 +593,14 @@ router.get(
     try {
       const projectId = req.query.projectId as string;
 
-      // Owner, an assigned Clinical Assistant, or Admin may fetch a project's file.
-      const access = await userCanAccessProject(projectId, req.user!);
-      if (!access.allowed || !access.project) {
+      // Owner or Admin may fetch a project's file; anyone may fetch a template's MRI.
+      const viewable = await findViewableProject(projectId, req.user);
+      if (!viewable) {
         return res
           .status(404)
           .json({ success: false, message: "Project not found" });
       }
-      const project = access.project;
+      const project = viewable.project;
       const s3HttpsUrlForTar = project.extractedfolderpath;
 
       if (!s3HttpsUrlForTar) {

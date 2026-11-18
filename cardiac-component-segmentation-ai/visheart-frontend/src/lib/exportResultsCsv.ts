@@ -48,18 +48,21 @@ function notComputedRow(modelLabel: string, totalColumns: number): string {
 const MODELS: Model[] = ["unet", "medsam"];
 const MODEL_LABEL: Record<Model, string> = { unet: "UNet", medsam: "MedSAM" };
 
-/** Max across the 17 AHA-segment ED wall-thickness values — same computation
- *  assembleDiseasePatternGateInputs does server-side for the HCM gate, and
- *  useProjectResults.ts duplicates client-side for the report's display.
- *  bullseye.segment_values is in PIXELS (see compute_bullseye_from_rle.py);
- *  spacing_mm[0] (in-plane dx) converts the max to real mm — without a known
+/** Maximal ED wall thickness — the value assembleDiseasePatternGateInputs uses
+ *  server-side for the HCM gate, and useProjectResults.ts duplicates
+ *  client-side for the report's display: heart metrics' ED-frame measurement
+ *  when present, otherwise the max across the 17 AHA-segment values.
+ *  bullseye.segment_values is in mm (unit "mm") or, on an older bullseye, in
+ *  PIXELS, which spacing_mm[0] (in-plane dx) converts — without a known
  *  spacing this must read as null, never a raw pixel count mislabeled mm. */
 function maxWallThicknessMm(d: MaskDoc): number | null {
+  const edMax = d.heartMetrics?.max_wall_thickness_mm;
+  if (typeof edMax === "number" && Number.isFinite(edMax)) return edMax;
   const vals = (d.bullseye?.segment_values ?? []).filter(
     (v): v is number => typeof v === "number" && Number.isFinite(v),
   );
-  const dx = d.heartMetrics?.spacing_mm?.[0];
-  return vals.length && typeof dx === "number" ? Math.max(...vals) * dx : null;
+  const toMm = d.bullseye?.unit === "mm" ? 1 : d.heartMetrics?.spacing_mm?.[0];
+  return vals.length && typeof toMm === "number" ? Math.max(...vals) * toMm : null;
 }
 
 export function buildResultsCsv(
@@ -146,68 +149,6 @@ export function buildResultsCsv(
       const v = get(byModel[m]!);
       return typeof v === "number" ? v : null;
     })));
-  }
-  lines.push("");
-
-  // ── Health status ───────────────────────────────────────────────────────
-  lines.push(row("HEALTH STATUS (rule-based — not a diagnosis)"));
-  lines.push(row("Model", "Status", "Confidence", "Evidence"));
-  for (const m of present) {
-    const hs = byModel[m]!.healthStatus;
-    if (!hs) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
-    const evidence = (hs.evidence ?? []).map((e) => `${e.label}: ${e.detail}`).join(" | ");
-    lines.push(row(MODEL_LABEL[m], hs.status, hs.confidence, evidence));
-  }
-  lines.push("");
-
-  // ── RV Health status ────────────────────────────────────────────────────
-  // Mirrors the LV section above — same MaskDoc-stored shape (rvHealthStatus),
-  // just no severity gradient (see compute_rv_health_status.py: no validated
-  // CMR severity grading exists for RV function, so this is in/out-of-range
-  // only, never a gradient).
-  lines.push(row("RV HEALTH STATUS (rule-based — not a diagnosis; no severity grading, see disclaimer)"));
-  lines.push(row("Model", "Status", "Confidence", "Sex", "Evidence"));
-  for (const m of present) {
-    const rhs = byModel[m]!.rvHealthStatus;
-    if (!rhs) { lines.push(notComputedRow(MODEL_LABEL[m], 5)); continue; }
-    const evidence = (rhs.evidence ?? []).map((e) => `${e.label}: ${e.detail}`).join(" | ");
-    lines.push(row(MODEL_LABEL[m], rhs.status, rhs.confidence, rhs.sex, evidence));
-  }
-  lines.push("");
-
-  // ── Regional health status (advisory, never changes the overall grade) ──
-  lines.push(row("REGIONAL HEALTH STATUS (advisory — per-segment, doesn't change overall grade)"));
-  lines.push(row("Model", "Status", "Reduced segment count", "Summary"));
-  for (const m of present) {
-    const rhs = byModel[m]!.regionalHealthStatus;
-    if (!rhs) { lines.push(notComputedRow(MODEL_LABEL[m], 4)); continue; }
-    lines.push(row(MODEL_LABEL[m], rhs.status, rhs.reduced_count, rhs.summary));
-  }
-  lines.push("");
-
-  // ── Unified LV+RV Disease Pattern Gates (ACDC-based) ─────────────────────
-  // See compute_disease_pattern_gates.py for the full method.
-  lines.push(row("DISEASE PATTERN GATES — ACDC-based (not a diagnosis)"));
-  lines.push(row("Model", "Gate", "Met", "Rank (when 2+ gates co-fire)", "Reasons", "Criterion"));
-  for (const m of present) {
-    const pg = byModel[m]!.diseasePatternGates;
-    if (!pg) { lines.push(notComputedRow(MODEL_LABEL[m], 6)); continue; }
-    for (const g of pg.gates) {
-      lines.push(row(
-        MODEL_LABEL[m],
-        g.label,
-        g.met === true ? "Met" : g.met === false ? "Not met" : "Pending",
-        g.rank_label ?? "",
-        g.reasons.join(" | "),
-        g.criterion_text,
-      ));
-    }
-    if (pg.rv_severity) {
-      const notes = [pg.rv_severity.arvc_note, pg.rv_severity.pah_note, pg.rv_severity.generic_note]
-        .filter((n): n is string => !!n)
-        .join(" | ");
-      lines.push(row(MODEL_LABEL[m], "RV severity context", "", notes, ""));
-    }
   }
   lines.push("");
 

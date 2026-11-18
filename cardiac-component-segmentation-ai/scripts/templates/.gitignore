@@ -1,0 +1,4 @@
+# The template account's login and per-project progress files are local only.
+.template_account.json
+.state/
+__pycache__/

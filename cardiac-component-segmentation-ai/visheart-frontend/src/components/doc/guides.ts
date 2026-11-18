@@ -13,6 +13,22 @@ export const GUIDES: readonly GuideLink[] = [
 ];
 
 export const TECHNICAL_GUIDE_HREF = "/doc/technical";
+export const MEDICAL_GUIDE_HREF = "/doc/medical";
+
+/** Medical Guide's "Disease patterns" subsection (medicalGuide.ts id: "disease-patterns"). */
+export const DISEASE_PATTERNS_SECTION_ID = "disease-patterns";
+export const DISEASE_PATTERNS_HREF = `${MEDICAL_GUIDE_HREF}#${DISEASE_PATTERNS_SECTION_ID}`;
+
+/** Technical Guide section "How LV and RV Works" (LV + RV strain methods) and its parts. */
+export const LV_RV_SECTION_ID = "how-lv-rv-works";
+export const LV_RV_SHARED_STEPS_ID = "lv-rv-shared-steps";
+export const LV_STRAIN_METHOD_ID = "lv-strain-method";
+/** The RV 9-segment research method. The Strain tab's "Research output only" notices link here. */
+export const RV_STRAIN_METHOD_SECTION_ID = "rv-strain-method";
+export const LV_RV_REFERENCES_ID = "lv-rv-references";
+export const RV_STRAIN_METHOD_HREF = `${TECHNICAL_GUIDE_HREF}#${RV_STRAIN_METHOD_SECTION_ID}`;
+/** The whole "How LV and RV Works" section (both methods) -- for callouts covering LV and RV together, where RV_STRAIN_METHOD_HREF alone would skip the LV half. */
+export const LV_RV_SECTION_HREF = `${TECHNICAL_GUIDE_HREF}#${LV_RV_SECTION_ID}`;
 
 export interface TocItem {
   id: string;

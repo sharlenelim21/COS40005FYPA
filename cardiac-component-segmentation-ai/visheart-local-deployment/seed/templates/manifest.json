@@ -1,0 +1,223 @@
+{
+ "format": 1,
+ "bucket": "visheart-bucket",
+ "template_account": "db/template_account.json",
+ "templates": [
+  {
+   "project_id": "6ada4dabb754d1f3d8e328f0",
+   "name": "Template – Normal heart (female)",
+   "version": "760520a1a54f101f",
+   "db": {
+    "file": "db/6ada4dabb754d1f3d8e328f0.ndjson.xz",
+    "sha256": "39fc08ad2f2b5c1d267bce8185ef7e12c999c9ecb70f556bea52c0aa0e4472cd",
+    "documents": {
+     "projects": 1,
+     "segmentation masks": 2,
+     "project landmarks": 1,
+     "jobs": 3,
+     "4d reconstructions": 2
+    }
+   },
+   "objects": [
+    {
+     "key": "reconstructions/6ada4dabb754d1f3d8e328f0/d03d8380-8941-45e4-a262-0ef9b17b3bc4/6ad7547ace314ffc434ce38f_96ae081b432351a415124b662ba71f90999dde4ac6e8d1b6ba2af63c90cdb2cf_d03d8380_1793649020728_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_96ae081b432351a415124b662ba71f90999dde4ac6e8d1b6ba2af63c90cdb2cf_d03d8380_1793649020728_mesh.tar.xz",
+     "size": 17965056,
+     "sha256": "25a19c662d8096c6dba28e767da1a02a89ae2ad18250604eb66291b2c972f654"
+    },
+    {
+     "key": "reconstructions/6ada4dabb754d1f3d8e328f0/ed204a87-5afe-4615-8d35-d820cab8a79a/6ad7547ace314ffc434ce38f_96ae081b432351a415124b662ba71f90999dde4ac6e8d1b6ba2af63c90cdb2cf_ed204a87_1793648838577_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_96ae081b432351a415124b662ba71f90999dde4ac6e8d1b6ba2af63c90cdb2cf_ed204a87_1793648838577_mesh.tar.xz",
+     "size": 19687936,
+     "sha256": "f73a87ebac412271e29d0853e82df63c2e9b4c8560da06941f3a1087a1fd9657"
+    },
+    {
+     "key": "source_nifti/6a1044e49ba67e9ab2c5a337/6a1044e49ba67e9ab2c5a337_96ae081b432351a415124b662ba71f90999dde4ac6e8d1b6ba2af63c90cdb2cf.tar",
+     "file": "objects/6a1044e49ba67e9ab2c5a337_96ae081b432351a415124b662ba71f90999dde4ac6e8d1b6ba2af63c90cdb2cf.tar.xz",
+     "size": 7731200,
+     "sha256": "b4ae74100e959c8aa5488c0d7b0d0744715902ef128e584bb42df6cc9ff50e17"
+    }
+   ]
+  },
+  {
+   "project_id": "6ada62ca81ce5e074c8c5cb6",
+   "name": "Template – Normal heart (male)",
+   "version": "878474bdbd384786",
+   "db": {
+    "file": "db/6ada62ca81ce5e074c8c5cb6.ndjson.xz",
+    "sha256": "72321ed83916323dc082bfdf49a04f08b09917c1e0ce71cbeabd2b4222c4f3e4",
+    "documents": {
+     "projects": 1,
+     "segmentation masks": 2,
+     "project landmarks": 1,
+     "jobs": 4,
+     "4d reconstructions": 2
+    }
+   },
+   "objects": [
+    {
+     "key": "reconstructions/6ada62ca81ce5e074c8c5cb6/63e1ec30-d519-4fa9-bde4-291f10c0f5c6/6ad7547ace314ffc434ce38f_e4b268917445eba1b6bb6babf587567d6b4454db5f308ab31a582dadc13b6a1c_63e1ec30_1793649584341_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_e4b268917445eba1b6bb6babf587567d6b4454db5f308ab31a582dadc13b6a1c_63e1ec30_1793649584341_mesh.tar.xz",
+     "size": 58179584,
+     "sha256": "d87400073c8de7991246d51ee5e5c9cce81bb50f4fe6061b37a73fcf8fd3a973"
+    },
+    {
+     "key": "reconstructions/6ada62ca81ce5e074c8c5cb6/f6602a1f-1ee4-4d56-b729-13e950f9f27f/6ad7547ace314ffc434ce38f_e4b268917445eba1b6bb6babf587567d6b4454db5f308ab31a582dadc13b6a1c_f6602a1f_1793649753898_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_e4b268917445eba1b6bb6babf587567d6b4454db5f308ab31a582dadc13b6a1c_f6602a1f_1793649753898_mesh.tar.xz",
+     "size": 22696960,
+     "sha256": "f6b86bd3d07a88db59b3448c6fc04fc8dfa964929e1c5fa09eea851b899dbbb5"
+    },
+    {
+     "key": "source_nifti/6a1044e49ba67e9ab2c5a337/6a1044e49ba67e9ab2c5a337_e4b268917445eba1b6bb6babf587567d6b4454db5f308ab31a582dadc13b6a1c.tar",
+     "file": "objects/6a1044e49ba67e9ab2c5a337_e4b268917445eba1b6bb6babf587567d6b4454db5f308ab31a582dadc13b6a1c.tar.xz",
+     "size": 2498560,
+     "sha256": "98383af9314790bb99be24c2bbec2087f9221da3353a381777ccc1713fdb7f68"
+    }
+   ]
+  },
+  {
+   "project_id": "6ada54fcb754d1f3d8e335cf",
+   "name": "Template – HCM heart (female)",
+   "version": "29818fc7f24adeb5",
+   "db": {
+    "file": "db/6ada54fcb754d1f3d8e335cf.ndjson.xz",
+    "sha256": "442d162d1731a27ac3a5c05b0a0523b338dd950f274142837ed190b543c9216a",
+    "documents": {
+     "projects": 1,
+     "segmentation masks": 2,
+     "project landmarks": 1,
+     "jobs": 3,
+     "4d reconstructions": 2
+    }
+   },
+   "objects": [
+    {
+     "key": "reconstructions/6ada54fcb754d1f3d8e335cf/c21be6af-25fa-40ec-9bc8-dd1b66179c0b/6ad7547ace314ffc434ce38f_4e9264605f4d889bcb7659384a4c03e5226cae3f7093fad14996bb8ac39e8ea0_c21be6af_1793650317663_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_4e9264605f4d889bcb7659384a4c03e5226cae3f7093fad14996bb8ac39e8ea0_c21be6af_1793650317663_mesh.tar.xz",
+     "size": 52843008,
+     "sha256": "9d9092719dc9cf1a5435903153ccd128414d7adc13c2978625fdd934c1b841c3"
+    },
+    {
+     "key": "reconstructions/6ada54fcb754d1f3d8e335cf/e9db9ac8-cb52-4cd8-b9a5-22d4957ef238/6ad7547ace314ffc434ce38f_4e9264605f4d889bcb7659384a4c03e5226cae3f7093fad14996bb8ac39e8ea0_e9db9ac8_1793650485096_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_4e9264605f4d889bcb7659384a4c03e5226cae3f7093fad14996bb8ac39e8ea0_e9db9ac8_1793650485096_mesh.tar.xz",
+     "size": 14486528,
+     "sha256": "4089ed5ce6df06843ba378786c983936946e83abac0954196cbd94ebaa33f30a"
+    },
+    {
+     "key": "source_nifti/6a1044e49ba67e9ab2c5a337/6a1044e49ba67e9ab2c5a337_4e9264605f4d889bcb7659384a4c03e5226cae3f7093fad14996bb8ac39e8ea0.tar",
+     "file": "objects/6a1044e49ba67e9ab2c5a337_4e9264605f4d889bcb7659384a4c03e5226cae3f7093fad14996bb8ac39e8ea0.tar.xz",
+     "size": 2816000,
+     "sha256": "41e9a269382f4b0756d618361f1380cfd65c8421d2d61deb9c3d5c5ebb47a68d"
+    }
+   ]
+  },
+  {
+   "project_id": "6ada62f281ce5e074c8c5d3e",
+   "name": "Template – HCM heart (male)",
+   "version": "30a4a1a411c6320b",
+   "db": {
+    "file": "db/6ada62f281ce5e074c8c5d3e.ndjson.xz",
+    "sha256": "ad05e9cb97c288ce92c8f72f467b0d50610eb92366568aea16ce3f072730d259",
+    "documents": {
+     "projects": 1,
+     "segmentation masks": 2,
+     "project landmarks": 1,
+     "jobs": 3,
+     "4d reconstructions": 2
+    }
+   },
+   "objects": [
+    {
+     "key": "reconstructions/6ada62f281ce5e074c8c5d3e/bf90cbbf-5b0b-4bfb-833e-8bcca8758ded/6ad7547ace314ffc434ce38f_44ce9cd8ada57b989e24d37dcedffd0e6f3678c6c3271f61f2d8279cc49d1fda_bf90cbbf_1793651067746_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_44ce9cd8ada57b989e24d37dcedffd0e6f3678c6c3271f61f2d8279cc49d1fda_bf90cbbf_1793651067746_mesh.tar.xz",
+     "size": 57467392,
+     "sha256": "43c7cba895b8a8c894970947d813651405d7f780f4fba100b9f62cbbabd2f04b"
+    },
+    {
+     "key": "reconstructions/6ada62f281ce5e074c8c5d3e/d31f7ec2-12ae-4a02-9ec2-38a9a19cd3ea/6ad7547ace314ffc434ce38f_44ce9cd8ada57b989e24d37dcedffd0e6f3678c6c3271f61f2d8279cc49d1fda_d31f7ec2_1793651234683_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_44ce9cd8ada57b989e24d37dcedffd0e6f3678c6c3271f61f2d8279cc49d1fda_d31f7ec2_1793651234683_mesh.tar.xz",
+     "size": 16615936,
+     "sha256": "67ca807c0ee6529bb2e583bf83c7459287efca6dd0a243d50c9bda4bbcdc4d2a"
+    },
+    {
+     "key": "source_nifti/6a1044e49ba67e9ab2c5a337/6a1044e49ba67e9ab2c5a337_44ce9cd8ada57b989e24d37dcedffd0e6f3678c6c3271f61f2d8279cc49d1fda.tar",
+     "file": "objects/6a1044e49ba67e9ab2c5a337_44ce9cd8ada57b989e24d37dcedffd0e6f3678c6c3271f61f2d8279cc49d1fda.tar.xz",
+     "size": 2611200,
+     "sha256": "79b6f615cb816ef78e93864b8946305051d2e4568abf090002719406d3b5ea2b"
+    }
+   ]
+  },
+  {
+   "project_id": "6ae38e705131a29b39d04c88",
+   "name": "Template – DCM heart (female)",
+   "version": "d31559724cfd4bb6",
+   "db": {
+    "file": "db/6ae38e705131a29b39d04c88.ndjson.xz",
+    "sha256": "4c076e89c94ac7163745066168095a84ea10e4f48cc8207c02350f123860c5d4",
+    "documents": {
+     "projects": 1,
+     "segmentation masks": 2,
+     "project landmarks": 1,
+     "jobs": 3,
+     "4d reconstructions": 2
+    }
+   },
+   "objects": [
+    {
+     "key": "reconstructions/6ae38e705131a29b39d04c88/0738e57f-4cc2-403c-82a7-1d4ebc4c50a7/6ad7547ace314ffc434ce38f_ce0ecb824548c39df4c5923152081c2a2b7ff117b1f92b09cfd2ead910fd74e1_0738e57f_1793698401137_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_ce0ecb824548c39df4c5923152081c2a2b7ff117b1f92b09cfd2ead910fd74e1_0738e57f_1793698401137_mesh.tar.xz",
+     "size": 34179584,
+     "sha256": "c40e57a79158d8c3f551006d3f135dc63bc01e8c790c3a3d6c9a7f7b70e2611d"
+    },
+    {
+     "key": "reconstructions/6ae38e705131a29b39d04c88/10cd21fc-5f58-43ad-aaa4-a7446bf5f6e0/6ad7547ace314ffc434ce38f_ce0ecb824548c39df4c5923152081c2a2b7ff117b1f92b09cfd2ead910fd74e1_10cd21fc_1793698218201_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_ce0ecb824548c39df4c5923152081c2a2b7ff117b1f92b09cfd2ead910fd74e1_10cd21fc_1793698218201_mesh.tar.xz",
+     "size": 51677696,
+     "sha256": "802cb4b9c6dae16a9287c24c5fa64bb63e9eaac70f8926395fb19f29494407cf"
+    },
+    {
+     "key": "source_nifti/6ad7547ace314ffc434ce38f/6ad7547ace314ffc434ce38f_ce0ecb824548c39df4c5923152081c2a2b7ff117b1f92b09cfd2ead910fd74e1.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_ce0ecb824548c39df4c5923152081c2a2b7ff117b1f92b09cfd2ead910fd74e1.tar.xz",
+     "size": 2641920,
+     "sha256": "dc2af075508474334d7f595e1f0d2576f14c094aee7bbd1e0c0175a2488f6955"
+    }
+   ]
+  },
+  {
+   "project_id": "6ae393545131a29b39d05083",
+   "name": "Template – DCM heart (male)",
+   "version": "c04e6db294ed21e2",
+   "db": {
+    "file": "db/6ae393545131a29b39d05083.ndjson.xz",
+    "sha256": "a192bf0acccf2e428cc41770aa61e2546f204583072bc43ee2a589f9a045b889",
+    "documents": {
+     "projects": 1,
+     "segmentation masks": 2,
+     "project landmarks": 1,
+     "jobs": 3,
+     "4d reconstructions": 2
+    }
+   },
+   "objects": [
+    {
+     "key": "reconstructions/6ae393545131a29b39d05083/0804c2a1-2abd-4f29-9d8f-23cdfd6c18ba/6ad7547ace314ffc434ce38f_75e6bb9730b17bff3c4e31c078d870ac7dd8bfd2098205bbb858b3b3a740012e_0804c2a1_1793699109871_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_75e6bb9730b17bff3c4e31c078d870ac7dd8bfd2098205bbb858b3b3a740012e_0804c2a1_1793699109871_mesh.tar.xz",
+     "size": 59924992,
+     "sha256": "72719692dc41b023c1bf8e4cc1a8d2e8845f97a04301e60717f48114c5f70592"
+    },
+    {
+     "key": "reconstructions/6ae393545131a29b39d05083/32f85379-b881-47c0-8187-eeb64dd00d6a/6ad7547ace314ffc434ce38f_75e6bb9730b17bff3c4e31c078d870ac7dd8bfd2098205bbb858b3b3a740012e_32f85379_1793699400660_mesh.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_75e6bb9730b17bff3c4e31c078d870ac7dd8bfd2098205bbb858b3b3a740012e_32f85379_1793699400660_mesh.tar.xz",
+     "size": 21099008,
+     "sha256": "50990d6cf4419c37245a15e1119f83051978a0746deb079cdf0617d21fa1ae91"
+    },
+    {
+     "key": "source_nifti/6ad7547ace314ffc434ce38f/6ad7547ace314ffc434ce38f_75e6bb9730b17bff3c4e31c078d870ac7dd8bfd2098205bbb858b3b3a740012e.tar",
+     "file": "objects/6ad7547ace314ffc434ce38f_75e6bb9730b17bff3c4e31c078d870ac7dd8bfd2098205bbb858b3b3a740012e.tar.xz",
+     "size": 2836480,
+     "sha256": "ffe3375bc7150dd5cbabfd2f11491a6c21bb5653bf7fd3f088015209a08b86bc"
+    }
+   ]
+  }
+ ]
+}

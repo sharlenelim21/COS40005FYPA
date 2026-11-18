@@ -34,9 +34,10 @@ const nextConfig: NextConfig = {
   // Transpile specific packages that might have issues
   transpilePackages: ["konva", "react-konva"],
 
-  // 🔥 Remove console.* in production
+  // 🔥 Remove console.* in production — except console.info / console.clear,
+  // kept for the landmark page's P1 / P2 / LV-centre coordinate log.
   compiler: {
-    removeConsole: process.env.NODE_ENV === "production",
+    removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["info", "clear"] } : false,
   },
 };
 

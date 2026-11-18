@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { Fragment, useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -31,29 +31,36 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { KineticProgress, ProgressMeter, hasProgressReading } from "@/components/ui/kinetic-progress";
 import { cn } from "@/lib/utils";
 import { useLandmarkDetection } from "@/hooks/useLandmarkDetection";
-import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
+import { useCyclePlayback } from "@/hooks/useCyclePlayback";
+import { LandmarkSidebar, SEGMENTATION_RUNNING_STRAIN_MESSAGE, LvFullCycleStrainTiles, RvFullCycleStrainTiles, type StrainComputeBundle } from "@/components/landmark/LandmarkSidebar";
+import { RvResearchNotice } from "@/components/landmark/RvResearchNotice";
 import { ReconstructedHeartModel } from "@/components/landmark/ReconstructedHeartModel";
 import { CombinedHeartModel } from "@/components/landmark/CombinedHeartModel";
 import { useMotionMesh } from "@/hooks/useMotionMesh";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { RV_SEGMENT_NAMES, RV_REGION_TO_SEGMENT3D, RV_SEGMENT3D_TO_REGION } from "@/components/landmark/heartColor";
 import { rvEdEsFac, rvFacSeries } from "@/lib/rvAreaMetrics";
-import { ChamberFocusToggle, type ChamberFocus } from "@/components/landmark/ChamberFocusToggle";
+import { ChamberFocusToggle, type ChamberFocus, type ChamberUnavailable } from "@/components/landmark/ChamberFocusToggle";
 import type { LandmarkMaskOverlay } from "@/components/landmark/LandmarkSliceViewer";
 import { FrameSliceControls } from "@/components/landmark/FrameSliceControls";
 import {
   LANDMARK_DEFINITIONS,
+  LANDMARK_SHORTCUT_KEYS,
+  LANDMARK_TOGGLE_LABELS_KEY,
+  LANDMARK_DELETE_KEY,
   framePredictionsToLandmarkFrames,
+  getLandmarkCoord,
+  isLandmarkPendingDelete,
   landmarkFramesToEdits,
   normalizeRvInsertionOrder,
 } from "@/types/landmark";
+import { isKeyForFocusedControl, isArrowOrSpaceForFocusedControl } from "@/lib/keyboard-shortcuts";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
 import type { LandmarkPageState } from "@/types/landmark";
-import type { FramePrediction } from "@/types/landmark";
+import type { FramePrediction, LandmarkCoord } from "@/types/landmark";
 import { segmentationApi } from "@/lib/api";
 import { useGpuStatus } from "@/lib/dashboard-hooks";
 import type { BullseyeData } from "@/types/project";
@@ -71,6 +78,7 @@ import {
 import { CombinedVentricularChart } from "@/components/landmark/CombinedVentricularChart";
 import { AhaBullseye, BullseyeScaleBar, finiteRange, type BullseyeHover } from "@/components/landmark/AhaBullseye";
 import { landmarkApi, computeStrainFromFrames, computeRvStrainFromFrames } from "@/lib/landmarkApi";
+import { UnsavedChangesDialog } from "@/components/common/UnsavedChangesDialog";
 
 const LandmarkSliceViewer = dynamic(
   () => import("@/components/landmark/LandmarkSliceViewer").then((m) => m.LandmarkSliceViewer),
@@ -89,6 +97,11 @@ const MODEL_OPTIONS = [
 ] as const;
 
 type ModelId = typeof MODEL_OPTIONS[number]["value"];
+
+// Pressed key -> landmark id, for the 1/2 focus shortcuts.
+const LANDMARK_ID_BY_SHORTCUT_KEY: Record<string, string> = Object.fromEntries(
+  Object.entries(LANDMARK_SHORTCUT_KEYS).map(([id, key]) => [key, id]),
+);
 
 const AHA_SEGMENTS = [
   "Basal Anterior",
@@ -191,6 +204,14 @@ export default function LandmarkDetectionPage() {
     refreshReconstructions,
   } = useProject();
 
+  // Template heart (a pre-computed reference project, see the dashboard's
+  // Templates tab): results only — nothing is run, recomputed or edited from
+  // this page. The server rejects those requests for templates as well.
+  const readOnly = !!(projectData?.readOnly || projectData?.isTemplate);
+  const lvOnly = !!projectData?.isTemplate;
+  const projectLoaded = !!projectData;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const { user } = useAuth();
 
   useEffect(() => {
@@ -244,10 +265,12 @@ export default function LandmarkDetectionPage() {
     frames: { frameIndex: number; segment_values: (number | null)[]; stats: any }[];
     computed_at: string;
   } | null>(null);
-  // RV analogue of frameBullseyeSeries above — RLE-only, no GPU, no landmark
-  // data. See computeFrameRvAreaSeries.
+  // RV analogue of frameBullseyeSeries above — RLE-only, no GPU; wedges made
+  // on reference_frame and oriented by the RV insertion landmarks. See
+  // computeFrameRvAreaSeries.
   const [rvFrameAreaSeries, setRvFrameAreaSeries] = useState<{
     frames: { frameIndex: number; regions: { region: number; area: number | null }[] }[];
+    reference_frame?: number;
     computed_at: string;
   } | null>(null);
   const [segFrameCount, setSegFrameCount] = useState(0);
@@ -283,10 +306,32 @@ export default function LandmarkDetectionPage() {
   useEffect(() => {
     if (!fullCycleJobIds || !projectId) return;
     let cancelled = false;
+    // Tracks which of the two job IDs have actually been SEEN (present in a
+    // getUserJobs response) at least once, keyed by jobId. A client-generated
+    // job ID exists the instant this effect starts, but the server doesn't
+    // write the Job record until its own route handler reaches that point --
+    // several awaits deep (mask lookup, NIfTI build, etc.). The very first
+    // poll tick(s) can land in that gap, where byId.get(jobId) is undefined
+    // for a job that hasn't been created YET, not one that has finished. The
+    // old code treated "not found" identically to "found and no longer
+    // pending", so it could conclude the whole compute was done (and
+    // immediately show whatever stale/empty data existed before the run)
+    // while both jobs were still legitimately queued -- reported live as
+    // "switch tabs mid-compute, it shows results before they're fully
+    // computed" and, in the worst case, no tab switch needed at all if the
+    // race landed on the very first tick (2026-11-07). A job only counts as
+    // finished once it has been seen at least once; until then, "not found"
+    // means "not created yet", not "done".
+    const seen = new Set<string>();
+    const startedAt = Date.now();
+    // Safety net: if a job is NEVER created (e.g. the server's createJob call
+    // itself failed) it would never be "seen" and this would poll forever --
+    // give up after a generous 5 minutes so the UI doesn't hang indefinitely.
+    const GIVE_UP_MS = 5 * 60 * 1000;
     const poll = async () => {
       let jobs: any[] = [];
       try {
-        ({ jobs } = await segmentationApi.getUserJobs());
+        ({ jobs } = await segmentationApi.getUserJobs(projectId));
       } catch {
         return; // A dropped poll is not evidence of anything -- try again next tick.
       }
@@ -294,8 +339,11 @@ export default function LandmarkDetectionPage() {
       const byId = new Map<string, any>((jobs ?? []).map((j: any) => [j.jobId, j]));
       const lvJob = byId.get(fullCycleJobIds.lv);
       const rvJob = byId.get(fullCycleJobIds.rv);
+      if (lvJob) seen.add(fullCycleJobIds.lv);
+      if (rvJob) seen.add(fullCycleJobIds.rv);
       const isPending = (j: any) => j && (j.status === "pending" || j.status === "in_progress");
-      if (isPending(lvJob) || isPending(rvJob)) {
+      const isUnresolved = (id: string, j: any) => isPending(j) || !seen.has(id);
+      if (Date.now() - startedAt < GIVE_UP_MS && (isUnresolved(fullCycleJobIds.lv, lvJob) || isUnresolved(fullCycleJobIds.rv, rvJob))) {
         const readings = [lvJob?.progress, rvJob?.progress].filter(
           (p): p is number => typeof p === "number" && p > 0,
         );
@@ -304,8 +352,8 @@ export default function LandmarkDetectionPage() {
         }
         return;
       }
-      // Neither job is pending/in_progress any more (done, failed, or aged out of the list) --
-      // the compute is over. Pick up whatever it produced and stop tracking it.
+      // Both jobs have been seen at least once and are no longer pending/in_progress (done,
+      // failed, or aged out of the list after finishing) -- the compute is actually over.
       if (!cancelled) {
         setFullCycleBusy(false);
         setFullCycleProgress(null);
@@ -408,7 +456,7 @@ export default function LandmarkDetectionPage() {
         _id?: string; name?: string; isMedSAMOutput: boolean; bullseye?: BullseyeData; strain?: RealStrainResult;
         heartMetrics?: { ed_frame?: number; es_frame?: number };
         frameBullseye?: { frames: { frameIndex: number; segment_values: (number | null)[]; stats: any }[]; computed_at: string };
-        rvFrameAreas?: { frames: { frameIndex: number; regions: { region: number; area: number | null }[] }[]; computed_at: string };
+        rvFrameAreas?: { frames: { frameIndex: number; regions: { region: number; area: number | null }[] }[]; reference_frame?: number; computed_at: string };
       };
       const segs = (res.segmentations ?? []) as SegItem[];
 
@@ -465,7 +513,7 @@ export default function LandmarkDetectionPage() {
       // re-trigger masks that already have a (possibly stale) bullseye —
       // otherwise a mask that already has ANY stored bullseye, even one
       // computed before a backend fix, is never regenerated by this button.
-      if (triggerIfMissing) {
+      if (triggerIfMissing && !readOnlyRef.current) {
         const masksNeedingBullseye = editables.filter(
           (m) => m._id && (!m.bullseye || !m.frameBullseye || !m.rvFrameAreas) && !autoTriggeredBullseyeMasks.current.has(m._id)
         );
@@ -732,6 +780,7 @@ export default function LandmarkDetectionPage() {
     setLandmarkEdits({});
     setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
+    moveUndoStacksRef.current = {};
     handleRunDetection(model, landmarkSegModel);
   }, [handleRunDetection, landmarkSegModel]);
 
@@ -739,11 +788,14 @@ export default function LandmarkDetectionPage() {
     setLandmarkEdits({});
     setSavedLandmarkEdits({});
     setHighlightedLandmarkId(null);
+    moveUndoStacksRef.current = {};
     handleRerunDetection(model, landmarkSegModel);
   }, [handleRerunDetection, landmarkSegModel]);
 
   useEffect(() => {
     if (loading !== "done" || !projectData || autoRunStartedRef.current) return;
+    // A template's landmarks are pre-computed — never start a detection run.
+    if (readOnly) return;
     // Wait for the hook to finish checking for an already-computed result
     // (in-memory cache or persisted DB job) before firing a fresh GPU run.
     // If one is found, status flips to "done" and this effect stays a no-op.
@@ -768,7 +820,7 @@ export default function LandmarkDetectionPage() {
       else runDetectionAndResetEdits(selectedModel);
     })();
     return () => { cancelled = true; };
-  }, [loading, projectData, hydrating, segModelsLoaded, segPending, state.status, reconCheckDone, hasReconstructions, hasReconForLandmarkModel, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
+  }, [loading, projectData, readOnly, hydrating, segModelsLoaded, segPending, state.status, reconCheckDone, hasReconstructions, hasReconForLandmarkModel, runDetectionAndResetEdits, selectedModel, landmarkSegModel, projectId, handleAttachToJob]);
 
   const runUnlessSegmentationPending = useCallback(async (run: () => void) => {
     if (segPending === true) return;
@@ -826,9 +878,34 @@ export default function LandmarkDetectionPage() {
   // is a medical measurement tool, an edit silently affecting a frame the user didn't touch is a
   // worse outcome than losing the convenience, so edits are back to fully independent per
   // (frame, slice) pair, as they were before that feature existed.
+  // True between a landmark's first move and its move-end (pointer up), so the
+  // console coordinate log waits for the final position of a drag.
+  const [isDraggingLandmark, setIsDraggingLandmark] = useState(false);
+  // Mirrors isDraggingLandmark but as a ref, so handleLandmarkMove always reads the live
+  // in-progress-drag flag instead of a stale closure value -- needed to tell "first move event of
+  // a new drag" (push an undo entry) apart from "still dragging" (don't push again per tick).
+  const isDraggingRef = useRef(false);
+  // Ctrl+Z undo stack for point MOVES only (not deletes, which keep their own Restore button/1-2
+  // key path unchanged) -- one stack per (frame, slice) key, so undoing a move on one frame can
+  // never reach into another, matching the "edits stay independent per slice" rule above. Cleared
+  // wherever landmarkEdits itself is wholesale-reset (frame/model switch, re-run, save).
+  const moveUndoStacksRef = useRef<Record<string, Array<{ id: string; hadEdit: boolean; coord: LandmarkCoord | undefined }>>>({});
+
   const handleLandmarkMove = useCallback((id: string, coord: [number, number]) => {
+    const isDragStart = !isDraggingRef.current;
+    isDraggingRef.current = true;
+    setIsDraggingLandmark(true);
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey] ?? {};
+      if (isDragStart) {
+        const stack = moveUndoStacksRef.current[currentLandmarkEditKey] ?? [];
+        stack.push({
+          id,
+          hadEdit: id in existing,
+          coord: (existing as Record<string, LandmarkCoord | undefined>)[id],
+        });
+        moveUndoStacksRef.current[currentLandmarkEditKey] = stack;
+      }
       const wasCollapsed = (currentPrediction?.flag === "collapsed_to_mean") && !("flag" in existing);
       return {
         ...prev,
@@ -844,6 +921,8 @@ export default function LandmarkDetectionPage() {
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
   const handleLandmarkMoveEnd = useCallback(() => {
+    isDraggingRef.current = false;
+    setIsDraggingLandmark(false);
     if (!currentPrediction) return;
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey];
@@ -862,12 +941,23 @@ export default function LandmarkDetectionPage() {
     });
   }, [currentLandmarkEditKey, currentPrediction]);
 
+  // Each deleted point's edit from just before its delete, keyed "frame:slice|landmarkId", so
+  // Restore (button or 1/2 key) puts the point back where it was -- including a manual drag --
+  // rather than at the AI's position. hadEdit false = it was at the AI's position. Every delete
+  // overwrites its entry and a restore consumes it, so a leftover entry is never read.
+  const preDeleteEditsRef = useRef(new Map<string, { hadEdit: boolean; coord: LandmarkCoord | undefined }>());
+
   /** Deletes immediately (no undo-countdown window) — it's an edit like a move,
    *  so it dirties the save button right away instead of waiting 5s to commit. */
   const handleLandmarkDeleteRequest = useCallback((id: string) => {
     const sliceKey = currentLandmarkEditKey;
     setLandmarkEdits((prev) => {
       const existing = prev[sliceKey] ?? {};
+      // Remember the position being deleted (same value on every run of this updater).
+      preDeleteEditsRef.current.set(`${sliceKey}|${id}`, {
+        hadEdit: id in existing,
+        coord: (existing as Record<string, LandmarkCoord | undefined>)[id],
+      });
       const wasCollapsed = (currentPrediction?.flag === "collapsed_to_mean") && !("flag" in existing);
       return {
         ...prev,
@@ -881,17 +971,24 @@ export default function LandmarkDetectionPage() {
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
-  /** Restores a deleted landmark back to its original AI-predicted coordinate —
-   *  available any time the landmark is currently deleted, whether that
-   *  deletion has been saved yet or not (removing the delete edit itself is a
-   *  change from whatever is currently saved, so this dirties the save button
-   *  the same as deleting does). */
+  /** Restores a deleted landmark to where it was just before the delete: a
+   *  manually moved point goes back to its moved position, an untouched one to
+   *  the AI-predicted coordinate (removing the delete edit itself is a change
+   *  from whatever is currently saved, so this dirties the save button the same
+   *  as deleting does). */
   const handleUndoLandmarkDelete = useCallback((id: string) => {
+    const memoKey = `${currentLandmarkEditKey}|${id}`;
+    const beforeDelete = preDeleteEditsRef.current.get(memoKey);
+    preDeleteEditsRef.current.delete(memoKey);
     setLandmarkEdits((prev) => {
       const existing = prev[currentLandmarkEditKey];
       if (!existing || !(id in existing)) return prev;
       const rest = { ...existing };
-      delete (rest as Record<string, unknown>)[id];
+      if (beforeDelete?.hadEdit && beforeDelete.coord) {
+        (rest as Record<string, unknown>)[id] = beforeDelete.coord; // back to the manual position
+      } else {
+        delete (rest as Record<string, unknown>)[id]; // back to the AI's position
+      }
       const next = { ...prev };
       if (Object.keys(rest).length > 0) {
         next[currentLandmarkEditKey] = rest;
@@ -901,6 +998,35 @@ export default function LandmarkDetectionPage() {
       return next;
     });
     setHasUnsavedLandmarkEdits(true);
+  }, [currentLandmarkEditKey]);
+
+  /** Ctrl+Z: steps back through this slice's own stack of recent point moves, one drag at a
+   *  time, landing back on the AI's position once the stack for this id runs out. Deletes are
+   *  deliberately untouched -- they keep their existing Restore button/1-2 key path. */
+  const handleUndoLastMove = useCallback(() => {
+    const stack = moveUndoStacksRef.current[currentLandmarkEditKey];
+    if (!stack || stack.length === 0) return;
+    const entry = stack.pop();
+    if (!entry) return;
+    setLandmarkEdits((prev) => {
+      const existing = prev[currentLandmarkEditKey];
+      if (!existing) return prev;
+      const rest = { ...existing };
+      if (entry.hadEdit && entry.coord) {
+        (rest as Record<string, unknown>)[entry.id] = entry.coord; // back to the move before this one
+      } else {
+        delete (rest as Record<string, unknown>)[entry.id]; // back to the AI's position
+      }
+      const next = { ...prev };
+      if (Object.keys(rest).length > 0) {
+        next[currentLandmarkEditKey] = rest;
+      } else {
+        delete next[currentLandmarkEditKey];
+      }
+      return next;
+    });
+    setHasUnsavedLandmarkEdits(true);
+    setHighlightedLandmarkId(entry.id);
   }, [currentLandmarkEditKey]);
 
   const handleSaveLandmarks = useCallback(async () => {
@@ -918,6 +1044,8 @@ export default function LandmarkDetectionPage() {
       });
       setHasUnsavedLandmarkEdits(false);
       setSavedLandmarkEdits(landmarkEdits);
+      // A saved move is no longer something a later Ctrl+Z should unwind past.
+      moveUndoStacksRef.current = {};
 
       // Landmark points just changed, so the stored AHA-17 bullseye is now stale.
       // Re-trigger bullseye for every editable mask — the backend prefers the
@@ -1012,13 +1140,128 @@ export default function LandmarkDetectionPage() {
         if (hasUnsavedLandmarkEdits && !isSavingLandmarks) {
           handleSaveLandmarks();
         }
+        return;
+      }
+      // Undo a point MOVE (not a delete -- that keeps its own Restore button/1-2 key).
+      // Same focused-control guard the other landmark shortcuts use, so a text field's own
+      // native undo wins instead of this firing underneath it.
+      if (event.ctrlKey && event.key === 'z') {
+        if (isKeyForFocusedControl(event.target) || readOnly || !editableLandmarks) return;
+        event.preventDefault();
+        handleUndoLastMove();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [hasUnsavedLandmarkEdits, isSavingLandmarks, handleSaveLandmarks]);
+  }, [hasUnsavedLandmarkEdits, isSavingLandmarks, handleSaveLandmarks, readOnly, editableLandmarks, handleUndoLastMove]);
+
+  // Landmarks-tab shortcuts: ←/→ frame, ↑/↓ slice, Space play/pause, 1/2 focus the anterior /
+  // inferior RV insertion point (or restore it if just deleted), Q (or Delete) removes the focused
+  // point from this slice, Esc unfocuses, L shows/hides labels. Registered once, here: the page renders the viewer and sidebar twice
+  // (the mobile layout is only CSS-hidden), so a listener inside them would run twice per key.
+  useEffect(() => {
+    if (workspace !== "landmarks" || !hasPredictions) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isKeyForFocusedControl(event.target)) return;
+      // Ctrl/Cmd/Alt combinations belong to the browser (Ctrl+S is handled above).
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (typeof event.key !== "string") return;
+      const key = event.key;
+      const isArrow = key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown";
+      // Holding a toggle key (Space, 1, 2, L) would flicker it on and off.
+      if (event.repeat && !isArrow) return;
+
+      const controlOwnsKey = isArrowOrSpaceForFocusedControl(event.target);
+
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        if (controlOwnsKey) return;
+        event.preventDefault();
+        const idx = state.frameIds.indexOf(state.landmarkFrame);
+        const nextFrameId = state.frameIds[idx + (key === "ArrowRight" ? 1 : -1)];
+        if (nextFrameId !== undefined) handleLandmarkFrameChange(nextFrameId);
+        return;
+      }
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        if (controlOwnsKey) return;
+        event.preventDefault();
+        if (key === "ArrowUp") handlePrevFrame();
+        else handleNextFrame();
+        return;
+      }
+      if (key === " ") {
+        if (controlOwnsKey) return;
+        // Always play/pause, even when a button has focus (Enter still presses buttons).
+        event.preventDefault();
+        handleTogglePlay();
+        return;
+      }
+
+      const landmarkId = LANDMARK_ID_BY_SHORTCUT_KEY[key];
+      if (landmarkId) {
+        // Just deleted (not saved yet): the key restores it, like the sidebar's Restore button,
+        // and keeps it focused so Q can delete it again.
+        if (
+          !readOnly &&
+          isLandmarkPendingDelete(landmarkId, adjustedCurrentPrediction, currentPrediction, savedCurrentPrediction)
+        ) {
+          event.preventDefault();
+          handleUndoLandmarkDelete(landmarkId);
+          setHighlightedLandmarkId(landmarkId);
+          return;
+        }
+        // Same rule as the sidebar's focus/place chip: a template has nothing to place.
+        if (readOnly && !getLandmarkCoord(adjustedCurrentPrediction, landmarkId)) return;
+        event.preventDefault();
+        setHighlightedLandmarkId((current) => (current === landmarkId ? null : landmarkId));
+        return;
+      }
+
+      if (key === "Delete" || key.toLowerCase() === LANDMARK_DELETE_KEY.toLowerCase()) {
+        // Only a focused point, only with "Move/edit landmarks" on, so a stray key press can't
+        // remove a point. Restore in the sidebar brings it back.
+        if (event.shiftKey || readOnly || !editableLandmarks || !highlightedLandmarkId) return;
+        if (!getLandmarkCoord(adjustedCurrentPrediction, highlightedLandmarkId)) return;
+        event.preventDefault();
+        handleLandmarkDeleteRequest(highlightedLandmarkId);
+        return;
+      }
+
+      if (key === "Escape") {
+        if (!highlightedLandmarkId) return;
+        event.preventDefault();
+        setHighlightedLandmarkId(null);
+        return;
+      }
+
+      if (key.toLowerCase() === LANDMARK_TOGGLE_LABELS_KEY.toLowerCase()) {
+        event.preventDefault();
+        setShowLabels((shown) => !shown);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    workspace,
+    hasPredictions,
+    state.frameIds,
+    state.landmarkFrame,
+    handleLandmarkFrameChange,
+    handlePrevFrame,
+    handleNextFrame,
+    handleTogglePlay,
+    readOnly,
+    editableLandmarks,
+    highlightedLandmarkId,
+    adjustedCurrentPrediction,
+    currentPrediction,
+    savedCurrentPrediction,
+    handleLandmarkDeleteRequest,
+    handleUndoLandmarkDelete,
+  ]);
 
   const bullseyeFrameCount =
     (projectData?.dimensions?.frames && projectData.dimensions.frames > 0)
@@ -1027,14 +1270,32 @@ export default function LandmarkDetectionPage() {
       ? projectData.dimensions.slices
       : 1;
 
-  // Cardiac-cycle frame owned by the Strain tab's playback bar (in the sidebar)
-  // and mirrored here so the bullseye and 3D heart animate with it. Kept
-  // separate from `state.currentFrame`, which is the SLICE index used by the
-  // landmark viewer.
-  const [strainPlaybackFrame, setStrainPlaybackFrame] = useState(0);
-  // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (LandmarkSidebar advances
-  // strainPlaybackFrame every 1000 / playbackFps ms), so the heart moves continuously instead of jumping per frame.
-  const [strainPlaybackFps, setStrainPlaybackFps] = useState(4);
+  // Cardiac-cycle playback for the Structure/Strain tabs: the sidebar's "Frame" playback bar
+  // drives it, and the bullseye and 3D heart animate from the same frame. Kept separate from
+  // `state.currentFrame`, which is the SLICE index used by the landmark viewer.
+  const cyclePlayback = useCyclePlayback(projectData?.dimensions?.frames ?? 0);
+  const { frame: strainPlaybackFrame, fps: strainPlaybackFps, setPlaying: setCyclePlaying } = cyclePlayback;
+
+  // Structure/Strain-tab shortcut: Space plays/pauses the cardiac cycle while the sidebar shows its
+  // "Frame" playback bar (always on Structure; on Strain only in Full cycle scope -- same condition
+  // as the sidebar). The Landmarks tab's Space (slice playback) is handled in the effect above.
+  const cycleBarVisible =
+    hasPredictions && (workspace === "structure" || (workspace === "strain" && computeScope !== "quick"));
+  useEffect(() => {
+    if (!cycleBarVisible) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== " " || event.repeat) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isKeyForFocusedControl(event.target) || isArrowOrSpaceForFocusedControl(event.target)) return;
+      // Always play/pause, even when a button has focus (Enter still presses buttons).
+      event.preventDefault();
+      setCyclePlaying((playing) => !playing);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [cycleBarVisible, setCyclePlaying]);
+  // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (the cycle
+  // advances every 1000 / fps ms), so the heart moves continuously instead of jumping per frame.
   const motionTransitionMs = Math.min(1000, 1000 / Math.max(strainPlaybackFps, 0.5));
 
 
@@ -1049,7 +1310,7 @@ export default function LandmarkDetectionPage() {
     seriesAvailable,
     seriesComputedAt,
     byModel: resultsByModel,
-  } = useProjectResults(projectId);
+  } = useProjectResults(projectId, "prefer-unet", { autoCompute: !readOnly });
   useEffect(() => {
     setBullseyeResultsModel(selectedBullseyeModel);
   }, [selectedBullseyeModel, setBullseyeResultsModel]);
@@ -1178,17 +1439,12 @@ export default function LandmarkDetectionPage() {
     }
   }, [activeModel, resultsByModel]);
 
-  // On first load with NO model in the URL, before any strain series exists yet for
-  // either model (so autoPickedSeriesModel below has nothing to go on), default to
-  // whichever model's editable mask was most recently created — e.g. the model that
-  // was just run via the one-click pipeline — rather than a hardcoded UNet preference.
-  // Without this, running MedSAM's landmark detection but landing here with no ?model=
-  // silently showed UNet's (older) mask/results instead whenever a UNet mask also
-  // existed for the project (reported live, 2026-10). Mongo ObjectIds are monotonic by
-  // creation time, so a plain string compare orders them without needing a timestamp
-  // field on the wire — same technique useProjectResults' own newerMaskAvailable uses.
-  // Superseded by autoPickedSeriesModel below once strain data exists for one model, a
-  // stronger signal of current interest than raw mask recency.
+  // On first load with NO model in the URL, before any strain series exists yet for either
+  // model (so autoPickedSeriesModel below has nothing to go on), default to UNet whenever it
+  // has an editable mask, falling back to MedSAM only when UNet has none (direct request,
+  // 2026-11-13 — both Structure and Strain should always land on UNet when it's available,
+  // not on whichever model was most recently touched). Superseded by autoPickedSeriesModel
+  // below once strain data exists for one model, which applies the same UNet-first rule.
   const autoPickedMaskModel = useRef(false);
   useEffect(() => {
     if (autoPickedMaskModel.current) return;
@@ -1196,10 +1452,9 @@ export default function LandmarkDetectionPage() {
     const unetId = resultsByModel?.unet?._id;
     const medsamId = resultsByModel?.medsam?._id;
     if (!unetId && !medsamId) return;
-    const preferred: "unet" | "medsam" =
-      unetId && medsamId
-        ? (String(medsamId) > String(unetId) ? "medsam" : "unet")
-        : unetId ? "unet" : "medsam";
+    // Always UNet when it has results, regardless of which model was touched more recently --
+    // direct request (2026-11-13), replacing the recency-based pick above.
+    const preferred: "unet" | "medsam" = unetId ? "unet" : "medsam";
     autoPickedMaskModel.current = true;
     if (preferred !== activeModel) {
       setActiveModel(preferred);
@@ -1217,13 +1472,9 @@ export default function LandmarkDetectionPage() {
     if (searchParams.get("model")) { autoPickedSeriesModel.current = true; return; }
     const { unet, medsam } = seriesAvailable;
     if (!unet && !medsam) return;
-    let preferred: "unet" | "medsam";
-    if (unet && medsam) {
-      preferred =
-        (seriesComputedAt.medsam ?? 0) > (seriesComputedAt.unet ?? 0) ? "medsam" : "unet";
-    } else {
-      preferred = unet ? "unet" : "medsam";
-    }
+    // Always UNet when it has series data, regardless of which was computed more recently --
+    // direct request (2026-11-13), replacing the recency-based pick above.
+    const preferred: "unet" | "medsam" = unet ? "unet" : "medsam";
     autoPickedSeriesModel.current = true;
     if (preferred !== activeModel) {
       setActiveModel(preferred);
@@ -1269,6 +1520,25 @@ export default function LandmarkDetectionPage() {
   // keeps the RV view's orientation stable across frames instead of
   // wobbling as LV's own per-frame alignment shifts.
   const lvAlignmentReconstruction = reconstructionsByModel?.[activeModel] ?? null;
+  const hasLvReconstruction = !!lvAlignmentReconstruction;
+  const hasRvReconstruction = structureRvMesh.available;
+
+  // Once it's known that exactly one chamber is actually reconstructed, default both the
+  // Structure tab's LV/RV toggle and the Strain tab's chamber focus to that chamber, instead of
+  // always starting on LV and leaving the user looking at a locked/empty panel (direct request,
+  // 2026-11-13). Runs once per project load -- a later manual click is never overridden.
+  const autoPickedChamberFocus = useRef(false);
+  useEffect(() => {
+    if (autoPickedChamberFocus.current) return;
+    if (!projectLoaded) return;
+    if (!hasLvReconstruction && !hasRvReconstruction) return;
+    autoPickedChamberFocus.current = true;
+    if (lvOnly) return;
+    if (hasLvReconstruction || !hasRvReconstruction) return; // LV available (or neither) -- the "LV" default already matches
+    setStructureVentricle("RV");
+    setChamberFocus("RV");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasLvReconstruction, hasRvReconstruction, projectLoaded, lvOnly]);
 
   // Warm the LV reconstruction's motion build as soon as the page loads, the same way
   // structureRvMesh above does for RV. Without this, LV's motion only starts building
@@ -1317,14 +1587,14 @@ export default function LandmarkDetectionPage() {
 
   /** Per-segment FAC from the auto RLE-only rvFrameAreaSeries — the lowest
    *  tier, used only when neither the landmark-aligned rvStrainSeries nor
-   *  the single rvStrainResult snapshot is available yet. There's no
-   *  landmark-derived "true ED" in this RLE-only series, so frame 0's own
-   *  area stands in for ED (same convention frameBullseyeSeries/LV's own
-   *  RLE-only series uses for its frame ordering). */
+   *  the single rvStrainResult snapshot is available yet. FAC is measured
+   *  against the series' reference frame (the frame its wedges were made on
+   *  — the detected ED frame, or the first frame before heart metrics
+   *  exist); older results without reference_frame use the first frame. */
   const rvFrameAreaRegions = useMemo(() => {
     if (!rvFrameAreaSeries?.frames?.length) return null;
     const sorted = [...rvFrameAreaSeries.frames].sort((a, b) => a.frameIndex - b.frameIndex);
-    const edFrame = sorted[0];
+    const edFrame = sorted.find((f) => f.frameIndex === rvFrameAreaSeries.reference_frame) ?? sorted[0];
     const frame = sorted.find((f) => f.frameIndex === strainPlaybackFrame) ?? sorted[0];
     return frame.regions.map((r) => {
       const edArea = edFrame.regions.find((er) => er.region === r.region)?.area;
@@ -1391,7 +1661,18 @@ export default function LandmarkDetectionPage() {
       }));
     }
     return null;
-  }, [rvStrainResult, rvStrainSeries, rvFrameAreaRegions]);
+  }, [rvStrainResult, rvStrainSeries, rvFrameAreaRegions, strainPlaybackFrame]);
+
+  /** True when the shown frame is the FAC reference frame (ED): every region's
+   *  FAC is exactly 0 there by definition (area compared with itself), which
+   *  the chart draws as grey "0" wedges — so the panel says so instead of
+   *  looking like missing data. */
+  const rvFacAtReferenceFrame = useMemo(() => {
+    const vals = (currentFrameRvFacRegions ?? [])
+      .map((r) => r.strain)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    return vals.length > 0 && vals.every((v) => v === 0);
+  }, [currentFrameRvFacRegions]);
 
   // Same FAC values the Structure tab's RV bullseye colors itself by,
   // remapped into the 3D mesh's segment-label order (0-8, Apical-first) via
@@ -1428,21 +1709,31 @@ export default function LandmarkDetectionPage() {
     // without needing user interaction.
   }, [hasPredictions, getMRIImage, currentImageFrame, currentImageSlice, projectId, tarCacheReady]);
 
+  // Frames the saved (editable) mask covers. On those frames the overlay shows
+  // the saved mask only, as the segmentation editor does: falling back to the
+  // AI's mask per structure would bring back a structure the saved mask leaves
+  // out of a slice (e.g. experts' ED/ES masks loaded over the AI's).
+  const editableMaskFrames = useMemo(() => {
+    const frames = new Set<number>();
+    for (const key of Object.keys(decodedMasks ?? {})) {
+      const match = /^editable_frame_(\d+)_/.exec(key);
+      if (match) frames.add(Number(match[1]));
+    }
+    return frames;
+  }, [decodedMasks]);
+
   const currentMaskOverlays = useMemo<LandmarkMaskOverlay[]>(() => {
     if (!decodedMasks || !hasPredictions) return [];
 
+    const source = editableMaskFrames.has(currentImageFrame) ? "editable" : "medSamOutput";
+    const prefix = `${source}_frame_${currentImageFrame}_slice_${currentImageSlice}_`;
     const overlays: LandmarkMaskOverlay[] = [];
     for (const label of ANATOMICAL_LABELS) {
-      const frameSlice = `_frame_${currentImageFrame}_slice_${currentImageSlice}_`;
-      const directKeys = [
-        `editable_frame_${currentImageFrame}_slice_${currentImageSlice}_${label}`,
-        `medSamOutput_frame_${currentImageFrame}_slice_${currentImageSlice}_${label}`,
-      ];
-      const matchedKey =
-        directKeys.find((key) => decodedMasks[key]) ??
-        Object.keys(decodedMasks).find(
-          (key) => key.includes(frameSlice) && key.toLowerCase().endsWith(`_${label}`),
-        );
+      const matchedKey = decodedMasks[`${prefix}${label}`]
+        ? `${prefix}${label}`
+        : Object.keys(decodedMasks).find(
+            (key) => key.startsWith(prefix) && key.toLowerCase().endsWith(`_${label}`),
+          );
       const mask = matchedKey ? decodedMasks[matchedKey] : null;
 
       if (mask) {
@@ -1451,7 +1742,58 @@ export default function LandmarkDetectionPage() {
     }
 
     return overlays;
-  }, [decodedMasks, hasPredictions, currentImageFrame, currentImageSlice]);
+  }, [decodedMasks, editableMaskFrames, hasPredictions, currentImageFrame, currentImageSlice]);
+
+  // LV centre of the slice on screen, found the way the backend's
+  // lv_reference_centroids() does (bullseye_analysis.py): centroid of the LV
+  // cavity mask, else of the myocardium. Pixel coords (x = column, y = row),
+  // rescaled to the landmarks' image space when the mask size differs.
+  const maskW = maskDimensions.width;
+  const maskH = maskDimensions.height;
+  const currentLvCentre = useMemo<[number, number] | null>(() => {
+    for (const label of ["lvc", "myo"] as const) {
+      const mask = currentMaskOverlays.find((o) => o.label === label)?.mask;
+      if (!mask) continue;
+      let n = 0, sumX = 0, sumY = 0;
+      const total = Math.min(mask.length, maskW * maskH);
+      for (let i = 0; i < total; i += 1) {
+        if (mask[i] <= 0) continue;
+        n += 1;
+        sumX += i % maskW;
+        sumY += Math.floor(i / maskW);
+      }
+      if (n > 0) {
+        return [(sumX / n) * (imageDimensions.width / maskW), (sumY / n) * (imageDimensions.height / maskH)];
+      }
+    }
+    return null;
+  }, [currentMaskOverlays, maskW, maskH, imageDimensions.width, imageDimensions.height]);
+
+  // P1 / P2 = anterior / inferior RV insertion, as currently shown (edits included).
+  const currentP1 = adjustedCurrentPrediction?.rv_insertion_1 ?? null;
+  const currentP2 = adjustedCurrentPrediction?.rv_insertion_2 ?? null;
+
+  // Shows P1 / P2 and the LV centre of the slice on screen in the browser
+  // console — cleared first, so the console only ever holds the current
+  // slice. Re-printed on a frame or slice change, when masks load, and at the
+  // END of a drag (not on every move). Frame/slice are 1-based to match the
+  // controls. The same numbers are shown live by LandmarkCoordsReadout.
+  // next.config keeps console.info / console.clear in production builds.
+  const lastLoggedCoordsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!adjustedCurrentPrediction || isDraggingLandmark) return;
+    const fmt = (p: readonly number[] | null | undefined) =>
+      p ? `x ${p[0].toFixed(1)}, y ${p[1].toFixed(1)}` : "none";
+    const text =
+      `[Landmarks] Frame ${currentImageFrame + 1}, Slice ${currentImageSlice + 1}\n` +
+      `  P1 (anterior)  ${fmt(currentP1)}\n` +
+      `  P2 (inferior)  ${fmt(currentP2)}\n` +
+      `  LV centre      ${fmt(currentLvCentre)}`;
+    if (text === lastLoggedCoordsRef.current) return;
+    lastLoggedCoordsRef.current = text;
+    console.clear();
+    console.info(text);
+  }, [adjustedCurrentPrediction, isDraggingLandmark, currentImageFrame, currentImageSlice, currentP1, currentP2, currentLvCentre]);
 
   // Slices with a manual deletion, for the Slice Confidence strip's pencil badge.
   const manuallyDeletedSliceKeys = useMemo(() => {
@@ -1569,12 +1911,23 @@ export default function LandmarkDetectionPage() {
     return matches ? rvStrainResult : null;
   })();
 
+  // Leaving Full cycle must also stop its playback timer -- otherwise cyclePlayback keeps
+  // advancing currentFrame in the background (it's always wired into the 3D heart's motion
+  // mesh regardless of scope), so a Quick ED->ES result that's supposed to be a single frozen
+  // pair kept visibly deforming frame-by-frame, matching whatever Full cycle would be playing,
+  // because only switching SIDEBAR TABS paused it (handleTabChange above), not switching scope
+  // within the same Strain tab (reported live, with a recording, 2026-11-11).
+  const handleStrainScopeChange = useCallback((scope: "quick" | "full") => {
+    if (scope === "quick") setCyclePlaying(false);
+    setComputeScope(scope);
+  }, [setCyclePlaying]);
+
   // Bundled and passed to LandmarkSidebar's "Compute strain" card (Strain tab) —
   // a single prop instead of ~18 individual ones, since the card and the main
   // panel's visualization both need this same state/these same handlers.
   const strainCompute: StrainComputeBundle = {
     scope: computeScope,
-    onScopeChange: setComputeScope,
+    onScopeChange: handleStrainScopeChange,
     inputMode: strainInputMode,
     onInputModeChange: setStrainInputMode,
     edFrameIdx,
@@ -1613,6 +1966,22 @@ export default function LandmarkDetectionPage() {
   // shows one loading state regardless of which of the two ran.
   const isComputeBusy = computeScope === "quick" ? isComputingStrain : fullCycleBusy;
 
+  // Full cycle + Combined chamber focus's LV/RV Global Strain tiles -- moved from
+  // StrainPreviewPanel's own render (a sibling of LandmarkSidebar, not an ancestor) into the
+  // sidebar instead (direct request, 2026-11-13). The underlying peak/current values are local
+  // to StrainPreviewPanel (it owns the full-cycle series), so it reports them up here through
+  // onFullCycleCombinedStrainChange whenever they change, the same lifting pattern already used
+  // for onFullCycleJobsStarted below.
+  const [fullCycleCombinedStrain, setFullCycleCombinedStrain] = useState<{
+    lv: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null };
+    rv: {
+      currentGcs: number | null; peakGcs: number | null;
+      currentGas: number | null; peakGas: number | null;
+      currentSeptal: number | null; peakSeptal: number | null;
+    };
+    loading?: boolean;
+  } | undefined>(undefined);
+
   if (loading !== "done") return <LoadingProject loadingStage={loading} />;
   if (error || !projectData) return <ErrorProject error={error ?? undefined} />;
 
@@ -1626,17 +1995,25 @@ export default function LandmarkDetectionPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 text-xs"
-            onClick={() => navigateWithUnsavedGuard(() => router.push(`/project/${projectId}`))}
+            className="h-8 gap-1.5 text-sm"
+            onClick={() => navigateWithUnsavedGuard(() => router.push(readOnly ? "/dashboard?tab=templates" : `/project/${projectId}`))}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Back to Project
+            {readOnly ? "Back to Templates" : "Back to Project"}
           </Button>
           <Heart className="h-4 w-4 text-rose-500 shrink-0" aria-hidden />
           <span className="text-sm font-medium truncate">{projectData.name}</span>
-          <StatusBadge status={state.status} />
+          {readOnly && (
+            <span
+              className="inline-flex items-center gap-1 text-[12.5px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+              title="A pre-computed reference heart. You can explore every tab, but nothing can be changed or re-run."
+            >
+              Template · read-only
+            </span>
+          )}
+          {!readOnly && <StatusBadge status={state.status} />}
           {hasPredictions && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400">
+            <span className="inline-flex items-center gap-1 text-[12.5px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400">
               <span className="h-1 w-1 rounded-full bg-blue-500 inline-block" />
               Landmarks Detected
             </span>
@@ -1646,7 +2023,7 @@ export default function LandmarkDetectionPage() {
         <div className="flex-1" />
 
         {/* Info pills */}
-        <div className="hidden md:flex items-center gap-4 text-[11px] text-muted-foreground">
+        <div className="hidden md:flex items-center gap-4 text-[13px] text-muted-foreground">
           {/* Slices and frames are different axes: landmark detection runs per
               slice, the cardiac cycle spans frames. state.totalFrames is a slice
               count despite its name, so label it as slices and take frames from
@@ -1665,12 +2042,13 @@ export default function LandmarkDetectionPage() {
         </div>
 
         {/* Re-run + Export buttons. (Landmark save lives in the Landmarks tab
-            now, next to the editing controls — the header button was redundant.) */}
-        {hasPredictions && (
+            now, next to the editing controls — the header button was redundant.)
+            Not shown for a template, which is results-only. */}
+        {hasPredictions && !readOnly && (
           <div className="flex items-center gap-2 shrink-0">
             <Button
               size="sm"
-              className="text-xs gap-1.5"
+              className="text-sm gap-1.5"
               disabled={segmentationBlocksRuns}
               title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
               onClick={() => runUnlessSegmentationPending(() => rerunDetectionAndResetEdits(selectedModel))}
@@ -1679,9 +2057,9 @@ export default function LandmarkDetectionPage() {
               Re-run
             </Button>
             <Button
-              variant="outline"
+              variant="info"
               size="sm"
-              className="text-xs gap-1.5"
+              className="text-sm gap-1.5"
               onClick={() => router.push(`/project/${projectId}/report`)}
             >
               <FileText className="h-3.5 w-3.5" />
@@ -1697,15 +2075,15 @@ export default function LandmarkDetectionPage() {
         >
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span className="flex-1">{state.error}</span>
-          <button
+          {!readOnly && <button
             type="button"
-            className="text-xs underline hover:no-underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
+            className="text-sm underline hover:no-underline disabled:opacity-50 disabled:no-underline disabled:cursor-not-allowed"
             disabled={segmentationBlocksRuns}
             title={segmentationBlocksRuns ? "Available once segmentation has written the new mask" : undefined}
             onClick={() => runUnlessSegmentationPending(() => runDetectionAndResetEdits(selectedModel))}
           >
             Try again
-          </button>
+          </button>}
         </div>
       )}
       {showSegmentationWait && (
@@ -1734,7 +2112,8 @@ export default function LandmarkDetectionPage() {
           />
         )}
         {/* Mobile: full-width viewer */}
-        <div className="aspect-square w-full">
+        <div className="relative aspect-square w-full">
+          {hasPredictions && <LandmarkCoordsReadout p1={currentP1} p2={currentP2} lvCentre={currentLvCentre} />}
           <LandmarkSliceViewer
             prediction={adjustedCurrentPrediction}
             currentFrame={state.currentFrame}
@@ -1745,7 +2124,7 @@ export default function LandmarkDetectionPage() {
             maskDimensions={maskDimensions}
             visibleLandmarks={visibleLandmarks}
             showLabels={showLabels}
-            editableLandmarks={editableLandmarks}
+            editableLandmarks={editableLandmarks && !readOnly}
             highlightedLandmarkId={highlightedLandmarkId}
             onLandmarkMove={handleLandmarkMove}
             onLandmarkMoveEnd={handleLandmarkMoveEnd}
@@ -1770,25 +2149,27 @@ export default function LandmarkDetectionPage() {
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
-            onStrainFrameChange={setStrainPlaybackFrame}
-            onStrainFpsChange={setStrainPlaybackFps}
+            cyclePlayback={cyclePlayback}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
+            lvOnly={lvOnly}
+            hasLvReconstruction={hasLvReconstruction}
+            hasRvReconstruction={hasRvReconstruction}
             structureStats={currentFrameStructureStats}
             isPerFrame={!!frameThicknessValues}
             rvFacStats={currentFrameRvFacStats}
             isRvPerFrame={!!(rvStrainSeries?.frames?.length || rvFrameAreaSeries?.frames?.length)}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
-            onSaveLandmarks={handleSaveLandmarks}
+            onSaveLandmarks={readOnly ? undefined : handleSaveLandmarks}
             onToggleLandmark={handleToggleLandmark}
             currentSliceKey={currentLandmarkEditKey}
-            onDeleteLandmark={handleLandmarkDeleteRequest}
-            onUndoDeleteLandmark={handleUndoLandmarkDelete}
+            onDeleteLandmark={readOnly ? undefined : handleLandmarkDeleteRequest}
+            onUndoDeleteLandmark={readOnly ? undefined : handleUndoLandmarkDelete}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
             onTogglePlay={handleTogglePlay}
             onNextFrame={handleNextFrame}
@@ -1802,14 +2183,17 @@ export default function LandmarkDetectionPage() {
             onClearReplacementFile={handleClearReplacementFile}
             showLabels={showLabels}
             onToggleShowLabels={() => setShowLabels((p) => !p)}
-            editableLandmarks={editableLandmarks}
+            editableLandmarks={editableLandmarks && !readOnly}
             onToggleEditableLandmarks={() => setEditableLandmarks((p) => !p)}
             highlightedLandmarkId={highlightedLandmarkId}
             onHighlightLandmark={setHighlightedLandmarkId}
             selectedStrainType={selectedStrainType}
             onStrainTypeChange={setSelectedStrainType}
             strainCompute={strainCompute}
+            readOnly={readOnly}
+            readOnlyNote={projectData?.templateInfo?.landmarkNote}
             chamberFocus={chamberFocus}
+            fullCycleCombinedStrain={fullCycleCombinedStrain}
           />
         </div>
       </div>
@@ -1839,7 +2223,7 @@ export default function LandmarkDetectionPage() {
                       control even though they shared state, and was just
                       redundant UI either way. */}
                   {structureVentricle === "LV" && bullseyeRecomputing && (
-                    <span className="text-[10px] font-medium text-muted-foreground animate-pulse">
+                    <span className="text-[12.5px] font-medium text-muted-foreground animate-pulse">
                       Recomputing with edits…
                     </span>
                   )}
@@ -1853,7 +2237,7 @@ export default function LandmarkDetectionPage() {
                     <button
                       type="button"
                       onClick={() => { bullseyeZoomResetRef.current?.(); heartZoomResetRef.current?.(); }}
-                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[10px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[12.5px] font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
                       title="Reset zoom on bullseye and 3D heart"
                     >
                       Reset View
@@ -1868,7 +2252,7 @@ export default function LandmarkDetectionPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">No landmark data yet</p>
-                    <p className="text-xs mt-1 opacity-70">
+                    <p className="text-sm mt-1 opacity-70">
                       Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate the {structureVentricle === "LV" ? "Wall Thickness" : "RV Cavity Area (FAC)"} panel.
                     </p>
                   </div>
@@ -1889,10 +2273,16 @@ export default function LandmarkDetectionPage() {
                           yet for this project. */}
                       <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
                         <div className="mb-1 flex items-center justify-between flex-shrink-0">
-                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                             RV Bullseye
                           </p>
                         </div>
+                        {rvFacAtReferenceFrame && (
+                          <p className="mb-1 flex-shrink-0 rounded bg-muted px-2 py-1 text-[12.5px] text-muted-foreground">
+                            Reference frame (ED): FAC is 0% here by definition — each segment&apos;s area is
+                            compared with itself. Play the cycle or pick another frame to see FAC.
+                          </p>
+                        )}
                         <div className="flex flex-1 min-h-0 items-center justify-center">
                           <CombinedVentricularChart
                             lvData={[]}
@@ -1905,8 +2295,9 @@ export default function LandmarkDetectionPage() {
                             // same segment's FAC value gets normalized against two different
                             // windows and renders a different color in each view (reported live,
                             // 2026-10). Matches the Strain tab's rvRange pattern (page.tsx ~3080).
-                            rvMin={structureRvFacRange.min ?? undefined}
-                            rvMax={structureRvFacRange.max ?? undefined}
+                            // At the reference frame (all 0) the fixed scale is shown instead of 0.0-0.0.
+                            rvMin={rvFacAtReferenceFrame ? undefined : structureRvFacRange.min ?? undefined}
+                            rvMax={rvFacAtReferenceFrame ? undefined : structureRvFacRange.max ?? undefined}
                             showLv={false}
                             showRv={true}
                             selectedRvRegion={selectedStructureRvRegion}
@@ -1919,8 +2310,8 @@ export default function LandmarkDetectionPage() {
                       {/* RIGHT: 3D heart model */}
                       <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
                         <div className="mb-1 flex items-center justify-between flex-shrink-0">
-                          <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+                          <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">Synced</span>
                         </div>
                         <div className="flex-1 min-h-0 w-full relative">
                           <ReconstructedHeartModel
@@ -1949,7 +2340,7 @@ export default function LandmarkDetectionPage() {
                           />
                           {structureRvTooltip && (
                             <div
-                              className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                              className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                               style={{ left: structureRvTooltip.x + 14, top: structureRvTooltip.y - 10 }}
                             >
                               <div className="font-semibold">{structureRvTooltip.label}</div>
@@ -1963,11 +2354,11 @@ export default function LandmarkDetectionPage() {
                             3D panel (AhaHeartProjection) so RV isn't missing
                             the control LV has. */}
                         <div className="flex items-center justify-center gap-2 px-2 py-1 flex-shrink-0">
-                          <p className="text-[9px] text-muted-foreground">Scroll or</p>
+                          <p className="text-[12px] text-muted-foreground">Scroll or</p>
                           <button
                             type="button"
                             aria-label="Zoom in"
-                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                             onClick={() => structureRvHeartZoomRef.current?.(-1)}
                           >
                             <ZoomIn className="h-3 w-3" />
@@ -1975,26 +2366,20 @@ export default function LandmarkDetectionPage() {
                           <button
                             type="button"
                             aria-label="Zoom out"
-                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                            className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                             onClick={() => structureRvHeartZoomRef.current?.(1)}
                           >
                             <ZoomOut className="h-3 w-3" />
                           </button>
-                          <p className="text-[9px] text-muted-foreground">to zoom</p>
+                          <p className="text-[12px] text-muted-foreground">to zoom</p>
                         </div>
                       </div>
                     </div>
-                    <p className="text-[9px] text-muted-foreground leading-relaxed flex-shrink-0 px-1">
-                      The 3D mesh shape and 9-segment boundaries are from the real RV reconstruction. It's
-                      colored by real per-segment FAC, synced with the bullseye on the left, once RV strain
-                      has been computed for this project — until then it falls back to segment-identity
-                      colors (the analysis notebook's palette).
-                    </p>
                   </div>
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
                     <AlertCircle className="h-8 w-8 opacity-40" />
-                    <p className="max-w-[280px] text-xs leading-relaxed">
+                    <p className="max-w-[280px] text-sm leading-relaxed">
                       4D reconstruction for {activeModel === "unet" ? "UNet" : "MedSAM"} is unavailable — please
                       run it from the project page to see results.
                     </p>
@@ -2005,7 +2390,7 @@ export default function LandmarkDetectionPage() {
                   bullseyeData={hasPredictions ? bullseyeData : null}
                   loading={hasPredictions ? bullseyeLoading : isRunning}
                   isComputing={bullseyeRecomputing || calculatingModels[activeModel]}
-                  onCompute={() => fetchBullseye(selectedBullseyeModel, true, true)}
+                  onCompute={readOnly ? undefined : () => fetchBullseye(selectedBullseyeModel, true, true)}
                   // Follows the shared cardiac-cycle playback (now driven from
                   // either the Structure or Strain tab), not the slice index —
                   // the bullseye is a per-frame view of the cycle.
@@ -2031,7 +2416,7 @@ export default function LandmarkDetectionPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-sm font-semibold text-foreground">Strain Preview</h3>
                   <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[12.5px] font-medium text-muted-foreground">
                     {activeModel === "unet" ? "UNet" : "MedSAM"}
                   </span>
                 </div>
@@ -2043,7 +2428,7 @@ export default function LandmarkDetectionPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">No landmark data yet</p>
-                    <p className="text-xs mt-1 opacity-70">
+                    <p className="text-sm mt-1 opacity-70">
                       Click <strong>Run Detection</strong> to analyse this project&apos;s MRI and generate strain results.
                     </p>
                   </div>
@@ -2071,6 +2456,8 @@ export default function LandmarkDetectionPage() {
                   fullCycleProgress={fullCycleProgress}
                   chamberFocus={chamberFocus}
                   onChamberFocusChange={setChamberFocus}
+                  lvOnly={lvOnly}
+                  onFullCycleCombinedStrainChange={setFullCycleCombinedStrain}
                 />
               )}
             </div>
@@ -2093,7 +2480,7 @@ export default function LandmarkDetectionPage() {
                       <p className="text-sm font-medium text-foreground">
                         Preparing landmark detection
                       </p>
-                      <p className="text-xs text-muted-foreground mt-1">
+                      <p className="text-sm text-muted-foreground mt-1">
                         Detection starts automatically using the server default model.
                       </p>
                     </div>
@@ -2109,7 +2496,7 @@ export default function LandmarkDetectionPage() {
                       <KineticProgress tone="primary" size="h-2" className="w-56" label="Landmark detection running" />
                     )}
                     <p className="text-sm font-medium">Running landmark detection…</p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-sm text-muted-foreground mt-1">
                       This may take a moment
                     </p>
                   </div>
@@ -2128,7 +2515,8 @@ export default function LandmarkDetectionPage() {
               )}
 
               {/* Main slice viewer */}
-              <div className="flex-1 min-h-0">
+              <div className="relative flex-1 min-h-0">
+                {hasPredictions && <LandmarkCoordsReadout p1={currentP1} p2={currentP2} lvCentre={currentLvCentre} />}
                 <LandmarkSliceViewer
                   prediction={adjustedCurrentPrediction}
                   currentFrame={state.currentFrame}
@@ -2139,7 +2527,7 @@ export default function LandmarkDetectionPage() {
                   maskDimensions={maskDimensions}
                   visibleLandmarks={visibleLandmarks}
                   showLabels={showLabels}
-                  editableLandmarks={editableLandmarks}
+                  editableLandmarks={editableLandmarks && !readOnly}
                   highlightedLandmarkId={highlightedLandmarkId}
                   onLandmarkMove={handleLandmarkMove}
                   onLandmarkMoveEnd={handleLandmarkMoveEnd}
@@ -2171,25 +2559,27 @@ export default function LandmarkDetectionPage() {
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
-                onStrainFrameChange={setStrainPlaybackFrame}
-            onStrainFpsChange={setStrainPlaybackFps}
+                cyclePlayback={cyclePlayback}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
             onModelChange={(m) => { setActiveModel(m); fetchBullseye(m); }}
             structureVentricle={structureVentricle}
             onStructureVentricleChange={setStructureVentricle}
+            lvOnly={lvOnly}
+            hasLvReconstruction={hasLvReconstruction}
+            hasRvReconstruction={hasRvReconstruction}
             structureStats={currentFrameStructureStats}
             isPerFrame={!!frameThicknessValues}
             rvFacStats={currentFrameRvFacStats}
             isRvPerFrame={!!(rvStrainSeries?.frames?.length || rvFrameAreaSeries?.frames?.length)}
             hasUnsavedLandmarkEdits={hasUnsavedLandmarkEdits}
             isSavingLandmarks={isSavingLandmarks}
-            onSaveLandmarks={handleSaveLandmarks}
+            onSaveLandmarks={readOnly ? undefined : handleSaveLandmarks}
                 onToggleLandmark={handleToggleLandmark}
             currentSliceKey={currentLandmarkEditKey}
-            onDeleteLandmark={handleLandmarkDeleteRequest}
-            onUndoDeleteLandmark={handleUndoLandmarkDelete}
+            onDeleteLandmark={readOnly ? undefined : handleLandmarkDeleteRequest}
+            onUndoDeleteLandmark={readOnly ? undefined : handleUndoLandmarkDelete}
             manuallyDeletedSliceKeys={manuallyDeletedSliceKeys}
                 onTogglePlay={handleTogglePlay}
                 onNextFrame={handleNextFrame}
@@ -2203,14 +2593,17 @@ export default function LandmarkDetectionPage() {
                 onClearReplacementFile={handleClearReplacementFile}
                 showLabels={showLabels}
                 onToggleShowLabels={() => setShowLabels((p) => !p)}
-                editableLandmarks={editableLandmarks}
+                editableLandmarks={editableLandmarks && !readOnly}
                 onToggleEditableLandmarks={() => setEditableLandmarks((p) => !p)}
                 highlightedLandmarkId={highlightedLandmarkId}
                 onHighlightLandmark={setHighlightedLandmarkId}
                 selectedStrainType={selectedStrainType}
                 onStrainTypeChange={setSelectedStrainType}
                 strainCompute={strainCompute}
+            readOnly={readOnly}
+            readOnlyNote={projectData?.templateInfo?.landmarkNote}
                 chamberFocus={chamberFocus}
+                fullCycleCombinedStrain={fullCycleCombinedStrain}
               />
             </div>
           </ResizablePanel>
@@ -2218,29 +2611,16 @@ export default function LandmarkDetectionPage() {
         </ResizablePanelGroup>
       </div>
 
-      <AlertDialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              Leaving now will lose your edits to these landmarks. Save first, or leave anyway?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Go back and save</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const action = pendingNavigation;
-                setPendingNavigation(null);
-                action?.();
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Leave anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <UnsavedChangesDialog
+        open={pendingNavigation !== null}
+        description="Leaving now will lose your edits to these landmarks. Save first, or leave anyway?"
+        onStay={() => setPendingNavigation(null)}
+        onLeave={() => {
+          const action = pendingNavigation;
+          setPendingNavigation(null);
+          action?.();
+        }}
+      />
     </div>
   );
 }
@@ -2440,7 +2820,7 @@ function AhaBullseyePanel({
       {!previewMode && !activeReconstruction ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center text-muted-foreground px-6">
           <AlertCircle className="h-8 w-8 opacity-40" />
-          <p className="max-w-[280px] text-xs leading-relaxed">
+          <p className="max-w-[280px] text-sm leading-relaxed">
             4D reconstruction for {modelLabel} is unavailable — please run it from the project page
             to see results.
           </p>
@@ -2451,20 +2831,20 @@ function AhaBullseyePanel({
             <Loader2 className="h-6 w-6 animate-spin" />
             {/* "Computing" only when the GPU is actually generating the bullseye;
                 otherwise we're just loading already-stored data. */}
-            <span className="text-xs">{isComputing ? "Computing bullseye…" : "Loading…"}</span>
+            <span className="text-sm">{isComputing ? "Computing bullseye…" : "Loading…"}</span>
           </div>
         </div>
       ) : !displayBullseyeData ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
-          <p className="text-xs text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             No bullseye data for this segmentation model yet.
           </p>
           {onCompute && (
             <button
               type="button"
               onClick={onCompute}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Compute Bullseye
@@ -2474,14 +2854,14 @@ function AhaBullseyePanel({
       ) : hasNoValidSegments ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
           <AlertCircle className="h-6 w-6 text-muted-foreground opacity-50" />
-          <p className="text-xs text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             Insufficient segmentation — no myocardium detected in any slice for this model.
           </p>
           {onCompute && (
             <button
               type="button"
               onClick={onCompute}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-muted/60 transition-colors"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Recompute Bullseye
@@ -2493,10 +2873,10 @@ function AhaBullseyePanel({
           {/* LEFT: Bullseye chart */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Frame {Math.min(currentFrame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
               </p>
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">
                 {previewMode ? "Preview" : "Result"}
               </span>
             </div>
@@ -2518,7 +2898,7 @@ function AhaBullseyePanel({
             </ZoomPanContainer>
             {bullseyeTooltip && (
               <div
-                className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                 style={{ left: bullseyeTooltip.x + 14, top: bullseyeTooltip.y - 10 }}
               >
                 <div className="font-semibold">{bullseyeTooltip.name}</div>
@@ -2537,8 +2917,8 @@ function AhaBullseyePanel({
           {/* RIGHT: 3D heart model */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">3D Heart</p>
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">Synced</span>
             </div>
             <AhaHeartProjection
               bullseyeData={displayBullseyeData}
@@ -2559,11 +2939,11 @@ function AhaBullseyePanel({
             />
             {/* Zoom hint + buttons */}
             <div className="flex items-center justify-center gap-2 px-2 py-1 flex-shrink-0">
-              <p className="text-[9px] text-muted-foreground">Scroll or</p>
+              <p className="text-[12px] text-muted-foreground">Scroll or</p>
               <button
                 type="button"
                 aria-label="Zoom in"
-                className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                 onClick={() => heartZoomRef.current?.(-1)}
               >
                 <ZoomIn className="h-3 w-3" />
@@ -2571,12 +2951,12 @@ function AhaBullseyePanel({
               <button
                 type="button"
                 aria-label="Zoom out"
-                className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
+                className="rounded border border-border bg-background px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-muted transition-colors flex items-center gap-0.5"
                 onClick={() => heartZoomRef.current?.(1)}
               >
                 <ZoomOut className="h-3 w-3" />
               </button>
-              <p className="text-[9px] text-muted-foreground">to zoom</p>
+              <p className="text-[12px] text-muted-foreground">to zoom</p>
             </div>
           </div>
         </div>
@@ -2603,10 +2983,10 @@ function MetricTile({
         emphasized && "bg-primary/10 text-primary",
       )}
     >
-      <p className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-[12px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="font-mono text-sm font-semibold tabular-nums">
         {value}
-        <span className="ml-1 text-[9px] font-medium text-muted-foreground">{unit}</span>
+        <span className="ml-1 text-[12px] font-medium text-muted-foreground">{unit}</span>
       </p>
     </div>
   );
@@ -2626,7 +3006,7 @@ function EmptyAnalysisPreview({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col rounded-lg bg-background p-3">
       <div className="flex items-center justify-end">
-        <span className="text-[10px] font-mono text-muted-foreground">
+        <span className="text-[12.5px] font-mono text-muted-foreground">
           Frame {Math.min(frame + 1, Math.max(frameCount, 1))}/{Math.max(frameCount, 1)}
         </span>
       </div>
@@ -2641,7 +3021,7 @@ function EmptyAnalysisPreview({
         ) : (
           <Activity className="h-8 w-8 opacity-25" />
         )}
-        <p className="max-w-[240px] text-xs leading-relaxed">{message}</p>
+        <p className="max-w-[240px] text-sm leading-relaxed">{message}</p>
       </div>
     </div>
   );
@@ -2710,7 +3090,7 @@ function AhaHeartProjection({
         />
         {heartTooltip && (
           <div
-            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
             style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
           >
             <div className="font-semibold">{AHA_SEGMENTS[heartTooltip.segment - 1] ?? `Segment ${heartTooltip.segment}`}</div>
@@ -2725,7 +3105,7 @@ function AhaHeartProjection({
     return (
       <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin opacity-50" />
-        <p className="max-w-[240px] text-xs leading-relaxed">
+        <p className="max-w-[240px] text-sm leading-relaxed">
           Your 4D reconstruction is processing, this usually takes 2-5 minutes. The real
           AHA-colored 3D model will appear here once it's done.
         </p>
@@ -2736,7 +3116,7 @@ function AhaHeartProjection({
   return (
     <div className="flex-1 min-h-0 w-full flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
       <AlertCircle className="h-8 w-8 opacity-40" />
-      <p className="max-w-[240px] text-xs leading-relaxed">
+      <p className="max-w-[240px] text-sm leading-relaxed">
         Please run <span className="font-medium text-foreground">MedSAM</span> or{" "}
         <span className="font-medium text-foreground">U-Net</span> 4D reconstruction to access this.
       </p>
@@ -2806,7 +3186,7 @@ function StrainHeartModel({
         />
         {heartTooltip && (
           <div
-            className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+            className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
             style={{ left: heartTooltip.x + 14, top: heartTooltip.y - 10 }}
           >
             <div className="font-semibold">
@@ -2822,7 +3202,7 @@ function StrainHeartModel({
   return (
     <div className="w-full h-full relative flex flex-col items-center justify-center gap-3 px-4 text-center text-muted-foreground">
       <AlertCircle className="h-8 w-8 opacity-40" />
-      <p className="max-w-[240px] text-xs leading-relaxed">
+      <p className="max-w-[240px] text-sm leading-relaxed">
         Please run <span className="font-medium text-foreground">MedSAM</span> or{" "}
         <span className="font-medium text-foreground">U-Net</span> 4D reconstruction to access this.
       </p>
@@ -2852,6 +3232,8 @@ function StrainPreviewPanel({
   fullCycleProgress,
   chamberFocus,
   onChamberFocusChange,
+  lvOnly = false,
+  onFullCycleCombinedStrainChange,
 }: {
   selectedStrainType: StrainType;
   currentFrame: number;
@@ -2891,6 +3273,20 @@ function StrainPreviewPanel({
    *  chamberFocus state's own comment. */
   chamberFocus: ChamberFocus;
   onChamberFocusChange: (focus: ChamberFocus) => void;
+  lvOnly?: boolean;
+  /** Reports Combined + Full cycle's LV/RV Global Strain tile values up to the page, which
+   *  passes them straight into LandmarkSidebar's fullCycleCombinedStrain -- those tiles moved
+   *  there from this panel's own render (direct request, 2026-11-13), but the underlying
+   *  peak/current values are computed here, where the full-cycle series already lives. */
+  onFullCycleCombinedStrainChange?: (data: {
+    lv: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null };
+    rv: {
+      currentGcs: number | null; peakGcs: number | null;
+      currentGas: number | null; peakGas: number | null;
+      currentSeptal: number | null; peakSeptal: number | null;
+    };
+    loading?: boolean;
+  } | undefined) => void;
 }) {
   // Compute controls (frame/upload pickers, model select, the actual
   // compute calls) live in the sidebar's "Compute strain" card now — this
@@ -2946,6 +3342,17 @@ function StrainPreviewPanel({
   // Independent of the LV reconstruction above; RV has its own reconstruction record.
   const rvMesh = useRvPrototypeMesh(strainModel, currentFrame);
 
+  // Which chamber-focus options are selectable -- a chamber the user hasn't reconstructed yet
+  // (for this model) has no bullseye/3D model to show, so its button (and Combined, which needs
+  // both) is blurred with a reason on hover instead of silently rendering an empty panel if
+  // clicked (direct request, 2026-11-13).
+  const chamberDisabledOptions = useMemo(() => {
+    const reasons: Partial<Record<ChamberFocus, ChamberUnavailable>> = {};
+    if (!activeReconstruction) reasons.LV = { message: "Reconstruct LV to view this", chamber: "LV" };
+    if (!rvMesh.available) reasons.RV = { message: "Reconstruct RV to view this", chamber: "RV" };
+    return Object.keys(reasons).length > 0 ? reasons : undefined;
+  }, [activeReconstruction, rvMesh.available]);
+
   // LV 3D heart: smooth motion when built (the ED mesh with its ED labels, vertices moved per frame), otherwise this
   // frame's own mesh and labels as before -- labels always come with the mesh they belong to, and the previous mesh
   // stays on screen until the next is ready (no flicker during playback). See hooks/useMotionMesh.
@@ -2972,9 +3379,11 @@ function StrainPreviewPanel({
   // selectedSegment/selectedSeg3d/selectedRvRegion here would mean clicking
   // a segment on the Combined bullseye also highlighted it on the LV-only
   // or RV-only tab (and vice versa) since those all read the same state,
-  // even though the two views aren't showing the same thing. Combined's 3D
-  // panel (CombinedHeartModel) doesn't support click-to-select yet, so these
-  // only drive the Combined bullseye's own highlight for now.
+  // even though the two views aren't showing the same thing. Drives BOTH
+  // the Combined bullseye's and the Combined 3D model's highlight -- a click
+  // on either one clears the OTHER chamber's selection first (only one
+  // chamber is ever highlighted at a time), so switching from an LV segment
+  // to an RV one (or back) always wins instead of being silently ignored.
   const [selectedCombinedSegment, setSelectedCombinedSegment] = useState<number | null>(null);
   const [selectedCombinedRvRegion, setSelectedCombinedRvRegion] = useState<number | null>(null);
 
@@ -3032,6 +3441,52 @@ function StrainPreviewPanel({
       } : null)
     : (rvStrainMatchesSelection ? rvStrainResult : null);
 
+  // Reports Combined + Full cycle's tile values up to the page (see
+  // onFullCycleCombinedStrainChange's own doc) -- undefined whenever those tiles
+  // wouldn't be shown (not Combined, or not Full cycle), so the sidebar renders
+  // nothing instead of stale numbers from the last time this WAS Combined.
+  //
+  // Deps are the PRIMITIVE numbers, not strainForDisplay/rvStrainForDisplay themselves --
+  // isFullCycle's branch above builds those as a fresh object literal every render
+  // regardless of whether the underlying frame data changed, so depending on the object
+  // reference made this effect (and the setState inside it) re-fire every render,
+  // triggering the parent re-render that recomputes a new object, forever: "Maximum
+  // update depth exceeded" (reported live, 2026-11-13).
+  const lvCurrentGrsForTiles = strainForDisplay?.global_grs ?? null;
+  const lvCurrentGcsForTiles = strainForDisplay?.global_gcs ?? null;
+  const rvCurrentGcsForTiles = rvStrainForDisplay?.global_rv_strain ?? null;
+  const rvCurrentGasForTiles = rvStrainForDisplay?.global_rv_gas ?? null;
+  const rvCurrentSeptalForTiles = rvStrainForDisplay?.global_rv_septal_gcs ?? null;
+  useEffect(() => {
+    if (chamberFocus !== "combined" || !isFullCycle) {
+      onFullCycleCombinedStrainChange?.(undefined);
+      return;
+    }
+    onFullCycleCombinedStrainChange?.({
+      lv: {
+        currentGrs: lvCurrentGrsForTiles,
+        currentGcs: lvCurrentGcsForTiles,
+        peakGrs: lvPeakGrs,
+        peakGcs: lvPeakGcs,
+      },
+      rv: {
+        currentGcs: rvCurrentGcsForTiles,
+        peakGcs: rvPeakGcs,
+        currentGas: rvCurrentGasForTiles,
+        peakGas: rvPeakGas,
+        currentSeptal: rvCurrentSeptalForTiles,
+        peakSeptal: rvPeakSeptalGcs,
+      },
+      loading: isComputeBusy,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    chamberFocus, isFullCycle,
+    lvCurrentGrsForTiles, lvCurrentGcsForTiles, lvPeakGrs, lvPeakGcs,
+    rvCurrentGcsForTiles, rvCurrentGasForTiles, rvCurrentSeptalForTiles, rvPeakGcs, rvPeakGas, rvPeakSeptalGcs,
+    isComputeBusy,
+  ]);
+
   // GCS and GAS are separate RV metrics (not combined). The bullseye reads
   // `strain`, so for GAS swap in each region's `gas`. Results computed before
   // the 9-segment backend have no `gas` -> null -> drawn as "no data".
@@ -3053,7 +3508,7 @@ function StrainPreviewPanel({
   // Colour scale — this result's own min→max, exactly like the Wall Thickness
   // bullseye (user choice), shared by the 2D bullseye and the 3D heart so the
   // same value is the same colour in both. GCS / RV strain are "more negative
-  // = more deformation", so their ramp is reversed (green = more).
+  // = more deformation", so their ramp is reversed (blue = more).
   const lvStrainValues: (number | null)[] = strainForDisplay
     ? Array.from({ length: 17 }, (_, i) => {
         const s = strainForDisplay.segments.find((seg) => seg.segment === i + 1);
@@ -3098,17 +3553,17 @@ function StrainPreviewPanel({
             sync with it. Labeled per-chamber (not a bare "GCS") since LV and
             RV each have their own independent metric toggle in the sidebar —
             this one never flips when you switch RV's toggle, by design. */}
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-medium text-muted-foreground">
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[12px] font-medium text-muted-foreground">
           LV {selectedStrainType}
         </span>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[9px] font-medium text-muted-foreground">
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[12px] font-medium text-muted-foreground">
           RV {rvMetricType}
         </span>
 
         <div className="ml-auto flex items-center gap-1.5">
           {/* Source badge — only when real data exists */}
           {(realStrainData || rvStrainResult) && (
-            <span className="rounded-full px-2 py-0.5 text-[9px] font-medium shrink-0 bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400">
+            <span className="rounded-full px-2 py-0.5 text-[12px] font-medium shrink-0 bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400">
               {avgLm1 ? "Real · Aligned" : "Real"}
             </span>
           )}
@@ -3119,7 +3574,7 @@ function StrainPreviewPanel({
               wouldn't actually empty anything meaningful there. */}
           {!isFullCycle && (realStrainData || rvStrainResult) && (
             <button type="button" onClick={() => { onStrainResult(null); onRvStrainResult(null); }}
-              className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[9px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
+              className="rounded border border-destructive/40 bg-background px-1.5 py-0.5 text-[12px] text-destructive hover:bg-destructive/10 transition-colors shrink-0">
               Clear
             </button>
           )}
@@ -3137,7 +3592,7 @@ function StrainPreviewPanel({
           ) : (
             <>
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              <p className="text-xs font-medium text-muted-foreground">
+              <p className="text-sm font-medium text-muted-foreground">
                 {computeScope === "quick" ? "Computing…" : "Computing all frames…"}
               </p>
             </>
@@ -3161,7 +3616,7 @@ function StrainPreviewPanel({
                 <p className="font-semibold text-sm text-foreground">
                   No result for frame {currentFrame + 1}
                 </p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   A full-cycle series exists for this model, but it doesn&apos;t include
                   frame {currentFrame + 1} — scrub to a different frame, or recompute
                   (Full cycle → Compute all frames) if the study&apos;s frame count changed
@@ -3173,7 +3628,7 @@ function StrainPreviewPanel({
                 <p className="font-semibold text-sm text-foreground">
                   No result for this selection yet
                 </p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   A strain result exists, but not for the ED/ES frames and model currently
                   selected here (it may be a full-cycle result, or was computed for a
                   different pair). Use the sidebar&apos;s Strain tab to compute this pair.
@@ -3184,7 +3639,7 @@ function StrainPreviewPanel({
                 <p className="font-semibold text-sm text-foreground">
                   No strain computed yet
                 </p>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   Use the <strong>Compute strain</strong> card in the sidebar&apos;s Strain tab to
                   compute LV and RV strain together from this project&apos;s already-saved
                   segmentation, or upload your own ED/ES masks in NIfTI format (.nii or .nii.gz;
@@ -3203,22 +3658,25 @@ function StrainPreviewPanel({
           {/* LEFT: combined 2D bullseye */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {chamberFocus === "combined" ? "LV + RV Bullseye" : chamberFocus === "LV" ? "LV Bullseye" : "RV Bullseye"}
               </p>
               <div className="flex items-center gap-1">
                 {chamberFocus !== "RV" && (
-                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">
                     LV {selectedStrainType}
                   </span>
                 )}
                 {chamberFocus !== "LV" && (
-                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">
                     RV {rvMetricType}
                   </span>
                 )}
               </div>
             </div>
+            {/* RV on screen (Combined or RV view) → red research-only notice at the
+                top of the panel, linking to the Technical Guide's RV method. */}
+            {chamberFocus !== "LV" && <RvResearchNotice compact className="mb-1 flex-shrink-0" />}
             <ZoomPanContainer className="flex-1 min-h-0 w-full" onResetRef={(fn) => { bullseyeResetRef.current = fn; }}>
               {chamberFocus === "LV" ? (
                 <AhaBullseye
@@ -3240,7 +3698,14 @@ function StrainPreviewPanel({
                 strainType={selectedStrainType}
                 selectedSegment={chamberFocus === "combined" ? selectedCombinedSegment : selectedSegment}
                 onSegmentClick={chamberFocus === "combined"
-                  ? (seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))
+                  ? (seg) => {
+                      // Combined view's 3D model only ever highlights one chamber at a time
+                      // (CombinedHeartModel's updateSelectionHighlight) -- clear the other
+                      // chamber's selection so a new click always wins, instead of being
+                      // silently ignored while an LV segment is still selected.
+                      setSelectedCombinedRvRegion(null);
+                      setSelectedCombinedSegment((prev) => (prev === seg ? null : seg));
+                    }
                   : handleSegClick}
                 onSegmentHover={setTooltip}
                 sharedMin={sharedMin}
@@ -3252,7 +3717,14 @@ function StrainPreviewPanel({
                 rvMax={rvRange.max}
                 showColorBars={false}
                 selectedRvRegion={chamberFocus === "combined" ? selectedCombinedRvRegion : selectedRvRegion}
-                onRvRegionClick={(region) => (chamberFocus === "combined" ? setSelectedCombinedRvRegion : setSelectedRvRegion)((prev) => (prev === region ? null : region))}
+                onRvRegionClick={(region) => {
+                  if (chamberFocus === "combined") {
+                    setSelectedCombinedSegment(null);
+                    setSelectedCombinedRvRegion((prev) => (prev === region ? null : region));
+                  } else {
+                    setSelectedRvRegion((prev) => (prev === region ? null : region));
+                  }
+                }}
                 onRvRegionHover={setTooltip}
                 showLv={chamberFocus === "combined"}
                 showRv
@@ -3283,7 +3755,7 @@ function StrainPreviewPanel({
             )}
             {rvGasMissing && (
               <div className="mt-1 flex-shrink-0 rounded-md border border-dashed border-amber-500/40 bg-amber-500/10 px-2 py-1 text-center">
-                <p className="text-[8.5px] leading-snug text-amber-700 dark:text-amber-400">
+                <p className="text-[13px] leading-snug text-amber-700 dark:text-amber-400">
                   This RV result was computed before GAS was added — recompute RV strain to see GAS.
                 </p>
               </div>
@@ -3293,14 +3765,14 @@ function StrainPreviewPanel({
           {/* RIGHT: real 3D heart coloured by LV strain */}
           <div className="flex min-w-0 flex-1 flex-col rounded-lg border border-border bg-slate-50 dark:bg-zinc-900 overflow-hidden p-2">
             <div className="mb-1 flex items-center justify-between flex-shrink-0">
-              <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
                 3D Heart {chamberFocus === "combined" ? "(LV + RV)" : `(${chamberFocus})`}
               </p>
               <div className="flex items-center gap-1">
-                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">Synced</span>
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground">Synced</span>
               </div>
             </div>
-            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} className="mb-2 flex-shrink-0" />
+            <ChamberFocusToggle value={chamberFocus} onChange={onChamberFocusChange} disabledOptions={chamberDisabledOptions} allowedOptions={lvOnly ? ["LV"] : undefined} className="mb-2 flex-shrink-0" />
             {/* Metric-type control, moved here (main panel, right under the
                 chamber toggle) from the sidebar's chart card -- same idea as
                 Quick ED->ES's own flat toggle (QuickCombinedStrainView, now
@@ -3314,12 +3786,12 @@ function StrainPreviewPanel({
               {chamberFocus !== "RV" && (
                 <>
                   <button type="button" onClick={() => onStrainTypeChange("GRS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       selectedStrainType === "GRS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "LV GRS" : "GRS"}
                   </button>
                   <button type="button" onClick={() => onStrainTypeChange("GCS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       selectedStrainType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "LV GCS" : "GCS"}
                   </button>
@@ -3328,12 +3800,12 @@ function StrainPreviewPanel({
               {chamberFocus !== "LV" && (
                 <>
                   <button type="button" onClick={() => onRvMetricTypeChange("GCS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       rvMetricType === "GCS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "RV GCS" : "GCS"}
                   </button>
                   <button type="button" onClick={() => onRvMetricTypeChange("GAS")}
-                    className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors",
+                    className={cn("rounded px-1.5 py-0.5 text-[12px] font-medium transition-colors",
                       rvMetricType === "GAS" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     {chamberFocus === "combined" ? "RV GAS" : "GAS"}
                   </button>
@@ -3391,7 +3863,7 @@ function StrainPreviewPanel({
                   />
                   {rvHeartTooltip && (
                     <div
-                      className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+                      className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
                       style={{ left: rvHeartTooltip.x + 14, top: rvHeartTooltip.y - 10 }}
                     >
                       <div className="font-semibold">
@@ -3400,7 +3872,7 @@ function StrainPreviewPanel({
                     </div>
                   )}
                 </div>
-                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                <p className="text-center text-[12px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
                 {/* Quick ED->ES already shows this same summary in the
@@ -3441,39 +3913,31 @@ function StrainPreviewPanel({
                     className="w-full h-full"
                     initialCameraDistance={8}
                     selectedLvSegment={selectedCombinedSegment ?? -1}
-                    onLvSegmentClick={(seg) => setSelectedCombinedSegment((prev) => (prev === seg ? null : seg))}
+                    onLvSegmentClick={(seg) => {
+                      setSelectedCombinedRvRegion(null);
+                      setSelectedCombinedSegment((prev) => (prev === seg ? null : seg));
+                    }}
                     selectedRvSegment={selectedCombinedRvRegion != null ? RV_REGION_TO_SEGMENT3D[selectedCombinedRvRegion - 1] : -1}
                     onRvSegmentClick={(segment) => {
                       const region = RV_SEGMENT3D_TO_REGION[segment];
+                      setSelectedCombinedSegment(null);
                       setSelectedCombinedRvRegion((prev) => (prev === region ? null : region));
                     }}
                   />
                 </div>
-                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                <p className="text-center text-[12px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom — LV colored by {selectedStrainType}, RV by {rvMetricType}
                   {!rvHasValues && " (segment identity — no RV strain computed yet)"}
+                  <span className="font-semibold text-red-700 dark:text-red-400"> · RV is research output, not validated</span>
                 </p>
-                {/* Quick ED->ES already shows this in the sidebar's
-                    QuickCombinedStrainView -- only Full cycle needs its own
-                    copy here (its sidebar shows the chart instead). */}
-                {isFullCycle && (
-                  <div className="grid grid-cols-2 gap-1 pt-1 flex-shrink-0">
-                    <LvFullCycleStrainTiles
-                      currentGrs={strainForDisplay?.global_grs ?? null}
-                      currentGcs={strainForDisplay?.global_gcs ?? null}
-                      peakGrs={lvPeakGrs}
-                      peakGcs={lvPeakGcs}
-                      loading={isComputeBusy}
-                    />
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
-                  </div>
-                )}
+                {/* Full cycle's LV/RV Global Strain tiles moved to the sidebar for Combined
+                    (direct request, 2026-11-13) -- see LandmarkSidebar's fullCycleCombinedStrain. */}
               </>
             ) : chamberFocus !== "LV" ? (
               <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto px-1 py-1">
                 <div className="flex flex-col items-center justify-center gap-1.5 px-4 py-3 text-center text-muted-foreground">
                   <AlertCircle className="h-6 w-6 opacity-40" />
-                  <p className="max-w-[240px] text-[10px] leading-relaxed">
+                  <p className="max-w-[240px] text-[12.5px] leading-relaxed">
                     {chamberFocus === "RV"
                       ? "No RV reconstruction built yet for this model"
                       : "Combined view needs both an LV and an RV reconstruction for this model"} — showing values only.
@@ -3481,20 +3945,12 @@ function StrainPreviewPanel({
                 </div>
                 {/* Quick ED->ES already shows this in the sidebar's
                     QuickCombinedStrainView regardless of mesh availability --
-                    only Full cycle needs its own copy here. */}
-                {isFullCycle && (
-                  <>
-                    {chamberFocus === "combined" && (
-                      <LvFullCycleStrainTiles
-                        currentGrs={strainForDisplay?.global_grs ?? null}
-                        currentGcs={strainForDisplay?.global_gcs ?? null}
-                        peakGrs={lvPeakGrs}
-                        peakGcs={lvPeakGcs}
-                        loading={isComputeBusy}
-                      />
-                    )}
-                    <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
-                  </>
+                    only Full cycle needs its own copy here. Combined's own
+                    tiles moved to the sidebar (direct request, 2026-11-13),
+                    so only the RV tab's own (RV-only, not Combined) case
+                    still needs its copy here. */}
+                {isFullCycle && chamberFocus === "RV" && (
+                  <RvFullCycleStrainTiles currentGcs={rvStrainForDisplay?.global_rv_strain ?? null} peakGcs={rvPeakGcs} currentGas={rvStrainForDisplay?.global_rv_gas ?? null} peakGas={rvPeakGas} currentSeptal={rvStrainForDisplay?.global_rv_septal_gcs ?? null} peakSeptal={rvPeakSeptalGcs} loading={isComputeBusy} />
                 )}
               </div>
             ) : strainForDisplay ? (
@@ -3516,7 +3972,7 @@ function StrainPreviewPanel({
                     onReconstructionSegmentClick={handleSegClick}
                   />
                 </div>
-                <p className="text-center text-[9px] text-muted-foreground pt-1 flex-shrink-0">
+                <p className="text-center text-[12px] text-muted-foreground pt-1 flex-shrink-0">
                   Drag to rotate · scroll to zoom
                 </p>
                 {/* Quick ED->ES already shows this in the sidebar's
@@ -3534,7 +3990,7 @@ function StrainPreviewPanel({
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-center px-4">
-                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                <p className="text-[12.5px] text-muted-foreground leading-relaxed">
                   {activeReconstruction?.reconstructionId
                     ? `${strainModel === "unet" ? "UNet" : "MedSAM"} reconstruction found — click Compute Strain to view the 3D heart.`
                     : `No LV strain yet — run ${strainModel === "unet" ? "UNet" : "MedSAM"} 4D reconstruction first. RV-only results show on the left.`}
@@ -3549,7 +4005,7 @@ function StrainPreviewPanel({
       {/* Hover tooltip */}
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none rounded px-2 py-1 text-xs bg-black/85 text-white border border-white/20 shadow-lg"
+          className="fixed z-[60] pointer-events-none rounded px-2.5 py-1.5 text-sm bg-black/85 text-white border border-white/20 shadow-lg"
           style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}>
           <div className="font-semibold">{tooltip.label}</div>
           <div>
@@ -3559,74 +4015,6 @@ function StrainPreviewPanel({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/** Small neutral stat tile — no color-coding, for values that aren't a
- *  strain % (wall thickness in mm, cavity area). */
-function KpiTile({ label, value, loading }: { label: string; value: string; loading?: boolean }) {
-  return (
-    <div className="rounded border border-border bg-background px-1.5 py-1 text-center">
-      <p className="text-[8px] text-muted-foreground">{label}</p>
-      {loading ? (
-        <div className="mx-auto mt-0.5 h-3 w-10 animate-pulse rounded bg-muted-foreground/20" />
-      ) : (
-        <p className="font-bold text-[10px]">{value}</p>
-      )}
-    </div>
-  );
-}
-
-
-/** Full-cycle's LV summary — CURRENT (at the scrubbed frame) + true PEAK
- *  (over the whole computed cycle) for both GRS and GCS, same idea as
- *  LvGlobalStrainMiniBlock's Quick-scope box but Quick only has one ED->ES
- *  pair so "current" isn't a meaningful separate concept there. */
-function LvFullCycleStrainTiles({
-  currentGrs, currentGcs, peakGrs, peakGcs, loading,
-}: { currentGrs: number | null; currentGcs: number | null; peakGrs: number | null; peakGcs: number | null; loading?: boolean }) {
-  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
-  return (
-    <div>
-      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">LV Global Strain</p>
-      <div className="grid grid-cols-2 gap-1">
-        <KpiTile label="Current GRS" value={fmt(currentGrs)} loading={loading} />
-        <KpiTile label="Peak GRS" value={fmt(peakGrs)} loading={loading} />
-        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
-        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
-      </div>
-    </div>
-  );
-}
-
-/** Full-cycle's RV summary — CURRENT + PEAK for free-wall GCS, GAS and septal
- *  GCS, each reported separately (real, unvalidated). Peak = most negative. */
-function RvFullCycleStrainTiles({
-  currentGcs, peakGcs, currentGas, peakGas, currentSeptal, peakSeptal, loading,
-}: {
-  currentGcs: number | null; peakGcs: number | null;
-  currentGas: number | null; peakGas: number | null;
-  currentSeptal: number | null; peakSeptal: number | null;
-  loading?: boolean;
-}) {
-  const fmt = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
-  return (
-    <div>
-      <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-        RV Global Strain
-      </p>
-      <div className="grid grid-cols-2 gap-1">
-        <KpiTile label="Current GCS" value={fmt(currentGcs)} loading={loading} />
-        <KpiTile label="Peak GCS" value={fmt(peakGcs)} loading={loading} />
-        <KpiTile label="Current GAS" value={fmt(currentGas)} loading={loading} />
-        <KpiTile label="Peak GAS" value={fmt(peakGas)} loading={loading} />
-        {/* FAC = -GAS (rvAreaMetrics.ts) — same cavity-area measurement, opposite sign convention. */}
-        <KpiTile label="Current FAC" value={fmt(currentGas != null ? -currentGas : null)} loading={loading} />
-        <KpiTile label="Peak FAC" value={fmt(peakGas != null ? -peakGas : null)} loading={loading} />
-        <KpiTile label="Current Septal GCS" value={fmt(currentSeptal)} loading={loading} />
-        <KpiTile label="Peak Septal GCS" value={fmt(peakSeptal)} loading={loading} />
-      </div>
     </div>
   );
 }
@@ -3642,7 +4030,7 @@ function StatusBadge({ status }: { status: LandmarkPageState["status"] }) {
   const { label, cls } = map[status];
 
   return (
-    <span className={cn("inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full", cls)}>
+    <span className={cn("inline-flex items-center gap-1 text-[12.5px] font-medium px-1.5 py-0.5 rounded-full", cls)}>
       {status === "running" ? (
         <KineticProgress size="h-1" className="w-4" label="Landmark detection running" />
       ) : status === "done" ? (
@@ -3700,13 +4088,60 @@ function LandmarkSummaryStats({
       {stats.map((s) => (
         <span
           key={s.key}
-          className="inline-flex items-center gap-1 text-[9px] text-muted-foreground"
+          className="inline-flex items-center gap-1 text-[12px] text-muted-foreground"
         >
           <span className={cn("h-1.5 w-1.5 rounded-full flex-shrink-0", s.dot)} />
           <span className="font-semibold text-foreground tabular-nums">{s.value}/{nTotal}</span>
           {s.label}
         </span>
       ))}
+    </div>
+  );
+}
+
+/** Live P1 / P2 / LV-centre pixel coordinates, overlaid on the slice viewer's
+ *  top-left corner. Click-through, so it never blocks dragging a landmark. */
+function LandmarkCoordsReadout({
+  p1,
+  p2,
+  lvCentre,
+}: {
+  p1: readonly number[] | null;
+  p2: readonly number[] | null;
+  lvCentre: readonly number[] | null;
+}) {
+  const colorOf = (id: string) => LANDMARK_DEFINITIONS.find((d) => d.id === id)?.color ?? "#ffffff";
+  const rows = [
+    { label: "P1 (anterior)", color: colorOf("rv_insertion_1"), point: p1 },
+    { label: "P2 (inferior)", color: colorOf("rv_insertion_2"), point: p2 },
+    { label: "LV centre", color: "#ffffff", point: lvCentre },
+  ];
+  // A small table: x and y each get their own labelled column, so a value can
+  // never be read as belonging to the other axis.
+  return (
+    <div className="pointer-events-none absolute left-2 top-2 z-10 rounded-md bg-black/75 px-2.5 py-1.5 text-[13px] leading-5 text-white shadow-md">
+      <div className="text-[12px] font-semibold uppercase tracking-wider text-white/60">Coordinates (pixels)</div>
+      <div className="grid grid-cols-[auto_auto_auto_auto] items-center gap-x-2">
+        <span />
+        <span />
+        <span className="text-right text-[12.5px] font-semibold text-white/60">x</span>
+        <span className="text-right text-[12.5px] font-semibold text-white/60">y</span>
+        {rows.map((r) => (
+          <Fragment key={r.label}>
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: r.color }} />
+            <span className="pr-1">{r.label}</span>
+            {r.point ? (
+              <>
+                <span className="min-w-[2.75rem] text-right tabular-nums">{r.point[0].toFixed(1)}</span>
+                <span className="min-w-[2.75rem] text-right tabular-nums">{r.point[1].toFixed(1)}</span>
+              </>
+            ) : (
+              <span className="col-span-2 text-right text-white/50">none</span>
+            )}
+          </Fragment>
+        ))}
+      </div>
+      <div className="mt-0.5 text-[12px] text-white/50">x = from left edge · y = from top edge</div>
     </div>
   );
 }
@@ -3729,7 +4164,7 @@ function LandmarkLegend({
             onClick={() => onToggle(def.id)}
             aria-pressed={on}
             className={cn(
-              "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] font-medium transition-all",
+              "flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[12.5px] font-medium transition-all",
               on
                 ? "border-transparent text-white"
                 : "border-border bg-transparent text-muted-foreground/60",

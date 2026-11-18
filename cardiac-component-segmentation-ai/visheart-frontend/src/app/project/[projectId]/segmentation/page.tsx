@@ -15,7 +15,16 @@ import { LoadingProject } from "@/components/project/LoadingProject";
 import { ErrorProject } from "@/components/project/ErrorProject";
 import { SegmentationSidebar } from "@/components/segmentation/segmentation-sidebar";
 import type { AnatomicalLabel, HistoryEntry, DrawingTool } from "@/types/segmentation";
-import { generateMaskKey } from "@/types/segmentation";
+import {
+  generateMaskKey,
+  LABEL_SHORTCUT_KEYS,
+  TOOL_SHORTCUT_KEYS,
+  BRUSH_SIZE_DECREASE_KEY,
+  BRUSH_SIZE_INCREASE_KEY,
+  BRUSH_SIZE_MIN,
+  BRUSH_SIZE_MAX,
+} from "@/types/segmentation";
+import { isKeyForFocusedControl } from "@/lib/keyboard-shortcuts";
 import type * as ProjectTypes from "@/types/project";
 import { useProject, normalizeReconstructionChamber, normalizeReconstructionModel } from "@/context/ProjectContext";
 import { useSegmentationHistory } from "@/hooks/useSegmentationHistory";
@@ -31,6 +40,7 @@ import { useGpuStatus } from "@/lib/dashboard-hooks";
 import { useAuth } from "@/context/auth-context";
 import { inferDocModel, SEGMENTATION_MODEL_OPTIONS } from "@/lib/segmentation-model-utils";
 import type { SegmentationModelId } from "@/lib/segmentation-model-utils";
+import { UnsavedChangesDialog } from "@/components/common/UnsavedChangesDialog";
 
 export type { SegmentationModelId };
 
@@ -38,6 +48,14 @@ const MODEL_OPTIONS = SEGMENTATION_MODEL_OPTIONS;
 
 const isValidModel = (v: string | null): v is SegmentationModelId =>
   v === "medsam" || v === "unet";
+
+// Reverse lookups for the keyboard shortcuts (pressed key, lower-cased -> label / tool).
+const LABEL_BY_SHORTCUT_KEY: Record<string, AnatomicalLabel> = Object.fromEntries(
+  (Object.entries(LABEL_SHORTCUT_KEYS) as [AnatomicalLabel, string][]).map(([label, key]) => [key.toLowerCase(), label])
+);
+const TOOL_BY_SHORTCUT_KEY: Record<string, DrawingTool> = Object.fromEntries(
+  (Object.entries(TOOL_SHORTCUT_KEYS) as [DrawingTool, string][]).map(([tool, key]) => [key.toLowerCase(), tool])
+);
 
 const ImageCanvas = dynamic(() => import("@/components/segmentation/image-canvas").then((mod) => mod.ImageCanvas), {
   ssr: false,
@@ -464,7 +482,7 @@ function SegmentationResultsPageInner() {
 
   const handleModelSelect = useCallback((value: SegmentationModelId) => {
     if (!isGpuMode && value === "medsam") {
-      setRunSegmentationError("MEDSAM model is only available with NVIDIA GPU.");
+      setRunSegmentationError("MedSAM model is only available with NVIDIA GPU.");
       return;
     }
 
@@ -586,7 +604,7 @@ function SegmentationResultsPageInner() {
   const refreshServerJobState = useCallback(async () => {
     if (!projectId) return;
     try {
-      const response = await segmentationApi.getUserJobs();
+      const response = await segmentationApi.getUserJobs(projectId);
       const jobs: Array<Record<string, unknown>> = Array.isArray(response?.jobs) ? response.jobs : [];
       // Mirrors STALE_JOB_MINUTES in the server's inference.ts. MedSAM is GPU-only (the CPU
       // compose profile does not load it), UNet also runs on CPU where the same work takes much
@@ -722,7 +740,7 @@ function SegmentationResultsPageInner() {
       const effectiveModel: SegmentationModelId = selectedModel;
 
       if (!isGpuMode && effectiveModel === "medsam") {
-        setRunSegmentationError("MedSam requires NVIDIA GPU mode. Select Unet or start the GPU service first.");
+        setRunSegmentationError("MedSAM requires NVIDIA GPU mode. Select UNet or start the GPU service first.");
         return;
       }
 
@@ -1134,6 +1152,68 @@ function SegmentationResultsPageInner() {
     };
   }, [hasUnsavedChanges, isSaving, handleSave]);
 
+  // Editing shortcuts: 1/2/3 active label, D/E draw/eraser, Q/W brush size, Ctrl+Z/Ctrl+Y
+  // undo/redo, Delete clears the active mask. They live here rather than in DrawingPanel because
+  // the page mounts the sidebar twice (the mobile layout is only CSS-hidden), so a listener in the
+  // panel ran twice per key press -- and it stopped working whenever the History tab was open.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isKeyForFocusedControl(event.target)) return;
+      // Browser autofill can dispatch keydown events without a key.
+      if (typeof event.key !== "string") return;
+
+      const key = event.key.toLowerCase();
+
+      if (event.ctrlKey || event.metaKey) {
+        if (event.altKey || event.shiftKey) return;
+        if (key === "z" && canUndo) {
+          event.preventDefault();
+          handleUndo();
+        } else if (key === "y" && canRedo) {
+          event.preventDefault();
+          handleRedo();
+        }
+        // Any other Ctrl/Cmd combination (Ctrl+W, Ctrl+D, Ctrl+1...) is left to the browser.
+        return;
+      }
+      if (event.altKey) return;
+
+      if (event.key === "Delete") {
+        if (event.shiftKey || !canClear) return;
+        event.preventDefault();
+        handleClear();
+        return;
+      }
+
+      const label = LABEL_BY_SHORTCUT_KEY[key];
+      if (label) {
+        event.preventDefault();
+        setActiveLabel(label);
+        return;
+      }
+
+      const shortcutTool = TOOL_BY_SHORTCUT_KEY[key];
+      if (shortcutTool) {
+        event.preventDefault();
+        setTool(shortcutTool);
+        return;
+      }
+
+      // Brush size only applies to Draw and Eraser, and the size slider is only visible then.
+      const sizeStep =
+        key === BRUSH_SIZE_INCREASE_KEY.toLowerCase() ? 1
+        : key === BRUSH_SIZE_DECREASE_KEY.toLowerCase() ? -1
+        : 0;
+      if (sizeStep !== 0 && (tool === "brush" || tool === "eraser")) {
+        event.preventDefault();
+        setBrushSize((size) => Math.min(BRUSH_SIZE_MAX, Math.max(BRUSH_SIZE_MIN, size + sizeStep)));
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [tool, canUndo, canRedo, canClear, handleUndo, handleRedo, handleClear]);
+
   const handleHistoryExport = useCallback(() => {
     console.log("Export triggered from page level");
   }, []);
@@ -1165,7 +1245,7 @@ function SegmentationResultsPageInner() {
   }
 
   return (
-    <div className="h-full w-full bg-background flex flex-col">
+    <div className="h-[calc(100dvh-var(--header-h))] min-h-[32rem] w-full bg-background flex flex-col">
       {/* Back to Project Button, and back to UNet Extend Training when the editor was opened from there */}
       <div className="flex flex-wrap gap-2 px-4 pt-3 pb-2">
         <Button
@@ -1413,7 +1493,7 @@ function SegmentationResultsPageInner() {
               {(reconstructionMetadataForModel || rvReconstructionForModel) && (
                 <>
                   <ResizablePanel defaultSize={35} minSize={0} maxSize={70}>
-                    <div className="w-full bg-background p-4 flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
+                    <div className="h-full w-full bg-background p-4 flex flex-col">
                       <div className="flex items-center justify-between mb-2 flex-shrink-0 gap-2">
                         <h3 className="text-sm font-semibold">
                           {reconstructionMetadataForModel
@@ -1435,8 +1515,8 @@ function SegmentationResultsPageInner() {
                       </div>
 
                       {rvReconstructionForModel && showRvInPanel && (
-                        <p className="mb-2 flex-shrink-0 text-[11px] leading-snug text-amber-600 dark:text-amber-500">
-                          RV reconstruction is for reference/research use only; not reliable for
+                        <p className="mb-2 flex-shrink-0 text-sm leading-snug text-amber-600 dark:text-amber-500">
+                          This is our own research output and is still under research; not reliable for
                           actual clinical diagnosis.
                         </p>
                       )}
@@ -1461,7 +1541,7 @@ function SegmentationResultsPageInner() {
 
               {/* 2D Canvas (Right) */}
               <ResizablePanel defaultSize={65}>
-                <div className="w-full relative bg-muted/40 p-4 flex items-center justify-center" style={{ height: 'calc(100vh - 120px)' }}>
+                <div className="h-full w-full relative bg-muted/40 p-4 flex items-center justify-center">
                   <ImageCanvas
                     projectData={projectData}
                     decodedMasks={safeDecodedMasks}
@@ -1624,29 +1704,16 @@ function SegmentationResultsPageInner() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              Leaving now will lose your edits to this mask. Save first, or leave anyway?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Go back and save</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const action = pendingNavigation;
-                setPendingNavigation(null);
-                action?.();
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Leave anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <UnsavedChangesDialog
+        open={pendingNavigation !== null}
+        description="Leaving now will lose your edits to this mask. Save first, or leave anyway?"
+        onStay={() => setPendingNavigation(null)}
+        onLeave={() => {
+          const action = pendingNavigation;
+          setPendingNavigation(null);
+          action?.();
+        }}
+      />
 
       </div>
 

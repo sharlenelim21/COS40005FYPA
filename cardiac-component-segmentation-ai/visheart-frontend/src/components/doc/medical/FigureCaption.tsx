@@ -41,7 +41,7 @@ interface FigureCaptionProps {
 export function FigureCaption({ number, caption, attribution, refs = [] }: FigureCaptionProps) {
   return (
     <figcaption className="mt-2 space-y-1">
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-sm">
         <span className="text-foreground font-semibold">Figure {number}.</span> <ContentText text={caption} />
         <CitationMarker refs={refs} />
       </p>

@@ -18,23 +18,23 @@ export function LandmarkDetectionSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               1
             </div>
             Starting a Landmark Detection Job
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Landmark detection is the last step: it needs a finished <strong>4D reconstruction</strong> first
             (see How Reconstruction Works above). Until one exists, the Landmark Detection button on the
             project page stays locked.
           </p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Then click the highlighted <strong>Landmark Detection</strong> button on the project page. The
             detection runs automatically using the model shown in the page header.
           </p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Switch to the <strong>Landmarks</strong> tab anytime to check the detected points frame by
             frame.
           </p>
@@ -52,19 +52,19 @@ export function LandmarkDetectionSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               2
             </div>
             Bullseye / Regional Strain
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Switch to the <strong>Strain</strong> tab, then click <strong>Recompute all frames</strong> to
             measure wall thickness and strain (GRS/GCS) across the whole cardiac cycle for the selected
             model.
           </p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             The bullseye stays synced with the 3D heart model, and <strong>By Region</strong> /{" "}
             <strong>Full Cycle</strong> break the same data down further. GLS isn&apos;t shown — it needs a
             4-chamber view, and this pipeline only reads short-axis slices.
@@ -103,19 +103,19 @@ export function LandmarkDetectionSection() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center text-base font-bold flex-shrink-0">
               3
             </div>
             Report &amp; Export
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Click <strong>Report Page</strong> for a printable functional analysis report (measurements,
             health status, disease pattern similarity, regional strain), or{" "}
             <strong>Export Data</strong> to download the raw numbers.
           </p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             Health Status and Disease Pattern Similarity are rule-based comparisons, not diagnoses.
           </p>
           <div className="rounded-lg border bg-muted/30 p-2 md:p-4">

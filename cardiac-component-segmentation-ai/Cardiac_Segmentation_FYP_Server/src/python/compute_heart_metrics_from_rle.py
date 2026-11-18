@@ -25,6 +25,7 @@ Output (stdout JSON):
     LVEDV, LVESV, LV_SV, LVEF          # LV metrics (SV/EF may be null — see below)
     RVEDV, RVESV, RV_SV, RVEF          # RV metrics
     LV_mass_g                          # LV myocardial mass at ED (may be null)
+    max_wall_thickness_mm              # maximal LV wall thickness at ED (see max_wall_thickness_px)
     bsa_m2, LVEDVI, LVESVI,            # BSA passthrough + indexed volumes (mL/m^2).
     RVEDVI, RVESVI                       null unless bsa_m2 was supplied and positive.
     voxel_mm3, spacing_mm              # derived from affine, kept for audit
@@ -67,6 +68,9 @@ import warnings as _pywarnings
 
 import numpy as np
 
+# Same ray casting as the wall-thickness bullseye (this script's own folder).
+from compute_bullseye_from_rle import ray_cast_thickness
+
 # Silence the numpy "invalid value encountered" chatter on all-zero frames.
 _pywarnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -88,6 +92,51 @@ _CLASS_NAME = {_RV_CLASS: "rv", _MYO_CLASS: "myo", _LVC_CLASS: "lvc"}
 
 # Myocardial density in g/mL (Bernard et al. 2018; standard cardiology value).
 _MYO_DENSITY_G_PER_ML = 1.05
+
+# ── Maximal wall thickness ────────────────────────────────────────────────────
+# Each slice's value is this percentile of its 360 ray thicknesses rather than
+# the single thickest ray, so one stray ray (a papillary muscle touching the
+# wall, a ragged edge) cannot set it, while a local thickening several rays
+# wide — as in HCM — still does.
+_MAX_WT_PERCENTILE = 95.0
+_MIN_MYO_PIXELS = 50     # slices with less myocardium are skipped (as the bullseye does)
+_MIN_VALID_RAYS = 36     # ... and slices where fewer rays cross the wall
+
+
+def max_wall_thickness_px(
+    per_slice_mask: dict[tuple[int, int, int], np.ndarray], frame: int,
+) -> tuple[Optional[float], Optional[int]]:
+    """Maximal LV wall thickness of one frame, in pixels, and the slice it is on.
+
+    Per slice: 360 rays from the LV-cavity centre (the myocardium's centre when
+    the slice has no cavity) measure the myocardium, as the bullseye does; the
+    slice's value is the _MAX_WT_PERCENTILE of its rays. The frame's value is
+    the largest slice value. This is what the ACDC criteria mean by a segment
+    "thicker than 15 mm in diastole" (HCM) — the maximal thickness, not the
+    segment average, which dilutes a local thickening (on the experts' masks of
+    15 M&Ms subjects the average reached 15 mm in 2 of 5 HCM hearts, this in 4,
+    and in none of the 10 NOR / DCM hearts).
+    """
+    best: Optional[float] = None
+    best_slice: Optional[int] = None
+    slices = sorted({s for (f, s, _c) in per_slice_mask if f == frame})
+    for s in slices:
+        myo = per_slice_mask.get((frame, s, _MYO_CLASS))
+        if myo is None or int(myo.sum()) < _MIN_MYO_PIXELS:
+            continue
+        lvc = per_slice_mask.get((frame, s, _LVC_CLASS))
+        centre = lvc if lvc is not None and lvc.any() else myo
+        ys, xs = np.nonzero(centre)
+        label = np.where(myo, _MYO_CLASS, 0).astype(np.uint8)
+        t = ray_cast_thickness(label, float(xs.mean()), float(ys.mean()))
+        t = t[np.isfinite(t)]
+        if t.size < _MIN_VALID_RAYS:
+            continue
+        v = float(np.percentile(t, _MAX_WT_PERCENTILE))
+        if best is None or v > best:
+            best, best_slice = v, s
+    return best, best_slice
+
 
 # ── Duplicate-slice detection thresholds (Part A) ─────────────────────────────
 # A copied slice keeps its pixels but gets a NEW sliceindex, so the union dedup
@@ -551,6 +600,12 @@ def main() -> None:
             "LV_mass_g set to null."
         )
 
+    # 8a. Maximal ED wall thickness (mm) — the HCM wall-thickness check's input
+    #     (see max_wall_thickness_px). In-plane pixels → mm with the mean of
+    #     the two in-plane spacings (the rays run in every direction).
+    wt_px, wt_slice = max_wall_thickness_px(per_slice_mask, ed_frame)
+    max_wall_thickness_mm = _safe_float(wt_px * (dx + dy) / 2.0) if wt_px is not None else None
+
     # 8b. BSA-indexed volumes (mL/m^2) — null whenever bsa_m2 wasn't supplied
     #     or a given raw volume is itself null. Pure division; no new
     #     plausibility guards needed since LVEDV/RVEDV etc. already have theirs.
@@ -596,6 +651,7 @@ def main() -> None:
         "StrokeVolume": LV_SV,
         "StrokeVolumeIndex": LV_SVI,
         "LVMI":         LVMI,
+        "MaxWallThicknessMm": max_wall_thickness_mm,  # the health status' wall-thickness rule reads it here
         "PeakGRS":      None,  # filled by strain, not computed here
         "PeakGCS":      None,  # filled by strain, not computed here
     }
@@ -617,6 +673,9 @@ def main() -> None:
         "RV_SV": RV_SV,
         "RVEF":  RVEF,
         "LV_mass_g": LV_mass_g,
+        # Maximal ED wall thickness (mm) and the slice it is on (sliceindex).
+        "max_wall_thickness_mm": max_wall_thickness_mm,
+        "max_wall_thickness_slice": wt_slice,
         # BSA passthrough + indexed volumes — all null when bsa_m2 wasn't given.
         "bsa_m2": bsa_m2,
         "LVEDVI": LVEDVI,

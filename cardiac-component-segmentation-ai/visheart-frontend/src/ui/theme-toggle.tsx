@@ -68,7 +68,7 @@ export default function ThemeToggle({ iconSize = 1 }: ThemeToggleProps) {
         </TooltipTrigger>
         <TooltipContent className="w-auto text-center">
           <div className="text-sm">Toggle Theme</div>
-          <p className="text-muted-foreground">
+          <p className="opacity-90">
             Switch to <span className="capitalize">dark</span>{" "}
             mode.
           </p>
@@ -110,7 +110,7 @@ export default function ThemeToggle({ iconSize = 1 }: ThemeToggleProps) {
       </TooltipTrigger>
       <TooltipContent className="w-auto text-center">
         <div className="text-sm">Toggle Theme</div>
-        <p className="text-muted-foreground">
+        <p className="opacity-90">
           Switch to <span className="capitalize">{getOppositeTheme()}</span>{" "}
           mode.
         </p>

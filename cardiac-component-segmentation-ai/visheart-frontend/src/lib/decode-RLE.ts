@@ -154,7 +154,10 @@ export function decodeSegmentationMasks(
  */
 export function getMaskStats(mask: Uint8Array) {
   const totalPixels = mask.length;
-  const nonZeroPixels = mask.filter((v) => v > 0).length;
+  let nonZeroPixels = 0; // counted in place: filter() would copy the whole mask
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i] > 0) nonZeroPixels++;
+  }
   const coverage = nonZeroPixels / totalPixels;
 
   return {

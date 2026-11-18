@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 
 // Import shared types and constants
 import type { SegmentationSidebarProps, AnatomicalLabel } from "@/types/segmentation";
-import { LABEL_COLORS, LABEL_NAMES, ANATOMICAL_LABELS } from "@/types/segmentation";
+import { LABEL_COLORS, LABEL_NAMES, ANATOMICAL_LABELS, LABEL_SHORTCUT_KEYS } from "@/types/segmentation";
 import type { SegmentationModelId } from "@/app/project/[projectId]/segmentation/page";
 import { DrawingPanel } from './drawing-panel';
 import { HistoryPanel } from './history-panel';
@@ -127,20 +127,29 @@ const ToolsAndMasksPanel = React.memo(({
             const color = LABEL_COLORS[anatomicalLabel] || '#gray';
             const labelName = LABEL_NAMES[anatomicalLabel] || label.toUpperCase();
             
-            // Handle null maskData (mask doesn't exist yet)
-            const filledPixels = maskData ? maskData.filter(pixel => pixel > 0).length : 0;
+            // Handle null maskData (mask doesn't exist yet). Counted in place —
+            // Uint8Array.filter() would allocate a full copy of the mask on every render.
+            let filledPixels = 0;
+            if (maskData) {
+              for (let i = 0; i < maskData.length; i++) {
+                if (maskData[i] > 0) filledPixels++;
+              }
+            }
             const maskExists = maskData !== null;
             
             const isActive = activeLabel === label;
             const isVisible = visibleMasks.has(anatomicalLabel);
+            const shortcut = LABEL_SHORTCUT_KEYS[anatomicalLabel];
 
             return (
               <div key={maskKey} className="flex flex-col gap-1.5">
                 {/* Main selection button */}
                 <button
                   onClick={() => setActiveLabel(anatomicalLabel)}
+                  aria-keyshortcuts={shortcut}
+                  title={shortcut ? `${labelName} (${shortcut})` : undefined}
                   className={cn(
-                    "w-full p-2.5 rounded-lg border-2 transition-all flex flex-col items-center gap-2",
+                    "relative w-full p-2.5 rounded-lg border-2 transition-all flex flex-col items-center gap-2",
                     "hover:border-primary/50 hover:shadow-sm",
                     isActive 
                       ? "border-primary bg-primary/5 shadow-sm" 
@@ -149,6 +158,14 @@ const ToolsAndMasksPanel = React.memo(({
                   )}
                   aria-label={`Select ${labelName} as active mask`}
                 >
+                  {shortcut && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-1 right-1.5 font-mono text-[10px] leading-none text-muted-foreground"
+                    >
+                      {shortcut}
+                    </span>
+                  )}
                   {/* Color indicator dot */}
                   <div 
                     className={cn(
@@ -459,14 +476,23 @@ export function SegmentationSidebar({
     setActiveTab(tabKey);
   }, []);
 
+  // Previously disabled with no edits made ("No Changes"), which meant the
+  // ONLY way to mark a project's masks as saved/confirmed was to make (and
+  // keep) at least one edit -- someone happy with the AI output as-is had no
+  // way to confirm it from here at all (reported live, 2026-11: "I already
+  // saved and didn't edit anything, but it still shows unsaved"). Clicking
+  // with no edits now saves the AI output as the editable mask verbatim --
+  // the same thing the project page's "Reset Masks" already does, just
+  // reachable from here too, and harmless to repeat (handleSave reports
+  // "no differences" when there's nothing new).
   const saveButtonConfig = useMemo(() => ({
     variant: (hasUnsavedChanges && !isSaving) ? "default" as const : "secondary" as const,
     text: isSaving
       ? "Saving..."
       : hasUnsavedChanges
       ? "Save Changes"
-      : "No Changes",
-    disabled: !hasUnsavedChanges || isSaving
+      : "Confirm Masks",
+    disabled: isSaving
   }), [hasUnsavedChanges, isSaving]);
 
   return (
@@ -568,7 +594,7 @@ export function SegmentationSidebar({
       </div>
 
       {/* Sidebar Content with proper error boundaries */}
-      <div className="flex-1 flex flex-col p-4 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4 pb-16">
         {activeTab === 'tools' && (
           <ToolsAndMasksPanel
             decodedMasks={decodedMasks}

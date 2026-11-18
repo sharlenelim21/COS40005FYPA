@@ -159,6 +159,19 @@ def build_mask_3d(frames: list, H: int, W: int) -> np.ndarray:
 
 # ── Bullseye computation (cv2-free port of bullseye_analysis.py) ──────────────
 
+def stack_runs_apex_first(mask_3d: np.ndarray) -> bool:
+    """True when slice 0 is at the apex (most M&Ms scans; ACDC is base first).
+    The base end of the LV is the wider one: mean LV area (cavity + myocardium)
+    of the first third of the LV slices vs the last third. Port of the GPU's
+    bullseye_analysis.stack_runs_apex_first — keep the two in sync."""
+    valid = [i for i in range(mask_3d.shape[2]) if int(np.sum(mask_3d[:, :, i] == _MYO_CLASS)) >= _MIN_MYO_PIXELS]
+    if len(valid) < 3:
+        return False
+    areas = [int(np.sum((mask_3d[:, :, i] == _MYO_CLASS) | (mask_3d[:, :, i] == _LV_CAVITY_CLASS))) for i in valid]
+    k = max(1, len(valid) // 3)
+    return float(np.mean(areas[-k:])) > float(np.mean(areas[:k]))
+
+
 def classify_slices(mask_3d: np.ndarray) -> list[str]:
     n_slices = mask_3d.shape[2]
     labels = ["none"] * n_slices
@@ -166,6 +179,9 @@ def classify_slices(mask_3d: np.ndarray) -> list[str]:
     n_valid = len(valid)
     if n_valid == 0:
         return labels
+    # Rings are counted from the base: reverse a stack that runs apex first.
+    if stack_runs_apex_first(mask_3d):
+        valid = valid[::-1]
     n_apex = 2 if n_valid >= 15 else 1
     n_remaining = max(n_valid - n_apex, 3)  # need at least 1 per ring
     n_basal  = max(1, round(n_remaining / 3))

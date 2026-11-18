@@ -1,5 +1,6 @@
 import type { DocVideoMode } from "@/components/doc/DocVideo";
 import { SEGMENT_LABELS } from "@/lib/ahaSegments";
+import { LV_RV_SECTION_HREF } from "@/components/doc/guides";
 
 export type Reference = {
   citation: string;
@@ -51,7 +52,7 @@ export const REFERENCES = {
   bernard2018: {
     citation:
       "Bernard O, Lalande A, Zotti C, et al. Deep Learning Techniques for Automatic MRI Cardiac Multi-Structures Segmentation and Diagnosis: Is the Problem Solved? IEEE Trans Med Imaging. 2018;37(11):2514–2525.",
-    doi: "10.1109/TMI.2018.2837502",
+    url: "https://ieeexplore.ieee.org/document/8360453",
   },
   bazhutina2023: {
     citation:
@@ -82,9 +83,23 @@ export const REFERENCES = {
       "Hegeman RRMJJ, et al. Reference Values for Inward Displacement in the Normal Left Ventricle: A Novel Method of Regional Left Ventricular Function Assessment. J Cardiovasc Dev Dis. 2023;10(12):474.",
     doi: "10.3390/jcdd10120474",
   },
+  myronenko2010: {
+    citation:
+      "Myronenko A, Song X. Point Set Registration: Coherent Point Drift. IEEE Trans Pattern Anal Mach Intell. 2010;32(12):2262–2275.",
+    doi: "10.1109/TPAMI.2010.46",
+  },
   wikimediaCardiacCycle: {
     citation: "DrJanaOfficial. Cardiac cycle animation. Wikimedia Commons. CC BY-SA 4.0.",
     url: "https://commons.wikimedia.org/w/index.php?curid=54393545",
+  },
+  kocica2006: {
+    citation:
+      "Kocica MJ, Corno AF, Carreras-Costa F, et al. The helical ventricular myocardial band: global, three-dimensional, functional architecture of the ventricular myocardium. Eur J Cardiothorac Surg. 2006;29 Suppl 1:S21–S40.",
+    doi: "10.1016/j.ejcts.2006.03.011",
+  },
+  physrep2017: {
+    citation: "Hoffman JIE. Will the real ventricular architecture please stand up? Physiol Rep. 2017;5(18):e13404.",
+    doi: "10.14814/phy2.13404",
   },
 } as const satisfies Record<string, Reference>;
 
@@ -96,7 +111,8 @@ export interface Claim {
   refs: RefId[];
 }
 
-export type CalloutVariant = "info" | "caution" | "disclaimer";
+/** "warning" is red: research-only output that must not be used clinically. */
+export type CalloutVariant = "info" | "caution" | "disclaimer" | "warning";
 
 export interface CalloutBlock {
   kind: "callout";
@@ -104,6 +120,9 @@ export interface CalloutBlock {
   title: string;
   body: Claim[];
   list?: Claim[];
+  /** Optional "Read more" link, e.g. to the Technical Guide's matching method section. */
+  readMoreHref?: string;
+  readMoreLabel?: string;
 }
 
 export interface RangeRow {
@@ -175,13 +194,20 @@ export interface PatternTableBlock {
   refs: RefId[];
 }
 
+/** The template hearts, loaded live from the app (components/doc/medical/ReferenceHearts.tsx). */
+export interface ReferenceHeartsBlock {
+  kind: "referenceHearts";
+  note?: Claim;
+}
+
 export type ContentBlock =
   | CalloutBlock
   | RangeTableBlock
   | FigureBlock
   | VideoBlock
   | ConditionsBlock
-  | PatternTableBlock;
+  | PatternTableBlock
+  | ReferenceHeartsBlock;
 
 export interface GuideSection {
   id: string;
@@ -476,7 +502,6 @@ export const MEDICAL_GUIDE: MedicalGuide = {
               refs: ["scmr2025"],
             },
             { text: "In most studies, women have higher strain values than men, and strain decreases with age.", refs: ["scmr2025"] },
-            { text: "The SCMR 2025 reference values do not include normal ranges for radial strain.", refs: ["scmr2025"] },
             {
               text: "Right ventricular strain can be measured in the longitudinal and circumferential directions, and as area strain: the change in the ventricle's inner surface area between end-diastole and end-systole.",
               refs: ["tokodi2021"],
@@ -490,13 +515,55 @@ export const MEDICAL_GUIDE: MedicalGuide = {
             {
               kind: "callout",
               variant: "info",
+              title: "The helical heart: why the ventricle twists",
+              body: [
+                {
+                  text: "The muscle fibres of the ventricles are not arranged in simple rings. They run in a helix that changes direction through the wall: a left-handed helix in the outer layer (subepicardium), mostly circumferential fibres running around the ventricle in the middle of the wall, and a right-handed helix in the inner layer (subendocardium).",
+                  refs: ["kocica2006", "physrep2017"],
+                },
+                {
+                  text: "The Spanish anatomist Francisco Torrent-Guasp described the ventricles as one continuous helical band of muscle that can be unrolled from the heart, as shown in the figure below.",
+                  refs: ["kocica2006"],
+                },
+                {
+                  text: "Because the outer and inner helices wind in opposite directions, the left ventricle twists as it contracts in systole and untwists in early diastole. This three-dimensional motion is why the heart's deformation is described in three directions: radial strain (wall thickening), circumferential strain (shortening around the ventricle) and longitudinal strain (shortening from base to apex).",
+                  refs: ["kocica2006"],
+                },
+                {
+                  text: "VisHeart reports global radial strain (GRS) and global circumferential strain (GCS) from short-axis images. It does not measure longitudinal strain.",
+                  refs: [],
+                },
+                {
+                  text: "The single-band model is still debated: some researchers describe the myocardium as a continuous three-dimensional mesh of fibres rather than one band that unrolls.",
+                  refs: ["physrep2017"],
+                },
+              ],
+            },
+            {
+              kind: "figure",
+              src: "/images/doc/Helical_Heart.jpg",
+              alt: "Photographs of a dissected heart at successive stages of being unrolled, from the intact ventricles to a single long, twisted strip of muscle.",
+              caption: "Unrolling the helical ventricular myocardial band (Torrent-Guasp model).",
+              attribution:
+                "Ballester-Rodés M., 'Helical Heart', Wise Traditions (Weston A. Price Foundation), Fall 2025. © Weston A. Price Foundation. https://www.westonaprice.org/health-topics/helical-heart/",
+              refs: ["kocica2006"],
+            },
+            {
+              kind: "callout",
+              variant: "info",
               title: "About VisHeart's strain values",
               body: [
                 {
-                  text: "VisHeart estimates radial and circumferential strain from changes in the radius of the heart wall across the heartbeat on short-axis images, and reports the peak values. This differs from the tagging and feature-tracking methods used in published studies, so VisHeart's strain values should not be compared directly with published normal ranges. For the right ventricle, VisHeart's strain approach draws on the ReVISION method.",
-                  refs: ["scmr2025", "tokodi2021"],
+                  text: "On short-axis images, VisHeart estimates radial strain from the change in wall thickness and circumferential strain from the change in the length of the heart wall's borders, and reports the peak values. This differs from the tagging and feature-tracking methods used in published studies, so VisHeart's strain values should not be compared directly with published normal ranges.",
+                  refs: ["scmr2025"],
+                },
+                {
+                  text: "VisHeart's right ventricle strain uses a research method of our own, adapted from the left ventricle method and from the ReVISION method. The Technical Guide's 'How LV and RV Works' section explains how it is calculated.",
+                  refs: ["tokodi2021"],
                 },
               ],
+              readMoreHref: LV_RV_SECTION_HREF,
+              readMoreLabel: "How LV and RV strain is calculated",
             },
           ],
         },
@@ -733,6 +800,18 @@ export const MEDICAL_GUIDE: MedicalGuide = {
               text: "VisHeart compares a patient’s heart measurements with reference patterns of common heart conditions. These patterns follow the diagnostic groups used in the ACDC cardiac MRI dataset. Volumes are indexed to body surface area (mL/m²).",
               refs: ["bernard2018"],
             },
+            {
+              text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the numbers from the actual research paper that created and labelled the ACDC dataset (for example, ejection fraction below 40% for MINF). This replaces an earlier version of VisHeart that read these numbers from the ACDC Challenge website's own short summary instead, which turned out to differ from the paper in two places: it omits a wall-thickness requirement for DCM, and it treats a cardiac-mass figure as required for HCM when the paper's own wording makes it an incidental finding in some patients, not a requirement.",
+              refs: ["bernard2018"],
+            },
+            {
+              text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the resulting distribution of values against the dataset's official hand-labelled ground truth for the same group. Most features landed in a similar range for every condition — a few, such as DCM's ejection fraction and HCM's LVMI, showed a larger gap, consistent with comparing a smaller 10-patient sample against a 20-patient one — which overall supports using the pipeline's own numbers alongside the published literature, not as a replacement for it.",
+              refs: [],
+            },
+            {
+              text: "The normal (NOR) group is checked for both the left and right side of the heart, using the paper's own published NOR numbers for each. VisHeart still widens every number to the widest combination of three sources — this paper's own numbers, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group (plus, for the one measurement the paper gives no number for, a published meta-analysis of healthy adults) — so a genuinely healthy heart is not wrongly flagged just because of how one single source happened to measure it.",
+              refs: ["bernard2018", "zhan2024"],
+            },
           ],
           blocks: [
             {
@@ -771,7 +850,7 @@ export const MEDICAL_GUIDE: MedicalGuide = {
                 },
               ],
               attribution:
-                "O. Bernard et al., “Deep Learning Techniques for Automatic MRI Cardiac Multi-structures Segmentation and Diagnosis: Is the Problem Solved?”, IEEE Transactions on Medical Imaging, vol. 37, no. 11, pp. 2514–2525, 2018. https://doi.org/10.1109/TMI.2018.2837502",
+                "O. Bernard et al., “Deep Learning Techniques for Automatic MRI Cardiac Multi-structures Segmentation and Diagnosis: Is the Problem Solved?”, IEEE Transactions on Medical Imaging, vol. 37, no. 11, pp. 2514–2525, 2018. https://ieeexplore.ieee.org/document/8360453",
               refs: ["bernard2018"],
             },
             {
@@ -786,23 +865,105 @@ export const MEDICAL_GUIDE: MedicalGuide = {
               ],
             },
             {
-              kind: "callout",
-              variant: "info",
-              title: "How VisHeart checks its own measurements against this research",
-              body: [
+              kind: "rangeTable",
+              caption: "The actual cut-offs VisHeart runs, after widening each published number as described above.",
+              groups: [
                 {
-                  text: "For MINF, DCM, HCM and the abnormal-right-ventricle group, VisHeart does not invent its own cut-offs — it uses the numbers from the actual research paper that created and labelled the ACDC dataset (for example, ejection fraction below 40% for MINF). This replaces an earlier version of VisHeart that read these numbers from the ACDC Challenge website's own short summary instead, which turned out to differ from the paper in two places: it omits a wall-thickness requirement for DCM, and it treats a cardiac-mass figure as required for HCM when the paper's own wording makes it an incidental finding in some patients, not a requirement.",
+                  label: "Normal (NOR) — left ventricle",
+                  rows: [
+                    { parameter: "Ejection fraction (EF)", men: "50.0–72.93", women: "50.0–72.93", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Max wall thickness", men: "6.22–12.00", women: "6.22–12.00", unit: "mm", refs: ["bernard2018"] },
+                    { parameter: "EDVI", men: "47.54–95.35", women: "47.54–95.35", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "LVMI", men: "36.94–76.00", women: "33.00–75.00", unit: "g/m²", refs: ["bernard2018", "zhan2024"] },
+                  ],
+                },
+                {
+                  label: "Normal (NOR) — right ventricle",
+                  rows: [
+                    { parameter: "RVEDVI", men: "51.65–111.38", women: "51.65–111.38", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "RVEF", men: "40.00–67.60", women: "40.00–67.60", unit: "%", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Myocardial infarction (MINF)",
+                  rows: [
+                    { parameter: "EF", men: "< 40.0", women: "< 40.0", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Regional contraction", men: "≥ 1 segment moderate/severe", women: "≥ 1 segment moderate/severe", unit: "criterion", refs: ["bernard2018"] },
+                    { parameter: "EDVI (informational only, not gating)", men: "> 100.0", women: "> 100.0", unit: "mL/m²", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Dilated cardiomyopathy (DCM)",
+                  rows: [
+                    { parameter: "EDVI", men: "> 100.0", women: "> 100.0", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "EF", men: "< 40.0", women: "< 40.0", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Max wall thickness (sector-mean)", men: "< 12.28", women: "< 12.28", unit: "mm", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Hypertrophic cardiomyopathy (HCM)",
+                  rows: [
+                    { parameter: "EF", men: "> 55.0", women: "> 55.0", unit: "%", refs: ["bernard2018"] },
+                    { parameter: "Max wall thickness (true-peak)", men: "> 15.0", women: "> 15.0", unit: "mm", refs: ["bernard2018"] },
+                    { parameter: "LVMI (informational only, not gating)", men: "> 110.0", women: "> 110.0", unit: "g/m²", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "Abnormal right ventricle (ARV)",
+                  rows: [
+                    { parameter: "RVEDVI", men: "> 110.0", women: "> 100.0", unit: "mL/m²", refs: ["bernard2018"] },
+                    { parameter: "RVEF", men: "< 40.0", women: "< 40.0", unit: "%", refs: ["bernard2018"] },
+                  ],
+                },
+                {
+                  label: "RV severity context — checked only once the ARV gate above is met",
+                  rows: [
+                    { parameter: "ARVC cohort — RVEDVI (mean ± SD)", men: "103.0 ± 26.0", women: "103.0 ± 26.0", unit: "mL/m²", refs: ["kubler2021"] },
+                    { parameter: "ARVC cohort — RVESVI (mean ± SD)", men: "56.0 ± 23.0", women: "56.0 ± 23.0", unit: "mL/m²", refs: ["kubler2021"] },
+                    { parameter: "ARVC cohort — RVEF (mean ± SD)", men: "46.0 ± 10.0", women: "46.0 ± 10.0", unit: "%", refs: ["kubler2021"] },
+                    { parameter: "PAH higher-risk band — RVEF", men: "< 37.0", women: "< 37.0", unit: "%", refs: ["escers2022"] },
+                    { parameter: "PAH higher-risk band — SVI", men: "< 26.0", women: "< 26.0", unit: "mL/m²", refs: ["escers2022"] },
+                    { parameter: "PAH higher-risk band — RVESVI", men: "> 54.0", women: "> 54.0", unit: "mL/m²", refs: ["escers2022"] },
+                  ],
+                },
+              ],
+              footnotes: [
+                {
+                  text: "The ARVC and PAH rows above are advisory severity context only, never a separate gate: VisHeart shows them only once the RV (ARV) gate above is already met, to give the clinician somewhere to look next, and they never change that gate's own met/not-met result.",
+                  refs: ["kubler2021", "escers2022"],
+                },
+                {
+                  text: "DCM reads the sector-mean wall-thickness statistic (average thickness per AHA segment, then across slices) since its criterion is an upper bound; HCM reads the true-peak statistic (the single thickest ray anywhere) since its criterion is a lower bound — the two conditions ask different questions of the same measurement, so they are not interchangeable.",
                   refs: ["bernard2018"],
                 },
                 {
-                  text: "To confirm its own segmentation model measures these features accurately, this project ran its deployed model, after manual review and correction, on a pilot subset of the ACDC Challenge's own training patients, and compared the results against the dataset's official hand-labelled ground truth for the same patients. The two agreed closely for every condition, which is evidence the pipeline's own numbers can be trusted, not a new diagnostic range.",
+                  text: "MINF's regional-contraction criterion has no published fixed count — VisHeart's own regional-health classifier supplies it (any single abnormal segment, irrespective of count), cross-checked against the wall-motion-scoring literature.",
                   refs: [],
                 },
                 {
-                  text: "The normal (NOR) group is checked for both the left and right side of the heart, using the paper's own published NOR numbers for each. VisHeart still widens every number to the widest combination of three sources — this paper's own numbers, this project's own measurement of the ACDC dataset's official normal-group ground truth, and this project's own deployed model's output on that same group (plus, for the one measurement the paper gives no number for, a published meta-analysis of healthy adults) — so a genuinely healthy heart is not wrongly flagged just because of how one single source happened to measure it.",
-                  refs: ["bernard2018", "zhan2024"],
+                  text: "LVMI for HCM and EDVI for MINF are shown for context only and are never required on their own for that gate to be met.",
+                  refs: ["bernard2018"],
                 },
               ],
+            },
+          ],
+        },
+        {
+          id: "reference-hearts",
+          title: "Reference hearts",
+          summary: [
+            {
+              text: "Six real hearts from a public cardiac MRI dataset show what these groups look like in numbers: one woman and one man each for normal, HCM and DCM. Their end-diastole and end-systole outlines are the dataset experts' own, and each heart meets its group's criteria from the table above. Select a heart to check it against each criterion, or open it in VisHeart to see its scan, 3D model and strain.",
+              refs: ["bernard2018"],
+            },
+          ],
+          blocks: [
+            {
+              kind: "referenceHearts",
+              note: {
+                text: "Volumes are indexed to each person's body surface area. Wall thickness is the thickest point of the left ventricular wall at end-diastole. The coloured rings show radial strain (GRS) for each AHA segment on VisHeart's fixed 0–80% scale: yellow means the wall barely thickens, blue means it thickens strongly. One fixed scale lets the hearts be compared; each heart's own page colours it by its own lowest and highest segment instead, so the colours there differ.",
+                refs: [],
+              },
             },
           ],
         },
@@ -831,6 +992,8 @@ function blockRefs(block: ContentBlock): RefId[] {
         ...block.conditions.flatMap((condition) => [...condition.summary.refs, ...claimRefs(condition.imagingFeatures)]),
         ...(block.note?.refs ?? []),
       ];
+    case "referenceHearts":
+      return block.note?.refs ?? [];
   }
 }
 
@@ -867,3 +1030,4 @@ const FIGURES: NumberedBlock[] = MEDICAL_GUIDE.sections.flatMap(sectionFigures);
 export function figureNumber(figure: NumberedBlock): number {
   return FIGURES.indexOf(figure) + 1;
 }
+5

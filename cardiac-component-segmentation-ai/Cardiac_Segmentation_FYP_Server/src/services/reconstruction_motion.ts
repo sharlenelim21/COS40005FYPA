@@ -57,7 +57,7 @@ export async function getMotion(source: MotionSource): Promise<MotionStatus> {
     const key = state?.status === "ready" ? state.key : extractS3KeyFromUrl(motionUrl);
     if (!key) return { status: "missing" };
     if (state?.status !== "ready") {
-        const size = await getS3FileSize(motionUrl);
+        const size = await getS3FileSize(motionUrl, true);   // not built yet is the normal first answer
         if (!size) return { status: "missing" };
         states.set(source.reconstructionId, { status: "ready", key });
     }

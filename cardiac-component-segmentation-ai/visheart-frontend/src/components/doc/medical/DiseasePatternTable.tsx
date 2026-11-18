@@ -11,7 +11,7 @@ export function DiseasePatternTable({ caption, rows, attribution, refs }: Omit<P
 
   return (
     <div className="bg-card rounded-lg border p-2 md:p-4">
-      <p id={captionId} className="mb-3 px-2 text-sm font-medium">
+      <p id={captionId} className="mb-3 px-2 text-base font-medium">
         <ContentText text={caption} />
         <CitationMarker refs={refs} />
       </p>

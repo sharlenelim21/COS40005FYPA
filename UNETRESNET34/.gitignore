@@ -3,7 +3,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-checkpoints/
+# Contents ignored, folder kept: docker-compose mounts a volume at UNETRESNET34/checkpoints inside a
+# read-only bind mount, and Docker on Linux cannot create that mount point if the folder is missing.
+checkpoints/*
+!checkpoints/.gitkeep
 results/
 inference_results/
 tta_results/

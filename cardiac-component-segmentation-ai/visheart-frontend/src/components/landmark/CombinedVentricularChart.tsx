@@ -1,8 +1,8 @@
 "use client";
 
 import React from "react";
-import { rdYlGn } from "./StrainVisualization";
-import { STRAIN_COLOR_SCALES, lvScaleKey, strainScaleMinMax } from "@/lib/strainColorScale";
+import { strainRamp } from "./StrainVisualization";
+import { STRAIN_COLOR_SCALES, lvScaleKey, strainRampStops, strainScaleMinMax } from "@/lib/strainColorScale";
 import type { StrainSegmentData, StrainType, RvStrainRegion } from "./StrainVisualization";
 
 // Notebook-style segment names (Sharlene's rv-deformation analysis notebook
@@ -108,14 +108,28 @@ export function CombinedVentricularChart({
   // balance against, so re-centering on the LV circle alone (horizontally;
   // vertical stays the same so the Anterior/Inferior/colorbar spacing built
   // around CENTER.y is unaffected) instead of leaving it off to one side of
-  // empty space. RV-only isn't touched here -- it already centers correctly
-  // on its own.
-  const center = (showLv && !showRv) ? { x: VIEW_W / 2, y: CENTER.y } : CENTER;
+  // empty space. RV-only used to keep the shared CENTER too, which left the
+  // whole right half of the (LV+RV-sized) canvas empty since nothing was
+  // drawn there -- recentered on the crescent itself instead, with the
+  // viewBox narrowed to match (see RV_ONLY_VIEW_W below).
+  const rvOnly = showRv && !showLv;
+  const center = (showLv && !showRv)
+    ? { x: VIEW_W / 2, y: CENTER.y }
+    : rvOnly
+    ? { x: RV_BASAL_OUTER + 20, y: CENTER.y }
+    : CENTER;
   // How far out layout (the Inferior label, the color bars) should clear --
   // the RV crescent's outer radius when it's drawn, or just the LV circle's
   // when it's the only thing on screen (using the RV radius there left a
   // large, unbalanced gap between the LV circle and everything below it).
   const outerR = showRv ? RV_BASAL_OUTER : (LV_BASAL_OUTER + 4);
+  // RV-only viewBox width: just enough for the crescent (left-aligned, small
+  // padding) plus the color bar underneath it (barW=260, centered on
+  // center.x -- see showColorBars below), which is wider than the crescent
+  // itself and so is the actual right-edge constraint. Narrowing this (from
+  // the full 480 Combined canvas) also makes the chart render taller for the
+  // same container width, since the SVG keeps its viewBox aspect ratio.
+  const RV_ONLY_VIEW_W = rvOnly ? center.x + 130 + 26 : VIEW_W;
 
   // ── LV (right side — unchanged 17-segment geometry, recentered) ──────────
   // Fixed colour scales (lib/strainColorScale.ts), not this patient's own min/max.
@@ -131,10 +145,10 @@ export function CombinedVentricularChart({
     // Exact 0 means no measurement for that segment at this frame -- same
     // "0/null is grey, not worst" convention as rvCol below and
     // heartColor.ts's valueToColor. Without this a genuinely-missing LV
-    // segment read as solid red instead of grey (reported live, 2026-10).
+    // segment read as solid "worst" instead of grey (reported live, 2026-10).
     if (v === 0) return "#cbd5e1";
     const t = lvColMin === lvColMax ? 0.5 : Math.max(0, Math.min(1, (v - lvColMin) / (lvColMax - lvColMin)));
-    return rdYlGn(reverseColors ? 1 - t : t);
+    return strainRamp(reverseColors ? 1 - t : t);
   };
   const isLvSel = (seg1based: number) => selectedSegment === seg1based;
 
@@ -162,14 +176,14 @@ export function CombinedVentricularChart({
     const v = rvVal(i);
     // Exact 0 means no measurement for that segment at this frame (same
     // convention as heartColor.ts's valueToColor for LV) -- without this a
-    // genuinely-missing/degenerate-data segment reads as "worst" (solid red)
+    // genuinely-missing/degenerate-data segment reads as "worst" (solid yellow)
     // instead of "no data" (grey).
     if (v == null || v === 0) return "#cbd5e1";
     const t = rvColMin === rvColMax ? 0.5 : Math.max(0, Math.min(1, (v - rvColMin) / (rvColMax - rvColMin)));
-    // GCS/GAS: negative (shrinking) is healthy, so green sits at the low end
+    // GCS/GAS: negative (shrinking) is healthy, so blue sits at the low end
     // (reverse). FAC = -GAS, so its healthy end is positive instead — same
     // "best" direction as strainScaleMinMax's `reverse` flag already encodes.
-    return rdYlGn(rvFixed.reverse ? 1 - t : t);
+    return strainRamp(rvFixed.reverse ? 1 - t : t);
   };
   const isRvSel = (region1based: number) => selectedRvRegion === region1based;
 
@@ -219,7 +233,7 @@ export function CombinedVentricularChart({
     });
 
   return (
-    <svg viewBox={`0 0 ${VIEW_W} ${showColorBars ? VIEW_H : center.y + outerR + 36}`} className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`Combined LV/RV ${strainType} bullseye`}>
+    <svg viewBox={`0 0 ${RV_ONLY_VIEW_W} ${showColorBars ? VIEW_H : center.y + outerR + 36}`} className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label={`Combined LV/RV ${strainType} bullseye`}>
       {/* Background discs */}
       {showRv && <circle cx={center.x} cy={center.y} r={RV_BASAL_OUTER} className="fill-slate-50 dark:fill-zinc-900" opacity="0.5" />}
       {showLv && <circle cx={center.x} cy={center.y} r={LV_BASAL_OUTER + 4} className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />}
@@ -324,14 +338,12 @@ export function CombinedVentricularChart({
            Inferior label above, so long RV numbers never collide with it. ── */}
       <defs>
         <linearGradient id="combinedLvBar" x1="0" x2="1" y1="0" y2="0">
-          {reverseColors ? (
-            <><stop offset="0%" stopColor="#00ff00" /><stop offset="25%" stopColor="#80ff00" /><stop offset="50%" stopColor="#ffff00" /><stop offset="75%" stopColor="#ff8000" /><stop offset="100%" stopColor="#ff0000" /></>
-          ) : (
-            <><stop offset="0%" stopColor="#ff0000" /><stop offset="25%" stopColor="#ff8000" /><stop offset="50%" stopColor="#ffff00" /><stop offset="75%" stopColor="#80ff00" /><stop offset="100%" stopColor="#00ff00" /></>
-          )}
+          {strainRampStops(reverseColors).map((s) => <stop key={s.offset} offset={s.offset} stopColor={s.color} />)}
         </linearGradient>
+        {/* Follows rvFixed.reverse like rvCol does (was always reversed, so
+            the FAC bar ran the wrong way round). */}
         <linearGradient id="combinedRvBar" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="#00ff00" /><stop offset="25%" stopColor="#80ff00" /><stop offset="50%" stopColor="#ffff00" /><stop offset="75%" stopColor="#ff8000" /><stop offset="100%" stopColor="#ff0000" />
+          {strainRampStops(rvFixed.reverse).map((s) => <stop key={s.offset} offset={s.offset} stopColor={s.color} />)}
         </linearGradient>
       </defs>
       {showColorBars && (() => {

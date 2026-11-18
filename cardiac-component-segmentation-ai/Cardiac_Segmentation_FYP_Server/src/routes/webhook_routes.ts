@@ -118,6 +118,21 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
   }
 
   try {
+    // The GPU keeps computing even after the reconstruction this landmark job depends on is
+    // deleted mid-run -- deleting it only marks the Job record FAILED client-side
+    // (clearDependentLandmarkJobs in reconstruction_routes.ts), it cannot reach into the running
+    // GPU process and stop it. Without this guard, this callback would land later and silently
+    // flip that FAILED job back to COMPLETED, then fire a bullseye recompute using landmark
+    // coordinates for a reconstruction that no longer exists -- the user saw the landmark button
+    // go gray (job correctly marked failed) but the job kept visibly running, then its stale
+    // result overwrote the project's analysis anyway (reported live, 2026-11-09).
+    const existing = await readJob(gpuJobId);
+    if (existing.success && existing.job?.status === JobStatus.FAILED) {
+      logger.info(`${serviceLocation}: Ignoring landmark callback for job ${gpuJobId}: already marked failed (its reconstruction was likely deleted mid-run).`);
+      res.status(200).json({ message: `Job ${gpuJobId} already failed; callback ignored.` });
+      return;
+    }
+
     const status = req.body?.status;
     const success =
       status === "completed" ||
@@ -240,6 +255,12 @@ router.post("/gpu-callback", async (req: Request, res: Response) => {
     return res
       .status(404)
       .json({ message: `Job with GPU Job ID ${gpuJobId} not found` });
+  }
+  // A job's result is written once. A repeated callback (e.g. a GPU retry) would otherwise create a new mask
+  // pair and prune the current ones, saved corrections included. 200 so the GPU stops sending it.
+  if (jobReadResult.job.status === JobStatus.COMPLETED) {
+    logger.info(`${serviceLocation}: Ignoring callback for job ${effectiveJobId}: it is already completed.`);
+    return res.status(200).json({ message: `Job ${effectiveJobId} is already completed; callback ignored.` });
   }
   // const job = jobReadResult.job; // Get the full job object // Not directly used, currentJob is used later
 

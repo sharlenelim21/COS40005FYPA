@@ -336,6 +336,11 @@ async def send_callback_with_files(
         await send_callback(callback_url, uuid, success, result, error_detail)
 
 
+# Waits between callback attempts when the backend refuses the connection (e.g. while it restarts):
+# 6 attempts over about 2 min. Runs inside the GPU semaphore, so queued jobs wait during an outage.
+CALLBACK_CONNECT_RETRY_DELAYS_S = (5, 10, 20, 40, 60)
+
+
 async def send_callback(
     callback_url: HttpUrl,
     uuid: UUID,
@@ -387,15 +392,30 @@ async def send_callback(
             "X-Job-ID": str(uuid),
         }
         async with httpx.AsyncClient() as client:
-            start_time = time.time()
             logger.info(
                 f"[{serviceLocation}] Sending callback to {callback_url} "
                 f"for job {uuid} status={callback_payload['status']} error={error_detail}"
             )
             print(f"[{serviceLocation}] Sending callback to {callback_url}", flush=True)
-            response = await client.post(
-                str(callback_url), json=callback_payload, headers=headers
-            )
+            # Retry only when no connection was made (backend restarting): the request never reached it,
+            # so it cannot be processed twice. Timeouts and HTTP errors are not retried. The last failure
+            # is re-raised to the handlers below.
+            for attempt, retry_delay in enumerate((*CALLBACK_CONNECT_RETRY_DELAYS_S, None), start=1):
+                start_time = time.time()
+                try:
+                    response = await client.post(
+                        str(callback_url), json=callback_payload, headers=headers
+                    )
+                    break
+                except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                    if retry_delay is None:
+                        raise
+                    print(
+                        f"[{serviceLocation}] Callback for job {uuid} could not connect to {host}:{port} "
+                        f"(attempt {attempt}): {e}; retrying in {retry_delay}s",
+                        flush=True,
+                    )
+                    await asyncio.sleep(retry_delay)
             elapsed = time.time() - start_time
             print(f"[{serviceLocation}] Callback request took {elapsed:.2f} seconds")
             print(

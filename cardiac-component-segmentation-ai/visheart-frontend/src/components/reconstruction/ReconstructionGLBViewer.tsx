@@ -1,5 +1,5 @@
 ﻿"use client";
-import { useEffect, useRef, Suspense, useState, useCallback } from "react";
+import { Component, useEffect, useRef, Suspense, useState, useCallback, type ReactNode } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, useGLTF, Center } from "@react-three/drei";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
@@ -10,11 +10,16 @@ import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useTheme } from "next-themes";
+import { cn } from "@/lib/utils";
+import { ViewerControlsHint } from "@/components/reconstruction/ViewerControlsHint";
 import * as THREE from "three";
 
 // Visualization settings interface
 interface ViewerSettings {
   modelColor: string;
+  /** RV's own editable color -- seeded from the `secondaryColor` prop, same as `modelColor`
+   *  (LV) is seeded from DEFAULT_SETTINGS. Only relevant when a secondary mesh is shown. */
+  secondaryModelColor: string;
   wireframe: boolean;
   showEdges: boolean;
   /** Average normals at shared vertices so shading crosses facet boundaries. Cosmetic only. */
@@ -24,12 +29,44 @@ interface ViewerSettings {
   roughness: number;
   metalness: number;
   opacity: number;
-  environmentPreset: 'studio' | 'sunset' | 'dawn' | 'night' | 'warehouse' | 'forest' | 'apartment' | 'city' | 'park' | 'lobby';
+  /** Only the bundled HDR (ENVIRONMENT_FILES); drei's other presets load from a CDN at runtime. */
+  environmentPreset: 'studio';
 }
+
+// Lighting maps served from public/hdri so the viewer works offline. drei's `preset` prop fetches
+// these from raw.githack.com, and a failed fetch took the whole page down ("Application error").
+// studio_small_03_1k.hdr: "Studio Small 03" by Poly Haven (https://polyhaven.com/a/studio_small_03),
+// CC0 1.0 public domain; the same 1k file drei's "studio" preset loads (pmndrs/drei-assets).
+const ENVIRONMENT_FILES: Record<ViewerSettings['environmentPreset'], string> = {
+  studio: '/hdri/studio_small_03_1k.hdr',
+};
+
+/** Renders `fallback` instead of crashing the page when the lighting map cannot be loaded. */
+class EnvironmentErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.warn("[ReconstructionGLBViewer] Environment map failed to load; using basic lighting.", error);
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+export const DEFAULT_LV_COLOR = '#c41e3a';
+export const DEFAULT_RV_COLOR = '#660000';
 
 // Default settings
 const DEFAULT_SETTINGS: ViewerSettings = {
-  modelColor: '#c41e3a', // Cardiac tissue color
+  modelColor: DEFAULT_LV_COLOR, // Cardiac tissue color
+  // Matches SECONDARY_DEFAULT_COLOR below -- "Reset to Defaults" overrides this with the actual
+  // secondaryColor prop (see its own onClick), this literal only matters when there's no prop.
+  secondaryModelColor: DEFAULT_RV_COLOR,
   wireframe: false,
   showEdges: false,
   smoothShading: true,
@@ -44,6 +81,8 @@ const DEFAULT_SETTINGS: ViewerSettings = {
 // Preset color palette for cardiac structures
 const COLOR_PRESETS = {
   'Red': '#c41e3a',
+  'Blood Red': '#660000',
+  'Orange': '#FF3F00',
   'Blue': '#4a90e2',
   'Green': '#09af00',
   'Purple': '#4a26fd',
@@ -454,11 +493,24 @@ interface ReconstructionGLBViewerProps {
   secondaryLabel?: string;
   secondaryColor?: string;
   secondaryIsResearchOnly?: boolean;
+  /**
+   * Suppresses the "loading model" overlay below even for a url this viewer instance has never
+   * personally rendered before. `lvReadyUrls`/`rvReadyUrls` only learn a url is ready from this
+   * component's OWN onReady callback firing, which happens one render after the url prop changes
+   * -- a real wait the very first time a url is genuinely being fetched, but still a one-frame
+   * flash even when a caller has already preloaded every frame into the Three.js/drei cache ahead
+   * of time (the cache doesn't know anything about this component's own bookkeeping). Pass true
+   * once the caller's own preload pass has completed, so first-playback-pass "flicker" doesn't
+   * show for data that's already fully warm (reported live with before/after recordings, 2026-11).
+   */
+  skipLoadingOverlay?: boolean;
+  onColorsChange?: (colors: { primary: string; secondary: string }) => void;
 }
 
-// Distinct from the primary default (#c41e3a, deep red) so the two chambers are never confused
-// with each other, and readable against both light and dark backgrounds.
-const SECONDARY_DEFAULT_COLOR = '#2f9ed6';
+// RV defaults to the "Blood Red" preset (DEFAULT_RV_COLOR, #660000) so it is never confused with the
+// LV default (#c41e3a, deep red). Both are independently user-editable from the Settings panel (see
+// secondaryModelColor), and Reset to Defaults returns RV to Blood Red; this is only the out-of-the-box value.
+const SECONDARY_DEFAULT_COLOR = DEFAULT_RV_COLOR;
 
 export function ReconstructionGLBViewer({ 
   modelUrl, 
@@ -469,6 +521,8 @@ export function ReconstructionGLBViewer({
   secondaryLabel = "RV cavity",
   secondaryColor = SECONDARY_DEFAULT_COLOR,
   secondaryIsResearchOnly = false,
+  skipLoadingOverlay = false,
+  onColorsChange,
 }: ReconstructionGLBViewerProps) {
   // useTheme hook ensures component re-renders when theme changes (needed for responsive background)
   useTheme();
@@ -477,7 +531,29 @@ export function ReconstructionGLBViewer({
   const [activePreset, setActivePreset] = useState<CameraPreset | null>(null);
   const [showPresets, setShowPresets] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [settings, setSettings] = useState<ViewerSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<ViewerSettings>(() => ({ ...DEFAULT_SETTINGS, secondaryModelColor: secondaryColor }));
+  const [viewerSize, setViewerSize] = useState<{ width: number; height: number } | null>(null);
+  const hasAnyModel = !!(modelUrl || secondaryModelUrl);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setViewerSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasAnyModel]);
+
+  useEffect(() => {
+    onColorsChange?.({ primary: settings.modelColor, secondary: settings.secondaryModelColor });
+  }, [onColorsChange, settings.modelColor, settings.secondaryModelColor]);
+
+  const overlayOpen = showSettings || showPresets;
+  const compactViewer = !!viewerSize && (viewerSize.width < 560 || viewerSize.height < 380);
+  const settingsMaxHeight = viewerSize ? Math.max(160, Math.floor(viewerSize.height - 64)) : undefined;
+  const fadeWhileOverlayOpen = cn("motion-safe:transition-opacity motion-safe:duration-200", overlayOpen && "pointer-events-none opacity-0");
 
   // Which chambers currently have REAL geometry in the scene, as opposed to which were requested.
   // <Center> keys off this rather than off the URLs: the URL changes every frame during playback,
@@ -562,7 +638,7 @@ export function ReconstructionGLBViewer({
   // the per-frame fix below was needed only for frames truly new to this session.
   const lvPending = !!modelUrl && !lvReadyUrls.has(modelUrl);
   const rvPending = !!secondaryModelUrl && !rvReadyUrls.has(secondaryModelUrl);
-  const showLoadingOverlay = lvPending || rvPending;
+  const showLoadingOverlay = !skipLoadingOverlay && (lvPending || rvPending);
 
   // Either chamber alone is a valid view -- hiding LV to inspect RV on its own must still render.
   if (!modelUrl && !secondaryModelUrl) {
@@ -594,7 +670,7 @@ export function ReconstructionGLBViewer({
       )}
 
       {/* Frame Badge */}
-      <div className="absolute bottom-3 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-xs font-semibold">
+      <div className={cn("absolute bottom-3 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-xs font-semibold", fadeWhileOverlayOpen)} aria-hidden={overlayOpen}>
         Frame {frame}
       </div>
 
@@ -605,7 +681,7 @@ export function ReconstructionGLBViewer({
           mesh on screen, which is exactly when saying so matters most. The research-only marker
           travels with the legend so the warning is on the image itself, not only beside it. */}
       {secondaryModelUrl && (
-        <div className="absolute bottom-14 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-[11px] space-y-1.5 max-w-[140px] @sm:max-w-[240px]">
+        <div className={cn("absolute bottom-14 left-3 z-10 px-3 py-2 rounded-md bg-black/70 text-white text-[11px] space-y-1.5 max-w-[140px] @sm:max-w-[240px]", fadeWhileOverlayOpen)} aria-hidden={overlayOpen}>
           {modelUrl && (
             <div className="flex items-center gap-2">
               <span
@@ -618,7 +694,7 @@ export function ReconstructionGLBViewer({
           <div className="flex items-center gap-2">
             <span
               className="inline-block h-2.5 w-2.5 rounded-full border border-white/40"
-              style={{ backgroundColor: secondaryColor }}
+              style={{ backgroundColor: settings.secondaryModelColor }}
             />
             <span className="font-semibold">{secondaryLabel}</span>
           </div>
@@ -635,12 +711,17 @@ export function ReconstructionGLBViewer({
       )}
 
       {/* Camera Preset Buttons */}
-      <div className="absolute top-3 right-3 z-10 space-y-2">
+      <div className="absolute top-3 right-3 z-20">
+        <div className="relative">
         <div className="flex gap-2">
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => setShowPresets(!showPresets)}
+            aria-expanded={showPresets}
+            onClick={() => {
+              setShowPresets(!showPresets);
+              setShowSettings(false);
+            }}
             className="bg-black/70 hover:bg-black/90 text-white text-xs px-2 @xs:px-3"
           >
             <AlertCircle className="h-3 w-3 @xs:mr-1" />
@@ -650,7 +731,11 @@ export function ReconstructionGLBViewer({
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => setShowSettings(!showSettings)}
+            aria-expanded={showSettings}
+            onClick={() => {
+              setShowSettings(!showSettings);
+              setShowPresets(false);
+            }}
             className="bg-black/70 hover:bg-black/90 text-white text-xs px-2 @xs:px-3"
           >
             <Settings className="h-3 w-3 @xs:mr-1" />
@@ -659,7 +744,7 @@ export function ReconstructionGLBViewer({
         </div>
         
         {showPresets && (
-          <div className="grid grid-cols-2 gap-1 p-2 rounded-md bg-black/70 text-white text-[10px]">
+          <div className="absolute top-full right-0 mt-2 grid w-max grid-cols-2 gap-1 p-2 rounded-md bg-black/70 text-white text-[10px]">
             {Object.keys(CAMERA_PRESETS).map((preset) => (
               <Button
                 key={preset}
@@ -676,7 +761,10 @@ export function ReconstructionGLBViewer({
 
         {/* Settings Panel */}
         {showSettings && (
-          <div className="w-72 p-4 rounded-md bg-black/90 text-white text-xs space-y-4 max-h-[500px] overflow-y-auto">
+          <div
+            className="vh-scrollbar-overlay vh-overlay-controls absolute top-full right-0 mt-2 w-[min(18rem,calc(100cqw-1.5rem))] p-4 rounded-md bg-black/90 text-white text-xs space-y-4 overflow-y-auto"
+            style={{ maxHeight: settingsMaxHeight }}
+          >
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold text-sm">Visualization Settings</h3>
               <Button
@@ -689,9 +777,9 @@ export function ReconstructionGLBViewer({
               </Button>
             </div>
 
-            {/* Model Color */}
+            {/* LV Model Color */}
             <div className="space-y-2">
-              <Label className="text-white text-xs">Model Color</Label>
+              <Label className="text-white text-xs">LV Model Color</Label>
               <Select
                 value={settings.modelColor}
                 onValueChange={(value: string) => setSettings({ ...settings, modelColor: value })}
@@ -717,6 +805,38 @@ export function ReconstructionGLBViewer({
                 className="w-full h-8 rounded cursor-pointer"
               />
             </div>
+
+            {/* RV Model Color -- only when the RV overlay is actually in play (same gating as
+                the RV legend row above). */}
+            {secondaryModelUrl && (
+              <div className="space-y-2">
+                <Label className="text-white text-xs">RV Model Color</Label>
+                <Select
+                  value={settings.secondaryModelColor}
+                  onValueChange={(value: string) => setSettings({ ...settings, secondaryModelColor: value })}
+                >
+                  <SelectTrigger className="w-full bg-white/10 border-white/20 text-white text-xs h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(COLOR_PRESETS).map(([name, color]) => (
+                      <SelectItem key={color} value={color} className="text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 rounded" style={{ backgroundColor: color }} />
+                          {name}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <input
+                  type="color"
+                  value={settings.secondaryModelColor}
+                  onChange={(e) => setSettings({ ...settings, secondaryModelColor: e.target.value })}
+                  className="w-full h-8 rounded cursor-pointer"
+                />
+              </div>
+            )}
 
             {/* Background */}
             <div className="space-y-2">
@@ -813,13 +933,14 @@ export function ReconstructionGLBViewer({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setSettings(DEFAULT_SETTINGS)}
+              onClick={() => setSettings({ ...DEFAULT_SETTINGS, secondaryModelColor: secondaryColor })}
               className="w-full text-xs mt-4 bg-white/10 border-white/20 hover:bg-white/20 text-white"
             >
               Reset to Defaults
             </Button>
           </div>
         )}
+        </div>
       </div>
       
       <Canvas 
@@ -911,14 +1032,20 @@ export function ReconstructionGLBViewer({
             {secondaryModelUrl && (
               <Model
                 url={secondaryModelUrl}
-                settings={{ ...settings, modelColor: secondaryColor }}
+                settings={{ ...settings, modelColor: settings.secondaryModelColor }}
                 onReady={handleRvReady}
               />
             )}
           </Center>
           
-          {/* Environment Map for reflections - customizable preset */}
-          <Environment preset={settings.environmentPreset} />
+          {/* Environment Map for reflections, loaded from public/hdri (see ENVIRONMENT_FILES).
+              Its own Suspense keeps the model visible while it loads; if it fails, the three-point
+              lights above stay and a soft ambient light stands in for the missing reflections. */}
+          <EnvironmentErrorBoundary fallback={<ambientLight intensity={0.4} />}>
+            <Suspense fallback={null}>
+              <Environment files={ENVIRONMENT_FILES[settings.environmentPreset]} />
+            </Suspense>
+          </EnvironmentErrorBoundary>
           
           <CameraController 
             onCameraChange={handleCameraChange} 
@@ -929,14 +1056,9 @@ export function ReconstructionGLBViewer({
         </Suspense>
       </Canvas>
       
-      {/* Controls Info -- a nice-to-have hint, not essential; hidden on a narrow panel where it
-          would otherwise collide with the chamber legend on the opposite corner. */}
-      <div className="absolute bottom-3 right-3 z-10 hidden @sm:block px-3 py-2 rounded-md bg-black/70 text-white text-xs">
-        <p className="font-semibold">Controls:</p>
-        <p>Left Click+Drag: Rotate</p>
-        <p>Right Click+Drag: Pan</p>
-        <p>Scroll: Zoom</p>
-      </div>
+      {/* Controls Info -- a nice-to-have hint, not essential. On a narrow or short viewer it
+          collapses to a "?" button, and it fades out while Settings or Views is open. */}
+      <ViewerControlsHint compact={compactViewer} hidden={overlayOpen} />
     </div>
   );
 }

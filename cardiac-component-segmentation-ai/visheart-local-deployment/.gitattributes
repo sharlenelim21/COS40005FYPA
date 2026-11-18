@@ -1,2 +1,4 @@
 # The Linux launcher runs under bash: keep it at LF even where core.autocrlf would convert it.
 *.sh text eol=lf
+# Template seed files (template_tool.py export): compressed data, never line-ending converted.
+seed/**/*.xz binary

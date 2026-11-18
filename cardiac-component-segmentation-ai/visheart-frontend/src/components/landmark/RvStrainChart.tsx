@@ -1,0 +1,117 @@
+"use client";
+
+import { strainRampStops, strainScaleMinMax } from "@/lib/strainColorScale";
+import React from "react";
+import { strainRamp, polarPoint, annularSectorPath } from "./StrainVisualization";
+import type { RvStrainRegion } from "./StrainVisualization";
+
+/**
+ * Regional RV strain chart — 3 rings (basal, mid, apical) x 3 sections,
+ * data order basal 1-3, mid 4-6, apical 7-9 (backend mask_to_rv_regions).
+ *
+ * Deliberately a separate, simpler component from StrainBullseyeChart rather
+ * than a generalized version of it: StrainBullseyeChart's 17-segment layout
+ * is also used by the printed-report pages, and RV strain isn't a
+ * wall-thickness measure like LV's GRS/GCS — see RvStrainRegion for why
+ * `strain` here is a cavity-radius % change instead. Negative (shrinking
+ * radius) is the healthy direction, same convention as GCS.
+ */
+// Like the LV bullseye charts, this chart is never rotated by the backend's
+// alignment_angle_deg — see StrainBullseyeChart.
+
+interface RvStrainChartProps {
+  regions: RvStrainRegion[];
+  selectedRegion?: number | null; // 1-based
+  onRegionClick?: (region: number) => void;
+  onRegionHover?: (info: { x: number; y: number; label: string; value: number | null } | null) => void;
+}
+
+export function RvStrainChart({ regions, selectedRegion, onRegionClick, onRegionHover }: RvStrainChartProps) {
+  const center = 150;
+  const basalOuter = 108, basalInner = 78, midInner = 48, apicalInner = 20;
+  const nSectors = 3;
+  const sectorDeg = 360 / nSectors;
+
+  // Fixed RV GCS colour scale (lib/strainColorScale.ts), not this patient's min/max.
+  const { min: colMin, max: colMax } = strainScaleMinMax("RV_GCS");
+
+  const val = (i: number) => regions[i]?.strain ?? null;
+  const lbl = (i: number) => regions[i]?.label ?? `Region ${i + 1}`;
+  // Negative strain (shrinking RV cavity) is healthy — same reversed ramp as GCS.
+  const col = (i: number) => {
+    const v = val(i);
+    if (v == null || v === 0) return "#94a3b8"; // slate — no data (or no change measured) for this region
+    const t = colMin === colMax ? 0.5 : Math.max(0, Math.min(1, (v - colMin) / (colMax - colMin)));
+    return strainRamp(1 - t);
+  };
+  const isSel = (region1based: number) => selectedRegion === region1based;
+
+  const segPath = (i: number, innerR: number, outerR: number) => {
+    const start = -90 - sectorDeg / 2 - i * sectorDeg;
+    const end = start + sectorDeg;
+    const mid = (start + end) / 2;
+    const lr = (innerR + outerR) / 2;
+    const lp = polarPoint(center, lr, mid);
+    return { path: annularSectorPath(center, innerR, outerR, start, end), lp };
+  };
+
+  const hoverHandler = (i: number) => onRegionHover
+    ? (e: React.MouseEvent) => onRegionHover({ x: e.clientX, y: e.clientY, label: lbl(i), value: val(i) })
+    : undefined;
+
+  const ring = (ringIndex: 0 | 1 | 2, innerR: number, outerR: number, keyPrefix: string) =>
+    Array.from({ length: nSectors }, (_, i) => {
+      const dataIdx = ringIndex * nSectors + i;
+      const region = dataIdx + 1;
+      const { path, lp } = segPath(i, innerR, outerR);
+      const v = val(dataIdx);
+      return (
+        <g key={`${keyPrefix}${i}`}>
+          <path
+            d={path}
+            fill={col(dataIdx)}
+            stroke={isSel(region) ? "white" : "rgba(0,0,0,0.18)"}
+            strokeWidth={isSel(region) ? 2.5 : 1}
+            style={{ transition: "fill 200ms ease", cursor: onRegionClick ? "pointer" : "default" }}
+            onMouseMove={hoverHandler(dataIdx)}
+            onMouseLeave={onRegionHover ? () => onRegionHover(null) : undefined}
+            onClick={onRegionClick ? () => onRegionClick(region) : undefined}
+          />
+          <text x={lp.x} y={lp.y - 1} textAnchor="middle" fontSize="9" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
+            {region}
+          </text>
+          <text x={lp.x} y={lp.y + 10} textAnchor="middle" fontSize="7.5" fontWeight="600" fill="rgba(0,0,0,0.85)" style={{ pointerEvents: "none", filter: "drop-shadow(0 1px 1px rgba(255,255,255,0.6))" }}>
+            {v != null ? v.toFixed(1) : "—"}
+          </text>
+        </g>
+      );
+    });
+
+  return (
+    <svg viewBox="0 0 300 340" className="h-full w-full text-[#475569] dark:text-slate-300" role="img" aria-label="RV regional strain chart">
+      <circle cx={center} cy={center} r="112" className="fill-slate-50 stroke-slate-200 dark:fill-zinc-900 dark:stroke-zinc-700" strokeWidth="1" />
+
+      <text x={center} y="12" textAnchor="middle" fontSize="11" fontWeight="700" fill="currentColor">RV Free Wall</text>
+      <text x={center} y="290" textAnchor="middle" fontSize="9" fill="currentColor" opacity="0.7">
+        Basal / mid / apical x 3 — free-wall chord strain (GCS-style)
+      </text>
+
+      {ring(0, basalInner, basalOuter, "b")}
+      {ring(1, midInner, basalInner, "m")}
+      {ring(2, apicalInner, midInner, "a")}
+
+      <circle cx={center} cy={center} r={apicalInner} className="fill-slate-200/70 dark:fill-zinc-800/70" />
+
+      {/* Colour scale bar */}
+      <defs>
+        <linearGradient id="rvStrainBar" x1="0" x2="1" y1="0" y2="0">
+          {strainRampStops(true).map((s) => <stop key={s.offset} offset={s.offset} stopColor={s.color} />)}
+        </linearGradient>
+      </defs>
+      <rect x="30" y="305" width="240" height="6" rx="3" fill="url(#rvStrainBar)" opacity="0.9" />
+      <text x="30"  y="320" textAnchor="middle" fontSize="7" fill="currentColor" opacity="0.7">{colMin.toFixed(1)}</text>
+      <text x="150" y="320" textAnchor="middle" fontSize="7" fill="currentColor" opacity="0.7">RV strain %</text>
+      <text x="270" y="320" textAnchor="middle" fontSize="7" fill="currentColor" opacity="0.7">{colMax.toFixed(1)}</text>
+    </svg>
+  );
+}

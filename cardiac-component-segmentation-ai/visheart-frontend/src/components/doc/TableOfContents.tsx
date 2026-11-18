@@ -35,7 +35,7 @@ function TocList({ items, activeId, onNavigate, nested = false }: TocListProps) 
               aria-current={active ? "location" : undefined}
               onClick={(event) => handleClick(event, item.id)}
               className={cn(
-                "block rounded-md px-2 py-1.5 text-sm leading-snug transition-colors",
+                "block rounded-md px-2 py-1.5 text-base leading-snug transition-colors",
                 "hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
                 active ? "bg-secondary text-foreground font-medium" : "text-muted-foreground",
               )}
@@ -84,7 +84,7 @@ export function TableOfContents({ items }: TableOfContentsProps) {
           aria-expanded={mobileOpen}
           aria-controls="doc-toc-mobile"
           onClick={() => setMobileOpen((open) => !open)}
-          className="focus-visible:ring-ring flex h-11 w-full items-center gap-2 rounded-md text-left text-sm focus-visible:ring-2 focus-visible:outline-none"
+          className="focus-visible:ring-ring flex h-11 w-full items-center gap-2 rounded-md text-left text-base focus-visible:ring-2 focus-visible:outline-none"
         >
           <ListTree className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="text-muted-foreground shrink-0">On this page:</span>
@@ -109,7 +109,7 @@ export function TableOfContents({ items }: TableOfContentsProps) {
           aria-label="Table of contents"
           className="sticky top-28 max-h-[calc(100dvh-8rem)] overflow-y-auto py-8 pr-2"
         >
-          <p className="text-muted-foreground mb-3 px-2 text-xs font-semibold tracking-wide uppercase">
+          <p className="text-muted-foreground mb-3 px-2 text-sm font-semibold tracking-wide uppercase">
             On this page
           </p>
           <TocList items={items} activeId={activeId} />

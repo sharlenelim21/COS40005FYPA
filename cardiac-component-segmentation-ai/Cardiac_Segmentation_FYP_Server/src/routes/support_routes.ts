@@ -39,6 +39,12 @@ const docs = [
     keywords: ['landmark detection', 'landmarks', 'rv insertion points', 'strain', 'bullseye', 'aha 17-segment', 'report', 'export data'],
   },
   {
+    tab: 'how-lv-rv-works',
+    title: 'How LV and RV Works',
+    excerpt: 'Step-by-step LV (AHA 17-segment GRS/GCS) and RV (9-segment GCS, GAS, FAC, septal GCS) strain formulas, ray casting and segment layout. RV strain is a research output.',
+    keywords: ['strain', 'calculation', 'formula', 'grs', 'gcs', 'gas', 'fac', 'rv strain', 'lv strain', 'ray casting', 'bullseye', '9 segments', 'septal gcs', 'research'],
+  },
+  {
     tab: 'reconstruction',
     title: '3D/4D Reconstruction',
     excerpt: 'Run 3D and 4D reconstructions, configure parameters, inspect results, and download outputs.',

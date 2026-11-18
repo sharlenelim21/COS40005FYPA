@@ -133,7 +133,7 @@ export function RegionalStrainByRegion({
       {/* Small multiples — one mini chart per segment, each styled like the
           Global curve (smooth line, own auto-scaled axis, hover dot) — instead
           of up to 6 overlapping lines in the same hue fighting for attention. */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-2">
         {segs.map((seg) => (
           <RegionSegmentMiniChart
             key={seg}
