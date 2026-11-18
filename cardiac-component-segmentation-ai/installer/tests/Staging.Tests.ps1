@@ -230,7 +230,9 @@ Describe 'Write-ReleaseEnv' {
         $map['VH_BIND'] | Should Be '127.0.0.1'
         $map['VH_MINIO_ANON'] | Should Be 'none'
         $map['COMPOSE_PROJECT_NAME'] | Should Be 'visheart'
-        $map.Count | Should Be 9
+        $map['VH_MONGO_HOST_PORT'] | Should Be '0'
+        $map['VH_REDIS_HOST_PORT'] | Should Be '0'
+        $map.Count | Should Be 11
     }
 
     It 'release env names the installed version and where to check for a newer one' {

@@ -130,3 +130,22 @@ Describe 'mounts inside read-only mounts' {
         }
     }
 }
+
+Describe 'MongoDB and Redis host ports' {
+    # Only VisHeart's containers use MongoDB and Redis, over Docker's network. A developer copy keeps the usual host
+    # ports (for tools such as Compass); an installed copy lets Docker pick free ones, so a MongoDB or Redis that the
+    # PC already runs cannot block VisHeart (found installing 1.0.1 on a PC with the MongoDB Windows service).
+    It 'a developer copy publishes 27017 and 6379' {
+        $config = Get-ComposeConfig
+        @($config.services.mongodb.ports)[0].published | Should Be '27017'
+        @($config.services.redis.ports)[0].published | Should Be '6379'
+    }
+    It 'an installed copy lets Docker choose free ports on 127.0.0.1' {
+        $config = Get-ComposeConfig @($fixtureEnv)
+        foreach ($svc in 'mongodb', 'redis') {
+            $port = @($config.services.$svc.ports)[0]
+            $port.published | Should Be '0'
+            $port.host_ip | Should Be '127.0.0.1'
+        }
+    }
+}

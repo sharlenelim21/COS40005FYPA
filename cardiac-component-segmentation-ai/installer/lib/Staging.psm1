@@ -177,6 +177,10 @@ function Write-ReleaseEnv {
     $lines += 'VH_MINIO_ANON=none'     # no anonymous downloads from the storage bucket
     # Its own compose project: containers, network and data volumes stay apart from a developer copy on the same PC.
     $lines += 'COMPOSE_PROJECT_NAME=visheart'
+    # MongoDB and Redis are used only inside Docker: let Docker pick free host ports, so a MongoDB or Redis that the
+    # PC already runs cannot block VisHeart.
+    $lines += 'VH_MONGO_HOST_PORT=0'
+    $lines += 'VH_REDIS_HOST_PORT=0'
     if ($Version) { $lines += "VH_VERSION=$Version" }
     if ($UpdateUrl) { $lines += "VH_UPDATE_URL=$UpdateUrl" }
     $utf8 = New-Object System.Text.UTF8Encoding($false)   # compose rejects a byte order mark
