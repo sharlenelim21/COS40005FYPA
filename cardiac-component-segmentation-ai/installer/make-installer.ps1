@@ -30,7 +30,10 @@ $installerDir = $PSScriptRoot
 $appRoot = Split-Path -Parent $installerDir           # cardiac-component-segmentation-ai
 $repoRoot = Split-Path -Parent $appRoot
 $outDir = Join-Path $installerDir 'out'
-$staging = Join-Path $outDir 'staging'
+# Staged at the root of the build drive, not in installer\out: the shipped paths (the seed templates above all) are
+# long, and under the deep repository folder they passed Windows' 260-character limit. Holds release.env with the
+# support mail password: never upload or share it.
+$staging = Join-Path ([IO.Path]::GetPathRoot($repoRoot)) 'vh-staging'
 $version = (Get-Content (Join-Path $installerDir 'VERSION') -TotalCount 1).Trim()
 
 function Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
@@ -100,6 +103,14 @@ try {
     Step "Copying files to $staging"
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
     $selection = @(Get-StagingSelection $repoRoot)
+    $targets = @($selection | ForEach-Object { $_.Target })
+    $tooLong = @(Get-LongPaths $targets 'C:\VisHeart')
+    if ($tooLong.Count -gt 0) {
+        Stop-Build ("These files would pass Windows' 260-character path limit when installed in C:\VisHeart. Give them " +
+            "shorter names:`n  " + ($tooLong -join "`n  "))
+    }
+    $tooLong = @(Get-LongPaths $targets $staging)
+    if ($tooLong.Count -gt 0) { Stop-Build ("Paths too long under $staging`:`n  " + ($tooLong -join "`n  ")) }
     foreach ($item in $selection) {
         $target = Join-Path $staging $item.Target
         $parent = Split-Path -Parent $target

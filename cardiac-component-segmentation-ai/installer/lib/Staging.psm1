@@ -147,6 +147,14 @@ function Read-EnvValues([string]$Path) {
     return $map
 }
 
+function Get-LongPaths {
+    # The relative paths that, under Root, pass Windows' 260-character path limit (259 plus the terminating null).
+    # Copy-Item and many programs fail on them unless long paths are switched on, which a user's PC may not have.
+    param([string[]]$Targets, [string]$Root, [int]$Limit = 259)
+    $prefix = $Root.TrimEnd('').Length + 1
+    return @($Targets | Where-Object { $prefix + $_.Length -gt $Limit })
+}
+
 function Write-ReleaseEnv {
     # release.env is shipped and replaced on every update: pinned images, the support mail account, and the
     # settings that keep an installed copy private to this PC.
@@ -204,5 +212,5 @@ function Find-InnoCompiler {
     return $unknown
 }
 
-Export-ModuleMember -Function Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack,
+Export-ModuleMember -Function Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack, Get-LongPaths,
     Write-ReleaseEnv, Get-InnoCandidates, Get-FileVersion, Find-InnoCompiler

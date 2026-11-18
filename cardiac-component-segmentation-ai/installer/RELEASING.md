@@ -73,6 +73,9 @@ The build PC is the computer that makes the installers. It needs:
    ```
    The output is `cardiac-component-segmentation-ai\installer\out\VisHeart-<Variant>-<version>\`: one `.exe` and
    one or more `.bin` files.
+   The build copies the app files to `vh-staging` at the root of the drive that holds the repository (for example
+   `E:h-staging`), because the full paths are too long inside the repository folder. That folder holds the support
+   mail password in `release.env`: never upload or share it.
 5. **Test it before you upload.** Install the Update over a test install and check that you can still log in and
    that your change is there. The first time, and after any change to the installer itself, test the Full installer
    on a clean Windows PC or VM.

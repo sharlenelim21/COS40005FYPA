@@ -285,3 +285,18 @@ Describe 'Find-InnoCompiler' {
         }
     }
 }
+
+Describe 'Get-LongPaths' {
+    It 'names the files whose full path under a folder passes the Windows 260-character limit' {
+        $short = 'app\a.txt'
+        $long = 'app\' + ('x' * 240) + '.txt'
+        @(Get-LongPaths @($short, $long) 'C:\VisHeart') | Should Be @($long)
+        @(Get-LongPaths @($short) 'C:\VisHeart').Count | Should Be 0
+    }
+
+    It 'every shipped file fits under C:\VisHeart on the user''s PC' {
+        $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        $targets = @(Get-StagingSelection $repo | ForEach-Object { $_.Target })
+        @(Get-LongPaths $targets 'C:\VisHeart').Count | Should Be 0
+    }
+}
