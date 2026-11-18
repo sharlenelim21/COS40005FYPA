@@ -165,7 +165,6 @@ Describe 'Test-ReleaseImages' {
             VH_APP_IMAGE          = 'sharlene21/visheart-local:1.5.0'
             VH_GPU_IMAGE          = 'sharlene21/visheart-gpu:9.9.9'
             VH_MINIO_IMAGE        = 'bitnamilegacy/minio:latest'
-            VH_MINIO_CLIENT_IMAGE = 'bitnamilegacy/minio-client@sha256:00dcc4e58ada0df45bb7d9ee435af98295f96c27c3c68292ce78ec700a87b511'
         }
         $bad = @(Test-ReleaseImages $images | Sort-Object)
         ($bad -join ',') | Should Be 'bitnamilegacy/minio:latest,sharlene21/visheart-gpu:9.9.9'
@@ -212,7 +211,7 @@ Describe 'Write-ReleaseEnv' {
     New-Item -ItemType Directory $dir | Out-Null
     $smtp = Join-Path $dir 'smtp.release.env'
     Set-Content $smtp "# team support account`r`nVH_SUPPORT_EMAIL=support@example.test`r`nVH_SMTP_USER=support@example.test`r`nVH_SMTP_PASS=abcd efgh ijkl mnop" -Encoding ASCII
-    $images = @{ VH_APP_IMAGE = 'a/app:1'; VH_GPU_IMAGE = 'a/gpu:1'; VH_MINIO_IMAGE = 'a/minio:1'; VH_MINIO_CLIENT_IMAGE = 'a/mc:1' }
+    $images = @{ VH_APP_IMAGE = 'a/app:1'; VH_GPU_IMAGE = 'a/gpu:1'; VH_MINIO_IMAGE = 'a/minio:1' }
 
     It 'release env content' {
         $out = Join-Path $dir 'release.env'
@@ -224,14 +223,14 @@ Describe 'Write-ReleaseEnv' {
         $map['VH_APP_IMAGE'] | Should Be 'a/app:1'
         $map['VH_GPU_IMAGE'] | Should Be 'a/gpu:1'
         $map['VH_MINIO_IMAGE'] | Should Be 'a/minio:1'
-        $map['VH_MINIO_CLIENT_IMAGE'] | Should Be 'a/mc:1'
+        $map.ContainsKey('VH_MINIO_CLIENT_IMAGE') | Should Be $false
         $map['VH_SUPPORT_EMAIL'] | Should Be 'support@example.test'
         $map['VH_SMTP_USER'] | Should Be 'support@example.test'
         $map['VH_SMTP_PASS'] | Should Be 'abcd efgh ijkl mnop'
         $map['VH_BIND'] | Should Be '127.0.0.1'
         $map['VH_MINIO_ANON'] | Should Be 'none'
         $map['COMPOSE_PROJECT_NAME'] | Should Be 'visheart'
-        $map.Count | Should Be 10
+        $map.Count | Should Be 9
     }
 
     It 'release env names the installed version and where to check for a newer one' {

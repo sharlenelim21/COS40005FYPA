@@ -160,7 +160,7 @@ function Write-ReleaseEnv {
         if (-not $smtp[$key]) { throw "smtp.release.env has no value for $key." }
     }
     $lines = @('# VisHeart release settings. Shipped by the installer and replaced on every update; do not edit.')
-    foreach ($key in @('VH_APP_IMAGE', 'VH_GPU_IMAGE', 'VH_MINIO_IMAGE', 'VH_MINIO_CLIENT_IMAGE')) {
+    foreach ($key in @('VH_APP_IMAGE', 'VH_GPU_IMAGE', 'VH_MINIO_IMAGE')) {
         if (-not $Images[$key]) { throw "release.json has no image for $key." }
         $lines += "$key=$($Images[$key])"
     }

@@ -38,7 +38,8 @@ Describe 'docker-compose.yml defaults (no env file)' {
         $config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD | Should Be 'P@ssw0rd123!'
         $app.environment.MONGODB_URI | Should Match ([regex]::Escape('admin:P%40ssw0rd123%21@'))
         $app.environment.ADMIN_PASS | Should Be 'P@ssw0rd123!'
-        $config.services.'minio-setup'.entrypoint -join ' ' | Should Match 'anonymous set download'
+        $app.environment.S3_ANONYMOUS_READ | Should Be 'download'
+        $config.services.Keys -contains 'minio-setup' | Should Be $false
     }
 
     It 'no personal mail in repository' {
@@ -71,9 +72,7 @@ Describe 'docker-compose.yml with the installed env file' {
         $config.services.'gpu-cpu'.image | Should Be $fixture['VH_GPU_IMAGE']
         $config.services.'visheart-app'.image | Should Be $fixture['VH_APP_IMAGE']
         $config.services.'visheart-app'.environment.ADMIN_PASS | Should Be $fixture['VH_ADMIN_PASS']
-        $entry = $config.services.'minio-setup'.entrypoint -join ' '
-        $entry | Should Match 'anonymous set none'
-        $entry | Should Match $fixture['VH_MINIO_PASSWORD']
+        $config.services.'visheart-app'.environment.S3_ANONYMOUS_READ | Should Be 'none'
     }
 
     It 'installed env replaces every secret' {
@@ -93,7 +92,6 @@ Describe 'docker-compose.yml with the installed env file' {
         ($config.services.mongodb.healthcheck.test -join ' ') | Should Match $fixture['VH_MONGO_PASSWORD']
         $config.services.minio.environment.MINIO_ROOT_PASSWORD | Should Be $fixture['VH_MINIO_PASSWORD']
         $config.services.minio.image | Should Be $fixture['VH_MINIO_IMAGE']
-        $config.services.'minio-setup'.image | Should Be $fixture['VH_MINIO_CLIENT_IMAGE']
         $gpu = $config.services.'gpu-nvidia'.environment
         $gpu.GPU_ACCESS_SECRET | Should Be $fixture['VH_GPU_ACCESS_SECRET']
         $gpu.JWT_SECRET | Should Be $fixture['VH_JWT_SECRET']

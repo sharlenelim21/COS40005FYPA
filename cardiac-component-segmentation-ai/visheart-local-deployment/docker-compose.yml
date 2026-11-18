@@ -84,6 +84,9 @@ services:
       S3_ACCESS_KEY_ID: minioadmin
       S3_SECRET_ACCESS_KEY: ${VH_MINIO_PASSWORD:-minioadmin123}
       S3_FORCE_PATH_STYLE: "true"
+      # "download" (a developer copy): the bucket the backend creates allows anonymous read. An installed copy
+      # sets VH_MINIO_ANON=none in release.env, so patient files are only reachable through presigned URLs.
+      S3_ANONYMOUS_READ: ${VH_MINIO_ANON:-download}
       
       # GPU Service Configuration
       # The inference service runs as `gpu-cpu` or `gpu-nvidia` in this
