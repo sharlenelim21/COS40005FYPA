@@ -9,7 +9,7 @@
              (passwords, trained models, jobs, exports) stay as they are.
 
     Steps: refuse uncommitted changes in the shipped folders, build the backend, copy the shipped files to
-    <build drive>:h-staging, check the images in release.json, write release.env, and run Inno Setup (6.5.2+).
+    <build drive>:\vh-staging, check the images in release.json, write release.env, and run Inno Setup (6.5.2+).
     Output: installer\out\VisHeart-<Variant>-<VERSION>\ (VisHeart-<Variant>-<VERSION>.exe plus .bin slices).
 
 .EXAMPLE
