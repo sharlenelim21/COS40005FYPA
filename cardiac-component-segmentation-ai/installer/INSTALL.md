@@ -6,7 +6,8 @@ from other computers.
 ## What you need
 
 - Windows 10 version 2004 or later, or Windows 11, 64-bit.
-- At least 40 GB free on drive C:.
+- At least 40 GB free: about 10 GB where VisHeart is installed and 30 GB where Docker Desktop keeps its data (both
+  on C: unless you choose otherwise).
 - About 10 GB more, on any drive, for the download while you install (you can delete it afterwards).
 - A Windows account with administrator rights, to install.
 - An internet connection for the first start.
@@ -30,12 +31,15 @@ Already have VisHeart? The newest `VisHeart-Full` installer also updates it and 
 
 1. Open the folder you unzipped.
 2. Run `VisHeart-Full-<version>.exe` and allow it to make changes.
-3. The installer checks the PC. If Docker Desktop, WSL2 or Python is missing, it installs them for you.
-4. At the end it shows your **VisHeart login** (user `admin` and a password made for this PC) and the next steps, in
-   a box you can scroll and copy from. The same login is saved in `C:\VisHeart\FIRST-LOGIN.txt`. Two options are
+3. Choose where to install. `C:\VisHeart` is the default; if C: is nearly full, choose another drive, for example
+   `E:\VisHeart` (a short folder name without spaces). The installer checks that this drive, and the drive where Docker
+   Desktop keeps its data, have enough room.
+4. The installer checks the PC. If Docker Desktop, WSL2 or Python is missing, it installs them for you.
+5. At the end it shows your **VisHeart login** (user `admin` and a password made for this PC) and the next steps, in
+   a box you can scroll and copy from. The same login is saved as `FIRST-LOGIN.txt` in the install folder. Two options are
    ticked: **Start VisHeart now** and **Open the login note**. Leave them ticked and click Finish.
-5. Restart Windows if the installer asks you to.
-6. Open **Docker Desktop** once and accept its terms. Docker Desktop is free for education, research and small
+6. Restart Windows if the installer asks you to.
+7. Open **Docker Desktop** once and accept its terms. Docker Desktop is free for education, research and small
    organisations.
 
 ## Start and stop

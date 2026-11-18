@@ -15,12 +15,17 @@ param(
     [string]$InstallDrive = 'C:',
     # Updating an existing install: its images and training data already take their space.
     [switch]$ExistingInstall,
+    # The installer checks the disk again once the user has chosen the install folder.
+    [switch]$SkipDisk,
+    [switch]$DiskOnly,
     [string]$OutJson,
     [string]$OutText
 )
 
 $script:MinBuild = 19041   # Windows 10 version 2004, the first with WSL2
-$script:MinFreeGB = 40     # app + training pack + ~25 GB of images on first start
+$script:MinFreeGB = 40     # app + training pack + ~25 GB of images on first start, when both are on one drive
+$script:MinFreeGBApp = 10      # the install folder: app files, training pack, UNet Extend Training environment
+$script:MinFreeGBDocker = 30   # where Docker Desktop keeps its data: ~25 GB of images on first start
 $script:MinFreeGBUpdate = 10   # an update adds new files and, at most, a changed image
 
 # --- Probes: one per fact, so the tests can replace them ---
@@ -76,6 +81,17 @@ function Get-FreeSpaceGB([string]$Drive) {
     return [math]::Round($info.AvailableFreeSpace / 1GB, 1)
 }
 
+function Get-DockerDataDrive {
+    # The drive Docker Desktop keeps its images on: the folder it was moved to (Settings > Resources > Advanced >
+    # Disk image location), or the Windows drive by default.
+    param([string]$SettingsPath = (Join-Path $env:APPDATA 'Docker\settings-store.json'))
+    try {
+        $dir = [string](Get-Content -Raw -LiteralPath $SettingsPath -ErrorAction Stop | ConvertFrom-Json).CustomWslDistroDir
+        if ($dir -match '^[A-Za-z]:') { return $dir.Substring(0, 2).ToUpperInvariant() }
+    } catch { }
+    return $env:SystemDrive
+}
+
 # --- Checks ---
 
 function New-Check([string]$Name, [string]$Status, [string]$Message) {
@@ -83,7 +99,8 @@ function New-Check([string]$Name, [string]$Status, [string]$Message) {
 }
 
 function Get-VisHeartPrerequisites {
-    param([string]$InstallDrive = 'C:', [switch]$ExistingInstall)
+    param([string]$InstallDrive = 'C:', [switch]$ExistingInstall, [switch]$SkipDisk, [switch]$DiskOnly)
+    if ($DiskOnly) { return Get-DiskCheck -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall }
     $build = Get-WindowsBuild
     if (-not (Test-Is64BitWindows)) {
         New-Check 'windows' 'block' 'VisHeart needs 64-bit Windows 10 (version 2004 or later) or Windows 11.'
@@ -107,19 +124,39 @@ function Get-VisHeartPrerequisites {
     elseif ($python) { New-Check 'python' 'missing' "Python $python is too old for UNet Extend Training (3.11 or later). The installer will install Python 3.13." }
     else { New-Check 'python' 'missing' 'Python is not installed. UNet Extend Training needs it; the installer will install Python 3.13.' }
 
+    if (-not $SkipDisk) { Get-DiskCheck -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall }
+}
+
+function Get-DiskCheck {
+    param([string]$InstallDrive, [switch]$ExistingInstall)
+    $InstallDrive = $InstallDrive.Substring(0, 2).ToUpperInvariant()
     $free = Get-FreeSpaceGB $InstallDrive
-    if ($ExistingInstall -and $free -lt $script:MinFreeGBUpdate) {
-        New-Check 'disk' 'block' ("Only {0} GB is free on {1}. Updating VisHeart needs at least {2} GB. Free some space, then run the update again." -f $free, $InstallDrive, $script:MinFreeGBUpdate)
-    } elseif (-not $ExistingInstall -and $free -lt $script:MinFreeGB) {
-        New-Check 'disk' 'block' ("Only {0} GB is free on {1}. VisHeart needs at least {2} GB (the first start downloads about 25 GB). Free some space, then install again." -f $free, $InstallDrive, $script:MinFreeGB)
-    } else {
-        New-Check 'disk' 'ok' ("{0} GB free on {1}." -f $free, $InstallDrive)
+    if ($ExistingInstall) {
+        if ($free -lt $script:MinFreeGBUpdate) {
+            return New-Check 'disk' 'block' ("Only {0} GB is free on {1}. Updating VisHeart needs at least {2} GB. Free some space, then run the update again." -f $free, $InstallDrive, $script:MinFreeGBUpdate)
+        }
+        return New-Check 'disk' 'ok' ("{0} GB free on {1}." -f $free, $InstallDrive)
     }
+    $dockerDrive = Get-DockerDataDrive
+    if ($dockerDrive -eq $InstallDrive) {
+        if ($free -lt $script:MinFreeGB) {
+            return New-Check 'disk' 'block' ("Only {0} GB is free on {1}. VisHeart needs at least {2} GB (the first start downloads about 25 GB). Free some space or choose another drive, then install again." -f $free, $InstallDrive, $script:MinFreeGB)
+        }
+        return New-Check 'disk' 'ok' ("{0} GB free on {1}." -f $free, $InstallDrive)
+    }
+    if ($free -lt $script:MinFreeGBApp) {
+        return New-Check 'disk' 'block' ("Only {0} GB is free on {1}. VisHeart's files need at least {2} GB there. Free some space or choose another drive." -f $free, $InstallDrive, $script:MinFreeGBApp)
+    }
+    $dockerFree = Get-FreeSpaceGB $dockerDrive
+    if ($dockerFree -lt $script:MinFreeGBDocker) {
+        return New-Check 'disk' 'block' ("Only {0} GB is free on {1}, where Docker Desktop keeps its data. The first start of VisHeart downloads about 25 GB there; it needs at least {2} GB. Free some space, then install again." -f $dockerFree, $dockerDrive, $script:MinFreeGBDocker)
+    }
+    return New-Check 'disk' 'ok' ("{0} GB free on {1}; {2} GB free on {3} for Docker." -f $free, $InstallDrive, $dockerFree, $dockerDrive)
 }
 
 function Invoke-VisHeartPrerequisites {
-    param([string]$InstallDrive = 'C:', [switch]$ExistingInstall, [string]$OutJson, [string]$OutText)
-    $results = @(Get-VisHeartPrerequisites -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall)
+    param([string]$InstallDrive = 'C:', [switch]$ExistingInstall, [switch]$SkipDisk, [switch]$DiskOnly, [string]$OutJson, [string]$OutText)
+    $results = @(Get-VisHeartPrerequisites -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall -SkipDisk:$SkipDisk -DiskOnly:$DiskOnly)
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     if ($OutJson) { [IO.File]::WriteAllText($OutJson, (ConvertTo-Json -InputObject $results), $utf8) }
     if ($OutText) {
@@ -133,5 +170,5 @@ function Invoke-VisHeartPrerequisites {
 
 # Run only when executed, not when dot-sourced by the tests.
 if ($MyInvocation.InvocationName -ne '.') {
-    exit (Invoke-VisHeartPrerequisites -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall -OutJson $OutJson -OutText $OutText)
+    exit (Invoke-VisHeartPrerequisites -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall -SkipDisk:$SkipDisk -DiskOnly:$DiskOnly -OutJson $OutJson -OutText $OutText)
 }

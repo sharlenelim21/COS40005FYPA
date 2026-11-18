@@ -104,9 +104,10 @@ try {
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
     $selection = @(Get-StagingSelection $repoRoot)
     $targets = @($selection | ForEach-Object { $_.Target })
-    $tooLong = @(Get-LongPaths $targets 'C:\VisHeart')
+    # The installer accepts an install folder of up to 40 characters (visheart.iss, NextButtonClick).
+    $tooLong = @(Get-LongPaths $targets ('C:\' + ('x' * 37)))
     if ($tooLong.Count -gt 0) {
-        Stop-Build ("These files would pass Windows' 260-character path limit when installed in C:\VisHeart. Give them " +
+        Stop-Build ("These files would pass Windows' 260-character path limit in a 40-character install folder. Give them " +
             "shorter names:`n  " + ($tooLong -join "`n  "))
     }
     $tooLong = @(Get-LongPaths $targets $staging)

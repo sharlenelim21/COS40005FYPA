@@ -32,7 +32,8 @@ AppVersion={#AppVersion}
 AppVerName=VisHeart {#AppVersion}
 AppPublisher=VisHeart team
 DefaultDirName=C:\VisHeart
-DisableDirPage=yes
+; New installs may choose the folder (another drive when C: is full); an update keeps the installed folder.
+DisableDirPage=auto
 DefaultGroupName=VisHeart
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
@@ -219,7 +220,7 @@ begin
   if Existing <> '' then
     Drive := ExtractFileDrive(Existing) + ' -ExistingInstall'
   else
-    Drive := 'C:';
+    Drive := 'C:' + ' -SkipDisk';   { checked again once the folder is chosen (NextButtonClick) }
   if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' +
       ExpandConstant('{tmp}\Test-VisHeartPrerequisites.ps1') + '" -InstallDrive ' + Drive + ' -OutText "' + OutFile + '"',
       '', SW_HIDE, ewWaitUntilTerminated, Code) or not LoadStringsFromFile(OutFile, Lines) then begin
@@ -253,6 +254,39 @@ begin
   if (Notes <> '') and not WizardSilent() then
     Result := MsgBox('Before you continue:' + #13#10#13#10 + Notes + 'Continue with the installation?',
       mbConfirmation, MB_YESNO) = IDYES;
+end;
+
+{ The chosen folder: short (the longest shipped path must stay under Windows' 260-character limit; make-installer
+  checks the files against a 40-character folder), without spaces, and on a drive with room for VisHeart and Docker. }
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Dir, OutFile, Line, Status: String;
+  Lines: TArrayOfString;
+  Code: Integer;
+begin
+  Result := True;
+  if CurPageID <> wpSelectDir then Exit;
+  Dir := WizardDirValue();
+  if (Length(Dir) > 40) or (Pos(' ', Dir) > 0) then begin
+    MsgBox('Choose a short folder without spaces, for example C:\VisHeart or E:\VisHeart (at most 40 characters).',
+      mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  OutFile := ExpandConstant('{tmp}\disk.txt');
+  if Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' +
+      ExpandConstant('{tmp}\Test-VisHeartPrerequisites.ps1') + '" -DiskOnly -InstallDrive ' + ExtractFileDrive(Dir) +
+      ' -OutText "' + OutFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) and LoadStringsFromFile(OutFile, Lines) and
+      (GetArrayLength(Lines) > 0) then begin
+    Line := Lines[0];
+    SplitField(Line);
+    Status := SplitField(Line);
+    Log('Disk check for ' + Dir + ': ' + Status + ' - ' + Line);
+    if Status = 'block' then begin
+      MsgBox(Line, mbError, MB_OK);
+      Result := False;
+    end;
+  end;
 end;
 
 { An update first stops the running VisHeart, so no file is in use while it is replaced. }

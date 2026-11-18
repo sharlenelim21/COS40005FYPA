@@ -294,9 +294,9 @@ Describe 'Get-LongPaths' {
         @(Get-LongPaths @($short) 'C:\VisHeart').Count | Should Be 0
     }
 
-    It 'every shipped file fits under C:\VisHeart on the user''s PC' {
+    It 'every shipped file fits in the longest install folder the installer accepts (40 characters)' {
         $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
         $targets = @(Get-StagingSelection $repo | ForEach-Object { $_.Target })
-        @(Get-LongPaths $targets 'C:\VisHeart').Count | Should Be 0
+        @(Get-LongPaths $targets ('C:\' + ('x' * 37))).Count | Should Be 0
     }
 }
