@@ -1,5 +1,5 @@
 ; VisHeart installer (Inno Setup 6.5.2 or later). Built by make-installer.ps1, which passes:
-;   /DVariant=Full|Update  /DAppVersion=<VERSION>  /DStagingDir=<installer\out\staging>  [/DPackDir=<training pack>]
+;   /DVariant=Full|Update  /DAppVersion=<VERSION>  /DStagingDir=<build drive>:h-staging>  [/DPackDir=<training pack>]
 ; Full installs the app, models and the UNet Extend Training data pack; Update installs the app and models only.
 ; Both share one AppId, so a newer installer upgrades an existing install in place.
 
