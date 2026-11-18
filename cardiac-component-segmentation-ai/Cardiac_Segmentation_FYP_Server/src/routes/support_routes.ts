@@ -143,7 +143,7 @@ async function resolveAdminEmail(): Promise<string> {
   if (adminEmail) return adminEmail;
 
   const admin = await userModel.findOne({ role: UserRole.Admin }).sort({ createdAt: 1 }).lean();
-  return admin?.email || 'meiqiliew334@gmail.com';
+  return admin?.email || 'admin@visheart.local';
 }
 
 async function sendFaqEmail({

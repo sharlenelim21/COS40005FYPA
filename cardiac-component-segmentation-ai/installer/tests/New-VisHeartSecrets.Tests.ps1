@@ -99,7 +99,9 @@ Describe 'New-VisHeartSecrets.ps1' {
             $note | Should Match 'admin'
             $note.Contains($p) | Should Be $true
             $note | Should Match ([regex]::Escape('http://localhost:3000'))
-            $note | Should Match ([regex]::Escape('Change this password after your first login.'))
+            $note | Should Match ([regex]::Escape('Change this password after your first login:'))
+            $note | Should Match ([regex]::Escape('Profile Settings'))
+            $note | Should Match ([regex]::Escape('http://localhost:3000/profile'))
         } finally { Remove-Item -Recurse -Force $d }
     }
 

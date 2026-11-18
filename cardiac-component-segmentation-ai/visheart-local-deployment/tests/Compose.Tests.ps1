@@ -44,6 +44,9 @@ Describe 'docker-compose.yml defaults (no env file)' {
 
     It 'no personal mail in repository' {
         (Get-Content -Raw $composeFile) -match 'meiqiliew334' | Should Be $false
+        # The default admin account and the FAQ fallback must not name a team member's own mailbox.
+        $src = Join-Path (Split-Path -Parent $deploymentDir) 'Cardiac_Segmentation_FYP_Server\src'
+        @(Get-ChildItem -Recurse $src -Include *.ts | Select-String -Pattern 'meiqiliew334' -SimpleMatch).Count | Should Be 0
         [string]$config.services.'visheart-app'.environment.SMTP_PASS | Should Be ''
     }
 
