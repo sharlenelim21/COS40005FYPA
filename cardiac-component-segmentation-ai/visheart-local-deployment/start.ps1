@@ -111,6 +111,10 @@ try {
         exit 7
     }
 
+    foreach ($name in @(Remove-OtherCopyContainers $scriptDir)) {
+        Write-Log "Removed container '$name' left by another copy of VisHeart (its data is kept)."
+    }
+
     if ($ForceCpu) {
         Write-Log 'CPU mode requested (--cpu); skipping GPU detection.'
         $gpuAvailable = $false

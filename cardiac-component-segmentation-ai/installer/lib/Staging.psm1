@@ -167,6 +167,8 @@ function Write-ReleaseEnv {
     foreach ($key in @('VH_SUPPORT_EMAIL', 'VH_SMTP_USER', 'VH_SMTP_PASS')) { $lines += "$key=$($smtp[$key])" }
     $lines += 'VH_BIND=127.0.0.1'      # patient data: nothing is reachable from other computers
     $lines += 'VH_MINIO_ANON=none'     # no anonymous downloads from the storage bucket
+    # Its own compose project: containers, network and data volumes stay apart from a developer copy on the same PC.
+    $lines += 'COMPOSE_PROJECT_NAME=visheart'
     if ($Version) { $lines += "VH_VERSION=$Version" }
     if ($UpdateUrl) { $lines += "VH_UPDATE_URL=$UpdateUrl" }
     $utf8 = New-Object System.Text.UTF8Encoding($false)   # compose rejects a byte order mark

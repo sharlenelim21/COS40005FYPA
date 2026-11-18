@@ -216,6 +216,64 @@ Describe 'Test-DatabaseVolume' {
     }
 }
 
+Describe 'Test-DatabaseVolume with a named project' {
+    Context 'an installed copy whose release.env names its compose project' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 1 }
+        It 'checks the volume of that project, not one named after the folder' {
+            $dir = Join-Path $env:TEMP ("vh-db-" + [guid]::NewGuid()) | Join-Path -ChildPath 'visheart-local-deployment'
+            New-Item -ItemType Directory $dir | Out-Null
+            Set-Content (Join-Path $dir 'secrets.env') 'VH_MONGO_PASSWORD=x'
+            Set-Content (Join-Path $dir 'release.env') @('VH_APP_IMAGE=a/app:1', 'COMPOSE_PROJECT_NAME=visheart') -Encoding ASCII
+            try {
+                (Test-DatabaseVolume $dir).Volume | Should Be 'visheart_mongodb_data'
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -eq 'volume inspect visheart_mongodb_data' }
+            } finally { Remove-Item -Recurse -Force (Split-Path -Parent $dir) }
+        }
+    }
+}
+
+Describe 'Remove-OtherCopyContainers' {
+    function New-Dir([switch]$Installed) {
+        $dir = Join-Path $env:TEMP ("vh-cc-" + [guid]::NewGuid())
+        New-Item -ItemType Directory $dir | Out-Null
+        if ($Installed) { Set-Content (Join-Path $dir 'release.env') 'COMPOSE_PROJECT_NAME=visheart' -Encoding ASCII }
+        return $dir
+    }
+
+    Context 'a developer copy (no release.env)' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'removes nothing and asks Docker nothing' {
+            $dir = New-Dir
+            try {
+                @(Remove-OtherCopyContainers $dir).Count | Should Be 0
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'an installed copy on a PC that also has a developer copy' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput {
+            @('visheart-local|visheart-local-deployment', 'visheart-redis|visheart', 'visheart-minio|') }
+        It 'removes the containers that are not its own (their data volumes stay) and keeps its own' {
+            $dir = New-Dir -Installed
+            try {
+                $removed = @(Remove-OtherCopyContainers $dir)
+                ($removed -join ',') | Should Be 'visheart-local,visheart-minio'
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -eq 'rm -f visheart-local' }
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -eq 'rm -f visheart-minio' }
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -eq 'rm -f visheart-redis' }
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -match '\bvolume\b|-v\b' }
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+}
+
 Describe 'Get-UpdateNotice' {
     function New-ReleaseDir([string]$Version, [string]$Url = 'https://example.test/latest.json') {
         $dir = Join-Path $env:TEMP ("vh-upd-" + [guid]::NewGuid())

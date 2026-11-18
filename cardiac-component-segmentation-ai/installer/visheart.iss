@@ -48,6 +48,8 @@ OutputDir=out
 OutputBaseFilename=VisHeart-{#Variant}-{#AppVersion}
 UninstallDisplayName=VisHeart
 WizardStyle=modern
+; Larger than the default, so the login and the next steps on the finish page are easy to read.
+WizardSizePercent=130
 SetupLogging=yes
 CloseApplications=no
 
@@ -82,11 +84,18 @@ Name: "{group}\Uninstall VisHeart"; Filename: "{uninstallexe}"
 Filename: "{autodesktop}\VisHeart.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:3000"
 Filename: "{group}\VisHeart.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:3000"
 
+[Run]
+; Ticked options on the finish page (not shown when Windows must restart first).
+Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"; Description: "Start VisHeart now (the first start downloads about 25 GB)"; Flags: postinstall nowait skipifsilent shellexec runasoriginaluser
+Filename: "{win}\notepad.exe"; Parameters: {app}\FIRST-LOGIN.txt; Description: "Open the login note (FIRST-LOGIN.txt, with the admin password)"; Flags: postinstall nowait skipifsilent runasoriginaluser; Check: LoginNoteExists
+
 [UninstallDelete]
 Type: files; Name: "{autodesktop}\VisHeart.url"
 Type: files; Name: "{group}\VisHeart.url"
 
 [Code]
+#include "finish-page.iss"
+
 var
   NeedWsl, NeedDocker, NeedPython, RebootNeeded, SecretsCreated, DeleteData: Boolean;
 
@@ -115,6 +124,48 @@ begin
   end;
 end;
 
+{ Takes the number up to the next '.' off the front of S (0 when it is not a number). }
+function NextVersionPart(var S: String): Integer;
+var
+  P: Integer;
+begin
+  P := Pos('.', S);
+  if P = 0 then begin
+    Result := StrToIntDef(S, 0);
+    S := '';
+  end else begin
+    Result := StrToIntDef(Copy(S, 1, P - 1), 0);
+    S := Copy(S, P + 1, Length(S));
+  end;
+end;
+
+{ 1 when version A is newer than B, -1 when older, 0 when the same. }
+function CompareVersions(A, B: String): Integer;
+var
+  I, X, Y: Integer;
+begin
+  Result := 0;
+  for I := 1 to 4 do begin
+    X := NextVersionPart(A);
+    Y := NextVersionPart(B);
+    if X > Y then begin Result := 1; Exit; end;
+    if X < Y then begin Result := -1; Exit; end;
+  end;
+end;
+
+{ The version of the VisHeart already installed on this PC (written by Inno Setup when it was installed), or ''. }
+function InstalledVersion(): String;
+begin
+  if not RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5}_is1',
+      'DisplayVersion', Result) then
+    Result := '';
+end;
+
+function LoginNoteExists(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\FIRST-LOGIN.txt'));
+end;
+
 { Folder of an existing VisHeart install (written by Inno Setup when it was installed), or ''. }
 function ExistingInstallDir(): String;
 begin
@@ -128,9 +179,39 @@ function InitializeSetup(): Boolean;
 var
   Lines: TArrayOfString;
   I, Code: Integer;
-  Line, Name, Status, Blocks, Notes, OutFile, Existing, Drive: String;
+  Line, Name, Status, Blocks, Notes, OutFile, Existing, Drive, Installed: String;
 begin
   Result := True;
+
+  { One installer for every PC: it installs VisHeart, or updates the copy that is already there and keeps its data. }
+  Installed := '';
+  if ExistingInstallDir() <> '' then
+    Installed := InstalledVersion();
+  if Installed <> '' then begin
+    if CompareVersions(Installed, '{#AppVersion}') > 0 then begin
+      SuppressibleMsgBox('This PC already has VisHeart ' + Installed + ', which is newer than this installer (' +
+        '{#AppVersion}). Nothing was changed. To update, use the newest VisHeart installer from the team''s Google Drive.',
+        mbCriticalError, MB_OK, IDOK);
+      Result := False;
+      Exit;
+    end;
+    if not WizardSilent() then begin
+      if CompareVersions(Installed, '{#AppVersion}') = 0 then
+        Line := 'VisHeart {#AppVersion} is already installed on this PC. Continuing repairs it.'
+      else
+        Line := 'VisHeart ' + Installed + ' is installed on this PC. This updates it to VisHeart {#AppVersion}.';
+      if MsgBox(Line + #13#10#13#10 + 'Patients, accounts, passwords and trained models are kept.' + #13#10#13#10 +
+          'Continue?', mbConfirmation, MB_YESNO) <> IDYES then begin
+        Result := False;
+        Exit;
+      end;
+    end;
+  end else if '{#Variant}' = 'Update' then begin
+    SuppressibleMsgBox('VisHeart is not installed on this PC, and this installer only updates an existing VisHeart.' + #13#10#13#10 +
+      'Use the VisHeart-Full installer from the team''s Google Drive instead.', mbCriticalError, MB_OK, IDOK);
+    Result := False;
+    Exit;
+  end;
   ExtractTemporaryFile('Test-VisHeartPrerequisites.ps1');
   OutFile := ExpandConstant('{tmp}\prerequisites.txt');
   { An update needs far less free space: the existing install's images and data already take theirs. }
@@ -267,12 +348,9 @@ begin
   if SecretsCreated and LoadStringFromFile(ExpandConstant('{app}\FIRST-LOGIN.txt'), Note) then
     Text := String(Note) + #13#10 + 'This note is saved as ' + ExpandConstant('{app}\FIRST-LOGIN.txt') + '.'
   else
-    Text := 'Your VisHeart login and data are unchanged.';
-  Text := Text + #13#10#13#10 +
-    'The first time Docker Desktop opens, it asks you to accept its terms. Then use "Start VisHeart" on the desktop. ' +
-    'The first start downloads about 25 GB and can take an hour or more.';
-  WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + Text;
-  WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
+    Text := 'VisHeart was updated. Your login, patients and trained models are unchanged.';
+  Text := Text + #13#10#13#10 + NextStepsText();
+  ShowFinishInfo(Text);
 end;
 
 { ---------- Uninstall ---------- }
@@ -281,8 +359,8 @@ function InitializeUninstall(): Boolean;
 begin
   Result := True;
   DeleteData := SuppressibleMsgBox('Also delete all VisHeart data (patients, accounts, trained models)?' + #13#10#13#10 +
-    'Yes: everything is removed and cannot be recovered.' + #13#10 +
-    'No: the data is kept, and installing VisHeart again on this PC finds it again.',
+    'Yes: everything is removed and cannot be recovered, including the downloaded VisHeart images (about 25 GB).' + #13#10 +
+    'No: the data and the downloaded images are kept, and installing VisHeart again on this PC finds them.',
     mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
 end;
 
@@ -302,7 +380,8 @@ begin
       Args := '/c docker compose';
       if FileExists(Deploy + '\release.env') then Args := Args + ' --env-file "' + Deploy + '\release.env"';
       if FileExists(Deploy + '\secrets.env') then Args := Args + ' --env-file "' + Deploy + '\secrets.env"';
-      Args := Args + ' --profile cpu --profile gpu down -v --remove-orphans';
+      { -v deletes the data volumes; --rmi all also deletes the downloaded VisHeart images (about 25 GB). }
+      Args := Args + ' --profile cpu --profile gpu down -v --rmi all --remove-orphans';
       if not Exec(ExpandConstant('{cmd}'), Args, Deploy, SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then begin
         { The database is still there, so keep everything, its passwords (secrets.env) above all: deleting them would
           leave a database that a new install of VisHeart cannot open. }

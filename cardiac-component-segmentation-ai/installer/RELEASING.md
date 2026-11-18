@@ -8,8 +8,8 @@ There are two installers:
 
 | Installer | Size | Contains | Who runs it |
 |---|---|---|---|
-| `VisHeart-Full-<version>` | about 4 GB | app files, models, UNet Extend Training data pack | a PC without VisHeart |
-| `VisHeart-Update-<version>` | about 600 MB | app files and models | a PC that already has VisHeart |
+| `VisHeart-Full-<version>` | about 2.6 GB | app files, models, UNet Extend Training data pack | any PC: installs VisHeart, or updates an installed copy and keeps its data |
+| `VisHeart-Update-<version>` | about 600 MB | app files and models | a PC that already has VisHeart (it refuses to run on a PC without one) |
 
 Both download the Docker images (about 25 GB) on the first start of a new version, not in the installer.
 

@@ -83,6 +83,48 @@ function Invoke-FirstPull {
     return (Invoke-Docker ($ComposeArgs + @('pull', '--include-deps') + $Services) -Show)
 }
 
+function Get-ReleaseValues {
+    # The KEY=value lines of an installed copy's release.env, as a hashtable (empty for a developer copy).
+    param([string]$DeploymentDir)
+    $values = @{}
+    $releaseEnv = Join-Path $DeploymentDir 'release.env'
+    if (Test-Path $releaseEnv) {
+        foreach ($line in Get-Content $releaseEnv) {
+            if ($line -match '^\s*([A-Z_]+)=(.*)$') { $values[$Matches[1]] = $Matches[2].Trim() }
+        }
+    }
+    return $values
+}
+
+function Get-ComposeProjectName {
+    # An installed copy names its compose project in release.env (COMPOSE_PROJECT_NAME=visheart), so its containers,
+    # network and data volumes never mix with a developer copy's on the same PC. A developer copy has no release.env,
+    # and compose names the project after the folder, as before.
+    param([string]$DeploymentDir)
+    $name = (Get-ReleaseValues $DeploymentDir)['COMPOSE_PROJECT_NAME']
+    if ($name) { return $name.ToLowerInvariant() }
+    return (Split-Path -Leaf $DeploymentDir).ToLowerInvariant()
+}
+
+function Remove-OtherCopyContainers {
+    # docker-compose.yml gives every container a fixed name (visheart-local, visheart-mongodb, ...), so containers left
+    # by another copy (a developer copy, or one started by hand in Docker Desktop) stop this copy from starting.
+    # An installed copy removes them. Only containers: their data volumes are kept, so the other copy still has its
+    # data. A developer copy removes nothing, as before. Returns the names removed.
+    param([string]$DeploymentDir)
+    if (-not (Test-Path (Join-Path $DeploymentDir 'release.env'))) { return @() }
+    $project = Get-ComposeProjectName $DeploymentDir
+    if ((Invoke-Docker @('ps', '-a', '--filter', 'name=visheart-', '--format',
+            '{{.Names}}|{{.Label "com.docker.compose.project"}}')) -ne 0) { return @() }
+    $removed = @()
+    foreach ($line in @(Get-LastDockerOutput)) {
+        $name, $owner = ([string]$line).Split('|', 2)
+        if (-not $name -or $owner -eq $project) { continue }
+        if ((Invoke-Docker @('rm', '-f', $name)) -eq 0) { $removed += $name }
+    }
+    return $removed
+}
+
 function Test-DatabaseVolume {
     # An installed copy makes new passwords on this PC, but MongoDB keeps the ones its data volume was first created
     # with. The volume name comes from this folder's name, so a developer copy or an earlier install whose data was
@@ -90,7 +132,7 @@ function Test-DatabaseVolume {
     # its volume; it is written before the first start, so a start that fails halfway is not mistaken for a stranger.
     # Returns @{ Ok; Volume }.
     param([string]$DeploymentDir)
-    $project = (Split-Path -Leaf $DeploymentDir).ToLowerInvariant()
+    $project = Get-ComposeProjectName $DeploymentDir
     $volume = "${project}_mongodb_data"
     $owner = Join-Path $DeploymentDir 'database.owner'
     if (-not (Test-Path (Join-Path $DeploymentDir 'secrets.env')) -or (Test-Path $owner)) {
@@ -116,12 +158,7 @@ function Get-UpdateNotice {
     # Only an installed copy checks (its release.env names its version and where to look). The check never stops
     # VisHeart from starting: no internet, a slow network or a bad latest.json all mean "no notice".
     param([string]$DeploymentDir, [int]$TimeoutSec = 5)
-    $releaseEnv = Join-Path $DeploymentDir 'release.env'
-    if (-not (Test-Path $releaseEnv)) { return $null }
-    $values = @{}
-    foreach ($line in Get-Content $releaseEnv) {
-        if ($line -match '^\s*([A-Z_]+)=(.*)$') { $values[$Matches[1]] = $Matches[2].Trim() }
-    }
+    $values = Get-ReleaseValues $DeploymentDir
     if (-not $values['VH_VERSION'] -or -not $values['VH_UPDATE_URL']) { return $null }
     try {
         $feed = Invoke-UpdateFeed -Url $values['VH_UPDATE_URL'] -TimeoutSec $TimeoutSec
@@ -139,4 +176,4 @@ function Get-UpdateNotice {
 }
 
 Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
-    Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice
+    Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers
