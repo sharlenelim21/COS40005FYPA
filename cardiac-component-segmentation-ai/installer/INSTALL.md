@@ -19,10 +19,16 @@ from other computers.
 The VisHeart team shares a Google Drive folder with you. Ask them for access if you do not have it.
 
 1. In that folder, open the newest `VisHeart-Full-<version>` folder. It holds one `.exe` and two `.bin` files,
-   about 2.6 GB in total.
-2. Download the whole folder. Google Drive gives you one or more `.zip` files.
-3. Unzip everything into **one** folder, for example `Downloads\VisHeart-Full-1.0.0`. The `.exe` does not work
-   without all of its `.bin` files next to it.
+   about 2.7 GB in total.
+2. Download the three files **one by one**: right-click each file, then **Download**. For the large `.bin` files
+   Google Drive says it cannot scan them for viruses; click **Download anyway**. They all land in your Downloads
+   folder, next to each other.
+3. Check that the `.exe` and **both** `.bin` files are in the same folder. The `.exe` does not work without them.
+
+Downloading the whole folder instead gives you **several** `.zip` files (Google Drive splits anything over about
+2 GB). Unzip every one of them into the **same** folder. If setup says **"Please insert Disk 2"** or "could not
+locate VisHeart-Full-...-2.bin", a `.bin` file is missing from the `.exe`'s folder: put it there, click **Browse**
+in that window, choose the folder and click **OK**.
 
 Already have VisHeart? The newest `VisHeart-Full` installer also updates it and keeps your data. The smaller
 `VisHeart-Update-<version>` folder does the same (see Updates).
