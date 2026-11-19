@@ -94,6 +94,14 @@ Filename: "{win}\notepad.exe"; Parameters: {app}\FIRST-LOGIN.txt; Description: "
 [UninstallDelete]
 Type: files; Name: "{autodesktop}\VisHeart.url"
 Type: files; Name: "{group}\VisHeart.url"
+; Made while VisHeart ran, so the uninstaller would otherwise leave them: Python's cache of the training worker, and
+; the folders Start VisHeart creates for the Docker mounts (Initialize-BackendFolders). Data folders are not listed.
+Type: filesandordirs; Name: "{app}\{#AppSub}\visheart-retraining\__pycache__"
+Type: dirifempty; Name: "{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\temp_jpeg"
+Type: dirifempty; Name: "{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\temp_mesh"
+Type: dirifempty; Name: "{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\temp_upload"
+Type: dirifempty; Name: "{app}\UNETRESNET34\checkpoints"
+Type: dirifempty; Name: "{app}\UNETRESNET34"
 
 [Code]
 #include "finish-page.iss"
@@ -430,8 +438,23 @@ begin
         'finds them.' + #13#10#13#10 +
         'To delete everything: install VisHeart again, start Docker Desktop, then uninstall and choose Yes.',
         mbInformation, MB_OK, IDOK);
+    end else if (not DeleteData) and (Code <> 0) then begin
+      { Containers left behind would block VisHeart or a developer copy later (same names), so say how to remove them. }
+      SuppressibleMsgBox('Docker Desktop did not start in time, so VisHeart''s containers could not be removed. Your data ' +
+        'is not affected.' + #13#10#13#10 +
+        'When Docker Desktop is running, remove them in a Command Prompt with:' + #13#10 +
+        'docker rm -f visheart-local visheart-mongodb visheart-mongodb-keyfile-init visheart-redis visheart-minio ' +
+        'visheart-gpu-cpu visheart-gpu-nvidia',
+        mbInformation, MB_OK, IDOK);
     end;
   end;
+
+  if (CurUninstallStep = usPostUninstall) and not DeleteData and DirExists(ExpandConstant('{app}')) then
+    SuppressibleMsgBox('VisHeart was uninstalled. As you chose, your patients, accounts, trained models and training ' +
+      'data were kept in ' + ExpandConstant('{app}') + ' and in Docker, with this PC''s passwords (secrets.env) and the ' +
+      'admin login (FIRST-LOGIN.txt). Installing VisHeart again in the same folder finds them.' + #13#10#13#10 +
+      'Do not delete that folder by hand: to remove everything, install VisHeart again, then uninstall and choose Yes.',
+      mbInformation, MB_OK, IDOK);
 
   if (CurUninstallStep = usPostUninstall) and DeleteData then begin
     DelTree(App + '\visheart-training-data', True, True, True);

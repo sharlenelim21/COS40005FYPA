@@ -65,6 +65,25 @@ Describe 'visheart.iss compiles' {
         } finally { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
     }
 
+    It 'uninstall removes what VisHeart made while it ran (Python cache, empty folders Start VisHeart creates)' {
+        # Found uninstalling 1.0.1 with "keep data": these stayed in the install folder.
+        $script:Iss | Should Match ([regex]::Escape('Type: filesandordirs; Name: "{app}\{#AppSub}\visheart-retraining\__pycache__"'))
+        foreach ($dir in 'temp_jpeg', 'temp_mesh', 'temp_upload') {
+            $script:Iss | Should Match ([regex]::Escape("Type: dirifempty; Name: `"{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\$dir`""))
+        }
+        $script:Iss | Should Match ([regex]::Escape('Type: dirifempty; Name: "{app}\UNETRESNET34\checkpoints"'))
+    }
+
+    It 'when Docker cannot be cleaned, uninstall says so even when the data is kept, and names the containers' {
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Match '(?s)if \(not DeleteData\) and \(Code <> 0\) then begin.*docker rm -f visheart-local'
+    }
+
+    It 'when the data is kept, uninstall ends by saying what was kept and where' {
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Match '(?s)usPostUninstall\) and not DeleteData.*were kept in'
+    }
+
     It 'no Start menu uninstall shortcut: Windows 11 hides it, so the guides point to Settings > Apps' {
         $script:Iss | Should Not Match '\{uninstallexe\}'
         $finish = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'finish-page.iss')
