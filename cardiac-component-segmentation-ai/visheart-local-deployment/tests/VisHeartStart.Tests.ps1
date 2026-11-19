@@ -484,3 +484,40 @@ Describe 'Get-BusyPorts' {
             ($Ports -join ',') -eq '3000,5000,9000,8001' }
     }
 }
+
+Describe 'Test-VisHeartAnswering' {
+    # The VisHeart desktop icon (start.bat --open) only opens the browser when VisHeart already runs.
+    Context 'web page and backend both answer' {
+        Mock -ModuleName VisHeartStart Test-UrlAnswers { $true }
+        It 'is true' { Test-VisHeartAnswering | Should Be $true }
+        It 'asks both the web page and the backend' {
+            Test-VisHeartAnswering | Out-Null
+            Assert-MockCalled -ModuleName VisHeartStart Test-UrlAnswers -Times 1 -Scope It -ParameterFilter { $Url -eq 'http://localhost:3000/' }
+            Assert-MockCalled -ModuleName VisHeartStart Test-UrlAnswers -Times 1 -Scope It -ParameterFilter { $Url -eq 'http://localhost:5000/' }
+        }
+    }
+    Context 'the backend does not answer' {
+        Mock -ModuleName VisHeartStart Test-UrlAnswers { $Url -eq 'http://localhost:3000/' }
+        It 'is false, so VisHeart is started' { Test-VisHeartAnswering | Should Be $false }
+    }
+}
+
+Describe 'Open-VisHeart' {
+    Mock -ModuleName VisHeartStart Start-Process {}
+    It 'opens the VisHeart web page in the default browser' {
+        Open-VisHeart
+        Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 1 -Exactly -Scope It -ParameterFilter { $FilePath -eq 'http://localhost:3000' }
+    }
+}
+
+Describe 'start.bat arguments' {
+    $bat = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.bat')
+    It 'passes --open (the VisHeart desktop icon) to start.ps1 as -OpenBrowser' {
+        $bat | Should Match '(?i)"--open".*-OpenBrowser'
+    }
+    It 'reads every argument, so --open works together with --cpu or --gpu' {
+        $bat | Should Match '(?i)for %%A in \(%\*\) do'
+        $bat | Should Match '(?i)"--cpu".*-ForceCpu'
+        $bat | Should Match '(?i)"--gpu".*-ForceGpu'
+    }
+}

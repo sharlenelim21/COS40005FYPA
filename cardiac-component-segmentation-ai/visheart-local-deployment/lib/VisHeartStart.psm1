@@ -237,6 +237,29 @@ function Get-BusyPorts {
         Sort-Object Port -Unique
 }
 
-Export-ModuleMember -Function Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
+function Test-UrlAnswers {
+    # True when the URL answers with any HTTP status within the timeout (a 404 still means the server runs).
+    param([string]$Url, [int]$TimeoutSec = 3)
+    try {
+        Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+        return $true
+    } catch [System.Net.WebException] {
+        return ($null -ne $_.Exception.Response)
+    } catch {
+        return $false
+    }
+}
+
+function Test-VisHeartAnswering {
+    # True when the web page and the backend both answer: the VisHeart desktop icon then just opens the browser.
+    return ((Test-UrlAnswers -Url 'http://localhost:3000/') -and (Test-UrlAnswers -Url 'http://localhost:5000/'))
+}
+
+function Open-VisHeart {
+    # The web page in the default browser.
+    Start-Process -FilePath 'http://localhost:3000'
+}
+
+Export-ModuleMember -Function Test-UrlAnswers, Test-VisHeartAnswering, Open-VisHeart, Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
     Remove-VisHeartDocker, Initialize-BackendFolders

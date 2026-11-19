@@ -48,6 +48,9 @@ SolidCompression=no
 OutputDir=out
 OutputBaseFilename=VisHeart-{#Variant}-{#AppVersion}
 UninstallDisplayName=VisHeart
+; The heart logo on the setup .exe and in Settings > Apps.
+SetupIconFile=assets\visheart.ico
+UninstallDisplayIcon={app}\installer\visheart.ico
 WizardStyle=modern
 ; Larger than the default, so the login and the next steps on the finish page are easy to read.
 WizardSizePercent=130
@@ -71,24 +74,31 @@ Source: "scripts\New-VisHeartSecrets.ps1"; DestDir: "{app}\installer"; Flags: ig
 Source: "scripts\Protect-VisHeartFolder.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "scripts\Test-VisHeartPrerequisites.ps1"; Flags: dontcopy
 Source: "INSTALL.md"; DestDir: "{app}"; Flags: ignoreversion
+; The VisHeart heart logo (visheart-frontend favicon, as a multi-size Windows icon) for the shortcuts and Apps list.
+Source: "assets\visheart.ico"; DestDir: "{app}\installer"; Flags: ignoreversion
 
 [Icons]
-Name: "{autodesktop}\Start VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"
-Name: "{autodesktop}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; WorkingDir: "{app}\{#AppSub}"
-Name: "{group}\Start VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"
-Name: "{group}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; WorkingDir: "{app}\{#AppSub}"
+; One desktop icon, like an ordinary app: "VisHeart" opens the web page, starting VisHeart first when it is not running
+; (start.bat --open). Stopping and the guide are in the Start menu only.
+Name: "{autodesktop}\VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; Parameters: "--open"; WorkingDir: "{app}\{#AppSub}"; IconFilename: "{app}\installer\visheart.ico"
+Name: "{group}\VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; Parameters: "--open"; WorkingDir: "{app}\{#AppSub}"; IconFilename: "{app}\installer\visheart.ico"
+Name: "{group}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; WorkingDir: "{app}\{#AppSub}"; IconFilename: "{app}\installer\visheart.ico"
 Name: "{group}\VisHeart install guide"; Filename: "{app}\INSTALL.md"
 ; No "Uninstall VisHeart" shortcut: Windows 11 hides shortcuts to uninstallers in the Start menu. Users uninstall in
 ; Settings > Apps > Installed apps (finish page, INSTALL.md).
 
-[INI]
-; "VisHeart" opens the app in the browser.
-Filename: "{autodesktop}\VisHeart.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:3000"
-Filename: "{group}\VisHeart.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:3000"
+[InstallDelete]
+; Icons of earlier versions (1.0.0 and the first 1.0.1 builds), which an update would otherwise leave next to the new one.
+Type: files; Name: "{autodesktop}\Start VisHeart.lnk"
+Type: files; Name: "{autodesktop}\Stop VisHeart.lnk"
+Type: files; Name: "{autodesktop}\VisHeart.url"
+Type: files; Name: "{group}\Start VisHeart.lnk"
+Type: files; Name: "{group}\VisHeart.url"
+Type: files; Name: "{group}\Uninstall VisHeart.lnk"
 
 [Run]
 ; Ticked options on the finish page (not shown when Windows must restart first).
-Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"; Description: "Start VisHeart now (the first start downloads about 25 GB)"; Flags: postinstall nowait skipifsilent shellexec runasoriginaluser
+Filename: "{app}\{#AppSub}\start.bat"; Parameters: "--open"; WorkingDir: "{app}\{#AppSub}"; Description: "Start VisHeart now (the first start downloads about 25 GB)"; Flags: postinstall nowait skipifsilent shellexec runasoriginaluser
 Filename: "{win}\notepad.exe"; Parameters: {app}\FIRST-LOGIN.txt; Description: "Open the login note (FIRST-LOGIN.txt, with the admin password)"; Flags: postinstall nowait skipifsilent runasoriginaluser; Check: LoginNoteExists
 
 [UninstallDelete]

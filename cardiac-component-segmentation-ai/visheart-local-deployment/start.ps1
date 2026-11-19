@@ -5,7 +5,10 @@ param(
     [int]$WaitIntervalSec = 2,
     # start.bat --cpu / --gpu pass these to skip GPU detection.
     [switch]$ForceCpu,
-    [switch]$ForceGpu
+    [switch]$ForceGpu,
+    # start.bat --open (the VisHeart desktop icon): open the web page when VisHeart is running, starting it first when
+    # it is not. A plain start.bat (developers) opens nothing, as before.
+    [switch]$OpenBrowser
 )
 
 function Write-Log {
@@ -87,6 +90,12 @@ try {
     Write-Log 'Starting VisHeart startup helper...'
 
     Import-Module (Join-Path $scriptDir 'lib\VisHeartStart.psm1') -Force
+
+    if ($OpenBrowser -and (Test-VisHeartAnswering)) {
+        Write-Log 'VisHeart is already running. Opening it in your browser.'
+        Open-VisHeart
+        exit 0
+    }
 
     $docker = Wait-DockerReady
     if (-not $docker.Ready) {
@@ -258,6 +267,7 @@ try {
         Write-Log ''
         Write-Log 'Open http://localhost:3000 in your browser.'
         Write-Log ('Inference profile: ' + $profile + ' (container: ' + $inferenceContainer + ')')
+        if ($OpenBrowser) { Open-VisHeart }
         exit 0
     } else {
         Write-Log 'Startup completed with warnings or failures.'

@@ -89,6 +89,25 @@ Describe 'visheart.iss compiles' {
         $step | Should Match ('(?s)' + [regex]::Escape("Protect-VisHeartFolder.ps1") + '.*-AppDir.*-Account "'' \+ Account')
     }
 
+    It 'the desktop gets one VisHeart icon, with the logo, that opens VisHeart (starting it first when needed)' {
+        $desktop = @([regex]::Matches($script:Iss, '(?m)^Name: "\{autodesktop\}\\[^"]+"[^\r\n]*') | ForEach-Object { $_.Value })
+        $desktop.Count | Should Be 1
+        $desktop[0] | Should Match ([regex]::Escape('Name: "{autodesktop}\VisHeart"'))
+        $desktop[0] | Should Match 'Parameters: "--open"'
+        $desktop[0] | Should Match ([regex]::Escape('IconFilename: "{app}\installer\visheart.ico"'))
+        $script:Iss | Should Not Match ([regex]::Escape('Filename: "{autodesktop}\VisHeart.url"'))
+        $script:Iss | Should Match '(?m)^Source: "assets\\visheart\.ico"; DestDir: "\{app\}\\installer"'
+        $script:Iss | Should Match '(?m)^SetupIconFile=assets\\visheart\.ico'
+    }
+
+    It 'an update removes the icons earlier versions put on the desktop and in the Start menu' {
+        foreach ($old in '{autodesktop}\Start VisHeart.lnk', '{autodesktop}\Stop VisHeart.lnk', '{autodesktop}\VisHeart.url',
+                '{group}\Start VisHeart.lnk', '{group}\VisHeart.url', '{group}\Uninstall VisHeart.lnk') {
+            $script:Iss | Should Match ([regex]::Escape("Type: files; Name: `"$old`""))
+        }
+        $script:Iss | Should Match '(?m)^\[InstallDelete\]'
+    }
+
     It 'no Start menu uninstall shortcut: Windows 11 hides it, so the guides point to Settings > Apps' {
         $script:Iss | Should Not Match '\{uninstallexe\}'
         $finish = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'finish-page.iss')

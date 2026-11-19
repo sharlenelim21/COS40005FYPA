@@ -80,7 +80,7 @@ try {
     $note = @(
         'VisHeart - first login',
         '',
-        'Open http://localhost:3000 after starting VisHeart (desktop icon "Start VisHeart").',
+        'Double-click the "VisHeart" icon on the desktop; it starts VisHeart and opens http://localhost:3000.',
         '',
         'Username: admin',
         "Password: $admin",

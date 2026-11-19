@@ -48,12 +48,14 @@ Already have VisHeart? The newest `VisHeart-Full` installer also updates it and 
 
 ## Start and stop
 
-- **Start VisHeart** (desktop icon) starts everything. Then open the **VisHeart** icon, or go to
-  http://localhost:3000.
-- The **first start downloads about 25 GB** and can take an hour or more. Later starts take about a minute.
-- **Stop VisHeart** stops it. Your data is kept.
+- Double-click the **VisHeart** heart icon on the desktop (also in the Start menu). It starts everything and opens
+  http://localhost:3000 in your browser. When VisHeart is already running, it opens the page at once.
+- The **first start downloads about 25 GB** and can take an hour or more. Later starts take about a minute. A window
+  shows the progress; it closes by itself when VisHeart is ready.
+- To stop VisHeart: **Start menu > VisHeart > Stop VisHeart**. Your data is kept. You rarely need to: updating and
+  uninstalling stop VisHeart by themselves.
 - Do not start VisHeart with the **Run** button in Docker Desktop. That starts only part of VisHeart, which then
-  fails (the log shows `redis://undefined`). Delete that container in Docker Desktop and use **Start VisHeart**.
+  fails (the log shows `redis://undefined`). Delete that container in Docker Desktop and use the **VisHeart** icon.
 
 After your first login, change the admin password, then delete `FIRST-LOGIN.txt` or keep it somewhere safe.
 
@@ -62,13 +64,13 @@ After your first login, change the admin password, then delete `FIRST-LOGIN.txt`
 Running a newer installer on a PC that has VisHeart says which version is installed and that it updates it. An
 older installer than the installed version changes nothing.
 
-When the team tells you there is a new version, or **Start VisHeart** shows a "VisHeart update available" popup
+When the team tells you there is a new version, or starting VisHeart shows a "VisHeart update available" popup
 (it checks the team's GitHub page each time it starts; VisHeart keeps running either way):
 
 1. Download the newest `VisHeart-Update-<version>.zip` from the Google Drive folder and extract it, as above. It is
    about 800 MB.
 2. Run `VisHeart-Update-<version>.exe`. It stops VisHeart, then updates it. It needs at least 10 GB free on C:.
-3. Use **Start VisHeart** as usual. If the new version needs new parts, this start downloads them first and takes
+3. Use the **VisHeart** icon as usual. If the new version needs new parts, this start downloads them first and takes
    longer.
 
 Your patients, accounts, passwords and trained models are kept.
