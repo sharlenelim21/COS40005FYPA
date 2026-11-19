@@ -368,11 +368,13 @@ begin
     SuppressibleMsgBox('VisHeart could not create its passwords (secrets.env). Run installer\New-VisHeartSecrets.ps1 in ' +
       ExpandConstant('{app}') + ' before starting VisHeart, or run this installer again.', mbError, MB_OK, IDOK);
 
-  { Only administrators and docker-users may change VisHeart, and other accounts cannot read its passwords. Done last,
-    after Docker Desktop (which creates docker-users) and secrets.env exist; repeated on every update. }
+  { Only administrators, docker-users and the installing account may change VisHeart, and other accounts cannot read its
+    passwords. The account is named too: Windows applies its new docker-users membership only after signing out, so
+    without its own entry the first "Start VisHeart" (and the login note) would be denied access. Done last, after
+    Docker Desktop (which creates docker-users) and secrets.env exist; repeated on every update. }
   WizardForm.StatusLabel.Caption := 'Protecting the VisHeart folder...';
   if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\Protect-VisHeartFolder.ps1') +
-      '" -AppDir "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
+      '" -AppDir "' + ExpandConstant('{app}') + '" -Account "' + Account + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
     Code := -1;
   Log('Protect-VisHeartFolder exit code: ' + IntToStr(Code));
 end;

@@ -86,3 +86,29 @@ Describe 'Protect-VisHeartFolder.ps1 without the group' {
         } finally { Remove-AppTree $app }
     }
 }
+
+Describe 'Protect-VisHeartFolder.ps1 -Account (the account that installed VisHeart)' {
+    # The installer adds that account to docker-users, but Windows applies a new group only after signing out and in,
+    # and an administrator's normal (not elevated) window has no administrator rights. Without its own entry, the
+    # first Start VisHeart after installing could not read release.env or create folders (found on a fresh laptop,
+    # 2026-11-19: "Access to the path ... release.env is denied").
+    $account = "$env:USERDOMAIN\$env:USERNAME"
+    $app = New-AppTree
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $script:Protect -AppDir $app -Account $account *> $null
+    $code = $LASTEXITCODE
+
+    It 'succeeds' { $code | Should Be 0 }
+
+    It 'gives that account itself change rights on the folder and on the private files' {
+        foreach ($f in @("$script:Deploy\stop.bat", "$script:Deploy\secrets.env", "$script:Deploy\release.env",
+                'FIRST-LOGIN.txt', 'cardiac-component-segmentation-ai\visheart-training-data\PACKED.json')) {
+            Get-Rights (Join-Path $app $f) $env:USERNAME | Should Match 'Modify'
+        }
+    }
+
+    It 'still hides the private files from other accounts' {
+        Get-Rights (Join-Path $app "$script:Deploy\release.env") $users | Should Be ''
+    }
+
+    Remove-AppTree $app
+}

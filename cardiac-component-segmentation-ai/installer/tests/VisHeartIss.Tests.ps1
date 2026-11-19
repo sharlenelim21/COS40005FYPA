@@ -84,6 +84,11 @@ Describe 'visheart.iss compiles' {
         $step | Should Match '(?s)usPostUninstall\) and not DeleteData.*were kept in'
     }
 
+    It 'the folder is protected with the installing account named, so its first start works before signing out' {
+        $step = Get-PascalFunction 'CurStepChanged'
+        $step | Should Match ('(?s)' + [regex]::Escape("Protect-VisHeartFolder.ps1") + '.*-AppDir.*-Account "'' \+ Account')
+    }
+
     It 'no Start menu uninstall shortcut: Windows 11 hides it, so the guides point to Settings > Apps' {
         $script:Iss | Should Not Match '\{uninstallexe\}'
         $finish = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'finish-page.iss')
