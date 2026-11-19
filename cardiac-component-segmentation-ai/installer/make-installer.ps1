@@ -145,7 +145,10 @@ try {
     & $iscc @isccArgs (Join-Path $installerDir 'visheart.iss')
     if ($LASTEXITCODE -ne 0) { Stop-Build "Inno Setup failed (exit $LASTEXITCODE)." }
 
-    Step "Done: $target"
+    Step 'Packing the installer into one zip (upload this file to Google Drive)'
+    $zip = New-ReleaseZip $target
+
+    Step "Done: $zip"
     exit 0
 } catch {
     Stop-Build $_.Exception.Message

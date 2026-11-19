@@ -302,3 +302,41 @@ Describe 'Get-LongPaths' {
         @(Get-LongPaths $targets ('C:\' + ('x' * 37))).Count | Should Be 0
     }
 }
+
+Describe 'New-ReleaseZip' {
+    # One zip per installer, uploaded as one file: Google Drive splits a folder download over about 2 GB into several
+    # dated zips, and users who unzipped only one got "Please insert Disk 2" (found on a test laptop, 2026-11-19).
+    It 'packs the installer folder, folder name included, without recompressing the slices' {
+        $work = Join-Path $env:TEMP ("vh-rz-" + [guid]::NewGuid())
+        $folder = Join-Path $work 'VisHeart-Full-9.9.9'
+        New-Item -ItemType Directory $folder | Out-Null
+        Set-Content (Join-Path $folder 'VisHeart-Full-9.9.9.exe') 'x'
+        Set-Content (Join-Path $folder 'VisHeart-Full-9.9.9-1.bin') ('y' * 5000)
+        try {
+            $zip = New-ReleaseZip $folder
+            $zip | Should Be (Join-Path $work 'VisHeart-Full-9.9.9.zip')
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $z = [IO.Compression.ZipFile]::OpenRead($zip)
+            try {
+                $files = @($z.Entries | Where-Object { $_.Length -gt 0 })
+                $expected = @('VisHeart-Full-9.9.9/VisHeart-Full-9.9.9-1.bin', 'VisHeart-Full-9.9.9/VisHeart-Full-9.9.9.exe')
+                (@($files | ForEach-Object { $_.FullName } | Sort-Object) -join ',') | Should Be ((@($expected | Sort-Object)) -join ',')
+                @($files | Where-Object { $_.CompressedLength -ne $_.Length }).Count | Should Be 0
+            } finally { $z.Dispose() }
+        } finally { Remove-Item -Recurse -Force $work }
+    }
+
+    It 'replaces an older zip of the same name' {
+        $work = Join-Path $env:TEMP ("vh-rz-" + [guid]::NewGuid())
+        $folder = Join-Path $work 'VisHeart-Update-9.9.9'
+        New-Item -ItemType Directory $folder | Out-Null
+        Set-Content (Join-Path $folder 'VisHeart-Update-9.9.9.exe') 'new'
+        Set-Content (Join-Path $work 'VisHeart-Update-9.9.9.zip') 'old broken zip'
+        try {
+            $zip = New-ReleaseZip $folder
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $z = [IO.Compression.ZipFile]::OpenRead($zip)
+            try { @($z.Entries | Where-Object { $_.Length -gt 0 }).Count | Should Be 1 } finally { $z.Dispose() }
+        } finally { Remove-Item -Recurse -Force $work }
+    }
+}

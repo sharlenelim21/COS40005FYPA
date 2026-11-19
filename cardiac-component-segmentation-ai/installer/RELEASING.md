@@ -8,8 +8,8 @@ There are two installers:
 
 | Installer | Size | Contains | Who runs it |
 |---|---|---|---|
-| `VisHeart-Full-<version>` | about 2.6 GB | app files, models, UNet Extend Training data pack | any PC: installs VisHeart, or updates an installed copy and keeps its data |
-| `VisHeart-Update-<version>` | about 600 MB | app files and models | a PC that already has VisHeart (it refuses to run on a PC without one) |
+| `VisHeart-Full-<version>.zip` | about 2.7 GB | app files, models, UNet Extend Training data pack | any PC: installs VisHeart, or updates an installed copy and keeps its data |
+| `VisHeart-Update-<version>.zip` | about 800 MB | app files and models | a PC that already has VisHeart (it refuses to run on a PC without one) |
 
 Both download the Docker images (about 25 GB) on the first start of a new version, not in the installer.
 
@@ -79,8 +79,10 @@ The build PC is the computer that makes the installers. It needs:
 5. **Test it before you upload.** Install the Update over a test install and check that you can still log in and
    that your change is there. The first time, and after any change to the installer itself, test the Full installer
    on a clean Windows PC or VM.
-6. **Upload.** Put the whole `VisHeart-<Variant>-<version>` folder in the team's VisHeart Google Drive folder. The
-   `.exe` does not work without its `.bin` files. Remove or rename older versions, so users pick the newest.
+6. **Upload.** Put `VisHeart-<Variant>-<version>.zip` (the one file, not the folder) in the team's VisHeart Google
+   Drive folder. Google Drive splits a folder download over about 2 GB into several dated zips, and a user who
+   extracts only one gets "Please insert Disk 2"; a single file downloads whole, under its own name. Remove or rename
+   older versions, so users pick the newest.
 7. **Tell the users** which version to download, and whether it is an Update or needs a Full install.
 8. **Publish the update notice**, only after step 6, so the link works. Edit `installer/latest.json`: set `version` to
    the new `installer/VERSION`, `download` to the https link of the Google Drive folder, and `note` to one or two

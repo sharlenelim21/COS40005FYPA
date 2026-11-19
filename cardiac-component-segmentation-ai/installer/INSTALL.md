@@ -18,20 +18,18 @@ from other computers.
 
 The VisHeart team shares a Google Drive folder with you. Ask them for access if you do not have it.
 
-1. In that folder, open the newest `VisHeart-Full-<version>` folder. It holds one `.exe` and two `.bin` files,
-   about 2.7 GB in total.
-2. Download the three files **one by one**: right-click each file, then **Download**. For the large `.bin` files
-   Google Drive says it cannot scan them for viruses; click **Download anyway**. They all land in your Downloads
-   folder, next to each other.
-3. Check that the `.exe` and **both** `.bin` files are in the same folder. The `.exe` does not work without them.
+1. In that folder, find the newest `VisHeart-Full-<version>.zip` (about 2.7 GB). It is one file.
+2. Click it, then **Download**. Google Drive says it cannot scan such a large file for viruses; click
+   **Download anyway**.
+3. In your Downloads folder, right-click the zip, choose **Extract All**, then **Extract**. You get a folder with
+   one `.exe` and two `.bin` files.
 
-Downloading the whole folder instead gives you **several** `.zip` files (Google Drive splits anything over about
-2 GB). Unzip every one of them into the **same** folder. If setup says **"Please insert Disk 2"** or "could not
-locate VisHeart-Full-...-2.bin", a `.bin` file is missing from the `.exe`'s folder: put it there, click **Browse**
-in that window, choose the folder and click **OK**.
+Extract first. Double-clicking the `.exe` while looking inside the zip makes setup say **"Please insert Disk 2"**,
+because the `.bin` files are not next to it. If you see that, cancel, extract the zip, and run the `.exe` from the
+extracted folder.
 
 Already have VisHeart? The newest `VisHeart-Full` installer also updates it and keeps your data. The smaller
-`VisHeart-Update-<version>` folder does the same (see Updates).
+`VisHeart-Update-<version>.zip` does the same (see Updates).
 
 ## Install
 
@@ -67,8 +65,8 @@ older installer than the installed version changes nothing.
 When the team tells you there is a new version, or **Start VisHeart** shows a "VisHeart update available" popup
 (it checks the team's GitHub page each time it starts; VisHeart keeps running either way):
 
-1. Download the newest `VisHeart-Update-<version>` folder from the Google Drive folder and unzip it into one folder,
-   as above. It is about 600 MB.
+1. Download the newest `VisHeart-Update-<version>.zip` from the Google Drive folder and extract it, as above. It is
+   about 800 MB.
 2. Run `VisHeart-Update-<version>.exe`. It stops VisHeart, then updates it. It needs at least 10 GB free on C:.
 3. Use **Start VisHeart** as usual. If the new version needs new parts, this start downloads them first and takes
    longer.

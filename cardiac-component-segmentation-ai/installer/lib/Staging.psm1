@@ -216,5 +216,21 @@ function Find-InnoCompiler {
     return $unknown
 }
 
+function New-ReleaseZip {
+    # <folder>.zip next to the installer folder, holding the folder itself (.exe and its .bin slices). Uploaded to
+    # Google Drive as one file: a folder download over about 2 GB comes back as several dated zips, and a user who
+    # unzipped only one got "Please insert Disk 2". The slices are already compressed, so they are stored as they are.
+    # Windows' tar writes forward-slash entry names, which every unzip tool reads. Returns the zip's path.
+    param([string]$Folder)
+    $Folder = (Resolve-Path $Folder).Path.TrimEnd('\')
+    $parent = Split-Path -Parent $Folder
+    $name = Split-Path -Leaf $Folder
+    $zip = Join-Path $parent "$name.zip"
+    if (Test-Path $zip) { Remove-Item -Force $zip }
+    & "$env:SystemRoot\System32\tar.exe" -a -c --options zip:compression=store -f $zip -C $parent $name
+    if ($LASTEXITCODE -ne 0) { throw "tar could not create $zip (exit $LASTEXITCODE)." }
+    return $zip
+}
+
 Export-ModuleMember -Function Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack, Get-LongPaths,
-    Write-ReleaseEnv, Get-InnoCandidates, Get-FileVersion, Find-InnoCompiler
+    Write-ReleaseEnv, Get-InnoCandidates, Get-FileVersion, Find-InnoCompiler, New-ReleaseZip
