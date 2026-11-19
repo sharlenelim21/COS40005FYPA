@@ -64,4 +64,11 @@ Describe 'visheart.iss compiles' {
             $LASTEXITCODE | Should Be 0
         } finally { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
     }
+
+    It 'no Start menu uninstall shortcut: Windows 11 hides it, so the guides point to Settings > Apps' {
+        $script:Iss | Should Not Match '\{uninstallexe\}'
+        $finish = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'finish-page.iss')
+        $finish | Should Match ([regex]::Escape('Settings > Apps > Installed apps > VisHeart'))
+        $finish | Should Not Match 'Start menu > VisHeart > Uninstall'
+    }
 }

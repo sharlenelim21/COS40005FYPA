@@ -15,7 +15,7 @@ begin
     '5. "Stop VisHeart" on the desktop stops it. Your data is kept.' + #13#10#13#10 +
     'Do not start VisHeart with the Run button in Docker Desktop: that starts only part of VisHeart, which then ' +
     'fails.' + #13#10#13#10 +
-    'TO UNINSTALL: Start menu > VisHeart > Uninstall VisHeart, or Windows Settings > Apps > VisHeart.' + #13#10 +
+    'TO UNINSTALL: Windows Settings > Apps > Installed apps > VisHeart > ... > Uninstall.' + #13#10 +
     'Full guide: ' + ExpandConstant('{app}') + '\INSTALL.md';
 end;
 

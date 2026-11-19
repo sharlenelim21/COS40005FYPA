@@ -78,7 +78,8 @@ Name: "{autodesktop}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; Worki
 Name: "{group}\Start VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"
 Name: "{group}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; WorkingDir: "{app}\{#AppSub}"
 Name: "{group}\VisHeart install guide"; Filename: "{app}\INSTALL.md"
-Name: "{group}\Uninstall VisHeart"; Filename: "{uninstallexe}"
+; No "Uninstall VisHeart" shortcut: Windows 11 hides shortcuts to uninstallers in the Start menu. Users uninstall in
+; Settings > Apps > Installed apps (finish page, INSTALL.md).
 
 [INI]
 ; "VisHeart" opens the app in the browser.

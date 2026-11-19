@@ -71,7 +71,8 @@ Your patients, accounts, passwords and trained models are kept.
 
 ## Uninstall
 
-Use **Uninstall VisHeart** in the Start menu, or Windows Settings > Apps. The uninstaller asks whether to also delete
+Open Windows **Settings > Apps > Installed apps**, find **VisHeart**, click **...** and **Uninstall**. (Windows 11 does
+not show uninstall shortcuts in the Start menu.) The uninstaller asks whether to also delete
 all VisHeart data:
 
 - **No (default):** patients, accounts, trained models and the downloaded images are kept. Installing VisHeart
