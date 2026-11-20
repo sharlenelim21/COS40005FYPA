@@ -21,3 +21,6 @@ mamba-unet-env/
 # into the image. Never committed here -- checkpoints/ is gitignored in
 # UNETRESNET34 itself too; this is a build-time-only local copy.
 _landmark_assets/
+
+# Versions UNet Extend Training activates on this PC (versions.py switch). Per PC, never committed.
+app/models/active/

@@ -2,6 +2,8 @@
 REM VisHeart Stop Script
 REM Stops the UNet Extend Training service (when this computer has it), then all Docker containers.
 REM While a training runs it asks first; set STOP_TRAINING=yes or STOP_TRAINING=no to answer in advance.
+REM   stop.bat --no-pause   never waits for a key (used by the installer and uninstaller); a running
+REM                         training is stopped unless STOP_TRAINING=no is set.
 
 echo ========================================
 echo Stopping VisHeart Services
@@ -9,6 +11,15 @@ echo ========================================
 echo.
 
 cd /d "%~dp0"
+
+set "NO_PAUSE="
+if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
+if defined NO_PAUSE if not defined STOP_TRAINING set "STOP_TRAINING=yes"
+
+rem An installed copy keeps its settings in release.env and secrets.env; a developer clone has neither.
+set "ENV_ARGS="
+if exist "%~dp0release.env" set ENV_ARGS=%ENV_ARGS% --env-file "%~dp0release.env"
+if exist "%~dp0secrets.env" set ENV_ARGS=%ENV_ARGS% --env-file "%~dp0secrets.env"
 
 set "WORKER_STOP=%~dp0..\visheart-retraining\stop-retraining-worker.bat"
 if exist "%WORKER_STOP%" (
@@ -25,14 +36,14 @@ if %errorlevel% equ 0 (
     set COMPOSE_PROFILES=gpu
 )
 
-docker-compose --profile %COMPOSE_PROFILES% down
-docker-compose down --remove-orphans
+docker compose%ENV_ARGS% --profile %COMPOSE_PROFILES% down
+docker compose%ENV_ARGS% down --remove-orphans
 
 if errorlevel 1 (
     echo.
     echo ERROR: Failed to stop services!
     echo Make sure Docker Desktop is running.
-    pause
+    if not defined NO_PAUSE pause
     exit /b 1
 )
 
@@ -45,9 +56,9 @@ echo All containers have been stopped and removed.
 echo Data in volumes is preserved.
 echo.
 echo To remove all data (including volumes), run:
-echo   docker-compose down -v
+echo   docker compose down -v
 echo.
-pause
+if not defined NO_PAUSE pause
 exit /b 0
 
 :stop_training_service

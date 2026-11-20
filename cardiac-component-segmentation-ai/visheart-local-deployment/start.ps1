@@ -2,22 +2,16 @@
 
 param(
     [int]$WaitRetries = 60,
-    [int]$WaitIntervalSec = 2
+    [int]$WaitIntervalSec = 2,
+    # start.bat --cpu / --gpu pass these to skip GPU detection.
+    [switch]$ForceCpu,
+    [switch]$ForceGpu
 )
 
 function Write-Log {
     param([string]$Message)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ssZ"
     Write-Host "[$timestamp] $Message"
-}
-
-function Test-DockerAvailable {
-    try {
-        docker version | Out-Null
-        return $true
-    } catch {
-        return $false
-    }
 }
 
 function Test-DockerGpuAvailable {
@@ -92,12 +86,50 @@ try {
     Set-Location $scriptDir
     Write-Log 'Starting VisHeart startup helper...'
 
-    if (-not (Test-DockerAvailable)) {
-        Write-Log 'Docker not available. Please start Docker Desktop and try again.'
+    Import-Module (Join-Path $scriptDir 'lib\VisHeartStart.psm1') -Force
+
+    $docker = Wait-DockerReady
+    if (-not $docker.Ready) {
+        $account = "$env:USERDOMAIN\$env:USERNAME"
+        switch ($docker.Reason) {
+            'not-installed' { Write-Log 'Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop/ (or run the VisHeart installer again), then start VisHeart.' }
+            'no-access'     { Write-Log "Docker is installed but this Windows account ($account) cannot use it. Ask the person who installed VisHeart to run: net localgroup docker-users `"$account`" /add  then sign out and in again." }
+            default         { Write-Log 'Docker Desktop did not become ready within 3 minutes. Open Docker Desktop, wait until it says Docker is running, then start VisHeart again.' }
+        }
         exit 2
     }
 
-    $gpuAvailable = Test-DockerGpuAvailable
+    # An installed copy has release.env / secrets.env here; a developer clone has neither and uses the defaults.
+    $envArgs = @(Get-ComposeEnvArgs $scriptDir)
+    if ($envArgs.Count -gt 0) { Write-Log 'Using the installed settings (release.env / secrets.env).' }
+
+    $database = Test-DatabaseVolume $scriptDir
+    if (-not $database.Ok) {
+        Write-Log "This PC already has a VisHeart database ($($database.Volume)) that was made by another copy of VisHeart, with other passwords, so this copy cannot open it."
+        Write-Log "If that data is not needed, delete it (this cannot be undone) in a Command Prompt with:  cd /d `"$scriptDir`" && docker compose --profile cpu --profile gpu down -v  then start VisHeart again."
+        Write-Log 'If it is needed, ask the VisHeart team before doing anything.'
+        exit 7
+    }
+
+    if (-not (Initialize-BackendFolders $scriptDir).Built) {
+        Write-Log 'The backend is not built (Cardiac_Segmentation_FYP_Server\dist\index.js is missing).'
+        Write-Log 'In a Command Prompt run:  cd /d "..\Cardiac_Segmentation_FYP_Server" && pnpm install && pnpm build  then start VisHeart again.'
+        exit 8
+    }
+
+    foreach ($name in @(Remove-OtherCopyContainers $scriptDir)) {
+        Write-Log "Removed container '$name' left by another copy of VisHeart (its data is kept)."
+    }
+
+    if ($ForceCpu) {
+        Write-Log 'CPU mode requested (--cpu); skipping GPU detection.'
+        $gpuAvailable = $false
+    } elseif ($ForceGpu) {
+        Write-Log 'GPU mode requested (--gpu); skipping GPU detection.'
+        $gpuAvailable = $true
+    } else {
+        $gpuAvailable = Test-DockerGpuAvailable
+    }
 
     if ($gpuAvailable) {
         $profile = 'gpu'
@@ -122,8 +154,14 @@ try {
         docker rm -f $stale 2>$null | Out-Null
     }
 
+    $pullExit = Invoke-FirstPull (@('compose') + $envArgs + @('--profile', $profile)) @('visheart-app', $inferenceService)
+    if ($pullExit -ne 0) {
+        Write-Log "ERROR: Downloading VisHeart failed (exit $pullExit). Check the internet connection and start VisHeart again; the download continues where it stopped."
+        exit 6
+    }
+
     Write-Log "Running: docker compose --profile $profile up -d visheart-app $inferenceService"
-    & docker compose --profile $profile up -d visheart-app $inferenceService
+    & docker compose @envArgs --profile $profile up -d visheart-app $inferenceService
     $composeExit = $LASTEXITCODE
 
     if ($composeExit -ne 0) {
@@ -141,7 +179,7 @@ try {
             }
 
             Write-Log "Running: docker compose --profile cpu up -d visheart-app $inferenceService"
-            & docker compose --profile cpu up -d visheart-app $inferenceService
+            & docker compose @envArgs --profile cpu up -d visheart-app $inferenceService
             $composeExit2 = $LASTEXITCODE
             if ($composeExit2 -ne 0) {
                 Write-Log "ERROR: CPU fallback also failed (exit $composeExit2). Aborting startup."
@@ -191,6 +229,19 @@ try {
     Write-Log "  Inference server (http://localhost:8001/status/server) => $inferenceOk"
     if ($gpuAvailable) {
         Write-Log "  Inference GPU    (http://localhost:8001/status/gpu)    => $inferenceGpuOk"
+    }
+
+    # An installed copy asks whether the team has published a newer version. This window closes by itself after a
+    # successful start, so the notice is also shown in a popup that stays until the user presses OK.
+    $update = Get-UpdateNotice $scriptDir
+    if ($update) {
+        $text = "A new version of VisHeart ($($update.Version)) is available."
+        if ($update.Note) { $text += "`n`n$($update.Note)" }
+        if ($update.Download) { $text += "`n`nDownload the Update installer from:`n$($update.Download)" }
+        else { $text += "`n`nAsk the VisHeart team where to download it." }
+        $text += "`n`nVisHeart is running and you can keep using it. Install the update when convenient."
+        foreach ($line in ($text -split "`n")) { if ($line) { Write-Log "UPDATE: $line" } }
+        try { (New-Object -ComObject WScript.Shell).Popup($text, 0, 'VisHeart update available', 64) | Out-Null } catch { }
     }
 
     if ($backendOk -and $frontendOk -and $inferenceOk -and ((-not $gpuAvailable) -or $inferenceGpuOk)) {

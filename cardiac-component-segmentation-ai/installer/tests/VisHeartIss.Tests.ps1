@@ -1,0 +1,67 @@
+# Pester 3.4 checks of installer/visheart.iss: the rules its Pascal code must keep (these paths only run on a real
+# install, which Task 7 tests on a clean PC), plus a real compile when Inno Setup is installed.
+# Run from installer:  Invoke-Pester .\tests\VisHeartIss.Tests.ps1
+# VH_ISS_PATH points the tests at another copy of the script (used to see them fail on an older version).
+
+$script:IssPath = if ($env:VH_ISS_PATH) { $env:VH_ISS_PATH } else { Join-Path (Split-Path -Parent $PSScriptRoot) 'visheart.iss' }
+$script:Iss = Get-Content -Raw $script:IssPath
+
+function Get-PascalFunction([string]$Name) {
+    # Text of one function or procedure of the [Code] section, up to the next one.
+    $m = [regex]::Match($script:Iss, "(?ms)^(function|procedure) $Name\b.*?(?=^(function|procedure) |\z)")
+    return $m.Value
+}
+
+Describe 'visheart.iss rules' {
+    It 'an install never replaces the registered original unet.pth' {
+        $script:Iss | Should Match '(?m)^Source: "\{#StagingDir\}\\\*";.*Excludes: "[^"]*visheart-inference-gpu\\app\\models\\unet\.pth"'
+        $script:Iss | Should Match '(?m)^Source: "[^"]*\\app\\models\\unet\.pth";.*Flags: onlyifdoesntexist'
+    }
+
+    It 'an update over an existing install asks for less free space' {
+        $init = Get-PascalFunction 'InitializeSetup'
+        $init | Should Match 'ExistingInstallDir\(\)'
+        $init | Should Match '-ExistingInstall'
+    }
+
+    It 'when the database cannot be deleted, uninstall keeps the data and its passwords' {
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        # DeleteData is switched off inside the branch where Remove-VisHeartDocker -DeleteData failed.
+        $step | Should Match "(?s)Remove-VisHeartDocker.*-DeleteData.*if DeleteData and \(Code <> 0\) then begin.*DeleteData := False"
+    }
+
+    It 'uninstall cleans Docker through Remove-VisHeartDocker, which starts Docker Desktop when it is not running' {
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Match "VisHeartStart\.psm1"
+        $step | Should Not Match "docker compose"
+    }
+
+    It 'the install folder is protected after the passwords are made' {
+        $script:Iss | Should Match '(?m)^Source: "scripts\\Protect-VisHeartFolder\.ps1"; DestDir: "\{app\}\\installer"'
+        $post = Get-PascalFunction 'CurStepChanged'
+        $post | Should Match '(?s)New-VisHeartSecrets\.ps1.*Protect-VisHeartFolder\.ps1'
+    }
+}
+
+Describe 'visheart.iss compiles' {
+    Import-Module (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\Staging.psm1') -Force
+    $iscc = Find-InnoCompiler
+
+    It 'with Inno Setup, against a small staging folder (Update and Full)' {
+        if (-not $iscc) { Set-TestInconclusive 'Inno Setup is not installed.'; return }
+        $work = Join-Path $env:TEMP ("vh-iss-" + [guid]::NewGuid())
+        try {
+            $models = Join-Path $work 'staging\cardiac-component-segmentation-ai\visheart-inference-gpu\app\models'
+            New-Item -ItemType Directory $models, (Join-Path $work 'pack') -Force | Out-Null
+            Set-Content (Join-Path $models 'unet.pth') 'x'
+            Set-Content (Join-Path $work 'staging\cardiac-component-segmentation-ai\start.bat') 'x'
+            Set-Content (Join-Path $work 'pack\PACKED.json') '{}'
+            $iss = (Resolve-Path $script:IssPath).Path
+            # The script compiles relative to its own folder (scripts\, INSTALL.md), so compile it in place.
+            & $iscc /Q "/DVariant=Update" "/DAppVersion=0.0.1" "/DStagingDir=$work\staging" "/O$work\out" $iss *> "$work\update.log"
+            $LASTEXITCODE | Should Be 0
+            & $iscc /Q "/DVariant=Full" "/DAppVersion=0.0.1" "/DStagingDir=$work\staging" "/DPackDir=$work\pack" "/O$work\out" $iss *> "$work\full.log"
+            $LASTEXITCODE | Should Be 0
+        } finally { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
+    }
+}

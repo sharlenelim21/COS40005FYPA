@@ -1,84 +1,60 @@
-# Environment files# Environment variables
+# Environment files (real values never go into git)
+.env
+.env.local
+.env.production
+.env.*.local
+!.env.example
 
-.env.env
-
-.env.local.env.local
-
-.env.production.env.*.local
-
-
-
-# Data volumes (contain sensitive data)# Docker volumes (persistent data)
-
-volumes/mongodb/*volumes/
-
-volumes/redis/*!volumes/.gitkeep
-
+# Local data volumes (may contain patient data)
+volumes/*
+!volumes/.gitkeep
+volumes/mongodb/*
+volumes/redis/*
 volumes/minio/*
+!volumes/mongodb/
+!volumes/redis/
+!volumes/minio/
+!volumes/mongodb/.gitkeep
+!volumes/redis/.gitkeep
+!volumes/minio/.gitkeep
 
 # Logs
-
-# Keep directory structure*.log
-
-!volumes/.gitkeeplogs/
-
-!volumes/mongodb/.gitkeep
-
-!volumes/redis/.gitkeep# OS files
-
-!volumes/minio/.gitkeep.DS_Store
-
-Thumbs.db
-
-# Logsdesktop.ini
-
 *.log
+logs/
 
-logs/# IDE
-
-.vscode/
-
-# Temporary files.idea/
-
-*.tmp*.swp
-
-*.temp*.swo
-
-.DS_Store*~
-
+# OS files
+.DS_Store
 Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
 
-# IDE*.tmp
-
-.vscode/tmp/
-
-.idea/temp/
-
-*.swp
-
-*.swo# Docker
-
+# Docker
 .docker/
 
 # Build artifacts
-
-dist/# Node modules (if any)
-
-build/node_modules/
-
+dist/
+build/
 *.zip
+!visheart-deployment-*.zip
 
-!visheart-deployment-*.zip# Python cache
-
+# Python / Node caches
 __pycache__/
-
-# Node modules (if accidentally copied)*.pyc
-
-node_modules/*.pyo
-
+*.pyc
+*.pyo
 *.pyd
+node_modules/
 
 # Backup files
 *.bak

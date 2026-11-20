@@ -37,3 +37,17 @@ secrets/
 # Docker
 Dockerfile
 .dockerignore
+
+# Models: only the shipped ones are baked in. Test checkpoints and versions trained on the build PC (including
+# app/models/active) stay out of the image. Keep this list in step with $ShippedModelNames in
+# installer/lib/Staging.psm1; installer/tests/GpuDockerignore.Tests.ps1 checks that they match.
+app/models/*
+!app/models/24April2025-single-stage-usethis.engine
+!app/models/24April2025-single-stage-usethis.onnx
+!app/models/24April2025-single-stage-usethis.pt
+!app/models/fourd_model_epoch_250.pth
+!app/models/fourd_rv_epoch_50.pth
+!app/models/medsam_vit_b.pth
+!app/models/unet.pth
+!app/models/atlas
+!app/models/atlas_rv

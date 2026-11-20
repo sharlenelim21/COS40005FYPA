@@ -11,6 +11,10 @@ On the other computer setup-training-pc.ps1 verifies the pack, then relocate.py 
 evidence runs' frozen-set reports are copied into evaluations/ (as from-evidence-<run>-<name>.json), so relocate.py
 rewrites the copies and the evidence itself is neither shipped nor changed. Left out: jobs, exports, scratch versions,
 the virtual environment, old v2-unet checkpoints and data.zip, which duplicates data/.
+
+Only the original version is packed. Versions trained on this computer (candidates, test runs, the active one) stay
+here: the packed registry lists the original alone, active again, with no history, and their reports and example
+scans are left out. A pack that still lists a trained version, made before this rule, does not verify.
 """
 import argparse
 import json
@@ -30,6 +34,18 @@ def _files(folder, pattern="*"):
     return sorted(path for path in folder.glob(pattern) if path.is_file() and "__pycache__" not in path.parts)
 
 
+def packed_registry(registry):
+    """The registry another computer starts from: the original version alone, active, with no history."""
+    original = registry["original"]
+    return {**registry, "active": original, "history": [], "versions": {original: registry["versions"][original]}}
+
+
+def trained_versions(registry):
+    """Labels of the versions in registry that are neither the original nor deleted."""
+    return [label for label, entry in registry["versions"].items()
+            if label != registry.get("original") and entry.get("status") != "deleted"]
+
+
 def selection(root, v2_root=None):
     """Every (source, path in the pack) another computer needs, from the data root."""
     root = Path(root)
@@ -39,15 +55,17 @@ def selection(root, v2_root=None):
     versions_dir = root / "versions"
     registry = json.loads((versions_dir / "registry.json").read_text(encoding="utf-8"))
     chosen = [versions_dir / name for name in ("registry.json", "frozen_holdout.json", "frozen_slices.npz")]
-    for entry in registry["versions"].values():
-        if entry.get("status") == "deleted":
-            continue
+    left_out = set(registry["versions"]) - {registry["original"]}
+    for entry in packed_registry(registry)["versions"].values():
         weights = versions_dir / entry["file"]
         chosen += [weights] + [path for path in (weights.with_suffix(".json"),) if path.exists()]
     chosen += [path for path in _files(v2) if path.suffix == ".py" or path.name == "requirements.txt"]
     chosen += _files(v2 / "models", "*.py") + _files(v2 / "utils", "**/*.py")
     chosen += [path for path in _files(v2 / "data", "**/*") if path.suffix != ".zip"]
-    chosen += _files(root / "evaluations", "*.json") + _files(root / "examples", "**/*")
+    chosen += [path for path in _files(root / "evaluations", "*.json")
+               if not any(path.name == f"{label}-public.json" for label in left_out)]
+    chosen += [path for path in _files(root / "examples", "**/*")
+               if path.relative_to(root / "examples").parts[0] not in left_out]
 
     pairs = [(path, path.relative_to(root).as_posix()) for path in chosen]
     for report in _files(root / "evidence", "*/public*.json"):
@@ -71,7 +89,10 @@ def pack(root, out, v2_root=None, log=print):
     for count, (source, rel) in enumerate(pairs, 1):
         target = out / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        if rel == "versions/registry.json":
+            target.write_text(json.dumps(packed_registry(registry), indent=1), encoding="utf-8")
+        else:
+            shutil.copy2(source, target)
         files[rel] = sha256_file(target)
         total += target.stat().st_size
         if count % 500 == 0 or count == len(pairs):
@@ -98,6 +119,12 @@ def verify(folder):
             problems.append(f"{rel} is missing")
         elif sha256_file(path) != digest:
             problems.append(f"{rel} differs from the packed file")
+    registry_file = folder / "versions" / "registry.json"
+    if registry_file.is_file():
+        trained = trained_versions(json.loads(registry_file.read_text(encoding="utf-8")))
+        if trained:
+            problems.append(f"The pack holds versions trained on another computer ({', '.join(trained)}); "
+                            "make a new pack with pack_training_data.py pack.")
     return problems
 
 
