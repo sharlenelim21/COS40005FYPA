@@ -85,6 +85,8 @@ try {
         'Username: admin',
         "Password: $admin",
         '',
+        'If you already changed the admin password, this password no longer works: sign in with the one you set.',
+        '',
         'Change this password after your first login: open Profile Settings (http://localhost:3000/profile),',
         'set a new password, and also replace the placeholder email (admin@visheart.local) with your own.',
         'Then delete this file, or keep it somewhere safe: anyone who can read it can sign in as admin.'
