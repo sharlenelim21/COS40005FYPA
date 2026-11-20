@@ -3554,11 +3554,17 @@ function StrainPreviewPanel({
             RV each have their own independent metric toggle in the sidebar —
             this one never flips when you switch RV's toggle, by design. */}
         <span className="rounded-full bg-muted px-2 py-0.5 text-[12px] font-medium text-muted-foreground">
-          LV {selectedStrainType}
+          {lvOnly ? selectedStrainType : `LV ${selectedStrainType}`}
         </span>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[12px] font-medium text-muted-foreground">
-          RV {rvMetricType}
-        </span>
+        {/* Templates are LV-only (no RV reconstruction/masks to show strain for) -- see
+            lvOnly's other uses just below (ChamberFocusToggle's allowedOptions, the metric
+            toggle buttons), which already hide RV; this badge was the one spot still always
+            showing it regardless (reported live, 2026-11-20). */}
+        {!lvOnly && (
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[12px] font-medium text-muted-foreground">
+            RV {rvMetricType}
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-1.5">
           {/* Source badge — only when real data exists */}
