@@ -37,10 +37,18 @@ function Get-ComposeEnvArgs {
     return $result   # callers wrap in @(...) so "no env files" is an empty array
 }
 
+function Get-DockerDesktopExe {
+    # Docker Desktop is 64-bit and lives in the 64-bit Program Files. ProgramW6432 names that folder in both 32- and
+    # 64-bit processes; ProgramFiles is "Program Files (x86)" in a 32-bit one (such as a start launched by the
+    # installer), where Docker Desktop then looked "not installed".
+    $programFiles = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+    return ($programFiles.TrimEnd('\') + '\Docker\Docker\Docker Desktop.exe')
+}
+
 function Wait-DockerReady {
     param(
         [int]$TimeoutSec = 180,
-        [string]$DesktopExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+        [string]$DesktopExe = (Get-DockerDesktopExe)
     )
     # Docker Desktop answers on docker_engine; newer releases point the CLI at dockerDesktopLinuxEngine.
     $pipes = @('\\.\pipe\docker_engine', '\\.\pipe\dockerDesktopLinuxEngine')
@@ -260,6 +268,6 @@ function Open-VisHeart {
     Start-Process -FilePath 'http://localhost:3000'
 }
 
-Export-ModuleMember -Function Test-UrlAnswers, Test-VisHeartAnswering, Open-VisHeart, Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
+Export-ModuleMember -Function Get-DockerDesktopExe, Test-UrlAnswers, Test-VisHeartAnswering, Open-VisHeart, Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
     Remove-VisHeartDocker, Initialize-BackendFolders

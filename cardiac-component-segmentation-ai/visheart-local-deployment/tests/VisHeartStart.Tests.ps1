@@ -521,3 +521,28 @@ Describe 'start.bat arguments' {
         $bat | Should Match '(?i)"--gpu".*-ForceGpu'
     }
 }
+
+Describe 'Get-DockerDesktopExe' {
+    # The installer is a 32-bit program: when its "Start VisHeart now" option runs start.bat, Windows gives the
+    # 32-bit process C:\Program Files (x86) as ProgramFiles, so Docker Desktop looked "not installed" (found
+    # 2026-11-20). ProgramW6432 always names the 64-bit Program Files.
+    It 'uses the 64-bit Program Files even from a 32-bit process' {
+        $saved = $env:ProgramW6432
+        try {
+            $env:ProgramW6432 = 'X:\Program Files'
+            Get-DockerDesktopExe | Should Be 'X:\Program Files\Docker\Docker\Docker Desktop.exe'
+        } finally { $env:ProgramW6432 = $saved }
+    }
+}
+
+Describe 'start.bat from a 32-bit process' {
+    It 'runs start.ps1 in 64-bit PowerShell' {
+        $t = Join-Path $env:TEMP ("vh-b32-" + [guid]::NewGuid()); New-Item -ItemType Directory $t | Out-Null
+        try {
+            Copy-Item (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.bat') $t
+            Set-Content (Join-Path $t 'start.ps1') 'param([switch]$ForceCpu,[switch]$ForceGpu,[switch]$OpenBrowser) "is64=$([Environment]::Is64BitProcess)"' -Encoding ASCII
+            $out = & "$env:SystemRoot\SysWOW64\cmd.exe" /c "`"$t\start.bat`"" | Out-String
+            $out | Should Match 'is64=True'
+        } finally { Remove-Item -Recurse -Force $t }
+    }
+}

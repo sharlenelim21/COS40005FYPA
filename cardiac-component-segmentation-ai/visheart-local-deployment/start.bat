@@ -20,7 +20,12 @@ for %%A in (%*) do (
     if /I "%%~A"=="--open" set "ARG_OPEN=-OpenBrowser"
 )
 
-powershell.exe -ExecutionPolicy Bypass -NoProfile -File "%~dp0start.ps1" %ARG_CPU% %ARG_GPU% %ARG_OPEN%
+rem Always 64-bit PowerShell: the installer is a 32-bit program, and a start it launches would otherwise run 32-bit,
+rem where "Program Files" is "Program Files (x86)" and Docker Desktop is not found. Sysnative exists only there.
+set "PS_EXE=powershell.exe"
+if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" set "PS_EXE=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+
+"%PS_EXE%" -ExecutionPolicy Bypass -NoProfile -File "%~dp0start.ps1" %ARG_CPU% %ARG_GPU% %ARG_OPEN%
 
 if errorlevel 1 (
     echo.
