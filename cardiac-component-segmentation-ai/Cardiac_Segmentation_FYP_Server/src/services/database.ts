@@ -7,6 +7,7 @@ import logger from "./logger";
 import * as bcrypt from "bcrypt";
 import { loadEnvFromKnownLocations } from "../utils/env";
 import { redisClient } from "./redis";
+import { BUILT_IN_ADMIN_PASSWORD, replaceDefaultAdminPassword } from "./admin_password";
 
 // Import utility functions
 import LogError from "../utils/error_logger"; // Import the error logging utility
@@ -33,7 +34,7 @@ const DB_NAME = "visheart";
 const DB_URI: string = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/visheart";
 
 // Fetch default admin password
-const adminPass: string = process.env.ADMIN_PASS || "P@ssw0rd123!"; // Default to "P@ssw0rd123!" (follows the validation) if not set
+const adminPass: string = process.env.ADMIN_PASS || BUILT_IN_ADMIN_PASSWORD; // The built-in default (follows the validation) if not set
 
 // Connect to MongoDB (called in index.ts)
 // Added parameter so can be used in test files to connect to a different database if needed, but default is the environment variable
@@ -180,6 +181,11 @@ const createAdminUser = async (): Promise<void> => {
       if (createdAdmin) logger.warn(`${serviceLocation}: WARNING: Default admin account created successfully with ID:${createdAdmin._id}. Please change the password IMMEDIATELY.`);
     } else {
       logger.info(`${serviceLocation}: Admin account(s) already exists.`);
+      // An "admin" made with the built-in default (ADMIN_PASS missing at its first start) takes this PC's ADMIN_PASS.
+      const defaultAdmin = await userModel.findOne({ username: "admin", role: UserRole.Admin });
+      if (defaultAdmin && await replaceDefaultAdminPassword(defaultAdmin, process.env.ADMIN_PASS)) {
+        logger.warn(`${serviceLocation}: The admin account still had the built-in default password; it now uses ADMIN_PASS.`);
+      }
       return;
     }
   } catch (error: unknown) {
