@@ -175,7 +175,8 @@ Do this on a "build PC" that has been set up once (Inno Setup, pnpm, the two mod
    wrong. The results are `VisHeart-Update-<version>.zip` and `VisHeart-Full-<version>.zip` in
    `cardiac-component-segmentation-ai/installer/out/`.
 4. Test the installers, then upload **only the two zip files** to the Google Drive folder.
-5. Edit `installer/latest.json` (new version, Drive link, short note) and merge it into `main`. Installed PCs then
+5. Edit `installer/latest.json`: the new version and a short note (the Drive folder link is already there and stays
+   the same). Merge it into `main`. Installed PCs then
    show the "update available" popup.
 
 Updates remove what the old version no longer uses: old program files and old VisHeart Docker images. User data is
