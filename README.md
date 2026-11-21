@@ -76,9 +76,14 @@ You need Windows 10/11 (64-bit), [Docker Desktop](https://www.docker.com/product
 with pnpm (`npm install -g pnpm`), Python 3.11 or later, and git.
 
 1. Clone the repository and switch to the branch you work on.
-2. **AI models.** Two model files are too large for git: `medsam_vit_b.pth` and `unet.pth`. Copy them from the team's
-   Google Drive into `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`. (With the training pack
-   in step 3, the first start puts the right `unet.pth` there by itself.) The other models are already in git.
+2. **AI models.** Two model files are too large for git. Put both in
+   `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`:
+   - `medsam_vit_b.pth`: download the MedSAM checkpoint from the [MedSAM project](https://github.com/bowang-lab/MedSAM)
+     (its README links the `medsam_vit_b` weights).
+   - `unet.pth`: from the team's Google Drive. With the training pack (step 3) you can skip this: the first start puts
+     the right `unet.pth` there by itself.
+
+   The other models are already in git.
 3. **Training data pack** (only needed for UNet Extend Training; everything else works without it). Download the
    training pack from the VisHeart Google Drive folder. Put its contents in
    `cardiac-component-segmentation-ai/visheart-training-data/`, so that `PACKED.json` is directly inside that folder:

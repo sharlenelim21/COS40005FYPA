@@ -49,9 +49,10 @@ mkdir -p UNETRESNET34/checkpoints \
 ### 3. Get `unet.pth` and `medsam_vit_b.pth`
 
 The inference services mount `visheart-inference-gpu/app/models` over the image's model folder, which hides the
-copies baked into `sharlene21/visheart-gpu`. These two files are not in git (the other models are). Copy them from
-the team's Google Drive into `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`, as the root
-README describes.
+copies baked into `sharlene21/visheart-gpu`. These two files are not in git (the other models are). Put them in
+`cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`, as the root README describes:
+`medsam_vit_b.pth` from the [MedSAM project](https://github.com/bowang-lab/MedSAM) (its README links the
+`medsam_vit_b` weights), and `unet.pth` from the team's Google Drive.
 
 Or copy them out of the image once:
 

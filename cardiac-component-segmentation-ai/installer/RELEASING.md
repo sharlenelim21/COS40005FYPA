@@ -48,8 +48,10 @@ The build PC is the computer that makes the installers. It needs:
 3. **pnpm**, to build the backend (`npm install -g pnpm`), and **Docker Desktop**. Only the `docker` command is used
    here, to check that the images exist on Docker Hub, so Docker Desktop need not be running.
 4. **Python 3.11 or later**, for a Full installer only (it checks the training pack).
-5. **The model files**, which are not in git. Copy `unet.pth`, `medsam_vit_b.pth` and the other model files from the
-   team's drive into `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`.
+5. **The two model files that are not in git**, in `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`:
+   `medsam_vit_b.pth` from the [MedSAM project](https://github.com/bowang-lab/MedSAM) (its README links the
+   `medsam_vit_b` weights), and `unet.pth` from the team's Google Drive. For a Full installer, `unet.pth` must be the
+   one the training pack was made with (section 4).
 6. **`installer/smtp.release.env`**, the support mailbox that the FAQ page sends from:
    1. Copy `installer/smtp.release.env.example` to `installer/smtp.release.env`.
    2. Fill in the team's support Gmail address and a Gmail **app password** for it.
