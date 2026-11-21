@@ -174,7 +174,7 @@ function Write-ReleaseEnv {
     }
     foreach ($key in @('VH_SUPPORT_EMAIL', 'VH_SMTP_USER', 'VH_SMTP_PASS')) { $lines += "$key=$($smtp[$key])" }
     $lines += 'VH_BIND=127.0.0.1'      # patient data: nothing is reachable from other computers
-    $lines += 'VH_MINIO_ANON=none'     # no anonymous downloads from the storage bucket
+    # (No VH_MINIO_ANON: the backend creates the storage bucket private in every copy, F1.)
     # Its own compose project: containers, network and data volumes stay apart from a developer copy on the same PC.
     $lines += 'COMPOSE_PROJECT_NAME=visheart'
     # MongoDB and Redis are used only inside Docker: let Docker pick free host ports, so a MongoDB or Redis that the

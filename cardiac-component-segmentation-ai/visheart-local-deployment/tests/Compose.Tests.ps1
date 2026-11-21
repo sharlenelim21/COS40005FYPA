@@ -76,7 +76,8 @@ Describe 'docker-compose.yml defaults (no env file)' {
         $config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD | Should Be 'P@ssw0rd123!'
         $app.environment.MONGODB_URI | Should Match ([regex]::Escape('admin:P%40ssw0rd123%21@'))
         $app.environment.ADMIN_PASS | Should Be 'P@ssw0rd123!'
-        $app.environment.S3_ANONYMOUS_READ | Should Be 'download'
+        # The bucket is private in every copy (F1); no setting may bring anonymous read back.
+        @($app.environment.PSObject.Properties.Name) -contains 'S3_ANONYMOUS_READ' | Should Be $false
         $config.services.Keys -contains 'minio-setup' | Should Be $false
     }
 
@@ -134,7 +135,6 @@ Describe 'docker-compose.yml with the installed env file' {
         $config.services.'gpu-cpu'.image | Should Be $fixture['VH_GPU_IMAGE']
         $config.services.'visheart-app'.image | Should Be $fixture['VH_APP_IMAGE']
         $config.services.'visheart-app'.environment.ADMIN_PASS | Should Be $fixture['VH_ADMIN_PASS']
-        $config.services.'visheart-app'.environment.S3_ANONYMOUS_READ | Should Be 'none'
     }
 
     It 'installed env replaces every secret' {
