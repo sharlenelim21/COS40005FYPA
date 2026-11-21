@@ -17,7 +17,7 @@ import React from "react";
 import { strainRamp, polarPoint, annularSectorPath } from "./StrainVisualization";
 import { strainRampCss } from "@/lib/strainColorScale";
 
-export type BullseyeHover = { x: number; y: number; name: string; value: number; pct: number };
+export type BullseyeHover = { x: number; y: number; name: string; value: number };
 
 /** Segment fill for a value on the view's own min→max scale. */
 export function bullseyeColor(value: number | null | undefined, min: number, max: number, reverse = false): string {
@@ -25,11 +25,6 @@ export function bullseyeColor(value: number | null | undefined, min: number, max
   if (value == null || !Number.isFinite(value) || value === 0) return "#444444";
   const t = max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5;
   return strainRamp(reverse ? 1 - t : t);
-}
-
-/** Position of a value along the min→max bar, as a whole percent (0 = min, 100 = max). */
-function pctOf(value: number, min: number, max: number): number {
-  return max > min ? Math.round(((value - min) / (max - min)) * 100) : 0;
 }
 
 /** Min/max of the finite values (0/0 if none). */
@@ -74,7 +69,7 @@ export function AhaBullseye({
   const hover = (index: number) => (e: React.MouseEvent) => {
     const v = values[index];
     if (!onSegmentHover || v == null) return;
-    onSegmentHover({ x: e.clientX, y: e.clientY, name: names[index] ?? `Segment ${index + 1}`, value: v, pct: pctOf(v, min, max) });
+    onSegmentHover({ x: e.clientX, y: e.clientY, name: names[index] ?? `Segment ${index + 1}`, value: v });
   };
 
   const segment = (index: number, innerR: number, outerR: number, startAngle: number, endAngle: number) => {
@@ -175,7 +170,6 @@ export function BullseyeScaleBar({
   title?: string;
   missingCount?: number;
 }) {
-  const meanPct = mean != null && max > min ? Math.round(((mean - min) / (max - min)) * 100) : 50;
   const u = unit === "%" ? "%" : ` ${unit}`;
   // Compact single-line Min/Mean/Max (was a 2-line label+value stack per
   // stat) -- when two of these stack (LV + RV in Combined view) the taller
@@ -191,7 +185,7 @@ export function BullseyeScaleBar({
       </div>
       <div className="flex justify-between gap-1 text-[12px] leading-tight">
         <span className="text-muted-foreground">Min <span className="font-semibold tabular-nums text-foreground">{min.toFixed(1)}{u}</span></span>
-        <span className="text-muted-foreground">Mean <span className="font-semibold tabular-nums text-primary">{(mean ?? 0).toFixed(1)}{u}</span> <span className="opacity-70">({meanPct}%)</span></span>
+        <span className="text-muted-foreground">Mean <span className="font-semibold tabular-nums text-primary">{(mean ?? 0).toFixed(1)}{u}</span></span>
         <span className="text-muted-foreground">Max <span className="font-semibold tabular-nums text-foreground">{max.toFixed(1)}{u}</span></span>
       </div>
       {missingCount > 0 && (

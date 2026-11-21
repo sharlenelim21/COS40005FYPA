@@ -2902,7 +2902,7 @@ function AhaBullseyePanel({
                 style={{ left: bullseyeTooltip.x + 14, top: bullseyeTooltip.y - 10 }}
               >
                 <div className="font-semibold">{bullseyeTooltip.name}</div>
-                <div>{bullseyeTooltip.value.toFixed(1)} mm ({bullseyeTooltip.pct}%)</div>
+                <div>{bullseyeTooltip.value.toFixed(1)} mm</div>
               </div>
             )}
             <BullseyeScaleBar
