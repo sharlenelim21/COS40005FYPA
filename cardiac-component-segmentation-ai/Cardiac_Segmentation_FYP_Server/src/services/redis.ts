@@ -49,11 +49,16 @@ if (redisCloud) {
     },
   };
 } else {
-  // AWS ElastiCache or Docker Redis/Valkey configuration
-  let redisUrl = `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`;
-  if (redisAWS) {
-    redisUrl = `rediss://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`;
-  }
+  // AWS ElastiCache or Docker Redis/Valkey configuration.
+  // Embed the password IN the URL so AUTH is sent (F3). NOTE: this only works once
+  // REDIS_PASSWORD actually reaches this process — the PM2 ecosystem.config.js env
+  // allowlist must include REDIS_PASSWORD (it is added alongside this change), otherwise
+  // the var is dropped before the app sees it.
+  const scheme = redisAWS ? "rediss" : "redis";
+  const auth = process.env.REDIS_PASSWORD
+    ? `:${encodeURIComponent(process.env.REDIS_PASSWORD)}@`
+    : "";
+  const redisUrl = `${scheme}://${auth}${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`;
 
   redisConfig = {
     url: redisUrl,

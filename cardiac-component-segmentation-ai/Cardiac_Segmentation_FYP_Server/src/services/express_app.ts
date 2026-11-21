@@ -1,4 +1,5 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import session from 'express-session';
 import passport from 'passport';
 import { RedisStore } from 'connect-redis';
@@ -86,8 +87,13 @@ app.use(
 let corsOriginConfig: cors.CorsOptions['origin'];
 
 if (envType === 'development') {
-  corsOriginConfig = true; // Allow all origins in development
-  logger.info(`${serviceLocation}: CORS configured to allow all origins (development mode).`);
+  // Explicit allow-list even in development — do NOT reflect arbitrary origins (F7).
+  // credentials:true is set below, so reflecting any Origin let any website make
+  // credentialed requests to the API using the victim's session cookie.
+  corsOriginConfig = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+    : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  logger.info(`${serviceLocation}: CORS allow-list (development): ${(corsOriginConfig as string[]).join(', ')}`);
 } else {
   const allowedOrigins: string[] = [];
   if (process.env.CORS_ORIGIN) {
@@ -197,6 +203,20 @@ app.get('/', (req: Request, res: Response) => {
     message: 'Visheart API Server is running',
     environment: envType,
   });
+});
+
+// Centralised error handler — returns JSON, never an HTML stack-trace page.
+// Must be registered AFTER all routes. Handles Multer upload errors (bad file
+// type / size / unexpected field) as 400, and anything else as 500, without
+// leaking stack traces or internal paths (F13/F14).
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  if (res.headersSent) return next(err);
+  if (err instanceof multer.MulterError) {
+    logger.warn(`${serviceLocation}: Multer error on ${req.method} ${req.path}: ${err.code} - ${err.message}`);
+    return res.status(400).json({ success: false, message: `Upload rejected: ${err.code}` });
+  }
+  logger.error(`${serviceLocation}: Unhandled error on ${req.method} ${req.path}: ${err?.message}`);
+  return res.status(500).json({ success: false, message: 'Internal server error.' });
 });
 
 // Configure static file serving

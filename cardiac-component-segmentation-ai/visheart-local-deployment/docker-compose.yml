@@ -65,6 +65,7 @@ services:
       # Redis Configuration
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
       
       # Session Configuration
       SESSION_SECRET: ${VH_SESSION_SECRET:-LOCAL-SESSION-SECRET-CHANGE-IN-PRODUCTION-12345}
@@ -217,7 +218,9 @@ services:
     ports:
       # Only VisHeart's containers use MongoDB (over the Docker network). An installed copy sets VH_MONGO_HOST_PORT=0
       # so Docker picks a free host port and a MongoDB the PC already runs cannot block VisHeart.
-      - "${VH_BIND:+${VH_BIND}:}${VH_MONGO_HOST_PORT:-27017}:27017"
+      # VH_BIND defaults to 127.0.0.1 (not all interfaces) so a plain `docker compose up` with no
+      # VH_BIND set is never reachable from the LAN -- an installed copy can still override it.
+      - "${VH_BIND:-127.0.0.1}:${VH_MONGO_HOST_PORT:-27017}:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: ${VH_MONGO_PASSWORD:-P@ssw0rd123!}
@@ -247,19 +250,20 @@ services:
     image: redis:7-alpine
     container_name: visheart-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     # Published so a backend running outside Docker (`npm run dev`, ts-node/
     # nodemon) can reach it at localhost:6379 — every other dependency
     # (Mongo, MinIO, GPU) already had a host port, only Redis didn't.
     ports:
-      # As MongoDB above: an installed copy sets VH_REDIS_HOST_PORT=0.
-      - "${VH_BIND:+${VH_BIND}:}${VH_REDIS_HOST_PORT:-6379}:6379"
+      # As MongoDB above: an installed copy sets VH_REDIS_HOST_PORT=0. VH_BIND defaults to
+      # 127.0.0.1 so this is never LAN-reachable unless explicitly overridden.
+      - "${VH_BIND:-127.0.0.1}:${VH_REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -278,8 +282,8 @@ services:
     restart: unless-stopped
     user: "0"
     ports:
-      - "${VH_BIND:+${VH_BIND}:}9000:9000"  # API
-      - "${VH_BIND:+${VH_BIND}:}9001:9001"  # Console (not served by this image)
+      - "${VH_BIND:-127.0.0.1}:9000:9000"  # API
+      - "${VH_BIND:-127.0.0.1}:9001:9001"  # Console (not served by this image)
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: ${VH_MINIO_PASSWORD:-minioadmin123}
@@ -313,7 +317,7 @@ services:
       # The prebuilt image's start_server.py binds uvicorn on port 8001.
       # If you rebuild the GPU image from local source (which uses 8011),
       # bump both this mapping and the visheart-app env block in lockstep.
-      - "${VH_BIND:+${VH_BIND}:}8001:8001"
+      - "${VH_BIND:-127.0.0.1}:8001:8001"
     environment:
       <<: *gpu-env
       USE_GPU: "false"
@@ -398,7 +402,7 @@ services:
     restart: unless-stopped
     ports:
       # See gpu-cpu service for the 8001-vs-8011 explanation.
-      - "${VH_BIND:+${VH_BIND}:}8001:8001"
+      - "${VH_BIND:-127.0.0.1}:8001:8001"
     deploy:
       resources:
         reservations:
