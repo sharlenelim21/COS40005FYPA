@@ -64,6 +64,7 @@ services:
       # Redis Configuration
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
       
       # Session Configuration
       SESSION_SECRET: LOCAL-SESSION-SECRET-CHANGE-IN-PRODUCTION-12345
@@ -234,7 +235,7 @@ services:
     image: redis:7-alpine
     container_name: visheart-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     # Published so a backend running outside Docker (`npm run dev`, ts-node/
     # nodemon) can reach it at localhost:6379 — every other dependency
     # (Mongo, MinIO, GPU) already had a host port, only Redis didn't.
@@ -245,7 +246,7 @@ services:
     networks:
       - visheart-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
