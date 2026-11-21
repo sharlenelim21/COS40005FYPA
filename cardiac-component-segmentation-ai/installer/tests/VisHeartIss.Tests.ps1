@@ -27,7 +27,22 @@ Describe 'visheart.iss rules' {
     It 'when the database cannot be deleted, uninstall keeps the data and its passwords' {
         $step = Get-PascalFunction 'CurUninstallStepChanged'
         # DeleteData is switched off inside the branch where Remove-VisHeartDocker -DeleteData failed.
-        $step | Should Match "(?s)Remove-VisHeartDocker.*-DeleteData.*if DeleteData and \(Code <> 0\) then begin.*DeleteData := False"
+        # Only when this copy made a database (database.owner): otherwise Docker holds nothing of it.
+        $step | Should Match "(?s)Remove-VisHeartDocker.*-DeleteData.*if DeleteData and \(Code <> 0\) and FileExists\(Deploy \+ '\\database\.owner'\) then begin.*DeleteData := False"
+    }
+
+    It 'when Docker cannot start but VisHeart never made its database, Yes still deletes everything' {
+        # 2026-11-21, test desktop: Docker never ran (Virtual Machine Platform off), so VisHeart never started, yet the
+        # uninstaller kept C:\VisHeart because it could not ask Docker. database.owner is written just before the
+        # first database is created (and before any image download), so without it Docker holds nothing of this copy.
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Not Match '(?m)^\s*if DeleteData and \(Code <> 0\) then begin'
+    }
+
+    It 'after keeping the data because Docker could not start, it does not say the user chose to keep it' {
+        # The same uninstall then said "As you chose, your patients ... were kept" although the user chose Yes.
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Match '(?s)usPostUninstall\) and not DeleteData and not KeptForDocker'
     }
 
     It 'uninstall cleans Docker through Remove-VisHeartDocker, which starts Docker Desktop when it is not running' {

@@ -118,7 +118,7 @@ Type: dirifempty; Name: "{app}\UNETRESNET34"
 #include "finish-page.iss"
 
 var
-  NeedWsl, NeedDocker, NeedPython, RebootNeeded, SecretsCreated, DeleteData: Boolean;
+  NeedWsl, NeedDocker, NeedPython, RebootNeeded, SecretsCreated, DeleteData, KeptForDocker: Boolean;
 
 function PowerShellExe(): String;
 begin
@@ -459,10 +459,14 @@ begin
     Args := Args + ')"';
     if not Exec(PowerShellExe(), Args, Deploy, SW_HIDE, ewWaitUntilTerminated, Code) then Code := -1;
     Log('Remove-VisHeartDocker exit code: ' + IntToStr(Code));
-    if DeleteData and (Code <> 0) then begin
+    { Docker could not be reached. Without database.owner, which Start writes just before it first creates the database
+      (and before any image download), Docker holds nothing of this copy, so Yes goes ahead and deletes the files.
+      Seen 2026-11-21 on a PC where Docker never started: the folder was kept for nothing. }
+    if DeleteData and (Code <> 0) and FileExists(Deploy + '\database.owner') then begin
       { The database is still there, so keep everything, its passwords (secrets.env) above all: deleting them would
         leave a database that a new install of VisHeart cannot open. }
       DeleteData := False;
+      KeptForDocker := True;
       SuppressibleMsgBox('Docker Desktop could not be started, so the VisHeart database could not be deleted. VisHeart''s ' +
         'data and passwords have been kept in ' + ExpandConstant('{app}') + ', and installing VisHeart again on this PC ' +
         'finds them.' + #13#10#13#10 +
@@ -479,7 +483,8 @@ begin
     end;
   end;
 
-  if (CurUninstallStep = usPostUninstall) and not DeleteData and DirExists(ExpandConstant('{app}')) then
+  { Only for "No": after "Yes" that Docker prevented, the message above has already said what was kept and why. }
+  if (CurUninstallStep = usPostUninstall) and not DeleteData and not KeptForDocker and DirExists(ExpandConstant('{app}')) then
     SuppressibleMsgBox('VisHeart was uninstalled. As you chose, your patients, accounts, trained models and training ' +
       'data were kept in ' + ExpandConstant('{app}') + ' and in Docker, with this PC''s passwords (secrets.env) and the ' +
       'admin login (FIRST-LOGIN.txt). Installing VisHeart again in the same folder finds them.' + #13#10#13#10 +
