@@ -97,6 +97,7 @@ Docker Desktop, WSL2 and Python stay installed. Remove them in Settings > Apps i
 | "Port 5000 is used by another program: ..." | VisHeart needs ports 3000, 5000, 9000 and 8001. The message names the program and its process id. Close that program (or end it in **Task Manager > Details**), then start VisHeart again. |
 | "Docker is installed but this Windows account (...) cannot use it" | See **Using VisHeart from another Windows account** below. |
 | "This PC already has a VisHeart database (...) that was made by another copy of VisHeart" | The data belongs to an earlier or developer copy of VisHeart. Ask the VisHeart team before deleting anything. |
+| Docker Desktop says "Virtual Machine Platform is not enabled" | A Windows feature Docker needs is off. Run the VisHeart installer again: it turns the feature on. Then restart Windows (restarting Docker Desktop is not enough). |
 | "Docker Desktop did not become ready within 3 minutes" | Open Docker Desktop, wait until it says Docker is running, then start VisHeart again. |
 | The login is rejected | If you changed the admin password, use your new password, not the one in `FIRST-LOGIN.txt`. After 5 wrong tries the account is locked for 10 minutes. |
 

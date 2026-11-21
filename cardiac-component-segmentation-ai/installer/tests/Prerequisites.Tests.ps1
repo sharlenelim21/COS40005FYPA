@@ -12,6 +12,7 @@ Describe 'Get-VisHeartPrerequisites' {
     Mock Get-WindowsBuild { 22631 }
     Mock Test-Is64BitWindows { $true }
     Mock Test-WslEnabled { $true }
+    Mock Test-VirtualMachinePlatformEnabled { $true }
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $true }
     Mock Get-PythonVersion { [version]'3.13.1' }
@@ -35,6 +36,17 @@ Describe 'Get-VisHeartPrerequisites' {
         Mock Test-Is64BitWindows { $false }
         It '32-bit Windows blocks' {
             (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:') 'windows').Status | Should Be 'block'
+        }
+    }
+
+    Context 'WSL installed but Virtual Machine Platform off' {
+        # Seen 2026-11-21 on a test desktop: wsl --status succeeded, Docker Desktop then said "Virtual Machine Platform
+        # is not enabled" and could not start.
+        Mock Test-VirtualMachinePlatformEnabled { $false }
+        It "WSL is 'missing', so the installer turns the feature on" {
+            $c = Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:') 'wsl'
+            $c.Status | Should Be 'missing'
+            $c.Message | Should Match 'Virtual Machine Platform'
         }
     }
 
@@ -108,6 +120,7 @@ Describe 'disk space where VisHeart and Docker keep their files' {
     Mock Get-WindowsBuild { 22631 }
     Mock Test-Is64BitWindows { $true }
     Mock Test-WslEnabled { $true }
+    Mock Test-VirtualMachinePlatformEnabled { $true }
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $true }
     Mock Get-PythonVersion { [version]'3.13.1' }
@@ -168,6 +181,7 @@ Describe 'Test-VisHeartPrerequisites.ps1 output' {
     Mock Get-WindowsBuild { 22631 }
     Mock Test-Is64BitWindows { $true }
     Mock Test-WslEnabled { $false }
+    Mock Test-VirtualMachinePlatformEnabled { $true }
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $false }
     Mock Get-PythonVersion { [version]'3.13.1' }

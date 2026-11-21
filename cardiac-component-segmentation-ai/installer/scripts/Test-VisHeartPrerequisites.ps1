@@ -50,6 +50,19 @@ function Test-WslEnabled {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Test-VirtualMachinePlatformEnabled {
+    # WSL2, and so Docker Desktop, needs the Windows feature "Virtual Machine Platform". wsl --status succeeds without
+    # it (seen 2026-11-21: Docker Desktop then said "Virtual Machine Platform is not enabled"). Readable without
+    # administrator rights. If Windows cannot answer, assume it is on rather than ask for a needless restart.
+    try {
+        $feature = Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name='VirtualMachinePlatform'" -ErrorAction Stop
+        if (-not $feature) { return $false }
+        return ([int]$feature.InstallState -eq 1)
+    } catch {
+        return $true
+    }
+}
+
 function Test-DockerDesktopInstalled {
     $programFiles = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
     Test-Path (Join-Path $programFiles 'Docker\Docker\Docker Desktop.exe')
@@ -110,8 +123,13 @@ function Get-VisHeartPrerequisites {
         New-Check 'windows' 'ok' "Windows build $build."
     }
 
-    if (Test-WslEnabled) { New-Check 'wsl' 'ok' 'WSL2 is enabled.' }
-    else { New-Check 'wsl' 'missing' 'WSL2 is not enabled. The installer will turn it on; Windows then needs a restart.' }
+    if (-not (Test-WslEnabled)) {
+        New-Check 'wsl' 'missing' 'WSL2 is not enabled. The installer will turn it on; Windows then needs a restart.'
+    } elseif (-not (Test-VirtualMachinePlatformEnabled)) {
+        New-Check 'wsl' 'missing' 'The Windows feature Virtual Machine Platform, which WSL2 and Docker Desktop need, is off. The installer will turn it on; Windows then needs a restart.'
+    } else {
+        New-Check 'wsl' 'ok' 'WSL2 is enabled.'
+    }
 
     if (Test-DockerDesktopInstalled) { New-Check 'docker' 'ok' 'Docker Desktop is installed.' }
     else { New-Check 'docker' 'missing' 'Docker Desktop is not installed. The installer will install it (free for education, research and small organisations).' }

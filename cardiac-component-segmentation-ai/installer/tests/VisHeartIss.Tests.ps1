@@ -42,6 +42,14 @@ Describe 'visheart.iss rules' {
         $post | Should Match '(?s)New-VisHeartSecrets\.ps1.*Protect-VisHeartFolder\.ps1'
     }
 
+    It 'turning WSL on always enables Virtual Machine Platform too, not only when wsl --install fails' {
+        # 2026-11-21: wsl --install succeeded on a test desktop, but Virtual Machine Platform stayed off and Docker
+        # Desktop could not start.
+        $step = Get-PascalFunction 'CurStepChanged'
+        $step | Should Match 'featurename:VirtualMachinePlatform'
+        $step | Should Not Match "--install --no-distribution', 'Turning on WSL2\.\.\.'\) <> 0 then"
+    }
+
     It 'an update removes the files the installed version shipped that this version does not' {
         $script:Iss | Should Match '(?m)^Source: "scripts\\Remove-VisHeartStaleFiles\.ps1"; DestDir: "\{app\}\\installer"'
         $step = Get-PascalFunction 'CurStepChanged'

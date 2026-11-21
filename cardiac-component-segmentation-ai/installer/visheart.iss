@@ -367,13 +367,14 @@ begin
   end;
 
   if NeedWsl then begin
-    if RunCmd('"' + ExpandConstant('{sys}\wsl.exe') + '" --install --no-distribution', 'Turning on WSL2...') <> 0 then begin
-      { Older Windows 10 builds have no "wsl --install": turn on the two Windows features instead. }
-      RunCmd('dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart',
-        'Turning on WSL2...');
-      RunCmd('dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart',
-        'Turning on WSL2...');
-    end;
+    RunCmd('"' + ExpandConstant('{sys}\wsl.exe') + '" --install --no-distribution', 'Turning on WSL2...');
+    { Always turn on the two Windows features as well: older Windows 10 builds have no "wsl --install", and it can
+      succeed while Virtual Machine Platform stays off, so Docker Desktop cannot start (seen 2026-11-21). Turning on
+      a feature that is already on changes nothing. }
+    RunCmd('dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart',
+      'Turning on WSL2...');
+    RunCmd('dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart',
+      'Turning on Virtual Machine Platform...');
     RebootNeeded := True;
   end;
   if NeedDocker then begin
