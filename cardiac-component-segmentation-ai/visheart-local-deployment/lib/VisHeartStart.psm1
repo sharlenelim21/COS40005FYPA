@@ -139,6 +139,65 @@ function Remove-OtherCopyContainers {
     return $removed
 }
 
+function Get-ImageRepository([string]$Reference) {
+    # 'a/app:2' and 'a/app@sha256:...' both give 'a/app' (a registry port, 'host:5000/a', stays in the name).
+    $name = ($Reference -split '@', 2)[0]
+    $slash = $name.LastIndexOf('/')
+    $colon = $name.LastIndexOf(':')
+    if ($colon -gt $slash) { $name = $name.Substring(0, $colon) }
+    return $name
+}
+
+function Remove-OldVisHeartImages {
+    # Each update names new VisHeart images in release.env, and Docker keeps the old ones (the GPU image alone is about
+    # 25 GB). An installed copy removes the images of its own repositories that it no longer uses. It keeps: the images
+    # in release.env, any image a container still uses, and the defaults in docker-compose.yml (what a developer copy
+    # on the same PC runs). Mongo and Redis are never touched. Removes nothing when a current image cannot be found,
+    # and nothing in a developer copy. Returns the removed image names.
+    param([string]$DeploymentDir)
+    if (-not (Test-Path (Join-Path $DeploymentDir 'release.env'))) { return @() }
+    $values = Get-ReleaseValues $DeploymentDir
+    $current = @($values.Keys | Where-Object { $_ -match '^VH_[A-Z_]*_IMAGE$' } | Sort-Object | ForEach-Object { $values[$_] } | Where-Object { $_ })
+    if ($current.Count -eq 0) { return @() }
+
+    $keep = @{}
+    foreach ($ref in $current) {
+        if ((Invoke-Docker @('image', 'inspect', '--format', '{{.Id}}', $ref)) -ne 0) { return @() }
+        foreach ($id in @(Get-LastDockerOutput)) { if ($id) { $keep[[string]$id] = $true } }
+    }
+    $compose = Join-Path $DeploymentDir 'docker-compose.yml'
+    if (Test-Path $compose) {
+        foreach ($m in [regex]::Matches((Get-Content -Raw $compose), '\$\{VH_[A-Z_]+_IMAGE:-([^}\s]+)\}')) {
+            if ((Invoke-Docker @('image', 'inspect', '--format', '{{.Id}}', $m.Groups[1].Value)) -eq 0) {
+                foreach ($id in @(Get-LastDockerOutput)) { if ($id) { $keep[[string]$id] = $true } }
+            }
+        }
+    }
+    if ((Invoke-Docker @('ps', '-a', '-q', '--no-trunc')) -ne 0) { return @() }
+    $containers = @(Get-LastDockerOutput | Where-Object { $_ })
+    if ($containers.Count -gt 0) {
+        if ((Invoke-Docker (@('inspect', '--format', '{{.Image}}') + $containers)) -ne 0) { return @() }
+        foreach ($id in @(Get-LastDockerOutput)) { if ($id) { $keep[[string]$id] = $true } }
+    }
+
+    $removed = @()
+    foreach ($repo in @($current | ForEach-Object { Get-ImageRepository $_ } | Select-Object -Unique)) {
+        if ((Invoke-Docker @('images', $repo, '--no-trunc', '--format', '{{.ID}}|{{.Tag}}')) -ne 0) { continue }
+        $tags = [ordered]@{}
+        foreach ($line in @(Get-LastDockerOutput)) {
+            $id, $tag = ([string]$line).Split('|', 2)
+            if (-not $id -or $keep.ContainsKey($id)) { continue }
+            if (-not $tags.Contains($id)) { $tags[$id] = @() }
+            if ($tag -and $tag -ne '<none>') { $tags[$id] += "${repo}:$tag" }
+        }
+        foreach ($id in $tags.Keys) {
+            if ((Invoke-Docker @('image', 'rm', '-f', $id)) -ne 0) { continue }
+            if ($tags[$id].Count -gt 0) { $removed += $tags[$id][0] } else { $removed += "$repo ($id)" }
+        }
+    }
+    return $removed
+}
+
 function Test-DatabaseVolume {
     # An installed copy makes new passwords on this PC, but MongoDB keeps the ones its data volume was first created
     # with. The volume name comes from this folder's name, so a developer copy or an earlier install whose data was
@@ -270,4 +329,4 @@ function Open-VisHeart {
 
 Export-ModuleMember -Function Get-DockerDesktopExe, Test-UrlAnswers, Test-VisHeartAnswering, Open-VisHeart, Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
-    Remove-VisHeartDocker, Initialize-BackendFolders
+    Remove-VisHeartDocker, Initialize-BackendFolders, Remove-OldVisHeartImages

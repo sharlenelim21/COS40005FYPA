@@ -280,6 +280,79 @@ Describe 'Remove-OtherCopyContainers' {
     }
 }
 
+Describe 'Remove-OldVisHeartImages' {
+    # A fake Docker: answers by the arguments of the last call (mock bodies run in the module, so the table lives there).
+    function global:Get-FakeDockerAnswer([string]$Arguments) {
+        $answers = @{
+            'image inspect --format {{.Id}} a/app:2'        = @('sha256:app2')
+            'image inspect --format {{.Id}} g/gpu@sha256:G' = @('sha256:gpuG')
+            'image inspect --format {{.Id}} a/app:dev'      = @('sha256:appdev')
+            'ps -a -q --no-trunc'                           = @('c1', 'c2')
+            'inspect --format {{.Image}} c1 c2'             = @('sha256:gpuOld', 'sha256:mongo')
+            'images a/app --no-trunc --format {{.ID}}|{{.Tag}}' = @('sha256:app2|2', 'sha256:app1|1', 'sha256:app1|old-alias', 'sha256:appdev|dev')
+            'images g/gpu --no-trunc --format {{.ID}}|{{.Tag}}' = @('sha256:gpuG|<none>', 'sha256:gpuOld|0.9')
+        }
+        return $answers[$Arguments]
+    }
+    function New-InstalledDir([switch]$Developer) {
+        $dir = Join-Path $env:TEMP ("vh-img-" + [guid]::NewGuid())
+        New-Item -ItemType Directory $dir | Out-Null
+        if (-not $Developer) {
+            Set-Content (Join-Path $dir 'release.env') @('COMPOSE_PROJECT_NAME=visheart', 'VH_APP_IMAGE=a/app:2', 'VH_GPU_IMAGE=g/gpu@sha256:G') -Encoding ASCII
+        }
+        Set-Content (Join-Path $dir 'docker-compose.yml') @('    image: ${VH_APP_IMAGE:-a/app:dev}', '    image: mongo:7.0') -Encoding ASCII
+        return $dir
+    }
+
+    Context 'an installed copy after an update' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { $script:lastDockerArgs = ($Arguments -join ' '); 0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { Get-FakeDockerAnswer $script:lastDockerArgs }
+        It 'removes only its old images, keeping the current ones, those a container uses and the developer default' {
+            $dir = New-InstalledDir
+            try {
+                $removed = @(Remove-OldVisHeartImages $dir)
+                ($removed -join ',') | Should Be 'a/app:1'
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -eq 'image rm -f sha256:app1' }
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -like 'image rm*' }
+                # Mongo and Redis are not VisHeart images: their repositories are never listed.
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -like 'images mongo*' }
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -match '"' }
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'a current image Docker cannot find' {
+        Mock -ModuleName VisHeartStart Invoke-Docker {
+            $script:lastDockerArgs = ($Arguments -join ' ')
+            if ($script:lastDockerArgs -like 'image inspect*') { return 1 }
+            0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { Get-FakeDockerAnswer $script:lastDockerArgs }
+        It 'removes nothing, since it cannot tell which image is current' {
+            $dir = New-InstalledDir
+            try {
+                @(Remove-OldVisHeartImages $dir).Count | Should Be 0
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -like 'image rm*' }
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'a developer copy (no release.env)' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'removes nothing and asks Docker nothing' {
+            $dir = New-InstalledDir -Developer
+            try {
+                @(Remove-OldVisHeartImages $dir).Count | Should Be 0
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+}
+
 Describe 'Get-UpdateNotice' {
     function New-ReleaseDir([string]$Version, [string]$Url = 'https://example.test/latest.json') {
         $dir = Join-Path $env:TEMP ("vh-upd-" + [guid]::NewGuid())
@@ -544,5 +617,12 @@ Describe 'start.bat from a 32-bit process' {
             $out = & "$env:SystemRoot\SysWOW64\cmd.exe" /c "`"$t\start.bat`"" | Out-String
             $out | Should Match 'is64=True'
         } finally { Remove-Item -Recurse -Force $t }
+    }
+}
+
+Describe 'start.ps1 removes old images' {
+    $ps1 = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
+    It 'only after VisHeart was started, and never fails the start' {
+        $ps1 | Should Match '(?s)up -d visheart-app \$inferenceService.*try \{[^}]*Remove-OldVisHeartImages \$scriptDir'
     }
 }

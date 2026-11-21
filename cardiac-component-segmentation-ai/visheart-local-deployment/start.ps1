@@ -211,6 +211,13 @@ try {
         }
     }
 
+    # VisHeart now runs on this version's images; an installed copy frees the space of the ones earlier versions used.
+    try {
+        foreach ($image in @(Remove-OldVisHeartImages $scriptDir)) { Write-Log "Removed old VisHeart image $image to free disk space." }
+    } catch {
+        Write-Log "Could not remove old VisHeart images (VisHeart is not affected): $($_.Exception.Message)"
+    }
+
     Write-Log 'Ensuring python symlink exists in backend container...'
     $pythonFixCmd = 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python'
     & docker exec visheart-local sh -c 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python' > $null 2>&1
