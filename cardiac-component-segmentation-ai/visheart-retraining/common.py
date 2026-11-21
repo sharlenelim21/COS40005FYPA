@@ -4,18 +4,21 @@ import os
 import sys
 from pathlib import Path
 
-WINDOWS_UNET_ROOT = r"E:\Jy\Unet"
+# The training data folder beside these tools, wherever VisHeart is installed (C:\VisHeart, E:\VisHeart, ...): the
+# installer puts the pack there. A PC that keeps its data elsewhere names it in retraining.local.bat.
+WINDOWS_UNET_ROOT = Path(__file__).resolve().parent.parent / "visheart-training-data"
 # The inference service's models folder in this repository: the original unet.pth and the active slot.
 REPO_MODELS = Path(__file__).resolve().parent.parent / "visheart-inference-gpu" / "app" / "models"
 
 
 def default_unet_root(env=None, os_name=None, home=None):
-    """Where the retraining data lives: VISHEART_UNET_ROOT, else E:\\Jy\\Unet on Windows and ~/visheart-unet elsewhere."""
+    """Where the retraining data lives: VISHEART_UNET_ROOT, else visheart-training-data beside these tools on Windows
+    and ~/visheart-unet elsewhere."""
     env = os.environ if env is None else env
     if env.get("VISHEART_UNET_ROOT"):
         return Path(env["VISHEART_UNET_ROOT"])
     if (os_name or os.name) == "nt":
-        return Path(WINDOWS_UNET_ROOT)
+        return WINDOWS_UNET_ROOT
     return Path(home or Path.home()) / "visheart-unet"
 
 

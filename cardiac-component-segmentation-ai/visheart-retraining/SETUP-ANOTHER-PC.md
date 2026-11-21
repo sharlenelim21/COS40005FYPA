@@ -13,8 +13,9 @@ Pack the data into a new folder, for example on a USB drive:
 py -3 cardiac-component-segmentation-ai\visheart-retraining\pack_training_data.py pack --out F:\visheart-training-pack
 ```
 
-(Run it from the repository root. It reads the training data from `E:\Jy\Unet` unless that PC keeps it elsewhere;
-see `visheart-retraining\common.py`.) The team has already made a pack: [download it from Google Drive](https://drive.google.com/file/d/17n4iitNrGpNxCIf98YxcGm4Dw89NTjXg/view?usp=sharing), extract
+(Run it from the repository root, adding `--root <folder>` with that PC's training data folder, for example
+`--root E:\Jy\Unet` on the original training PC. Without `--root` it reads `visheart-training-data` beside these
+scripts.) The team has already made a pack: [download it from Google Drive](https://drive.google.com/file/d/17n4iitNrGpNxCIf98YxcGm4Dw89NTjXg/view?usp=sharing), extract
 it, and go to step 2.
 
 It copies only what the service needs and records every file's SHA-256 in `PACKED.json`. Copy the whole folder to
@@ -73,3 +74,13 @@ Add `-ReplaceOriginalModel` to replace a different `unet.pth` without asking. It
 | "STOPPED: ... is a different model" | Run `start.bat` again and answer Y, or run the setup by hand with `-ReplaceOriginalModel`. |
 | "did not start. See ...\jobs\worker.log" | The last lines of that log name the problem. |
 | Nothing about the training service | `start.bat` did not find `visheart-retraining`. Pull the branch again. |
+
+## Running the training tests
+
+Some tests load the real v2-unet training code from the data folder. On a PC that keeps its data somewhere else (the
+original training PC keeps it in `E:\Jy\Unet`), name that folder first, as `retraining.local.bat` does for the service:
+
+```powershell
+$env:VISHEART_UNET_ROOT = 'E:\Jy\Unet'
+python -m unittest discover -s tests
+```

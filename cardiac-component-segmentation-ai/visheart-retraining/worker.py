@@ -33,10 +33,18 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import jobs  # noqa: E402
-import pipeline  # noqa: E402
-import versions  # noqa: E402
-from evaluate import atomic_write_json, summarize  # noqa: E402
+try:
+    import jobs  # noqa: E402
+    import pipeline  # noqa: E402
+    import versions  # noqa: E402
+    from evaluate import atomic_write_json, summarize  # noqa: E402
+    SERVICE_IMPORT_ERROR = None
+except Exception as _error:  # noqa: BLE001
+    # These load PyTorch. Where it cannot load (2026-11-21, a test desktop: "[WinError 1114] ... c10.dll"), --stop and
+    # --check-running must still work, and serving must say why it cannot start instead of crashing: a crash exits 1,
+    # which stop.bat reads as "a training is in progress".
+    jobs = pipeline = versions = atomic_write_json = summarize = None
+    SERVICE_IMPORT_ERROR = _error
 
 HOST, PORT = "127.0.0.1", 8010
 ALLOWED_HOSTS = ("127.0.0.1", "localhost", "host.docker.internal")
@@ -392,6 +400,9 @@ def host_allowed(header, port):
     return name in ALLOWED_HOSTS and given in ("", str(port))
 
 
+# Without the service modules (PyTorch could not load) nothing is served; the pattern only has to exist.
+_JOB_ID = jobs.JOB_ID_PATTERN if jobs else r"[^/]+"
+
 ROUTES = [
     ("GET", r"/health", lambda app, m, q, b: {"ok": True, "busy": app.runner.busy(), "simulated": app.simulate,
                                               "pid": os.getpid()}),
@@ -400,9 +411,9 @@ ROUTES = [
     ("POST", r"/eligible/check", lambda app, m, q, b: app.check_eligible()),
     ("POST", r"/jobs/train", lambda app, m, q, b: app.start_training(who(b), None, selection_of(b))),
     ("GET", r"/jobs/current", lambda app, m, q, b: app.runner.current()),
-    ("GET", rf"/jobs/({jobs.JOB_ID_PATTERN})", lambda app, m, q, b: app.job(m[1])),
-    ("GET", rf"/jobs/({jobs.JOB_ID_PATTERN})/log", lambda app, m, q, b: app.log(m[1], q.get("tail", ["200"])[0])),
-    ("POST", rf"/jobs/({jobs.JOB_ID_PATTERN})/cancel", lambda app, m, q, b: app.cancel(m[1], who(b))),
+    ("GET", rf"/jobs/({_JOB_ID})", lambda app, m, q, b: app.job(m[1])),
+    ("GET", rf"/jobs/({_JOB_ID})/log", lambda app, m, q, b: app.log(m[1], q.get("tail", ["200"])[0])),
+    ("POST", rf"/jobs/({_JOB_ID})/cancel", lambda app, m, q, b: app.cancel(m[1], who(b))),
     ("GET", r"/versions/([^/]+)/preview", lambda app, m, q, b: app.preview(m[1], q.get("action", ["activate"])[0])),
     ("GET", r"/versions/([^/]+)/results", lambda app, m, q, b: app.results(m[1])),
     ("GET", r"/versions/([^/]+)/examples/(\d{1,2})",
@@ -522,7 +533,8 @@ def terminate(app, exit=os._exit):
 
 def stop_process(pid):
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=jobs.NO_WINDOW)
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     else:
         os.kill(pid, 15)
 
@@ -567,6 +579,19 @@ def main(argv=None):
         stop_process(info["pid"])
         print(f"stopped (pid {info['pid']})")
         return 0
+
+    if SERVICE_IMPORT_ERROR is not None:
+        message = (f"The training service cannot start: PyTorch could not be loaded on this computer "
+                   f"({SERVICE_IMPORT_ERROR}). Install the latest Microsoft Visual C++ Redistributable (x64) from "
+                   f"https://aka.ms/vs/17/release/vc_redist.x64.exe, restart Windows, then start VisHeart again.")
+        print(message)
+        root = os.environ.get("VISHEART_UNET_ROOT")
+        if root:
+            log = Path(root) / "jobs" / "worker.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with open(log, "a", encoding="utf-8") as handle:
+                handle.write(f"{dt.datetime.now().isoformat(timespec='seconds')} {message}\n")
+        return 3
 
     config = pipeline.default_config()
     config.jobs.mkdir(parents=True, exist_ok=True)

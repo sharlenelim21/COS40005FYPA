@@ -108,9 +108,10 @@ The build PC is the computer that makes the installers. It needs:
 
 ## 4. A new training data pack (Full installer only)
 
-On the PC that holds the UNet Extend Training data:
+On the PC that holds the UNet Extend Training data (`--root` is that PC's data folder; `E:\Jy\Unet` on the original
+training PC):
 ```
-py -3 cardiac-component-segmentation-ai\visheart-retraining\pack_training_data.py pack --out F:\visheart-training-pack
+py -3 cardiac-component-segmentation-ai\visheart-retraining\pack_training_data.py pack --root E:\Jy\Unet --out F:\visheart-training-pack
 ```
 Then build the Full installer with `-PackPath F:\visheart-training-pack`. The `unet.pth` in `app/models` must be the
 one the pack was made with; `make-installer` checks this. An Update installer never ships the pack, and a PC that

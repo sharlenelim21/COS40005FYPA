@@ -10,6 +10,19 @@ if not exist "%VENV%\pythonw.exe" (
   echo To set it up, see SETUP-ANOTHER-PC.md in visheart-retraining.
   exit /b 2
 )
+rem The Python environment alone is not a finished setup: setup-training-pc.ps1 creates it first, rewrites the pack's
+rem paths for this PC, and writes retraining.local.bat last. Without that file or the data's registry, say "not set up"
+rem (exit 2), so start.bat runs the setup again.
+if not exist "%HERE%retraining.local.bat" (
+  echo The training service is not set up on this computer: the setup has not finished.
+  echo To set it up, see SETUP-ANOTHER-PC.md in visheart-retraining.
+  exit /b 2
+)
+if not exist "%TRAINING_DATA%\versions\registry.json" (
+  echo The training service is not set up on this computer: no training data was found in %TRAINING_DATA%.
+  echo To set it up, see SETUP-ANOTHER-PC.md in visheart-retraining.
+  exit /b 2
+)
 "%VENV%\python.exe" "%HERE%worker.py" --check-running >nul 2>&1
 if not errorlevel 1 (
   echo The training service is already running:
