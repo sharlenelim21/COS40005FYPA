@@ -94,6 +94,10 @@ try {
     if ($OpenBrowser -and (Test-VisHeartAnswering)) {
         Write-Log 'VisHeart is already running. Opening it in your browser.'
         Open-VisHeart
+        # The training service runs on Windows, not in Docker: after a Windows restart Docker brings VisHeart back by
+        # itself, but not this service. Starting it is quick when it already runs.
+        $inferenceContainer = Get-RunningInferenceContainer
+        Start-RetrainingWorker
         exit 0
     }
 

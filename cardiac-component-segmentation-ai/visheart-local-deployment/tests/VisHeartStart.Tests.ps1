@@ -729,3 +729,28 @@ Describe 'start.ps1 checks the Windows feature before waiting for Docker' {
         $ps1 | Should Match '(?s)if \(-not \(Resolve-WindowsFeatureProblem\)\) \{\s*exit 10\s*\}.*\$docker = Wait-DockerReady'
     }
 }
+
+Describe 'start.ps1 when VisHeart is already running (the desktop icon)' {
+    $ps1 = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
+    It 'also starts the UNet Extend Training service before it stops' {
+        # 2026-11-21: after a Windows restart Docker brings the containers back by itself, but not the training
+        # service (it runs on Windows, not in Docker). The icon saw VisHeart answering, only opened the browser, and
+        # the training page said "The training service is not available" however often it was clicked.
+        $ps1 | Should Match '(?s)if \(\$OpenBrowser -and \(Test-VisHeartAnswering\)\) \{[^}]*Start-RetrainingWorker[^}]*exit 0'
+    }
+}
+
+Describe 'Get-RunningInferenceContainer' {
+    Context 'the CPU AI service runs' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { @('visheart-gpu-cpu') }
+        It 'names it, asking Docker without double quotes' {
+            Get-RunningInferenceContainer | Should Be 'visheart-gpu-cpu'
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter { ($Arguments -join ' ') -match '"' }
+        }
+    }
+    Context 'Docker cannot be asked' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 1 }
+        It 'returns nothing' { Get-RunningInferenceContainer | Should Be '' }
+    }
+}

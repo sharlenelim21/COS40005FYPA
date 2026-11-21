@@ -139,6 +139,14 @@ function Remove-OtherCopyContainers {
     return $removed
 }
 
+function Get-RunningInferenceContainer {
+    # The AI service container that is running now (visheart-gpu-cpu or visheart-gpu-nvidia), or '' when none is.
+    if ((Invoke-Docker @('ps', '--filter', 'name=visheart-gpu-', '--format', '{{.Names}}')) -ne 0) { return '' }
+    $names = @(Get-LastDockerOutput | Where-Object { $_ -match '^visheart-gpu-(cpu|nvidia)$' })
+    if ($names.Count -gt 0) { return [string]$names[0] }
+    return ''
+}
+
 function Test-DockerUsesWsl {
     # Docker Desktop runs on WSL2 unless its settings turn the WSL engine off (Hyper-V mode). No settings yet: WSL.
     param([string]$SettingsPath = (Join-Path $env:APPDATA 'Docker\settings-store.json'))
@@ -416,4 +424,4 @@ Export-ModuleMember -Function Get-DockerDesktopExe, Test-UrlAnswers, Test-VisHea
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
     Remove-VisHeartDocker, Initialize-BackendFolders, Remove-OldVisHeartImages, Test-DockerUsesWsl, Get-VirtualMachinePlatformState,
     Test-RestartPending, Get-WindowsFeatureProblem, Show-VisHeartQuestion, Enable-VirtualMachinePlatform, Invoke-WindowsRestart,
-    Resolve-WindowsFeatureProblem
+    Resolve-WindowsFeatureProblem, Get-RunningInferenceContainer
