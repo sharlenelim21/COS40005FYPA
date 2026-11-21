@@ -1072,6 +1072,9 @@ export interface UserCrudResult {
   user?: IUserSafe; // The created or updated user document (applicable for CREATE and UPDATE operations)
   users?: IUserSafe[]; // Array of user documents (applicable for READ operation)
   message?: string; // Message if error/warning occurred (applicable for all operations)
+  // AUTHENTICATE only: the account is locked (it already was, or this attempt locked it). The login route answers
+  // 423 from this flag alone, never from the message's wording.
+  locked?: boolean;
 }
 
 // Define result type for project CRUD operations

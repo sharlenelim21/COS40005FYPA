@@ -579,6 +579,7 @@ const authenticateUser = async (
       return {
         success: false,
         operation,
+        locked: true,
         message: `Account temporarily locked due to too many failed login attempts. Please try again in ${minutes} minute${minutes !== 1 ? "s" : ""}.`,
       };
     }
@@ -619,6 +620,7 @@ const authenticateUser = async (
         return {
           success: false,
           operation,
+          locked: true,
           message: `Too many failed login attempts. Account locked for ${LOGIN_LOCKOUT_SECONDS / 60} minutes.`,
         };
       }

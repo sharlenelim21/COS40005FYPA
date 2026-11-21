@@ -163,15 +163,16 @@ router.post("/login",
     }
   },
   (req: Request, res: Response, next: NextFunction): void => {
-    passport.authenticate("local", (err: Error | null, user: IUserSafe, info?: { message: string }) => {
+    passport.authenticate("local", (err: Error | null, user: IUserSafe, info?: { message?: string; locked?: boolean }) => {
       if (err) {
         logger.error(`${serviceLocation}: Authentication error: ${err}`);
         return res.status(500).json({ message: "Internal error" });
       }
       if (!user) {
         const message = info?.message ?? "Invalid username or password.";
-        const isLocked = message.toLowerCase().includes("locked") || message.toLowerCase().includes("too many");
-        const statusCode = isLocked ? 423 : 401;
+        // 423 only for a real lockout (authenticateUser's `locked`). The wording is not a signal: a wrong password's
+        // message says how many attempts remain "before account is locked", and that is a 401.
+        const statusCode = info?.locked === true ? 423 : 401;
         logger.warn(
           `${serviceLocation}: Failed login attempt - ` +
           `username=${req.body.username} ` +
