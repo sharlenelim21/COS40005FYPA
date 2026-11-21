@@ -146,3 +146,12 @@ Describe 'visheart.iss compiles' {
         $finish | Should Not Match 'Start menu > VisHeart > Uninstall'
     }
 }
+
+Describe 'visheart.iss installs the Visual C++ runtime' {
+    $iss = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'visheart.iss')
+    It 'when the prerequisite check says it is missing or too old' {
+        # PyTorch (UNet Extend Training) failed with WinError 1114 on a PC with the 2017 runtime (2026-11-21).
+        $iss | Should Match "Name = 'vcredist' then NeedVCRedist := True"
+        $iss | Should Match "(?s)if NeedVCRedist then\s+InstallWithWinget\('Microsoft\.VCRedist\.2015\+\.x64'"
+    }
+}

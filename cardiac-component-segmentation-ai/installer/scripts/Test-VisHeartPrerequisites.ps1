@@ -3,7 +3,7 @@
     Checks this PC before VisHeart is installed.
 
 .DESCRIPTION
-    Writes one result per check (windows, wsl, docker, nvidia, python, disk), each with a status and a plain sentence:
+    Writes one result per check (windows, wsl, docker, nvidia, python, vcredist, disk), each with a status and a plain sentence:
       ok       nothing to do
       missing  the installer installs it (WSL, Docker Desktop, Python)
       warn     VisHeart works with a limitation (no NVIDIA GPU)
@@ -79,6 +79,21 @@ function Test-NvidiaDriver {
     return ($LASTEXITCODE -eq 0)
 }
 
+$script:MinVCRuntime = [version]'14.40'   # current PyTorch builds for Windows need the 2022 (14.40+) runtime
+
+function Get-VCRuntimeVersion {
+    # The installed Microsoft Visual C++ 2015-2022 runtime (x64), or $null. Read from the 64-bit registry view: the
+    # installer is a 32-bit program, which would otherwise see the 32-bit runtime's key.
+    try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        $key = $base.OpenSubKey('SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64')
+        if (-not $key) { return $null }
+        $text = [string]$key.GetValue('Version')
+        if ($text -match '(\d+\.\d+\.\d+)') { return [version]$Matches[1] }
+    } catch { }
+    return $null
+}
+
 function Get-PythonVersion {
     # The Microsoft Store "python" stub prints nothing useful; a real install prints "Python 3.x.y".
     foreach ($cmd in @(@('py', '-3', '--version'), @('python', '--version'))) {
@@ -141,6 +156,12 @@ function Get-VisHeartPrerequisites {
     if ($python -and $python -ge [version]'3.11') { New-Check 'python' 'ok' "Python $python." }
     elseif ($python) { New-Check 'python' 'missing' "Python $python is too old for UNet Extend Training (3.11 or later). The installer will install Python 3.13." }
     else { New-Check 'python' 'missing' 'Python is not installed. UNet Extend Training needs it; the installer will install Python 3.13.' }
+
+    # Found 2026-11-21: with the 2017 runtime (14.10) PyTorch fails with "[WinError 1114] ... c10.dll".
+    $vc = Get-VCRuntimeVersion
+    if ($vc -and $vc -ge $script:MinVCRuntime) { New-Check 'vcredist' 'ok' "Microsoft Visual C++ runtime $vc." }
+    elseif ($vc) { New-Check 'vcredist' 'missing' "The Microsoft Visual C++ runtime on this PC ($vc) is too old for UNet Extend Training. The installer will update it." }
+    else { New-Check 'vcredist' 'missing' 'The Microsoft Visual C++ runtime is not installed. UNet Extend Training needs it; the installer will install it.' }
 
     if (-not $SkipDisk) { Get-DiskCheck -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall }
 }

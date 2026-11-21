@@ -118,7 +118,7 @@ Type: dirifempty; Name: "{app}\UNETRESNET34"
 #include "finish-page.iss"
 
 var
-  NeedWsl, NeedDocker, NeedPython, RebootNeeded, SecretsCreated, DeleteData, KeptForDocker: Boolean;
+  NeedWsl, NeedDocker, NeedPython, NeedVCRedist, RebootNeeded, SecretsCreated, DeleteData, KeptForDocker: Boolean;
 
 function PowerShellExe(): String;
 begin
@@ -262,7 +262,8 @@ begin
     if Status = 'missing' then begin
       if Name = 'wsl' then NeedWsl := True
       else if Name = 'docker' then NeedDocker := True
-      else if Name = 'python' then NeedPython := True;
+      else if Name = 'python' then NeedPython := True
+      else if Name = 'vcredist' then NeedVCRedist := True;
     end;
   end;
 
@@ -383,6 +384,10 @@ begin
   end;
   if NeedPython then
     InstallWithWinget('Python.Python.3.13', '--scope machine', 'Python 3.13', 'https://www.python.org/downloads/');
+  { PyTorch (UNet Extend Training) needs the current runtime: with the 2017 one it failed with WinError 1114. }
+  if NeedVCRedist then
+    InstallWithWinget('Microsoft.VCRedist.2015+.x64', '', 'Microsoft Visual C++ Redistributable',
+      'https://aka.ms/vs/17/release/vc_redist.x64.exe');
 
   { Docker Desktop only accepts accounts in the docker-users group. "Already a member" is fine. }
   Account := GetEnv('USERDOMAIN') + '\' + GetUserNameString();
