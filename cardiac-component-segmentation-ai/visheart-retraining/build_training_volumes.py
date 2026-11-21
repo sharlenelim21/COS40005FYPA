@@ -2,7 +2,7 @@
 
 stdin : {"source_nifti", "case_id", "out_dir", "plane": {"height", "width"}, "min_share", "min_pixels",
          "tracked_slices": editTracking.slices, "frames": the saved editable mask's frames,
-         "case": {"isTemplate", "aiResult", "heldOut"}, the facts the export judged the case by,
+         "case": {"isTemplate", "fromTemplate", "aiResult", "heldOut"}, the facts the export judged the case by,
          "frozen_slices": optional frozen_guard.py index; a source volume with any frozen slice exports nothing}
 stdout: {"files": [...], "skipped": {...}[, "frozen_match": {...}]}  or  {"error": "..."}
 
@@ -27,7 +27,7 @@ from common import sha256_file  # noqa: E402
 from eligibility import MIN_PIXELS, MIN_SHARE, case_exclusion, slice_skip  # noqa: E402
 
 CLASS_TO_LABEL = {"lvc": 3, "lv": 3, "myo": 2, "rv": 1}
-REFUSED = {"template_project": "a template project never trains",
+REFUSED = {"template_project": "a template project, or one that came from a template, never trains",
            "no_ai_result": "the case has no AI result of its model, so its edits cannot be measured",
            "unknown_case": "the export did not say whether this case may train (rebuild the backend: npx tsc)"}
 

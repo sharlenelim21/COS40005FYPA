@@ -30,6 +30,27 @@
       ]
     },
     {
+      "about": "A template given back to its author by template_tool.py unpublish: no longer published, but fromTemplate stays. Its own UNet result and edits do not make the experts' masks a user's corrections: it never trains.",
+      "project": { "_id": "p-unpublished", "name": "Normal heart (male), unpublished", "userid": "u-jy",
+                   "filehash": "hash-unpublished", "isTemplate": false, "fromTemplate": true,
+                   "templateInfo": { "category": "NOR", "sex": "M" }, "dimensions": { "height": 4, "width": 4 } },
+      "aiResults": [
+        { "_id": "ai-unpublished", "isMedSAMOutput": true, "segmentationModel": "unet", "frames": [{ "frameindex": 0, "slices": [
+          { "sliceindex": 0, "segmentationmasks": [{ "class": "lvc", "segmentationmaskcontents": "0 4" }] },
+          { "sliceindex": 1, "segmentationmasks": [{ "class": "lvc", "segmentationmaskcontents": "0 4" }] }] }] }
+      ],
+      "masks": [
+        { "_id": "m-unpublished", "isMedSAMOutput": false, "segmentationModel": "unet",
+          "editTracking": { "status": "computed", "editedSliceCount": 2, "aiMaskId": "ai-unpublished", "editedAt": "2026-11-06T10:00:00Z",
+            "slices": [
+              { "frameindex": 0, "sliceindex": 0, "pixelsChanged": 4, "editedClasses": ["lvc"], "byClass": { "lvc": 4 } },
+              { "frameindex": 0, "sliceindex": 1, "pixelsChanged": 2, "editedClasses": ["lvc"], "byClass": { "lvc": 2 } }] },
+          "frames": [{ "frameindex": 0, "slices": [
+            { "sliceindex": 0, "segmentationmasks": [{ "class": "lvc", "segmentationmaskcontents": "0 8" }] },
+            { "sliceindex": 1, "segmentationmasks": [{ "class": "lvc", "segmentationmaskcontents": "0 6" }] }] }] }
+      ]
+    },
+    {
       "about": "A normal corrected project: both corrected slices are large enough and its AI result holds them.",
       "project": { "_id": "p-a", "name": "Patient A", "userid": "u-lee", "filehash": "hash-a",
                    "dimensions": { "height": 4, "width": 4 } },
@@ -116,17 +137,20 @@
   },
   "expected": {
     "cases": 3, "projects": 3, "slices": 4, "trainingAllowed": false,
-    "excluded": { "template_project": 1, "no_ai_result": 1 },
+    "excluded": { "template_project": 2, "no_ai_result": 1 },
     "skipped": { "slice_no_ai_baseline": 1 }
   },
   "caseRules": [
-    { "name": "a template project never trains", "isTemplate": true, "ai": "same_model", "heldOut": false, "expected": "template_project" },
-    { "name": "a template project stays in the held-out comparison", "isTemplate": true, "ai": "same_model", "heldOut": true, "expected": null },
-    { "name": "held out or not, a case needs its AI result", "isTemplate": true, "ai": "missing", "heldOut": true, "expected": "no_ai_result" },
-    { "name": "a case without an AI result never trains", "isTemplate": false, "ai": "missing", "heldOut": false, "expected": "no_ai_result" },
-    { "name": "the other model's AI result is not this case's", "isTemplate": false, "ai": "other_model", "heldOut": false, "expected": "no_ai_result" },
-    { "name": "a saved, editable mask is not an AI result", "isTemplate": false, "ai": "not_ai_output", "heldOut": false, "expected": "no_ai_result" },
-    { "name": "a corrected project with its own AI result trains", "isTemplate": false, "ai": "same_model", "heldOut": false, "expected": null }
+    { "name": "a template project never trains", "isTemplate": true, "fromTemplate": true, "ai": "same_model", "heldOut": false, "expected": "template_project" },
+    { "name": "a published template without its origin flag (before the backfill) still never trains", "isTemplate": true, "fromTemplate": false, "ai": "same_model", "heldOut": false, "expected": "template_project" },
+    { "name": "an unpublished template with its own UNet result and edits never trains", "isTemplate": false, "fromTemplate": true, "ai": "same_model", "heldOut": false, "expected": "template_project" },
+    { "name": "a template project stays in the held-out comparison", "isTemplate": true, "fromTemplate": true, "ai": "same_model", "heldOut": true, "expected": null },
+    { "name": "an unpublished template stays in the held-out comparison too", "isTemplate": false, "fromTemplate": true, "ai": "same_model", "heldOut": true, "expected": null },
+    { "name": "held out or not, a case needs its AI result", "isTemplate": true, "fromTemplate": true, "ai": "missing", "heldOut": true, "expected": "no_ai_result" },
+    { "name": "a case without an AI result never trains", "isTemplate": false, "fromTemplate": false, "ai": "missing", "heldOut": false, "expected": "no_ai_result" },
+    { "name": "the other model's AI result is not this case's", "isTemplate": false, "fromTemplate": false, "ai": "other_model", "heldOut": false, "expected": "no_ai_result" },
+    { "name": "a saved, editable mask is not an AI result", "isTemplate": false, "fromTemplate": false, "ai": "not_ai_output", "heldOut": false, "expected": "no_ai_result" },
+    { "name": "a corrected project with its own AI result trains", "isTemplate": false, "fromTemplate": false, "ai": "same_model", "heldOut": false, "expected": null }
   ],
   "sliceRules": [
     { "name": "a slice its AI result does not hold never trains, however large the edit",

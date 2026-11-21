@@ -34,7 +34,7 @@ import LogError from './utils/error_logger'; // Import error logging utility
 import { connectToDatabase } from './services/database'; // Import DB connection function
 import { initAndRefreshAuth, stopTokenRefresh } from './services/gpu_auth_client'; // Import GPU auth client functions
 import { isMigrationNeeded, runAffineMigration } from './scripts/affine_matrix_migration'; // Import migration functions
-import { loadTemplateSeed } from './services/template_seed'; // Template hearts committed to the repo
+import { loadTemplateSeed, markTemplateOrigins } from './services/template_seed'; // Template hearts committed to the repo
 
 // Get serving host and port from environment variables
 const HOST = process.env.HOST || 'localhost'; // Default to localhost if not set
@@ -82,6 +82,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     // them yet. Before the job cleanup below, which would otherwise delete their
     // jobs while their project / owner are still being inserted.
     await loadTemplateSeed();
+    // Every project that holds a template's data keeps that origin, published or not (never trains the UNet).
+    await markTemplateOrigins();
 
     // Schedule CRON jobs
     await scheduleGuestCleanup(); // Guest user cleanup

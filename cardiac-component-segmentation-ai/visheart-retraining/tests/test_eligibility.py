@@ -18,8 +18,14 @@ class AgreesWithTheExport(unittest.TestCase):
         for rule in FIXTURE["caseRules"]:
             with self.subTest(rule["name"]):
                 # The facts the export sends the builder (training_eligibility.test.ts checks it sends these).
-                facts = {"isTemplate": rule["isTemplate"], "aiResult": rule["ai"] == "same_model", "heldOut": rule["heldOut"]}
+                facts = {"isTemplate": rule["isTemplate"], "fromTemplate": rule["fromTemplate"],
+                         "aiResult": rule["ai"] == "same_model", "heldOut": rule["heldOut"]}
                 self.assertEqual(eligibility.case_exclusion(facts), rule["expected"])
+
+    def test_an_unpublished_template_with_its_own_unet_result_and_edits_never_trains(self):
+        unpublished = {"isTemplate": False, "fromTemplate": True, "aiResult": True, "heldOut": False}
+        self.assertEqual(eligibility.case_exclusion(unpublished), "template_project")
+        self.assertIsNone(eligibility.case_exclusion({**unpublished, "fromTemplate": False}))  # the origin alone
 
     def test_slice_rules(self):
         frames = [{"frameindex": 0, "slices": [{"sliceindex": 0, "segmentationmasks": []}]}]

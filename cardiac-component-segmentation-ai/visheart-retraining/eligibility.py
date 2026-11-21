@@ -5,7 +5,8 @@ training_eligibility.ts and training_selection.ts editTooSmall). This copy is th
 build_training_volumes.py refuses a case or a slice the rule rules out, and pipeline.py gates on the export's counts.
 tests/fixtures/training_eligibility.json holds examples that the server's tests and these tests both check.
 
-- A template project never trains (it stays in the held-out comparison).
+- A template project never trains: a published one ("isTemplate") or one that came from a template ("fromTemplate",
+  kept after template_tool.py unpublish), even with its own UNet result and edits. It stays in the held-out comparison.
 - A case without its own model's AI result never trains: a missing AI result is never read as an empty mask.
 - A slice its AI result does not hold ("aiBaseline": false) is skipped; the rest of the case stays.
 - A measured slice counts when its edit is at least min_share (2%) of the heart in the AI result and the correction
@@ -21,11 +22,11 @@ FEW_SLICES = 10            # below this, the page warns: each correction is repe
 
 
 def case_exclusion(facts):
-    """Why a case may not train, or None. `facts` is what the export sends ({"isTemplate", "aiResult", "heldOut"});
-    without them nothing is assumed, and the case does not train."""
+    """Why a case may not train, or None. `facts` is what the export sends ({"isTemplate", "fromTemplate", "aiResult",
+    "heldOut"}); without them nothing is assumed, and the case does not train."""
     if not isinstance(facts, dict):
         return "unknown_case"
-    if facts.get("isTemplate") and not facts.get("heldOut"):
+    if (facts.get("isTemplate") or facts.get("fromTemplate")) and not facts.get("heldOut"):
         return "template_project"
     if facts.get("aiResult") is not True:
         return "no_ai_result"

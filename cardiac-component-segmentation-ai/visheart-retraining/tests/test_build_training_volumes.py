@@ -20,7 +20,7 @@ def frame(frameindex, *slices):
             "slices": [{"sliceindex": si, "segmentationmasks": masks, **extra} for si, masks, extra in slices]}
 
 
-ELIGIBLE = {"isTemplate": False, "aiResult": True, "heldOut": False}  # what the export sends for a case that may train
+ELIGIBLE = {"isTemplate": False, "fromTemplate": False, "aiResult": True, "heldOut": False}  # what the export sends for a case that may train
 
 
 def tracked(frameindex, sliceindex, pixels, cls="lvc"):
@@ -46,8 +46,9 @@ class BuildTrainingVolumes(unittest.TestCase):
 
     def test_refuses_a_case_the_export_rules_out(self):
         frames = [frame(0, (0, [{"class": "lvc", "segmentationmaskcontents": "0 3"}], {}))]
-        for case, words in (({**ELIGIBLE, "isTemplate": True}, "template"), ({**ELIGIBLE, "aiResult": False}, "AI result"),
-                            (None, "rebuild the backend")):
+        for case, words in (({**ELIGIBLE, "isTemplate": True}, "template"),
+                            ({**ELIGIBLE, "fromTemplate": True}, "came from a template"),   # an unpublished template
+                            ({**ELIGIBLE, "aiResult": False}, "AI result"), (None, "rebuild the backend")):
             with self.subTest(case=case):
                 out = btv.build(self.payload([tracked(0, 0, 3)], frames, case=case))
                 self.assertIn(words, out["error"])

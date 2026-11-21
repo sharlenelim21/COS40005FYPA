@@ -96,6 +96,12 @@ python template_tool.py unpublish --project <ID> --to-user <you>   # unlocks it 
 python template_tool.py list                                       # current templates
 ```
 
+A project that has held a template's data keeps `fromTemplate: true` for good: `prepare` sets it, `finalize` and
+`unpublish` keep it, and the backend marks any template (or project with `templateInfo`) on start-up. Such a project
+never trains the UNet on the Extend Training page, even unpublished, with its own UNet result and new edits: its masks
+are the experts' reference masks, not corrections of the AI. To give the model a real correction of the same scan,
+upload the scan again as a new project.
+
 ## Sharing the templates with your team
 
 Templates live in your local MongoDB and MinIO, not in git. To give teammates the same templates:

@@ -57,9 +57,21 @@ describe('Which corrections may train the UNet (option C)', () => {
     });
 
     it('leaves a template project out, and does not list it', () => {
-        expect(dry.excluded.template_project).toBe(1);
+        expect(dry.excluded.template_project).toBe(2);   // the published template and the unpublished one
         expect(dry.cases.map(c => c.projectId)).not.toContain('p-template');
         expect(dry.candidates.map(c => c.projectId)).not.toContain('p-template');
+    });
+
+    it('an unpublished template with its own UNet result and edits is still not eligible', () => {
+        const unpublished = fixture.projects.find((p: any) => p.project._id === 'p-unpublished');
+        expect(unpublished.project).toMatchObject({ isTemplate: false, fromTemplate: true });
+        const aiById = new Map<string, AiResult>(unpublished.aiResults.map((ai: AiResult) => [String(ai._id), ai]));
+        // It has everything a real correction has: its own UNet result, and edits large enough to train.
+        expect(caseExclusion({ isTemplate: false }, unpublished.masks[0], aiById.get('ai-unpublished'))).toBeNull();
+        // Its origin alone keeps it out.
+        expect(eligibleCorrections(unpublished.project, unpublished.masks, aiById, 16))
+            .toEqual({ masks: [], excluded: { template_project: 1 } });
+        expect(dry.cases.map(c => c.projectId)).not.toContain('p-unpublished');
     });
 
     it('leaves out a case whose AI result is missing, never reading it as an empty mask', () => {
@@ -93,11 +105,13 @@ describe('Which corrections may train the UNet (option C)', () => {
     });
 
     it.each(named(fixture.caseRules))('case rule: %s (as eligibility.py decides)', (_name, rule) => {
-        const project = { isTemplate: rule.isTemplate }, ai = AI_RESULTS[rule.ai], options = { heldOut: rule.heldOut };
+        const project = { isTemplate: rule.isTemplate, fromTemplate: rule.fromTemplate };
+        const ai = AI_RESULTS[rule.ai], options = { heldOut: rule.heldOut };
         expect(caseExclusion(project, unetCase(), ai, options)).toBe(rule.expected);
         // The facts the builder is sent, as test_eligibility.py derives them from the same example.
-        expect(caseFacts(project, unetCase(), ai, options))
-            .toEqual({ isTemplate: rule.isTemplate, aiResult: rule.ai === 'same_model', heldOut: rule.heldOut });
+        expect(caseFacts(project, unetCase(), ai, options)).toEqual({
+            isTemplate: rule.isTemplate, fromTemplate: rule.fromTemplate, aiResult: rule.ai === 'same_model', heldOut: rule.heldOut,
+        });
     });
 
     it.each(named(fixture.sliceRules))('slice rule: %s (as eligibility.py decides)', (_name, rule) => {

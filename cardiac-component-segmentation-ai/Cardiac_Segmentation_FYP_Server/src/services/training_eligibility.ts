@@ -5,9 +5,11 @@
  * export dry run, and the training job runs the same export again before it trains (visheart-retraining/pipeline.py):
  * both are scripts/export_training_set.ts, which decides with this module.
  *
- * - A template project (`isTemplate`, set when template_tool.py publishes it, and restored by the seed) never trains.
- *   Its saved masks are the experts' reference masks for the template hearts, not corrections of an AI result; before
- *   this rule they were every one of the page's corrected slices. The held-out comparison (--only-holdout) keeps them.
+ * - A template project never trains: a published one (`isTemplate`), and one that came from a template
+ *   (`fromTemplate`), such as a template given back to a user by template_tool.py `unpublish`, or one being prepared
+ *   before it is published. Its saved masks are the experts' reference masks for the template hearts, not corrections
+ *   of an AI result, even after it has its own UNet result and edits; before this rule they were every one of the
+ *   page's corrected slices. The held-out comparison (--only-holdout) keeps them.
  * - A case trains only against its own model's AI result: the AI output (`isMedSAMOutput` is set on every model's AI
  *   output) of the same model, which edit tracking paired with it (`editTracking.aiMaskId`). Without it no slice of the
  *   case trains: a missing AI result is never read as an empty mask.
@@ -24,6 +26,7 @@ export type CaseExclusion = 'template_project' | 'no_ai_result';
 
 export interface EligibilityProject {
     isTemplate?: unknown;
+    fromTemplate?: unknown;
 }
 
 export interface AiResult extends FramedMask {
@@ -41,9 +44,14 @@ export interface EligibilityOptions {
 /** What the training builder checks again (eligibility.py case_exclusion). */
 export interface CaseFacts {
     isTemplate: boolean;
+    fromTemplate: boolean;
     aiResult: boolean;
     heldOut: boolean;
 }
+
+/** A published template, or a project that came from one (IProject.fromTemplate). */
+const isTemplateProject = (project: EligibilityProject | null | undefined): boolean =>
+    Boolean(project?.isTemplate || project?.fromTemplate);
 
 const modelOf = (mask: { segmentationModel?: unknown; model_used?: unknown }): string =>
     String(mask.segmentationModel || mask.model_used || '').toLowerCase();
@@ -57,13 +65,14 @@ export function hasAiResult(mask: TrackedMask, aiMask: AiResult | null | undefin
 /** Why a case may not train, or null when it may. */
 export function caseExclusion(project: EligibilityProject | null | undefined, mask: TrackedMask,
                               aiMask: AiResult | null | undefined, options: EligibilityOptions = {}): CaseExclusion | null {
-    if (project?.isTemplate && !options.heldOut) return 'template_project';
+    if (isTemplateProject(project) && !options.heldOut) return 'template_project';
     return hasAiResult(mask, aiMask) ? null : 'no_ai_result';
 }
 
 export function caseFacts(project: EligibilityProject | null | undefined, mask: TrackedMask,
                           aiMask: AiResult | null | undefined, options: EligibilityOptions = {}): CaseFacts {
-    return { isTemplate: Boolean(project?.isTemplate), aiResult: hasAiResult(mask, aiMask), heldOut: Boolean(options.heldOut) };
+    return { isTemplate: Boolean(project?.isTemplate), fromTemplate: Boolean(project?.fromTemplate),
+             aiResult: hasAiResult(mask, aiMask), heldOut: Boolean(options.heldOut) };
 }
 
 /**

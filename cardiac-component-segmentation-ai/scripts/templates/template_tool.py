@@ -248,6 +248,9 @@ def cmd_prepare(a):
         die(f"save failed ({code}): {body.get('message')}")
     record_helper(a.project, "prepare", {"ed": ed + 1, "es": es + 1, "after_editing": bool(a.published)})
     log("experts' masks saved into ED and ES. Edit tracking:", json.dumps(body.get("editTracking"))[:200])
+    # From now on the project holds the experts' masks, published or not: mark its origin, which nothing clears, so
+    # it never trains the UNet as if they were a user's corrections (training_eligibility.ts).
+    mark_from_template(a.project, a.mongo_container)
     if not a.published:
         log("Next: check/edit every frame in the segmentation editor, Save, then run `landmarks`.")
         return
@@ -483,7 +486,7 @@ def cmd_recompute(a):
             fields[key] = value
     mongo(f"""
 const P = {json.dumps({"projectId": a.project, "fields": fields})};
-const set = {{}};
+const set = {{ fromTemplate: true }};  // a template in the making (IProject.fromTemplate)
 for (const [k, v] of Object.entries(P.fields)) set["templateInfo." + k] = v;
 db.projects.updateOne({{ _id: ObjectId(P.projectId) }}, {{ $set: set }});
 print(JSON.stringify({{ ok: true }}));
@@ -586,7 +589,7 @@ if (!proj) throw new Error("project not found");
 const tplId = tpl._id.toString();
 if (proj.userid !== tplId && (!owner || proj.userid !== owner._id.toString()))
   throw new Error("the project is not owned by " + P.owner);
-db.projects.updateOne({{ _id: proj._id }}, {{ $set: {{ userid: tplId, isTemplate: true, templateInfo: P.info, name: P.name, description: P.description }} }});
+db.projects.updateOne({{ _id: proj._id }}, {{ $set: {{ userid: tplId, isTemplate: true, fromTemplate: true, templateInfo: P.info, name: P.name, description: P.description }} }});
 const jobs = db.jobs.updateMany({{ projectid: {{ $in: [P.projectId, proj._id] }} }}, {{ $set: {{ userid: tplId }} }});
 print(JSON.stringify({{ ok: true, jobsMoved: jobs.modifiedCount }}));
 """, a.mongo_container)
@@ -671,7 +674,8 @@ const user = db.users.findOne({{ username: P.to }});
 if (!user) throw new Error("user not found: " + P.to);
 const proj = db.projects.findOne({{ _id: ObjectId(P.projectId) }});
 if (!proj) throw new Error("project not found");
-db.projects.updateOne({{ _id: proj._id }}, {{ $set: {{ isTemplate: false, userid: user._id.toString() }} }});
+// No longer published, but still the experts' masks: fromTemplate stays true, so it never trains the UNet.
+db.projects.updateOne({{ _id: proj._id }}, {{ $set: {{ isTemplate: false, fromTemplate: true, userid: user._id.toString() }} }});
 const jobs = db.jobs.updateMany({{ projectid: {{ $in: [P.projectId, proj._id] }} }}, {{ $set: {{ userid: user._id.toString() }} }});
 print(JSON.stringify({{ ok: true, name: proj.name, jobsMoved: jobs.modifiedCount }}));
 """, a.mongo_container)
@@ -703,6 +707,15 @@ print(JSON.stringify({ templates: out }));
 DEFAULT_SEED_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "visheart-local-deployment", "seed", "templates"))
 # The collections that hold a template's documents besides `projects` (all keyed by projectid).
 SEED_COLLECTIONS = ("segmentation masks", "project landmarks", "jobs", "4d reconstructions")
+
+
+def mark_from_template(project_id: str, container: str) -> None:
+    """Set the project's template origin (IProject.fromTemplate). Nothing ever clears it."""
+    mongo(f"""
+const P = {json.dumps({"projectId": project_id})};
+const r = db.projects.updateOne({{ _id: ObjectId(P.projectId) }}, {{ $set: {{ fromTemplate: true }} }});
+print(JSON.stringify({{ ok: r.matchedCount === 1 }}));
+""", container)
 
 
 def mongo_lines(js: str, container: str) -> list[str]:
