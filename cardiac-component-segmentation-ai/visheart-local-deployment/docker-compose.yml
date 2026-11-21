@@ -204,7 +204,7 @@ services:
     # by the mongodb-keyfile-init service above if it doesn't already exist.
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/data/configdb/mongo-keyfile"]
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: P@ssw0rd123!
@@ -239,7 +239,7 @@ services:
     # nodemon) can reach it at localhost:6379 — every other dependency
     # (Mongo, MinIO, GPU) already had a host port, only Redis didn't.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -264,8 +264,8 @@ services:
     restart: unless-stopped
     user: "0"
     ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Console (not served by this image)
+      - "127.0.0.1:9000:9000"  # API
+      - "127.0.0.1:9001:9001"  # Console (not served by this image)
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
@@ -299,7 +299,7 @@ services:
       # The prebuilt image's start_server.py binds uvicorn on port 8001.
       # If you rebuild the GPU image from local source (which uses 8011),
       # bump both this mapping and the visheart-app env block in lockstep.
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     environment:
       <<: *gpu-env
       USE_GPU: "false"
@@ -384,7 +384,7 @@ services:
     restart: unless-stopped
     ports:
       # See gpu-cpu service for the 8001-vs-8011 explanation.
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     deploy:
       resources:
         reservations:
