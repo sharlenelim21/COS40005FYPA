@@ -563,6 +563,14 @@ router.get(
     const projectId = String(req.params.projectId);
 
     try {
+      // Owner or Admin may read; anyone may read a template's. Previously this had NO
+      // access check — any authenticated user could read another project's landmarks by id.
+      const viewable = await findViewableProject(projectId, req.user);
+      if (!viewable) {
+        res.status(404).json({ success: false, result: null, message: "Project not found." });
+        return;
+      }
+
       const landmarksResult = await readProjectLandmark(projectId);
       const candidateDocs = (landmarksResult.projectlandmarks ?? []).filter(doc => !doc.isModelOutput);
       const editableDoc = candidateDocs[0];
