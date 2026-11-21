@@ -54,6 +54,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Docker compose is available
         run: docker compose version
+      # Docker Desktop creates docker-users on users' PCs; the folder-permission tests need it. The runner has none.
+      - name: Create the docker-users group
+        run: |
+          if (-not (Get-LocalGroup -Name docker-users -ErrorAction SilentlyContinue)) { New-LocalGroup -Name docker-users | Out-Null }
+          Add-LocalGroupMember -Group docker-users -Member "$env:USERDOMAIN\$env:USERNAME" -ErrorAction SilentlyContinue
+          Get-LocalGroupMember -Group docker-users
       - name: Install Pester 3.4 (the tests use its syntax)
         run: Install-Module Pester -RequiredVersion 3.4.0 -Force -SkipPublisherCheck -Scope CurrentUser
       - name: Pester

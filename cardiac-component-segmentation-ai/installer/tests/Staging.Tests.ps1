@@ -79,7 +79,13 @@ Describe 'Get-StagingSelection' {
     }
 
     It 'every source matches its target under the repository root' {
-        foreach ($s in $sel) { $s.Source | Should Be (Join-Path $repo $s.Target) }
+        # Same file, compared by content of the path after the root: TEMP may be a short 8.3 path (C:\Users\RUNNER~1 on
+        # GitHub's runners) while the selection reports the long one.
+        foreach ($s in $sel) {
+            $s.Source.EndsWith('\' + $s.Target, [StringComparison]::OrdinalIgnoreCase) | Should Be $true
+            (Get-Item -LiteralPath $s.Source).Length | Should Be (Get-Item -LiteralPath (Join-Path $repo $s.Target)).Length
+            Test-Path -LiteralPath $s.Source -PathType Leaf | Should Be $true
+        }
     }
 
     It 'selection excludes dev and per-PC folders' {
