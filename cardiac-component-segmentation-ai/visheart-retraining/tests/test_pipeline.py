@@ -90,7 +90,7 @@ class Pipeline(unittest.TestCase):
                                          {"qualifyingSlices": 1}, {"qualifyingSlices": 1}]), self.real_export(10)])
         pipeline.prepare(self.config, ctx, LABEL)
         self.assertEqual(ctx.commands[0][:3], ["docker", "exec", "visheart-local"])
-        self.assertEqual(sum(command[1] == "cp" for command in ctx.commands), 5)
+        self.assertEqual(sum(command[1] == "cp" for command in ctx.commands), len(pipeline.BUILDER_FILES) + 2)
         node = [command for command in ctx.commands if "node" in command]
         self.assertEqual(len(node), 2)
         self.assertIn("--dry-run", node[0])
@@ -279,7 +279,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((result["projects"], result["slices"], result["conflicts"]), (2, 10, 0))
         self.assertEqual([case["maskId"] for case in result["cases"]], ["m1", "m2"])
         # The builder and the frozen-set index go into the container first, so the check can lock frozen patients.
-        self.assertEqual(sum(command[1] == "cp" for command in commands), 5)
+        self.assertEqual(sum(command[1] == "cp" for command in commands), len(pipeline.BUILDER_FILES) + 2)
         dry = next(command for command in commands if "node" in command)
         self.assertEqual(dry[dry.index("--owner") + 1], "u1")
         self.assertIn("--dry-run", dry)
