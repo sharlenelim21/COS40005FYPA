@@ -91,6 +91,9 @@ The uninstaller asks whether to also delete all VisHeart data:
 
 Docker Desktop, WSL2 and Python stay installed. Remove them in Settings > Apps if no other program needs them.
 
+**The size shown in Installed apps** is VisHeart's folder (program, models, training data), measured at the end of each
+install or update. Docker's VisHeart images (about 25 GB) are not included: they are in Docker Desktop's storage.
+
 **Getting the disk space back.** Docker Desktop keeps everything in one large file (`docker_data.vhdx`, on C: unless
 you moved it). When VisHeart's images are deleted, the space is freed inside that file, but the file does not shrink,
 so Windows does not get the space back. To get it back, either uninstall Docker Desktop (Settings > Apps), or, if no

@@ -164,3 +164,18 @@ Describe 'visheart.iss shows prerequisite messages with line breaks' {
         $select | Should Match 'MsgBox\(Readable\(Line\)'
     }
 }
+
+Describe 'visheart.iss shows VisHeart''s real size in Installed apps' {
+    # 2026-11-21: Installed apps showed 2.77 GB after the Full installer and 836 MB after an Update, because Inno Setup
+    # records the size of the files that installer itself copied (the Update has no training pack).
+    $iss = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'visheart.iss')
+    It 'keeps the AppId in one place, so the size goes to VisHeart''s own entry' {
+        $iss | Should Match '(?m)^#define AppGuid "CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5"'
+        $iss | Should Match '(?m)^AppId=\{\{\{#AppGuid\}\}'
+    }
+    It 'measures the install folder at the end and writes EstimatedSize to that entry' {
+        $iss | Should Match '(?s)function FolderSizeKB\(.*FindFirst'
+        $write = "RegWriteDWordValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + '{#AppGuid}' + '}_is1', 'EstimatedSize'"
+        $iss | Should Match ('(?s)CurStep = ssDone.*' + [regex]::Escape($write))
+    }
+}

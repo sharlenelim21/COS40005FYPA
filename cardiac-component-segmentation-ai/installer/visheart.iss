@@ -23,10 +23,12 @@
 
 #define AppSub "cardiac-component-segmentation-ai"
 #define Deploy AppSub + "\visheart-local-deployment"
+; Keep this forever: it is how Windows knows a new installer is an update of VisHeart. Also names VisHeart's entry in
+; Installed apps, whose size [Code] corrects.
+#define AppGuid "CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5"
 
 [Setup]
-; Keep this AppId forever: it is how Windows knows a new installer is an update of VisHeart.
-AppId={{CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5}
+AppId={{{#AppGuid}}
 AppName=VisHeart
 AppVersion={#AppVersion}
 AppVerName=VisHeart {#AppVersion}
@@ -128,6 +130,28 @@ end;
 function DeploymentDir(): String;
 begin
   Result := ExpandConstant('{app}\{#Deploy}');
+end;
+
+{ Total size of the files in Dir and its subfolders, in KB. }
+function FolderSizeKB(Dir: String): Int64;
+var
+  Rec: TFindRec;
+begin
+  Result := 0;
+  if FindFirst(Dir + '\*', Rec) then begin
+    try
+      repeat
+        if (Rec.Name <> '.') and (Rec.Name <> '..') then begin
+          if Rec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
+            Result := Result + FolderSizeKB(Dir + '\' + Rec.Name)
+          else
+            Result := Result + (Int64(Rec.SizeHigh) * 4294967296 + Rec.SizeLow) div 1024;
+        end;
+      until not FindNext(Rec);
+    finally
+      FindClose(Rec);
+    end;
+  end;
 end;
 
 { A check result is one line of text; "\n" in its message marks a line break. }
@@ -357,6 +381,14 @@ var
   Account: String;
 begin
   { Before the new files are copied: keep the installed version's list of shipped files, which the copy overwrites. }
+  { Installed apps shows the size Inno Setup records: the files this installer copied, so 2.77 GB after the Full
+    installer and 836 MB after an Update, which has no training pack (2026-11-21). Record the whole folder instead.
+    Docker's images (about 25 GB) live in Docker's own storage and are not counted. }
+  if CurStep = ssDone then begin
+    RegWriteDWordValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + '{#AppGuid}' + '}_is1', 'EstimatedSize',
+      FolderSizeKB(ExpandConstant('{app}')));
+    Exit;
+  end;
   if CurStep = ssInstall then begin
     if FileExists(ExpandConstant('{app}\shipped-files.txt')) then
       FileCopy(ExpandConstant('{app}\shipped-files.txt'), ExpandConstant('{tmp}\old-shipped-files.txt'), False);
