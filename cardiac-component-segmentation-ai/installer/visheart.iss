@@ -130,6 +130,13 @@ begin
   Result := ExpandConstant('{app}\{#Deploy}');
 end;
 
+{ A check result is one line of text; "\n" in its message marks a line break. }
+function Readable(S: String): String;
+begin
+  Result := S;
+  StringChangeEx(Result, '\n', #13#10, True);
+end;
+
 { Takes the text up to the next '|' off the front of S. }
 function SplitField(var S: String): String;
 var
@@ -256,9 +263,9 @@ begin
     Status := SplitField(Line);
     Log('Prerequisite ' + Name + ': ' + Status + ' - ' + Line);
     if Status = 'block' then
-      Blocks := Blocks + '- ' + Line + #13#10#13#10
+      Blocks := Blocks + '- ' + Readable(Line) + #13#10#13#10
     else if (Status = 'warn') or (Status = 'missing') then
-      Notes := Notes + '- ' + Line + #13#10#13#10;
+      Notes := Notes + '- ' + Readable(Line) + #13#10#13#10;
     if Status = 'missing' then begin
       if Name = 'wsl' then NeedWsl := True
       else if Name = 'docker' then NeedDocker := True
@@ -304,7 +311,7 @@ begin
     Status := SplitField(Line);
     Log('Disk check for ' + Dir + ': ' + Status + ' - ' + Line);
     if Status = 'block' then begin
-      MsgBox(Line, mbError, MB_OK);
+      MsgBox(Readable(Line), mbError, MB_OK);
       Result := False;
     end;
   end;

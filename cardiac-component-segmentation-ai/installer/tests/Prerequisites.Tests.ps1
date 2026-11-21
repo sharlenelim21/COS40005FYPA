@@ -166,6 +166,24 @@ Describe 'disk space where VisHeart and Docker keep their files' {
             $c.Message | Should Match 'C:'
             $c.Message | Should Match '30 GB'
         }
+        It 'explains that the chosen folder does not change it, and how to move Docker''s storage' {
+            # 2026-11-21: installing on E: still said "C: is full"; it looked like a bug.
+            $m = (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'E:') 'disk').Message
+            $m | Should Match 'E:'
+            $m | Should Match 'does not change this'
+            $m | Should Match ([regex]::Escape('Settings > Resources > Advanced > Disk image location'))
+            $m | Should Not Match 'install it first'
+        }
+    }
+
+    Context 'Docker''s drive is too small and Docker Desktop is not installed yet' {
+        Mock Get-DockerDataDrive { 'C:' }
+        Mock Get-FreeSpaceGB { if ($Drive -eq 'E:') { 600 } else { 20 } }
+        Mock Test-DockerDesktopInstalled { $false }
+        It 'says to install Docker Desktop first, move its storage, then run the installer again' {
+            $m = (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'E:') 'disk').Message
+            $m | Should Match 'install it first'
+        }
     }
 
     Context 'choosing the folder later' {

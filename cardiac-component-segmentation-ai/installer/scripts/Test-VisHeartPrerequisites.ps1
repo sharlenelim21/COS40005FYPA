@@ -188,7 +188,20 @@ function Get-DiskCheck {
     }
     $dockerFree = Get-FreeSpaceGB $dockerDrive
     if ($dockerFree -lt $script:MinFreeGBDocker) {
-        return New-Check 'disk' 'block' ("Only {0} GB is free on {1}, where Docker Desktop keeps its data. The first start of VisHeart downloads about 25 GB there; it needs at least {2} GB. Free some space, then install again." -f $dockerFree, $dockerDrive, $script:MinFreeGBDocker)
+        # 2026-11-21: installing on E: still said "C: is full", which looked like a bug. Say why the folder choice does
+        # not help and how to move Docker's storage. "\n" marks a line break; the installer shows it as one.
+        $text = ("Not enough room for Docker's downloads.\n\nVisHeart's files go to the folder you chose ({0}), but the " +
+            "25 GB that VisHeart downloads on its first start go to Docker Desktop's storage, which is on {1}. Only {2} GB " +
+            "is free there; {3} GB is needed. Choosing another folder for VisHeart does not change this.\n\n" +
+            "To fix it, either:\n- free space on {1}, or\n- move Docker Desktop's storage to a drive with {3} GB free: open " +
+            "Docker Desktop > Settings > Resources > Advanced > Disk image location, choose a folder on that drive (for " +
+            "example {0}\DockerData), click Apply & restart, then run this installer again.") -f
+            $InstallDrive, $dockerDrive, $dockerFree, $script:MinFreeGBDocker
+        if (-not (Test-DockerDesktopInstalled)) {
+            $text += ("\n\nDocker Desktop is not installed yet: install it first from https://www.docker.com/products/docker-desktop/, " +
+                "move its storage as above, then run this installer again.")
+        }
+        return New-Check 'disk' 'block' $text
     }
     return New-Check 'disk' 'ok' ("{0} GB free on {1}; {2} GB free on {3} for Docker." -f $free, $InstallDrive, $dockerFree, $dockerDrive)
 }

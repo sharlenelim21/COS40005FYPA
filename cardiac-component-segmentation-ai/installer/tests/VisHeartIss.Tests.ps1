@@ -155,3 +155,12 @@ Describe 'visheart.iss installs the Visual C++ runtime' {
         $iss | Should Match "(?s)if NeedVCRedist then\s+InstallWithWinget\('Microsoft\.VCRedist\.2015\+\.x64'"
     }
 }
+
+Describe 'visheart.iss shows prerequisite messages with line breaks' {
+    $iss = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'visheart.iss')
+    It 'turns the \n marker of a one-line check result into real line breaks before showing it' {
+        $iss | Should Match "StringChangeEx\(Result, '\\n', #13#10, True\)"
+        $select = [regex]::Match($iss, "(?ms)^function NextButtonClick.*?^end;").Value
+        $select | Should Match 'MsgBox\(Readable\(Line\)'
+    }
+}
