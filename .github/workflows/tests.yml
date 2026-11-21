@@ -25,15 +25,14 @@ jobs:
       run:
         working-directory: cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.33.0
-      - uses: actions/setup-node@v4
+      # v5 of these actions run on Node 24 (GitHub retired Node 20 for actions). pnpm is installed with npm rather than
+      # pnpm/action-setup, whose Node 24 release was not confirmed.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 18 # the version in the backend's Docker image
-          cache: pnpm
-          cache-dependency-path: cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server/pnpm-lock.yaml
+          package-manager-cache: false
+      - run: npm install -g pnpm@10.33.0
       - run: pnpm install --frozen-lockfile
       - name: Type check
         run: pnpm exec tsc --noEmit
@@ -51,7 +50,7 @@ jobs:
       run:
         shell: powershell # Windows PowerShell 5.1, what users' PCs run
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Docker compose is available
         run: docker compose version
       # Docker Desktop creates docker-users on users' PCs; the folder-permission tests need it. The runner has none.
