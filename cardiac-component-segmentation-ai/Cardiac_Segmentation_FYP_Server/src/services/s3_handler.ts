@@ -1,7 +1,7 @@
 // File: src/services/s3_handler.ts
 // Description: This module handles AWS S3 interactions, including uploading files, deleting objects, and extracting S3 keys from URLs.
 
-import { S3Client, PutObjectCommand, PutObjectCommandInput, DeleteObjectCommand, GetObjectCommand, GetObjectCommandOutput, HeadObjectCommand, HeadBucketCommand, CreateBucketCommand, PutBucketPolicyCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, PutObjectCommandInput, DeleteObjectCommand, GetObjectCommand, GetObjectCommandOutput, HeadObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
 import { projectModel } from "../services/database";
 import logger from "./logger"; // Import your logger
 import fs from "fs";
@@ -66,9 +66,10 @@ if (process.env.STORAGE_MODE === "s3") {
 }
 
 /**
- * Local MinIO only (S3_ENDPOINT set): create the bucket when it doesn't exist yet and give
- * it anonymous read ("download") access — what docker-compose's minio-setup service did with
- * `mc mb` + `mc anonymous set download`, until the minio/mc image stopped being published.
+ * Local MinIO only (S3_ENDPOINT set): create the bucket when it doesn't exist yet, kept
+ * PRIVATE (no anonymous policy). Objects are served via presigned URLs, so no public access
+ * is needed. Previously this granted anonymous read ("download"), mirroring the old
+ * minio-setup `mc anonymous set download` — removed for F1.
  * Never touches a real AWS bucket. Every caller awaits the same run; a failed run is retried
  * by the next caller.
  */
@@ -84,17 +85,13 @@ export function ensureLocalBucket(): Promise<void> {
       if (error?.$metadata?.httpStatusCode !== 404) throw error;
     }
     await client.send(new CreateBucketCommand({ Bucket }));
-    await client.send(new PutBucketPolicyCommand({
-      Bucket,
-      Policy: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          { Effect: "Allow", Principal: { AWS: ["*"] }, Action: ["s3:GetBucketLocation", "s3:ListBucket"], Resource: [`arn:aws:s3:::${Bucket}`] },
-          { Effect: "Allow", Principal: { AWS: ["*"] }, Action: ["s3:GetObject"], Resource: [`arn:aws:s3:::${Bucket}/*`] },
-        ],
-      }),
-    }));
-    logger.info(`${serviceLocation}: created bucket "${Bucket}" (anonymous read) on ${process.env.S3_ENDPOINT}`);
+    // Bucket is left PRIVATE — no anonymous bucket policy is applied (F1). The app serves
+    // every object through presigned URLs (utils/s3_presigned_url.ts), which carry their own
+    // signature and do not depend on a public bucket policy. This previously granted anonymous
+    // ListBucket + GetObject to Principal {AWS:["*"]} via PutBucketPolicyCommand, which let
+    // anyone list/download the bucket — removed. Creating the bucket here (vs. mc) keeps it
+    // private on every fresh deploy, so the fix survives a MinIO/volume recreate.
+    logger.info(`${serviceLocation}: created bucket "${Bucket}" (private) on ${process.env.S3_ENDPOINT}`);
   })().catch((error) => {
     bucketReady = null;
     throw error;
