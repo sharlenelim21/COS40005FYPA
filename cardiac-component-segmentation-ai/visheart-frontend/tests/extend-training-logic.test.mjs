@@ -53,6 +53,19 @@ test("training needs 5 projects, whatever the slices; 7 projects and 10 slices o
   assert.deepEqual(logic.dataGate({ projects: 7, slices: 10 }), { allowed: true, message: null });
 });
 
+test("the page counts what the training job counts, from the same dry run (option C)", () => {
+  // The server builds this dry run from the fixture's projects (training_eligibility.test.ts) and the training job
+  // counts it (test_eligibility.py): a template, a case without its AI result, and a slice that AI result lacks are out.
+  const fixture = JSON.parse(readFileSync(
+    new URL("../../visheart-retraining/tests/fixtures/training_eligibility.json", import.meta.url), "utf8"));
+  const { dryRun, expected } = fixture;
+  const listed = logic.trainableCases(dryRun.cases);
+  const summary = logic.selectionSummary(listed, new Set(listed.map(item => item.maskId)));
+  assert.deepEqual(summary, { cases: expected.cases, projects: expected.projects, slices: expected.slices });
+  assert.equal(logic.dataGate(summary).allowed, expected.trainingAllowed);
+  assert.ok(!listed.some(item => item.projectId === "p-template"), "a template is never listed");
+});
+
 test("a version's training method reads in words", () => {
   assert.equal(logic.recipeLabel("whole dataset + corrections 1:10, decoder only, 1 epoch"),
                "Whole training set + corrections, 1 epoch");
