@@ -87,8 +87,13 @@ app.use(
 let corsOriginConfig: cors.CorsOptions['origin'];
 
 if (envType === 'development') {
-  corsOriginConfig = true; // Allow all origins in development
-  logger.info(`${serviceLocation}: CORS configured to allow all origins (development mode).`);
+  // Explicit allow-list even in development — do NOT reflect arbitrary origins (F7).
+  // credentials:true is set below, so reflecting any Origin let any website make
+  // credentialed requests to the API using the victim's session cookie.
+  corsOriginConfig = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+    : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  logger.info(`${serviceLocation}: CORS allow-list (development): ${(corsOriginConfig as string[]).join(', ')}`);
 } else {
   const allowedOrigins: string[] = [];
   if (process.env.CORS_ORIGIN) {
