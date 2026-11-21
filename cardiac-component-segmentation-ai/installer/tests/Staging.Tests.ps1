@@ -49,7 +49,9 @@ function New-FakeRepo {
         'cardiac-component-segmentation-ai\visheart-training-data\PACKED.json',
         'cardiac-component-segmentation-ai\installer\make-installer.ps1',
         'cardiac-component-segmentation-ai\FIRST-LOGIN.txt',
-        'cardiac-component-segmentation-ai\visheart-local-deployment\database.owner'
+        'cardiac-component-segmentation-ai\visheart-local-deployment\database.owner',
+        # The build PC's own training settings (2026-11-21): shipped, they would point every PC at its data folder.
+        'cardiac-component-segmentation-ai\visheart-retraining\retraining.local.bat'
     )
     foreach ($f in $files) {
         $p = Join-Path $root $f
@@ -95,7 +97,7 @@ Describe 'Get-StagingSelection' {
             $_ -match 'atlas_rv_backup_pre_lengthwise' -or
             $_ -match 'visheart-retraining\\jobs\\' -or
             $_ -match 'dist\\temp_' -or
-            $_ -match '(^|\\)(secrets\.env|release\.env|\.env|FIRST-LOGIN\.txt|database\.owner)$' -or
+            $_ -match '(^|\\)(secrets\.env|release\.env|\.env|FIRST-LOGIN\.txt|database\.owner|retraining\.local\.bat)$' -or
             $_ -match 'UNETRESNET34\\checkpoints\\' -or
             $_ -match 'visheart-local-deployment\\volumes\\'
         })
