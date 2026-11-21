@@ -626,3 +626,106 @@ Describe 'start.ps1 removes old images' {
         $ps1 | Should Match '(?s)up -d visheart-app \$inferenceService.*try \{[^}]*Remove-OldVisHeartImages \$scriptDir'
     }
 }
+
+Describe 'Test-DockerUsesWsl' {
+    It 'is true when Docker Desktop has no settings yet (WSL is its default)' {
+        Test-DockerUsesWsl (Join-Path $env:TEMP 'vh-no-such-settings.json') | Should Be $true
+    }
+    It 'is false only when the settings turn the WSL engine off (Hyper-V mode)' {
+        $f = Join-Path $env:TEMP ("vh-ds-" + [guid]::NewGuid() + '.json')
+        try {
+            Set-Content $f '{ "WslEngineEnabled": false }' -Encoding ASCII
+            Test-DockerUsesWsl $f | Should Be $false
+            Set-Content $f '{ "CustomWslDistroDir": "E:\docker" }' -Encoding ASCII
+            Test-DockerUsesWsl $f | Should Be $true
+        } finally { Remove-Item -Force $f -ErrorAction SilentlyContinue }
+    }
+}
+
+Describe 'Get-WindowsFeatureProblem' {
+    # 2026-11-21, test desktop: Virtual Machine Platform was off, so Docker Desktop could never start, and Start waited
+    # 3 minutes, then only said "Docker Desktop did not become ready".
+    Mock -ModuleName VisHeartStart Test-DockerUsesWsl { $true }
+    Mock -ModuleName VisHeartStart Test-RestartPending { $false }
+
+    Context 'the feature is on' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'enabled' }
+        It 'reports nothing' { Get-WindowsFeatureProblem | Should BeNullOrEmpty }
+    }
+    Context 'Windows cannot say' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'unknown' }
+        It 'reports nothing, so Start goes on as before' { Get-WindowsFeatureProblem | Should BeNullOrEmpty }
+    }
+    Context 'the feature is off' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'disabled' }
+        It "reports 'off'" { Get-WindowsFeatureProblem | Should Be 'off' }
+    }
+    Context 'the feature is off and Windows waits for a restart' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'disabled' }
+        Mock -ModuleName VisHeartStart Test-RestartPending { $true }
+        It "reports 'restart' (it was turned on; the restart has not happened yet)" {
+            Get-WindowsFeatureProblem | Should Be 'restart'
+        }
+    }
+    Context 'Docker Desktop runs in Hyper-V mode' {
+        Mock -ModuleName VisHeartStart Test-DockerUsesWsl { $false }
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'disabled' }
+        It 'reports nothing: Virtual Machine Platform is not needed there' {
+            Get-WindowsFeatureProblem | Should BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'Resolve-WindowsFeatureProblem' {
+    Mock -ModuleName VisHeartStart Enable-VirtualMachinePlatform { 3010 }
+    Mock -ModuleName VisHeartStart Invoke-WindowsRestart { }
+
+    Context 'no problem' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { $null }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { throw 'must not ask' }
+        It 'lets Start go on' { Resolve-WindowsFeatureProblem | Should Be $true }
+    }
+    Context 'the feature is off and the user says No' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'off' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $false }
+        It 'changes nothing and stops Start' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Enable-VirtualMachinePlatform -Times 0 -Scope It
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 0 -Scope It
+        }
+    }
+    Context 'the feature is off and the user says Yes twice' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'off' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $true }
+        It 'turns it on (one Windows permission prompt), then restarts' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Enable-VirtualMachinePlatform -Times 1 -Exactly -Scope It
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 1 -Exactly -Scope It
+        }
+    }
+    Context 'the user refuses the Windows permission prompt' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'off' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $true }
+        Mock -ModuleName VisHeartStart Enable-VirtualMachinePlatform { -1 }
+        It 'does not restart' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 0 -Scope It
+        }
+    }
+    Context 'it was turned on and only the restart is missing' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'restart' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $true }
+        It 'offers the restart without turning anything on again' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Enable-VirtualMachinePlatform -Times 0 -Scope It
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 1 -Exactly -Scope It
+        }
+    }
+}
+
+Describe 'start.ps1 checks the Windows feature before waiting for Docker' {
+    $ps1 = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
+    It 'stops early instead of waiting 3 minutes for a Docker that cannot start' {
+        $ps1 | Should Match '(?s)if \(-not \(Resolve-WindowsFeatureProblem\)\) \{\s*exit 10\s*\}.*\$docker = Wait-DockerReady'
+    }
+}

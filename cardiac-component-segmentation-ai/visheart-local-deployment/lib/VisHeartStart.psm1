@@ -139,6 +139,91 @@ function Remove-OtherCopyContainers {
     return $removed
 }
 
+function Test-DockerUsesWsl {
+    # Docker Desktop runs on WSL2 unless its settings turn the WSL engine off (Hyper-V mode). No settings yet: WSL.
+    param([string]$SettingsPath = (Join-Path $env:APPDATA 'Docker\settings-store.json'))
+    try { $settings = Get-Content -Raw -LiteralPath $SettingsPath -ErrorAction Stop | ConvertFrom-Json } catch { return $true }
+    if ($settings.PSObject.Properties.Name -contains 'WslEngineEnabled' -and $settings.WslEngineEnabled -eq $false) { return $false }
+    return $true
+}
+
+function Get-VirtualMachinePlatformState {
+    # 'enabled', 'disabled' or 'unknown'. WSL2, and so Docker Desktop, needs this Windows feature. Readable without
+    # administrator rights.
+    try {
+        $feature = Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name='VirtualMachinePlatform'" -ErrorAction Stop
+    } catch { return 'unknown' }
+    if ($feature -and [int]$feature.InstallState -eq 1) { return 'enabled' }
+    return 'disabled'
+}
+
+function Test-RestartPending {
+    # Windows has installed feature or system changes that take effect only after a restart.
+    return (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
+}
+
+function Get-WindowsFeatureProblem {
+    # $null when Docker Desktop has what it needs from Windows; 'restart' when Virtual Machine Platform is off and Windows
+    # waits for a restart (it was turned on, e.g. by the installer); 'off' when it is off. Found 2026-11-21: with the
+    # feature off, Docker Desktop never starts, and Start only said "did not become ready" after 3 minutes.
+    if (-not (Test-DockerUsesWsl)) { return $null }
+    if ((Get-VirtualMachinePlatformState) -ne 'disabled') { return $null }
+    if (Test-RestartPending) { return 'restart' }
+    return 'off'
+}
+
+function Show-VisHeartQuestion {
+    # A Yes/No popup (the start window closes by itself, so console questions are easy to miss). $true for Yes.
+    param([string]$Text, [string]$Title = 'VisHeart')
+    try { return ((New-Object -ComObject WScript.Shell).Popup($Text, 0, $Title, 4 + 32) -eq 6) } catch { return $false }
+}
+
+function Enable-VirtualMachinePlatform {
+    # Turns the feature on with dism, which needs administrator rights: Windows asks the user once. Returns dism's exit
+    # code (0, or 3010 = done, restart needed), or -1 when the user refused the prompt.
+    try {
+        $dism = Join-Path $env:SystemRoot 'System32\dism.exe'
+        $process = Start-Process -FilePath $dism -ArgumentList @('/online', '/enable-feature', '/featurename:VirtualMachinePlatform', '/all', '/norestart') `
+            -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+        return [int]$process.ExitCode
+    } catch { return -1 }
+}
+
+function Invoke-WindowsRestart {
+    # Restarts Windows in one minute, so the user can still save their work ("shutdown /a" cancels it).
+    & (Join-Path $env:SystemRoot 'System32\shutdown.exe') /r /t 60 /c 'Restarting so Docker Desktop can use Virtual Machine Platform (needed by VisHeart).'
+}
+
+function Resolve-WindowsFeatureProblem {
+    # Called by Start before it waits for Docker. $true: go on. $false: VisHeart cannot start until Windows has
+    # restarted; the user was offered to turn the feature on (one Windows permission prompt) and to restart.
+    $problem = Get-WindowsFeatureProblem
+    if (-not $problem) { return $true }
+    $manual = 'To do it yourself: open PowerShell as administrator, run  Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform  then restart Windows.'
+    if ($problem -eq 'off') {
+        Write-Host 'Docker Desktop cannot start: the Windows feature "Virtual Machine Platform" is off.'
+        $turnOn = Show-VisHeartQuestion ("Docker Desktop, which VisHeart runs on, needs the Windows feature 'Virtual Machine Platform', " +
+            "and it is off on this PC.`n`nTurn it on now? Windows asks for permission once; then Windows must restart.")
+        if (-not $turnOn) { Write-Host $manual; return $false }
+        $code = Enable-VirtualMachinePlatform
+        if ($code -ne 0 -and $code -ne 3010) {
+            Write-Host "Virtual Machine Platform could not be turned on (dism exit $code). $manual"
+            return $false
+        }
+        Write-Host 'Virtual Machine Platform is turned on. Windows must restart before Docker Desktop can use it.'
+    } else {
+        Write-Host 'Virtual Machine Platform has been turned on, but Windows has not restarted since. Docker Desktop needs that restart.'
+    }
+    if (Show-VisHeartQuestion ("Windows must restart before VisHeart can start.`n`nRestart now? Save your work first: Windows " +
+            "restarts one minute after you press Yes. After the restart, double-click the VisHeart icon.")) {
+        Invoke-WindowsRestart
+        Write-Host 'Windows restarts in one minute. After the restart, double-click the VisHeart icon.'
+    } else {
+        Write-Host 'Restart Windows, then double-click the VisHeart icon.'
+    }
+    return $false
+}
+
 function Get-ImageRepository([string]$Reference) {
     # 'a/app:2' and 'a/app@sha256:...' both give 'a/app' (a registry port, 'host:5000/a', stays in the name).
     $name = ($Reference -split '@', 2)[0]
@@ -329,4 +414,6 @@ function Open-VisHeart {
 
 Export-ModuleMember -Function Get-DockerDesktopExe, Test-UrlAnswers, Test-VisHeartAnswering, Open-VisHeart, Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
-    Remove-VisHeartDocker, Initialize-BackendFolders, Remove-OldVisHeartImages
+    Remove-VisHeartDocker, Initialize-BackendFolders, Remove-OldVisHeartImages, Test-DockerUsesWsl, Get-VirtualMachinePlatformState,
+    Test-RestartPending, Get-WindowsFeatureProblem, Show-VisHeartQuestion, Enable-VirtualMachinePlatform, Invoke-WindowsRestart,
+    Resolve-WindowsFeatureProblem

@@ -97,13 +97,22 @@ try {
         exit 0
     }
 
+    # Docker Desktop cannot start while Windows' Virtual Machine Platform is off or waits for a restart; say so at once
+    # (and offer to fix it) instead of waiting 3 minutes for a Docker that cannot come up.
+    if (-not (Resolve-WindowsFeatureProblem)) {
+        exit 10
+    }
+
     $docker = Wait-DockerReady
     if (-not $docker.Ready) {
         $account = "$env:USERDOMAIN\$env:USERNAME"
         switch ($docker.Reason) {
             'not-installed' { Write-Log 'Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop/ (or run the VisHeart installer again), then start VisHeart.' }
             'no-access'     { Write-Log "Docker is installed but this Windows account ($account) cannot use it. Ask the person who installed VisHeart to run: net localgroup docker-users `"$account`" /add  then sign out and in again." }
-            default         { Write-Log 'Docker Desktop did not become ready within 3 minutes. Open Docker Desktop, wait until it says Docker is running, then start VisHeart again.' }
+            default         {
+                Write-Log 'Docker Desktop did not become ready within 3 minutes. Open Docker Desktop, wait until it says Docker is running, then start VisHeart again.'
+                if (Test-RestartPending) { Write-Log 'Windows is waiting for a restart to finish installing changes. Restart Windows first; Docker Desktop may need it.' }
+            }
         }
         exit 2
     }
