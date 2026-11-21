@@ -170,6 +170,34 @@ Step-by-step release guide, including the one-time build PC setup:
 [`installer/RELEASING.md`](cardiac-component-segmentation-ai/installer/RELEASING.md). Map of the code:
 [`README_CODEBASE.md`](README_CODEBASE.md).
 
+## Data credits
+
+The UNet segmentation model was trained on three public cardiac MRI datasets, and the **training data pack**
+(UNet Extend Training) contains images and labels from the same three. They belong to their creators, not to the
+VisHeart team. They may be used for non-commercial research only, and anyone who uses the pack must follow each
+dataset's terms and cite its paper:
+
+| Dataset | Where it comes from | Terms |
+|---|---|---|
+| **ACDC** (Automated Cardiac Diagnosis Challenge) | [creatis.insa-lyon.fr/Challenge/acdc](https://www.creatis.insa-lyon.fr/Challenge/acdc/databases.html), via the Human Heart Project | Listed as CC BY-NC-SA 4.0 (non-commercial, share alike). The organisers require the citation below for any use. |
+| **M&Ms** (Multi-Centre, Multi-Vendor & Multi-Disease Cardiac Segmentation) | [ub.edu/mnms](https://www.ub.edu/mnms/) | Data released by the organisers on that site; follow the terms you accept there. |
+| **M&Ms-2** (Multi-Disease, Multi-View & Multi-Centre Right Ventricular Segmentation) | [ub.edu/mnms-2](https://www.ub.edu/mnms-2/) | Data released by the organisers on that site; follow the terms you accept there. |
+
+Citations:
+
+1. O. Bernard, A. Lalande, C. Zotti, F. Cervenansky et al., "Deep Learning Techniques for Automatic MRI Cardiac
+   Multi-Structures Segmentation and Diagnosis: Is the Problem Solved?", *IEEE Transactions on Medical Imaging*,
+   vol. 37, no. 11, pp. 2514–2525, 2018. [doi:10.1109/TMI.2018.2837502](https://doi.org/10.1109/TMI.2018.2837502)
+2. V. M. Campello et al., "Multi-Centre, Multi-Vendor and Multi-Disease Cardiac Segmentation: The M&Ms Challenge",
+   *IEEE Transactions on Medical Imaging*, vol. 40, no. 12, pp. 3543–3554, 2021.
+   [doi:10.1109/TMI.2021.3090082](https://doi.org/10.1109/TMI.2021.3090082)
+3. C. Martín-Isla et al., "Deep Learning Segmentation of the Right Ventricle in Cardiac MRI: The M&Ms Challenge",
+   *IEEE Journal of Biomedical and Health Informatics*, vol. 27, no. 7, pp. 3302–3313, 2023.
+   [doi:10.1109/JBHI.2023.3267857](https://doi.org/10.1109/JBHI.2023.3267857)
+
+MedSAM (`medsam_vit_b.pth`) is by J. Ma et al., "Segment Anything in Medical Images", *Nature Communications* 15,
+654 (2024); see the [MedSAM project](https://github.com/bowang-lab/MedSAM).
+
 ## Team rules
 
 - `main` — stable branch, no direct push. Installed PCs read `installer/latest.json` from here.
