@@ -1,4 +1,5 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import session from 'express-session';
 import passport from 'passport';
 import { RedisStore } from 'connect-redis';
@@ -197,6 +198,20 @@ app.get('/', (req: Request, res: Response) => {
     message: 'Visheart API Server is running',
     environment: envType,
   });
+});
+
+// Centralised error handler — returns JSON, never an HTML stack-trace page.
+// Must be registered AFTER all routes. Handles Multer upload errors (bad file
+// type / size / unexpected field) as 400, and anything else as 500, without
+// leaking stack traces or internal paths (F13/F14).
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  if (res.headersSent) return next(err);
+  if (err instanceof multer.MulterError) {
+    logger.warn(`${serviceLocation}: Multer error on ${req.method} ${req.path}: ${err.code} - ${err.message}`);
+    return res.status(400).json({ success: false, message: `Upload rejected: ${err.code}` });
+  }
+  logger.error(`${serviceLocation}: Unhandled error on ${req.method} ${req.path}: ${err?.message}`);
+  return res.status(500).json({ success: false, message: 'Internal server error.' });
 });
 
 // Configure static file serving
