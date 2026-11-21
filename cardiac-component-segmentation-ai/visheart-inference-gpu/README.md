@@ -313,7 +313,8 @@ Model files are stored in the `app/models` directory:
 `/app/app/models` (read-only), which hides the copies baked into the image. On a fresh clone the folder has
 neither file, so UNet fails with "UNet checkpoint file not found" and MedSAM cannot load.
 
-The usual way is to copy both files from the team's Google Drive into `app/models` (see "For developers" in the
+The usual way is to download both into `app/models`: `medsam_vit_b.pth` from the
+[MedSAM project](https://github.com/bowang-lab/MedSAM) and `unet.pth` from [Google Drive](https://drive.google.com/file/d/1qL-Gxft-KdHQ7pPbxlRNiUr-L-Dn64sU/view?usp=sharing) (see "For developers" in the
 root README). Alternatively, copy them out of the image once (Linux, macOS or Git Bash; run from
 `visheart-inference-gpu/`):
 

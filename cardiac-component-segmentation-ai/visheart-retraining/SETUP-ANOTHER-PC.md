@@ -14,8 +14,8 @@ py -3 cardiac-component-segmentation-ai\visheart-retraining\pack_training_data.p
 ```
 
 (Run it from the repository root. It reads the training data from `E:\Jy\Unet` unless that PC keeps it elsewhere;
-see `visheart-retraining\common.py`.) The team's Google Drive folder already has a pack; to use that one, download it
-and go to step 2.
+see `visheart-retraining\common.py`.) The team has already made a pack: [download it from Google Drive](https://drive.google.com/file/d/17n4iitNrGpNxCIf98YxcGm4Dw89NTjXg/view?usp=sharing), extract
+it, and go to step 2.
 
 It copies only what the service needs and records every file's SHA-256 in `PACKED.json`. Copy the whole folder to
 the other computer, by USB drive or through Google Drive. To send a single file, zip it first and unzip it there

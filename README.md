@@ -80,12 +80,12 @@ with pnpm (`npm install -g pnpm`), Python 3.11 or later, and git.
    `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`:
    - `medsam_vit_b.pth`: download the MedSAM checkpoint from the [MedSAM project](https://github.com/bowang-lab/MedSAM)
      (its README links the `medsam_vit_b` weights).
-   - `unet.pth`: from the team's Google Drive. With the training pack (step 3) you can skip this: the first start puts
+   - `unet.pth`: [download from Google Drive](https://drive.google.com/file/d/1qL-Gxft-KdHQ7pPbxlRNiUr-L-Dn64sU/view?usp=sharing). With the training pack (step 3) you can skip this: the first start puts
      the right `unet.pth` there by itself.
 
    The other models are already in git.
-3. **Training data pack** (only needed for UNet Extend Training; everything else works without it). Download the
-   training pack from the VisHeart Google Drive folder. Put its contents in
+3. **Training data pack** (only needed for UNet Extend Training; everything else works without it). [Download the
+   training pack](https://drive.google.com/file/d/17n4iitNrGpNxCIf98YxcGm4Dw89NTjXg/view?usp=sharing) (about 4 GB) and extract it. Put its contents in
    `cardiac-component-segmentation-ai/visheart-training-data/`, so that `PACKED.json` is directly inside that folder:
    ```
    cardiac-component-segmentation-ai\
@@ -94,7 +94,8 @@ with pnpm (`npm install -g pnpm`), Python 3.11 or later, and git.
        PACKED.json
        ...
    ```
-   If it is a zip, extract it first. Git ignores this folder.
+   If extracting gives you one more folder level, move the files up so `PACKED.json` is directly inside
+   `visheart-training-data`. Git ignores this folder.
 4. **Build the backend once:**
    ```
    cd cardiac-component-segmentation-ai\Cardiac_Segmentation_FYP_Server

@@ -50,7 +50,7 @@ The build PC is the computer that makes the installers. It needs:
 4. **Python 3.11 or later**, for a Full installer only (it checks the training pack).
 5. **The two model files that are not in git**, in `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`:
    `medsam_vit_b.pth` from the [MedSAM project](https://github.com/bowang-lab/MedSAM) (its README links the
-   `medsam_vit_b` weights), and `unet.pth` from the team's Google Drive. For a Full installer, `unet.pth` must be the
+   `medsam_vit_b` weights), and `unet.pth` from [Google Drive](https://drive.google.com/file/d/1qL-Gxft-KdHQ7pPbxlRNiUr-L-Dn64sU/view?usp=sharing). For a Full installer, `unet.pth` must be the
    one the training pack was made with (section 4).
 6. **`installer/smtp.release.env`**, the support mailbox that the FAQ page sends from:
    1. Copy `installer/smtp.release.env.example` to `installer/smtp.release.env`.

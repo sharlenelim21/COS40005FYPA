@@ -52,7 +52,7 @@ The inference services mount `visheart-inference-gpu/app/models` over the image'
 copies baked into `sharlene21/visheart-gpu`. These two files are not in git (the other models are). Put them in
 `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`, as the root README describes:
 `medsam_vit_b.pth` from the [MedSAM project](https://github.com/bowang-lab/MedSAM) (its README links the
-`medsam_vit_b` weights), and `unet.pth` from the team's Google Drive.
+`medsam_vit_b` weights), and `unet.pth` from [Google Drive](https://drive.google.com/file/d/1qL-Gxft-KdHQ7pPbxlRNiUr-L-Dn64sU/view?usp=sharing).
 
 Or copy them out of the image once:
 
