@@ -12,10 +12,12 @@ Describe 'Get-VisHeartPrerequisites' {
     Mock Get-WindowsBuild { 22631 }
     Mock Test-Is64BitWindows { $true }
     Mock Test-WslEnabled { $true }
+    Mock Test-VirtualMachinePlatformEnabled { $true }
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $true }
     Mock Get-PythonVersion { [version]'3.13.1' }
     Mock Get-FreeSpaceGB { 120.5 }
+    Mock Get-DockerDataDrive { 'C:' }
 
     It 'a complete PC passes every check' {
         $r = @(Get-VisHeartPrerequisites -InstallDrive 'C:')
@@ -34,6 +36,17 @@ Describe 'Get-VisHeartPrerequisites' {
         Mock Test-Is64BitWindows { $false }
         It '32-bit Windows blocks' {
             (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:') 'windows').Status | Should Be 'block'
+        }
+    }
+
+    Context 'WSL installed but Virtual Machine Platform off' {
+        # Seen 2026-11-21 on a test desktop: wsl --status succeeded, Docker Desktop then said "Virtual Machine Platform
+        # is not enabled" and could not start.
+        Mock Test-VirtualMachinePlatformEnabled { $false }
+        It "WSL is 'missing', so the installer turns the feature on" {
+            $c = Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:') 'wsl'
+            $c.Status | Should Be 'missing'
+            $c.Message | Should Match 'Virtual Machine Platform'
         }
     }
 
@@ -103,13 +116,76 @@ Describe 'Get-VisHeartPrerequisites' {
     }
 }
 
+Describe 'disk space where VisHeart and Docker keep their files' {
+    Mock Get-WindowsBuild { 22631 }
+    Mock Test-Is64BitWindows { $true }
+    Mock Test-WslEnabled { $true }
+    Mock Test-VirtualMachinePlatformEnabled { $true }
+    Mock Test-DockerDesktopInstalled { $true }
+    Mock Test-NvidiaDriver { $true }
+    Mock Get-PythonVersion { [version]'3.13.1' }
+
+    Context 'Docker keeps its data on E:, which has room; C: is nearly full' {
+        Mock Get-DockerDataDrive { 'E:' }
+        Mock Get-FreeSpaceGB { if ($Drive -eq 'E:') { 600 } else { 9.6 } }
+        It 'installing on E: is fine' {
+            (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'E:') 'disk').Status | Should Be 'ok'
+        }
+        It 'installing on C: blocks and asks for 10 GB on C:' {
+            $c = Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:') 'disk'
+            $c.Status | Should Be 'block'
+            $c.Message | Should Match '9\.6 GB is free on C:'
+            $c.Message | Should Match '10 GB'
+        }
+    }
+
+    Context 'the app drive has room, the Docker drive does not' {
+        Mock Get-DockerDataDrive { 'C:' }
+        Mock Get-FreeSpaceGB { if ($Drive -eq 'E:') { 600 } else { 20 } }
+        It 'blocks and names Docker''s drive and the 30 GB of downloads' {
+            $c = Get-Check (Get-VisHeartPrerequisites -InstallDrive 'E:') 'disk'
+            $c.Status | Should Be 'block'
+            $c.Message | Should Match 'C:'
+            $c.Message | Should Match '30 GB'
+        }
+    }
+
+    Context 'choosing the folder later' {
+        Mock Get-DockerDataDrive { 'C:' }
+        Mock Get-FreeSpaceGB { 1 }
+        It '-SkipDisk leaves the disk check out' {
+            $names = @(Get-VisHeartPrerequisites -InstallDrive 'C:' -SkipDisk | ForEach-Object { $_.Name }) -join ','
+            $names | Should Be 'windows,wsl,docker,nvidia,python'
+        }
+        It '-DiskOnly runs only the disk check' {
+            $r = @(Get-VisHeartPrerequisites -InstallDrive 'C:' -DiskOnly)
+            $r.Count | Should Be 1
+            $r[0].Name | Should Be 'disk'
+            $r[0].Status | Should Be 'block'
+        }
+    }
+}
+
+Describe 'Get-DockerDataDrive' {
+    It 'reads the drive Docker Desktop was moved to' {
+        $f = Join-Path $env:TEMP ("vh-ds-" + [guid]::NewGuid() + '.json')
+        Set-Content $f '{"CustomWslDistroDir": "E:\\DockerData\\DockerDesktopWSL", "Other": 1}' -Encoding ASCII
+        try { Get-DockerDataDrive $f | Should Be 'E:' } finally { Remove-Item $f }
+    }
+    It 'is the Windows drive when Docker Desktop keeps its default place, or has no settings yet' {
+        Get-DockerDataDrive (Join-Path $env:TEMP 'no-such-settings.json') | Should Be $env:SystemDrive
+    }
+}
+
 Describe 'Test-VisHeartPrerequisites.ps1 output' {
     Mock Get-WindowsBuild { 22631 }
     Mock Test-Is64BitWindows { $true }
     Mock Test-WslEnabled { $false }
+    Mock Test-VirtualMachinePlatformEnabled { $true }
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $false }
     Mock Get-PythonVersion { [version]'3.13.1' }
+    Mock Get-DockerDataDrive { 'C:' }
 
     Context 'nothing blocks' {
         Mock Get-FreeSpaceGB { 100 }

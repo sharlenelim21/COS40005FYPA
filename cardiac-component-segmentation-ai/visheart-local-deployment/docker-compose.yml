@@ -84,6 +84,9 @@ services:
       S3_ACCESS_KEY_ID: minioadmin
       S3_SECRET_ACCESS_KEY: ${VH_MINIO_PASSWORD:-minioadmin123}
       S3_FORCE_PATH_STYLE: "true"
+      # "download" (a developer copy): the bucket the backend creates allows anonymous read. An installed copy
+      # sets VH_MINIO_ANON=none in release.env, so patient files are only reachable through presigned URLs.
+      S3_ANONYMOUS_READ: ${VH_MINIO_ANON:-download}
       
       # GPU Service Configuration
       # The inference service runs as `gpu-cpu` or `gpu-nvidia` in this
@@ -212,7 +215,9 @@ services:
     # by the mongodb-keyfile-init service above if it doesn't already exist.
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/data/configdb/mongo-keyfile"]
     ports:
-      - "${VH_BIND:+${VH_BIND}:}27017:27017"
+      # Only VisHeart's containers use MongoDB (over the Docker network). An installed copy sets VH_MONGO_HOST_PORT=0
+      # so Docker picks a free host port and a MongoDB the PC already runs cannot block VisHeart.
+      - "${VH_BIND:+${VH_BIND}:}${VH_MONGO_HOST_PORT:-27017}:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: ${VH_MONGO_PASSWORD:-P@ssw0rd123!}
@@ -247,7 +252,8 @@ services:
     # nodemon) can reach it at localhost:6379 — every other dependency
     # (Mongo, MinIO, GPU) already had a host port, only Redis didn't.
     ports:
-      - "${VH_BIND:+${VH_BIND}:}6379:6379"
+      # As MongoDB above: an installed copy sets VH_REDIS_HOST_PORT=0.
+      - "${VH_BIND:+${VH_BIND}:}${VH_REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     networks:

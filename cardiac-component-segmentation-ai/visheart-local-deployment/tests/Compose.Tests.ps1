@@ -38,11 +38,15 @@ Describe 'docker-compose.yml defaults (no env file)' {
         $config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD | Should Be 'P@ssw0rd123!'
         $app.environment.MONGODB_URI | Should Match ([regex]::Escape('admin:P%40ssw0rd123%21@'))
         $app.environment.ADMIN_PASS | Should Be 'P@ssw0rd123!'
-        $config.services.'minio-setup'.entrypoint -join ' ' | Should Match 'anonymous set download'
+        $app.environment.S3_ANONYMOUS_READ | Should Be 'download'
+        $config.services.Keys -contains 'minio-setup' | Should Be $false
     }
 
     It 'no personal mail in repository' {
         (Get-Content -Raw $composeFile) -match 'meiqiliew334' | Should Be $false
+        # The default admin account and the FAQ fallback must not name a team member's own mailbox.
+        $src = Join-Path (Split-Path -Parent $deploymentDir) 'Cardiac_Segmentation_FYP_Server\src'
+        @(Get-ChildItem -Recurse $src -Include *.ts | Select-String -Pattern 'meiqiliew334' -SimpleMatch).Count | Should Be 0
         [string]$config.services.'visheart-app'.environment.SMTP_PASS | Should Be ''
     }
 
@@ -71,9 +75,7 @@ Describe 'docker-compose.yml with the installed env file' {
         $config.services.'gpu-cpu'.image | Should Be $fixture['VH_GPU_IMAGE']
         $config.services.'visheart-app'.image | Should Be $fixture['VH_APP_IMAGE']
         $config.services.'visheart-app'.environment.ADMIN_PASS | Should Be $fixture['VH_ADMIN_PASS']
-        $entry = $config.services.'minio-setup'.entrypoint -join ' '
-        $entry | Should Match 'anonymous set none'
-        $entry | Should Match $fixture['VH_MINIO_PASSWORD']
+        $config.services.'visheart-app'.environment.S3_ANONYMOUS_READ | Should Be 'none'
     }
 
     It 'installed env replaces every secret' {
@@ -93,10 +95,60 @@ Describe 'docker-compose.yml with the installed env file' {
         ($config.services.mongodb.healthcheck.test -join ' ') | Should Match $fixture['VH_MONGO_PASSWORD']
         $config.services.minio.environment.MINIO_ROOT_PASSWORD | Should Be $fixture['VH_MINIO_PASSWORD']
         $config.services.minio.image | Should Be $fixture['VH_MINIO_IMAGE']
-        $config.services.'minio-setup'.image | Should Be $fixture['VH_MINIO_CLIENT_IMAGE']
         $gpu = $config.services.'gpu-nvidia'.environment
         $gpu.GPU_ACCESS_SECRET | Should Be $fixture['VH_GPU_ACCESS_SECRET']
         $gpu.JWT_SECRET | Should Be $fixture['VH_JWT_SECRET']
         $config.services.'gpu-cpu'.environment.GPU_ACCESS_SECRET | Should Be $fixture['VH_GPU_ACCESS_SECRET']
+    }
+}
+
+Describe 'mounts inside read-only mounts' {
+    # Docker cannot create a mount point inside a read-only bind mount ("mkdirat ... read-only file system"), so the
+    # host folder must exist first. Initialize-BackendFolders (start.ps1) creates them; this finds every such mount in
+    # docker-compose.yml, so a new one cannot be forgotten.
+    Import-Module (Join-Path $deploymentDir 'lib\VisHeartStart.psm1') -Force
+    $config = Get-ComposeConfig
+    $needed = @()
+    foreach ($svc in $config.services.PSObject.Properties) {
+        $vols = @($svc.Value.volumes | Where-Object { $_ })
+        $readOnly = @($vols | Where-Object { $_.type -eq 'bind' -and $_.read_only })
+        foreach ($v in $vols) {
+            foreach ($r in $readOnly) {
+                $prefix = $r.target.TrimEnd('/') + '/'
+                if ($v -ne $r -and $v.target.StartsWith($prefix)) {
+                    $needed += [IO.Path]::GetFullPath((Join-Path $r.source ($v.target.Substring($prefix.Length) -replace '/', '\')))
+                }
+            }
+        }
+    }
+
+    It 'finds the five known ones' {
+        @($needed | Sort-Object -Unique).Count | Should Be 5
+    }
+
+    It 'Initialize-BackendFolders creates the host folder of every one' {
+        $created = @((Initialize-BackendFolders $deploymentDir).Folders | ForEach-Object { [IO.Path]::GetFullPath($_) })
+        foreach ($path in ($needed | Sort-Object -Unique)) {
+            ($created -contains $path) | Should Be $true
+        }
+    }
+}
+
+Describe 'MongoDB and Redis host ports' {
+    # Only VisHeart's containers use MongoDB and Redis, over Docker's network. A developer copy keeps the usual host
+    # ports (for tools such as Compass); an installed copy lets Docker pick free ones, so a MongoDB or Redis that the
+    # PC already runs cannot block VisHeart (found installing 1.0.1 on a PC with the MongoDB Windows service).
+    It 'a developer copy publishes 27017 and 6379' {
+        $config = Get-ComposeConfig
+        @($config.services.mongodb.ports)[0].published | Should Be '27017'
+        @($config.services.redis.ports)[0].published | Should Be '6379'
+    }
+    It 'an installed copy lets Docker choose free ports on 127.0.0.1' {
+        $config = Get-ComposeConfig @($fixtureEnv)
+        foreach ($svc in 'mongodb', 'redis') {
+            $port = @($config.services.$svc.ports)[0]
+            $port.published | Should Be '0'
+            $port.host_ip | Should Be '127.0.0.1'
+        }
     }
 }

@@ -12,22 +12,24 @@ Written in:
 
 # API Documentation
 
-A comprehensive medical imaging backend server for cardiac segmentation and 4D reconstruction, featuring AI-powered analysis, cloud-based GPU processing, and AWS infrastructure monitoring.
+A comprehensive medical imaging backend server for cardiac segmentation and 4D reconstruction, featuring AI-powered analysis on a separate inference service, and AWS infrastructure monitoring for the original cloud deployment.
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [General API Notes](#general-api-notes)
-3. [Authentication Routes](#authentication-routes)
-4. [Project Routes](#project-routes)
-5. [Segmentation Routes](#segmentation-routes)
-6. [4D Reconstruction Routes](#4d-reconstruction-routes)
-7. [GPU Status Routes](#gpu-status-routes)
-8. [Webhook Routes](#webhook-routes)
-9. [Admin Tools Routes](#admin-tools-routes)
-10. [AWS CloudWatch Metrics API](#aws-cloudwatch-metrics-api)
-11. [Debug Routes](#debug-routes-development-only)
-12. [Environment Configuration](#environment-configuration)
+2. [Routes this document does not cover](#routes-this-document-does-not-cover)
+3. [General API Notes](#general-api-notes)
+4. [Authentication Routes](#authentication-routes)
+5. [Project Routes](#project-routes)
+6. [Segmentation Routes](#segmentation-routes)
+7. [4D Reconstruction Routes](#4d-reconstruction-routes)
+8. [Reconstruction: mesh format, performance and troubleshooting](#reconstruction-mesh-format-performance-and-troubleshooting)
+9. [GPU Status Routes](#gpu-status-routes)
+10. [Webhook Routes](#webhook-routes)
+11. [Admin Tools Routes](#admin-tools-routes)
+12. [AWS CloudWatch Metrics API](#aws-cloudwatch-metrics-api)
+13. [Debug Routes](#debug-routes-development-only)
+14. [Environment Configuration](#environment-configuration)
 
 ---
 
@@ -38,7 +40,7 @@ The VisHeart Backend Server provides a complete medical imaging pipeline for car
 - **Medical Image Processing**: NIfTI file handling with metadata extraction
 - **AI-Powered Segmentation**: YOLO + MedSAM integration for cardiac structure segmentation
 - **4D Reconstruction**: SDF-based mesh generation across cardiac phases
-- **Cloud Infrastructure Monitoring**: Real-time AWS metrics and cost tracking
+- **Cloud Infrastructure Monitoring**: AWS metrics and cost tracking (original cloud deployment only)
 - **Distributed Architecture**: Microservices coordination between backend, GPU server, and storage
 
 **Architecture Components**:
@@ -46,8 +48,38 @@ The VisHeart Backend Server provides a complete medical imaging pipeline for car
 - FastAPI GPU Server for AI inference
 - MongoDB for data persistence
 - Redis for session management
-- AWS S3 for file storage
-- AWS CloudWatch for infrastructure monitoring
+- S3-compatible storage for files (MinIO in the local install, AWS S3 in the original cloud deployment)
+- AWS CloudWatch for infrastructure monitoring (original cloud deployment only)
+
+In this document, "S3" means that S3-compatible storage.
+
+---
+
+## Routes this document does not cover
+
+These routes were added after this document was written. They are mounted in `src/services/express_app.ts`. Read
+the source file for the request and response shapes.
+
+| Route group | What it does | Source |
+|---|---|---|
+| `/landmark-detection` | Start landmark detection, read results and jobs, compute strain, save and load edited landmarks | `src/routes/landmark_routes.ts` |
+| `/pipeline` | `POST /start/:projectId` runs the selected segmentation, reconstruction and landmark steps one after another; `GET /:projectId` reads its progress | `src/routes/pipeline_routes.ts`, `src/services/pipeline_orchestrator.ts` |
+| `/support` | Documentation search, FAQ list, and the FAQ "send a message" form | `src/routes/support_routes.ts` |
+| `/retraining` | UNet Extend Training (admins only). Forwards to the training service on the host (`http://host.docker.internal:8010` by default) | `src/routes/retraining_routes.ts`, `src/services/retraining_proxy.ts` |
+| `/admin` | `GET /flagged-masks`: masks flagged for retraining (admins only) | `src/routes/assignment_review_routes.ts` |
+| `/sample-nifti` | Sample NIfTI files: `/info`, `/download/:filename`, `/metadata/:filename` | `src/routes/sample_nifti.ts` |
+
+The 4D reconstruction routes also have endpoints that the [4D Reconstruction Routes](#4d-reconstruction-routes)
+section does not list (all in `src/routes/reconstruction_routes.ts`):
+
+- `DELETE /reconstruction/delete-reconstruction/:projectId/:reconstructionId`: delete one reconstruction.
+- `DELETE /reconstruction/delete-model-reconstruction/:projectId?segmentationModel=medsam|unet`: delete the
+  reconstruction made from one segmentation model.
+- `GET` and `POST /reconstruction/motion/:projectId/:reconstructionId`: read or build the smooth-motion file the
+  landmark page plays.
+- `POST /reconstruction/start-reconstruction/:projectId` also accepts `chamber` (`"lv"` or `"rv"`, default `"lv"`)
+  and `segmentationModel` (`"medsam"` or `"unet"`) in the body. An `rv` request fails if the inference service has no
+  RV checkpoint configured.
 
 ---
 
@@ -1455,6 +1487,73 @@ gpu_callback_1761471371546_uuid.nii_4D_frame29.obj
 
 ---
 
+## Reconstruction: mesh format, performance and troubleshooting
+
+This section holds what the former `README_RECONSTRUCTION.md` had and this document did not.
+
+### How the mesh format is chosen
+
+The backend (`src/services/reconstruction.ts`) uses, in this order:
+
+1. `export_format` in the start request: `"obj"` gives OBJ, any other value gives GLB.
+2. The `RECONSTRUCTION_MESH_FORMAT` environment variable (`obj` or `glb`).
+3. GLB.
+
+The inference service sends the finished meshes back as `.glb` or `.obj` files in a multipart callback
+(`POST /webhook/gpu-reconstruction-callback`), and the backend packs them into one TAR in S3.
+
+### Before you start a reconstruction
+
+- The project is uploaded and segmented. Reconstruction uses only the **editable** mask (`isMedSAMOutput: false`).
+  It is created automatically by segmentation, so it exists even if nobody edited it.
+- `ed_frame` is **1-based**: at least 1 and at most the project's frame count. The backend turns it into the
+  0-based `ed_frame_index` the inference service expects.
+- The user is signed in, is not a guest, and owns the project.
+- Only one reconstruction per segmentation model and chamber can exist or run at a time. Delete the old one first.
+- The inference service, S3 storage and MongoDB are running.
+
+### Error messages
+
+| Situation | Message |
+|---|---|
+| Not signed in | 401 `Unauthorized. Please log in.` |
+| Guest account | 403 `Forbidden. Admin or regular user access required.` |
+| Not the project's owner | `Access denied to this project` |
+| No segmentation yet | `4D reconstruction requires completed segmentation masks. Please complete segmentation before starting reconstruction.` |
+| No editable mask | `4D reconstruction requires editable segmentation masks. Please complete or refine segmentation before starting reconstruction.` |
+| `ed_frame` below 1 | `Invalid end-diastole frame number: <n>. Must be a positive integer >= 1.` |
+| `ed_frame` too large | `End-diastole frame <n> exceeds project frame count of <frames>.` |
+| Same model and chamber already done or running | 409 `... reconstruction already exists for ...` or `... is already running ...` |
+| Inference service unreachable or failing | `Failed to start 4D reconstruction: Error communicating with GPU service: ...` or `... GPU service error: ...` |
+
+### Performance and limits
+
+- The local install runs **one** GPU job at a time (`GPU_SEMAPHORE_COUNT: 1` in
+  `visheart-local-deployment/docker-compose.yml`). Further jobs wait in a queue; they do not fail.
+- `num_iterations` (default 50) and `resolution` (default 128) can be set in `parameters`. The inference service
+  accepts 1-500 iterations and resolution 32-256.
+- The old document gave these figures from the original cloud GPU server. They have not been measured again for
+  the local install: 3-10 minutes for a typical reconstruction, 10-20 minutes at resolution 256, and TAR files of
+  about 30-70 MB (GLB, one frame) to 150-200 MB (OBJ, about 30 frames). GLB files are 30-50% smaller than OBJ.
+
+### Troubleshooting
+
+- **"requires editable segmentation masks"**: run or finish segmentation for the project first.
+- **"exceeds project frame count"**: `ed_frame` is 1-based. Check the frame count in the project details.
+- **"Error communicating with GPU service"**: check the inference service answers at
+  `http://localhost:8001/status/server`, and read its log: `docker logs visheart-gpu-cpu` (or
+  `visheart-gpu-nvidia`).
+- **An RV (`chamber: "rv"`) request fails**: the inference service has no RV checkpoint (`FOURD_RV_MODEL_NAME` in
+  `docker-compose.yml`) and answers 503. LV is not affected.
+- **A job stays pending**: another GPU job may be running, as only one runs at a time. Check
+  `/reconstruction/user-check-jobs` and the inference service log.
+- **Debug copies of the meshes**: set `parameters.debug_save: true` (or `parameters.debug: true`) and, optionally,
+  `parameters.debug_dir` (default `/tmp/4d_reconstruction_debug`). The inference service then saves a copy of each
+  mesh there, inside its own container.
+- **Backend logs**: `docker logs visheart-local`, or the files in `logs/winston_logger/`.
+
+---
+
 ## GPU Status Routes (`/status`)
 
 **Base Path**: `/status`
@@ -1722,6 +1821,9 @@ POST /admintools/gpu-config/test-connection
 ## AWS CloudWatch Metrics API
 
 Monitor AWS infrastructure in real-time with CloudWatch and Cost Explorer integration.
+
+> **Local install:** these routes are still registered (`src/services/express_app.ts`), but there is no AWS account
+> behind them, so they return no data (empty series or an error).
 
 **AWS SDK**: `@aws-sdk/client-cloudwatch`, `@aws-sdk/client-cost-explorer`
 
@@ -2323,6 +2425,9 @@ POST /gpu-webhook
 
 ### Required Environment Variables
 
+The local install sets these for the `visheart-app` service in `visheart-local-deployment/docker-compose.yml`;
+that file shows the values it uses.
+
 ```bash
 # MongoDB
 MONGODB_URI=mongodb://localhost:27017/visheart
@@ -2336,20 +2441,27 @@ REDIS_PASSWORD=your_redis_password
 SESSION_SECRET=your_session_secret
 GPU_SERVER_AUTH_JWT_SECRET=your_gpu_auth_secret
 
-# AWS S3
-AWS_ACCESS_KEY_ID=your_aws_access_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-AWS_BUCKET_NAME=your_s3_bucket_name
-AWS_REGION=ap-southeast-1
+# S3-compatible storage (MinIO in the local install, AWS S3 in the original cloud deployment)
+STORAGE_MODE=s3              # must be "s3": the S3 client is only created in this mode
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_BUCKET_NAME=your_bucket_name
+AWS_REGION=ap-southeast-1    # required even for MinIO (the local install uses us-east-1)
+S3_ENDPOINT=http://minio:9000        # MinIO only: leave unset for AWS S3
+S3_FORCE_PATH_STYLE=true             # MinIO only
+S3_PUBLIC_URL=http://localhost:9000  # MinIO only: host the browser uses in download links (defaults to S3_ENDPOINT)
+S3_ANONYMOUS_READ=none               # MinIO only: "none" keeps the bucket private when the backend creates it
 
 # GPU Server
-GPU_SERVER_URL=https://gpu.example.com
-GPU_SERVER_PORT=8000
-GPU_SERVER_SSL=true
-CALLBACK_URL=https://api.visheart.art
+GPU_SERVER_URL=gpu           # host name only, no http:// (default localhost)
+GPU_SERVER_PORT=8001
+GPU_SERVER_SSL=false
+CALLBACK_URL=http://host.docker.internal:5000
 
 # Admin
 ADMIN_PASS=your_admin_password
+
+# --- The variables below are only for the AWS metrics routes (original cloud deployment) ---
 
 # EC2 (optional - auto-detected)
 EC2_INSTANCE_ID=i-1234567890abcdef0

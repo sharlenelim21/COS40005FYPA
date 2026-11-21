@@ -111,8 +111,8 @@ files the read-only pages load (image stacks and 3D models). Left out: the origi
 (they barely compress; the backend builds a template's motion the first time someone opens it, and the
 3D heart plays frame by frame until then). Commit that folder.
 
-After a teammate merges, they rebuild and restart their stack (see the commit/merge notes: `npm run build`
-for the backend, `build.ps1` for the frontend image, then recreate `visheart-app`). On start-up the backend
+After a teammate merges, they rebuild and restart their stack: `pnpm build` for the backend (and `build.ps1` if
+the frontend changed), then `stop.bat` and `start.bat`. On start-up the backend
 loads every template their machine doesn't have yet (`src/services/template_seed.ts`); it takes about a
 minute the first time and appears in the log as `TemplateSeed: loaded ...`. It creates the template account
 with a random password.

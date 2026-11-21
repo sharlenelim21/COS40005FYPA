@@ -8,13 +8,14 @@ begin
     'NEXT STEPS' + #13#10 +
     '1. If the installer asks you to restart Windows, restart first.' + #13#10 +
     '2. Open Docker Desktop once and accept its terms (only the first time).' + #13#10 +
-    '3. Double-click "Start VisHeart" on the desktop (also in the Start menu under VisHeart). The first start ' +
-    'downloads about 25 GB and can take an hour or more; later starts take about a minute.' + #13#10 +
-    '4. Double-click "VisHeart" on the desktop, or open http://localhost:3000, and log in.' + #13#10 +
-    '5. "Stop VisHeart" on the desktop stops it. Your data is kept.' + #13#10#13#10 +
+    '3. Double-click the "VisHeart" heart icon on the desktop (also in the Start menu). It starts VisHeart and ' +
+    'opens it in your browser. The first start downloads about 25 GB and can take an hour or more; later starts ' +
+    'take about a minute, and when VisHeart is already running it opens at once.' + #13#10 +
+    '4. Log in, then change the admin password in Profile Settings (http://localhost:3000/profile).' + #13#10 +
+    '5. To stop VisHeart: Start menu > VisHeart > Stop VisHeart. Your data is kept.' + #13#10#13#10 +
     'Do not start VisHeart with the Run button in Docker Desktop: that starts only part of VisHeart, which then ' +
     'fails.' + #13#10#13#10 +
-    'TO UNINSTALL: Start menu > VisHeart > Uninstall VisHeart, or Windows Settings > Apps > VisHeart.' + #13#10 +
+    'TO UNINSTALL: Windows Settings > Apps > Installed apps > VisHeart > ... > Uninstall.' + #13#10 +
     'Full guide: ' + ExpandConstant('{app}') + '\INSTALL.md';
 end;
 

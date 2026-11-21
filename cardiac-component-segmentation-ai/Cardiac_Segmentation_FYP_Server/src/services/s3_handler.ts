@@ -84,6 +84,12 @@ export function ensureLocalBucket(): Promise<void> {
       if (error?.$metadata?.httpStatusCode !== 404) throw error;
     }
     await client.send(new CreateBucketCommand({ Bucket }));
+    // An installed copy keeps patient files private (S3_ANONYMOUS_READ=none, from VH_MINIO_ANON in release.env):
+    // they are then fetched only through presigned URLs.
+    if (process.env.S3_ANONYMOUS_READ === "none") {
+      logger.info(`${serviceLocation}: created bucket "${Bucket}" (private) on ${process.env.S3_ENDPOINT}`);
+      return;
+    }
     await client.send(new PutBucketPolicyCommand({
       Bucket,
       Policy: JSON.stringify({

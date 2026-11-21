@@ -80,12 +80,15 @@ try {
     $note = @(
         'VisHeart - first login',
         '',
-        'Open http://localhost:3000 after starting VisHeart (desktop icon "Start VisHeart").',
+        'Double-click the "VisHeart" icon on the desktop; it starts VisHeart and opens http://localhost:3000.',
         '',
         'Username: admin',
         "Password: $admin",
         '',
-        'Change this password after your first login.',
+        'If you already changed the admin password, this password no longer works: sign in with the one you set.',
+        '',
+        'Change this password after your first login: open Profile Settings (http://localhost:3000/profile),',
+        'set a new password, and also replace the placeholder email (admin@visheart.local) with your own.',
         'Then delete this file, or keep it somewhere safe: anyone who can read it can sign in as admin.'
     ) -join "`r`n"
     [IO.File]::WriteAllText($LoginNotePath, $note + "`r`n", $utf8)

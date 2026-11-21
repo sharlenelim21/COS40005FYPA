@@ -168,7 +168,8 @@ const createAdminUser = async (): Promise<void> => {
       const admin: IUserDocument = new userModel({
         username: "admin",
         password: hashedPassword,
-        email: "meiqiliew334@gmail.com",
+        // A placeholder, not a real mailbox: the admin changes it in Profile Settings.
+        email: "admin@visheart.local",
         phone: "1234567890",
         role: UserRole.Admin,
       });

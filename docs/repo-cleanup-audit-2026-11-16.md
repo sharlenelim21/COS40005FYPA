@@ -1,5 +1,8 @@
 # Repository cleanup audit — 2026-11-16
 
+> **Historical record.** Most items were done on 2026-11-17 (see git log). Some findings are no longer true, for
+> example `start.ps1` now has `-ForceCpu` / `-ForceGpu`, and the READMEs it mentions have been rewritten.
+
 Read-only audit of tracked files on `test/jiayi-hackathon`. "Unreferenced" means `git grep` over tracked files found
 no reference to the file name, module or import path; Docker/compose mounts and launch scripts were also checked.
 Nothing has been deleted yet. Spot-checked by hand: `visualisation.zip`, `client-heart-assets`, `3dheart.glb`,

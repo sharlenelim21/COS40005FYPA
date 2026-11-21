@@ -9,7 +9,7 @@
              (passwords, trained models, jobs, exports) stay as they are.
 
     Steps: refuse uncommitted changes in the shipped folders, build the backend, copy the shipped files to
-    installer\out\staging, check the images in release.json, write release.env, and run Inno Setup (6.5.2+).
+    <build drive>:\vh-staging, check the images in release.json, write release.env, and run Inno Setup (6.5.2+).
     Output: installer\out\VisHeart-<Variant>-<VERSION>\ (VisHeart-<Variant>-<VERSION>.exe plus .bin slices).
 
 .EXAMPLE
@@ -30,7 +30,10 @@ $installerDir = $PSScriptRoot
 $appRoot = Split-Path -Parent $installerDir           # cardiac-component-segmentation-ai
 $repoRoot = Split-Path -Parent $appRoot
 $outDir = Join-Path $installerDir 'out'
-$staging = Join-Path $outDir 'staging'
+# Staged at the root of the build drive, not in installer\out: the shipped paths (the seed templates above all) are
+# long, and under the deep repository folder they passed Windows' 260-character limit. Holds release.env with the
+# support mail password: never upload or share it.
+$staging = Join-Path ([IO.Path]::GetPathRoot($repoRoot)) 'vh-staging'
 $version = (Get-Content (Join-Path $installerDir 'VERSION') -TotalCount 1).Trim()
 
 function Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
@@ -100,12 +103,23 @@ try {
     Step "Copying files to $staging"
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
     $selection = @(Get-StagingSelection $repoRoot)
+    $targets = @($selection | ForEach-Object { $_.Target })
+    # The installer accepts an install folder of up to 40 characters (visheart.iss, NextButtonClick).
+    $tooLong = @(Get-LongPaths $targets ('C:\' + ('x' * 37)))
+    if ($tooLong.Count -gt 0) {
+        Stop-Build ("These files would pass Windows' 260-character path limit in a 40-character install folder. Give them " +
+            "shorter names:`n  " + ($tooLong -join "`n  "))
+    }
+    $tooLong = @(Get-LongPaths $targets $staging)
+    if ($tooLong.Count -gt 0) { Stop-Build ("Paths too long under $staging`:`n  " + ($tooLong -join "`n  ")) }
     foreach ($item in $selection) {
         $target = Join-Path $staging $item.Target
         $parent = Split-Path -Parent $target
         if (-not (Test-Path $parent)) { New-Item -ItemType Directory $parent -Force | Out-Null }
         Copy-Item -LiteralPath $item.Source -Destination $target
     }
+    # The next update removes what this version shipped and that one no longer does (Remove-VisHeartStaleFiles.ps1).
+    Write-ShippedFileList $targets (Join-Path $staging 'shipped-files.txt')
     $bytes = ($selection | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum
     Write-Host ("    {0} files, {1:N2} GB" -f $selection.Count, ($bytes / 1GB))
 
@@ -133,7 +147,10 @@ try {
     & $iscc @isccArgs (Join-Path $installerDir 'visheart.iss')
     if ($LASTEXITCODE -ne 0) { Stop-Build "Inno Setup failed (exit $LASTEXITCODE)." }
 
-    Step "Done: $target"
+    Step 'Packing the installer into one zip (upload this file to Google Drive)'
+    $zip = New-ReleaseZip $target
+
+    Step "Done: $zip"
     exit 0
 } catch {
     Stop-Build $_.Exception.Message

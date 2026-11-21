@@ -11,10 +11,14 @@ A **GPU-accelerated cardiac MRI segmentation and 4D reconstruction inference ser
 
 ## Overview
 
-VisHeart Inference GPU is a specialized, high-performance and concurrent inference server designed for segmenting cardiac MRI images and reconstructing 4D myocardium models. It leverages the power of GPU acceleration by combining three key machine learning models: YOLO (You Only Look Once) for initial chamber detection, MedSAM (Medical Segment Anything Model) for precise segmentation, and a 4D deep SDF model for temporal myocardium reconstruction. This service is containerized using Docker and exposes its functionality through a FastAPI-based web interface, specifically supporting the [Cardiac_Segmentation_FYP_Server](https://github.com/jamesmuking5/Cardiac_Segmentation_FYP_Server) project.
+VisHeart Inference GPU is a specialized, high-performance and concurrent inference server designed for segmenting cardiac MRI images and reconstructing 4D myocardium models. It leverages the power of GPU acceleration by combining three key machine learning models: YOLO (You Only Look Once) for initial chamber detection, MedSAM (Medical Segment Anything Model) for precise segmentation, and a 4D deep SDF model for temporal myocardium reconstruction. This service is containerized using Docker and exposes its functionality through a FastAPI-based web interface, specifically supporting the VisHeart backend (`../Cardiac_Segmentation_FYP_Server` in this repository).
 
 >[!IMPORTANT]
-> **Strictly** requires a GPU with CUDA support. Does not support CPU-only, ROCM, or MPS as there is hard-coded CUDA optimization used.
+> An NVIDIA GPU with CUDA is recommended but not required. The service picks CUDA, ROCm or CPU at start-up
+> (`app/classes/device_runtime.py`). In the local install, `start.bat` runs the `gpu-nvidia` container when it finds
+> a working NVIDIA GPU and the `gpu-cpu` container otherwise. On CPU, MedSAM is not loaded
+> (`SKIP_MEDSAM_MODEL_LOAD=true` in `docker-compose.yml`), so MedSAM segmentation is unavailable; YOLO, UNet,
+> landmarks and 4D reconstruction still run, more slowly. MPS (Apple) is not supported.
 
 ## Key Features
 
@@ -96,18 +100,18 @@ visheart-inference-gpu/
 > This project was developed and tested on a **Ubuntu 22.04 system** running under **WSL2** with NVIDIA GPU support. It is **not guaranteed** to work on other operating systems or environments.
 
 > [!IMPORTANT]
-> Before running the server, ensure the CUDA toolkit is installed and the GPU is accessible. For a more comprehensive setup, consider using Docker as described in the [Quick Start (Docker)](#quick-start-docker) section.
+> For GPU use, ensure the CUDA toolkit is installed and the GPU is accessible. Most developers run this service in
+> Docker instead, as described in the [Quick Start (Docker)](#quick-start-docker) section.
 
-1.  **Clone the repository:**
+1.  **Go to this folder.** This service is part of the VisHeart repository; there is no separate repository to clone:
 
     ```bash
-    git clone https://github.com/jamesmuking5/visheart-inference-gpu.git
-    cd visheart-inference-gpu
+    cd cardiac-component-segmentation-ai/visheart-inference-gpu
     ```
 
 2.  **Create a secret file (`.env`):**
 
-    - In the root directory of the project , create a secret file named `.env`. Use the `env.template` and the [Environment Variables](#environment-variables) section as a guide for the required environment variables.
+    - In this folder, create a secret file named `.env`. Use `.env.template` and the [Environment Variables](#environment-variables) section as a guide for the required environment variables.
 
     - _Important:_ Do not use quotation marks (`" "`) for the values in the `.env` file. For example, use `SERVER_USERNAME=myusername` instead of `SERVER_USERNAME="myusername"`.
 
@@ -124,11 +128,12 @@ visheart-inference-gpu/
     pip install -r requirements_prod.txt
     ```
 
-4.  **Download the MedSAM model:**
-    Download the MedSAM model weights from [MedSAM](https://github.com/bowang-lab/MedSAM) and place the `medsam_vit_b.pth` file in the `models` directory.
+4.  **Get the models that are not in git:**
+    `medsam_vit_b.pth` and `unet.pth` go in `app/models`. See [Models](#models).
 
-5.  **Edit `start_server.py`:**
-    Modify the `start_server.py` file located in `/app/scripts` to set your desired worker count and concurrency limit settings.
+5.  **(Optional) Edit `start_server.py`:**
+    `start_server.py` is in this folder. It starts uvicorn on port 8001 with 1 worker and a concurrency limit of 100;
+    change those there if needed.
 
 6.  **Run the server:**
 
@@ -153,29 +158,45 @@ visheart-inference-gpu/
 > 1. Docker is installed and running.
 > 2. (Optional) Docker Buildkit (default builder in Docker Desktop 2.3.0+) is recommended but not a strict requirement. See the [Docker Documentations](https://docs.docker.com/build/buildkit/) on how to enable it. If you do not have it, instead of `docker buildx build`, use the `docker build` command.
 
-1.  **Clone the repository:**
+**In VisHeart (the usual way):** you do not run this image by hand. `visheart-local-deployment/docker-compose.yml`
+runs it as the `gpu-cpu` or `gpu-nvidia` service (container `visheart-gpu-cpu` / `visheart-gpu-nvidia`, port 8001),
+and `start.bat` starts the right one. The compose file mounts the service's `.py` files (each one listed by name) and
+`app/models` into the container, so a code change only needs `stop.bat` and `start.bat`; a new `.py` file also needs
+its own mount line. See the root README, "After you change code".
+
+**Building the image:**
+
+1.  **Go to this folder:**
 
     ```bash
-    git clone https://github.com/jamesmuking5/visheart-inference-gpu.git
-    cd visheart-inference-gpu
+    cd cardiac-component-segmentation-ai/visheart-inference-gpu
     ```
 
-2.  **Edit `start_server.py`:**
-    Modify the `start_server.py` file located in `/docker/scripts` to set your desired worker count and concurrency limit settings.
-3.  **Download the MedSAM model:**
-    Download the MedSAM model weights from [MedSAM](https://github.com/bowang-lab/MedSAM) and place the `medsam_vit_b.pth` file in the `models` directory.
+2.  **Get the models that are not in git** (`medsam_vit_b.pth`, `unet.pth`) into `app/models`. See [Models](#models).
+    The image includes the model files listed in `.dockerignore`.
 
-4.  **Create a secret file (`.env`):**
+3.  **Build with the build script, not plain `docker build`:**
 
-    - In the root directory of the project (the same directory where you will run `docker build` and `docker run`), create a secret file named `.env`. Use the `env.template` and the [Environment Variables](#environment-variables) section as a guide for the required environment variables.
-    - _Important:_ Do not use quotation marks (`" "`) for the values in the `.env` file. For example, use `SERVER_USERNAME=myusername` instead of `SERVER_USERNAME="myusername"`.
+    ```powershell
+    .\build.ps1                 # Windows: tags sharlene21/visheart-gpu:latest
+    .\build.ps1 -Tag 1.4.0      # also tags sharlene21/visheart-gpu:1.4.0
+    ```
 
-5.  **Build and run with Docker, listening on port 8001 (GPU support), while passing your environment variables:**
+    On Linux or macOS use `./build.sh` (or `./build.sh 1.4.0`). The script copies the landmark model files from the root `UNETRESNET34`
+    folder into the build; a plain `docker build .` fails at that step.
+
+4.  **(Optional) Run it on its own**, listening on port 8001, with a `.env` file made from `.env.template`
+    (no quotation marks around values):
 
     ```bash
-    docker buildx build -t visheart-inference-gpu .
-    docker run --rm -it -p 8001:8001 --env-file .env --gpus all visheart-inference-gpu
+    docker run --rm -it -p 8001:8001 --env-file .env --gpus all sharlene21/visheart-gpu:latest
     ```
+
+    Leave out `--gpus all` on a computer without an NVIDIA GPU.
+
+5.  To use a new image in VisHeart, change the default of `VH_GPU_IMAGE` in `docker-compose.yml` (for your own
+    copy) and the `VH_GPU_IMAGE` entry in `installer/release.json` (for installed copies), the same way the root
+    README describes for the app image ("When you build a new image").
 
 6.  **(Optional) Test the API with curl:**
     ```bash
@@ -184,11 +205,11 @@ visheart-inference-gpu/
 7.  **(Optional) Save the Docker image to a tar file:**
     ```bash
     # No compression
-    docker save -o visheart-inference-gpu.tar visheart-inference-gpu
+    docker save -o visheart-inference-gpu.tar sharlene21/visheart-gpu:latest
     # With gzip compression
-    docker save visheart-inference-gpu | gzip > visheart-inference-gpu.tar.gz
+    docker save sharlene21/visheart-gpu:latest | gzip > visheart-inference-gpu.tar.gz
     ```
-    This command will create a tar (or tar.gz if compresed) file named `visheart-inference-gpu` in the current directory, which can be used to transfer the image to another machine or for backup purposes.
+    This command will create a tar (or tar.gz if compressed) file named `visheart-inference-gpu` in the current directory, which can be used to transfer the image to another machine or for backup purposes.
 8.  **(Optional) Load the Docker image from a tar file:**
     ```bash
     docker load -i visheart-inference-gpu.tar # add .gz if compressed
@@ -209,6 +230,12 @@ The following environment variables are required for the server to run properly.
 | `ALLOWED_NODE_USERNAME`      | The username of an allowed client (e.g., a node server) that can access this inference server's API.           | `visheart-node-server`                    |
 | `ENV_TYPE`                   | Defines the operating environment for the server. Can be set to `development` or `production`.                  | `production`                              |
 | `GPU_SEMAPHORE_COUNT`        | Determines the maximum number of concurrent GPU inference tasks that can be processed at the same time.         | `1`                                       |
+| `FOURD_RV_MODEL_NAME`        | Optional. RV 4D reconstruction checkpoint (file in `./app/models` or an absolute path). Unset: RV requests get 503. | `fourd_rv_epoch_50.pth`                |
+| `VISHEART_DEVICE`            | Optional. `auto`, `cpu`, `cuda`, `rocm` or a torch device string. The `gpu-cpu` service sets `cpu`.              | `auto`                                    |
+| `SKIP_MEDSAM_MODEL_LOAD`     | Optional. `true` skips loading MedSAM (the `gpu-cpu` service sets it). Also `SKIP_YOLO_MODEL_LOAD`, `SKIP_FOURD_RECONSTRUCTION_MODEL_LOAD`. | `false` |
+
+`visheart-local-deployment/docker-compose.yml` holds the values the local install uses (the `x-gpu-environment`
+block and the `gpu-cpu` / `gpu-nvidia` services). It sets `ENV_TYPE=development`, so JWT checks are skipped there.
 
 > [!WARNING]
 > The `GPU_ACCESS_SECRET` is a secret key used for JWT (JSON Web Token) authentication to secure access to this GPU inference endpoints and is used to generate a JWT token that is required for accessing the inference endpoints. If you do not set this variable, the server will not start. This key's value is shared between the inference server and the node server. The JWT token is generated using the `SERVER_USERNAME` and `GPU_ACCESS_SECRET` variables, and it is used to authenticate requests to the inference endpoints.
@@ -263,7 +290,7 @@ pip install -r requirements_dev.txt
 
 ## Models
 
-Model files are stored in the `/models` directory:
+Model files are stored in the `app/models` directory:
 
 - **YOLOv11**: `24April2025-single-stage-usethis.engine` (TensorRT optimized) or `24April2025-single-stage-usethis.pt` (PyTorch model)
   - This model is already provided in the repository.
@@ -273,6 +300,8 @@ Model files are stored in the `/models` directory:
 > The **MedSAM model** is not provided in the repository due to its large size.
 - **4D Reconstruction Model**: `fourd_model_epoch_250.pth` (PyTorch model)
   - This model is already provided in the repository.
+- **RV 4D Reconstruction Model**: `fourd_rv_epoch_50.pth`, and the CPD atlases `atlas/` (LV) and `atlas_rv/` (RV)
+  - Already provided in the repository.
 - **UNet segmentation**: `unet.pth` (PyTorch model)
   - Not in the repository (gitignored, large). It is looked up in this order: the `UNET_CHECKPOINT_PATH`
     environment variable, `app/models/active/unet.pth` (a retrained version activated by Extend Training),
@@ -282,8 +311,12 @@ Model files are stored in the `/models` directory:
 
 `visheart-local-deployment/docker-compose.yml` mounts this repo's `app/models` folder over the image's
 `/app/app/models` (read-only), which hides the copies baked into the image. On a fresh clone the folder has
-neither file, so UNet fails with "UNet checkpoint file not found" and MedSAM cannot load. Copy them out of the
-image once (Linux, macOS or Git Bash; run from `visheart-inference-gpu/`):
+neither file, so UNet fails with "UNet checkpoint file not found" and MedSAM cannot load.
+
+The usual way is to download both into `app/models`: `medsam_vit_b.pth` from the
+[MedSAM project](https://github.com/bowang-lab/MedSAM) and `unet.pth` from [Google Drive](https://drive.google.com/file/d/1qL-Gxft-KdHQ7pPbxlRNiUr-L-Dn64sU/view?usp=sharing) (see "For developers" in the
+root README). Alternatively, copy them out of the image once (Linux, macOS or Git Bash; run from
+`visheart-inference-gpu/`):
 
 ```bash
 docker pull sharlene21/visheart-gpu:latest
@@ -308,6 +341,11 @@ When running locally: `http://localhost:8001`
 
 - **GET /status/server**: Server status (CPU, memory, disk usage)
 - **GET /status/gpu**: GPU status (name, memory usage, utilization)
+- **GET /status/ready**: Whether every model has finished loading (`ready: true`) or is still `starting`
+- **GET /status/environment**: `ENV_TYPE`, whether authentication is required, and the configured model names
+- **GET /status/models**: Which models are loaded in memory
+
+Interactive API docs (FastAPI): `http://localhost:8001/docs`.
 
 ### Inference Endpoints
 
@@ -493,12 +531,26 @@ Content-Type: application/json
 | `url` | string (HttpUrl) | ✅ | - | Presigned S3 URL for NiFTI file |
 | `callback_url` | string (HttpUrl) | ✅ | - | Webhook endpoint for results |
 | `ed_frame_index` | integer | ❌ | 0 | End Diastolic frame reference (0-based) |
-| `num_iterations` | integer | ❌ | 50 | SDF optimization iterations (1-200) |
+| `num_iterations` | integer | ❌ | 50 | SDF optimization iterations (1-500) |
 | `resolution` | integer | ❌ | 128 | Mesh resolution (32-256) |
 | `process_all_frames` | boolean | ❌ | true | Enable multi-frame processing |
 | `export_format` | string | ❌ | "obj" | Mesh export format: "obj" (Wavefront) or "glb" (glTF 2.0 binary) **(recommended)** |
+| `chamber` | string | ❌ | "lv" | `"lv"` meshes the LV myocardial wall (label 2). `"rv"` meshes the RV cavity (label 1) with the RV checkpoint; returns 503 if `FOURD_RV_MODEL_NAME` is not set |
+| `seed` | integer | ❌ | null | Seed for the starting latent code (0 to 2^31-1). Set it to make a job repeatable |
+| `num_candidates` | integer | ❌ | 1 | Fit this many seeds and keep the one that best matches the input contour (1-10). About N times slower |
+| `code_reg_lambda` | number | ❌ | 0.0001 | L2 regularization of the latent code (0-0.01). Experimental |
+| `verbose_logging` | boolean | ❌ | false | Log optimization details per epoch |
 | `debug_save` | boolean | ❌ | false | Save files persistently |
 | `debug_dir` | string | ❌ | "/tmp/4d_reconstruction_debug" | Debug file location |
+
+All request fields are defined in `FourDReconstructionJobRequest` in `app/classes/pydantic_schema.py`. The VisHeart
+backend always sends `ed_frame_index`, `num_iterations`, `resolution`, `process_all_frames`, `export_format`
+(`glb` unless asked otherwise), `debug_save`, `debug_dir` and `chamber` (`src/services/reconstruction.ts`).
+
+> [!NOTE]
+> `pydantic_schema.py` also defines a `FourDReconstructionResult` model with `mesh_format: "npz"`, `mesh_data` and
+> `mesh_files`. The current code does not use it: results are sent as `.obj` / `.glb` files in the multipart
+> callback below, with the metadata built in `app/helpers/inference_jobs.py`.
 
 **Export Format Notes:**
 - **OBJ (Wavefront)**: Plain text format with vertex and face data. Widely supported, human-readable.
@@ -532,8 +584,10 @@ X-File-Count: 5
     "mesh_file_size": 1247856,
     "total_mesh_files": 5,
     "total_mesh_size": 6239280,
-    "mesh_format": "glb",
-    "export_format": "glb",
+    "mesh_format": "obj",
+    "chamber": "lv",
+    "aha_vertex_labels": "...",
+    "frame_aha_vertex_labels": "...",
     "reconstruction_time": 127.45,
     "num_iterations": 150,
     "resolution": 128,
@@ -593,6 +647,11 @@ X-File-Count: 5
 **Content-Type:** `model/gltf-binary` (for GLB) or `model/obj` (for OBJ)  
 **Filenames:** `patient006_4d_gt_4D_frame04.glb`, `patient006_4d_gt_4D_frame09.glb`, etc.
 
+With only one mesh file the field is named `mesh`. The metadata's `mesh_format` is always `"obj"` in the current
+code, even for GLB files; the file extension and Content-Type show the real format. `aha_vertex_labels` and
+`frame_aha_vertex_labels` (shortened above) hold the segment label of each mesh vertex (AHA segments for LV), for
+the main mesh and per frame; they are `null` when labelling fails.
+
 ##### Error Response Sample
 
 ```json
@@ -636,24 +695,39 @@ The system supports advanced temporal sequence processing:
 
 ### Callback Mechanism
 
-Most inference endpoints (`/inference/v2/bbox-inference`, `/inference/v2/medsam-inference`, `/inference/v2/4d-reconstruction`) use an asynchronous workflow:
+Most inference endpoints (`bbox-inference`, `medsam-inference`, `unet-inference`, `landmark-detection`,
+`4d-reconstruction`) answer `202 Accepted` at once and later POST the result to the request's `callback_url`.
 
 > [!NOTE]
-> The `/inference/v2/medsam-inference-manual` endpoint is an exception. It operates synchronously and returns results directly in the HTTP response, instead of using the callback mechanism.
-
-
-**Callback Format:**
+> `/inference/v2/medsam-inference-manual`, `/inference/v2/4d-motion` and the `/bullseye/*` endpoints are exceptions.
+> They work synchronously and return the result directly in the HTTP response.
 
 ### Endpoints Summary
+
+"Requires Auth" means a backend JWT in the `Authorization` header. It is only checked when `ENV_TYPE=production`;
+the local install runs with `ENV_TYPE=development`. Routers: `app/routes/status_routes.py`, `inference_route.py`,
+`bullseye_route.py`.
 
 | Endpoint                                | Method | Description                                    | Requires Auth |
 | --------------------------------------- | ------ | ---------------------------------------------- | ------------- |
 | `/status/server`                        | GET    | Server status                                  | No            |
 | `/status/gpu`                           | GET    | GPU status and utilization                     | No            |
+| `/status/ready`                         | GET    | Whether all models have finished loading       | No            |
+| `/status/environment`                   | GET    | Environment type, auth mode, model names       | No            |
+| `/status/models`                        | GET    | Which models are loaded                        | No            |
 | `/inference/v2/bbox-inference`          | POST   | YOLO chamber detection (Async)                 | Yes           |
 | `/inference/v2/medsam-inference`        | POST   | Full chamber segmentation (Async)              | Yes           |
+| `/inference/v2/unet-inference`          | POST   | UNet segmentation of a NIfTI file (Async)      | Yes           |
+| `/inference/v2/landmark-detection`      | POST   | Landmark detection, UNetResNet34 (Async)       | Yes           |
 | `/inference/v2/medsam-inference-manual` | POST   | Manual bounding box segmentation (Synchronous) | Yes           |
 | `/inference/v2/4d-reconstruction`       | POST   | 4D myocardium reconstruction (Async)           | Yes           |
+| `/inference/v2/4d-motion`               | POST   | Smooth motion from a finished reconstruction's TAR (body), CPU only, one at a time; query `chamber`, `ed_frame` | Yes |
+| `/bullseye/analyze`                     | POST   | AHA 17-segment analysis, NIfTI mask uploaded   | Yes           |
+| `/bullseye/analyze-from-s3`             | POST   | AHA 17-segment analysis, mask from a presigned URL | Yes       |
+| `/bullseye/compute-strain`              | POST   | LV strain (GRS, GCS) from ED + ES masks        | Yes           |
+| `/bullseye/compute-rv-strain`           | POST   | RV 9-segment strain (GCS, GAS) from ED + ES masks | Yes        |
+
+`/inference/v2/3d-reconstruction` is commented out in `inference_route.py` and not available.
 
 > [!NOTE]
 > The `/inference/v1/` synchronous endpoints are available, but deprecated. They are retained for backward compatibility with the `_interactive_medsam_ui.py` script and will only be exposed in the development environment.

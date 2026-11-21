@@ -255,7 +255,9 @@ Describe 'Remove-OtherCopyContainers' {
     Context 'an installed copy on a PC that also has a developer copy' {
         Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
         Mock -ModuleName VisHeartStart Get-LastDockerOutput {
-            @('visheart-local|visheart-local-deployment', 'visheart-redis|visheart', 'visheart-minio|') }
+            @('visheart-local|com.docker.compose.service=visheart-app,com.docker.compose.project=visheart-local-deployment',
+              'visheart-redis|com.docker.compose.project=visheart,com.docker.compose.service=redis',
+              'visheart-minio|') }
         It 'removes the containers that are not its own (their data volumes stay) and keeps its own' {
             $dir = New-Dir -Installed
             try {
@@ -269,6 +271,83 @@ Describe 'Remove-OtherCopyContainers' {
                     ($Arguments -join ' ') -eq 'rm -f visheart-redis' }
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
                     ($Arguments -join ' ') -match '\bvolume\b|-v\b' }
+                # Windows PowerShell 5.1 strips double quotes inside native arguments, so docker got a broken
+                # --format template ('function "com" not defined'; found testing the installer, 2026-11-18).
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -match '"' }
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+}
+
+Describe 'Remove-OldVisHeartImages' {
+    # A fake Docker: answers by the arguments of the last call (mock bodies run in the module, so the table lives there).
+    function global:Get-FakeDockerAnswer([string]$Arguments) {
+        $answers = @{
+            'image inspect --format {{.Id}} a/app:2'        = @('sha256:app2')
+            'image inspect --format {{.Id}} g/gpu@sha256:G' = @('sha256:gpuG')
+            'image inspect --format {{.Id}} a/app:dev'      = @('sha256:appdev')
+            'ps -a -q --no-trunc'                           = @('c1', 'c2')
+            'inspect --format {{.Image}} c1 c2'             = @('sha256:gpuOld', 'sha256:mongo')
+            'images a/app --no-trunc --format {{.ID}}|{{.Tag}}' = @('sha256:app2|2', 'sha256:app1|1', 'sha256:app1|old-alias', 'sha256:appdev|dev')
+            'images g/gpu --no-trunc --format {{.ID}}|{{.Tag}}' = @('sha256:gpuG|<none>', 'sha256:gpuOld|0.9')
+        }
+        return $answers[$Arguments]
+    }
+    function New-InstalledDir([switch]$Developer) {
+        $dir = Join-Path $env:TEMP ("vh-img-" + [guid]::NewGuid())
+        New-Item -ItemType Directory $dir | Out-Null
+        if (-not $Developer) {
+            Set-Content (Join-Path $dir 'release.env') @('COMPOSE_PROJECT_NAME=visheart', 'VH_APP_IMAGE=a/app:2', 'VH_GPU_IMAGE=g/gpu@sha256:G') -Encoding ASCII
+        }
+        Set-Content (Join-Path $dir 'docker-compose.yml') @('    image: ${VH_APP_IMAGE:-a/app:dev}', '    image: mongo:7.0') -Encoding ASCII
+        return $dir
+    }
+
+    Context 'an installed copy after an update' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { $script:lastDockerArgs = ($Arguments -join ' '); 0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { Get-FakeDockerAnswer $script:lastDockerArgs }
+        It 'removes only its old images, keeping the current ones, those a container uses and the developer default' {
+            $dir = New-InstalledDir
+            try {
+                $removed = @(Remove-OldVisHeartImages $dir)
+                ($removed -join ',') | Should Be 'a/app:1'
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -eq 'image rm -f sha256:app1' }
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -like 'image rm*' }
+                # Mongo and Redis are not VisHeart images: their repositories are never listed.
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -like 'images mongo*' }
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -match '"' }
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'a current image Docker cannot find' {
+        Mock -ModuleName VisHeartStart Invoke-Docker {
+            $script:lastDockerArgs = ($Arguments -join ' ')
+            if ($script:lastDockerArgs -like 'image inspect*') { return 1 }
+            0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { Get-FakeDockerAnswer $script:lastDockerArgs }
+        It 'removes nothing, since it cannot tell which image is current' {
+            $dir = New-InstalledDir
+            try {
+                @(Remove-OldVisHeartImages $dir).Count | Should Be 0
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
+                    ($Arguments -join ' ') -like 'image rm*' }
+            } finally { Remove-Item -Recurse -Force $dir }
+        }
+    }
+
+    Context 'a developer copy (no release.env)' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        It 'removes nothing and asks Docker nothing' {
+            $dir = New-InstalledDir -Developer
+            try {
+                @(Remove-OldVisHeartImages $dir).Count | Should Be 0
+                Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It
             } finally { Remove-Item -Recurse -Force $dir }
         }
     }
@@ -415,17 +494,22 @@ Describe 'Remove-VisHeartDocker' {
 }
 
 Describe 'Initialize-BackendFolders' {
+    # <base>\UNETRESNET34 and <base>\cardiac-component-segmentation-ai\{visheart-local-deployment, Cardiac_...\dist},
+    # as in the repository and an installed copy.
     function New-Tree([switch]$Built) {
-        $root = Join-Path $env:TEMP ("vh-bf-" + [guid]::NewGuid())
-        $deploy = Join-Path $root 'visheart-local-deployment'
+        $base = Join-Path $env:TEMP ("vh-bf-" + [guid]::NewGuid())
+        $app = Join-Path $base 'cardiac-component-segmentation-ai'
+        $deploy = Join-Path $app 'visheart-local-deployment'
         New-Item -ItemType Directory $deploy | Out-Null
-        $dist = Join-Path $root 'Cardiac_Segmentation_FYP_Server\dist'
+        $dist = Join-Path $app 'Cardiac_Segmentation_FYP_Server\dist'
         New-Item -ItemType Directory $dist | Out-Null
+        New-Item -ItemType Directory (Join-Path $base 'UNETRESNET34') | Out-Null
         if ($Built) { Set-Content (Join-Path $dist 'index.js') '//' }
         return $deploy
     }
+    function Get-Base($deploy) { Split-Path -Parent (Split-Path -Parent $deploy) }
 
-    It 'creates the folders docker-compose.yml mounts volumes on, inside the read-only dist mount' {
+    It 'creates the folders docker-compose.yml mounts volumes on inside read-only mounts' {
         $deploy = New-Tree -Built
         try {
             (Initialize-BackendFolders $deploy).Built | Should Be $true
@@ -433,18 +517,112 @@ Describe 'Initialize-BackendFolders' {
             foreach ($name in 'temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports') {
                 Test-Path (Join-Path $dist $name) -PathType Container | Should Be $true
             }
-        } finally { Remove-Item -Recurse -Force (Split-Path -Parent $deploy) }
+            Test-Path (Join-Path (Get-Base $deploy) 'UNETRESNET34\checkpoints') -PathType Container | Should Be $true
+        } finally { Remove-Item -Recurse -Force (Get-Base $deploy) }
     }
 
     It 'says when the backend was never built' {
         $deploy = New-Tree
         try { (Initialize-BackendFolders $deploy).Built | Should Be $false }
-        finally { Remove-Item -Recurse -Force (Split-Path -Parent $deploy) }
+        finally { Remove-Item -Recurse -Force (Get-Base $deploy) }
+    }
+}
+
+Describe 'Get-BusyPorts' {
+    # VisHeart's own containers hold their ports through Docker's processes; only another program is a problem.
+    Context 'Docker holds 3000 and 9000, another program holds 5000' {
+        Mock -ModuleName VisHeartStart Get-PortListeners {
+            @([pscustomobject]@{ Port = 3000; Process = 'com.docker.backend'; Id = 10 },
+              [pscustomobject]@{ Port = 9000; Process = 'wslrelay'; Id = 11 },
+              [pscustomobject]@{ Port = 5000; Process = 'node'; Id = 4321 })
+        }
+        It 'names only the other program, with its process id' {
+            $busy = @(Get-BusyPorts)
+            $busy.Count | Should Be 1
+            $busy[0].Port | Should Be 5000
+            $busy[0].Process | Should Be 'node'
+            $busy[0].Id | Should Be 4321
+        }
     }
 
-    It 'every folder it creates is one docker-compose.yml mounts under dist' {
-        $compose = Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'docker-compose.yml') -Raw
-        $mounted = @([regex]::Matches($compose, '/app/backend/dist/(temp_\w+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-        ($mounted -join ',') | Should Be 'temp_exports,temp_jpeg,temp_mesh,temp_upload'
+    Context 'nothing else listens' {
+        Mock -ModuleName VisHeartStart Get-PortListeners { @() }
+        It 'returns nothing' { @(Get-BusyPorts).Count | Should Be 0 }
+    }
+
+    It 'checks the ports a user cannot do without: web page, backend, file storage, GPU service' {
+        Mock -ModuleName VisHeartStart Get-PortListeners { @() }
+        Get-BusyPorts | Out-Null
+        Assert-MockCalled -ModuleName VisHeartStart Get-PortListeners -Times 1 -Scope It -ParameterFilter {
+            ($Ports -join ',') -eq '3000,5000,9000,8001' }
+    }
+}
+
+Describe 'Test-VisHeartAnswering' {
+    # The VisHeart desktop icon (start.bat --open) only opens the browser when VisHeart already runs.
+    Context 'web page and backend both answer' {
+        Mock -ModuleName VisHeartStart Test-UrlAnswers { $true }
+        It 'is true' { Test-VisHeartAnswering | Should Be $true }
+        It 'asks both the web page and the backend' {
+            Test-VisHeartAnswering | Out-Null
+            Assert-MockCalled -ModuleName VisHeartStart Test-UrlAnswers -Times 1 -Scope It -ParameterFilter { $Url -eq 'http://localhost:3000/' }
+            Assert-MockCalled -ModuleName VisHeartStart Test-UrlAnswers -Times 1 -Scope It -ParameterFilter { $Url -eq 'http://localhost:5000/' }
+        }
+    }
+    Context 'the backend does not answer' {
+        Mock -ModuleName VisHeartStart Test-UrlAnswers { $Url -eq 'http://localhost:3000/' }
+        It 'is false, so VisHeart is started' { Test-VisHeartAnswering | Should Be $false }
+    }
+}
+
+Describe 'Open-VisHeart' {
+    Mock -ModuleName VisHeartStart Start-Process {}
+    It 'opens the VisHeart web page in the default browser' {
+        Open-VisHeart
+        Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 1 -Exactly -Scope It -ParameterFilter { $FilePath -eq 'http://localhost:3000' }
+    }
+}
+
+Describe 'start.bat arguments' {
+    $bat = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.bat')
+    It 'passes --open (the VisHeart desktop icon) to start.ps1 as -OpenBrowser' {
+        $bat | Should Match '(?i)"--open".*-OpenBrowser'
+    }
+    It 'reads every argument, so --open works together with --cpu or --gpu' {
+        $bat | Should Match '(?i)for %%A in \(%\*\) do'
+        $bat | Should Match '(?i)"--cpu".*-ForceCpu'
+        $bat | Should Match '(?i)"--gpu".*-ForceGpu'
+    }
+}
+
+Describe 'Get-DockerDesktopExe' {
+    # The installer is a 32-bit program: when its "Start VisHeart now" option runs start.bat, Windows gives the
+    # 32-bit process C:\Program Files (x86) as ProgramFiles, so Docker Desktop looked "not installed" (found
+    # 2026-11-20). ProgramW6432 always names the 64-bit Program Files.
+    It 'uses the 64-bit Program Files even from a 32-bit process' {
+        $saved = $env:ProgramW6432
+        try {
+            $env:ProgramW6432 = 'X:\Program Files'
+            Get-DockerDesktopExe | Should Be 'X:\Program Files\Docker\Docker\Docker Desktop.exe'
+        } finally { $env:ProgramW6432 = $saved }
+    }
+}
+
+Describe 'start.bat from a 32-bit process' {
+    It 'runs start.ps1 in 64-bit PowerShell' {
+        $t = Join-Path $env:TEMP ("vh-b32-" + [guid]::NewGuid()); New-Item -ItemType Directory $t | Out-Null
+        try {
+            Copy-Item (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.bat') $t
+            Set-Content (Join-Path $t 'start.ps1') 'param([switch]$ForceCpu,[switch]$ForceGpu,[switch]$OpenBrowser) "is64=$([Environment]::Is64BitProcess)"' -Encoding ASCII
+            $out = & "$env:SystemRoot\SysWOW64\cmd.exe" /c "`"$t\start.bat`"" | Out-String
+            $out | Should Match 'is64=True'
+        } finally { Remove-Item -Recurse -Force $t }
+    }
+}
+
+Describe 'start.ps1 removes old images' {
+    $ps1 = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
+    It 'only after VisHeart was started, and never fails the start' {
+        $ps1 | Should Match '(?s)up -d visheart-app \$inferenceService.*try \{[^}]*Remove-OldVisHeartImages \$scriptDir'
     }
 }

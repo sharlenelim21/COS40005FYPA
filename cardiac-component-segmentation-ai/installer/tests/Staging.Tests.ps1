@@ -79,7 +79,13 @@ Describe 'Get-StagingSelection' {
     }
 
     It 'every source matches its target under the repository root' {
-        foreach ($s in $sel) { $s.Source | Should Be (Join-Path $repo $s.Target) }
+        # Same file, compared by content of the path after the root: TEMP may be a short 8.3 path (C:\Users\RUNNER~1 on
+        # GitHub's runners) while the selection reports the long one.
+        foreach ($s in $sel) {
+            $s.Source.EndsWith('\' + $s.Target, [StringComparison]::OrdinalIgnoreCase) | Should Be $true
+            (Get-Item -LiteralPath $s.Source).Length | Should Be (Get-Item -LiteralPath (Join-Path $repo $s.Target)).Length
+            Test-Path -LiteralPath $s.Source -PathType Leaf | Should Be $true
+        }
     }
 
     It 'selection excludes dev and per-PC folders' {
@@ -165,7 +171,6 @@ Describe 'Test-ReleaseImages' {
             VH_APP_IMAGE          = 'sharlene21/visheart-local:1.5.0'
             VH_GPU_IMAGE          = 'sharlene21/visheart-gpu:9.9.9'
             VH_MINIO_IMAGE        = 'bitnamilegacy/minio:latest'
-            VH_MINIO_CLIENT_IMAGE = 'bitnamilegacy/minio-client@sha256:00dcc4e58ada0df45bb7d9ee435af98295f96c27c3c68292ce78ec700a87b511'
         }
         $bad = @(Test-ReleaseImages $images | Sort-Object)
         ($bad -join ',') | Should Be 'bitnamilegacy/minio:latest,sharlene21/visheart-gpu:9.9.9'
@@ -212,7 +217,7 @@ Describe 'Write-ReleaseEnv' {
     New-Item -ItemType Directory $dir | Out-Null
     $smtp = Join-Path $dir 'smtp.release.env'
     Set-Content $smtp "# team support account`r`nVH_SUPPORT_EMAIL=support@example.test`r`nVH_SMTP_USER=support@example.test`r`nVH_SMTP_PASS=abcd efgh ijkl mnop" -Encoding ASCII
-    $images = @{ VH_APP_IMAGE = 'a/app:1'; VH_GPU_IMAGE = 'a/gpu:1'; VH_MINIO_IMAGE = 'a/minio:1'; VH_MINIO_CLIENT_IMAGE = 'a/mc:1' }
+    $images = @{ VH_APP_IMAGE = 'a/app:1'; VH_GPU_IMAGE = 'a/gpu:1'; VH_MINIO_IMAGE = 'a/minio:1' }
 
     It 'release env content' {
         $out = Join-Path $dir 'release.env'
@@ -224,14 +229,16 @@ Describe 'Write-ReleaseEnv' {
         $map['VH_APP_IMAGE'] | Should Be 'a/app:1'
         $map['VH_GPU_IMAGE'] | Should Be 'a/gpu:1'
         $map['VH_MINIO_IMAGE'] | Should Be 'a/minio:1'
-        $map['VH_MINIO_CLIENT_IMAGE'] | Should Be 'a/mc:1'
+        $map.ContainsKey('VH_MINIO_CLIENT_IMAGE') | Should Be $false
         $map['VH_SUPPORT_EMAIL'] | Should Be 'support@example.test'
         $map['VH_SMTP_USER'] | Should Be 'support@example.test'
         $map['VH_SMTP_PASS'] | Should Be 'abcd efgh ijkl mnop'
         $map['VH_BIND'] | Should Be '127.0.0.1'
         $map['VH_MINIO_ANON'] | Should Be 'none'
         $map['COMPOSE_PROJECT_NAME'] | Should Be 'visheart'
-        $map.Count | Should Be 10
+        $map['VH_MONGO_HOST_PORT'] | Should Be '0'
+        $map['VH_REDIS_HOST_PORT'] | Should Be '0'
+        $map.Count | Should Be 11
     }
 
     It 'release env names the installed version and where to check for a newer one' {
@@ -284,5 +291,71 @@ Describe 'Find-InnoCompiler' {
         It 'prefers the known one' {
             Find-InnoCompiler | Should Be 'C:\new\ISCC.exe'
         }
+    }
+}
+
+Describe 'Get-LongPaths' {
+    It 'names the files whose full path under a folder passes the Windows 260-character limit' {
+        $short = 'app\a.txt'
+        $long = 'app\' + ('x' * 240) + '.txt'
+        @(Get-LongPaths @($short, $long) 'C:\VisHeart') | Should Be @($long)
+        @(Get-LongPaths @($short) 'C:\VisHeart').Count | Should Be 0
+    }
+
+    It 'every shipped file fits in the longest install folder the installer accepts (40 characters)' {
+        $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        $targets = @(Get-StagingSelection $repo | ForEach-Object { $_.Target })
+        @(Get-LongPaths $targets ('C:\' + ('x' * 37))).Count | Should Be 0
+    }
+}
+
+Describe 'New-ReleaseZip' {
+    # One zip per installer, uploaded as one file: Google Drive splits a folder download over about 2 GB into several
+    # dated zips, and users who unzipped only one got "Please insert Disk 2" (found on a test laptop, 2026-11-19).
+    It 'packs the installer folder, folder name included, without recompressing the slices' {
+        $work = Join-Path $env:TEMP ("vh-rz-" + [guid]::NewGuid())
+        $folder = Join-Path $work 'VisHeart-Full-9.9.9'
+        New-Item -ItemType Directory $folder | Out-Null
+        Set-Content (Join-Path $folder 'VisHeart-Full-9.9.9.exe') 'x'
+        Set-Content (Join-Path $folder 'VisHeart-Full-9.9.9-1.bin') ('y' * 5000)
+        try {
+            $zip = New-ReleaseZip $folder
+            $zip | Should Be (Join-Path $work 'VisHeart-Full-9.9.9.zip')
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $z = [IO.Compression.ZipFile]::OpenRead($zip)
+            try {
+                $files = @($z.Entries | Where-Object { $_.Length -gt 0 })
+                $expected = @('VisHeart-Full-9.9.9/VisHeart-Full-9.9.9-1.bin', 'VisHeart-Full-9.9.9/VisHeart-Full-9.9.9.exe')
+                (@($files | ForEach-Object { $_.FullName } | Sort-Object) -join ',') | Should Be ((@($expected | Sort-Object)) -join ',')
+                @($files | Where-Object { $_.CompressedLength -ne $_.Length }).Count | Should Be 0
+            } finally { $z.Dispose() }
+        } finally { Remove-Item -Recurse -Force $work }
+    }
+
+    It 'replaces an older zip of the same name' {
+        $work = Join-Path $env:TEMP ("vh-rz-" + [guid]::NewGuid())
+        $folder = Join-Path $work 'VisHeart-Update-9.9.9'
+        New-Item -ItemType Directory $folder | Out-Null
+        Set-Content (Join-Path $folder 'VisHeart-Update-9.9.9.exe') 'new'
+        Set-Content (Join-Path $work 'VisHeart-Update-9.9.9.zip') 'old broken zip'
+        try {
+            $zip = New-ReleaseZip $folder
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $z = [IO.Compression.ZipFile]::OpenRead($zip)
+            try { @($z.Entries | Where-Object { $_.Length -gt 0 }).Count | Should Be 1 } finally { $z.Dispose() }
+        } finally { Remove-Item -Recurse -Force $work }
+    }
+}
+
+Describe 'Write-ShippedFileList' {
+    It 'lists every shipped file, sorted, except unet.pth (never replaced, so never removed)' {
+        $f = Join-Path $env:TEMP ("vh-list-" + [guid]::NewGuid() + '.txt')
+        try {
+            Write-ShippedFileList @('b\two.txt', 'a\one.txt', 'cardiac-component-segmentation-ai\visheart-inference-gpu\app\models\unet.pth', ('c\caf' + [char]0xE9 + '.txt')) $f
+            $lines = @(Get-Content $f -Encoding UTF8)
+            ($lines -join '|') | Should Be ('a\one.txt|b\two.txt|c\caf' + [char]0xE9 + '.txt')
+            # UTF-8 without a byte order mark
+            [IO.File]::ReadAllBytes($f)[0] | Should Be ([byte][char]'a')
+        } finally { Remove-Item -Force $f -ErrorAction SilentlyContinue }
     }
 }

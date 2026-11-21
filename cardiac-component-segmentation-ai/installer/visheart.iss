@@ -1,5 +1,5 @@
 ; VisHeart installer (Inno Setup 6.5.2 or later). Built by make-installer.ps1, which passes:
-;   /DVariant=Full|Update  /DAppVersion=<VERSION>  /DStagingDir=<installer\out\staging>  [/DPackDir=<training pack>]
+;   /DVariant=Full|Update  /DAppVersion=<VERSION>  /DStagingDir=<build drive>:\vh-staging>  [/DPackDir=<training pack>]
 ; Full installs the app, models and the UNet Extend Training data pack; Update installs the app and models only.
 ; Both share one AppId, so a newer installer upgrades an existing install in place.
 
@@ -32,7 +32,8 @@ AppVersion={#AppVersion}
 AppVerName=VisHeart {#AppVersion}
 AppPublisher=VisHeart team
 DefaultDirName=C:\VisHeart
-DisableDirPage=yes
+; New installs may choose the folder (another drive when C: is full); an update keeps the installed folder.
+DisableDirPage=auto
 DefaultGroupName=VisHeart
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
@@ -47,6 +48,9 @@ SolidCompression=no
 OutputDir=out
 OutputBaseFilename=VisHeart-{#Variant}-{#AppVersion}
 UninstallDisplayName=VisHeart
+; The heart logo on the setup .exe and in Settings > Apps.
+SetupIconFile=assets\visheart.ico
+UninstallDisplayIcon={app}\installer\visheart.ico
 WizardStyle=modern
 ; Larger than the default, so the login and the next steps on the finish page are easy to read.
 WizardSizePercent=130
@@ -68,30 +72,47 @@ Source: "{#PackDir}\*"; DestDir: "{app}\{#AppSub}\visheart-training-data"; Flags
 #endif
 Source: "scripts\New-VisHeartSecrets.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "scripts\Protect-VisHeartFolder.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "scripts\Remove-VisHeartStaleFiles.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "scripts\Test-VisHeartPrerequisites.ps1"; Flags: dontcopy
 Source: "INSTALL.md"; DestDir: "{app}"; Flags: ignoreversion
+; The VisHeart heart logo (visheart-frontend favicon, as a multi-size Windows icon) for the shortcuts and Apps list.
+Source: "assets\visheart.ico"; DestDir: "{app}\installer"; Flags: ignoreversion
 
 [Icons]
-Name: "{autodesktop}\Start VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"
-Name: "{autodesktop}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; WorkingDir: "{app}\{#AppSub}"
-Name: "{group}\Start VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"
-Name: "{group}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; WorkingDir: "{app}\{#AppSub}"
+; One desktop icon, like an ordinary app: "VisHeart" opens the web page, starting VisHeart first when it is not running
+; (start.bat --open). Stopping and the guide are in the Start menu only.
+Name: "{autodesktop}\VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; Parameters: "--open"; WorkingDir: "{app}\{#AppSub}"; IconFilename: "{app}\installer\visheart.ico"
+Name: "{group}\VisHeart"; Filename: "{app}\{#AppSub}\start.bat"; Parameters: "--open"; WorkingDir: "{app}\{#AppSub}"; IconFilename: "{app}\installer\visheart.ico"
+Name: "{group}\Stop VisHeart"; Filename: "{app}\{#AppSub}\stop.bat"; WorkingDir: "{app}\{#AppSub}"; IconFilename: "{app}\installer\visheart.ico"
 Name: "{group}\VisHeart install guide"; Filename: "{app}\INSTALL.md"
-Name: "{group}\Uninstall VisHeart"; Filename: "{uninstallexe}"
+; No "Uninstall VisHeart" shortcut: Windows 11 hides shortcuts to uninstallers in the Start menu. Users uninstall in
+; Settings > Apps > Installed apps (finish page, INSTALL.md).
 
-[INI]
-; "VisHeart" opens the app in the browser.
-Filename: "{autodesktop}\VisHeart.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:3000"
-Filename: "{group}\VisHeart.url"; Section: "InternetShortcut"; Key: "URL"; String: "http://localhost:3000"
+[InstallDelete]
+; Icons of earlier versions (1.0.0 and the first 1.0.1 builds), which an update would otherwise leave next to the new one.
+Type: files; Name: "{autodesktop}\Start VisHeart.lnk"
+Type: files; Name: "{autodesktop}\Stop VisHeart.lnk"
+Type: files; Name: "{autodesktop}\VisHeart.url"
+Type: files; Name: "{group}\Start VisHeart.lnk"
+Type: files; Name: "{group}\VisHeart.url"
+Type: files; Name: "{group}\Uninstall VisHeart.lnk"
 
 [Run]
 ; Ticked options on the finish page (not shown when Windows must restart first).
-Filename: "{app}\{#AppSub}\start.bat"; WorkingDir: "{app}\{#AppSub}"; Description: "Start VisHeart now (the first start downloads about 25 GB)"; Flags: postinstall nowait skipifsilent shellexec runasoriginaluser
+Filename: "{app}\{#AppSub}\start.bat"; Parameters: "--open"; WorkingDir: "{app}\{#AppSub}"; Description: "Start VisHeart now (the first start downloads about 25 GB)"; Flags: postinstall nowait skipifsilent shellexec runasoriginaluser
 Filename: "{win}\notepad.exe"; Parameters: {app}\FIRST-LOGIN.txt; Description: "Open the login note (FIRST-LOGIN.txt, with the admin password)"; Flags: postinstall nowait skipifsilent runasoriginaluser; Check: LoginNoteExists
 
 [UninstallDelete]
 Type: files; Name: "{autodesktop}\VisHeart.url"
 Type: files; Name: "{group}\VisHeart.url"
+; Made while VisHeart ran, so the uninstaller would otherwise leave them: Python's cache of the training worker, and
+; the folders Start VisHeart creates for the Docker mounts (Initialize-BackendFolders). Data folders are not listed.
+Type: filesandordirs; Name: "{app}\{#AppSub}\visheart-retraining\__pycache__"
+Type: dirifempty; Name: "{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\temp_jpeg"
+Type: dirifempty; Name: "{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\temp_mesh"
+Type: dirifempty; Name: "{app}\{#AppSub}\Cardiac_Segmentation_FYP_Server\dist\temp_upload"
+Type: dirifempty; Name: "{app}\UNETRESNET34\checkpoints"
+Type: dirifempty; Name: "{app}\UNETRESNET34"
 
 [Code]
 #include "finish-page.iss"
@@ -219,7 +240,7 @@ begin
   if Existing <> '' then
     Drive := ExtractFileDrive(Existing) + ' -ExistingInstall'
   else
-    Drive := 'C:';
+    Drive := 'C:' + ' -SkipDisk';   { checked again once the folder is chosen (NextButtonClick) }
   if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' +
       ExpandConstant('{tmp}\Test-VisHeartPrerequisites.ps1') + '" -InstallDrive ' + Drive + ' -OutText "' + OutFile + '"',
       '', SW_HIDE, ewWaitUntilTerminated, Code) or not LoadStringsFromFile(OutFile, Lines) then begin
@@ -253,6 +274,39 @@ begin
   if (Notes <> '') and not WizardSilent() then
     Result := MsgBox('Before you continue:' + #13#10#13#10 + Notes + 'Continue with the installation?',
       mbConfirmation, MB_YESNO) = IDYES;
+end;
+
+{ The chosen folder: short (the longest shipped path must stay under Windows' 260-character limit; make-installer
+  checks the files against a 40-character folder), without spaces, and on a drive with room for VisHeart and Docker. }
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Dir, OutFile, Line, Status: String;
+  Lines: TArrayOfString;
+  Code: Integer;
+begin
+  Result := True;
+  if CurPageID <> wpSelectDir then Exit;
+  Dir := WizardDirValue();
+  if (Length(Dir) > 40) or (Pos(' ', Dir) > 0) then begin
+    MsgBox('Choose a short folder without spaces, for example C:\VisHeart or E:\VisHeart (at most 40 characters).',
+      mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  OutFile := ExpandConstant('{tmp}\disk.txt');
+  if Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' +
+      ExpandConstant('{tmp}\Test-VisHeartPrerequisites.ps1') + '" -DiskOnly -InstallDrive ' + ExtractFileDrive(Dir) +
+      ' -OutText "' + OutFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) and LoadStringsFromFile(OutFile, Lines) and
+      (GetArrayLength(Lines) > 0) then begin
+    Line := Lines[0];
+    SplitField(Line);
+    Status := SplitField(Line);
+    Log('Disk check for ' + Dir + ': ' + Status + ' - ' + Line);
+    if Status = 'block' then begin
+      MsgBox(Line, mbError, MB_OK);
+      Result := False;
+    end;
+  end;
 end;
 
 { An update first stops the running VisHeart, so no file is in use while it is replaced. }
@@ -294,16 +348,33 @@ var
   Code: Integer;
   Account: String;
 begin
+  { Before the new files are copied: keep the installed version's list of shipped files, which the copy overwrites. }
+  if CurStep = ssInstall then begin
+    if FileExists(ExpandConstant('{app}\shipped-files.txt')) then
+      FileCopy(ExpandConstant('{app}\shipped-files.txt'), ExpandConstant('{tmp}\old-shipped-files.txt'), False);
+    Exit;
+  end;
   if CurStep <> ssPostInstall then Exit;
 
+  { An update removes the files the installed version shipped that this version no longer does (never data). }
+  if FileExists(ExpandConstant('{tmp}\old-shipped-files.txt')) then begin
+    WizardForm.StatusLabel.Caption := 'Removing files this version no longer uses...';
+    if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\Remove-VisHeartStaleFiles.ps1') +
+        '" -AppDir "' + ExpandConstant('{app}') + '" -OldList "' + ExpandConstant('{tmp}\old-shipped-files.txt') + '"',
+        '', SW_HIDE, ewWaitUntilTerminated, Code) then
+      Code := -1;
+    Log('Remove-VisHeartStaleFiles exit code: ' + IntToStr(Code));
+  end;
+
   if NeedWsl then begin
-    if RunCmd('"' + ExpandConstant('{sys}\wsl.exe') + '" --install --no-distribution', 'Turning on WSL2...') <> 0 then begin
-      { Older Windows 10 builds have no "wsl --install": turn on the two Windows features instead. }
-      RunCmd('dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart',
-        'Turning on WSL2...');
-      RunCmd('dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart',
-        'Turning on WSL2...');
-    end;
+    RunCmd('"' + ExpandConstant('{sys}\wsl.exe') + '" --install --no-distribution', 'Turning on WSL2...');
+    { Always turn on the two Windows features as well: older Windows 10 builds have no "wsl --install", and it can
+      succeed while Virtual Machine Platform stays off, so Docker Desktop cannot start (seen 2026-11-21). Turning on
+      a feature that is already on changes nothing. }
+    RunCmd('dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart',
+      'Turning on WSL2...');
+    RunCmd('dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart',
+      'Turning on Virtual Machine Platform...');
     RebootNeeded := True;
   end;
   if NeedDocker then begin
@@ -325,11 +396,13 @@ begin
     SuppressibleMsgBox('VisHeart could not create its passwords (secrets.env). Run installer\New-VisHeartSecrets.ps1 in ' +
       ExpandConstant('{app}') + ' before starting VisHeart, or run this installer again.', mbError, MB_OK, IDOK);
 
-  { Only administrators and docker-users may change VisHeart, and other accounts cannot read its passwords. Done last,
-    after Docker Desktop (which creates docker-users) and secrets.env exist; repeated on every update. }
+  { Only administrators, docker-users and the installing account may change VisHeart, and other accounts cannot read its
+    passwords. The account is named too: Windows applies its new docker-users membership only after signing out, so
+    without its own entry the first "Start VisHeart" (and the login note) would be denied access. Done last, after
+    Docker Desktop (which creates docker-users) and secrets.env exist; repeated on every update. }
   WizardForm.StatusLabel.Caption := 'Protecting the VisHeart folder...';
   if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\Protect-VisHeartFolder.ps1') +
-      '" -AppDir "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
+      '" -AppDir "' + ExpandConstant('{app}') + '" -Account "' + Account + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
     Code := -1;
   Log('Protect-VisHeartFolder exit code: ' + IntToStr(Code));
 end;
@@ -395,8 +468,23 @@ begin
         'finds them.' + #13#10#13#10 +
         'To delete everything: install VisHeart again, start Docker Desktop, then uninstall and choose Yes.',
         mbInformation, MB_OK, IDOK);
+    end else if (not DeleteData) and (Code <> 0) then begin
+      { Containers left behind would block VisHeart or a developer copy later (same names), so say how to remove them. }
+      SuppressibleMsgBox('Docker Desktop did not start in time, so VisHeart''s containers could not be removed. Your data ' +
+        'is not affected.' + #13#10#13#10 +
+        'When Docker Desktop is running, remove them in a Command Prompt with:' + #13#10 +
+        'docker rm -f visheart-local visheart-mongodb visheart-mongodb-keyfile-init visheart-redis visheart-minio ' +
+        'visheart-gpu-cpu visheart-gpu-nvidia',
+        mbInformation, MB_OK, IDOK);
     end;
   end;
+
+  if (CurUninstallStep = usPostUninstall) and not DeleteData and DirExists(ExpandConstant('{app}')) then
+    SuppressibleMsgBox('VisHeart was uninstalled. As you chose, your patients, accounts, trained models and training ' +
+      'data were kept in ' + ExpandConstant('{app}') + ' and in Docker, with this PC''s passwords (secrets.env) and the ' +
+      'admin login (FIRST-LOGIN.txt). Installing VisHeart again in the same folder finds them.' + #13#10#13#10 +
+      'Do not delete that folder by hand: to remove everything, install VisHeart again, then uninstall and choose Yes.',
+      mbInformation, MB_OK, IDOK);
 
   if (CurUninstallStep = usPostUninstall) and DeleteData then begin
     DelTree(App + '\visheart-training-data', True, True, True);

@@ -1,5 +1,9 @@
 # VisHeart — Handoff: work since `dev` (Jul 1 – Jul 31, 2026)
 
+> **Historical hand-off record (July-August 2026).** It describes the state at that time; branch states, the
+> Research Assistant chatbot (no longer used) and the linked `DISEASE_SIMILARITY_REFERENCES.md` (not in this
+> repository) are out of date. The design rules and known issues are still useful.
+
 **Purpose of this file:** `test/sharlene-hackathon` is 43 commits ahead of `dev`
 with zero commits the other way (`dev` is a strict ancestor). If you start a new
 repository from `dev`, this document — plus the commit list below, which you can

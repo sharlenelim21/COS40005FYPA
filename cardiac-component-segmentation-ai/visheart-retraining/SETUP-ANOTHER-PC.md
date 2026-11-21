@@ -10,8 +10,12 @@ them the page says **"The training service is not available"**; the rest of VisH
 Pack the data into a new folder, for example on a USB drive:
 
 ```bat
-E:\Jy\Unet\.venv\Scripts\python.exe pack_training_data.py pack --out F:\visheart-training-pack
+py -3 cardiac-component-segmentation-ai\visheart-retraining\pack_training_data.py pack --out F:\visheart-training-pack
 ```
+
+(Run it from the repository root. It reads the training data from `E:\Jy\Unet` unless that PC keeps it elsewhere;
+see `visheart-retraining\common.py`.) The team has already made a pack: [download it from Google Drive](https://drive.google.com/file/d/17n4iitNrGpNxCIf98YxcGm4Dw89NTjXg/view?usp=sharing), extract
+it, and go to step 2.
 
 It copies only what the service needs and records every file's SHA-256 in `PACKED.json`. Copy the whole folder to
 the other computer, by USB drive or through Google Drive. To send a single file, zip it first and unzip it there

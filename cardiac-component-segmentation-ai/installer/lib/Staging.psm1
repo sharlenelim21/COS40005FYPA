@@ -147,6 +147,14 @@ function Read-EnvValues([string]$Path) {
     return $map
 }
 
+function Get-LongPaths {
+    # The relative paths that, under Root, pass Windows' 260-character path limit (259 plus the terminating null).
+    # Copy-Item and many programs fail on them unless long paths are switched on, which a user's PC may not have.
+    param([string[]]$Targets, [string]$Root, [int]$Limit = 259)
+    $prefix = $Root.TrimEnd('').Length + 1
+    return @($Targets | Where-Object { $prefix + $_.Length -gt $Limit })
+}
+
 function Write-ReleaseEnv {
     # release.env is shipped and replaced on every update: pinned images, the support mail account, and the
     # settings that keep an installed copy private to this PC.
@@ -160,7 +168,7 @@ function Write-ReleaseEnv {
         if (-not $smtp[$key]) { throw "smtp.release.env has no value for $key." }
     }
     $lines = @('# VisHeart release settings. Shipped by the installer and replaced on every update; do not edit.')
-    foreach ($key in @('VH_APP_IMAGE', 'VH_GPU_IMAGE', 'VH_MINIO_IMAGE', 'VH_MINIO_CLIENT_IMAGE')) {
+    foreach ($key in @('VH_APP_IMAGE', 'VH_GPU_IMAGE', 'VH_MINIO_IMAGE')) {
         if (-not $Images[$key]) { throw "release.json has no image for $key." }
         $lines += "$key=$($Images[$key])"
     }
@@ -169,10 +177,25 @@ function Write-ReleaseEnv {
     $lines += 'VH_MINIO_ANON=none'     # no anonymous downloads from the storage bucket
     # Its own compose project: containers, network and data volumes stay apart from a developer copy on the same PC.
     $lines += 'COMPOSE_PROJECT_NAME=visheart'
+    # MongoDB and Redis are used only inside Docker: let Docker pick free host ports, so a MongoDB or Redis that the
+    # PC already runs cannot block VisHeart.
+    $lines += 'VH_MONGO_HOST_PORT=0'
+    $lines += 'VH_REDIS_HOST_PORT=0'
     if ($Version) { $lines += "VH_VERSION=$Version" }
     if ($UpdateUrl) { $lines += "VH_UPDATE_URL=$UpdateUrl" }
     $utf8 = New-Object System.Text.UTF8Encoding($false)   # compose rejects a byte order mark
     [IO.File]::WriteAllText($OutPath, (($lines -join "`r`n") + "`r`n"), $utf8)
+}
+
+function Write-ShippedFileList {
+    # shipped-files.txt: every file this installer ships, relative to the install folder. The next update compares it
+    # with its own list and removes the files no longer shipped (scripts\Remove-VisHeartStaleFiles.ps1). unet.pth is
+    # left out: an install never replaces it, so an update must never remove it either.
+    param([string[]]$Targets, [string]$Path)
+    $unet = "$($script:App)\visheart-inference-gpu\app\models\unet.pth"
+    $list = [string[]]@($Targets | Where-Object { $_ -and $_ -ne $unet })
+    [Array]::Sort($list, [StringComparer]::OrdinalIgnoreCase)
+    [IO.File]::WriteAllLines($Path, $list, (New-Object System.Text.UTF8Encoding $false))
 }
 
 function Get-InnoCandidates {
@@ -204,5 +227,21 @@ function Find-InnoCompiler {
     return $unknown
 }
 
-Export-ModuleMember -Function Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack,
-    Write-ReleaseEnv, Get-InnoCandidates, Get-FileVersion, Find-InnoCompiler
+function New-ReleaseZip {
+    # <folder>.zip next to the installer folder, holding the folder itself (.exe and its .bin slices). Uploaded to
+    # Google Drive as one file: a folder download over about 2 GB comes back as several dated zips, and a user who
+    # unzipped only one got "Please insert Disk 2". The slices are already compressed, so they are stored as they are.
+    # Windows' tar writes forward-slash entry names, which every unzip tool reads. Returns the zip's path.
+    param([string]$Folder)
+    $Folder = (Resolve-Path $Folder).Path.TrimEnd('\')
+    $parent = Split-Path -Parent $Folder
+    $name = Split-Path -Leaf $Folder
+    $zip = Join-Path $parent "$name.zip"
+    if (Test-Path $zip) { Remove-Item -Force $zip }
+    & "$env:SystemRoot\System32\tar.exe" -a -c --options zip:compression=store -f $zip -C $parent $name
+    if ($LASTEXITCODE -ne 0) { throw "tar could not create $zip (exit $LASTEXITCODE)." }
+    return $zip
+}
+
+Export-ModuleMember -Function Write-ShippedFileList, Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack, Get-LongPaths,
+    Write-ReleaseEnv, Get-InnoCandidates, Get-FileVersion, Find-InnoCompiler, New-ReleaseZip

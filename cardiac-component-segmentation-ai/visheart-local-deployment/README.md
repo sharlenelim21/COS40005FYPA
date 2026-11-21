@@ -13,18 +13,19 @@ root (`COS40005FYPA/`), with Docker Engine and the compose plugin installed and 
 
 `visheart-app` mounts `Cardiac_Segmentation_FYP_Server/dist` read-only and runs the backend from it. `dist` is
 gitignored, so a fresh clone has none and the container cannot start. Build it with Node 18 (the version the
-image uses):
+image uses) and pnpm (`npm install -g pnpm`), as the root README does:
 
 ```bash
 cd cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server
-npm ci && npm run build
+pnpm install && pnpm build
 ```
 
 Without Node 18 on the host, build it in a container instead (files stay owned by you):
 
 ```bash
 cd cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server
-docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src -w /src node:18 sh -c "npm ci && npm run build"
+docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src -w /src node:18 \
+  sh -c "npx -y pnpm@10.33.0 install --frozen-lockfile && npx -y pnpm@10.33.0 build"
 ```
 
 Rebuild after pulling backend changes.
@@ -35,7 +36,7 @@ Docker on Linux cannot create a mount point inside a read-only mount, so these f
 `docker compose up` ("read-only file system" error otherwise):
 
 - `Cardiac_Segmentation_FYP_Server/dist/temp_jpeg`, `temp_mesh`, `temp_upload`, `temp_exports`: created by
-  `npm run build` (its `postbuild` step).
+  `pnpm build` (its `postbuild` step).
 - `UNETRESNET34/checkpoints`: kept in the repository with a `.gitkeep`.
 
 On an older checkout without those changes, create them by hand:
@@ -45,11 +46,15 @@ mkdir -p UNETRESNET34/checkpoints \
   cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server/dist/{temp_jpeg,temp_mesh,temp_upload,temp_exports}
 ```
 
-### 3. Copy `unet.pth` and `medsam_vit_b.pth` out of the inference image
+### 3. Get `unet.pth` and `medsam_vit_b.pth`
 
 The inference services mount `visheart-inference-gpu/app/models` over the image's model folder, which hides the
-`unet.pth` and `medsam_vit_b.pth` baked into `sharlene21/visheart-gpu`. Both are gitignored, so copy them out of
-the image once:
+copies baked into `sharlene21/visheart-gpu`. These two files are not in git (the other models are). Put them in
+`cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`, as the root README describes:
+`medsam_vit_b.pth` from the [MedSAM project](https://github.com/bowang-lab/MedSAM) (its README links the
+`medsam_vit_b` weights), and `unet.pth` from [Google Drive](https://drive.google.com/file/d/1qL-Gxft-KdHQ7pPbxlRNiUr-L-Dn64sU/view?usp=sharing).
+
+Or copy them out of the image once:
 
 ```bash
 cd cardiac-component-segmentation-ai/visheart-inference-gpu
@@ -85,23 +90,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.0-base-ubuntu22.04 nvidia-smi
 
 Without it, `start.sh` falls back to the CPU profile.
 
-### 5. MinIO images that cannot be pulled
-
-`minio/minio` and `minio/mc` were removed from Docker Hub (around September 2026), so `docker compose pull` fails
-for them on a machine that has never pulled them. Until the compose file moves to a replacement image, copy them
-from a machine that still has them cached:
-
-```bash
-# On the machine that has the images (check with: docker image ls minio/*)
-docker save minio/minio:latest minio/mc:latest -o visheart-minio-images.tar
-
-# On the new machine
-docker load -i visheart-minio-images.tar
-```
-
-Then start the stack without pulling MinIO again (`./start.sh`, or `docker compose --profile cpu up -d`).
-
-### 6. Start
+### 5. Start
 
 ```bash
 cd cardiac-component-segmentation-ai/visheart-local-deployment

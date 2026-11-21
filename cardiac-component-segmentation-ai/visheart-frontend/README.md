@@ -50,23 +50,20 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-The application will be available at `http://localhost:5001`
+The application will be available at `http://localhost:5001`. The backend must be running on port 5000 (start
+the Docker stack with `start.bat`, see the root README).
 
 ### Environment Configuration
 
 Create a `.env.local` file with:
 
 ```bash
-# Backend API Configuration
-NEXT_PUBLIC_API_URL=http://localhost:3001
-NEXT_PUBLIC_API_TIMEOUT=30000
+# Backend API (the backend in the Docker stack listens on port 5000)
+NEXT_PUBLIC_API_URL=http://localhost:5000
+NEXT_PUBLIC_ENV=development
 
-# Application Settings
-NEXT_PUBLIC_APP_NAME=VisHeart
-NEXT_PUBLIC_APP_VERSION=0.1.0
-
-# Analytics (Optional)
-NEXT_PUBLIC_GA_ID=G-XXXXXXXXXX
+# Landmark detection: without "false" the landmark page uses stub data instead of the real model
+NEXT_PUBLIC_LANDMARK_USE_STUB=false
 ```
 
 ---
@@ -78,7 +75,8 @@ visheart-frontend/
 ├── src/
 │   ├── app/                     # Next.js App Router pages
 │   │   ├── dashboard/           # User project management interface
-│   │   ├── project/[projectId]/ # Individual project detail pages
+│   │   ├── project/[projectId]/ # Project pages: segmentation, landmark-detection, report, ...
+│   │   ├── extend-training/     # UNet Extend Training (admin-only)
 │   │   ├── admin/               # Administrative panel (admin-only)
 │   │   ├── login/register/      # Authentication pages
 │   │   ├── about/doc/policy/    # Static content pages
@@ -123,11 +121,10 @@ visheart-frontend/
 │
 ├── public/                      # Static assets
 │   ├── visheart_logo.svg        # Application branding
-│   ├── heart.mp4                # Hero section video
-│   └── images/                  # Additional assets
+│   ├── images/                  # Additional assets
+│   └── videos/                  # Videos used by the /doc pages
 │
 ├── next.config.ts               # Next.js configuration
-├── tailwind.config.ts           # Tailwind CSS configuration
 ├── components.json              # Shadcn/ui configuration
 └── package.json                 # Dependencies and scripts
 ```
@@ -466,9 +463,14 @@ try {
 
 ### Protected Routes
 
-- **`/dashboard`** - Main project management interface
+- **`/dashboard`** - Main project management interface. Its **Templates** tab lists read-only reference hearts
 - **`/project/[projectId]`** - Individual project details and visualization
+- **`/project/[projectId]/segmentation`** - Segmentation editor
+- **`/project/[projectId]/landmark-detection`** - Landmarks (with correction), strain, and the AHA 17-segment
+  bullseye; templates open here read-only
+- **`/project/[projectId]/report`** - Report page
 - **`/admin/*`** - Administrative panel (admin role required)
+- **`/extend-training`** - UNet Extend Training (admin role required)
 
 ### Navigation Patterns
 
@@ -618,11 +620,6 @@ pnpm dev              # Start dev server with hot reload
 pnpm build            # Production build with optimizations
 pnpm start            # Start production server
 pnpm lint             # ESLint code quality checks
-
-# Development workflow
-pnpm lint:fix         # Auto-fix linting issues
-pnpm type-check       # TypeScript compilation check
-pnpm analyze          # Bundle size analysis
 ```
 
 ### Code Style & Conventions
@@ -800,33 +797,9 @@ module.exports = {
 
 ## Deployment
 
-### Build Process
-```powershell
-# Production build
-pnpm build
-
-# Static export (if needed)
-# Uncomment output: 'export' in next.config.ts
-pnpm build && pnpm export
-```
-
-### Environment Variables
-```bash
-# Production environment
-NEXT_PUBLIC_API_URL=https://api.visheart.com
-NEXT_PUBLIC_APP_ENV=production
-NEXT_PUBLIC_GA_ID=G-PRODUCTION-ID
-
-# Staging environment
-NEXT_PUBLIC_API_URL=https://staging-api.visheart.com
-NEXT_PUBLIC_APP_ENV=staging
-```
-
-### Deployment Targets
-- **Vercel** - Recommended for Next.js applications
-- **AWS S3/CloudFront** - Static hosting with CDN
-- **Docker** - Containerized deployment
-- **Traditional Hosting** - Static export support
+The frontend is built into the `sharlene21/visheart-local` Docker image together with the backend
+(`visheart-local-deployment/Dockerfile`). Users get frontend changes only through a new image: see "When you build
+a new image" in the root README.
 
 ---
 
@@ -929,10 +902,12 @@ console.log('[GPU] Server status:', {
 - Responsive design with accessibility
 - File upload and management
 - Technical metadata display
+- 3D cardiac model rendering (4D reconstruction viewer, Three.js)
+- Landmark detection, strain and AHA 17-segment bullseye
+- UNet Extend Training (model retraining, admin only)
 
 ### Upcoming Features
 
-- **Advanced Visualization** - 3D cardiac model rendering
 - **Collaborative Features** - Project sharing and team workflows
 - **Analytics Dashboard** - Usage metrics and system performance
 - **Mobile App** - React Native companion application
@@ -941,7 +916,6 @@ console.log('[GPU] Server status:', {
 
 ### Long-term Vision
 
-- **Machine Learning Integration** - Model training interface
 <!-- - **DICOM Support** - Expanded medical imaging format support -->
 - **Cloud Integration** - Multi-cloud deployment options
 - **Research Tools** - Advanced analysis and reporting features
@@ -952,7 +926,6 @@ console.log('[GPU] Server status:', {
 
 ### Documentation
 - **API Documentation** - See `Cardiac_Segmentation_FYP_Server/README.md`
-- **Component Storybook** - Visual component documentation
 - **User Guides** - Available at `/doc` route in application
 
 ### Community & Support

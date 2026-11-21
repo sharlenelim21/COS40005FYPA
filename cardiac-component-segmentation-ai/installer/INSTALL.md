@@ -1,98 +1,129 @@
 # Installing VisHeart
 
-VisHeart runs on one Windows PC. Doctors and administrators use it in a web browser on that PC. Nothing is reachable
-from other computers.
+VisHeart runs on one Windows PC. You use it in a web browser on that PC. Other computers cannot reach it.
 
 ## What you need
 
 - Windows 10 version 2004 or later, or Windows 11, 64-bit.
-- At least 40 GB free on drive C:.
-- About 10 GB more, on any drive, for the download while you install (you can delete it afterwards).
-- A Windows account with administrator rights, to install.
+- A Windows account with administrator rights (only to install).
+- Free disk space:
+  - **40 GB** for VisHeart itself: about 10 GB for its files and about 30 GB for the parts Docker downloads on the
+    first start. If you install VisHeart on another drive (for example E:), that drive needs 10 GB and the drive where
+    Docker Desktop keeps its data (normally C:) needs 30 GB. The installer checks this for you.
+  - **About 6 GB more while you install**, for the downloaded zip (2.8 GB) and the folder you unzip it into (2.8 GB).
+    Delete both after installing.
 - An internet connection for the first start.
-- An NVIDIA graphics card is optional. Without one, VisHeart runs in CPU mode: it is slower, and MedSAM is not
-  available.
+- Optional: an NVIDIA graphics card. Without one, VisHeart is slower and the MedSAM tool is not available.
 
 ## Download
 
 The VisHeart team shares a Google Drive folder with you. Ask them for access if you do not have it.
 
-1. In that folder, open the newest `VisHeart-Full-<version>` folder. It holds one `.exe` and two `.bin` files,
-   about 2.6 GB in total.
-2. Download the whole folder. Google Drive gives you one or more `.zip` files.
-3. Unzip everything into **one** folder, for example `Downloads\VisHeart-Full-1.0.0`. The `.exe` does not work
-   without all of its `.bin` files next to it.
-
-Already have VisHeart? The newest `VisHeart-Full` installer also updates it and keeps your data. The smaller
-`VisHeart-Update-<version>` folder does the same (see Updates).
+1. In that folder, click the newest `VisHeart-Full-<version>.zip` (about 2.8 GB) and click **Download**.
+2. Google Drive says it cannot scan the file for viruses because it is large. Click **Download anyway**.
 
 ## Install
 
-1. Open the folder you unzipped.
-2. Run `VisHeart-Full-<version>.exe` and allow it to make changes.
-3. The installer checks the PC. If Docker Desktop, WSL2 or Python is missing, it installs them for you.
-4. At the end it shows your **VisHeart login** (user `admin` and a password made for this PC) and the next steps, in
-   a box you can scroll and copy from. The same login is saved in `C:\VisHeart\FIRST-LOGIN.txt`. Two options are
-   ticked: **Start VisHeart now** and **Open the login note**. Leave them ticked and click Finish.
-5. Restart Windows if the installer asks you to.
-6. Open **Docker Desktop** once and accept its terms. Docker Desktop is free for education, research and small
-   organisations.
+1. Open your **Downloads** folder. Right-click `VisHeart-Full-<version>.zip` and choose **Extract All**, then
+   **Extract**. A new folder opens with three files: `VisHeart-Full-<version>.exe` and two `.bin` files.
+2. Double-click `VisHeart-Full-<version>.exe` **in that new folder**. If Windows asks whether to allow the app to make
+   changes, click **Yes**. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**.
+3. Choose where to install. `C:\VisHeart` is the default. If C: is nearly full, type another drive, for example
+   `E:\VisHeart`. Use a short folder name without spaces.
+4. The installer checks the PC. If Docker Desktop, WSL2 or Python is missing, it installs them. This can take several
+   minutes.
+5. At the end it shows your **VisHeart login**: user `admin` and a password made for this PC. The same login is saved
+   in `FIRST-LOGIN.txt` in the install folder, and opens in Notepad when you click **Finish**. Leave the two options
+   ticked (**Start VisHeart now** and **Open the login note**) and click **Finish**.
+6. If the installer asks you to restart Windows, restart, then double-click the **VisHeart** icon on the desktop.
+7. The first time Docker Desktop opens, it asks you to accept its terms. Accept them. Docker Desktop is free for
+   education, research and small organisations.
+
+> **Setup says "Please insert Disk 2"?** You opened the `.exe` from inside the zip, where setup cannot find the two
+> `.bin` files. Click **Cancel**, do step 1 (Extract All), and run the `.exe` from the extracted folder.
 
 ## Start and stop
 
-- **Start VisHeart** (desktop icon) starts everything. Then open the **VisHeart** icon, or go to
-  http://localhost:3000.
-- The **first start downloads about 25 GB** and can take an hour or more. Later starts take about a minute.
-- **Stop VisHeart** stops it. Your data is kept.
-- Do not start VisHeart with the **Run** button in Docker Desktop. That starts only part of VisHeart, which then
-  fails (the log shows `redis://undefined`). Delete that container in Docker Desktop and use **Start VisHeart**.
+- **Start:** double-click the **VisHeart** heart icon on the desktop (it is also in the Start menu). A black window
+  shows the progress and closes by itself when VisHeart is ready. Your browser then opens http://localhost:3000.
+  If VisHeart is already running, the icon just opens the page.
+- **The first start downloads about 25 GB** and can take an hour or more. Later starts take about a minute.
+- **Stop:** Start menu > **VisHeart** > **Stop VisHeart**. Your data is kept. You rarely need this: updating and
+  uninstalling stop VisHeart by themselves.
+- Do not start VisHeart with the **Run** button in Docker Desktop. That starts only part of it, and it fails. Use the
+  **VisHeart** icon.
 
-After your first login, change the admin password, then delete `FIRST-LOGIN.txt` or keep it somewhere safe.
+After your first login, change the admin password in **Profile Settings** (http://localhost:3000/profile), and
+replace the placeholder email `admin@visheart.local` with your own. Then delete `FIRST-LOGIN.txt`, or keep it
+somewhere safe. Once you change the password, the one in the note no longer works.
 
 ## Updates
 
-Running a newer installer on a PC that has VisHeart says which version is installed and that it updates it. An
-older installer than the installed version changes nothing.
+When the team tells you there is a new version, or VisHeart shows a **"VisHeart update available"** popup when it
+starts (VisHeart keeps working while the popup is open):
 
-When the team tells you there is a new version, or **Start VisHeart** shows a "VisHeart update available" popup
-(it checks the team's GitHub page each time it starts; VisHeart keeps running either way):
+1. Download the newest `VisHeart-Update-<version>.zip` (about 800 MB) from the Google Drive folder.
+2. Extract it as in Install step 1, and run `VisHeart-Update-<version>.exe` from the extracted folder. It stops
+   VisHeart and updates it. The drive VisHeart is installed on needs at least 10 GB free.
+3. Start VisHeart with the icon as usual. If the new version needs new parts, this start downloads them first and
+   takes longer.
 
-1. Download the newest `VisHeart-Update-<version>` folder from the Google Drive folder and unzip it into one folder,
-   as above. It is about 600 MB.
-2. Run `VisHeart-Update-<version>.exe`. It stops VisHeart, then updates it. It needs at least 10 GB free on C:.
-3. Use **Start VisHeart** as usual. If the new version needs new parts, this start downloads them first and takes
-   longer.
+You do not need to uninstall or delete anything first. Your patients, accounts, passwords and trained models are kept.
+The update deletes only program files the new version no longer uses, and the next start deletes old VisHeart
+download parts (Docker images), so updates do not keep filling the disk.
 
-Your patients, accounts, passwords and trained models are kept.
+The newest `VisHeart-Full` installer also works as an update. An installer older than the installed version changes
+nothing.
 
 ## Uninstall
 
-Use **Uninstall VisHeart** in the Start menu, or Windows Settings > Apps. The uninstaller asks whether to also delete
-all VisHeart data:
+Open Windows **Settings > Apps > Installed apps**, find **VisHeart**, click **...** and choose **Uninstall**. (Windows
+11 does not show uninstall shortcuts in the Start menu.)
 
-- **No (default):** patients, accounts, trained models and the downloaded images are kept. Installing VisHeart
-  again finds them and starts quickly.
-- **Yes:** everything is deleted and cannot be recovered, including the downloaded VisHeart images (about 25 GB).
-  The uninstaller starts Docker Desktop itself when it is not running. If Docker Desktop cannot start, nothing is
-  deleted and the uninstaller tells you how to finish later.
+The uninstaller asks whether to also delete all VisHeart data:
 
-Docker Desktop, WSL2 and Python stay installed; remove them in Windows Settings > Apps if no other program needs them.
+- **No (default):** patients, accounts, trained models and the downloaded parts are kept. If you install VisHeart
+  again, it finds them and starts quickly.
+- **Yes:** everything is deleted and cannot be recovered, including the 25 GB of downloaded parts. The uninstaller
+  starts Docker Desktop by itself if needed. If Docker Desktop cannot start, nothing is deleted and the uninstaller
+  tells you what to do.
+
+Docker Desktop, WSL2 and Python stay installed. Remove them in Settings > Apps if no other program needs them.
+
+## Problems
+
+| What you see | What to do |
+|---|---|
+| "Port 5000 is used by another program: ..." | VisHeart needs ports 3000, 5000, 9000 and 8001. The message names the program and its process id. Close that program (or end it in **Task Manager > Details**), then start VisHeart again. |
+| "Docker is installed but this Windows account (...) cannot use it" | See **Using VisHeart from another Windows account** below. |
+| "This PC already has a VisHeart database (...) that was made by another copy of VisHeart" | The data belongs to an earlier or developer copy of VisHeart. Ask the VisHeart team before deleting anything. |
+| Docker Desktop says "Virtual Machine Platform is not enabled" | A Windows feature Docker needs is off. Run the VisHeart installer again: it turns the feature on. Then restart Windows (restarting Docker Desktop is not enough). |
+| "Docker Desktop did not become ready within 3 minutes" | Open Docker Desktop, wait until it says Docker is running, then start VisHeart again. |
+| The login is rejected | If you changed the admin password, use your new password, not the one in `FIRST-LOGIN.txt`. After 5 wrong tries the account is locked for 10 minutes. |
+
+### Using VisHeart from another Windows account
+
+VisHeart works for the Windows account that installed it. If another person signs in to the same PC with their own
+Windows account, Docker refuses that account until it is added to the Windows group **docker-users**:
+
+1. The other person signs in and starts VisHeart once. The message names their account, for example
+   `DESKTOP-ABC\maria`.
+2. An administrator opens the Start menu, types `cmd`, right-clicks **Command Prompt** and chooses
+   **Run as administrator**.
+3. They type this, with the account name from step 1, and press Enter:
+   ```
+   net localgroup docker-users "DESKTOP-ABC\maria" /add
+   ```
+4. The other person signs out of Windows and signs in again. VisHeart now works for them.
 
 ## Good to know
 
-- **Another Windows account.** Docker only works for Windows accounts in the `docker-users` group. If VisHeart says
-  your account cannot use Docker, an administrator runs this in an administrator Command Prompt, and you then sign
-  out and in again:
-  ```
-  net localgroup docker-users "<DOMAIN>\<user name>" /add
-  ```
-- **Who can see VisHeart's files.** Only administrators and members of `docker-users` can change the `C:\VisHeart`
-  folder. Other Windows accounts cannot read VisHeart's passwords or training data.
-- **A developer copy (from git) on the same PC.** The installed VisHeart keeps its own containers and database, so
-  the two do not mix. Start VisHeart removes the developer copy's containers (not its data) so it can start; the
-  developer copy's `start.bat` creates them again. Only one of the two can run at a time.
-- **"This PC already has a VisHeart database made by another copy".** That data belongs to an earlier or developer
-  copy of VisHeart. Ask the VisHeart team before deleting it.
+- **Privacy on a shared PC.** Only administrators, the account that installed VisHeart and members of docker-users
+  can change the VisHeart folder. Other Windows accounts cannot read VisHeart's passwords or training data.
+- **A developer copy on the same PC** (VisHeart from git). The installed VisHeart and the developer copy keep separate
+  databases, but only one can run at a time. Stop one before starting the other: **Stop VisHeart** for the installed
+  copy, `stop.bat` for the developer copy. (Starting the installed copy also removes a developer copy's leftover
+  containers by itself; their data is kept.)
 
 ## Help
 

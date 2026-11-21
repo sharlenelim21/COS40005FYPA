@@ -5,7 +5,10 @@ param(
     [int]$WaitIntervalSec = 2,
     # start.bat --cpu / --gpu pass these to skip GPU detection.
     [switch]$ForceCpu,
-    [switch]$ForceGpu
+    [switch]$ForceGpu,
+    # start.bat --open (the VisHeart desktop icon): open the web page when VisHeart is running, starting it first when
+    # it is not. A plain start.bat (developers) opens nothing, as before.
+    [switch]$OpenBrowser
 )
 
 function Write-Log {
@@ -88,6 +91,12 @@ try {
 
     Import-Module (Join-Path $scriptDir 'lib\VisHeartStart.psm1') -Force
 
+    if ($OpenBrowser -and (Test-VisHeartAnswering)) {
+        Write-Log 'VisHeart is already running. Opening it in your browser.'
+        Open-VisHeart
+        exit 0
+    }
+
     $docker = Wait-DockerReady
     if (-not $docker.Ready) {
         $account = "$env:USERDOMAIN\$env:USERNAME"
@@ -119,6 +128,15 @@ try {
 
     foreach ($name in @(Remove-OtherCopyContainers $scriptDir)) {
         Write-Log "Removed container '$name' left by another copy of VisHeart (its data is kept)."
+    }
+
+    $busy = @(Get-BusyPorts)
+    if ($busy.Count -gt 0) {
+        foreach ($b in $busy) {
+            Write-Log "Port $($b.Port) is used by another program: $($b.Process) (process id $($b.Id)). VisHeart needs this port."
+        }
+        Write-Log 'Close that program (or stop it in Task Manager > Details, by its process id), then start VisHeart again.'
+        exit 9
     }
 
     if ($ForceCpu) {
@@ -193,6 +211,13 @@ try {
         }
     }
 
+    # VisHeart now runs on this version's images; an installed copy frees the space of the ones earlier versions used.
+    try {
+        foreach ($image in @(Remove-OldVisHeartImages $scriptDir)) { Write-Log "Removed old VisHeart image $image to free disk space." }
+    } catch {
+        Write-Log "Could not remove old VisHeart images (VisHeart is not affected): $($_.Exception.Message)"
+    }
+
     Write-Log 'Ensuring python symlink exists in backend container...'
     $pythonFixCmd = 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python'
     & docker exec visheart-local sh -c 'command -v python >/dev/null 2>&1 || ln -sf /usr/bin/python3 /usr/bin/python' > $null 2>&1
@@ -249,6 +274,7 @@ try {
         Write-Log ''
         Write-Log 'Open http://localhost:3000 in your browser.'
         Write-Log ('Inference profile: ' + $profile + ' (container: ' + $inferenceContainer + ')')
+        if ($OpenBrowser) { Open-VisHeart }
         exit 0
     } else {
         Write-Log 'Startup completed with warnings or failures.'

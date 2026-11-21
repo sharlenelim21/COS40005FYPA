@@ -1,0 +1,72 @@
+# Continuous integration: runs the automated tests on every push and pull request that touches the tested code.
+# It only tests; it builds no installer and deploys nothing (see installer/RELEASING.md for releases).
+name: Tests
+
+on:
+  push:
+    paths:
+      - "cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server/**"
+      - "cardiac-component-segmentation-ai/visheart-local-deployment/**"
+      - "cardiac-component-segmentation-ai/installer/**"
+      - ".github/workflows/tests.yml"
+  pull_request:
+    paths:
+      - "cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server/**"
+      - "cardiac-component-segmentation-ai/visheart-local-deployment/**"
+      - "cardiac-component-segmentation-ai/installer/**"
+      - ".github/workflows/tests.yml"
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend (Jest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server
+    steps:
+      # v5 of these actions run on Node 24 (GitHub retired Node 20 for actions). pnpm is installed with npm rather than
+      # pnpm/action-setup, whose Node 24 release was not confirmed.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 18 # the version in the backend's Docker image
+          package-manager-cache: false
+      - run: npm install -g pnpm@10.33.0
+      - run: pnpm install --frozen-lockfile
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+      # auth, database._user and database_project are fully commented out; Jest counts a file without tests as a
+      # failure, so they are skipped until someone restores them.
+      - name: Jest
+        run: >-
+          pnpm exec jest --runInBand --forceExit
+          --testPathIgnorePatterns "__tests__/auth\.test\.ts" "__tests__/database\._user\.test\.ts" "__tests__/database_project\.test\.ts"
+
+  windows-scripts:
+    name: Start, stop and installer scripts (Pester)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell # Windows PowerShell 5.1, what users' PCs run
+    steps:
+      - uses: actions/checkout@v5
+      - name: Docker compose is available
+        run: docker compose version
+      # Docker Desktop creates docker-users on users' PCs; the folder-permission tests need it. The runner has none.
+      - name: Create the docker-users group
+        run: |
+          if (-not (Get-LocalGroup -Name docker-users -ErrorAction SilentlyContinue)) { New-LocalGroup -Name docker-users | Out-Null }
+          Add-LocalGroupMember -Group docker-users -Member "$env:USERDOMAIN\$env:USERNAME" -ErrorAction SilentlyContinue
+          Get-LocalGroupMember -Group docker-users
+      - name: Install Pester 3.4 (the tests use its syntax)
+        run: Install-Module Pester -RequiredVersion 3.4.0 -Force -SkipPublisherCheck -Scope CurrentUser
+      - name: Pester
+        run: |
+          Import-Module Pester -RequiredVersion 3.4.0
+          $r = Invoke-Pester -Script @(
+            'cardiac-component-segmentation-ai/visheart-local-deployment/tests',
+            'cardiac-component-segmentation-ai/installer/tests'
+          ) -PassThru
+          "Passed $($r.PassedCount), failed $($r.FailedCount), inconclusive $($r.InconclusiveCount)"
+          if ($r.FailedCount -gt 0) { exit 1 }

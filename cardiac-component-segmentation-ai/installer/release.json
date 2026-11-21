@@ -3,8 +3,7 @@
   "images": {
     "VH_APP_IMAGE": "sharlene21/visheart-local:1.5.0",
     "VH_GPU_IMAGE": "sharlene21/visheart-gpu@sha256:7192e7a23d25c99264f2ff28e0668f906d4530fb0c592baf6a07a7395278df1a",
-    "VH_MINIO_IMAGE": "bitnamilegacy/minio@sha256:451fe6858cb770cc9d0e77ba811ce287420f781c7c1b806a386f6896471a349c",
-    "VH_MINIO_CLIENT_IMAGE": "bitnamilegacy/minio-client@sha256:00dcc4e58ada0df45bb7d9ee435af98295f96c27c3c68292ce78ec700a87b511"
+    "VH_MINIO_IMAGE": "bitnamilegacy/minio@sha256:451fe6858cb770cc9d0e77ba811ce287420f781c7c1b806a386f6896471a349c"
   },
   "updateUrl": "https://raw.githubusercontent.com/sharlenelim21/COS40005FYPA/main/cardiac-component-segmentation-ai/installer/latest.json"
 }

@@ -37,10 +37,18 @@ function Get-ComposeEnvArgs {
     return $result   # callers wrap in @(...) so "no env files" is an empty array
 }
 
+function Get-DockerDesktopExe {
+    # Docker Desktop is 64-bit and lives in the 64-bit Program Files. ProgramW6432 names that folder in both 32- and
+    # 64-bit processes; ProgramFiles is "Program Files (x86)" in a 32-bit one (such as a start launched by the
+    # installer), where Docker Desktop then looked "not installed".
+    $programFiles = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+    return ($programFiles.TrimEnd('\') + '\Docker\Docker\Docker Desktop.exe')
+}
+
 function Wait-DockerReady {
     param(
         [int]$TimeoutSec = 180,
-        [string]$DesktopExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+        [string]$DesktopExe = (Get-DockerDesktopExe)
     )
     # Docker Desktop answers on docker_engine; newer releases point the CLI at dockerDesktopLinuxEngine.
     $pipes = @('\\.\pipe\docker_engine', '\\.\pipe\dockerDesktopLinuxEngine')
@@ -114,13 +122,78 @@ function Remove-OtherCopyContainers {
     param([string]$DeploymentDir)
     if (-not (Test-Path (Join-Path $DeploymentDir 'release.env'))) { return @() }
     $project = Get-ComposeProjectName $DeploymentDir
-    if ((Invoke-Docker @('ps', '-a', '--filter', 'name=visheart-', '--format',
-            '{{.Names}}|{{.Label "com.docker.compose.project"}}')) -ne 0) { return @() }
+    # {{.Labels}}, not {{.Label "com.docker.compose.project"}}: Windows PowerShell 5.1 strips double quotes inside
+    # native arguments, which broke that template ("function "com" not defined").
+    if ((Invoke-Docker @('ps', '-a', '--filter', 'name=visheart-', '--format', '{{.Names}}|{{.Labels}}')) -ne 0) {
+        Write-Host "Could not list VisHeart containers: $((Get-LastDockerOutput) -join ' ')"
+        return @()
+    }
     $removed = @()
     foreach ($line in @(Get-LastDockerOutput)) {
-        $name, $owner = ([string]$line).Split('|', 2)
+        $name, $labels = ([string]$line).Split('|', 2)
+        $owner = ''
+        if ($labels -match '(?:^|,)com\.docker\.compose\.project=([^,]*)') { $owner = $Matches[1] }
         if (-not $name -or $owner -eq $project) { continue }
         if ((Invoke-Docker @('rm', '-f', $name)) -eq 0) { $removed += $name }
+    }
+    return $removed
+}
+
+function Get-ImageRepository([string]$Reference) {
+    # 'a/app:2' and 'a/app@sha256:...' both give 'a/app' (a registry port, 'host:5000/a', stays in the name).
+    $name = ($Reference -split '@', 2)[0]
+    $slash = $name.LastIndexOf('/')
+    $colon = $name.LastIndexOf(':')
+    if ($colon -gt $slash) { $name = $name.Substring(0, $colon) }
+    return $name
+}
+
+function Remove-OldVisHeartImages {
+    # Each update names new VisHeart images in release.env, and Docker keeps the old ones (the GPU image alone is about
+    # 25 GB). An installed copy removes the images of its own repositories that it no longer uses. It keeps: the images
+    # in release.env, any image a container still uses, and the defaults in docker-compose.yml (what a developer copy
+    # on the same PC runs). Mongo and Redis are never touched. Removes nothing when a current image cannot be found,
+    # and nothing in a developer copy. Returns the removed image names.
+    param([string]$DeploymentDir)
+    if (-not (Test-Path (Join-Path $DeploymentDir 'release.env'))) { return @() }
+    $values = Get-ReleaseValues $DeploymentDir
+    $current = @($values.Keys | Where-Object { $_ -match '^VH_[A-Z_]*_IMAGE$' } | Sort-Object | ForEach-Object { $values[$_] } | Where-Object { $_ })
+    if ($current.Count -eq 0) { return @() }
+
+    $keep = @{}
+    foreach ($ref in $current) {
+        if ((Invoke-Docker @('image', 'inspect', '--format', '{{.Id}}', $ref)) -ne 0) { return @() }
+        foreach ($id in @(Get-LastDockerOutput)) { if ($id) { $keep[[string]$id] = $true } }
+    }
+    $compose = Join-Path $DeploymentDir 'docker-compose.yml'
+    if (Test-Path $compose) {
+        foreach ($m in [regex]::Matches((Get-Content -Raw $compose), '\$\{VH_[A-Z_]+_IMAGE:-([^}\s]+)\}')) {
+            if ((Invoke-Docker @('image', 'inspect', '--format', '{{.Id}}', $m.Groups[1].Value)) -eq 0) {
+                foreach ($id in @(Get-LastDockerOutput)) { if ($id) { $keep[[string]$id] = $true } }
+            }
+        }
+    }
+    if ((Invoke-Docker @('ps', '-a', '-q', '--no-trunc')) -ne 0) { return @() }
+    $containers = @(Get-LastDockerOutput | Where-Object { $_ })
+    if ($containers.Count -gt 0) {
+        if ((Invoke-Docker (@('inspect', '--format', '{{.Image}}') + $containers)) -ne 0) { return @() }
+        foreach ($id in @(Get-LastDockerOutput)) { if ($id) { $keep[[string]$id] = $true } }
+    }
+
+    $removed = @()
+    foreach ($repo in @($current | ForEach-Object { Get-ImageRepository $_ } | Select-Object -Unique)) {
+        if ((Invoke-Docker @('images', $repo, '--no-trunc', '--format', '{{.ID}}|{{.Tag}}')) -ne 0) { continue }
+        $tags = [ordered]@{}
+        foreach ($line in @(Get-LastDockerOutput)) {
+            $id, $tag = ([string]$line).Split('|', 2)
+            if (-not $id -or $keep.ContainsKey($id)) { continue }
+            if (-not $tags.Contains($id)) { $tags[$id] = @() }
+            if ($tag -and $tag -ne '<none>') { $tags[$id] += "${repo}:$tag" }
+        }
+        foreach ($id in $tags.Keys) {
+            if ((Invoke-Docker @('image', 'rm', '-f', $id)) -ne 0) { continue }
+            if ($tags[$id].Count -gt 0) { $removed += $tags[$id][0] } else { $removed += "$repo ($id)" }
+        }
     }
     return $removed
 }
@@ -198,15 +271,62 @@ function Initialize-BackendFolders {
     # docker-compose.yml mounts the backend's dist folder read-only and puts Docker volumes on dist\temp_jpeg,
     # temp_mesh, temp_upload and temp_exports. Docker cannot create those folders inside a read-only mount ("mkdirat
     # ... read-only file system"), and dist is built, not in git, so a fresh copy lacks them. Creates them, and
-    # returns @{ Built } saying whether the backend was built (dist\index.js exists).
+    # The same holds for UNETRESNET34\checkpoints (a volume inside the read-only UNETRESNET34 mount of the GPU
+    # service): the installer does not ship it and an older git copy has none. Compose.Tests.ps1 finds every such
+    # mount in docker-compose.yml and checks that it is listed here.
+    # Returns @{ Built; Folders }: whether the backend was built (dist\index.js exists), and the folders made sure of.
     param([string]$DeploymentDir)
-    $dist = Join-Path (Split-Path -Parent $DeploymentDir) 'Cardiac_Segmentation_FYP_Server\dist'
-    foreach ($name in @('temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports')) {
-        New-Item -ItemType Directory -Force (Join-Path $dist $name) | Out-Null
-    }
-    return @{ Built = (Test-Path (Join-Path $dist 'index.js')) }
+    $app = Split-Path -Parent $DeploymentDir
+    $dist = Join-Path $app 'Cardiac_Segmentation_FYP_Server\dist'
+    $folders = @(@('temp_jpeg', 'temp_mesh', 'temp_upload', 'temp_exports') | ForEach-Object { Join-Path $dist $_ })
+    $folders += Join-Path (Split-Path -Parent $app) 'UNETRESNET34\checkpoints'
+    foreach ($folder in $folders) { New-Item -ItemType Directory -Force $folder | Out-Null }
+    return @{ Built = (Test-Path (Join-Path $dist 'index.js')); Folders = $folders }
 }
 
-Export-ModuleMember -Function Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
+function Get-PortListeners {
+    # The programs listening on the given TCP ports: @{ Port; Process; Id }.
+    param([int[]]$Ports)
+    foreach ($c in @(Get-NetTCPConnection -State Listen -LocalPort $Ports -ErrorAction SilentlyContinue)) {
+        $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue
+        [pscustomobject]@{ Port = [int]$c.LocalPort; Process = [string]$p.ProcessName; Id = [int]$c.OwningProcess }
+    }
+}
+
+function Get-BusyPorts {
+    # Ports VisHeart must have (3000 web page and 5000 backend, both built into the app image; 9000 file storage, which
+    # the browser downloads from; 8001 GPU service) that another program holds. VisHeart's own containers hold theirs
+    # through Docker's processes, which are not a problem. MongoDB and Redis are left out: an installed copy lets Docker
+    # pick free ports for them. Returns @{ Port; Process; Id } per busy port.
+    $docker = @('com.docker.backend', 'com.docker.proxy', 'wslrelay', 'vpnkit', 'docker-proxy', 'dockerd')
+    @(Get-PortListeners -Ports @(3000, 5000, 9000, 8001)) |
+        Where-Object { $docker -notcontains $_.Process } |
+        Sort-Object Port -Unique
+}
+
+function Test-UrlAnswers {
+    # True when the URL answers with any HTTP status within the timeout (a 404 still means the server runs).
+    param([string]$Url, [int]$TimeoutSec = 3)
+    try {
+        Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+        return $true
+    } catch [System.Net.WebException] {
+        return ($null -ne $_.Exception.Response)
+    } catch {
+        return $false
+    }
+}
+
+function Test-VisHeartAnswering {
+    # True when the web page and the backend both answer: the VisHeart desktop icon then just opens the browser.
+    return ((Test-UrlAnswers -Url 'http://localhost:3000/') -and (Test-UrlAnswers -Url 'http://localhost:5000/'))
+}
+
+function Open-VisHeart {
+    # The web page in the default browser.
+    Start-Process -FilePath 'http://localhost:3000'
+}
+
+Export-ModuleMember -Function Get-DockerDesktopExe, Test-UrlAnswers, Test-VisHeartAnswering, Open-VisHeart, Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
-    Remove-VisHeartDocker, Initialize-BackendFolders
+    Remove-VisHeartDocker, Initialize-BackendFolders, Remove-OldVisHeartImages
