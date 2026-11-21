@@ -32,8 +32,14 @@ Describe 'docker-compose.yml defaults (no env file)' {
         $app = $config.services.'visheart-app'
         $p3000 = @($app.ports | Where-Object { $_.target -eq 3000 })[0]
         $p3000 | Should Not BeNullOrEmpty
-        # No host_ip at all: Docker's default (all IPv4 and IPv6 addresses), exactly as before.
-        @(Get-AllPorts $config | Where-Object { $_.Port.host_ip }).Count | Should Be 0
+        # Frontend 3000 / backend 5000 keep Docker's default (no host_ip: all addresses), as before.
+        # MongoDB, Redis, MinIO and GPU are loopback-only without VH_BIND, so a plain
+        # `docker compose up` never exposes them to the LAN.
+        foreach ($entry in @(Get-AllPorts $config)) {
+            $want = if ($entry.Service -eq 'visheart-app') { '' } else { '127.0.0.1' }
+            "$($entry.Service):$($entry.Port.target)=$($entry.Port.host_ip)" |
+                Should Be "$($entry.Service):$($entry.Port.target)=$want"
+        }
         $app.image | Should Be 'sharlene21/visheart-local:1.5.0'
         $config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD | Should Be 'P@ssw0rd123!'
         $app.environment.MONGODB_URI | Should Match ([regex]::Escape('admin:P%40ssw0rd123%21@'))
