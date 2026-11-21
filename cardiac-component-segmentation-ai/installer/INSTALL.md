@@ -38,7 +38,9 @@ The VisHeart team shares a Google Drive folder with you. Ask them for access if 
    ticked (**Start VisHeart now** and **Open the login note**) and click **Finish**.
 6. If the installer asks you to restart Windows, restart, then double-click the **VisHeart** icon on the desktop.
 7. The first time Docker Desktop opens, it asks you to accept its terms. Accept them. Docker Desktop is free for
-   education, research and small organisations.
+   education, research and small organisations. It then asks you to sign in or create a Docker account: click
+   **Skip**. VisHeart does not need a Docker account. (Some versions also ask a few survey questions; **Skip** those
+   too.)
 
 > **Setup says "Please insert Disk 2"?** You opened the `.exe` from inside the zip, where setup cannot find the two
 > `.bin` files. Click **Cancel**, do step 1 (Extract All), and run the `.exe` from the extracted folder.
@@ -109,6 +111,7 @@ stored in Docker, not only VisHeart's.
 | "Docker is installed but this Windows account (...) cannot use it" | See **Using VisHeart from another Windows account** below. |
 | "This PC already has a VisHeart database (...) that was made by another copy of VisHeart" | The data belongs to an earlier or developer copy of VisHeart. Ask the VisHeart team before deleting anything. |
 | Docker Desktop says "Virtual Machine Platform is not enabled" | A Windows feature Docker needs is off, or Windows has not restarted since it was turned on. Double-click the VisHeart icon: it asks to turn the feature on (click **Yes**, then **Yes** in the Windows permission window) and then to restart Windows. Restarting Docker Desktop alone is not enough. |
+| Docker Desktop shows a sign-in page and VisHeart waits | Docker Desktop's first start asks you to sign in. Click **Skip** (no Docker account is needed), then double-click the VisHeart icon again. |
 | "Docker Desktop did not become ready within 3 minutes" | Open Docker Desktop, wait until it says Docker is running, then start VisHeart again. |
 | The login is rejected | If you changed the admin password, use your new password, not the one in `FIRST-LOGIN.txt`. After 5 wrong tries the account is locked for 10 minutes. |
 
