@@ -7,7 +7,7 @@ base weights load plain or wrapped, AdamW starts new at --lr, the best epoch is 
 among the epochs trained, and the output is <label>.pth plus <label>.json in --output-dir.
 
   python finetune.py --base-checkpoint unet.pth --train IMAGES_DIR MASKS_DIR [--train ...]
-                     --val IMAGES_DIR MASKS_DIR --output-dir E:\\Jy\\Unet\\versions --label LABEL
+                     --val IMAGES_DIR MASKS_DIR --output-dir DATA_FOLDER\\versions --label LABEL
                      [--epochs 20] [--batch-size 8] [--lr 1e-4] [--weight-decay 1e-4] [--val-every 5]
                      [--augmentation corrected|original] [--unfreeze-encoder] [--image-size 256]
                      [--max-val-slices N] [--seed 42] [--frozen-slices frozen_slices.npz] [--select best|last]
@@ -154,7 +154,7 @@ def main(argv=None):
         return 1
     if not Path(args.frozen_slices).exists():
         print(f"frozen-slice index not found: {args.frozen_slices}. Build it once with:\n"
-              r"  python frozen_guard.py build --manifest E:\Jy\Unet\versions\frozen_holdout.json")
+              f"  python frozen_guard.py build --manifest {Path(args.frozen_slices).parent / 'frozen_holdout.json'}")
         return 1
     frozen = FrozenIndex.load(args.frozen_slices)
     problem = frozen.manifest_problem()

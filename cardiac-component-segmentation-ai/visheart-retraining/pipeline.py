@@ -18,6 +18,7 @@ RECOMMENDED_PROJECTS and FEW_SLICES only warn, on the page.
 """
 import datetime as dt
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -34,7 +35,7 @@ from frozen_guard import DEFAULT_INDEX  # noqa: E402
 from jobs import NO_WINDOW, Step, StepFailed, now  # noqa: E402
 from train_candidate import RECIPE  # noqa: E402
 
-def _default_docker_cmd() -> list:
+def _default_docker_cmd(env=None) -> list:
     """Resolve a real path to the docker CLI instead of trusting bare "docker" to be on PATH.
 
     subprocess.run(["docker", ...]) relies on the *worker process's own* PATH, not the
@@ -51,12 +52,17 @@ def _default_docker_cmd() -> list:
     found = shutil.which("docker")
     if found:
         return [found]
+    # Docker Desktop's folders, from this Windows' own variables (Windows need not live on C:; ProgramW6432 is the
+    # 64-bit Program Files even for a 32-bit process).
+    env = os.environ if env is None else env
+    program_files = env.get("ProgramW6432") or env.get("ProgramFiles") or r"C:\Program Files"
+    program_data = env.get("ProgramData") or r"C:\ProgramData"
     for candidate in (
-        r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
-        r"C:\ProgramData\DockerDesktop\version-bin\docker.exe",
+        Path(program_files) / "Docker" / "Docker" / "resources" / "bin" / "docker.exe",
+        Path(program_data) / "DockerDesktop" / "version-bin" / "docker.exe",
     ):
-        if Path(candidate).is_file():
-            return [candidate]
+        if candidate.is_file():
+            return [str(candidate)]
     return ["docker"]  # last resort -- unchanged previous behaviour
 
 

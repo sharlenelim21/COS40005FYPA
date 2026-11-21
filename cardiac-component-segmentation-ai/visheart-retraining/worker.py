@@ -1,6 +1,6 @@
 """The UNet Extend Training service: the page's only way to run the retraining tools (plan WS13).
 
-It runs on the host in E:\\Jy\\Unet\\.venv and listens on 127.0.0.1 only. The app container reaches it through
+It runs on the host, in the Python environment the setup made (see retraining.local.bat), and listens on 127.0.0.1 only. The app container reaches it through
 host.docker.internal, as checked on 2026-09-25; nothing on the network can. A request must name this computer in its
 Host header, and every POST must be JSON, so a web page in a browser cannot drive it either. The rule that only one
 training runs at a time lives here (jobs.JobRunner), not in the page.

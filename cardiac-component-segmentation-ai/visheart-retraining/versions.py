@@ -28,7 +28,7 @@ Jy's rules (2026-09-23):
   python versions.py prune    [--yes]
   python versions.py status
 
-Every command takes --registry (default E:\\Jy\\Unet\\versions\\registry.json).
+Every command takes --registry (default: versions\\registry.json in the training data folder).
 """
 import argparse
 import datetime as dt
