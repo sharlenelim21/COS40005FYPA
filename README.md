@@ -153,12 +153,28 @@ changed image under an old tag, installed PCs never get it.
 
 ### Make a release
 
+Do this on a "build PC" that has been set up once (Inno Setup, pnpm, the two model files, the support mailbox file
+`installer/smtp.release.env`); see section 2 of `installer/RELEASING.md`.
+
 1. Commit everything (the build refuses uncommitted changes).
-2. Raise the version in `installer/VERSION`, for example `1.0.1` to `1.0.2`.
-3. Build: `.\cardiac-component-segmentation-ai\installer\make-installer.ps1 -Variant Update`, and for new PCs also
-   `-Variant Full -PackPath <training data pack>`. It checks the code, models and images, and writes one zip per
-   installer to `installer/out/`.
-4. Test the installer, then upload **only the zip** to the Google Drive folder.
+2. Raise the version by hand in `cardiac-component-segmentation-ai/installer/VERSION`, for example `1.0.1` to
+   `1.0.2`, and commit. The build never changes the version itself.
+3. Build the installers. Open PowerShell in the repository root (the folder that holds this README). Each command
+   builds **one** installer, so run both:
+
+   **Update installer** (for PCs that already have VisHeart; about 800 MB):
+   ```
+   .\cardiac-component-segmentation-ai\installer\make-installer.ps1 -Variant Update
+   ```
+   **Full installer** (for new PCs; about 2.8 GB; takes about 10 minutes). `-PackPath` is the extracted training
+   data pack, the folder that contains `PACKED.json`:
+   ```
+   .\cardiac-component-segmentation-ai\installer\make-installer.ps1 -Variant Full -PackPath D:\visheart-training-pack
+   ```
+   Each build checks the code, models and Docker images first and stops with a clear message if something is
+   wrong. The results are `VisHeart-Update-<version>.zip` and `VisHeart-Full-<version>.zip` in
+   `cardiac-component-segmentation-ai/installer/out/`.
+4. Test the installers, then upload **only the two zip files** to the Google Drive folder.
 5. Edit `installer/latest.json` (new version, Drive link, short note) and merge it into `main`. Installed PCs then
    show the "update available" popup.
 
