@@ -10,8 +10,10 @@
  * Large enough (Jy's decision 2026-11-01, decisions/retraining-edit-threshold-and-minimum-data.md): when the export
  * measured the slice against its AI result (`editShare`, changed pixels / heart pixels of the AI result and the
  * correction together), the share is at least `minShare` (2%), or a structure was added or removed
- * (`structureChanged`, which also covers a basal or apical slice the AI missed or over-drew). Without that measure
- * (the AI result was not found), the old rule stands: at least `minPixels` (20) changed pixels.
+ * (`structureChanged`, which also covers a basal or apical slice the AI missed or over-drew). A slice the export
+ * found missing from its AI result (`aiBaseline: false`) never counts: a missing AI result is not an empty mask
+ * (option C, 2026-11-22; training_eligibility.ts). A slice nobody measured (review_candidates.ts loads masks without
+ * their frames) keeps the old rule: at least `minPixels` (20) changed pixels.
  *
  * One image slice gives at most one label. When both models corrected the same frame and slice:
  * - pixel-identical corrections are not a conflict, and one copy is used;
@@ -29,6 +31,8 @@ export interface TrackedSlice {
     pixelsChanged: number;
     editShare?: number | null;
     structureChanged?: boolean;
+    /** Set by the export's recount: whether the AI result holds this frame and slice. */
+    aiBaseline?: boolean;
     byClass?: Record<string, number>;
     [key: string]: unknown;
 }
@@ -65,6 +69,7 @@ export interface SelectionOptions {
 
 /** Why a slice's edit is too small to train on, or null when it is large enough. */
 export const editTooSmall = (slice: TrackedSlice, minPixels: number, minShare = MIN_EDIT_SHARE): string | null => {
+    if (slice.aiBaseline === false) return "slice_no_ai_baseline";
     if (typeof slice.editShare === "number") {
         return slice.editShare >= minShare || slice.structureChanged ? null : "slice_below_min_share";
     }

@@ -579,6 +579,7 @@ const authenticateUser = async (
       return {
         success: false,
         operation,
+        locked: true,
         message: `Account temporarily locked due to too many failed login attempts. Please try again in ${minutes} minute${minutes !== 1 ? "s" : ""}.`,
       };
     }
@@ -619,6 +620,7 @@ const authenticateUser = async (
         return {
           success: false,
           operation,
+          locked: true,
           message: `Too many failed login attempts. Account locked for ${LOGIN_LOCKOUT_SECONDS / 60} minutes.`,
         };
       }
@@ -690,6 +692,8 @@ const projectSchema = new Schema<IProject>({
   affineMatrix: { type: [[Number]], required: false }, // 4x4 affine transformation matrix from NIfTI header (optional, for avoiding re-downloads during export)
   // Template hearts: read-only reference projects every logged-in user can view (see IProject.isTemplate)
   isTemplate: { type: Boolean, required: false, default: false, index: true },
+  // Origin, not state: true once the project holds a template's data, and kept after unpublish (IProject.fromTemplate)
+  fromTemplate: { type: Boolean, required: false, default: false, index: true },
   templateInfo: { type: Schema.Types.Mixed, required: false }, // ITemplateInfo — category, sex, subject details, card order
 }, { timestamps: true }); // Automatically add createdAt and updatedAt timestamps
 // Hooks for pre-save and pre-delete operations (must be before the model creation)

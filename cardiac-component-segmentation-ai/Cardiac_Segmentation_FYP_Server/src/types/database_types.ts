@@ -197,6 +197,12 @@ export interface IProject {
    *  can view on the landmark page. Only its owner (the template account) can
    *  change it — see middleware/template_guard.ts and services/template_access.ts. */
   isTemplate?: boolean;
+  /** Where the project came from: true once it holds a template heart's data (the experts' masks), whether it is
+   *  published now or not. Set when template_tool.py `prepare` loads the experts' masks, kept by `finalize` and
+   *  `unpublish`, set by the seed, and backfilled on start-up (template_seed.ts markTemplateOrigins). Never cleared:
+   *  such a project never trains the UNet (training_eligibility.ts). A user's own upload of the same scan is a new
+   *  project without it. */
+  fromTemplate?: boolean;
   /** Shown on the dashboard's Templates tab. */
   templateInfo?: ITemplateInfo;
 
@@ -1072,6 +1078,9 @@ export interface UserCrudResult {
   user?: IUserSafe; // The created or updated user document (applicable for CREATE and UPDATE operations)
   users?: IUserSafe[]; // Array of user documents (applicable for READ operation)
   message?: string; // Message if error/warning occurred (applicable for all operations)
+  // AUTHENTICATE only: the account is locked (it already was, or this attempt locked it). The login route answers
+  // 423 from this flag alone, never from the message's wording.
+  locked?: boolean;
 }
 
 // Define result type for project CRUD operations

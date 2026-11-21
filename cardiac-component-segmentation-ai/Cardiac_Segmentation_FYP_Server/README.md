@@ -2450,7 +2450,7 @@ AWS_REGION=ap-southeast-1    # required even for MinIO (the local install uses u
 S3_ENDPOINT=http://minio:9000        # MinIO only: leave unset for AWS S3
 S3_FORCE_PATH_STYLE=true             # MinIO only
 S3_PUBLIC_URL=http://localhost:9000  # MinIO only: host the browser uses in download links (defaults to S3_ENDPOINT)
-S3_ANONYMOUS_READ=none               # MinIO only: "none" keeps the bucket private when the backend creates it
+                                     # (a MinIO bucket the backend creates is always private; files go by presigned URL)
 
 # GPU Server
 GPU_SERVER_URL=gpu           # host name only, no http:// (default localhost)

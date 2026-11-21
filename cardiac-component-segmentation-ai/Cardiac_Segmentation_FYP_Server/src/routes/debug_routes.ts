@@ -7,7 +7,7 @@ import LogError from "../utils/error_logger"; // Import the error logging utilit
 import { jobModel, createJob, readJob, updateJob, deleteJob, JobStatus, IJobDocument, IJob } from "../services/database"; // Import the job model and functions
 import { injectGpuAuthToken } from "../middleware/gpuauthmiddleware";
 import { v4 as uuidv4 } from "uuid"; // Import UUID generator
-import { isAuth } from "../services/passportjs"; // Import the authentication middleware
+import { isAuth, isAuthAndAdmin } from "../services/passportjs"; // Import the authentication middleware
 import axios from "axios"; // Import axios for HTTP requests
 
 // fetch env variables
@@ -31,7 +31,7 @@ function isAxiosErrorLike(error: any): error is AxiosErrorLike {
     return error && typeof error === 'object' && 'isAxiosError' in error;
 }
 
-router.get("/get-gpu_token", async (req: Request, res: Response): Promise<void> => {
+router.get("/get-gpu_token", isAuthAndAdmin, async (req: Request, res: Response): Promise<void> => {
     const token = getCurrentToken(); // Get the current token
     if (token) {
         res.status(200).json({ token });
@@ -41,7 +41,7 @@ router.get("/get-gpu_token", async (req: Request, res: Response): Promise<void> 
 });
 
 // route to start bbox inferencing via the gpu with self-generated callback_url (below), presigned_url, uuid
-router.get('/start-bbox-inferencing', /*isAuth,*/ injectGpuAuthToken, async (req: Request, res: Response): Promise<void> => {
+router.get('/start-bbox-inferencing', isAuth, injectGpuAuthToken, async (req: Request, res: Response): Promise<void> => {
     logger.warn("DEBUG: Starting bbox inferencing..."); // Log the start of the process
     // Create sample job data
     const uuid = uuidv4(); // Generate a unique UUID for the job

@@ -13,7 +13,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CorrectionCase, isActiveJob, MODEL_NAMES, RetrainingStatus } from "@/lib/retraining-api";
 import { LABEL_COLORS } from "@/types/segmentation";
-import { canEditCase, dataGate, editorHref, matchesQuery, sameScanGroups, selectionSummary, testScanName, trainableCases } from "@/components/extend-training/logic";
+import {
+  canEditCase, dataGate, editorHref, matchesQuery, MIN_PROJECTS, RECOMMENDED_PROJECTS, sameScanGroups, selectionSummary,
+  testScanName, trainableCases,
+} from "@/components/extend-training/logic";
 import { CasePreview, markEdited } from "@/components/extend-training/CasePreview";
 
 /** Edit tracking's classes as short tags, in the editor's colours; the full name shows on hover. */
@@ -153,7 +156,8 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
   const reason = checking ? "Checking the saved corrections…"
     : running ? "A training is running. The selection stays as it is until it finishes."
     : !eligible ? "The corrections have not been checked yet."
-    : trainable.length === 0 ? "None of the corrections can train yet."
+    : trainable.length === 0
+      ? `No corrected case can train yet. Training needs at least ${MIN_PROJECTS} corrected projects with an AI result.`
     : summary.cases === 0 ? "Choose at least one case."
     : !gate.allowed ? gate.message
     : null;
@@ -276,8 +280,8 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
                 )}
                 {!checking && eligible && cases.length === 0 && (
                   <Message>
-                    No corrections can train yet. Open one of your projects, correct its segmentation and save it; only
-                    the slices you change count.
+                    No corrections can train yet. Open one of your projects, run its AI segmentation, correct the result
+                    and save it; only the slices you change count. Template projects are not listed.
                   </Message>
                 )}
                 {cases.length > 0 && shown.length === 0 && <Message>No case matches “{query}”.</Message>}
@@ -339,9 +343,10 @@ export function PrepareTab({ status, userId, selected, onSelectedChange, checkin
           <p className="text-xs text-muted-foreground">
             A slice counts when the pixels whose label changed are at least 2% of the heart in the AI result and
             your correction together, or a structure was added or removed, and none of its regions is marked “manual”.
-            A training needs at least 5 corrected projects (7 recommended): more patients help more than more
-            slices. Training never
-            changes your scans or your saved corrections.
+            Template projects and projects without an AI result are not counted or listed, and a slice the AI result
+            does not cover is left out. A training needs at least {MIN_PROJECTS} corrected projects
+            ({RECOMMENDED_PROJECTS} recommended): more patients help more than more slices. Training never changes
+            your scans or your saved corrections.
           </p>
         </CardContent>
       </Card>

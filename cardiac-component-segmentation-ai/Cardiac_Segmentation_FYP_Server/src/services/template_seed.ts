@@ -134,7 +134,7 @@ async function loadTemplate(dir: string, s3: S3Client, t: SeedTemplate): Promise
     }
     await db.collection("projects").deleteOne({ _id: pid });
     await db.collection("projects").insertOne({
-        ...project, templateInfo: { ...(project.templateInfo ?? {}), seedVersion: "loading" },
+        ...project, fromTemplate: true, templateInfo: { ...(project.templateInfo ?? {}), seedVersion: "loading" },
     });
 
     let uploaded = 0;
@@ -147,6 +147,32 @@ async function loadTemplate(dir: string, s3: S3Client, t: SeedTemplate): Promise
     }
     await db.collection("projects").updateOne({ _id: pid }, { $set: { "templateInfo.seedVersion": t.version } });
     logger.info(`${serviceLocation}: loaded "${t.name}" (${docs.length} documents, ${uploaded}/${t.objects.length} files uploaded).`);
+}
+
+/**
+ * Which projects hold a template's data but lack the `fromTemplate` origin flag: every template, and every project
+ * that still has `templateInfo`, which only template_tool.py (prepare/recompute/finalize) and this seed write. That
+ * covers a template unpublished before the flag existed, or switched back to a user project by hand in the database.
+ */
+export const TEMPLATE_ORIGIN_BACKFILL = {
+    fromTemplate: { $ne: true },
+    $or: [{ isTemplate: true }, { templateInfo: { $exists: true } }],
+};
+
+/**
+ * Mark every project that came from a template (TEMPLATE_ORIGIN_BACKFILL), so it never trains the UNet once it is a
+ * user project again. Idempotent, run on every start; never throws.
+ */
+export async function markTemplateOrigins(): Promise<number> {
+    try {
+        const result = await mongoose.connection.db!.collection("projects")
+            .updateMany(TEMPLATE_ORIGIN_BACKFILL, { $set: { fromTemplate: true } });
+        if (result.modifiedCount) logger.info(`${serviceLocation}: marked ${result.modifiedCount} project(s) as from a template.`);
+        return result.modifiedCount;
+    } catch (err) {
+        logger.error(`${serviceLocation}: could not mark template projects: ${(err as Error).message}`);
+        return 0;
+    }
 }
 
 /**

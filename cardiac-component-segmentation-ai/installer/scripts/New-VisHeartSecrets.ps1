@@ -3,8 +3,10 @@
     Creates this PC's VisHeart passwords and secrets (secrets.env) and the first-login note.
 
 .DESCRIPTION
-    Run by the installer after the files are copied. An existing secrets.env is never rewritten: MongoDB, MinIO and
-    the admin account were created with those values, so new ones would lock VisHeart out of its own data.
+    Run by the installer after the files are copied, on every install and update. An existing secrets.env is never
+    rewritten: MongoDB, MinIO and the admin account were created with those values, so new ones would lock VisHeart
+    out of its own data. The one exception is a key a later version added whose service keeps nothing tied to its
+    value ($addedLater): when it is missing, only that line is appended and every other line stays as it was.
     Exit code 0 when the file was written or already exists, 1 on failure.
 #>
 param(
@@ -15,6 +17,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $alphanumeric = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+# Keys that may be added to an existing secrets.env. Only ones whose service stores nothing made with the value:
+# Redis takes its password on the command line at every start. Never add MongoDB, MinIO or admin keys here.
+$addedLater = @('REDIS_PASSWORD')
 $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
 
 function Get-RandomIndex([int]$Count) {
@@ -47,8 +52,20 @@ function New-AdminPassword {
 
 try {
     $secretsPath = Join-Path $DeploymentDir 'secrets.env'
+    # UTF-8 without a byte order mark: docker compose rejects a BOM before the first key.
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
     if (Test-Path $secretsPath) {
-        Write-Host "secrets.env already exists; keeping this PC's passwords."
+        $text = [IO.File]::ReadAllText($secretsPath)
+        $missing = @($addedLater | Where-Object { $text -notmatch "(?m)^$_=" })
+        if ($missing.Count -eq 0) {
+            Write-Host "secrets.env already exists; keeping this PC's passwords."
+            exit 0
+        }
+        $append = ''
+        if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $append = "`r`n" }
+        foreach ($key in $missing) { $append += "$key=$(New-RandomString 32 $alphanumeric)`r`n" }
+        [IO.File]::AppendAllText($secretsPath, $append, $utf8)
+        Write-Host "secrets.env already exists; keeping this PC's passwords and adding $($missing -join ', ') (new in this version)."
         exit 0
     }
     if (-not (Test-Path $DeploymentDir)) { throw "Folder not found: $DeploymentDir" }
@@ -60,6 +77,8 @@ try {
         # Alphanumeric, so the URL form needs no percent-encoding.
         VH_MONGO_PASSWORD_URL         = $mongo
         VH_MINIO_PASSWORD             = New-RandomString 32 $alphanumeric
+        # The name docker-compose.yml and the backend read; alphanumeric, so it is safe on Redis's command line.
+        REDIS_PASSWORD                = New-RandomString 32 $alphanumeric
         VH_ADMIN_PASS                 = $admin
         VH_JWT_SECRET                 = New-RandomString 32 $alphanumeric
         VH_SESSION_SECRET             = New-RandomString 32 $alphanumeric
@@ -72,8 +91,6 @@ try {
     foreach ($k in $values.Keys) { $lines += "$k=$($values[$k])" }
     $lines += '# VisHeart passwords and secrets for this PC, created by the installer. Keep this file private.'
     $lines += '# Do not edit or delete it: the database and storage were set up with these values.'
-    # UTF-8 without a byte order mark: docker compose rejects a BOM before the first key.
-    $utf8 = New-Object System.Text.UTF8Encoding($false)
     $content = ($lines -join "`r`n") + "`r`n"
     [IO.File]::WriteAllText($secretsPath, $content, $utf8)
 

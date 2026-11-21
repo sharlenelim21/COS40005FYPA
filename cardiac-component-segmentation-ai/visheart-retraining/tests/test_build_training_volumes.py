@@ -20,6 +20,9 @@ def frame(frameindex, *slices):
             "slices": [{"sliceindex": si, "segmentationmasks": masks, **extra} for si, masks, extra in slices]}
 
 
+ELIGIBLE = {"isTemplate": False, "fromTemplate": False, "aiResult": True, "heldOut": False}  # what the export sends for a case that may train
+
+
 def tracked(frameindex, sliceindex, pixels, cls="lvc"):
     return {"frameindex": frameindex, "sliceindex": sliceindex, "pixelsChanged": pixels, "byClass": {cls: pixels}}
 
@@ -36,10 +39,31 @@ class BuildTrainingVolumes(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def payload(self, tracked_slices, frames, plane=(6, 4), min_pixels=1, source=None):
+    def payload(self, tracked_slices, frames, plane=(6, 4), min_pixels=1, source=None, case=ELIGIBLE):
         return {"source_nifti": str(source or self.src), "case_id": "p1", "out_dir": str(self.dir / "out"),
                 "plane": {"height": plane[0], "width": plane[1]}, "min_pixels": min_pixels,
-                "tracked_slices": tracked_slices, "frames": frames}
+                "tracked_slices": tracked_slices, "frames": frames, "case": case}
+
+    def test_refuses_a_case_the_export_rules_out(self):
+        frames = [frame(0, (0, [{"class": "lvc", "segmentationmaskcontents": "0 3"}], {}))]
+        for case, words in (({**ELIGIBLE, "isTemplate": True}, "template"),
+                            ({**ELIGIBLE, "fromTemplate": True}, "came from a template"),   # an unpublished template
+                            ({**ELIGIBLE, "aiResult": False}, "AI result"), (None, "rebuild the backend")):
+            with self.subTest(case=case):
+                out = btv.build(self.payload([tracked(0, 0, 3)], frames, case=case))
+                self.assertIn(words, out["error"])
+                self.assertFalse((self.dir / "out").exists())          # nothing written
+        # In the held-out export a template still builds, as before.
+        out = btv.build(self.payload([tracked(0, 0, 3)], frames, case={**ELIGIBLE, "isTemplate": True, "heldOut": True}))
+        self.assertEqual(len(out["files"]), 1)
+
+    def test_a_slice_its_ai_result_lacks_is_skipped_and_the_rest_builds(self):
+        frames = [frame(0, (0, [{"class": "lvc", "segmentationmaskcontents": "0 3"}], {}),
+                        (1, [{"class": "lvc", "segmentationmaskcontents": "0 9"}], {}))]
+        out = btv.build(self.payload([{**tracked(0, 0, 3), "aiBaseline": True, "editShare": 0.5},
+                                      {**tracked(0, 1, 9), "aiBaseline": False}], frames))
+        self.assertEqual(out["files"][0]["slices"], [0])
+        self.assertEqual(out["skipped"]["no_ai_baseline"], 1)
 
     def test_images_are_the_edited_source_slices_in_order(self):
         frames = [frame(1, (2, [{"class": "lvc", "segmentationmaskcontents": "0 3"}], {}),
@@ -65,7 +89,8 @@ class BuildTrainingVolumes(unittest.TestCase):
         chosen, skipped = btv.select_slices(
             [tracked(0, 0, 5), tracked(0, 1, 50), tracked(0, 2, 50), tracked(0, 7, 50)], frames, min_pixels=20)
         self.assertEqual(chosen, {})
-        self.assertEqual(skipped, {"below_min_share": 0, "below_min_pixels": 1, "manual": 1, "excluded": 1, "missing": 1})
+        self.assertEqual(skipped, {"no_ai_baseline": 0, "below_min_share": 0, "below_min_pixels": 1, "manual": 1,
+                                   "excluded": 1, "missing": 1})
 
     def test_the_two_percent_rule(self):
         frames = [frame(0, *[(z, [], {}) for z in range(5)])]

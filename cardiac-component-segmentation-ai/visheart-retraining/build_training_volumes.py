@@ -2,15 +2,18 @@
 
 stdin : {"source_nifti", "case_id", "out_dir", "plane": {"height", "width"}, "min_share", "min_pixels",
          "tracked_slices": editTracking.slices, "frames": the saved editable mask's frames,
+         "case": {"isTemplate", "fromTemplate", "aiResult", "heldOut"}, the facts the export judged the case by,
          "frozen_slices": optional frozen_guard.py index; a source volume with any frozen slice exports nothing}
 stdout: {"files": [...], "skipped": {...}[, "frozen_match": {...}]}  or  {"error": "..."}
 
 With {"check_frozen": true, "source_nifti", "frozen_slices"} it only checks: {"frozen_match": {...} or null}.
 
-The edit rule matches training_selection.ts (Jy's decision 2026-11-01): a tracked slice that carries "editShare"
-(changed pixels / heart pixels of the AI result and the correction together) counts when the share is at least
-min_share (default 0.02) or "structureChanged" is set (a structure added or removed); one without it (its AI result was
-not found) counts when "pixelsChanged" is at least min_pixels (default 20).
+Which cases and slices may train is eligibility.py, the same rule as the export's (option C, 2026-11-22): a template
+project, a case without its AI result, or a payload without "case" is refused whole; a slice its AI result does not
+hold ("aiBaseline": false) is skipped. A tracked slice that carries "editShare" (changed pixels / heart pixels of the
+AI result and the correction together) counts when the share is at least min_share (default 0.02) or
+"structureChanged" is set (a structure added or removed); one nobody measured counts when "pixelsChanged" is at least
+min_pixels (default 20).
 """
 import json
 import sys
@@ -21,9 +24,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import sha256_file  # noqa: E402
+from eligibility import MIN_PIXELS, MIN_SHARE, case_exclusion, slice_skip  # noqa: E402
 
 CLASS_TO_LABEL = {"lvc": 3, "lv": 3, "myo": 2, "rv": 1}
-MIN_SHARE, MIN_PIXELS = 0.02, 20
+REFUSED = {"template_project": "a template project, or one that came from a template, never trains",
+           "no_ai_result": "the case has no AI result of its model, so its edits cannot be measured",
+           "unknown_case": "the export did not say whether this case may train (rebuild the backend: npx tsc)"}
 
 
 def decode_rle(rle, height, width):
@@ -46,19 +52,12 @@ def has_manual(entries):
                for e in entries)
 
 
-def below_rule(tracked_slice, min_pixels, min_share):
-    """The skip reason when a tracked slice's edit is too small, else None."""
-    share = tracked_slice.get("editShare")
-    if share is not None:
-        return None if share >= min_share or tracked_slice.get("structureChanged") else "below_min_share"
-    return None if tracked_slice.get("pixelsChanged", 0) >= min_pixels else "below_min_pixels"
-
-
 def select_slices(tracked, frames, min_pixels=MIN_PIXELS, min_share=MIN_SHARE):
     saved = {(int(f.get("frameindex", 0)), int(s.get("sliceindex", 0))): s
              for f in frames or [] for s in f.get("slices") or []}
     chosen = {}
-    skipped = {"below_min_share": 0, "below_min_pixels": 0, "manual": 0, "excluded": 0, "missing": 0}
+    skipped = {"no_ai_baseline": 0, "below_min_share": 0, "below_min_pixels": 0, "manual": 0, "excluded": 0,
+               "missing": 0}
     for t in tracked or []:
         key = (int(t["frameindex"]), int(t["sliceindex"]))
         entries = (saved.get(key) or {}).get("segmentationmasks") or []
@@ -68,8 +67,8 @@ def select_slices(tracked, frames, min_pixels=MIN_PIXELS, min_share=MIN_SHARE):
             skipped["excluded"] += 1
         elif (t.get("byClass") or {}).get("manual", 0) > 0 or has_manual(entries):
             skipped["manual"] += 1
-        elif below_rule(t, min_pixels, min_share):
-            skipped[below_rule(t, min_pixels, min_share)] += 1
+        elif slice_skip(t, min_pixels, min_share):
+            skipped[slice_skip(t, min_pixels, min_share)] += 1
         else:
             chosen.setdefault(key[0], []).append((key[1], entries))
     return {f: sorted(v, key=lambda item: item[0]) for f, v in sorted(chosen.items())}, skipped
@@ -101,6 +100,9 @@ def build(payload):
     if payload.get("check_frozen"):
         # The export's dry run asks only this, so the Prepare page can lock a frozen test patient's cases.
         return {"frozen_match": frozen_match(data, payload["frozen_slices"])}
+    refused = case_exclusion(payload.get("case"))
+    if refused:
+        return {"error": f"left out: {REFUSED[refused]}"}
     height, width = int(payload["plane"]["height"]), int(payload["plane"]["width"])
     if data.ndim != 4 or data.shape[:2] != (height, width):
         return {"error": f"source shape {data.shape} does not match plane ({height}, {width})"}

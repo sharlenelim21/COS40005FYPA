@@ -62,3 +62,9 @@ node_modules/
 
 # Local docker-compose overrides (machine-specific image tags)
 docker-compose.override.yml
+
+# Environment secrets — never commit the real .env (the earlier rules above were
+# malformed, e.g. ".env.env", so .env was tracked by mistake). Keep .env.example tracked.
+.env
+.env.*
+!.env.example

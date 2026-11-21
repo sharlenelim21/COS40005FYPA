@@ -3,8 +3,9 @@
 
 $script = Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\New-VisHeartSecrets.ps1'
 
-$expectedKeys = @('VH_MONGO_PASSWORD', 'VH_MONGO_PASSWORD_URL', 'VH_MINIO_PASSWORD', 'VH_ADMIN_PASS', 'VH_JWT_SECRET',
-    'VH_SESSION_SECRET', 'VH_GPU_ACCESS_SECRET', 'VH_GPU_JWT_SECRET', 'VH_GPU_SERVER_AUTH_JWT_SECRET')
+$expectedKeys = @('VH_MONGO_PASSWORD', 'VH_MONGO_PASSWORD_URL', 'VH_MINIO_PASSWORD', 'REDIS_PASSWORD', 'VH_ADMIN_PASS',
+    'VH_JWT_SECRET', 'VH_SESSION_SECRET', 'VH_GPU_ACCESS_SECRET', 'VH_GPU_JWT_SECRET', 'VH_GPU_SERVER_AUTH_JWT_SECRET')
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function New-TempDir {
     $d = Join-Path $env:TEMP ("vh-secrets-" + [guid]::NewGuid())
@@ -77,6 +78,39 @@ Describe 'New-VisHeartSecrets.ps1' {
             Invoke-Secrets $d | Should Be 0
             [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) | Should Be ([Convert]::ToBase64String($before))
             (Get-Item $file).LastWriteTimeUtc | Should Be $stamp
+        } finally { Remove-Item -Recurse -Force $d }
+    }
+
+    It 'an older secrets.env without REDIS_PASSWORD gets only that key added' {
+        $d = New-TempDir
+        try {
+            $file = Join-Path $d 'secrets.env'
+            # As versions before REDIS_PASSWORD wrote it: every other key, then the comment lines.
+            $old = (@($expectedKeys | Where-Object { $_ -ne 'REDIS_PASSWORD' } | ForEach-Object { "$_=Older$($_ -replace '_', '')" }) +
+                '# VisHeart passwords and secrets for this PC, created by the installer. Keep this file private.') -join "`r`n"
+            $old += "`r`n"
+            [IO.File]::WriteAllText($file, $old, $utf8NoBom)
+            Invoke-Secrets $d | Should Be 0
+            $after = [IO.File]::ReadAllText($file)
+            $after.StartsWith($old) | Should Be $true
+            $after.Substring($old.Length) | Should Match '^REDIS_PASSWORD=[A-Za-z0-9]{32}\r\n$'
+            # The admin password did not change, so no new login note.
+            Test-Path (Join-Path $d 'FIRST-LOGIN.txt') | Should Be $false
+            # The next run finds the key and leaves the file alone.
+            Invoke-Secrets $d | Should Be 0
+            [IO.File]::ReadAllText($file) | Should Be $after
+        } finally { Remove-Item -Recurse -Force $d }
+    }
+
+    It 'the added key gets its own line when the older file has no final line break' {
+        $d = New-TempDir
+        try {
+            $file = Join-Path $d 'secrets.env'
+            [IO.File]::WriteAllText($file, 'VH_MONGO_PASSWORD=KeepMe', $utf8NoBom)
+            Invoke-Secrets $d | Should Be 0
+            $env = Read-EnvFile $file
+            $env['VH_MONGO_PASSWORD'] | Should Be 'KeepMe'
+            $env['REDIS_PASSWORD'] | Should Match '^[A-Za-z0-9]{32}$'
         } finally { Remove-Item -Recurse -Force $d }
     }
 

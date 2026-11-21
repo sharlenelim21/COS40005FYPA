@@ -17,6 +17,38 @@ function Get-ComposeConfig([string[]]$EnvFiles = @()) {
     return ($json | Out-String) | ConvertFrom-Json
 }
 
+function Get-ComposeWarnings {
+    # compose's stderr for a config run with no env file. Continue, not Stop: Windows PowerShell 5.1 turns each stderr
+    # line of a native command into an error record, and CI runs with $ErrorActionPreference = 'Stop'.
+    $ErrorActionPreference = 'Continue'
+    $emptyEnv = Join-Path $env:TEMP 'visheart-empty.env'
+    [IO.File]::WriteAllText($emptyEnv, '')
+    $out = & docker compose -f $composeFile --env-file $emptyEnv --profile gpu --profile cpu config --quiet 2>&1
+    return @($out | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { $_.ToString() })
+}
+
+function Get-Secrets($config) {
+    # Every Redis, MinIO and MongoDB password compose hands out, named by where it lands. An empty Redis password makes
+    # Redis exit on a bare --requirepass; MongoDB and MinIO cannot set up their root account without one.
+    $app = $config.services.'visheart-app'.environment
+    $redisCmd = @($config.services.redis.command)
+    $i = [array]::IndexOf($redisCmd, '--requirepass')
+    $redisCheck = @($config.services.redis.healthcheck.test)
+    $j = [array]::IndexOf($redisCheck, '-a')
+    $mongoCheck = $config.services.mongodb.healthcheck.test -join ' '
+    return [ordered]@{
+        'redis --requirepass'                = $(if ($i -ge 0 -and $i + 1 -lt $redisCmd.Count) { [string]$redisCmd[$i + 1] } else { '' })
+        'redis healthcheck -a'               = $(if ($j -ge 0 -and $j + 1 -lt $redisCheck.Count) { [string]$redisCheck[$j + 1] } else { '' })
+        'visheart-app REDIS_PASSWORD'        = [string]$app.REDIS_PASSWORD
+        'minio MINIO_ROOT_PASSWORD'          = [string]$config.services.minio.environment.MINIO_ROOT_PASSWORD
+        'visheart-app S3_SECRET_ACCESS_KEY'  = [string]$app.S3_SECRET_ACCESS_KEY
+        'visheart-app AWS_SECRET_ACCESS_KEY' = [string]$app.AWS_SECRET_ACCESS_KEY
+        'mongodb MONGO_INITDB_ROOT_PASSWORD' = [string]$config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD
+        'mongodb healthcheck -p'             = $(if ($mongoCheck -match '-p "([^"]*)"') { $Matches[1] } else { '' })
+        'visheart-app MONGODB_URI password'  = $(if ([string]$app.MONGODB_URI -match '^mongodb://[^:/@]*:([^@]*)@') { $Matches[1] } else { '' })
+    }
+}
+
 function Get-AllPorts($config) {
     foreach ($svc in $config.services.PSObject.Properties) {
         foreach ($p in @($svc.Value.ports)) {
@@ -32,14 +64,42 @@ Describe 'docker-compose.yml defaults (no env file)' {
         $app = $config.services.'visheart-app'
         $p3000 = @($app.ports | Where-Object { $_.target -eq 3000 })[0]
         $p3000 | Should Not BeNullOrEmpty
-        # No host_ip at all: Docker's default (all IPv4 and IPv6 addresses), exactly as before.
-        @(Get-AllPorts $config | Where-Object { $_.Port.host_ip }).Count | Should Be 0
+        # Frontend 3000 / backend 5000 keep Docker's default (no host_ip: all addresses), as before.
+        # MongoDB, Redis, MinIO and GPU are loopback-only without VH_BIND, so a plain
+        # `docker compose up` never exposes them to the LAN.
+        foreach ($entry in @(Get-AllPorts $config)) {
+            $want = if ($entry.Service -eq 'visheart-app') { '' } else { '127.0.0.1' }
+            "$($entry.Service):$($entry.Port.target)=$($entry.Port.host_ip)" |
+                Should Be "$($entry.Service):$($entry.Port.target)=$want"
+        }
         $app.image | Should Be 'sharlene21/visheart-local:1.5.0'
         $config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD | Should Be 'P@ssw0rd123!'
         $app.environment.MONGODB_URI | Should Match ([regex]::Escape('admin:P%40ssw0rd123%21@'))
         $app.environment.ADMIN_PASS | Should Be 'P@ssw0rd123!'
-        $app.environment.S3_ANONYMOUS_READ | Should Be 'download'
+        # The bucket is private in every copy (F1); no setting may bring anonymous read back.
+        @($app.environment.PSObject.Properties.Name) -contains 'S3_ANONYMOUS_READ' | Should Be $false
         $config.services.Keys -contains 'minio-setup' | Should Be $false
+    }
+
+    It 'no Redis, MinIO or MongoDB secret resolves to empty' {
+        $secrets = Get-Secrets $config
+        foreach ($name in $secrets.Keys) { "$name=[$($secrets[$name])]" | Should Not Be "$name=[]" }
+        # Each service and its clients must also agree, or the service starts but the backend cannot sign in.
+        $redis = $secrets['redis --requirepass']
+        $secrets['redis healthcheck -a'] | Should Be $redis
+        $secrets['visheart-app REDIS_PASSWORD'] | Should Be $redis
+        $minio = $secrets['minio MINIO_ROOT_PASSWORD']
+        $secrets['visheart-app S3_SECRET_ACCESS_KEY'] | Should Be $minio
+        $secrets['visheart-app AWS_SECRET_ACCESS_KEY'] | Should Be $minio
+        $mongo = $secrets['mongodb MONGO_INITDB_ROOT_PASSWORD']
+        $secrets['mongodb healthcheck -p'] | Should Be $mongo
+        [uri]::UnescapeDataString($secrets['visheart-app MONGODB_URI password']) | Should Be $mongo
+    }
+
+    It 'every variable it uses is set or has a default' {
+        # For an unset ${VAR} compose only warns and substitutes an empty string, which is how an empty Redis
+        # password passed CI unnoticed.
+        @(Get-ComposeWarnings | Where-Object { $_ -match 'variable is not set' }) -join "`n" | Should Be ''
     }
 
     It 'no personal mail in repository' {
@@ -75,7 +135,6 @@ Describe 'docker-compose.yml with the installed env file' {
         $config.services.'gpu-cpu'.image | Should Be $fixture['VH_GPU_IMAGE']
         $config.services.'visheart-app'.image | Should Be $fixture['VH_APP_IMAGE']
         $config.services.'visheart-app'.environment.ADMIN_PASS | Should Be $fixture['VH_ADMIN_PASS']
-        $config.services.'visheart-app'.environment.S3_ANONYMOUS_READ | Should Be 'none'
     }
 
     It 'installed env replaces every secret' {
@@ -95,7 +154,11 @@ Describe 'docker-compose.yml with the installed env file' {
         ($config.services.mongodb.healthcheck.test -join ' ') | Should Match $fixture['VH_MONGO_PASSWORD']
         $config.services.minio.environment.MINIO_ROOT_PASSWORD | Should Be $fixture['VH_MINIO_PASSWORD']
         $config.services.minio.image | Should Be $fixture['VH_MINIO_IMAGE']
-        $gpu = $config.services.'gpu-nvidia'.environment
+        $secrets = Get-Secrets $config
+        $secrets['redis --requirepass'] | Should Be $fixture['REDIS_PASSWORD']
+        $secrets['redis healthcheck -a'] | Should Be $fixture['REDIS_PASSWORD']
+        $app.REDIS_PASSWORD | Should Be $fixture['REDIS_PASSWORD']
+        $gpu =$config.services.'gpu-nvidia'.environment
         $gpu.GPU_ACCESS_SECRET | Should Be $fixture['VH_GPU_ACCESS_SECRET']
         $gpu.JWT_SECRET | Should Be $fixture['VH_JWT_SECRET']
         $config.services.'gpu-cpu'.environment.GPU_ACCESS_SECRET | Should Be $fixture['VH_GPU_ACCESS_SECRET']

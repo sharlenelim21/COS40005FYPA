@@ -43,7 +43,10 @@ const configureLocalStrategy = () => {
             `username=${username} ` +
             `timestamp=${new Date().toISOString()}`
           );
-          return done(null, false, { message: result.message });
+          // `locked` is the lockout itself, so the login route never has to guess it from the message. (Passport hands
+          // this object to the route unchanged; its IVerifyOptions type only names `message`.)
+          const info = { message: result.message, locked: result.locked === true };
+          return done(null, false, info);
         }
 
         if (result.success && result.user) {

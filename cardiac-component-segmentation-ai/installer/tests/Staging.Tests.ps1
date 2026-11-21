@@ -236,11 +236,11 @@ Describe 'Write-ReleaseEnv' {
         $map['VH_SMTP_USER'] | Should Be 'support@example.test'
         $map['VH_SMTP_PASS'] | Should Be 'abcd efgh ijkl mnop'
         $map['VH_BIND'] | Should Be '127.0.0.1'
-        $map['VH_MINIO_ANON'] | Should Be 'none'
+        $map.ContainsKey('VH_MINIO_ANON') | Should Be $false     # the bucket is private in every copy (F1)
         $map['COMPOSE_PROJECT_NAME'] | Should Be 'visheart'
         $map['VH_MONGO_HOST_PORT'] | Should Be '0'
         $map['VH_REDIS_HOST_PORT'] | Should Be '0'
-        $map.Count | Should Be 11
+        $map.Count | Should Be 10
     }
 
     It 'release env names the installed version and where to check for a newer one' {

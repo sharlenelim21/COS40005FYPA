@@ -105,7 +105,22 @@ describe('Extend Training export helpers (plan WS13 R1)', () => {
     const recounted = withTrainingPixelCounts(edited, ai, 8);
     expect(recounted.editTracking.slices[0]).toMatchObject({ pixelsChanged: 3, pixelsChangedPerClass: 5 });
     expect(edited.editTracking.slices[0].pixelsChanged).toBe(5);
-    expect(withTrainingPixelCounts(edited, undefined, 8)).toBe(edited);  // no AI result: the saved counts stand
+    // No AI result: no slice is measured, and none trains (option C); the saved counts are never used instead.
+    const unmeasured = withTrainingPixelCounts(edited, undefined, 8);
+    expect(unmeasured.editTracking.slices[0]).toMatchObject({ aiBaseline: false, pixelsChanged: 5 });
+    expect(unmeasured.editTracking.slices[0]).not.toHaveProperty('editShare');
+    expect(selectTrainingSlices([unmeasured], 1).skipped).toEqual({ slice_no_ai_baseline: 1 });
+  });
+
+  it('a slice the AI result does not hold is skipped, not compared with an empty mask', () => {
+    const edited = { ...mask('m-unet', 'unet', '2026-09-26T05:00:00Z', [[0, 3, 5, ['rv']], [0, 4, 5, ['rv']]]),
+                     frames: [{ frameindex: 0, slices: [3, 4].map(sliceindex =>
+                       ({ sliceindex, segmentationmasks: [{ class: 'rv', segmentationmaskcontents: '0 8' }] })) }] };
+    // The AI result holds slice 3 (with nothing found) and lacks slice 4.
+    const ai = { _id: 'ai-m-unet', frames: [{ frameindex: 0, slices: [{ sliceindex: 3, segmentationmasks: [] }] }] };
+    const [held, lacking] = withTrainingPixelCounts(edited, ai, 8).editTracking.slices;
+    expect(held).toMatchObject({ aiBaseline: true, pixelsChanged: 8, structureChanged: true });  // an empty AI slice is real
+    expect(lacking).toMatchObject({ aiBaseline: false });
   });
 
   it('measures an edit as a share of the heart in the AI result and the correction together (the 2% rule)', () => {

@@ -6,7 +6,9 @@
  * D5 picks between two models' corrections of the same slice, so a user who clears one model's case can still train
  * the other.
  */
-import { SelectedMask, SliceConflict, sliceKey, TrackedMask, TrackedSlice, TrainingModel } from './training_selection';
+import {
+    SelectedMask, selectTrainingSlices, SliceConflict, sliceKey, TrackedMask, TrackedSlice, TrainingModel,
+} from './training_selection';
 
 export const MASK_ID = /^[0-9a-f]{24}$/;
 export const MAX_SELECTION = 500;
@@ -104,28 +106,34 @@ export function changedTrainingPixels(aiEntries: MaskEntry[] | undefined, edited
     return editSize(aiEntries, editedEntries, planeSize).changed;
 }
 
-interface FramedMask {
+export interface FramedMask {
     frames?: { frameindex?: unknown; slices?: { sliceindex?: unknown; segmentationmasks?: MaskEntry[] }[] }[];
 }
 
-function entriesAt(mask: FramedMask, frameindex: number, sliceindex: number): MaskEntry[] | undefined {
+/** The saved slice at frame and slice, or undefined when the mask does not hold it (not the same as holding nothing). */
+function sliceAt(mask: FramedMask, frameindex: number, sliceindex: number) {
     return mask.frames?.find(frame => Number(frame.frameindex) === frameindex)
-        ?.slices?.find(slice => Number(slice.sliceindex) === sliceindex)?.segmentationmasks;
+        ?.slices?.find(slice => Number(slice.sliceindex) === sliceindex);
 }
 
 /**
  * A copy of `mask` whose tracked slices count the pixels whose training label changed, compared with its AI result,
  * and the share of the heart they make up (editShare, heartPixels, structureChanged), so the 2% rule, the page and the
- * builder all use the pixels that train. The saved per-class count is kept as pixelsChangedPerClass. Without the AI
- * result the saved counts stand, and `mask` is returned as it is (the 20-pixel fallback then applies).
+ * builder all use the pixels that train. The saved per-class count is kept as pixelsChangedPerClass. A slice the AI
+ * result does not hold is marked `aiBaseline: false` and is not measured: a missing AI result is never read as an
+ * empty one, which would count every corrected pixel as changed. Without the AI result every slice is marked so, and
+ * none trains (training_selection.ts editTooSmall).
  */
 export function withTrainingPixelCounts<M extends TrackedMask & FramedMask>(mask: M, aiMask: FramedMask | undefined,
                                                                          planeSize: number): M {
-    if (!aiMask || !mask.editTracking?.slices) return mask;
+    if (!mask.editTracking?.slices) return mask;
     const slices = mask.editTracking.slices.map((slice: TrackedSlice) => {
         const frameindex = Number(slice.frameindex), sliceindex = Number(slice.sliceindex);
-        const size = editSize(entriesAt(aiMask, frameindex, sliceindex), entriesAt(mask, frameindex, sliceindex), planeSize);
-        return { ...slice, pixelsChangedPerClass: slice.pixelsChanged, pixelsChanged: size.changed,
+        const aiSlice = aiMask ? sliceAt(aiMask, frameindex, sliceindex) : undefined;
+        if (!aiSlice) return { ...slice, aiBaseline: false };
+        const size = editSize(aiSlice.segmentationmasks ?? [], sliceAt(mask, frameindex, sliceindex)?.segmentationmasks,
+                              planeSize);
+        return { ...slice, aiBaseline: true, pixelsChangedPerClass: slice.pixelsChanged, pixelsChanged: size.changed,
                  heartPixels: size.heart, editShare: size.share, structureChanged: size.structureChanged };
     });
     return { ...mask, editTracking: { ...mask.editTracking, slices } };
@@ -191,4 +199,37 @@ export function describeCase<M extends TrackedMask>(
         shared, frozen,
         ownerId: project.userid ? String(project.userid) : null, ownerName, scanId: scanIdOf(project),
     };
+}
+
+/** One mask the training job counts (pipeline.py: projects by scan, slices by qualifyingSlices). */
+export interface DryRunCandidate {
+    projectId: string;
+    scanId: string;
+    model: TrainingModel;
+    maskId: string;
+    editedSliceCount: number;
+    qualifyingSlices: number;
+}
+
+/**
+ * What the dry run lists for one project: a case per mask from its own qualifying slices (the Prepare tab's rows,
+ * before D5 picks between models), and the candidates the training job counts, none for a frozen test patient.
+ * `projectMasks` are the eligible, recounted ones (training_eligibility.ts eligibleCorrections), `selection` the
+ * project's selectTrainingSlices result.
+ */
+export function dryRunEntries<M extends TrackedMask>(
+    project: Parameters<typeof describeCase>[0], projectMasks: M[],
+    selection: { selected: SelectedMask<M>[]; conflicts: SliceConflict[] },
+    options: { minPixels: number; minShare?: number; frozen?: FrozenMatch | null; ownerName?: string | null },
+): { cases: ExportCase[]; candidates: DryRunCandidate[] } {
+    const cases: ExportCase[] = [];
+    for (const mask of projectMasks) {
+        const own = selectTrainingSlices([mask], options.minPixels, { minShare: options.minShare }).selected[0];
+        if (own) cases.push(describeCase(project, own, selection.conflicts, options.frozen ?? null, options.ownerName ?? null));
+    }
+    const candidates = options.frozen ? [] : selection.selected.map(entry => ({
+        projectId: String(project._id), scanId: scanIdOf(project), model: entry.model, maskId: String(entry.mask._id),
+        editedSliceCount: Number(entry.mask.editTracking?.editedSliceCount), qualifyingSlices: entry.slices.length,
+    }));
+    return { cases, candidates };
 }
