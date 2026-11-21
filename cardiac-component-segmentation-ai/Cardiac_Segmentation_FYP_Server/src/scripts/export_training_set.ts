@@ -11,10 +11,12 @@ import { projectSegmentationMaskModel, projectModel, userModel } from '../servic
 import { extractS3KeyFromUrl, downloadFromS3 } from '../services/s3_handler';
 import { runEditTrackingScript } from '../services/edit_tracking';
 import { FALLBACK_MIN_PIXELS, MIN_EDIT_SHARE, selectTrainingSlices, sliceKey, TRAINING_MODELS } from '../services/training_selection';
-import { describeCase, FrozenMatch, maskQuery, parseSelection, scanIdOf, withTrainingPixelCounts } from '../services/training_export';
+import { dryRunEntries, FrozenMatch, maskQuery, parseSelection, scanIdOf } from '../services/training_export';
+import { AiResult, caseFacts, eligibleCorrections } from '../services/training_eligibility';
 
 // Run inside the app container, which already has the database and S3 settings. The container does not
-// hold visheart-retraining/, so copy build_training_volumes.py and common.py in and pass --builder.
+// hold visheart-retraining/, so copy build_training_volumes.py, common.py and eligibility.py in (pipeline.py
+// BUILDER_FILES) and pass --builder.
 // UNet and MedSAM corrections both count; training_selection.ts decides which slices. When both models
 // corrected the same slice differently, the dry run writes conflicts.json: set each "use", then pass the
 // file back with --choices. A real export needs --frozen-slices (frozen_guard.py's index, copied in with the
@@ -25,8 +27,10 @@ import { describeCase, FrozenMatch, maskQuery, parseSelection, scanIdOf, withTra
 // frozen test patient ("frozen"), which never count as candidates. A slice's changed pixels are the pixels whose
 // training label changed, recounted against the mask's AI result; edit tracking's own count is per class, so a
 // pixel moved between two structures would count twice. A slice counts when those pixels are at least --min-share
-// (default 0.02) of the heart in the AI result and the correction together, or a structure was added or removed;
-// --min-pixels (default 20) applies only to a mask whose AI result is missing (training_selection.ts).
+// (default 0.02) of the heart in the AI result and the correction together, or a structure was added or removed.
+// Which cases may train at all is training_eligibility.ts (option C, 2026-11-22): never a template project (except in
+// --only-holdout), never a case without its own model's AI result, and never a slice that AI result does not hold.
+// --min-pixels (default 20) is kept for the builder's old payloads; no case without an AI result reaches it.
 // The same scan uploaded by two users (scanIdOf: the same file hash) counts as one project, and only the first of
 // its projects is exported.
 const argValue = (name: string, fallback?: string) => {
@@ -93,7 +97,8 @@ async function main() {
     const aiMasks = aiMaskIds.length > 0
         ? await projectSegmentationMaskModel.find({ _id: { $in: aiMaskIds } }).lean() as any[]
         : [];
-    const aiById = new Map(aiMasks.map(mask => [String(mask._id), mask]));
+    const aiById = new Map<string, AiResult>(aiMasks.map(mask => [String(mask._id), mask]));
+    const eligibility = { heldOut: onlyHoldout };
 
     const skipped: Record<string, number> = {};
     const skip = (reason: string, n = 1) => { skipped[reason] = (skipped[reason] ?? 0) + n; };
@@ -145,11 +150,13 @@ async function main() {
         if (!/\.nii(\.gz)?$/i.test(String(project.originalfilename || project.filename || ''))) { skip('not_nifti'); continue; }
         if (!String(project.originalfilepath || '').startsWith('https://')) { skip('no_s3_volume'); continue; }
         const plane = { height: dims.height, width: dims.width };
-        const projectMasks = savedMasks.map(mask => {
-            const ai = aiById.get(String(mask.editTracking?.aiMaskId));
-            if (!ai) console.warn(`${projectId} (${mask.segmentationModel}): AI result not found; its saved pixel counts are used`);
-            return withTrainingPixelCounts(mask, ai, plane.height * plane.width);
-        });
+        const { masks: projectMasks, excluded } = eligibleCorrections(project, savedMasks, aiById,
+                                                                      plane.height * plane.width, eligibility);
+        for (const [reason, n] of Object.entries(excluded)) {
+            skip(reason, n!);
+            if (reason === 'no_ai_result') console.warn(`${projectId}: ${n} case(s) left out: their AI result was not found`);
+        }
+        if (projectMasks.length === 0) continue;
 
         const choices = choicesByProject.get(projectId);
         let selection = selectTrainingSlices(projectMasks, minPixels, { choices, minShare });
@@ -184,19 +191,15 @@ async function main() {
                     console.warn(`${projectId}: the frozen-set check failed: ${(err as Error).message}`);
                 }
             }
-            for (const mask of projectMasks) {
-                const own = selectTrainingSlices([mask], minPixels, { minShare }).selected[0];
-                if (own) caseRows.push(describeCase(project, own, selection.conflicts, frozen, await ownerName(project.userid)));
-            }
+            const entries = dryRunEntries(project, projectMasks, selection,
+                                          { minPixels, minShare, frozen, ownerName: await ownerName(project.userid) });
+            caseRows.push(...entries.cases);
             if (frozen) {
                 skip('frozen_test_patient');
                 frozenExcluded.push({ projectId, frozen_match: frozen });
                 continue;
             }
-            for (const entry of selection.selected) {
-                candidates.push({ projectId, scanId: scanIdOf(project), model: entry.model, maskId: String(entry.mask._id),
-                                  editedSliceCount: entry.mask.editTracking.editedSliceCount, qualifyingSlices: entry.slices.length });
-            }
+            candidates.push(...entries.candidates);
             continue;
         }
         if (limit && exportedProjects >= limit) break;
@@ -215,6 +218,8 @@ async function main() {
                     const out = await runBuilder(python, builder, {
                         source_nifti: local, case_id: `p${projectId}_${entry.model}`, out_dir: outDir, plane, min_pixels: minPixels, min_share: minShare,
                         tracked_slices: entry.slices, frames: entry.mask.frames, frozen_slices: frozenSlices,
+                        // The builder refuses a case these facts rule out (eligibility.py), as this export does.
+                        case: caseFacts(project, entry.mask, aiById.get(String(entry.mask.editTracking?.aiMaskId)), eligibility),
                     });
                     if (out.frozen_match) {
                         skip('frozen_test_patient');

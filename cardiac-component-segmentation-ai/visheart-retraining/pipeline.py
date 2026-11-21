@@ -29,6 +29,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import versions  # noqa: E402
 from common import UNET_ROOT, sha256_file  # noqa: E402
+# The gate's numbers and the eligibility rule are eligibility.py's, shared with the builder; imported here by name so
+# pipeline.MIN_PROJECTS, pipeline.too_little and pipeline.qualifying stay what worker.py and the tests use.
+from eligibility import FEW_SLICES, MIN_PROJECTS, RECOMMENDED_PROJECTS, qualifying, too_little  # noqa: E402,F401
 from evaluate import atomic_write_json  # noqa: E402
 from frozen_guard import DEFAULT_INDEX  # noqa: E402
 from jobs import NO_WINDOW, Step, StepFailed, now  # noqa: E402
@@ -61,9 +64,6 @@ def _default_docker_cmd() -> list:
 
 
 TRAIN_EPOCHS = 1  # train_candidate.py's default for the whole recipe, passed explicitly so the page's count is true
-MIN_PROJECTS = 5           # below this, training does not start; a project counts only with a qualifying slice
-RECOMMENDED_PROJECTS = 7   # below this, the page warns
-FEW_SLICES = 10            # below this, the page warns: each correction is repeated more often (about 147x at 5)
 STEP_TITLES = {"prepare": "Preparing data", "train": "Training", "evaluate": "Comparing with the current model",
                "examples": "Preparing example scans"}
 # The Results tab can ask for a version's example scans (worker.py compare_examples) while its training is still
@@ -71,16 +71,7 @@ STEP_TITLES = {"prepare": "Preparing data", "train": "Training", "evaluate": "Co
 EXAMPLES_LOCK = threading.Lock()
 NOTHING_QUALIFIES = "No corrected slices qualify for training yet. Correct a segmentation, save it, then train again."
 NOTHING_CHOSEN = "None of the chosen cases qualifies for training any more. Check the corrections again, then choose."
-
-
-def too_little(projects, slices):
-    """The refusal when a training set has too few projects, or None. The slice count is only reported."""
-    if projects >= MIN_PROJECTS:
-        return None
-    return (f"Too little data to train: {projects} project(s) and {slices} slice(s) qualify. Training needs at least "
-            f"{MIN_PROJECTS} corrected projects ({RECOMMENDED_PROJECTS} are recommended); more patients help more than "
-            "more slices.")
-BUILDER_FILES = ("build_training_volumes.py", "common.py", "frozen_guard.py")
+BUILDER_FILES = ("build_training_volumes.py", "common.py", "eligibility.py", "frozen_guard.py")
 
 
 @dataclass
@@ -142,10 +133,6 @@ def run_quiet(command, timeout=170):
     if result.returncode != 0:
         raise StepFailed(f"{' '.join(command[:3])} failed: {(result.stderr or result.stdout).strip()[-300:]}")
     return result.stdout
-
-
-def qualifying(dry):
-    return sum(int(candidate["qualifyingSlices"]) for candidate in dry["candidates"])
 
 
 def export_command(config, name):
