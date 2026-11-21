@@ -264,13 +264,15 @@ Describe 'Remove-OtherCopyContainers' {
                 $removed = @(Remove-OtherCopyContainers $dir)
                 ($removed -join ',') | Should Be 'visheart-local,visheart-minio'
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -eq 'rm -f visheart-local' }
+                    ($Arguments -join ' ') -eq 'rm -f -v visheart-local' }
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -eq 'rm -f visheart-minio' }
+                    ($Arguments -join ' ') -eq 'rm -f -v visheart-minio' }
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -eq 'rm -f visheart-redis' }
+                    ($Arguments -join ' ') -eq 'rm -f -v visheart-redis' }
+                # The other copy's data stays: no volume command. ("rm -v" removes only a container's unnamed volumes,
+                # never named ones such as its database.)
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -match '\bvolume\b|-v\b' }
+                    ($Arguments -join ' ') -match '\bvolume\b|down' }
                 # Windows PowerShell 5.1 strips double quotes inside native arguments, so docker got a broken
                 # --format template ('function "com" not defined'; found testing the installer, 2026-11-18).
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
@@ -462,7 +464,14 @@ Describe 'Remove-VisHeartDocker' {
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
                 ($Arguments -join ' ') -eq "compose -f $compose --env-file $(Join-Path $dir 'release.env') --profile cpu --profile gpu down --remove-orphans" }
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
-                ($Arguments -join ' ') -match ' -v|--rmi|^rm ' }
+                ($Arguments -join ' ') -match 'down .*-v|--rmi|image rm|^rm ' }
+        }
+        It 'first removes the containers with their unnamed volumes (never the named data volumes)' {
+            # 2026-11-21, test desktop: every start left 3 unnamed volumes (the AI service's checkpoints mount, MinIO's
+            # /certs, the key-file helper's /data/db), because "down" without -v keeps them. "rm -v" removes only those.
+            Remove-VisHeartDocker $dir | Should Be 0
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -eq "compose -f $compose --env-file $(Join-Path $dir 'release.env') --profile cpu --profile gpu rm -s -f -v" }
         }
     }
 
@@ -477,7 +486,13 @@ Describe 'Remove-VisHeartDocker' {
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
                 ($Arguments -join ' ') -eq 'ps -aq --filter name=visheart-' }
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
-                ($Arguments -join ' ') -eq 'rm -f abc123 def456' }
+                ($Arguments -join ' ') -eq 'rm -f -v abc123 def456' }
+        }
+        It 'also removes the image the GPU check downloaded, without forcing it' {
+            # 346 MB that start.ps1's GPU check pulled stayed after "delete everything" (2026-11-21).
+            Remove-VisHeartDocker $dir -DeleteData | Out-Null
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -eq ('image rm ' + (Get-GpuCheckImage)) }
         }
     }
 

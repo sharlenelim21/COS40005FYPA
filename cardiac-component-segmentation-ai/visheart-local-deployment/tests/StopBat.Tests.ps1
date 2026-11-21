@@ -141,3 +141,19 @@ Describe 'top-level start.bat' {
         } finally { Remove-Item -Recurse -Force $root }
     }
 }
+
+Describe 'stop.bat removes the unnamed volumes of its containers' {
+    It 'removes the containers with "rm -s -f -v" for both profiles before "down", and never "down -v"' {
+        # 2026-11-21, test desktop: every start left 3 unnamed volumes, because "down" without -v keeps them.
+        $root = New-StopTree
+        try {
+            $r = Invoke-StopBat $root '--no-pause'
+            $calls = @($r.Calls)
+            $rm = [array]::FindIndex([string[]]$calls, [Predicate[string]]{ param($c) $c -like 'docker compose*--profile cpu --profile gpu rm -s -f -v*' })
+            $down = [array]::FindIndex([string[]]$calls, [Predicate[string]]{ param($c) $c -like 'docker compose*down*' })
+            $rm | Should Not Be -1
+            $rm -lt $down | Should Be $true
+            @($calls | Where-Object { $_ -match 'down.* -v\b' }).Count | Should Be 0
+        } finally { Remove-Item -Recurse -Force $root }
+    }
+}

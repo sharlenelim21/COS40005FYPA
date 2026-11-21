@@ -24,7 +24,7 @@ function Test-DockerGpuAvailable {
             Write-Log "Detected 'nvidia' runtime in 'docker info'. Will perform container-level verification to confirm GPU usability."
             Write-Log "Attempting container-level GPU check (this may pull a lightweight CUDA base image)."
 
-            docker run --rm --gpus all "nvidia/cuda:12.3.0-base-ubuntu22.04" nvidia-smi 2>$null | Out-Null
+            docker run --rm --gpus all (Get-GpuCheckImage) nvidia-smi 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 Write-Log "Container-level GPU check passed."
                 return $true
@@ -182,7 +182,7 @@ try {
     $stale = docker ps -aq --filter "name=$oppositeContainer" 2>$null
     if ($stale) {
         Write-Log "Removing stale '$oppositeContainer' container to avoid port 8001 conflicts."
-        docker rm -f $stale 2>$null | Out-Null
+        docker rm -f -v $stale 2>$null | Out-Null
     }
 
     $pullExit = Invoke-FirstPull (@('compose') + $envArgs + @('--profile', $profile)) @('visheart-app', $inferenceService)
@@ -206,7 +206,7 @@ try {
             $staleGpu = docker ps -aq --filter "name=visheart-gpu-nvidia" 2>$null
             if ($staleGpu) {
                 Write-Log "Removing partially-created 'visheart-gpu-nvidia' container."
-                docker rm -f $staleGpu 2>$null | Out-Null
+                docker rm -f -v $staleGpu 2>$null | Out-Null
             }
 
             Write-Log "Running: docker compose --profile cpu up -d visheart-app $inferenceService"

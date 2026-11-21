@@ -36,6 +36,10 @@ if %errorlevel% equ 0 (
     set COMPOSE_PROFILES=gpu
 )
 
+rem Containers first, with their unnamed volumes (the AI service's checkpoints mount, MinIO's /certs, the key-file
+rem helper's /data/db): "down" keeps those, so every start used to leave 3 behind (2026-11-21). Named volumes, the
+rem data, are never removed by this.
+docker compose%ENV_ARGS% --profile cpu --profile gpu rm -s -f -v
 docker compose%ENV_ARGS% --profile %COMPOSE_PROFILES% down
 docker compose%ENV_ARGS% down --remove-orphans
 

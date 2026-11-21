@@ -134,9 +134,15 @@ function Remove-OtherCopyContainers {
         $owner = ''
         if ($labels -match '(?:^|,)com\.docker\.compose\.project=([^,]*)') { $owner = $Matches[1] }
         if (-not $name -or $owner -eq $project) { continue }
-        if ((Invoke-Docker @('rm', '-f', $name)) -eq 0) { $removed += $name }
+        # -v: with its unnamed volumes only; named ones (that copy's data) stay.
+        if ((Invoke-Docker @('rm', '-f', '-v', $name)) -eq 0) { $removed += $name }
     }
     return $removed
+}
+
+function Get-GpuCheckImage {
+    # The small CUDA image start.ps1 runs to see whether an NVIDIA GPU is usable; the uninstaller removes it.
+    return 'nvidia/cuda:12.3.0-base-ubuntu22.04'
 }
 
 function Get-RunningInferenceContainer {
@@ -349,13 +355,22 @@ function Remove-VisHeartDocker {
     # Returns 0 when done, 2 when Docker could not be started, otherwise compose's exit code (data not removed).
     param([string]$DeploymentDir, [switch]$DeleteData)
     if (-not (Wait-DockerReady).Ready) { return 2 }
-    $arguments = @('compose', '-f', (Join-Path $DeploymentDir 'docker-compose.yml')) + @(Get-ComposeEnvArgs $DeploymentDir) +
-        @('--profile', 'cpu', '--profile', 'gpu', 'down', '--remove-orphans')
+    $compose = @('compose', '-f', (Join-Path $DeploymentDir 'docker-compose.yml')) + @(Get-ComposeEnvArgs $DeploymentDir) +
+        @('--profile', 'cpu', '--profile', 'gpu')
+    # Containers first, with their unnamed volumes (the AI service's checkpoints mount, MinIO's /certs, the key-file
+    # helper's /data/db): "down" without -v keeps those, so every start used to leave 3 behind (2026-11-21). Named
+    # volumes, the data, are never removed by this.
+    Invoke-Docker ($compose + @('rm', '-s', '-f', '-v')) | Out-Null
+    $arguments = $compose + @('down', '--remove-orphans')
     if ($DeleteData) { $arguments += @('-v', '--rmi', 'all') }
     $code = Invoke-Docker $arguments
-    if ($DeleteData -and (Invoke-Docker @('ps', '-aq', '--filter', 'name=visheart-')) -eq 0) {
-        $left = @(Get-LastDockerOutput | Where-Object { $_ })
-        if ($left.Count -gt 0) { Invoke-Docker (@('rm', '-f') + $left) | Out-Null }
+    if ($DeleteData) {
+        # The image start.ps1's GPU check downloads (346 MB); not forced, so an image another program uses stays.
+        Invoke-Docker @('image', 'rm', (Get-GpuCheckImage)) | Out-Null
+        if ((Invoke-Docker @('ps', '-aq', '--filter', 'name=visheart-')) -eq 0) {
+            $left = @(Get-LastDockerOutput | Where-Object { $_ })
+            if ($left.Count -gt 0) { Invoke-Docker (@('rm', '-f', '-v') + $left) | Out-Null }
+        }
     }
     return $code
 }
@@ -424,4 +439,4 @@ Export-ModuleMember -Function Get-DockerDesktopExe, Test-UrlAnswers, Test-VisHea
     Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
     Remove-VisHeartDocker, Initialize-BackendFolders, Remove-OldVisHeartImages, Test-DockerUsesWsl, Get-VirtualMachinePlatformState,
     Test-RestartPending, Get-WindowsFeatureProblem, Show-VisHeartQuestion, Enable-VirtualMachinePlatform, Invoke-WindowsRestart,
-    Resolve-WindowsFeatureProblem, Get-RunningInferenceContainer
+    Resolve-WindowsFeatureProblem, Get-RunningInferenceContainer, Get-GpuCheckImage
