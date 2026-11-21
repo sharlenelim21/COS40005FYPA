@@ -8,7 +8,7 @@ on that PC, and nothing is reachable from other computers. Patient data never le
 - **Projects:** upload cardiac MRI scans (NIfTI) per patient, or try the built-in sample data.
 - **AI segmentation:** outlines the heart's chambers on every slice with UNet (CPU or NVIDIA GPU) or MedSAM (GPU
   only). Results can be reviewed and corrected.
-- **Landmark detection:** finds the anatomical landmarks used for the analyses below.
+- **Landmark detection:** marks anatomical landmarks on the scans.
 - **3D and 4D reconstruction:** builds a 3D model of the heart and its motion over the heartbeat.
 - **LV and RV analysis:** bullseye plots of the left ventricle (17 segments) and right ventricle (9 segments,
   research), with reports.
@@ -18,26 +18,31 @@ on that PC, and nothing is reachable from other computers. Patient data never le
 
 ## Install and use (for users)
 
-**Download:** [VisHeart on Google Drive](PUT-THE-GOOGLE-DRIVE-LINK-HERE)
+**Download:** [VisHeart on Google Drive](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv?usp=sharing)
 
-You need Windows 10 (2004 or later) or Windows 11, 64-bit, at least 40 GB free disk space, and administrator rights
-to install. An NVIDIA graphics card is optional (without one, VisHeart is slower and MedSAM is not available).
+You need Windows 10 (version 2004 or later) or Windows 11, 64-bit, administrator rights to install, at least 40 GB
+of free disk space for VisHeart, and about 6 GB more while installing (for the download). An NVIDIA graphics card is
+optional: without one, VisHeart is slower and the MedSAM tool is not available.
 
-1. Download `VisHeart-Full-<version>.zip` (one file, about 2.8 GB). Google Drive warns it cannot scan large files;
-   click **Download anyway**.
-2. Right-click the zip, choose **Extract All**, then run `VisHeart-Full-<version>.exe` from the extracted folder.
-   Do not run it from inside the zip.
-3. Choose the install folder (default `C:\VisHeart`). The installer installs Docker Desktop, WSL2 and Python if they
+1. Open the Google Drive folder, click the newest `VisHeart-Full-<version>.zip` (one file, about 2.8 GB) and click
+   **Download**. Google Drive says it cannot scan large files for viruses; click **Download anyway**.
+2. In your Downloads folder, right-click the zip and choose **Extract All**, then **Extract**.
+3. In the extracted folder, double-click `VisHeart-Full-<version>.exe`. (If you open the `.exe` without extracting
+   first, setup asks for "Disk 2". Cancel and do step 2.)
+4. Choose the install folder (default `C:\VisHeart`). The installer installs Docker Desktop, WSL2 and Python if they
    are missing.
-4. At the end it shows your **admin login**. The same login is saved in `FIRST-LOGIN.txt` in the install folder.
-   Restart Windows if asked, then open Docker Desktop once and accept its terms.
-5. Double-click the **VisHeart** heart icon on the desktop. It starts everything and opens http://localhost:3000.
-   The first start downloads about 25 GB and can take an hour; later starts take about a minute.
-6. After your first login, change the admin password in **Profile Settings**.
+5. At the end it shows your **admin login** and saves it as `FIRST-LOGIN.txt` in the install folder. Click
+   **Finish**. Restart Windows if the installer asks you to.
+6. Double-click the **VisHeart** heart icon on the desktop. It starts Docker Desktop and VisHeart, then opens
+   http://localhost:3000. The first time Docker Desktop opens, accept its terms. The first start downloads about 25 GB
+   and can take an hour; later starts take about a minute.
+7. Sign in, then change the admin password in **Profile Settings**. After that, the password in `FIRST-LOGIN.txt`
+   no longer works.
 
-**Stop:** Start menu > VisHeart > **Stop VisHeart**. **Update:** download the newest `VisHeart-Update-<version>.zip`
-and run it the same way; your data is kept. VisHeart shows a popup when a new version is published.
-**Uninstall:** Windows Settings > Apps > Installed apps > VisHeart.
+- **Stop:** Start menu > VisHeart > **Stop VisHeart**.
+- **Update:** VisHeart shows a popup when a new version is published. Download the newest
+  `VisHeart-Update-<version>.zip`, extract it and run the `.exe` in it. Your data is kept.
+- **Uninstall:** Windows Settings > Apps > Installed apps > VisHeart > **...** > Uninstall.
 
 Full user guide: [`installer/INSTALL.md`](cardiac-component-segmentation-ai/installer/INSTALL.md).
 
@@ -50,7 +55,7 @@ VisHeart runs as Docker containers on the user's PC, started together by one `do
 | `visheart-local` | Web page (Next.js) and backend API (Node.js) in one image |
 | `visheart-gpu-cpu` / `visheart-gpu-nvidia` | AI service (Python, FastAPI): runs the AI models and heart analyses |
 | `visheart-mongodb` | Database: users, projects, results |
-| `visheart-redis` | Job queue for long AI tasks |
+| `visheart-redis` | Login sessions and the login-lockout counters |
 | `visheart-minio` | File storage: scans, masks, 3D models |
 
 The **VisHeart** icon runs `start.bat`, which waits for Docker Desktop, picks GPU or CPU mode, starts the containers
@@ -65,27 +70,53 @@ Code is delivered in two ways:
 
 ## For developers
 
-### Run from source
+### Run VisHeart locally from source (to test your changes)
 
-1. Install Docker Desktop, Node.js 18 with pnpm (`npm install -g pnpm`), and Python 3.11 or later.
-2. Copy the model files (`unet.pth`, `medsam_vit_b.pth`, ...) from the team's drive into
-   `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`. They are not in git.
-3. Build the backend once: `cd cardiac-component-segmentation-ai/Cardiac_Segmentation_FYP_Server`, then
-   `pnpm install` and `pnpm build`.
-4. Run `cardiac-component-segmentation-ai/start.bat` (`--cpu` or `--gpu` to force a mode) and open
-   http://localhost:3000. Stop with `stop.bat`. A developer copy uses the defaults in `docker-compose.yml`
-   (admin password `P@ssw0rd123!`).
+You need Windows 10/11 (64-bit), [Docker Desktop](https://www.docker.com/products/docker-desktop/), Node.js 18
+with pnpm (`npm install -g pnpm`), Python 3.11 or later, and git.
 
-An installed VisHeart and a developer copy can be on the same PC, but only one can run at a time.
+1. Clone the repository and switch to the branch you work on.
+2. **AI models.** Two model files are too large for git: `medsam_vit_b.pth` and `unet.pth`. Copy them from the team's
+   Google Drive into `cardiac-component-segmentation-ai/visheart-inference-gpu/app/models/`. (With the training pack
+   in step 3, the first start puts the right `unet.pth` there by itself.) The other models are already in git.
+3. **Training data pack** (only needed for UNet Extend Training; everything else works without it). Download the
+   training pack from the VisHeart Google Drive folder. Put its contents in
+   `cardiac-component-segmentation-ai/visheart-training-data/`, so that `PACKED.json` is directly inside that folder:
+   ```
+   cardiac-component-segmentation-ai\
+     start.bat
+     visheart-training-data\
+       PACKED.json
+       ...
+   ```
+   If it is a zip, extract it first. Git ignores this folder.
+4. **Build the backend once:**
+   ```
+   cd cardiac-component-segmentation-ai\Cardiac_Segmentation_FYP_Server
+   pnpm install
+   pnpm build
+   ```
+5. **Start:** double-click `cardiac-component-segmentation-ai\start.bat` (or run it with `--cpu` / `--gpu` to force a
+   mode). The first start downloads about 25 GB of Docker images. With the training pack, the first start also sets up
+   UNet Extend Training (about 10 minutes, the website is usable meanwhile). Open http://localhost:3000 and sign in as
+   `admin` with password `P@ssw0rd123!` (the developer default).
+6. **Stop:** `cardiac-component-segmentation-ai\stop.bat`.
+
+More on the training pack (making one, problems):
+[`visheart-retraining/SETUP-ANOTHER-PC.md`](cardiac-component-segmentation-ai/visheart-retraining/SETUP-ANOTHER-PC.md).
+An installed VisHeart and a developer copy can be on the same PC, but only one can run at a time: stop one before
+starting the other.
 
 ### After you change code
 
-| You changed | What to do |
-|---|---|
-| Backend (`Cardiac_Segmentation_FYP_Server/src`) | Run `pnpm build`, then `start.bat` again. For users: commit; the next installer ships it. |
-| AI service code (`visheart-inference-gpu/app`) | Restart with `start.bat`. A **new** `.py` file must also get a mount line in `docker-compose.yml`. |
-| Frontend (`visheart-frontend`), npm or Python packages | Build a new Docker image (below). |
-| Scripts, `docker-compose.yml`, `visheart-retraining` | Commit; the next installer ships them. |
+The containers do not reload changed code by themselves. After a change, run `stop.bat`, then `start.bat`.
+
+| You changed | To test it locally | To get it to users |
+|---|---|---|
+| Backend (`Cardiac_Segmentation_FYP_Server/src`) | `pnpm build`, then `stop.bat` and `start.bat` | Commit; the next installer ships it |
+| AI service code (`visheart-inference-gpu/app`) | `stop.bat` and `start.bat`. A **new** `.py` file also needs a mount line in `docker-compose.yml` under both `gpu-cpu` and `gpu-nvidia` (copy an existing line) | Commit; the next installer ships it |
+| Frontend (`visheart-frontend`), backend npm packages, AI Python packages | Build a new image (below) and test it before pushing | New image, then a new installer |
+| Scripts, `docker-compose.yml`, `visheart-retraining` | `stop.bat` and `start.bat` | Commit; the next installer ships it |
 
 Run the tests before you push. GitHub Actions also runs them on every push (`.github/workflows/tests.yml`):
 
@@ -96,16 +127,23 @@ Run the tests before you push. GitHub Actions also runs them on every push (`.gi
 
 ### When you build a new image
 
-1. Start Docker Desktop, then in `cardiac-component-segmentation-ai/visheart-local-deployment` run:
+1. Start Docker Desktop. In PowerShell, in `cardiac-component-segmentation-ai\visheart-local-deployment`, build the
+   image with a **new version number** (one that was never pushed before):
    ```
    .\build.ps1 -Version 1.6.0
+   ```
+2. Test it locally before pushing: in `visheart-local-deployment\docker-compose.yml`, change the default image to the
+   new tag, `${VH_APP_IMAGE:-sharlene21/visheart-local:1.6.0}`, then run `stop.bat` and `start.bat`. VisHeart now
+   runs your new image.
+3. Push it (needs access to the `sharlene21` Docker Hub account; ask the team lead):
+   ```
    docker push sharlene21/visheart-local:1.6.0
    ```
-   Use a **new version number every time**. An installed PC downloads an image only when its tag is new to it, so
-   re-pushing an existing tag never reaches users. Pushing needs access to the `sharlene21` Docker Hub account.
-2. Put the new tag in `installer/release.json` (`VH_APP_IMAGE`) and as the default in `docker-compose.yml`
-   (`${VH_APP_IMAGE:-sharlene21/visheart-local:1.6.0}`), so users and developers get it.
-3. Commit, then make a release (below).
+4. Put the same tag in `cardiac-component-segmentation-ai/installer/release.json` (`VH_APP_IMAGE`). Commit both files,
+   then make a release (below).
+
+Why a new number every time: an installed PC downloads an image only when its tag is new to it. If you push a
+changed image under an old tag, installed PCs never get it.
 
 ### Make a release
 
@@ -128,10 +166,7 @@ Step-by-step release guide, including the one-time build PC setup:
 
 ## Team rules
 
-- `main` — stable branch, no direct push.
-- `develop` — integration branch for sprint work.
-- `feature/<name-task>` — individual work branches; `fix/<issue>` — bug-fix branches when needed.
-- Merge work through pull requests into `develop`.
-
-Sprint 1 branches: `feature/meiqi-branch-strategy-frontend-audit`, `feature/jiayi-docker-device-agnostic`,
-`feature/stefani-nifti-smoke-amd-fix`, `feature/sharlene-readme-linux-support`.
+- `main` — stable branch, no direct push. Installed PCs read `installer/latest.json` from here.
+- `dev` — integration branch for sprint work.
+- `test/<name>` — each member's own work branch.
+- Merge work through pull requests into `dev`.

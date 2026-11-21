@@ -65,7 +65,23 @@ python app/scripts/_torch_vs_tensorrt.py
 - Generates IoU histograms and summary statistics
 - Creates a `summary.txt` file with performance metrics
 
+### _torch_vs_tensorrt_batch_16.py
+
+The same comparison, running inference in batches of 16 images.
+
+```bash
+python app/scripts/_torch_vs_tensorrt_batch_16.py
+```
+
 ## Visualization Tools
+
+### _decode_rle.py
+
+Decodes the RLE-encoded masks in a MedSAM inference result (JSON) into mask images.
+
+```bash
+python app/scripts/_decode_rle.py --input results.json --output mask_images --height 512 --width 512
+```
 
 ### _overlay_masks.py
 

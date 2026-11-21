@@ -8,7 +8,7 @@ There are two installers:
 
 | Installer | Size | Contains | Who runs it |
 |---|---|---|---|
-| `VisHeart-Full-<version>.zip` | about 2.7 GB | app files, models, UNet Extend Training data pack | any PC: installs VisHeart, or updates an installed copy and keeps its data |
+| `VisHeart-Full-<version>.zip` | about 2.8 GB | app files, models, UNet Extend Training data pack | any PC: installs VisHeart, or updates an installed copy and keeps its data |
 | `VisHeart-Update-<version>.zip` | about 800 MB | app files and models | a PC that already has VisHeart (it refuses to run on a PC without one) |
 
 Both download the Docker images (about 25 GB) on the first start of a new version, not in the installer.
@@ -59,16 +59,23 @@ The build PC is the computer that makes the installers. It needs:
 
 1. **Merge and commit everything.** `make-installer` refuses to build when the shipped folders have uncommitted
    changes, because a release must come from committed code.
-2. **If the frontend or an npm package changed, build and push a new app image.** You need push access to the
-   `sharlene21` Docker Hub account; ask the team lead. Start Docker Desktop, then run:
-   ```
-   cd cardiac-component-segmentation-ai\visheart-local-deployment
-   .\build.ps1 -Version 1.6.0
-   docker push sharlene21/visheart-local:1.6.0
-   ```
-   Then set `"VH_APP_IMAGE": "sharlene21/visheart-local:1.6.0"` in `installer/release.json`, and the same default
-   in `docker-compose.yml` (`${VH_APP_IMAGE:-sharlene21/visheart-local:1.6.0}`) so developers get it too. Use a
-   new version number every time, never `latest`: installed PCs must get exactly the image you tested.
+2. **If the frontend or an npm package changed, build, test and push a new app image.** Start Docker Desktop, then:
+   1. Build it with a version number that was never pushed before:
+      ```
+      cd cardiac-component-segmentation-ai\visheart-local-deployment
+      .\build.ps1 -Version 1.6.0
+      ```
+   2. Set the default image in `visheart-local-deployment\docker-compose.yml` to the new tag
+      (`${VH_APP_IMAGE:-sharlene21/visheart-local:1.6.0}`), run `stop.bat` and `start.bat`, and check your change in
+      the browser.
+   3. Push it. You need push access to the `sharlene21` Docker Hub account; ask the team lead.
+      ```
+      docker push sharlene21/visheart-local:1.6.0
+      ```
+   4. Set `"VH_APP_IMAGE": "sharlene21/visheart-local:1.6.0"` in `installer/release.json`.
+
+   Use a new version number every time, never `latest` or an old number: an installed PC downloads an image only when
+   its tag is new to it, so a changed image pushed under an old tag never reaches users.
 3. **Raise the version.** Edit `installer/VERSION`, for example `1.0.0` to `1.0.1`. Commit.
 4. **Build the installer.** From the repository root:
    ```
@@ -93,8 +100,8 @@ The build PC is the computer that makes the installers. It needs:
 7. **Tell the users** which version to download, and whether it is an Update or needs a Full install.
 8. **Publish the update notice**, only after step 6, so the link works. Edit `installer/latest.json`: set `version` to
    the new `installer/VERSION`, `download` to the https link of the Google Drive folder, and `note` to one or two
-   sentences. Commit it and get it onto the `main` branch on GitHub. Each installed PC reads that file when someone
-   runs **Start VisHeart** (`updateUrl` in `release.json`) and shows a popup when the version is newer than its own.
+   sentences. Commit it and get it onto the `main` branch on GitHub. Each installed PC reads that file every time
+   VisHeart starts (`updateUrl` in `release.json`) and shows a popup when the version is newer than its own.
    Without internet, or while the file is not on `main`, there is simply no popup; starting is never blocked.
 
 ## 4. A new training data pack (Full installer only)
@@ -127,7 +134,5 @@ and `make-installer` refuses it. Make a new pack.
 
 ## 6. Developers who only run VisHeart from git
 
-Run `start.bat` and `stop.bat` as before. Build the backend once after cloning (`pnpm install` and `pnpm build` in
-`Cardiac_Segmentation_FYP_Server`): `dist` is not in git, and `start.bat` stops and says so when it is missing. It
-creates the `dist	emp_*` folders Docker mounts volumes on. They use the defaults in `docker-compose.yml`
-and do not need `release.env` or `secrets.env`.
+See "Run VisHeart locally from source" and "After you change code" in the repository's top-level `README.md`.
+A developer copy uses the defaults in `docker-compose.yml` and needs no `release.env` or `secrets.env`.

@@ -7,10 +7,20 @@ The main model is a ResNet-34 encoder with a UNet-style decoder, CBAM attention,
 ## Important Note
 The current loader follows the same general NIfTI 2-D slice loading concept of the 2nd segmentation model, but it is customized for landmark detection rather than segmentation. It does not use the exact same MONAI preprocessing pipeline.
 
+## Use in VisHeart
+
+The VisHeart AI service loads two checkpoints made with this code: `best_model_2ch.pth` and `best_model_1ch.pth`
+(`visheart-inference-gpu/app/dependencies/model_init.py`). It looks for them in `visheart-inference-gpu/app/models`
+first, then in `UNETRESNET34/checkpoints`. Without `best_model_1ch.pth` it falls back to the 2-channel model.
+
+`train.py` imports `UNETRESNET34.dataset...` as well as `models...` and `utils...`, so run the commands below from
+this folder with the repository root on the Python path, for example in PowerShell:
+`$env:PYTHONPATH = (Resolve-Path ..).Path` before `python train.py`.
+
 ## Project Structure
 
 ```text
-Landmark_Detection_Model/
+UNETRESNET34/
 |-- data/ 
 |   `-- lv-landmark/ #go to the link and download the dataset, and bring the folder here
 |       |-- Training/
@@ -20,7 +30,7 @@ Landmark_Detection_Model/
 |           |-- images/      # Testing NIfTI image volumes (.nii.gz)
 |           `-- masks/       # Testing masks
 |-- dataset/
-|   `-- landmark_dataset.py  # Dataset loader, preprocessing, augmentation, heatmap target creation
+|   `-- acdc_landmark_dataset.py  # Dataset loader, preprocessing, augmentation, heatmap target creation
 |-- models/
 |   `-- unet_resnet34.py     # ResNet34 + UNet model definition
 |-- utils/
@@ -50,7 +60,7 @@ Landmark_Detection_Model/
 | `tta_eval.py` | Evaluates a checkpoint with test-time augmentation, averaging predictions from flipped/rotated variants. |
 | `test_dataset.py` | Verifies that the dataset can load samples and returns image, heatmap, and coordinate tensors. |
 | `check_labels.py` | Prints the labels present in one sample mask and counts LV/RV pixels. Useful for checking mask values. |
-| `dataset/landmark_dataset.py` | Reads `.nii.gz` volumes, extracts valid 2-D slices, finds landmark points from masks, normalizes images, applies augmentation, and creates heatmap targets. |
+| `dataset/acdc_landmark_dataset.py` | Reads `.nii.gz` volumes, extracts valid 2-D slices, finds landmark points from masks, normalizes images, applies augmentation, and creates heatmap targets. |
 | `models/unet_resnet34.py` | Defines the ResNet34-UNet architecture, CBAM attention, fallback UNet, and optional pretrained encoder loading. |
 | `utils/heatmap.py` | Creates Gaussian heatmaps from landmark coordinates. |
 | `utils/loss.py` | Defines the combined training loss: BCE, Dice, coordinate Wing loss, and landmark separation loss. |

@@ -5,15 +5,25 @@ This document explains the repository structure, what each major folder/file doe
 Scope:
 - Repository root: COS40005FYPA
 - Main monorepo folder: cardiac-component-segmentation-ai
-- Subsystems: Backend API, Frontend UI, GPU Inference, Local Docker deployment
+- Subsystems: Backend API, Frontend UI, GPU Inference, Local Docker deployment, Windows installer, UNet Extend Training
+
+For installing and running VisHeart, see the top-level README.md; this guide only maps the code.
 
 ## 1) Top-level workspace structure
 
 ### Root folder: COS40005FYPA
 - README.md
-  - Team workflow document (branching strategy and sprint branch list).
+  - What VisHeart is, how to install and use it, how to develop and release it, team branch rules.
+- README_CODEBASE.md
+  - This code map.
 - cardiac-component-segmentation-ai/
   - Main monorepo for the application stack.
+- UNETRESNET34/
+  - Landmark detection model (training code and checkpoints used by the AI service); see UNETRESNET34/README.md.
+- .github/workflows/tests.yml
+  - CI: runs the backend tests and the Windows script tests on every push (tests only, no deployment).
+- docs/
+  - Design notes, plans and historical hand-off records.
 
 ## 2) Monorepo root: cardiac-component-segmentation-ai
 
@@ -22,8 +32,6 @@ Purpose:
 - Includes convenience launchers and four service modules.
 
 Main files:
-- README.md
-  - Local deployment quick-start documentation.
 - start.bat
   - Root launcher for Windows; delegates startup to visheart-local-deployment/start.bat.
 - stop.bat
@@ -32,10 +40,13 @@ Main files:
   - Repository license.
 
 Main folders:
-- Cardiac_Segmentation_FYP_Server/
-- visheart-frontend/
-- visheart-inference-gpu/
-- visheart-local-deployment/
+- Cardiac_Segmentation_FYP_Server/ (backend API)
+- visheart-frontend/ (web UI)
+- visheart-inference-gpu/ (AI service)
+- visheart-local-deployment/ (docker-compose.yml, start/stop scripts, image build)
+- installer/ (Windows installer: make-installer.ps1, visheart.iss, INSTALL.md user guide, RELEASING.md release guide)
+- visheart-retraining/ (UNet Extend Training service that runs on the host, port 8010; SETUP-ANOTHER-PC.md)
+- scripts/templates/ (tool that makes the template hearts in visheart-local-deployment/seed/templates)
 
 ## 3) Backend service: Cardiac_Segmentation_FYP_Server
 
@@ -65,13 +76,9 @@ It handles:
 - cors-config.json
   - CORS-related local config.
 - README.md
-  - API reference and route descriptions.
-- README_SEGMENTATION.md
-  - Segmentation-specific backend docs.
-- README_RECONSTRUCTION.md
-  - Reconstruction-specific backend docs.
-- README_AWS-METRICS.md
-  - AWS metrics endpoints docs.
+  - API reference and route descriptions (segmentation, reconstruction, AWS metrics).
+- docs/HEART_METRICS_IMPLEMENTATION.md
+  - Heart function metrics: formulas, guards and tests.
 
 ### Backend source tree: src/
 
@@ -123,6 +130,23 @@ Core business/services layer.
   - Mesh/tar handling helpers.
 - segmentation_export.ts
   - Segmentation export transformation utilities.
+- landmark_inference.ts
+  - Landmark detection requests to the AI service.
+- pipeline_orchestrator.ts
+  - Runs the one-click analysis pipeline (segmentation, landmarks, reconstruction) for a project and tracks its jobs.
+- reconstruction_motion.ts
+  - Smooth heart motion for the 3D heart on the landmark page (sends a finished 4D reconstruction to the AI service's
+    /inference/v2/4d-motion).
+- retraining_proxy.ts
+  - Forwards UNet Extend Training calls to the training service on the host (127.0.0.1:8010).
+- training_export.ts, training_selection.ts, review_candidates.ts, edit_tracking.ts
+  - Choosing and exporting corrected masks for retraining.
+- template_seed.ts, template_access.ts
+  - Load the template hearts (sample projects) into MongoDB, and give users read access to them.
+- gpu_availability.ts
+  - Whether the AI service can use a GPU (from its /status/gpu reply).
+- rv_insertion_points.ts
+  - The project's saved (user-edited) landmarks, such as the RV insertion points.
 
 #### src/routes/
 HTTP API boundaries.
@@ -140,8 +164,19 @@ HTTP API boundaries.
   - GPU availability/status proxy route(s).
 - admin_tools.ts
   - Admin maintenance/management APIs.
+- landmark_routes.ts (/landmark-detection)
+  - Landmark detection.
+- pipeline_routes.ts (/pipeline)
+  - Start and follow the one-click analysis pipeline for a project.
+- support_routes.ts (/support)
+  - FAQ page: sends a question to the support mailbox.
+- retraining_routes.ts (/retraining)
+  - UNet Extend Training API, admins only.
+- assignment_review_routes.ts (/admin)
+  - Admin queue of masks flagged for retraining.
 - cpu_metrics.ts, ecr_metrics.ts, s3_metrics.ts, alb_metrics.ts, asg_metrics.ts, billing_metrics.ts
-  - Infrastructure/usage/cost observability endpoints.
+  - AWS infrastructure/usage/cost endpoints from the original cloud deployment. Still mounted, but they return no
+    data in the local install.
 - sample_nifti.ts
   - Route for sample NIfTI assets.
 - debug_routes.ts
@@ -329,10 +364,8 @@ High-compute FastAPI service for:
   - CUDA-enabled multi-stage container.
 - requirements_torch.txt, requirements_prod.txt, requirements_dev.txt
   - Python dependency sets by environment.
-- 4d-reconstruction-api.md
-  - Reconstruction API details.
 - README.md
-  - Full service and API documentation.
+  - Full service and API documentation, including the 4D reconstruction request fields.
 
 ### Inference app tree: app/
 
@@ -390,23 +423,22 @@ This is the deployment glue used in local demos/development.
 ### Key files
 - docker-compose.yml
   - Orchestrates containers:
-    - visheart-app (combined frontend + backend image)
+    - visheart-app (combined frontend + backend image, container visheart-local)
     - mongodb
     - redis
-    - minio + minio-setup bucket initializer
-    - gpu inference service
-  - Defines ports, env vars, healthchecks, and network.
-- start.ps1 / start.bat
-  - Startup automation scripts for Windows.
-  - Handles Docker checks and host-file mapping for minio local host.
-- stop.ps1 / stop.bat
-  - Stop/cleanup scripts.
+    - minio (the backend creates the bucket itself)
+    - gpu-cpu or gpu-nvidia (AI service; profile cpu or gpu)
+  - Defines ports, env vars, healthchecks, network and named data volumes.
+  - An installed copy passes release.env and secrets.env (made by the installer) to override the defaults.
+- start.bat / start.ps1 / lib/VisHeartStart.psm1
+  - Start VisHeart on Windows: waits for Docker Desktop, picks GPU or CPU, checks ports, starts the containers and the
+    training service, waits until everything answers. tests/ holds their Pester tests.
+- stop.bat
+  - Stops the containers (docker compose down) and the training service.
 - build.ps1
-  - Builds combined local application image.
-- Dockerfile
-  - Combined app image build definition.
-- volumes/
-  - Persistent local data mounts (Mongo/Redis state).
+  - Builds the combined local application image.
+- Dockerfile, Dockerfile.gpu
+  - Image build definitions.
 
 ## 7) How the architecture works end-to-end
 
@@ -483,7 +515,7 @@ flowchart LR
 ## 9) What to read first if you are onboarding
 
 Suggested order:
-1. cardiac-component-segmentation-ai/README.md
+1. README.md (top level)
 2. Cardiac_Segmentation_FYP_Server/src/index.ts
 3. Cardiac_Segmentation_FYP_Server/src/services/express_app.ts
 4. Cardiac_Segmentation_FYP_Server/src/routes/segmentation_routes.ts

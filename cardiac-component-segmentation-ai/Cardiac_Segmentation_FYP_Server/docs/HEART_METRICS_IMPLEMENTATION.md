@@ -3,6 +3,9 @@
 Feature branch: `metrics-jy`
 Audience: a student new to VisHeart who needs to understand every moving part.
 
+> `PIPELINE_INTEGRATION.md` and `verify.py`, mentioned below, were working files from that branch and are not in this
+> repository.
+
 ---
 
 ## 1. Overview

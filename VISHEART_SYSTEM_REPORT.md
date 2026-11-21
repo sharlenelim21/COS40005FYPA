@@ -1,5 +1,9 @@
 # VisHeart — System Implementation Reference
 
+> **Snapshot from 2026-05-31 (dev branch), kept as report material.** Some details are out of date (for example the
+> Next.js version, the MinIO console, the environment variable names and the start commands). For how VisHeart works
+> and runs now, see `README.md` and `README_CODEBASE.md`.
+
 > This document is a comprehensive technical reference for the VisHeart cardiac imaging platform, intended to support report writing covering system architecture, feature implementation, security, and optimizations.
 
 ---
