@@ -118,6 +118,8 @@ try {
         if (-not (Test-Path $parent)) { New-Item -ItemType Directory $parent -Force | Out-Null }
         Copy-Item -LiteralPath $item.Source -Destination $target
     }
+    # The next update removes what this version shipped and that one no longer does (Remove-VisHeartStaleFiles.ps1).
+    Write-ShippedFileList $targets (Join-Path $staging 'shipped-files.txt')
     $bytes = ($selection | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum
     Write-Host ("    {0} files, {1:N2} GB" -f $selection.Count, ($bytes / 1GB))
 

@@ -340,3 +340,16 @@ Describe 'New-ReleaseZip' {
         } finally { Remove-Item -Recurse -Force $work }
     }
 }
+
+Describe 'Write-ShippedFileList' {
+    It 'lists every shipped file, sorted, except unet.pth (never replaced, so never removed)' {
+        $f = Join-Path $env:TEMP ("vh-list-" + [guid]::NewGuid() + '.txt')
+        try {
+            Write-ShippedFileList @('b\two.txt', 'a\one.txt', 'cardiac-component-segmentation-ai\visheart-inference-gpu\app\models\unet.pth', ('c\caf' + [char]0xE9 + '.txt')) $f
+            $lines = @(Get-Content $f -Encoding UTF8)
+            ($lines -join '|') | Should Be ('a\one.txt|b\two.txt|c\caf' + [char]0xE9 + '.txt')
+            # UTF-8 without a byte order mark
+            [IO.File]::ReadAllBytes($f)[0] | Should Be ([byte][char]'a')
+        } finally { Remove-Item -Force $f -ErrorAction SilentlyContinue }
+    }
+}

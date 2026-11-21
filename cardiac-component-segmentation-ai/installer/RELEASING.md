@@ -29,6 +29,13 @@ Find the folder you changed, then do what the table says.
 | `app/models/*.pth` | shipped from the build PC's folder (the models are not in git) | Put the new file in `visheart-inference-gpu/app/models` on the build PC, and add its name to `$ShippedModelNames` in `installer/lib/Staging.psm1` **and** to the `app/models` lines of `visheart-inference-gpu/.dockerignore`. Only listed files ship or go into the GPU image. Do **not** replace `unet.pth`: it is UNet Extend Training's registered original, and an update never overwrites it. |
 | UNet Extend Training data (versions, datasets) | in the Full installer only, from the training pack | Make a new pack (section 4) and build a Full installer. |
 
+**Deleting or renaming a shipped file** removes it from installed PCs at their next update: each installer writes
+`shipped-files.txt` (every file it ships), and an update removes the files the old list has and the new one does not.
+So never ship a file that VisHeart writes data into. Files VisHeart creates while it runs are never on the list and
+are never removed. Old Docker images are removed by the first start after an update (`Remove-OldVisHeartImages`):
+only other versions of the images named in `release.json`, never one a container uses or the `docker-compose.yml`
+default.
+
 ## 2. One-time setup of the build PC
 
 The build PC is the computer that makes the installers. It needs:

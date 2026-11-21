@@ -72,6 +72,7 @@ Source: "{#PackDir}\*"; DestDir: "{app}\{#AppSub}\visheart-training-data"; Flags
 #endif
 Source: "scripts\New-VisHeartSecrets.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "scripts\Protect-VisHeartFolder.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "scripts\Remove-VisHeartStaleFiles.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "scripts\Test-VisHeartPrerequisites.ps1"; Flags: dontcopy
 Source: "INSTALL.md"; DestDir: "{app}"; Flags: ignoreversion
 ; The VisHeart heart logo (visheart-frontend favicon, as a multi-size Windows icon) for the shortcuts and Apps list.
@@ -347,7 +348,23 @@ var
   Code: Integer;
   Account: String;
 begin
+  { Before the new files are copied: keep the installed version's list of shipped files, which the copy overwrites. }
+  if CurStep = ssInstall then begin
+    if FileExists(ExpandConstant('{app}\shipped-files.txt')) then
+      FileCopy(ExpandConstant('{app}\shipped-files.txt'), ExpandConstant('{tmp}\old-shipped-files.txt'), False);
+    Exit;
+  end;
   if CurStep <> ssPostInstall then Exit;
+
+  { An update removes the files the installed version shipped that this version no longer does (never data). }
+  if FileExists(ExpandConstant('{tmp}\old-shipped-files.txt')) then begin
+    WizardForm.StatusLabel.Caption := 'Removing files this version no longer uses...';
+    if not Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\Remove-VisHeartStaleFiles.ps1') +
+        '" -AppDir "' + ExpandConstant('{app}') + '" -OldList "' + ExpandConstant('{tmp}\old-shipped-files.txt') + '"',
+        '', SW_HIDE, ewWaitUntilTerminated, Code) then
+      Code := -1;
+    Log('Remove-VisHeartStaleFiles exit code: ' + IntToStr(Code));
+  end;
 
   if NeedWsl then begin
     if RunCmd('"' + ExpandConstant('{sys}\wsl.exe') + '" --install --no-distribution', 'Turning on WSL2...') <> 0 then begin

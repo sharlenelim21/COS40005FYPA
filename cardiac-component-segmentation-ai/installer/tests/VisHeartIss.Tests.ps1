@@ -41,6 +41,14 @@ Describe 'visheart.iss rules' {
         $post = Get-PascalFunction 'CurStepChanged'
         $post | Should Match '(?s)New-VisHeartSecrets\.ps1.*Protect-VisHeartFolder\.ps1'
     }
+
+    It 'an update removes the files the installed version shipped that this version does not' {
+        $script:Iss | Should Match '(?m)^Source: "scripts\\Remove-VisHeartStaleFiles\.ps1"; DestDir: "\{app\}\\installer"'
+        $step = Get-PascalFunction 'CurStepChanged'
+        # The old list is saved before the new files overwrite it, and compared after they were copied.
+        $step | Should Match '(?s)ssInstall.*shipped-files\.txt.*old-shipped-files\.txt'
+        $step | Should Match '(?s)Remove-VisHeartStaleFiles\.ps1.*-OldList'
+    }
 }
 
 Describe 'visheart.iss compiles' {

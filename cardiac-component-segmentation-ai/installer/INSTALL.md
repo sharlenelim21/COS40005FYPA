@@ -73,7 +73,9 @@ When the team tells you there is a new version, or starting VisHeart shows a "Vi
 3. Use the **VisHeart** icon as usual. If the new version needs new parts, this start downloads them first and takes
    longer.
 
-Your patients, accounts, passwords and trained models are kept.
+Your patients, accounts, passwords and trained models are kept. You do not need to delete anything first: the update
+removes the program files the new version no longer uses, and the first start of the new version removes the old
+VisHeart Docker images, so updates do not keep filling the disk.
 
 ## Uninstall
 

@@ -187,6 +187,17 @@ function Write-ReleaseEnv {
     [IO.File]::WriteAllText($OutPath, (($lines -join "`r`n") + "`r`n"), $utf8)
 }
 
+function Write-ShippedFileList {
+    # shipped-files.txt: every file this installer ships, relative to the install folder. The next update compares it
+    # with its own list and removes the files no longer shipped (scripts\Remove-VisHeartStaleFiles.ps1). unet.pth is
+    # left out: an install never replaces it, so an update must never remove it either.
+    param([string[]]$Targets, [string]$Path)
+    $unet = "$($script:App)\visheart-inference-gpu\app\models\unet.pth"
+    $list = [string[]]@($Targets | Where-Object { $_ -and $_ -ne $unet })
+    [Array]::Sort($list, [StringComparer]::OrdinalIgnoreCase)
+    [IO.File]::WriteAllLines($Path, $list, (New-Object System.Text.UTF8Encoding $false))
+}
+
 function Get-InnoCandidates {
     $candidates = @(
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
@@ -232,5 +243,5 @@ function New-ReleaseZip {
     return $zip
 }
 
-Export-ModuleMember -Function Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack, Get-LongPaths,
+Export-ModuleMember -Function Write-ShippedFileList, Get-StagingSelection, Get-ShippedModelNames, Get-UnexpectedModelFiles, Test-ImageOnRegistry, Test-ReleaseImages, Test-ModelMatchesPack, Get-LongPaths,
     Write-ReleaseEnv, Get-InnoCandidates, Get-FileVersion, Find-InnoCompiler, New-ReleaseZip
