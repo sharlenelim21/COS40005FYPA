@@ -34,8 +34,8 @@ services:
   # Frontend (Next.js) + Backend (Node.js)
   # ============================================
   visheart-app:
-    # image: sharlene21/visheart-local:1.5.0
-    image: ${VH_APP_IMAGE:-sharlene21/visheart-local:1.5.0}
+    # image: sharlene21/visheart-local:1.6.0
+    image: ${VH_APP_IMAGE:-sharlene21/visheart-local:1.6.0}
     container_name: visheart-local
     extra_hosts:
       # Docker Desktop provides host.docker.internal; Linux Docker Engine needs this line (harmless on Desktop).

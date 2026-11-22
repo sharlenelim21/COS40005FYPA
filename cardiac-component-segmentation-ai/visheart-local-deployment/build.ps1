@@ -2,11 +2,13 @@
 # This builds a single Docker image containing both frontend and backend
 #
 # Usage:
-#   .\build.ps1                 # builds sharlene21/visheart-local:1.5.0 (+ :latest)
-#   .\build.ps1 -Version 1.6.0  # builds a different version tag (+ :latest)
+#   .\build.ps1 -Version 1.6.0  # builds sharlene21/visheart-local:1.6.0 (+ :latest)
+# -Version is required: there is no default, so a build can never reuse an old tag by accident.
 
 param(
-    [string]$Version = "1.5.0",
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$Version,
     [string]$ImageName = "sharlene21/visheart-local"
 )
 

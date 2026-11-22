@@ -72,7 +72,7 @@ Describe 'docker-compose.yml defaults (no env file)' {
             "$($entry.Service):$($entry.Port.target)=$($entry.Port.host_ip)" |
                 Should Be "$($entry.Service):$($entry.Port.target)=$want"
         }
-        $app.image | Should Be 'sharlene21/visheart-local:1.5.0'
+        $app.image | Should Be 'sharlene21/visheart-local:1.6.0'
         $config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD | Should Be 'P@ssw0rd123!'
         $app.environment.MONGODB_URI | Should Match ([regex]::Escape('admin:P%40ssw0rd123%21@'))
         $app.environment.ADMIN_PASS | Should Be 'P@ssw0rd123!'
