@@ -24,7 +24,7 @@ function Test-DockerGpuAvailable {
             Write-Log "Detected 'nvidia' runtime in 'docker info'. Will perform container-level verification to confirm GPU usability."
             Write-Log "Attempting container-level GPU check (this may pull a lightweight CUDA base image)."
 
-            docker run --rm --gpus all "nvidia/cuda:12.3.0-base-ubuntu22.04" nvidia-smi 2>$null | Out-Null
+            docker run --rm --gpus all (Get-GpuCheckImage) nvidia-smi 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 Write-Log "Container-level GPU check passed."
                 return $true
@@ -94,7 +94,17 @@ try {
     if ($OpenBrowser -and (Test-VisHeartAnswering)) {
         Write-Log 'VisHeart is already running. Opening it in your browser.'
         Open-VisHeart
+        # The training service runs on Windows, not in Docker: after a Windows restart Docker brings VisHeart back by
+        # itself, but not this service. Starting it is quick when it already runs.
+        $inferenceContainer = Get-RunningInferenceContainer
+        Start-RetrainingWorker
         exit 0
+    }
+
+    # Docker Desktop cannot start while Windows' Virtual Machine Platform is off or waits for a restart; say so at once
+    # (and offer to fix it) instead of waiting 3 minutes for a Docker that cannot come up.
+    if (-not (Resolve-WindowsFeatureProblem)) {
+        exit 10
     }
 
     $docker = Wait-DockerReady
@@ -103,7 +113,10 @@ try {
         switch ($docker.Reason) {
             'not-installed' { Write-Log 'Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop/ (or run the VisHeart installer again), then start VisHeart.' }
             'no-access'     { Write-Log "Docker is installed but this Windows account ($account) cannot use it. Ask the person who installed VisHeart to run: net localgroup docker-users `"$account`" /add  then sign out and in again." }
-            default         { Write-Log 'Docker Desktop did not become ready within 3 minutes. Open Docker Desktop, wait until it says Docker is running, then start VisHeart again.' }
+            default         {
+                Write-Log 'Docker Desktop did not become ready within 3 minutes. Open Docker Desktop, wait until it says Docker is running, then start VisHeart again.'
+                if (Test-RestartPending) { Write-Log 'Windows is waiting for a restart to finish installing changes. Restart Windows first; Docker Desktop may need it.' }
+            }
         }
         exit 2
     }
@@ -169,7 +182,7 @@ try {
     $stale = docker ps -aq --filter "name=$oppositeContainer" 2>$null
     if ($stale) {
         Write-Log "Removing stale '$oppositeContainer' container to avoid port 8001 conflicts."
-        docker rm -f $stale 2>$null | Out-Null
+        docker rm -f -v $stale 2>$null | Out-Null
     }
 
     $pullExit = Invoke-FirstPull (@('compose') + $envArgs + @('--profile', $profile)) @('visheart-app', $inferenceService)
@@ -193,7 +206,7 @@ try {
             $staleGpu = docker ps -aq --filter "name=visheart-gpu-nvidia" 2>$null
             if ($staleGpu) {
                 Write-Log "Removing partially-created 'visheart-gpu-nvidia' container."
-                docker rm -f $staleGpu 2>$null | Out-Null
+                docker rm -f -v $staleGpu 2>$null | Out-Null
             }
 
             Write-Log "Running: docker compose --profile cpu up -d visheart-app $inferenceService"

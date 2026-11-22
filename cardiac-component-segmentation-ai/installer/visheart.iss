@@ -23,10 +23,12 @@
 
 #define AppSub "cardiac-component-segmentation-ai"
 #define Deploy AppSub + "\visheart-local-deployment"
+; Keep this forever: it is how Windows knows a new installer is an update of VisHeart. Also names VisHeart's entry in
+; Installed apps, whose size [Code] corrects.
+#define AppGuid "CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5"
 
 [Setup]
-; Keep this AppId forever: it is how Windows knows a new installer is an update of VisHeart.
-AppId={{CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5}
+AppId={{{#AppGuid}}
 AppName=VisHeart
 AppVersion={#AppVersion}
 AppVerName=VisHeart {#AppVersion}
@@ -118,7 +120,7 @@ Type: dirifempty; Name: "{app}\UNETRESNET34"
 #include "finish-page.iss"
 
 var
-  NeedWsl, NeedDocker, NeedPython, RebootNeeded, SecretsCreated, DeleteData: Boolean;
+  NeedWsl, NeedDocker, NeedPython, NeedVCRedist, RebootNeeded, SecretsCreated, DeleteData, KeptForDocker: Boolean;
 
 function PowerShellExe(): String;
 begin
@@ -128,6 +130,35 @@ end;
 function DeploymentDir(): String;
 begin
   Result := ExpandConstant('{app}\{#Deploy}');
+end;
+
+{ Total size of the files in Dir and its subfolders, in KB. }
+function FolderSizeKB(Dir: String): Int64;
+var
+  Rec: TFindRec;
+begin
+  Result := 0;
+  if FindFirst(Dir + '\*', Rec) then begin
+    try
+      repeat
+        if (Rec.Name <> '.') and (Rec.Name <> '..') then begin
+          if Rec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
+            Result := Result + FolderSizeKB(Dir + '\' + Rec.Name)
+          else
+            Result := Result + (Int64(Rec.SizeHigh) * 4294967296 + Rec.SizeLow) div 1024;
+        end;
+      until not FindNext(Rec);
+    finally
+      FindClose(Rec);
+    end;
+  end;
+end;
+
+{ A check result is one line of text; "\n" in its message marks a line break. }
+function Readable(S: String): String;
+begin
+  Result := S;
+  StringChangeEx(Result, '\n', #13#10, True);
 end;
 
 { Takes the text up to the next '|' off the front of S. }
@@ -256,13 +287,14 @@ begin
     Status := SplitField(Line);
     Log('Prerequisite ' + Name + ': ' + Status + ' - ' + Line);
     if Status = 'block' then
-      Blocks := Blocks + '- ' + Line + #13#10#13#10
+      Blocks := Blocks + '- ' + Readable(Line) + #13#10#13#10
     else if (Status = 'warn') or (Status = 'missing') then
-      Notes := Notes + '- ' + Line + #13#10#13#10;
+      Notes := Notes + '- ' + Readable(Line) + #13#10#13#10;
     if Status = 'missing' then begin
       if Name = 'wsl' then NeedWsl := True
       else if Name = 'docker' then NeedDocker := True
-      else if Name = 'python' then NeedPython := True;
+      else if Name = 'python' then NeedPython := True
+      else if Name = 'vcredist' then NeedVCRedist := True;
     end;
   end;
 
@@ -303,7 +335,7 @@ begin
     Status := SplitField(Line);
     Log('Disk check for ' + Dir + ': ' + Status + ' - ' + Line);
     if Status = 'block' then begin
-      MsgBox(Line, mbError, MB_OK);
+      MsgBox(Readable(Line), mbError, MB_OK);
       Result := False;
     end;
   end;
@@ -349,6 +381,14 @@ var
   Account: String;
 begin
   { Before the new files are copied: keep the installed version's list of shipped files, which the copy overwrites. }
+  { Installed apps shows the size Inno Setup records: the files this installer copied, so 2.77 GB after the Full
+    installer and 836 MB after an Update, which has no training pack (2026-11-21). Record the whole folder instead.
+    Docker's images (about 25 GB) live in Docker's own storage and are not counted. }
+  if CurStep = ssDone then begin
+    RegWriteDWordValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + '{#AppGuid}' + '}_is1', 'EstimatedSize',
+      FolderSizeKB(ExpandConstant('{app}')));
+    Exit;
+  end;
   if CurStep = ssInstall then begin
     if FileExists(ExpandConstant('{app}\shipped-files.txt')) then
       FileCopy(ExpandConstant('{app}\shipped-files.txt'), ExpandConstant('{tmp}\old-shipped-files.txt'), False);
@@ -383,6 +423,10 @@ begin
   end;
   if NeedPython then
     InstallWithWinget('Python.Python.3.13', '--scope machine', 'Python 3.13', 'https://www.python.org/downloads/');
+  { PyTorch (UNet Extend Training) needs the current runtime: with the 2017 one it failed with WinError 1114. }
+  if NeedVCRedist then
+    InstallWithWinget('Microsoft.VCRedist.2015+.x64', '', 'Microsoft Visual C++ Redistributable',
+      'https://aka.ms/vs/17/release/vc_redist.x64.exe');
 
   { Docker Desktop only accepts accounts in the docker-users group. "Already a member" is fine. }
   Account := GetEnv('USERDOMAIN') + '\' + GetUserNameString();
@@ -459,10 +503,14 @@ begin
     Args := Args + ')"';
     if not Exec(PowerShellExe(), Args, Deploy, SW_HIDE, ewWaitUntilTerminated, Code) then Code := -1;
     Log('Remove-VisHeartDocker exit code: ' + IntToStr(Code));
-    if DeleteData and (Code <> 0) then begin
+    { Docker could not be reached. Without database.owner, which Start writes just before it first creates the database
+      (and before any image download), Docker holds nothing of this copy, so Yes goes ahead and deletes the files.
+      Seen 2026-11-21 on a PC where Docker never started: the folder was kept for nothing. }
+    if DeleteData and (Code <> 0) and FileExists(Deploy + '\database.owner') then begin
       { The database is still there, so keep everything, its passwords (secrets.env) above all: deleting them would
         leave a database that a new install of VisHeart cannot open. }
       DeleteData := False;
+      KeptForDocker := True;
       SuppressibleMsgBox('Docker Desktop could not be started, so the VisHeart database could not be deleted. VisHeart''s ' +
         'data and passwords have been kept in ' + ExpandConstant('{app}') + ', and installing VisHeart again on this PC ' +
         'finds them.' + #13#10#13#10 +
@@ -479,7 +527,8 @@ begin
     end;
   end;
 
-  if (CurUninstallStep = usPostUninstall) and not DeleteData and DirExists(ExpandConstant('{app}')) then
+  { Only for "No": after "Yes" that Docker prevented, the message above has already said what was kept and why. }
+  if (CurUninstallStep = usPostUninstall) and not DeleteData and not KeptForDocker and DirExists(ExpandConstant('{app}')) then
     SuppressibleMsgBox('VisHeart was uninstalled. As you chose, your patients, accounts, trained models and training ' +
       'data were kept in ' + ExpandConstant('{app}') + ' and in Docker, with this PC''s passwords (secrets.env) and the ' +
       'admin login (FIRST-LOGIN.txt). Installing VisHeart again in the same folder finds them.' + #13#10#13#10 +

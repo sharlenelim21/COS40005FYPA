@@ -9,7 +9,8 @@ VisHeart runs on one Windows PC. You use it in a web browser on that PC. Other c
 - Free disk space:
   - **40 GB** for VisHeart itself: about 10 GB for its files and about 30 GB for the parts Docker downloads on the
     first start. If you install VisHeart on another drive (for example E:), that drive needs 10 GB and the drive where
-    Docker Desktop keeps its data (normally C:) needs 30 GB. The installer checks this for you.
+    Docker Desktop keeps its data (normally C:) needs 30 GB. The installer checks this for you. Choosing another drive
+    for VisHeart does **not** move Docker's 30 GB; see "Not enough room for Docker's downloads" under Problems.
   - **About 6 GB more while you install**, for the downloaded zip (2.8 GB) and the folder you unzip it into (2.8 GB).
     Delete both after installing.
 - An internet connection for the first start.
@@ -90,14 +91,24 @@ The uninstaller asks whether to also delete all VisHeart data:
 
 Docker Desktop, WSL2 and Python stay installed. Remove them in Settings > Apps if no other program needs them.
 
+**The size shown in Installed apps** is VisHeart's folder (program, models, training data), measured at the end of each
+install or update. Docker's VisHeart images (about 25 GB) are not included: they are in Docker Desktop's storage.
+
+**Getting the disk space back.** Docker Desktop keeps everything in one large file (`docker_data.vhdx`, on C: unless
+you moved it). When VisHeart's images are deleted, the space is freed inside that file, but the file does not shrink,
+so Windows does not get the space back. To get it back, either uninstall Docker Desktop (Settings > Apps), or, if no
+other program uses Docker, open Docker Desktop > **Troubleshoot** > **Clean / Purge data**. Both delete everything
+stored in Docker, not only VisHeart's.
+
 ## Problems
 
 | What you see | What to do |
 |---|---|
+| "Not enough room for Docker's downloads" (although you chose another drive) | VisHeart's files go to the folder you chose, but its 25 GB of downloads go to Docker Desktop's storage, which is on C: by default. Either free space on that drive, or move Docker's storage: Docker Desktop > **Settings** > **Resources** > **Advanced** > **Disk image location**, choose a folder on a drive with 30 GB free (for example `E:\DockerData`), click **Apply & restart**, then run the installer again. If Docker Desktop is not installed yet, install it first. |
 | "Port 5000 is used by another program: ..." | VisHeart needs ports 3000, 5000, 9000 and 8001. The message names the program and its process id. Close that program (or end it in **Task Manager > Details**), then start VisHeart again. |
 | "Docker is installed but this Windows account (...) cannot use it" | See **Using VisHeart from another Windows account** below. |
 | "This PC already has a VisHeart database (...) that was made by another copy of VisHeart" | The data belongs to an earlier or developer copy of VisHeart. Ask the VisHeart team before deleting anything. |
-| Docker Desktop says "Virtual Machine Platform is not enabled" | A Windows feature Docker needs is off. Run the VisHeart installer again: it turns the feature on. Then restart Windows (restarting Docker Desktop is not enough). |
+| Docker Desktop says "Virtual Machine Platform is not enabled" | A Windows feature Docker needs is off, or Windows has not restarted since it was turned on. Double-click the VisHeart icon: it asks to turn the feature on (click **Yes**, then **Yes** in the Windows permission window) and then to restart Windows. Restarting Docker Desktop alone is not enough. |
 | "Docker Desktop did not become ready within 3 minutes" | Open Docker Desktop, wait until it says Docker is running, then start VisHeart again. |
 | The login is rejected | If you changed the admin password, use your new password, not the one in `FIRST-LOGIN.txt`. After 5 wrong tries the account is locked for 10 minutes. |
 

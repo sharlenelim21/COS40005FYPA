@@ -16,12 +16,13 @@ Describe 'Get-VisHeartPrerequisites' {
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $true }
     Mock Get-PythonVersion { [version]'3.13.1' }
+    Mock Get-VCRuntimeVersion { [version]'14.44.35208' }
     Mock Get-FreeSpaceGB { 120.5 }
     Mock Get-DockerDataDrive { 'C:' }
 
     It 'a complete PC passes every check' {
         $r = @(Get-VisHeartPrerequisites -InstallDrive 'C:')
-        (@($r | ForEach-Object { $_.Name }) -join ',') | Should Be 'windows,wsl,docker,nvidia,python,disk'
+        (@($r | ForEach-Object { $_.Name }) -join ',') | Should Be 'windows,wsl,docker,nvidia,python,vcredist,disk'
         @($r | Where-Object { $_.Status -ne 'ok' }).Count | Should Be 0
     }
 
@@ -48,6 +49,22 @@ Describe 'Get-VisHeartPrerequisites' {
             $c.Status | Should Be 'missing'
             $c.Message | Should Match 'Virtual Machine Platform'
         }
+    }
+
+    Context 'an old Visual C++ runtime' {
+        # 2026-11-21, a test desktop had v14.10.25017 (Visual Studio 2017): PyTorch failed with "[WinError 1114] ...
+        # c10.dll", so UNet Extend Training could not start.
+        Mock Get-VCRuntimeVersion { [version]'14.10.25017' }
+        It "is 'missing', so the installer updates it" {
+            $c = Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:') 'vcredist'
+            $c.Status | Should Be 'missing'
+            $c.Message | Should Match '14\.10'
+        }
+    }
+
+    Context 'no Visual C++ runtime' {
+        Mock Get-VCRuntimeVersion { $null }
+        It "is 'missing'" { (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'C:') 'vcredist').Status | Should Be 'missing' }
     }
 
     Context 'no WSL and no Docker' {
@@ -124,6 +141,7 @@ Describe 'disk space where VisHeart and Docker keep their files' {
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $true }
     Mock Get-PythonVersion { [version]'3.13.1' }
+    Mock Get-VCRuntimeVersion { [version]'14.44.35208' }
 
     Context 'Docker keeps its data on E:, which has room; C: is nearly full' {
         Mock Get-DockerDataDrive { 'E:' }
@@ -148,6 +166,24 @@ Describe 'disk space where VisHeart and Docker keep their files' {
             $c.Message | Should Match 'C:'
             $c.Message | Should Match '30 GB'
         }
+        It 'explains that the chosen folder does not change it, and how to move Docker''s storage' {
+            # 2026-11-21: installing on E: still said "C: is full"; it looked like a bug.
+            $m = (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'E:') 'disk').Message
+            $m | Should Match 'E:'
+            $m | Should Match 'does not change this'
+            $m | Should Match ([regex]::Escape('Settings > Resources > Advanced > Disk image location'))
+            $m | Should Not Match 'install it first'
+        }
+    }
+
+    Context 'Docker''s drive is too small and Docker Desktop is not installed yet' {
+        Mock Get-DockerDataDrive { 'C:' }
+        Mock Get-FreeSpaceGB { if ($Drive -eq 'E:') { 600 } else { 20 } }
+        Mock Test-DockerDesktopInstalled { $false }
+        It 'says to install Docker Desktop first, move its storage, then run the installer again' {
+            $m = (Get-Check (Get-VisHeartPrerequisites -InstallDrive 'E:') 'disk').Message
+            $m | Should Match 'install it first'
+        }
     }
 
     Context 'choosing the folder later' {
@@ -155,7 +191,7 @@ Describe 'disk space where VisHeart and Docker keep their files' {
         Mock Get-FreeSpaceGB { 1 }
         It '-SkipDisk leaves the disk check out' {
             $names = @(Get-VisHeartPrerequisites -InstallDrive 'C:' -SkipDisk | ForEach-Object { $_.Name }) -join ','
-            $names | Should Be 'windows,wsl,docker,nvidia,python'
+            $names | Should Be 'windows,wsl,docker,nvidia,python,vcredist'
         }
         It '-DiskOnly runs only the disk check' {
             $r = @(Get-VisHeartPrerequisites -InstallDrive 'C:' -DiskOnly)
@@ -185,6 +221,7 @@ Describe 'Test-VisHeartPrerequisites.ps1 output' {
     Mock Test-DockerDesktopInstalled { $true }
     Mock Test-NvidiaDriver { $false }
     Mock Get-PythonVersion { [version]'3.13.1' }
+    Mock Get-VCRuntimeVersion { [version]'14.44.35208' }
     Mock Get-DockerDataDrive { 'C:' }
 
     Context 'nothing blocks' {
@@ -195,10 +232,10 @@ Describe 'Test-VisHeartPrerequisites.ps1 output' {
                 $code = Invoke-VisHeartPrerequisites -InstallDrive 'C:' -OutJson "$dir\p.json" -OutText "$dir\p.txt"
                 $code | Should Be 0
                 $json = Get-Content -Raw "$dir\p.json" | ConvertFrom-Json
-                @($json).Count | Should Be 6
+                @($json).Count | Should Be 7
                 (@($json | Where-Object { $_.Name -eq 'wsl' })[0]).Status | Should Be 'missing'
                 $lines = Get-Content "$dir\p.txt"
-                $lines.Count | Should Be 6
+                $lines.Count | Should Be 7
                 $lines[1] | Should Match '^wsl\|missing\|.+'
                 $lines[3] | Should Match '^nvidia\|warn\|.+'
             } finally { Remove-Item -Recurse -Force $dir }

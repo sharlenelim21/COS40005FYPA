@@ -32,7 +32,8 @@ $script:ExcludedDirPaths = @(
     "$($script:App)\visheart-retraining\jobs"
 )
 # Files that are per PC or secret, never shipped.
-$script:ExcludedFileNames = @('secrets.env', 'release.env', '.env', 'FIRST-LOGIN.txt', 'database.owner')
+$script:ExcludedFileNames = @('secrets.env', 'release.env', '.env', 'FIRST-LOGIN.txt', 'database.owner',
+    'retraining.local.bat')   # the build PC's own training settings: each PC's setup writes its own
 # The only files and folders in visheart-inference-gpu\app\models that ship. Anything else there (a test checkpoint,
 # a version trained on the build PC) stops the build, so it can never reach users. Keep in step with the
 # "app/models" lines of visheart-inference-gpu\.dockerignore, which keep the same files out of the GPU image.

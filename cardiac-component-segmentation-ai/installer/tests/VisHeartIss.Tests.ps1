@@ -27,7 +27,22 @@ Describe 'visheart.iss rules' {
     It 'when the database cannot be deleted, uninstall keeps the data and its passwords' {
         $step = Get-PascalFunction 'CurUninstallStepChanged'
         # DeleteData is switched off inside the branch where Remove-VisHeartDocker -DeleteData failed.
-        $step | Should Match "(?s)Remove-VisHeartDocker.*-DeleteData.*if DeleteData and \(Code <> 0\) then begin.*DeleteData := False"
+        # Only when this copy made a database (database.owner): otherwise Docker holds nothing of it.
+        $step | Should Match "(?s)Remove-VisHeartDocker.*-DeleteData.*if DeleteData and \(Code <> 0\) and FileExists\(Deploy \+ '\\database\.owner'\) then begin.*DeleteData := False"
+    }
+
+    It 'when Docker cannot start but VisHeart never made its database, Yes still deletes everything' {
+        # 2026-11-21, test desktop: Docker never ran (Virtual Machine Platform off), so VisHeart never started, yet the
+        # uninstaller kept C:\VisHeart because it could not ask Docker. database.owner is written just before the
+        # first database is created (and before any image download), so without it Docker holds nothing of this copy.
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Not Match '(?m)^\s*if DeleteData and \(Code <> 0\) then begin'
+    }
+
+    It 'after keeping the data because Docker could not start, it does not say the user chose to keep it' {
+        # The same uninstall then said "As you chose, your patients ... were kept" although the user chose Yes.
+        $step = Get-PascalFunction 'CurUninstallStepChanged'
+        $step | Should Match '(?s)usPostUninstall\) and not DeleteData and not KeptForDocker'
     }
 
     It 'uninstall cleans Docker through Remove-VisHeartDocker, which starts Docker Desktop when it is not running' {
@@ -129,5 +144,38 @@ Describe 'visheart.iss compiles' {
         $finish = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'finish-page.iss')
         $finish | Should Match ([regex]::Escape('Settings > Apps > Installed apps > VisHeart'))
         $finish | Should Not Match 'Start menu > VisHeart > Uninstall'
+    }
+}
+
+Describe 'visheart.iss installs the Visual C++ runtime' {
+    $iss = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'visheart.iss')
+    It 'when the prerequisite check says it is missing or too old' {
+        # PyTorch (UNet Extend Training) failed with WinError 1114 on a PC with the 2017 runtime (2026-11-21).
+        $iss | Should Match "Name = 'vcredist' then NeedVCRedist := True"
+        $iss | Should Match "(?s)if NeedVCRedist then\s+InstallWithWinget\('Microsoft\.VCRedist\.2015\+\.x64'"
+    }
+}
+
+Describe 'visheart.iss shows prerequisite messages with line breaks' {
+    $iss = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'visheart.iss')
+    It 'turns the \n marker of a one-line check result into real line breaks before showing it' {
+        $iss | Should Match "StringChangeEx\(Result, '\\n', #13#10, True\)"
+        $select = [regex]::Match($iss, "(?ms)^function NextButtonClick.*?^end;").Value
+        $select | Should Match 'MsgBox\(Readable\(Line\)'
+    }
+}
+
+Describe 'visheart.iss shows VisHeart''s real size in Installed apps' {
+    # 2026-11-21: Installed apps showed 2.77 GB after the Full installer and 836 MB after an Update, because Inno Setup
+    # records the size of the files that installer itself copied (the Update has no training pack).
+    $iss = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'visheart.iss')
+    It 'keeps the AppId in one place, so the size goes to VisHeart''s own entry' {
+        $iss | Should Match '(?m)^#define AppGuid "CA49167C-4A63-4EEF-BCDA-6CCFB0BA99E5"'
+        $iss | Should Match '(?m)^AppId=\{\{\{#AppGuid\}\}'
+    }
+    It 'measures the install folder at the end and writes EstimatedSize to that entry' {
+        $iss | Should Match '(?s)function FolderSizeKB\(.*FindFirst'
+        $write = "RegWriteDWordValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + '{#AppGuid}' + '}_is1', 'EstimatedSize'"
+        $iss | Should Match ('(?s)CurStep = ssDone.*' + [regex]::Escape($write))
     }
 }

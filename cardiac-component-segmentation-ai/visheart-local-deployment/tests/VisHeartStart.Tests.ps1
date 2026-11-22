@@ -264,13 +264,15 @@ Describe 'Remove-OtherCopyContainers' {
                 $removed = @(Remove-OtherCopyContainers $dir)
                 ($removed -join ',') | Should Be 'visheart-local,visheart-minio'
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -eq 'rm -f visheart-local' }
+                    ($Arguments -join ' ') -eq 'rm -f -v visheart-local' }
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -eq 'rm -f visheart-minio' }
+                    ($Arguments -join ' ') -eq 'rm -f -v visheart-minio' }
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -eq 'rm -f visheart-redis' }
+                    ($Arguments -join ' ') -eq 'rm -f -v visheart-redis' }
+                # The other copy's data stays: no volume command. ("rm -v" removes only a container's unnamed volumes,
+                # never named ones such as its database.)
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
-                    ($Arguments -join ' ') -match '\bvolume\b|-v\b' }
+                    ($Arguments -join ' ') -match '\bvolume\b|down' }
                 # Windows PowerShell 5.1 strips double quotes inside native arguments, so docker got a broken
                 # --format template ('function "com" not defined'; found testing the installer, 2026-11-18).
                 Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
@@ -462,7 +464,14 @@ Describe 'Remove-VisHeartDocker' {
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
                 ($Arguments -join ' ') -eq "compose -f $compose --env-file $(Join-Path $dir 'release.env') --profile cpu --profile gpu down --remove-orphans" }
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter {
-                ($Arguments -join ' ') -match ' -v|--rmi|^rm ' }
+                ($Arguments -join ' ') -match 'down .*-v|--rmi|image rm|^rm ' }
+        }
+        It 'first removes the containers with their unnamed volumes (never the named data volumes)' {
+            # 2026-11-21, test desktop: every start left 3 unnamed volumes (the AI service's checkpoints mount, MinIO's
+            # /certs, the key-file helper's /data/db), because "down" without -v keeps them. "rm -v" removes only those.
+            Remove-VisHeartDocker $dir | Should Be 0
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -eq "compose -f $compose --env-file $(Join-Path $dir 'release.env') --profile cpu --profile gpu rm -s -f -v" }
         }
     }
 
@@ -477,7 +486,13 @@ Describe 'Remove-VisHeartDocker' {
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
                 ($Arguments -join ' ') -eq 'ps -aq --filter name=visheart-' }
             Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
-                ($Arguments -join ' ') -eq 'rm -f abc123 def456' }
+                ($Arguments -join ' ') -eq 'rm -f -v abc123 def456' }
+        }
+        It 'also removes the image the GPU check downloaded, without forcing it' {
+            # 346 MB that start.ps1's GPU check pulled stayed after "delete everything" (2026-11-21).
+            Remove-VisHeartDocker $dir -DeleteData | Out-Null
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 1 -Scope It -ParameterFilter {
+                ($Arguments -join ' ') -eq ('image rm ' + (Get-GpuCheckImage)) }
         }
     }
 
@@ -624,5 +639,133 @@ Describe 'start.ps1 removes old images' {
     $ps1 = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
     It 'only after VisHeart was started, and never fails the start' {
         $ps1 | Should Match '(?s)up -d visheart-app \$inferenceService.*try \{[^}]*Remove-OldVisHeartImages \$scriptDir'
+    }
+}
+
+Describe 'Test-DockerUsesWsl' {
+    It 'is true when Docker Desktop has no settings yet (WSL is its default)' {
+        Test-DockerUsesWsl (Join-Path $env:TEMP 'vh-no-such-settings.json') | Should Be $true
+    }
+    It 'is false only when the settings turn the WSL engine off (Hyper-V mode)' {
+        $f = Join-Path $env:TEMP ("vh-ds-" + [guid]::NewGuid() + '.json')
+        try {
+            Set-Content $f '{ "WslEngineEnabled": false }' -Encoding ASCII
+            Test-DockerUsesWsl $f | Should Be $false
+            Set-Content $f '{ "CustomWslDistroDir": "E:\docker" }' -Encoding ASCII
+            Test-DockerUsesWsl $f | Should Be $true
+        } finally { Remove-Item -Force $f -ErrorAction SilentlyContinue }
+    }
+}
+
+Describe 'Get-WindowsFeatureProblem' {
+    # 2026-11-21, test desktop: Virtual Machine Platform was off, so Docker Desktop could never start, and Start waited
+    # 3 minutes, then only said "Docker Desktop did not become ready".
+    Mock -ModuleName VisHeartStart Test-DockerUsesWsl { $true }
+    Mock -ModuleName VisHeartStart Test-RestartPending { $false }
+
+    Context 'the feature is on' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'enabled' }
+        It 'reports nothing' { Get-WindowsFeatureProblem | Should BeNullOrEmpty }
+    }
+    Context 'Windows cannot say' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'unknown' }
+        It 'reports nothing, so Start goes on as before' { Get-WindowsFeatureProblem | Should BeNullOrEmpty }
+    }
+    Context 'the feature is off' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'disabled' }
+        It "reports 'off'" { Get-WindowsFeatureProblem | Should Be 'off' }
+    }
+    Context 'the feature is off and Windows waits for a restart' {
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'disabled' }
+        Mock -ModuleName VisHeartStart Test-RestartPending { $true }
+        It "reports 'restart' (it was turned on; the restart has not happened yet)" {
+            Get-WindowsFeatureProblem | Should Be 'restart'
+        }
+    }
+    Context 'Docker Desktop runs in Hyper-V mode' {
+        Mock -ModuleName VisHeartStart Test-DockerUsesWsl { $false }
+        Mock -ModuleName VisHeartStart Get-VirtualMachinePlatformState { 'disabled' }
+        It 'reports nothing: Virtual Machine Platform is not needed there' {
+            Get-WindowsFeatureProblem | Should BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'Resolve-WindowsFeatureProblem' {
+    Mock -ModuleName VisHeartStart Enable-VirtualMachinePlatform { 3010 }
+    Mock -ModuleName VisHeartStart Invoke-WindowsRestart { }
+
+    Context 'no problem' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { $null }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { throw 'must not ask' }
+        It 'lets Start go on' { Resolve-WindowsFeatureProblem | Should Be $true }
+    }
+    Context 'the feature is off and the user says No' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'off' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $false }
+        It 'changes nothing and stops Start' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Enable-VirtualMachinePlatform -Times 0 -Scope It
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 0 -Scope It
+        }
+    }
+    Context 'the feature is off and the user says Yes twice' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'off' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $true }
+        It 'turns it on (one Windows permission prompt), then restarts' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Enable-VirtualMachinePlatform -Times 1 -Exactly -Scope It
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 1 -Exactly -Scope It
+        }
+    }
+    Context 'the user refuses the Windows permission prompt' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'off' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $true }
+        Mock -ModuleName VisHeartStart Enable-VirtualMachinePlatform { -1 }
+        It 'does not restart' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 0 -Scope It
+        }
+    }
+    Context 'it was turned on and only the restart is missing' {
+        Mock -ModuleName VisHeartStart Get-WindowsFeatureProblem { 'restart' }
+        Mock -ModuleName VisHeartStart Show-VisHeartQuestion { $true }
+        It 'offers the restart without turning anything on again' {
+            Resolve-WindowsFeatureProblem | Should Be $false
+            Assert-MockCalled -ModuleName VisHeartStart Enable-VirtualMachinePlatform -Times 0 -Scope It
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-WindowsRestart -Times 1 -Exactly -Scope It
+        }
+    }
+}
+
+Describe 'start.ps1 checks the Windows feature before waiting for Docker' {
+    $ps1 = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
+    It 'stops early instead of waiting 3 minutes for a Docker that cannot start' {
+        $ps1 | Should Match '(?s)if \(-not \(Resolve-WindowsFeatureProblem\)\) \{\s*exit 10\s*\}.*\$docker = Wait-DockerReady'
+    }
+}
+
+Describe 'start.ps1 when VisHeart is already running (the desktop icon)' {
+    $ps1 = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
+    It 'also starts the UNet Extend Training service before it stops' {
+        # 2026-11-21: after a Windows restart Docker brings the containers back by itself, but not the training
+        # service (it runs on Windows, not in Docker). The icon saw VisHeart answering, only opened the browser, and
+        # the training page said "The training service is not available" however often it was clicked.
+        $ps1 | Should Match '(?s)if \(\$OpenBrowser -and \(Test-VisHeartAnswering\)\) \{[^}]*Start-RetrainingWorker[^}]*exit 0'
+    }
+}
+
+Describe 'Get-RunningInferenceContainer' {
+    Context 'the CPU AI service runs' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 0 }
+        Mock -ModuleName VisHeartStart Get-LastDockerOutput { @('visheart-gpu-cpu') }
+        It 'names it, asking Docker without double quotes' {
+            Get-RunningInferenceContainer | Should Be 'visheart-gpu-cpu'
+            Assert-MockCalled -ModuleName VisHeartStart Invoke-Docker -Times 0 -Scope It -ParameterFilter { ($Arguments -join ' ') -match '"' }
+        }
+    }
+    Context 'Docker cannot be asked' {
+        Mock -ModuleName VisHeartStart Invoke-Docker { 1 }
+        It 'returns nothing' { Get-RunningInferenceContainer | Should Be '' }
     }
 }

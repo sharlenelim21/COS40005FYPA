@@ -3,7 +3,7 @@
     Checks this PC before VisHeart is installed.
 
 .DESCRIPTION
-    Writes one result per check (windows, wsl, docker, nvidia, python, disk), each with a status and a plain sentence:
+    Writes one result per check (windows, wsl, docker, nvidia, python, vcredist, disk), each with a status and a plain sentence:
       ok       nothing to do
       missing  the installer installs it (WSL, Docker Desktop, Python)
       warn     VisHeart works with a limitation (no NVIDIA GPU)
@@ -79,6 +79,21 @@ function Test-NvidiaDriver {
     return ($LASTEXITCODE -eq 0)
 }
 
+$script:MinVCRuntime = [version]'14.40'   # current PyTorch builds for Windows need the 2022 (14.40+) runtime
+
+function Get-VCRuntimeVersion {
+    # The installed Microsoft Visual C++ 2015-2022 runtime (x64), or $null. Read from the 64-bit registry view: the
+    # installer is a 32-bit program, which would otherwise see the 32-bit runtime's key.
+    try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        $key = $base.OpenSubKey('SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64')
+        if (-not $key) { return $null }
+        $text = [string]$key.GetValue('Version')
+        if ($text -match '(\d+\.\d+\.\d+)') { return [version]$Matches[1] }
+    } catch { }
+    return $null
+}
+
 function Get-PythonVersion {
     # The Microsoft Store "python" stub prints nothing useful; a real install prints "Python 3.x.y".
     foreach ($cmd in @(@('py', '-3', '--version'), @('python', '--version'))) {
@@ -142,6 +157,12 @@ function Get-VisHeartPrerequisites {
     elseif ($python) { New-Check 'python' 'missing' "Python $python is too old for UNet Extend Training (3.11 or later). The installer will install Python 3.13." }
     else { New-Check 'python' 'missing' 'Python is not installed. UNet Extend Training needs it; the installer will install Python 3.13.' }
 
+    # Found 2026-11-21: with the 2017 runtime (14.10) PyTorch fails with "[WinError 1114] ... c10.dll".
+    $vc = Get-VCRuntimeVersion
+    if ($vc -and $vc -ge $script:MinVCRuntime) { New-Check 'vcredist' 'ok' "Microsoft Visual C++ runtime $vc." }
+    elseif ($vc) { New-Check 'vcredist' 'missing' "The Microsoft Visual C++ runtime on this PC ($vc) is too old for UNet Extend Training. The installer will update it." }
+    else { New-Check 'vcredist' 'missing' 'The Microsoft Visual C++ runtime is not installed. UNet Extend Training needs it; the installer will install it.' }
+
     if (-not $SkipDisk) { Get-DiskCheck -InstallDrive $InstallDrive -ExistingInstall:$ExistingInstall }
 }
 
@@ -167,7 +188,20 @@ function Get-DiskCheck {
     }
     $dockerFree = Get-FreeSpaceGB $dockerDrive
     if ($dockerFree -lt $script:MinFreeGBDocker) {
-        return New-Check 'disk' 'block' ("Only {0} GB is free on {1}, where Docker Desktop keeps its data. The first start of VisHeart downloads about 25 GB there; it needs at least {2} GB. Free some space, then install again." -f $dockerFree, $dockerDrive, $script:MinFreeGBDocker)
+        # 2026-11-21: installing on E: still said "C: is full", which looked like a bug. Say why the folder choice does
+        # not help and how to move Docker's storage. "\n" marks a line break; the installer shows it as one.
+        $text = ("Not enough room for Docker's downloads.\n\nVisHeart's files go to the folder you chose ({0}), but the " +
+            "25 GB that VisHeart downloads on its first start go to Docker Desktop's storage, which is on {1}. Only {2} GB " +
+            "is free there; {3} GB is needed. Choosing another folder for VisHeart does not change this.\n\n" +
+            "To fix it, either:\n- free space on {1}, or\n- move Docker Desktop's storage to a drive with {3} GB free: open " +
+            "Docker Desktop > Settings > Resources > Advanced > Disk image location, choose a folder on that drive (for " +
+            "example {0}\DockerData), click Apply & restart, then run this installer again.") -f
+            $InstallDrive, $dockerDrive, $dockerFree, $script:MinFreeGBDocker
+        if (-not (Test-DockerDesktopInstalled)) {
+            $text += ("\n\nDocker Desktop is not installed yet: install it first from https://www.docker.com/products/docker-desktop/, " +
+                "move its storage as above, then run this installer again.")
+        }
+        return New-Check 'disk' 'block' $text
     }
     return New-Check 'disk' 'ok' ("{0} GB free on {1}; {2} GB free on {3} for Docker." -f $free, $InstallDrive, $dockerFree, $dockerDrive)
 }

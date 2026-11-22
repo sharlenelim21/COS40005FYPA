@@ -1,7 +1,7 @@
 """Compare an evaluate.py report with the orientation diagnostic's raw-arm Dice, case by case.
 
   python check_against_diagnostic.py REPORT.json [--label production] [--map mms1=mms]
-         [--diagnostic E:\\Jy\\Unet\\diagnostics\\heldout_unet_orientation_full.json] [--tolerance 1e-9]
+         [--diagnostic DATA_FOLDER\\diagnostics\\heldout_unet_orientation_full.json] [--tolerance 1e-9]
 
 Exit code 0 only when at least one case was compared and every compared case matches within tolerance.
 """
