@@ -441,6 +441,163 @@ Describe 'Get-UpdateNotice' {
     }
 }
 
+Describe 'Get-SafeDownloadUri' {
+    It 'accepts an https link on drive.google.com or github.com' {
+        foreach ($url in @('https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv?usp=sharing',
+                           'https://github.com/sharlenelim21/COS40005FYPA/releases',
+                           'HTTPS://GitHub.com/x')) {
+            $uri = Get-SafeDownloadUri $url
+            $uri | Should Not BeNullOrEmpty
+            $uri.GetType().FullName | Should Be 'System.Uri'
+        }
+        (Get-SafeDownloadUri 'https://drive.google.com/drive/folders/abc?usp=sharing').AbsoluteUri |
+            Should Be 'https://drive.google.com/drive/folders/abc?usp=sharing'
+    }
+
+    It 'refuses anything else' {
+        foreach ($url in @('http://drive.google.com/x', 'http://github.com/x', 'file://C:/x.exe', 'file:///C:/x.exe',
+                           'C:\Users\x\VisHeart-Update.exe', '\\server\share\VisHeart-Update.exe', '.\update.exe',
+                           'github.com/x', 'https://evil.example/x', 'https://drive.google.com.evil.example/x',
+                           'https://evilgithub.com/x', 'https://gist.github.com/x', 'https://raw.githubusercontent.com/x',
+                           'https://github.com@evil.example/x', 'https://user:pw@github.com/x', 'https://github.com:8443/x',
+                           'ftp://github.com/x', 'javascript:alert(1)', '', '   ', $null)) {
+            Get-SafeDownloadUri $url | Should BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'Show-VisHeartPopup' {
+    Mock -ModuleName VisHeartStart New-Object { throw 'no COM here' }
+    It 'returns -1 when the popup cannot be shown' {
+        Show-VisHeartPopup -Text 'x' -Type 68 | Should Be -1
+    }
+}
+
+Describe 'Show-UpdateNotice' {
+    $driveLink = 'https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv?usp=sharing'
+    $log = { param($Message) $global:VhUpdateLog += @($Message) }
+    $askText = "A new version of VisHeart (1.0.2) is available.`n`nFixes the export.`n`nOpen the download page now? VisHeart keeps running either way."
+
+    Context 'Yes on a safe link' {
+        Mock -ModuleName VisHeartStart Show-VisHeartPopup { 6 }
+        Mock -ModuleName VisHeartStart Start-Process {}
+        It 'asks Yes/No and opens the download page in the browser' {
+            $global:VhUpdateLog = @()
+            $r = Show-UpdateNotice @{ Version = '1.0.2'; Download = $driveLink; Note = 'Fixes the export.' } -Log $log
+            $r | Should Be 'opened'
+            Assert-MockCalled -ModuleName VisHeartStart Show-VisHeartPopup -Times 1 -Exactly -Scope It -ParameterFilter {
+                $Type -eq (4 + 64) -and $Text -ceq $askText -and $Title -eq 'VisHeart update available' }
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 1 -Exactly -Scope It -ParameterFilter { $FilePath -ceq $driveLink }
+            ($global:VhUpdateLog | Where-Object { $_ -notlike 'UPDATE: *' }).Count | Should Be 0
+            $global:VhUpdateLog -contains "UPDATE: Download page: $driveLink" | Should Be $true
+        }
+        It 'leaves the note line out when there is none' {
+            Show-UpdateNotice @{ Version = '1.0.2'; Download = $driveLink; Note = '' } -Log $log | Should Be 'opened'
+            Assert-MockCalled -ModuleName VisHeartStart Show-VisHeartPopup -Times 1 -Exactly -Scope It -ParameterFilter {
+                $Text -ceq "A new version of VisHeart (1.0.2) is available.`n`nOpen the download page now? VisHeart keeps running either way." }
+        }
+    }
+
+    Context 'No, or the popup closed or not shown' {
+        Mock -ModuleName VisHeartStart Start-Process {}
+        It 'opens nothing on No' {
+            Mock -ModuleName VisHeartStart Show-VisHeartPopup { 7 }
+            Show-UpdateNotice @{ Version = '1.0.2'; Download = $driveLink; Note = '' } -Log $log | Should Be 'declined'
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 0 -Scope It
+        }
+        It 'opens nothing when the popup could not be shown' {
+            Mock -ModuleName VisHeartStart Show-VisHeartPopup { -1 }
+            Show-UpdateNotice @{ Version = '1.0.2'; Download = $driveLink; Note = '' } -Log $log | Should Be 'declined'
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 0 -Scope It
+        }
+    }
+
+    Context 'a link that is not safe to open' {
+        # The popup answers Yes, so a slip in the check would show up as a Start-Process call.
+        Mock -ModuleName VisHeartStart Show-VisHeartPopup { 6 }
+        Mock -ModuleName VisHeartStart Start-Process {}
+        It 'shows the old OK-only notice with the link as text and opens nothing' {
+            foreach ($bad in @('http://drive.google.com/x', 'file://C:/x.exe', 'C:\Users\x\VisHeart-Update.exe',
+                               'https://evil.example/x', 'https://drive.google.com.evil.example/x', 'https://gist.github.com/x')) {
+                Show-UpdateNotice @{ Version = '1.0.2'; Download = $bad; Note = 'Fixes the export.' } -Log $log | Should Be 'notice'
+                $old = "A new version of VisHeart (1.0.2) is available.`n`nFixes the export.`n`nDownload the Update installer from:`n$bad" +
+                       "`n`nVisHeart is running and you can keep using it. Install the update when convenient."
+                Assert-MockCalled -ModuleName VisHeartStart Show-VisHeartPopup -Times 1 -Exactly -Scope It -ParameterFilter { $Type -eq 64 -and $Text -ceq $old }
+            }
+            Assert-MockCalled -ModuleName VisHeartStart Show-VisHeartPopup -Times 0 -Scope It -ParameterFilter { $Type -ne 64 }
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 0 -Scope It
+        }
+        It 'says to ask the team when there is no link' {
+            Show-UpdateNotice @{ Version = '1.0.2'; Download = $null; Note = '' } -Log $log | Should Be 'notice'
+            Assert-MockCalled -ModuleName VisHeartStart Show-VisHeartPopup -Times 1 -Exactly -Scope It -ParameterFilter {
+                $Type -eq 64 -and $Text -like '*Ask the VisHeart team where to download it.*' }
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 0 -Scope It
+        }
+    }
+
+    Context 'from latest.json to the popup' {
+        Mock -ModuleName VisHeartStart Show-VisHeartPopup { 6 }
+        Mock -ModuleName VisHeartStart Start-Process {}
+        function New-ReleaseDir([string]$Version) {
+            $dir = Join-Path $env:TEMP ("vh-upd-" + [guid]::NewGuid())
+            New-Item -ItemType Directory $dir | Out-Null
+            Set-Content (Join-Path $dir 'release.env') @("VH_VERSION=$Version", 'VH_UPDATE_URL=https://example.test/latest.json') -Encoding ASCII
+            return $dir
+        }
+        It 'shows no popup when the published version is not higher' {
+            Mock -ModuleName VisHeartStart Invoke-UpdateFeed { [pscustomobject]@{ version = '1.0.2'; download = 'https://drive.google.com/drive/folders/abc?usp=sharing'; note = 'x' } }
+            foreach ($installed in @('1.0.2', '1.0.3')) {
+                $dir = New-ReleaseDir $installed
+                try { Show-UpdateNotice (Get-UpdateNotice $dir) -Log $log | Should BeNullOrEmpty }
+                finally { Remove-Item -Recurse -Force $dir }
+            }
+            Assert-MockCalled -ModuleName VisHeartStart Show-VisHeartPopup -Times 0 -Scope It
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 0 -Scope It
+        }
+        It 'opens nothing for an http:// or file:// link in latest.json' {
+            Mock -ModuleName VisHeartStart Invoke-UpdateFeed { [pscustomobject]@{ version = '1.0.2'; download = $global:VhFeedLink; note = '' } }
+            foreach ($bad in @('http://drive.google.com/x', 'file://C:/x.exe')) {
+                $global:VhFeedLink = $bad
+                $dir = New-ReleaseDir '1.0.0'
+                try { Show-UpdateNotice (Get-UpdateNotice $dir) -Log $log | Should Be 'notice' }
+                finally { Remove-Item -Recurse -Force $dir }
+            }
+            Assert-MockCalled -ModuleName VisHeartStart Show-VisHeartPopup -Times 2 -Exactly -Scope It -ParameterFilter { $Type -eq 64 }
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 0 -Scope It
+        }
+        It 'asks and opens the page for a copy set to VH_VERSION=1.0.0 (the test trick)' {
+            Mock -ModuleName VisHeartStart Invoke-UpdateFeed { [pscustomobject]@{ version = '1.0.2'; download = 'https://drive.google.com/drive/folders/abc?usp=sharing'; note = '' } }
+            $dir = New-ReleaseDir '1.0.0'
+            try { Show-UpdateNotice (Get-UpdateNotice $dir) -Log $log | Should Be 'opened' }
+            finally { Remove-Item -Recurse -Force $dir }
+            Assert-MockCalled -ModuleName VisHeartStart Start-Process -Times 1 -Exactly -Scope It
+        }
+    }
+
+    Context 'the browser cannot be opened' {
+        Mock -ModuleName VisHeartStart Show-VisHeartPopup { 6 }
+        Mock -ModuleName VisHeartStart Start-Process { throw 'No application is associated with the specified file.' }
+        It 'does not throw, and logs an UPDATE: line with the link' {
+            $global:VhUpdateLog = @()
+            $script:result = $null
+            { $script:result = Show-UpdateNotice @{ Version = '1.0.2'; Download = $driveLink; Note = '' } -Log $log } | Should Not Throw
+            $script:result | Should Be 'open-failed'
+            @($global:VhUpdateLog | Where-Object { $_ -like 'UPDATE: Could not open the download page in the browser (No application is associated*' -and $_ -like "*$driveLink" }).Count |
+                Should Be 1
+        }
+    }
+
+    Context 'start.ps1' {
+        $start = Get-Content -Raw (Join-Path (Split-Path -Parent $PSScriptRoot) 'start.ps1')
+        It 'leaves the popup to Show-UpdateNotice, before the start result is decided' {
+            $start | Should Not Match 'WScript\.Shell'
+            $call = $start.IndexOf('Show-UpdateNotice $update')
+            $call | Should BeGreaterThan 0
+            $call | Should BeLessThan $start.IndexOf("Write-Log 'Startup successful.'")
+        }
+    }
+}
+
 Describe 'Remove-VisHeartDocker' {
     $dir = Join-Path $env:TEMP ("vh-rm-" + [guid]::NewGuid())
     New-Item -ItemType Directory $dir | Out-Null

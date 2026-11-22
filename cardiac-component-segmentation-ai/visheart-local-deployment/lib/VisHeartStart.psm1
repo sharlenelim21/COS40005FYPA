@@ -347,6 +347,70 @@ function Get-UpdateNotice {
     return @{ Version = [string]$feed.version; Download = $download; Note = $note }
 }
 
+# The only sites the update popup opens in the browser. latest.json is fetched from the internet, so its link is
+# never trusted on its own.
+$script:UpdateDownloadHosts = @('drive.google.com', 'github.com')
+
+function Get-SafeDownloadUri {
+    # The download link from latest.json as a parsed [System.Uri] when it is safe to open in the browser, else $null.
+    # Safe means: an absolute https address on exactly drive.google.com or github.com (no other subdomain), on the
+    # normal port, with no user name or password in it. http://, file://, a local path or any other site is $null.
+    param([string]$Url)
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $null }
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$uri)) { return $null }
+    if ($uri.Scheme -cne [System.Uri]::UriSchemeHttps) { return $null }
+    if ($uri.UserInfo -or -not $uri.IsDefaultPort) { return $null }
+    if ($script:UpdateDownloadHosts -notcontains $uri.Host) { return $null }
+    return $uri
+}
+
+function Show-VisHeartPopup {
+    # A WScript.Shell popup that waits for the user. Returns the button pressed (1 OK, 6 Yes, 7 No), -1 when it
+    # cannot be shown.
+    param([string]$Text, [string]$Title = 'VisHeart', [int]$Type = 64)
+    try { return [int]((New-Object -ComObject WScript.Shell).Popup($Text, 0, $Title, $Type)) } catch { return -1 }
+}
+
+function Show-UpdateNotice {
+    # Tells the user about a newer VisHeart (an object from Get-UpdateNotice; $null shows nothing). Every line also
+    # goes to the start log as UPDATE: ..., because the start window closes by itself after a successful start.
+    # With a safe download link (Get-SafeDownloadUri) the popup asks Yes/No, and Yes opens that page in the default
+    # browser. Otherwise it is the OK-only notice with the link as text, and nothing is opened. Never throws:
+    # VisHeart keeps running whatever happens here. Returns what happened: opened, declined, open-failed or notice.
+    param($Update, [scriptblock]$Log = { param($Message) Write-Host $Message })
+    if (-not $Update) { return $null }
+    $title = 'VisHeart update available'
+    $uri = Get-SafeDownloadUri $Update.Download
+
+    if (-not $uri) {
+        $text = "A new version of VisHeart ($($Update.Version)) is available."
+        if ($Update.Note) { $text += "`n`n$($Update.Note)" }
+        if ($Update.Download) { $text += "`n`nDownload the Update installer from:`n$($Update.Download)" }
+        else { $text += "`n`nAsk the VisHeart team where to download it." }
+        $text += "`n`nVisHeart is running and you can keep using it. Install the update when convenient."
+        foreach ($line in ($text -split "`n")) { if ($line) { & $Log "UPDATE: $line" } }
+        Show-VisHeartPopup -Text $text -Title $title -Type 64 | Out-Null
+        return 'notice'
+    }
+
+    $link = $uri.AbsoluteUri
+    $text = "A new version of VisHeart ($($Update.Version)) is available."
+    if ($Update.Note) { $text += "`n`n$($Update.Note)" }
+    $text += "`n`nOpen the download page now? VisHeart keeps running either way."
+    foreach ($line in ($text -split "`n")) { if ($line) { & $Log "UPDATE: $line" } }
+    & $Log "UPDATE: Download page: $link"
+    if ((Show-VisHeartPopup -Text $text -Title $title -Type (4 + 64)) -ne 6) { return 'declined' }
+    try {
+        Start-Process -FilePath $link -ErrorAction Stop
+        & $Log 'UPDATE: Opened the download page in the browser.'
+        return 'opened'
+    } catch {
+        & $Log "UPDATE: Could not open the download page in the browser ($($_.Exception.Message)). Open it yourself: $link"
+        return 'open-failed'
+    }
+}
+
 function Remove-VisHeartDocker {
     # Used by the uninstaller. Starts Docker Desktop when it is not running (the old uninstaller skipped the clean-up
     # then, leaving containers that point at the deleted install folder). Keeping the data removes this copy's
@@ -436,7 +500,7 @@ function Open-VisHeart {
 }
 
 Export-ModuleMember -Function Get-DockerDesktopExe, Test-UrlAnswers, Test-VisHeartAnswering, Open-VisHeart, Get-PortListeners, Get-BusyPorts, Invoke-Docker, Get-LastDockerOutput, Get-ComposeEnvArgs, Wait-DockerReady, Invoke-FirstPull,
-    Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
+    Test-DatabaseVolume, Invoke-UpdateFeed, Get-UpdateNotice, Get-SafeDownloadUri, Show-VisHeartPopup, Show-UpdateNotice, Get-ComposeProjectName, Remove-OtherCopyContainers,
     Remove-VisHeartDocker, Initialize-BackendFolders, Remove-OldVisHeartImages, Test-DockerUsesWsl, Get-VirtualMachinePlatformState,
     Test-RestartPending, Get-WindowsFeatureProblem, Show-VisHeartQuestion, Enable-VirtualMachinePlatform, Invoke-WindowsRestart,
     Resolve-WindowsFeatureProblem, Get-RunningInferenceContainer, Get-GpuCheckImage
