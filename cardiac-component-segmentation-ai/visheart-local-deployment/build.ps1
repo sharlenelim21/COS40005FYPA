@@ -44,7 +44,7 @@ Write-Host "Building combined image..." -ForegroundColor Yellow
 Write-Host "This will take several minutes..." -ForegroundColor Gray
 Write-Host ""
 
-docker build -f visheart-local-deployment/Dockerfile -t $FULL_IMAGE_NAME -t "${ImageName}:latest" --build-arg BUILDKIT_INLINE_CACHE=1 .
+docker build --no-cache -f visheart-local-deployment/Dockerfile -t $FULL_IMAGE_NAME -t "${ImageName}:latest" --build-arg BUILDKIT_INLINE_CACHE=1 .
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
