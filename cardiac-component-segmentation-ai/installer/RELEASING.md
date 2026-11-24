@@ -70,11 +70,14 @@ The build PC is the computer that makes the installers. It needs:
    2. Set the default image in `visheart-local-deployment\docker-compose.yml` to the new tag
       (`${VH_APP_IMAGE:-sharlene21/visheart-local:1.6.0}`), run `stop.bat` and `start.bat`, and check your change in
       the browser.
-   3. Push it. You need push access to the `sharlene21` Docker Hub account; ask the team lead.
+   3. Push it. You need push access to the Docker Hub account in the image name. Any account works, not only
+      `sharlene21`: build with your own name (`.\build.ps1 -Version 1.6.0 -ImageName youraccount/visheart-local`) and
+      push that.
       ```
       docker push sharlene21/visheart-local:1.6.0
       ```
-   4. Set `"VH_APP_IMAGE": "sharlene21/visheart-local:1.6.0"` in `installer/release.json`.
+   4. Set `"VH_APP_IMAGE": "sharlene21/visheart-local:1.6.0"` in `installer/release.json` (your own image name, if
+      you pushed to another account).
 
    Use a new version number every time, never `latest` or an old number: an installed PC downloads an image only when
    its tag is new to it, so a changed image pushed under an old tag never reaches users.
@@ -141,3 +144,54 @@ and `make-installer` refuses it. Make a new pack.
 
 See "Run VisHeart locally from source" and "After you change code" in the repository's top-level `README.md`.
 A developer copy uses the defaults in `docker-compose.yml` and needs no `release.env` or `secrets.env`.
+
+## 7. Handing the accounts to a new owner
+
+VisHeart depends on three outside accounts. Each one is built into every installed copy, so moving one is more than
+handing over a password. Hand passwords over in person or through a password manager, never in a document or chat.
+
+| Account | What installed copies use it for | What breaks if it changes carelessly |
+|---|---|---|
+| Support Gmail (`VH_SUPPORT_EMAIL` in `smtp.release.env`) | The FAQ page sends users' questions through it, with the app password built into each installer | FAQ emails |
+| Its Google Drive (the two folders in step 6 of section 3) | `latest.json` and `INSTALL.md` link to the folders | Download links |
+| GitHub repository (`updateUrl` in `release.json`) | Every start reads `latest.json` from its `main` branch | The update popup |
+| Docker Hub (`VH_APP_IMAGE`, `VH_GPU_IMAGE` in `release.json`) | A PC downloads the images only when they are missing: new install, reinstall, or the first start of a new version | New installs and reinstalls |
+
+### Support Gmail
+
+1. Give the new owner the login. Change the account's recovery phone and recovery email to theirs.
+2. The new owner changes the password. Google then revokes the account's app passwords, so the FAQ page on every
+   installed copy stops sending mail.
+3. The new owner creates a new app password, puts it in `installer/smtp.release.env`, and releases an Update
+   (section 3). Installed copies send FAQ mail again once that Update is installed.
+
+### Google Drive folders
+
+Check who owns the *visheart installer* and *visheart version update* folders (Drive > the folder > Details). If a
+team member's personal Drive owns them, transfer ownership to the support account before that member leaves.
+Transferring ownership keeps the folder links, so `latest.json`, `INSTALL.md` and the popup keep working. A folder
+owned by a university account may not transfer to a Gmail account; then copy the files into a new folder on the
+support account. A new folder has a new link, which must go into `latest.json` (`download`) and `INSTALL.md`.
+
+### GitHub repository (new owner forks it)
+
+Installed copies read the update notice from the address in `updateUrl`, which names the original repository. A
+fork does not change that address, so:
+
+1. Keep the original repository online, and do not delete or rename it, until step 4 is done. Without it, VisHeart
+   still starts, but shows no update popup.
+2. In the fork, change `updateUrl` in `installer/release.json` to the fork's own `latest.json`:
+   `https://raw.githubusercontent.com/<new-owner>/<fork-name>/main/cardiac-component-segmentation-ai/installer/latest.json`.
+3. Release an Update from the fork (section 3). Publish its notice in the **original** repository's `latest.json`,
+   the one installed copies still read, so the popup announces it.
+4. Once every installed PC has that Update, they read the fork's `latest.json`. Publish later notices there only.
+
+If the original repository cannot stay online, skip the notice in step 3: tell the users directly to install that
+Update by hand.
+
+### Docker Hub
+
+An installed copy keeps running without Docker Hub, because it already has its images. Keep the released images
+named in `release.json` online on their account, or new installs and reinstalls of those versions cannot start.
+Future versions need no access to the old account: push to the new owner's account (section 3, step 2) and name
+those images in `release.json`.
