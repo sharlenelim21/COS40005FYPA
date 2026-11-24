@@ -292,8 +292,17 @@ def _assign_rvip_classes(
     Classify two RVIP points as (anterior, inferior) using their angular
     position around the LV centroid.
 
-    The anterior RVIP always occurs at a smaller angle than the inferior
-    RVIP (anti-clockwise positive), given a non-flipped image.
+    Quadrant-based, not a plain angle comparison: within the same quadrant
+    the smaller angle is anterior, as before, but a plain "smaller angle
+    wins" comparison gets the Q4->Q1 case backwards (a point at 350 degrees
+    reads as "larger" than one at 10 degrees, even though it is the earlier
+    one going anti-clockwise around the 0/360 wrap). Quadrant order fixes
+    that, and the two near-opposite pairs (Q1/Q3, Q2/Q4) -- where quadrant
+    order alone doesn't decide it -- fall back to whichever point sits
+    closer to the far quadrant boundary (225 degrees for Q1/Q3, 315 degrees
+    for Q2/Q4). Client-supplied logic (assign_classes_v2.py, 2026-11-24),
+    replacing the plain comparison; see Landmark-logic-Sharlene.pdf for the
+    original derivation this refines.
 
     Returns
     -------
@@ -308,7 +317,32 @@ def _assign_rvip_classes(
     angle_a = math.degrees(math.atan2(ay - cy, ax - cx)) % 360.0
     angle_b = math.degrees(math.atan2(by - cy, bx - cx)) % 360.0
 
-    if angle_b < angle_a:
+    def _quadrant(angle: float) -> str:
+        if angle < 90.0:
+            return "Q1"
+        if angle < 180.0:
+            return "Q2"
+        if angle < 270.0:
+            return "Q3"
+        return "Q4"
+
+    quad_a = _quadrant(angle_a)
+    quad_b = _quadrant(angle_b)
+
+    if quad_a == quad_b:
+        b_is_anterior = angle_b < angle_a
+    elif (quad_a, quad_b) in (("Q1", "Q2"), ("Q2", "Q3"), ("Q3", "Q4"), ("Q4", "Q1")):
+        b_is_anterior = False
+    elif (quad_a, quad_b) in (("Q2", "Q1"), ("Q3", "Q2"), ("Q4", "Q3"), ("Q1", "Q4")):
+        b_is_anterior = True
+    elif quad_a == "Q1" and quad_b == "Q3":
+        b_is_anterior = angle_b >= 225.0
+    elif quad_a == "Q2" and quad_b == "Q4":
+        b_is_anterior = angle_b >= 315.0
+    else:
+        b_is_anterior = True
+
+    if b_is_anterior:
         inferior, anterior = point_a, point_b
         swapped = True
     else:
