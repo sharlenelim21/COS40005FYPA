@@ -20,7 +20,6 @@ import { JobStatus, IProjectLandmark, IProjectLandmarkDocument } from "../types/
 import logger from "../services/logger";
 import { getFreshGPUServerAddress, getCurrentToken } from "../services/gpu_auth_client";
 import { resolveRvInsertionPoints, resolveRvInsertionSlices } from "../services/rv_insertion_points";
-import { normalizeLandmarkFrames, normalizeLandmarkJobResult } from "../utils/landmark_order";
 import { applyTemplateGuard } from "../middleware/template_guard";
 import { findViewableProject } from "../services/template_access";
 
@@ -32,7 +31,9 @@ const serviceLocation = "LandmarkRoutes";
 
 const parseCompletedLandmarkJobResult = (job: any) => {
   try {
-    const r = normalizeLandmarkJobResult(typeof job.result === "string" ? JSON.parse(job.result) : job.result);
+    // Stored exactly as the GPU service sent it -- anterior/inferior is decided once, geometrically,
+    // by landmark_inference_api.py's _assign_rvip_classes, and must never be re-labelled on every read.
+    const r = typeof job.result === "string" ? JSON.parse(job.result) : job.result;
     if (!r) return null;
 
     // Old format already has predictions[]
@@ -463,7 +464,9 @@ router.put(
       res.status(400).json({ success: false, message: "'frames' must be a non-empty array." });
       return;
     }
-    const orderedFrames = normalizeLandmarkFrames(framesFromBody);
+    // Saved exactly as the user positioned it -- re-labelling anterior/inferior by Y-position here
+    // would flip the point right back after the user deliberately moved it (direct request, 2026-11-24).
+    const orderedFrames = framesFromBody;
 
     try {
       // Owner (Doctor) or Admin may save here. This endpoint previously had NO ownership
@@ -578,9 +581,11 @@ router.get(
         ? (editableDoc as any).toJSON()
         : editableDoc ?? null;
 
+      // Returned exactly as stored -- see the save route's own comment on why this is never
+      // re-labelled by position.
       res.status(200).json({
         success: true,
-        result: editableJson ? { ...editableJson, frames: normalizeLandmarkFrames(editableJson.frames ?? []) } : null,
+        result: editableJson ? { ...editableJson, frames: editableJson.frames ?? [] } : null,
       });
     } catch (error: any) {
       logger.error(`${serviceLocation}: Error loading landmark edits`, {

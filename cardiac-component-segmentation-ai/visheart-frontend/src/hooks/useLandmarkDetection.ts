@@ -131,7 +131,10 @@ export function useLandmarkDetection(
 
   const applyResult = useCallback(
     (rawResult: LandmarkInferenceResponse) => {
-      const result = normalizeLandmarkResponse(rawResult);
+      // Applied exactly as the backend returned it -- anterior/inferior is decided once,
+      // geometrically, by the GPU service; re-labelling by Y-position here would silently undo
+      // that classification for a freshly-received result (direct request, 2026-11-24).
+      const result = rawResult;
       const frameIds = Array.from(new Set(result.predictions.map((p) => p.frame_id))).sort((a, b) => a - b);
       const firstFrame = frameIds[0] ?? 0;
       setState((s) => ({

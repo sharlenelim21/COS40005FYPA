@@ -99,39 +99,16 @@ export function isLandmarkPendingDelete(
 }
 
 /**
- * Ordering rule for the two RV insertion points: rv_insertion_1 is the ANTERIOR
- * point = the TOP point on the displayed short-axis image (smaller y);
- * rv_insertion_2 is the INFERIOR point (larger y). Ties keep the current order;
- * if either point is missing nothing is swapped. Returns [anterior, inferior].
- *
- * Copy of normalizeRvInsertionOrder in
- * Cardiac_Segmentation_FYP_Server/src/utils/landmark_order.ts — keep the two in sync.
+ * ED (frame 0) only -- the mean must not blend positions across cardiac phases. Anterior/inferior
+ * ordering is no longer re-labelled here: it's decided once, geometrically, by the GPU service's
+ * _assign_rvip_classes, and kept exactly as returned (direct request, 2026-11-24; removed the
+ * Y-position re-check this function used to do, along with its now-unused normalizeRvInsertionOrder
+ * helper -- see Cardiac_Segmentation_FYP_Server/src/utils/landmark_order.ts for the backend side
+ * of this same change).
  */
-export function normalizeRvInsertionOrder<T extends { y: number } | readonly number[]>(
-  first: T | null | undefined,
-  second: T | null | undefined,
-): [T | null | undefined, T | null | undefined] {
-  if (!first || !second) return [first, second];
-  const yOf = (p: T) => (Array.isArray(p) ? (p as readonly number[])[1] : (p as { y: number }).y);
-  return yOf(first) > yOf(second) ? [second, first] : [first, second];
-}
-
 export function normalizeLandmarkResponse(result: LandmarkInferenceResponse): LandmarkInferenceResponse {
-  let anySwapped = false;
-  const predictions = result.predictions.map((p) => {
-    const [anterior] = normalizeRvInsertionOrder(p.rv_insertion_1, p.rv_insertion_2);
-    if (anterior === p.rv_insertion_1) return p;
-    anySwapped = true;
-    return {
-      ...p,
-      rv_insertion_1: p.rv_insertion_2, rv_insertion_2: p.rv_insertion_1,
-      hm1_max: p.hm2_max, hm2_max: p.hm1_max,
-    };
-  });
-  if (!anySwapped) return result;
-
+  const predictions = result.predictions;
   const out: LandmarkInferenceResponse = { ...result, predictions };
-  // ED (frame 0) only -- the mean must not blend positions across cardiac phases.
   const both = predictions.filter((p) => p.rv_insertion_1 && p.rv_insertion_2 && p.frame_id === 0);
   if (result.avg_lm1 && result.avg_lm2 && both.length) {
     const mean = (vals: number[]) => vals.reduce((s, v) => s + v, 0) / vals.length;

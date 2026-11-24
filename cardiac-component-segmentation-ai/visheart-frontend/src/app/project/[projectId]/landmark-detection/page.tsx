@@ -55,7 +55,6 @@ import {
   getLandmarkCoord,
   isLandmarkPendingDelete,
   landmarkFramesToEdits,
-  normalizeRvInsertionOrder,
 } from "@/types/landmark";
 import { isKeyForFocusedControl, isArrowOrSpaceForFocusedControl } from "@/lib/keyboard-shortcuts";
 import { ANATOMICAL_LABELS, type AnatomicalLabel } from "@/types/segmentation";
@@ -920,26 +919,13 @@ export default function LandmarkDetectionPage() {
     setHasUnsavedLandmarkEdits(true);
   }, [currentLandmarkEditKey, currentPrediction?.flag]);
 
+  // Anterior/inferior is decided once, geometrically, when the model makes its prediction -- never
+  // re-labelled by position afterward, including here at drag end, so a manual move can't silently
+  // flip which point is which (direct request, 2026-11-24).
   const handleLandmarkMoveEnd = useCallback(() => {
     isDraggingRef.current = false;
     setIsDraggingLandmark(false);
-    if (!currentPrediction) return;
-    setLandmarkEdits((prev) => {
-      const existing = prev[currentLandmarkEditKey];
-      if (!existing) return prev;
-      const merged = { ...currentPrediction, ...existing } as FramePrediction;
-      const [anterior] = normalizeRvInsertionOrder(merged.rv_insertion_1, merged.rv_insertion_2);
-      if (anterior === merged.rv_insertion_1) return prev;
-      return {
-        ...prev,
-        [currentLandmarkEditKey]: {
-          ...existing,
-          rv_insertion_1: merged.rv_insertion_2,
-          rv_insertion_2: merged.rv_insertion_1,
-        },
-      };
-    });
-  }, [currentLandmarkEditKey, currentPrediction]);
+  }, []);
 
   // Each deleted point's edit from just before its delete, keyed "frame:slice|landmarkId", so
   // Restore (button or 1/2 key) puts the point back where it was -- including a manual drag --

@@ -1,0 +1,2339 @@
+[
+  {
+    "_id": "6b01a81484679fd05530194d",
+    "projectid": "6b01a7ef84679fd05530188f",
+    "name": "Manual Segmentation - 2026-11-21T14:18:26.016Z",
+    "description": "Manually edited segmentation masks with RLE encoding",
+    "isSaved": true,
+    "segmentationmaskRLE": true,
+    "isMedSAMOutput": false,
+    "segmentationModel": "unet",
+    "model_used": "unet",
+    "frames": [
+      {
+        "frameindex": 0,
+        "frameinferred": true,
+        "slices": [
+          {
+            "sliceindex": 0,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "14351 4 14523 8 14696 9 14869 11 15042 12 15215 13 15388 14 15562 14 15736 15 15909 15 16083 15 16257 16 16430 17 16603 18 16777 17 16951 16 17125 14 17298 14 17471 12 17644 13 17817 14 17991 13 18164 13 18338 13 18511 13 18684 14 18858 14 19030 15 19204 15 19377 16 19550 17 19723 18 19896 20 20070 20 20243 22 20416 23 20589 24 20763 25 20936 26 21110 26 21284 26 21458 26 21632 25 21806 25 21980 23 22155 22 22329 22 22504 20 22680 17 22855 15 23030 12 23206 9 23382 5"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "16796 4 16967 9 17139 13 17312 14 17483 7 17496 6 17657 4 17670 6 17831 3 17846 5 18004 3 18020 6 18177 2 18196 4 18351 2 18370 5 18524 3 18545 5 18698 3 18719 5 18872 2 18894 5 19045 3 19068 5 19219 3 19242 5 19393 3 19416 5 19567 4 19590 5 19741 4 19764 5 19916 3 19937 6 20090 3 20111 5 20265 3 20284 6 20439 5 20457 6 20613 6 20630 6 20788 7 20800 10 20962 21 21136 20 21311 18 21486 16 21661 13 21837 9"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "17490 6 17661 9 17834 12 18007 13 18179 17 18353 17 18527 18 18701 18 18874 20 19048 20 19222 20 19396 20 19571 19 19745 19 19919 18 20093 18 20268 16 20444 13 20619 11 20795 5"
+              }
+            ]
+          },
+          {
+            "sliceindex": 1,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "14179 2 14352 5 14524 8 14697 11 14870 12 15043 14 15215 17 15388 18 15561 19 15734 20 15907 21 16081 21 16255 21 16428 22 16601 23 16775 21 16949 19 17122 18 17295 18 17468 17 17641 17 17814 17 17988 17 18162 16 18335 16 18509 16 18682 17 18856 17 19029 18 19202 18 19376 18 19549 19 19722 20 19895 21 20069 21 20242 23 20416 23 20590 23 20763 24 20937 24 21111 24 21285 25 21459 25 21632 26 21807 25 21981 23 22156 21 22330 21 22505 18 22680 16 22856 13 23032 9 23208 5"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "16796 4 16968 8 17140 12 17313 14 17485 5 17497 5 17658 5 17672 6 17831 4 17847 5 18005 4 18022 5 18178 3 18198 5 18351 4 18372 5 18525 4 18546 5 18699 3 18721 4 18873 3 18896 4 19047 3 19070 5 19220 3 19244 5 19394 3 19419 4 19568 3 19593 4 19742 4 19767 4 19916 4 19941 4 20090 4 20114 5 20265 3 20288 4 20439 3 20462 3 20613 4 20635 4 20787 4 20808 5 20961 4 20982 4 21135 4 21155 4 21310 5 21328 4 21484 7 21500 5 21659 19 21834 18 22010 13 22187 7"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "17490 7 17663 9 17835 12 18009 13 18181 17 18355 17 18529 17 18702 19 18876 20 19050 20 19223 21 19397 22 19571 22 19746 21 19920 21 20094 20 20268 20 20442 20 20617 18 20791 17 20965 17 21139 16 21315 13 21491 9"
+              }
+            ]
+          },
+          {
+            "sliceindex": 2,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "14178 3 14350 8 14521 13 14695 13 14867 17 15041 17 15213 20 15386 22 15560 22 15733 23 15907 24 16081 25 16254 26 16427 27 16601 27 16775 27 16948 24 17121 22 17295 20 17468 19 17641 19 17814 19 17988 19 18162 17 18335 18 18508 19 18682 18 18856 17 19029 18 19202 19 19376 19 19549 19 19722 20 19896 20 20070 20 20244 20 20417 22 20591 22 20765 22 20939 22 21113 22 21288 22 21462 22 21636 23 21810 23 21986 19 22160 18 22335 16 22510 14 22686 9 22862 5"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "16972 4 17143 9 17315 12 17487 17 17660 8 17673 6 17833 7 17849 5 18007 5 18024 5 18179 5 18200 4 18353 4 18374 5 18527 4 18548 5 18700 4 18723 4 18873 4 18897 4 19047 4 19072 4 19221 4 19246 4 19395 3 19421 3 19568 4 19595 3 19742 4 19769 3 19916 3 19942 4 20090 3 20116 4 20264 3 20290 4 20439 3 20463 4 20613 3 20636 5 20787 3 20810 5 20961 3 20984 4 21135 4 21157 4 21310 3 21330 5 21484 4 21503 5 21659 4 21676 5 21833 4 21848 7 22009 18 22183 17 22359 13 22536 7"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "17668 5 17840 9 18012 12 18184 16 18357 17 18531 17 18704 19 18877 20 19051 21 19225 21 19398 23 19572 23 19746 23 19919 23 20093 23 20267 23 20442 21 20616 20 20790 20 20964 20 21139 18 21313 17 21488 15 21663 13 21837 11"
+              }
+            ]
+          },
+          {
+            "sliceindex": 3,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "14180 3 14353 6 14523 12 14696 14 14869 16 15042 18 15215 20 15388 22 15561 23 15735 23 15907 25 16081 25 16255 25 16428 26 16601 27 16775 19 16948 19 17121 18 17294 19 17468 17 17641 18 17814 18 17988 18 18161 18 18335 17 18508 18 18682 17 18855 18 19028 19 19202 18 19376 18 19550 18 19723 19 19896 20 20070 21 20244 21 20418 21 20592 21 20766 21 20940 21 21114 22 21289 22 21464 21 21638 21 21813 18 21989 15 22164 13 22340 10"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "16794 12 16967 13 17139 17 17313 9 17325 6 17485 7 17502 5 17659 5 17677 5 17832 6 17852 4 18006 5 18026 5 18179 4 18202 4 18352 5 18376 4 18526 4 18551 4 18699 5 18725 4 18873 4 18899 4 19047 4 19073 4 19220 5 19247 4 19394 4 19421 4 19568 4 19595 4 19742 4 19769 4 19916 4 19943 4 20091 3 20116 4 20265 3 20290 4 20439 4 20462 5 20613 4 20636 5 20787 4 20810 4 20961 4 20982 5 21136 4 21156 5 21311 4 21328 5 21485 7 21500 6 21660 19 21835 17 22013 9"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "17322 3 17492 10 17664 13 17838 14 18011 15 18183 19 18357 19 18530 21 18704 21 18877 22 19051 22 19225 22 19398 23 19572 23 19746 23 19920 23 20094 22 20268 22 20443 19 20617 19 20791 19 20965 17 21140 16 21315 13 21492 8"
+              }
+            ]
+          },
+          {
+            "sliceindex": 4,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "13998 5 14171 8 14345 10 14518 14 14692 15 14865 17 15039 18 15213 19 15387 20 15561 21 15735 21 15907 23 16081 23 16254 24 16427 25 16601 25 16773 25 16946 24 17120 22 17293 21 17466 20 17640 19 17814 18 17987 18 18160 18 18334 17 18507 18 18681 18 18854 19 19028 18 19202 18 19376 17 19550 17 19723 18 19896 19 20070 19 20244 19 20419 19 20593 19 20768 18 20942 19 21116 19 21292 17 21466 18 21642 14 21816 13 21995 5"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "16798 4 16970 8 17142 11 17314 14 17486 8 17498 6 17659 7 17674 5 17832 6 17849 5 18005 6 18024 5 18178 5 18200 4 18351 6 18374 5 18525 5 18548 5 18699 4 18722 5 18873 4 18897 4 19046 4 19071 4 19220 3 19245 4 19393 4 19420 3 19567 4 19594 3 19741 4 19767 4 19915 4 19941 4 20089 4 20115 4 20263 4 20288 5 20438 3 20462 4 20612 3 20635 5 20786 3 20809 4 20961 2 20982 5 21135 3 21155 5 21309 5 21327 5 21484 7 21500 6 21659 9 21670 9 21834 18 22011 12 22188 6"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "17494 4 17666 8 17838 11 18011 13 18183 17 18357 17 18530 18 18703 19 18877 20 19050 21 19223 22 19397 23 19571 23 19745 22 19919 22 20093 22 20267 21 20441 21 20615 20 20789 20 20963 19 21138 17 21314 13 21491 9 21668 2"
+              }
+            ]
+          },
+          {
+            "sliceindex": 5,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "15044 5 15216 12 15389 13 15563 14 15736 16 15909 18 16083 19 16255 21 16429 22 16602 23 16775 25 16949 25 17122 25 17296 22 17468 19 17642 17 17816 17 17990 15 18162 16 18336 16 18510 15 18684 15 18857 15 19031 14 19205 14 19379 14 19553 14 19727 13 19901 13 20076 12 20250 12 20425 11 20600 10 20774 10 20950 8 21125 7 21301 2"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "17318 4 17487 11 17659 15 17833 16 18005 7 18019 5 18178 5 18196 4 18352 4 18370 4 18525 4 18545 4 18699 4 18720 4 18872 4 18894 5 19045 4 19069 4 19219 4 19243 4 19393 3 19417 4 19567 3 19592 3 19740 3 19766 3 19914 3 19939 4 20088 3 20113 4 20262 3 20287 4 20436 3 20460 5 20610 3 20634 5 20784 3 20808 4 20958 3 20981 5 21132 4 21154 5 21307 5 21326 6 21481 6 21500 5 21657 6 21672 6 21831 20 22008 14 22184 10 22361 5"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "18012 7 18183 13 18356 14 18529 16 18703 17 18876 18 19049 20 19223 20 19396 21 19570 22 19743 23 19917 22 20091 22 20265 22 20439 21 20613 21 20787 21 20961 20 21136 18 21312 14 21487 13 21663 9"
+              }
+            ]
+          },
+          {
+            "sliceindex": 6,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "13999 8 14172 11 14345 13 14518 16 14691 18 14865 19 15039 19 15212 22 15385 23 15559 23 15733 23 15906 22 16080 19 16253 19 16427 17 16601 16 16775 14 16949 13 17123 12 17297 12 17471 11 17645 10 17819 10 17993 9 18167 9 18341 8 18515 8 18689 8 18863 8 19037 8 19212 7 19387 6 19561 6 19738 1 19740 1"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "15928 4 16099 8 16272 10 16444 13 16617 15 16789 5 16803 5 16962 6 16978 5 17135 5 17153 5 17309 4 17328 5 17482 4 17503 4 17655 4 17678 4 17829 4 17852 4 18002 3 18026 4 18176 3 18200 5 18349 4 18375 4 18523 3 18549 4 18697 3 18723 4 18871 2 18897 4 19045 2 19070 4 19219 2 19244 4 19393 2 19418 3 19567 2 19591 4 19741 3 19764 4 19915 4 19937 4 20090 4 20110 4 20265 4 20283 5 20440 11 20453 7 20615 17 20791 15 20966 12 21143 6"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "16794 9 16968 10 17140 13 17313 15 17486 17 17659 19 17833 19 18005 21 18179 21 18353 22 18526 23 18700 23 18873 24 19047 23 19221 23 19395 23 19569 22 19744 20 19919 18 20094 16 20269 14 20451 2"
+              }
+            ]
+          },
+          {
+            "sliceindex": 7,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "13826 4 13998 8 14171 10 14345 11 14519 13 14692 14 14866 15 15039 17 15212 18 15386 18 15559 18 15733 14 15907 11 16080 11 16253 10 16427 10 16601 9 16775 8 16949 8 17122 8 17296 8 17470 7 17644 7 17818 7 17993 6 18167 6 18341 6 18517 4 18692 2"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "15577 3 15747 9 15918 15 16091 17 16263 6 16278 4 16437 5 16453 4 16610 5 16628 4 16783 4 16803 4 16957 4 16978 3 17130 4 17152 4 17304 3 17326 4 17477 4 17501 3 17651 3 17675 3 17825 3 17849 3 17999 2 18023 3 18173 2 18197 3 18347 2 18371 3 18521 2 18545 3 18694 4 18718 4 18869 3 18892 4 19043 5 19066 3 19218 5 19239 3 19393 5 19412 4 19567 6 19586 3 19743 19 19919 15 20094 14 20269 11"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "16269 9 16442 11 16615 13 16787 16 16961 17 17134 18 17307 19 17481 20 17654 21 17828 21 18001 22 18175 22 18349 22 18523 22 18698 20 18872 20 19048 18 19223 16 19398 14 19573 13"
+              }
+            ]
+          },
+          {
+            "sliceindex": 8,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "rv",
+                "segmentationmaskcontents": "13654 3 13825 9 13998 11 14172 12 14346 12 14519 13 14692 15 14866 15 15039 15 15213 15 15387 15 15560 15 15734 12 15908 11 16083 10 16257 9 16431 9 16606 7 16782 2"
+              },
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "15398 6 15571 8 15744 10 15916 7 15926 4 16089 6 16102 3 16263 4 16277 3 16436 5 16452 2 16609 4 16626 3 16783 3 16801 3 16956 4 16975 3 17130 3 17149 3 17304 3 17324 3 17478 3 17498 3 17651 4 17672 3 17825 4 17846 3 17999 4 18020 3 18174 3 18193 3 18348 4 18367 3 18522 4 18540 4 18697 4 18714 4 18871 4 18888 4 19046 5 19060 5 19221 7 19234 4 19396 16 19570 15 19747 9 19924 4"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "15923 3 16095 7 16267 10 16441 11 16613 13 16786 15 16960 15 17133 16 17307 17 17481 17 17655 17 17829 17 18003 17 18177 16 18352 15 18526 14 18701 13 18875 13 19051 9 19228 6"
+              }
+            ]
+          },
+          {
+            "sliceindex": 9,
+            "componentboundingboxes": [],
+            "segmentationmasks": [
+              {
+                "class": "myo",
+                "segmentationmaskcontents": "15223 5 15395 9 15568 11 15741 5 15748 6 15914 4 15926 3 16088 3 16101 3 16261 4 16276 2 16435 3 16450 3 16609 3 16625 2 16783 2 16800 2 16957 2 16974 2 17131 2 17148 2 17305 2 17322 2 17479 3 17496 2 17653 3 17669 3 17827 4 17843 3 18002 3 18016 4 18177 4 18190 2 18351 6 18363 3 18526 8 18536 4 18701 12 18876 9 19053 3"
+              },
+              {
+                "class": "lvc",
+                "segmentationmaskcontents": "15746 2 15918 8 16091 10 16265 11 16438 12 16612 13 16785 15 16959 15 17133 15 17307 15 17482 14 17656 13 17831 12 18005 11 18181 9 18357 6 18534 2"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "createdAt": "2026-11-21T14:17:56.219Z",
+    "updatedAt": "2026-11-24T03:27:14.999Z",
+    "__v": 1,
+    "heartMetrics": {
+      "measurements": {
+        "EF": 45.14884233737597,
+        "EDV": 51.36242532695473,
+        "ESV": 28.172884895435477,
+        "EDVI": null,
+        "ESVI": null,
+        "StrokeVolume": 23.18954043151925,
+        "StrokeVolumeIndex": null,
+        "LVMI": null,
+        "MaxWallThicknessMm": 10.642266146144287,
+        "PeakGRS": 25.64,
+        "PeakGCS": -22.9
+      },
+      "ed_frame": 0,
+      "es_frame": 5,
+      "ed_override_used": false,
+      "es_override_used": false,
+      "lv_volumes_ml": [
+        51.36242532695473,
+        45.501332690416895,
+        38.43687562367202,
+        33.92071970324795,
+        30.39556978417084,
+        28.172884895435477,
+        29.064790296647757,
+        31.655563128740567,
+        35.74700219144451,
+        43.70336465940167,
+        47.299300721432125,
+        51.8154566418562,
+        53.7266825015968,
+        52.83477710038453
+      ],
+      "rv_volumes_ml": [
+        86.00516368832689,
+        80.29980056628645,
+        71.90456401201848,
+        58.851599251419735,
+        53.896569244684855,
+        50.24400426829171,
+        48.37525009432313,
+        51.57478375581479,
+        60.83361125411369,
+        68.90323155079622,
+        83.76832157100087,
+        87.37841486162199,
+        93.04130629789043,
+        95.41972070112318
+      ],
+      "LVEDV": 51.36242532695473,
+      "LVESV": 28.172884895435477,
+      "LV_SV": 23.18954043151925,
+      "LVEF": 45.14884233737597,
+      "RVEDV": 86.00516368832689,
+      "RVESV": 50.24400426829171,
+      "RV_SV": 35.76115942003518,
+      "RVEF": 41.58024691358024,
+      "LV_mass_g": 40.62629102521931,
+      "max_wall_thickness_mm": 10.642266146144287,
+      "max_wall_thickness_slice": 0,
+      "bsa_m2": null,
+      "LVEDVI": null,
+      "LVESVI": null,
+      "RVEDVI": null,
+      "RVESVI": null,
+      "LV_SVI": null,
+      "LVMI": null,
+      "RV_SVI": null,
+      "voxel_mm3": 14.157228590671094,
+      "spacing_mm": [
+        1.6826900243759155,
+        1.6826900243759155,
+        5
+      ],
+      "units": {
+        "volumes": "mL",
+        "ef": "%",
+        "mass": "g",
+        "spacing": "mm",
+        "bsa": "m^2",
+        "indexed_volumes": "mL/m^2"
+      },
+      "warnings": [],
+      "duplicate_slices": [],
+      "duplicate_slices_detected": false,
+      "computed_at": "2026-11-21T14:26:18.120Z"
+    },
+    "bullseye": {
+      "request_id": null,
+      "segment_values": [
+        7.538760094466843,
+        6.025445547661675,
+        5.083872987879766,
+        5.840028564123653,
+        6.759363096881486,
+        6.9836204967360045,
+        6.014704690142797,
+        6.377133064945367,
+        6.158910077893921,
+        6.04797611256467,
+        6.3828124593421816,
+        5.541207964881681,
+        5.195641467323645,
+        5.119840685720234,
+        5.507975110202158,
+        6.129160928851742,
+        4.730093193038677
+      ],
+      "segment_values_max": [
+        12.250168287052778,
+        10.774473279167895,
+        8.413450121879578,
+        8.580069269620711,
+        9.81168458607203,
+        9.81168458607203,
+        8.413450121879578,
+        9.81168458607203,
+        9.06156310058548,
+        9.06156310058548,
+        9.06156310058548,
+        7.525218559130651,
+        7.525218559130651,
+        9.06156310058548,
+        8.413450121879578,
+        9.06156310058548,
+        7.525218559130651
+      ],
+      "segment_metadata": [
+        {
+          "idx": 1,
+          "name": "Basal Anterior",
+          "ring": "Basal",
+          "value": 7.538760094466843
+        },
+        {
+          "idx": 2,
+          "name": "Basal Anteroseptal",
+          "ring": "Basal",
+          "value": 6.025445547661675
+        },
+        {
+          "idx": 3,
+          "name": "Basal Inferoseptal",
+          "ring": "Basal",
+          "value": 5.083872987879766
+        },
+        {
+          "idx": 4,
+          "name": "Basal Inferior",
+          "ring": "Basal",
+          "value": 5.840028564123653
+        },
+        {
+          "idx": 5,
+          "name": "Basal Inferolateral",
+          "ring": "Basal",
+          "value": 6.759363096881486
+        },
+        {
+          "idx": 6,
+          "name": "Basal Anterolateral",
+          "ring": "Basal",
+          "value": 6.9836204967360045
+        },
+        {
+          "idx": 7,
+          "name": "Mid Anterior",
+          "ring": "Mid-cavity",
+          "value": 6.014704690142797
+        },
+        {
+          "idx": 8,
+          "name": "Mid Anteroseptal",
+          "ring": "Mid-cavity",
+          "value": 6.377133064945367
+        },
+        {
+          "idx": 9,
+          "name": "Mid Inferoseptal",
+          "ring": "Mid-cavity",
+          "value": 6.158910077893921
+        },
+        {
+          "idx": 10,
+          "name": "Mid Inferior",
+          "ring": "Mid-cavity",
+          "value": 6.04797611256467
+        },
+        {
+          "idx": 11,
+          "name": "Mid Inferolateral",
+          "ring": "Mid-cavity",
+          "value": 6.3828124593421816
+        },
+        {
+          "idx": 12,
+          "name": "Mid Anterolateral",
+          "ring": "Mid-cavity",
+          "value": 5.541207964881681
+        },
+        {
+          "idx": 13,
+          "name": "Apical Anterior",
+          "ring": "Apical",
+          "value": 5.195641467323645
+        },
+        {
+          "idx": 14,
+          "name": "Apical Septal",
+          "ring": "Apical",
+          "value": 5.119840685720234
+        },
+        {
+          "idx": 15,
+          "name": "Apical Inferior",
+          "ring": "Apical",
+          "value": 5.507975110202158
+        },
+        {
+          "idx": 16,
+          "name": "Apical Lateral",
+          "ring": "Apical",
+          "value": 6.129160928851742
+        },
+        {
+          "idx": 17,
+          "name": "Apex",
+          "ring": "Apex",
+          "value": 4.730093193038677
+        }
+      ],
+      "stats": {
+        "min": 4.730093193038677,
+        "max": 7.538760094466843,
+        "mean": 5.966855678979794,
+        "n_nan": 0
+      },
+      "input_shape": [
+        208,
+        174,
+        10
+      ],
+      "slice_labels": [
+        "basal",
+        "basal",
+        "basal",
+        "mid",
+        "mid",
+        "mid",
+        "apical",
+        "apical",
+        "apical",
+        "apex"
+      ],
+      "lv_centroid": [
+        93.24483998316322,
+        112.06847844219301
+      ],
+      "alignment_angle_deg": 60.725414785991255,
+      "alignment_source": "landmark",
+      "unit": "mm",
+      "mm_per_px": 1.6826900243759155,
+      "computed_at": "2026-11-21T14:37:03.766Z"
+    },
+    "healthStatus": {
+      "status": "Mild",
+      "confidence": "normal",
+      "grade_from_ef": "Mild",
+      "evidence": [
+        {
+          "label": "Ejection Fraction",
+          "level": "warn",
+          "detail": "LVEF 45.1 % — mildly reduced (45-54 %)."
+        },
+        {
+          "label": "End-Diastolic Volume",
+          "level": "warn",
+          "detail": "EDV 51.4 mL — below the raw adult reference band (60-250 mL). Not BSA-indexed; body size not accounted for."
+        },
+        {
+          "label": "Peak GCS",
+          "level": "ok",
+          "detail": "Peak GCS -22.9 % — within the expected normal range (<= -17 %, more negative = better contraction). Reference is approximate."
+        },
+        {
+          "label": "Peak GRS",
+          "level": "ok",
+          "detail": "Peak GRS 25.6 % — within the expected normal range (>= 25 %). Reference is approximate."
+        },
+        {
+          "label": "Wall Thickness",
+          "level": "ok",
+          "detail": "Maximal LV wall thickness 10.6 mm at end-diastole — below 12 mm, the normal limit of the ACDC criteria."
+        }
+      ],
+      "features_used": [
+        "EF",
+        "EDV",
+        "PeakGCS",
+        "PeakGRS",
+        "MaxWallThicknessMm"
+      ],
+      "features_missing": [],
+      "disclaimer": "Rule-based assessment using ASE/EACVI 2015 LV systolic-function grading thresholds and the ACDC wall-thickness criteria. NOT a diagnosis — interpretation by a qualified clinician is required.",
+      "method": "rule-based-ase-lvef-grading",
+      "warnings": [],
+      "computed_at": "2026-11-21T14:39:37.506Z"
+    },
+    "editTracking": {
+      "status": "computed",
+      "method": "rle-interval-xor",
+      "slices": [
+        {
+          "frameindex": 0,
+          "sliceindex": 8,
+          "editedClasses": [
+            "rv"
+          ],
+          "pixelsChanged": 164,
+          "byClass": {
+            "rv": 164
+          }
+        }
+      ],
+      "editedSliceCount": 1,
+      "pixelsChanged": 164,
+      "manualPixels": 0,
+      "slicesCompared": 140,
+      "warnings": [],
+      "aiMaskId": "6b01a81384679fd055301948",
+      "model": "unet",
+      "editedBy": "69b7eed44fdf688ce5eadb24",
+      "editedAt": "2026-11-21T14:18:26.523Z",
+      "computed_at": "2026-11-21T14:18:26.523Z"
+    },
+    "regionalHealthStatus": {
+      "status": "ok",
+      "overall_grade_unchanged": true,
+      "source": "strain",
+      "segments": [
+        {
+          "idx": 1,
+          "region": "basal",
+          "label": "Basal Anterior",
+          "gcs": -9.03,
+          "grs": 8.28,
+          "level": "moderate",
+          "abs_level": "moderate",
+          "rel_gap": 9.73,
+          "rel_flag": true
+        },
+        {
+          "idx": 2,
+          "region": "basal",
+          "label": "Basal Anteroseptal",
+          "gcs": -17.01,
+          "grs": -3.01,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": 1.75,
+          "rel_flag": false
+        },
+        {
+          "idx": 3,
+          "region": "basal",
+          "label": "Basal Inferoseptal",
+          "gcs": -13.98,
+          "grs": 20.07,
+          "level": "mild",
+          "abs_level": "mild",
+          "rel_gap": 4.78,
+          "rel_flag": true
+        },
+        {
+          "idx": 4,
+          "region": "basal",
+          "label": "Basal Inferior",
+          "gcs": -17.43,
+          "grs": -8.9,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": 1.33,
+          "rel_flag": false
+        },
+        {
+          "idx": 5,
+          "region": "basal",
+          "label": "Basal Inferolateral",
+          "gcs": -14.67,
+          "grs": -6.23,
+          "level": "normal",
+          "abs_level": "mild",
+          "rel_gap": 4.09,
+          "rel_flag": false
+        },
+        {
+          "idx": 6,
+          "region": "basal",
+          "label": "Basal Anterolateral",
+          "gcs": -17.09,
+          "grs": 20.78,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": 1.67,
+          "rel_flag": false
+        },
+        {
+          "idx": 7,
+          "region": "mid",
+          "label": "Mid Anterior",
+          "gcs": -8.96,
+          "grs": 28.59,
+          "level": "moderate",
+          "abs_level": "moderate",
+          "rel_gap": 9.8,
+          "rel_flag": true
+        },
+        {
+          "idx": 8,
+          "region": "mid",
+          "label": "Mid Anteroseptal",
+          "gcs": -22.62,
+          "grs": 21.31,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -3.86,
+          "rel_flag": false
+        },
+        {
+          "idx": 9,
+          "region": "mid",
+          "label": "Mid Inferoseptal",
+          "gcs": -15.12,
+          "grs": 42.59,
+          "level": "normal",
+          "abs_level": "mild",
+          "rel_gap": 3.64,
+          "rel_flag": false
+        },
+        {
+          "idx": 10,
+          "region": "mid",
+          "label": "Mid Inferior",
+          "gcs": -10,
+          "grs": 34.68,
+          "level": "moderate",
+          "abs_level": "moderate",
+          "rel_gap": 8.76,
+          "rel_flag": true
+        },
+        {
+          "idx": 11,
+          "region": "mid",
+          "label": "Mid Inferolateral",
+          "gcs": -23.56,
+          "grs": 39.74,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -4.8,
+          "rel_flag": false
+        },
+        {
+          "idx": 12,
+          "region": "mid",
+          "label": "Mid Anterolateral",
+          "gcs": -7.43,
+          "grs": 44.63,
+          "level": "moderate",
+          "abs_level": "moderate",
+          "rel_gap": 11.33,
+          "rel_flag": true
+        },
+        {
+          "idx": 13,
+          "region": "apical",
+          "label": "Apical Anterior",
+          "gcs": -19.56,
+          "grs": 60.05,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -0.8,
+          "rel_flag": false
+        },
+        {
+          "idx": 14,
+          "region": "apical",
+          "label": "Apical Septal",
+          "gcs": -25.89,
+          "grs": 65.14,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -7.13,
+          "rel_flag": false
+        },
+        {
+          "idx": 15,
+          "region": "apical",
+          "label": "Apical Inferior",
+          "gcs": -30.09,
+          "grs": 15.19,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -11.33,
+          "rel_flag": false
+        },
+        {
+          "idx": 16,
+          "region": "apical",
+          "label": "Apical Lateral",
+          "gcs": -23.12,
+          "grs": 47.74,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -4.36,
+          "rel_flag": false
+        },
+        {
+          "idx": 17,
+          "region": "apex",
+          "label": "Apex",
+          "gcs": -43.42,
+          "grs": 21.43,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -24.66,
+          "rel_flag": false
+        }
+      ],
+      "reduced_count": 5,
+      "affected_idx": [
+        1,
+        3,
+        7,
+        10,
+        12
+      ],
+      "skipped_idx": [],
+      "summary": "Moderate reduction in 2 basal and 3 mid segments",
+      "patient_mean_gcs": -18.76,
+      "relative_rule_applied": true,
+      "thresholds": {
+        "seg_gcs_normal_max": -17,
+        "seg_gcs_mild_max": -12,
+        "seg_gcs_moderate_max": -7,
+        "rel_gap_pct": 25,
+        "rel_gap_threshold_abs": 4.691
+      },
+      "disclaimer": "Advisory regional assessment, not a diagnosis. Per-segment strain normals are not standardised; thresholds are borrowed from global strain references and must be interpreted by a qualified clinician alongside the full clinical picture. This layer never changes the overall health-status grade.",
+      "method": "Hybrid per-segment classification: absolute GCS band (anchored on the EACVI/ASE global peak-GCS reference) AND a relative gap versus the patient's own mean segmental GCS.",
+      "warnings": [],
+      "computed_at": "2026-11-21T14:39:37.494Z"
+    },
+    "rvFrameAreas": {
+      "frames": [
+        {
+          "frameIndex": 0,
+          "regions": [
+            {
+              "region": 1,
+              "area": 260.3333333333333
+            },
+            {
+              "region": 2,
+              "area": 276
+            },
+            {
+              "region": 3,
+              "area": 403.3333333333333
+            },
+            {
+              "region": 4,
+              "area": 243.66666666666666
+            },
+            {
+              "region": 5,
+              "area": 281.3333333333333
+            },
+            {
+              "region": 6,
+              "area": 244.66666666666666
+            },
+            {
+              "region": 7,
+              "area": 115.66666666666667
+            },
+            {
+              "region": 8,
+              "area": 134.33333333333334
+            },
+            {
+              "region": 9,
+              "area": 65.66666666666667
+            }
+          ]
+        },
+        {
+          "frameIndex": 1,
+          "regions": [
+            {
+              "region": 1,
+              "area": 256.3333333333333
+            },
+            {
+              "region": 2,
+              "area": 268.6666666666667
+            },
+            {
+              "region": 3,
+              "area": 389.3333333333333
+            },
+            {
+              "region": 4,
+              "area": 234.33333333333334
+            },
+            {
+              "region": 5,
+              "area": 280
+            },
+            {
+              "region": 6,
+              "area": 234.66666666666666
+            },
+            {
+              "region": 7,
+              "area": 83
+            },
+            {
+              "region": 8,
+              "area": 101.66666666666667
+            },
+            {
+              "region": 9,
+              "area": 40.666666666666664
+            }
+          ]
+        },
+        {
+          "frameIndex": 2,
+          "regions": [
+            {
+              "region": 1,
+              "area": 273
+            },
+            {
+              "region": 2,
+              "area": 241.33333333333334
+            },
+            {
+              "region": 3,
+              "area": 327
+            },
+            {
+              "region": 4,
+              "area": 211.33333333333334
+            },
+            {
+              "region": 5,
+              "area": 252.33333333333334
+            },
+            {
+              "region": 6,
+              "area": 205.66666666666666
+            },
+            {
+              "region": 7,
+              "area": 70
+            },
+            {
+              "region": 8,
+              "area": 74
+            },
+            {
+              "region": 9,
+              "area": 8
+            }
+          ]
+        },
+        {
+          "frameIndex": 3,
+          "regions": [
+            {
+              "region": 1,
+              "area": 245.33333333333334
+            },
+            {
+              "region": 2,
+              "area": 185
+            },
+            {
+              "region": 3,
+              "area": 214.33333333333334
+            },
+            {
+              "region": 4,
+              "area": 200.66666666666666
+            },
+            {
+              "region": 5,
+              "area": 230.33333333333334
+            },
+            {
+              "region": 6,
+              "area": 178
+            },
+            {
+              "region": 7,
+              "area": 59
+            },
+            {
+              "region": 8,
+              "area": 50.666666666666664
+            },
+            {
+              "region": 9,
+              "area": 6.333333333333333
+            }
+          ]
+        },
+        {
+          "frameIndex": 4,
+          "regions": [
+            {
+              "region": 1,
+              "area": 235.33333333333334
+            },
+            {
+              "region": 2,
+              "area": 179
+            },
+            {
+              "region": 3,
+              "area": 196
+            },
+            {
+              "region": 4,
+              "area": 177
+            },
+            {
+              "region": 5,
+              "area": 208.66666666666666
+            },
+            {
+              "region": 6,
+              "area": 151.33333333333334
+            },
+            {
+              "region": 7,
+              "area": 56.666666666666664
+            },
+            {
+              "region": 8,
+              "area": 44.333333333333336
+            },
+            {
+              "region": 9,
+              "area": 6.333333333333333
+            }
+          ]
+        },
+        {
+          "frameIndex": 5,
+          "regions": [
+            {
+              "region": 1,
+              "area": 229.66666666666666
+            },
+            {
+              "region": 2,
+              "area": 171.33333333333334
+            },
+            {
+              "region": 3,
+              "area": 184.33333333333334
+            },
+            {
+              "region": 4,
+              "area": 160.66666666666666
+            },
+            {
+              "region": 5,
+              "area": 188.33333333333334
+            },
+            {
+              "region": 6,
+              "area": 133.33333333333334
+            },
+            {
+              "region": 7,
+              "area": 46.666666666666664
+            },
+            {
+              "region": 8,
+              "area": 39.666666666666664
+            },
+            {
+              "region": 9,
+              "area": 5.333333333333333
+            }
+          ]
+        },
+        {
+          "frameIndex": 6,
+          "regions": [
+            {
+              "region": 1,
+              "area": 242.66666666666666
+            },
+            {
+              "region": 2,
+              "area": 159.33333333333334
+            },
+            {
+              "region": 3,
+              "area": 179.33333333333334
+            },
+            {
+              "region": 4,
+              "area": 154
+            },
+            {
+              "region": 5,
+              "area": 180.66666666666666
+            },
+            {
+              "region": 6,
+              "area": 112.66666666666667
+            },
+            {
+              "region": 7,
+              "area": 42
+            },
+            {
+              "region": 8,
+              "area": 36.666666666666664
+            },
+            {
+              "region": 9,
+              "area": 4
+            }
+          ]
+        },
+        {
+          "frameIndex": 7,
+          "regions": [
+            {
+              "region": 1,
+              "area": 230
+            },
+            {
+              "region": 2,
+              "area": 164.33333333333334
+            },
+            {
+              "region": 3,
+              "area": 177.66666666666666
+            },
+            {
+              "region": 4,
+              "area": 162
+            },
+            {
+              "region": 5,
+              "area": 209.33333333333334
+            },
+            {
+              "region": 6,
+              "area": 163
+            },
+            {
+              "region": 7,
+              "area": 37.333333333333336
+            },
+            {
+              "region": 8,
+              "area": 43.333333333333336
+            },
+            {
+              "region": 9,
+              "area": 4.333333333333333
+            }
+          ]
+        },
+        {
+          "frameIndex": 8,
+          "regions": [
+            {
+              "region": 1,
+              "area": 241.66666666666666
+            },
+            {
+              "region": 2,
+              "area": 206
+            },
+            {
+              "region": 3,
+              "area": 199.66666666666666
+            },
+            {
+              "region": 4,
+              "area": 192
+            },
+            {
+              "region": 5,
+              "area": 262.6666666666667
+            },
+            {
+              "region": 6,
+              "area": 193.33333333333334
+            },
+            {
+              "region": 7,
+              "area": 48.666666666666664
+            },
+            {
+              "region": 8,
+              "area": 69
+            },
+            {
+              "region": 9,
+              "area": 18
+            }
+          ]
+        },
+        {
+          "frameIndex": 9,
+          "regions": [
+            {
+              "region": 1,
+              "area": 251
+            },
+            {
+              "region": 2,
+              "area": 257.6666666666667
+            },
+            {
+              "region": 3,
+              "area": 236.66666666666666
+            },
+            {
+              "region": 4,
+              "area": 198
+            },
+            {
+              "region": 5,
+              "area": 290.3333333333333
+            },
+            {
+              "region": 6,
+              "area": 180.66666666666666
+            },
+            {
+              "region": 7,
+              "area": 77.66666666666667
+            },
+            {
+              "region": 8,
+              "area": 97.66666666666667
+            },
+            {
+              "region": 9,
+              "area": 32.666666666666664
+            }
+          ]
+        },
+        {
+          "frameIndex": 10,
+          "regions": [
+            {
+              "region": 1,
+              "area": 278.3333333333333
+            },
+            {
+              "region": 2,
+              "area": 300.6666666666667
+            },
+            {
+              "region": 3,
+              "area": 329
+            },
+            {
+              "region": 4,
+              "area": 259.6666666666667
+            },
+            {
+              "region": 5,
+              "area": 308.6666666666667
+            },
+            {
+              "region": 6,
+              "area": 234
+            },
+            {
+              "region": 7,
+              "area": 89.33333333333333
+            },
+            {
+              "region": 8,
+              "area": 115
+            },
+            {
+              "region": 9,
+              "area": 56.666666666666664
+            }
+          ]
+        },
+        {
+          "frameIndex": 11,
+          "regions": [
+            {
+              "region": 1,
+              "area": 332.3333333333333
+            },
+            {
+              "region": 2,
+              "area": 313
+            },
+            {
+              "region": 3,
+              "area": 392.3333333333333
+            },
+            {
+              "region": 4,
+              "area": 240.33333333333334
+            },
+            {
+              "region": 5,
+              "area": 284.6666666666667
+            },
+            {
+              "region": 6,
+              "area": 251.66666666666666
+            },
+            {
+              "region": 7,
+              "area": 89.33333333333333
+            },
+            {
+              "region": 8,
+              "area": 106.33333333333333
+            },
+            {
+              "region": 9,
+              "area": 45.333333333333336
+            }
+          ]
+        },
+        {
+          "frameIndex": 12,
+          "regions": [
+            {
+              "region": 1,
+              "area": 335.3333333333333
+            },
+            {
+              "region": 2,
+              "area": 327.3333333333333
+            },
+            {
+              "region": 3,
+              "area": 406.6666666666667
+            },
+            {
+              "region": 4,
+              "area": 264
+            },
+            {
+              "region": 5,
+              "area": 304
+            },
+            {
+              "region": 6,
+              "area": 269.3333333333333
+            },
+            {
+              "region": 7,
+              "area": 101
+            },
+            {
+              "region": 8,
+              "area": 120
+            },
+            {
+              "region": 9,
+              "area": 61
+            }
+          ]
+        },
+        {
+          "frameIndex": 13,
+          "regions": [
+            {
+              "region": 1,
+              "area": 332.3333333333333
+            },
+            {
+              "region": 2,
+              "area": 332.3333333333333
+            },
+            {
+              "region": 3,
+              "area": 409.3333333333333
+            },
+            {
+              "region": 4,
+              "area": 273.6666666666667
+            },
+            {
+              "region": 5,
+              "area": 317
+            },
+            {
+              "region": 6,
+              "area": 279.6666666666667
+            },
+            {
+              "region": 7,
+              "area": 105
+            },
+            {
+              "region": 8,
+              "area": 131
+            },
+            {
+              "region": 9,
+              "area": 63.333333333333336
+            }
+          ]
+        }
+      ],
+      "reference_frame": 0,
+      "computed_at": "2026-11-21T14:37:00.937Z"
+    },
+    "diseasePatternGates": {
+      "gates": [
+        {
+          "code": "NOR_LV",
+          "label": "LV NOR (Normal)",
+          "met": false,
+          "reasons": [
+            "EF 45.1 is outside the normal range (50.00-72.93, pooled).",
+            "Wall thickness 10.6 is within the normal range (6.22-12.00, pooled)."
+          ],
+          "criterion_text": "EF > 50%, wall thickness < 12mm, EDVI < 90 mL/m² (men) / 80 mL/m² (women).",
+          "rank_label": null
+        },
+        {
+          "code": "NOR_RV",
+          "label": "RV NOR (Normal)",
+          "met": true,
+          "reasons": [
+            "RVEF 41.6 is within the normal range (40.00-67.60)."
+          ],
+          "criterion_text": "RVEDVI < 100 mL/m², RVEF > 40%.",
+          "rank_label": null
+        },
+        {
+          "code": "MINF",
+          "label": "MINF (Systolic Heart Failure with Infarction)",
+          "met": false,
+          "reasons": [
+            "EF 45.1% does not meet the < 40% criterion.",
+            "Regional contraction assessment not available.",
+            "EDVI 28.3 mL/m^2 is at or below 100 mL/m^2 (informational only). (Estimated — no BSA on file).",
+            "Resolved from the available criterion alone."
+          ],
+          "criterion_text": "EF < 40% and ≥1 LV segment with moderate/severe contraction abnormality. (EDVI shown below is informational only.)",
+          "validation_note": "Pipeline validation: ACDC's own 20 ground-truth-labelled MINF patients averaged EF 31.0% (ground-truth masks) vs 28.9% measured by this app's own segmentation model after manual QC/correction (n=10 of those 20) — both clearly below the 40% cutoff above, confirming this app's own measurement pipeline agrees with the official ground truth for this criterion.",
+          "resolved_from_partial_data": true,
+          "rank_label": null
+        },
+        {
+          "code": "DCM",
+          "label": "DCM (Dilated Cardiomyopathy)",
+          "met": false,
+          "reasons": [
+            "EDVI 28.3 mL/m^2 does not meet the > 100 mL/m^2 criterion. (Estimated — no BSA on file).",
+            "EF 45.1% does not meet the < 40% criterion.",
+            "Typical wall thickness 7.5 mm meets the < 12.28 mm criterion."
+          ],
+          "criterion_text": "EDVI > 100 mL/m², EF < 40%, wall thickness < 12.28 mm.",
+          "validation_note": "Pipeline validation: ACDC's own 20 ground-truth-labelled DCM patients averaged EDVI 153.3 mL/m^2 and EF 18.4% (ground-truth masks) vs 155.7 mL/m^2 and 16.2% measured by this app's own segmentation model after manual QC/correction (n=10 of those 20) — both clearly past the >100 mL/m^2 / <40% cutoffs above, confirming agreement with the official ground truth. Wall thickness averaged 10.0mm (ground-truth masks, max 12.02mm) vs 11.0mm (system-derived, max 12.28mm) — both close to, and at the high end slightly past, Bernard's own <12mm bound, which is exactly why this gate's wall-thickness criterion above is widened to the union of all three sources rather than used as the paper's literal number alone (see _DCM_WALL_MM_MAX).",
+          "rank_label": null
+        },
+        {
+          "code": "HCM",
+          "label": "HCM (Hypertrophic Cardiomyopathy)",
+          "met": false,
+          "reasons": [
+            "Max wall thickness 10.6 mm does not meet the > 15 mm criterion.",
+            "EF 45.1% does not meet the > 55% criterion.",
+            "LVMI 22.3 g/m^2 is at or below 110 g/m^2 (informational only). (Estimated — no BSA on file)."
+          ],
+          "criterion_text": "EF > 55%, wall thickness > 15 mm. (LVMI shown below is informational only.)",
+          "validation_note": "Pipeline validation: ACDC's own 20 ground-truth-labelled HCM patients averaged LVMI 92.2 g/m^2 and wall thickness 17.1 mm (ground-truth masks) vs 99.7 g/m^2 and 16.6 mm measured by this app's own segmentation model after manual QC/correction (n=10 of those 20) — confirming agreement with the official ground truth for this criterion. (The group AVERAGE LVMI sits below the >110 g/m^2 cutoff in both measurements — expected, since ACDC's HCM label is a clinical diagnosis and not every labelled patient individually clears every numeric ACDC criterion; this gate still evaluates each patient's own measurements, not the group average.)",
+          "rank_label": null
+        },
+        {
+          "code": "RV",
+          "label": "RV (Abnormal Right Ventricle)",
+          "met": null,
+          "reasons": [
+            "RVEDVI not available (need BSA).",
+            "RVEF 41.6% does not meet the < 40% criterion.",
+            "Pending — the missing value could still meet its own half."
+          ],
+          "criterion_text": "RVEDVI > 110 mL/m² (men) / 100 mL/m² (women), or RVEF < 40%.",
+          "validation_note": "Pipeline validation: ACDC's own 20 ground-truth-labelled RV patients averaged RVEDVI 111.9 mL/m^2 and RVEF 31.4% (ground-truth masks) vs 110.7 mL/m^2 and 27.0% measured by this app's own segmentation model after manual QC/correction (n=10 of those 20) — both clearly past the >110 mL/m^2 / <40% cutoffs above, confirming agreement with the official ground truth.",
+          "rank_label": null
+        }
+      ],
+      "met_codes": [
+        "NOR_RV"
+      ],
+      "rv_severity": null,
+      "sex": "unspecified",
+      "disclaimer": "This is a research-based pattern-similarity screen, not a validated disease likelihood or a diagnosis. Each gate below reports only whether the available measurements meet a published classification criterion (primarily the ACDC Challenge dataset's own grouping rules) — meeting a gate does not confirm that condition, and not meeting any gate does not exclude disease. Interpretation by a qualified clinician, using the full clinical picture, is required.",
+      "method": "acdc-criteria-gates",
+      "reference_source": "Bernard O, Lalande A, Zotti C, et al. 'Deep Learning Techniques for Automatic MRI Cardiac Multi-Structures Segmentation and Diagnosis: Is the Problem Solved?' IEEE Trans Med Imaging. 2018;37(11):2514-2525 (doi:10.1109/TMI.2018.2837502), Section II.A.1 — the ACDC dataset's own defining paper, read directly, for MINF/DCM/HCM/ARV's criteria and NOR's own published numbers. NOR gate: union of this paper's NOR numbers; this project's own measurement of the ACDC Challenge training set's 20 ground-truth NOR patients (scripts/derive_acdc_reference_ranges.py); and this project's own deployed segmentation model's output after manual QC/correction, 10 NOR patients (scripts/derive_system_reference_ranges.js). DCM gate: same union rule applied to its wall-thickness bound only (EDVI/EF stay at the paper's own numbers) — the paper's <12mm widened to this project's own ACDC ground-truth DCM-group max (12.02mm) and system-derived DCM-group max (12.28mm), same two scripts as NOR. LVMI has no number in the paper, so its NOR/HCM literature component is still Zhan et al. 2024, Circulation: Cardiovascular Imaging 2024;17(2):e016090 (HCM: informational only, not gating — see module docstring). RV severity note: Kubler et al. 2021, Int J Cardiovasc Imaging 2021;37:2501-2515 (doi:10.1007/s10554-021-02280-6). RV PAH severity note: Humbert et al. 2023, Eur Respir J 2023;61:2200879 (2022 ESC/ERS PH Guidelines, Table 16, cMRI row). DCM/HCM reference-BSA fallback (used only when the patient's own BSA is missing): DuBois & DuBois 1916, Arch Intern Med 17:863-871.",
+      "warnings": [],
+      "computed_at": "2026-11-21T14:39:37.521Z"
+    },
+    "frameBullseye": {
+      "frames": [
+        {
+          "frameIndex": 0,
+          "segment_values": [
+            7.538760094466843,
+            6.025445547661675,
+            5.083872987879766,
+            5.840028564123653,
+            6.759363096881486,
+            6.9836204967360045,
+            6.014704690142797,
+            6.377133064945367,
+            6.158910077893921,
+            6.04797611256467,
+            6.3828124593421816,
+            5.541207964881681,
+            5.195641467323645,
+            5.119840685720234,
+            5.507975110202158,
+            6.129160928851742,
+            4.730093193038677
+          ],
+          "stats": {
+            "min": 4.730093193038677,
+            "max": 7.538760094466843,
+            "mean": 5.966855678979794,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 1,
+          "segment_values": [
+            8.237730629097383,
+            7.061341482919442,
+            5.91394860486461,
+            6.2900873487197195,
+            5.966274209919924,
+            7.109175388784794,
+            6.127604322254516,
+            6.308031959250635,
+            6.915087280854416,
+            6.315517635437776,
+            7.042099595149322,
+            6.165595658748335,
+            5.792356207435641,
+            6.026368325722397,
+            5.531300663788653,
+            6.312175948909223,
+            5.400601574694597
+          ],
+          "stats": {
+            "min": 5.400601574694597,
+            "max": 8.237730629097383,
+            "mean": 6.383252755091258,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 2,
+          "segment_values": [
+            9.857513693683925,
+            7.413450513020443,
+            5.695305975362922,
+            6.358840346108739,
+            6.913628313757907,
+            7.992030747580039,
+            6.5832128349561305,
+            7.019667593637617,
+            7.616967074921739,
+            6.800640509950379,
+            7.6593959450482085,
+            6.57011877598021,
+            6.686404169137896,
+            6.644261498995468,
+            5.650679278470184,
+            6.532651564763906,
+            5.319213471269542
+          ],
+          "stats": {
+            "min": 5.319213471269542,
+            "max": 9.857513693683925,
+            "mean": 6.900822488626191,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 3,
+          "segment_values": [
+            9.945998798834509,
+            6.707987611081726,
+            5.972287768252304,
+            5.939369480255305,
+            7.37026951843287,
+            7.924553284406762,
+            6.816674250018807,
+            7.101381896518962,
+            7.844010744073409,
+            7.233533466402054,
+            7.748408000422092,
+            6.879098484107473,
+            6.52689422099357,
+            7.168201223789571,
+            5.159984356141235,
+            6.814565616796651,
+            3.844793364507972
+          ],
+          "stats": {
+            "min": 3.844793364507972,
+            "max": 9.945998798834509,
+            "mean": 6.882236005002075,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 4,
+          "segment_values": [
+            8.640329396546406,
+            8.996087705515412,
+            6.11609244793016,
+            5.923241210150008,
+            5.387241313813092,
+            6.699647816242517,
+            7.461762912207376,
+            7.119015848266653,
+            8.297815191901496,
+            7.60403337789469,
+            8.47056278270169,
+            7.247134227464458,
+            7.338783557500813,
+            8.135816935432334,
+            6.3159083030112395,
+            8.072735759384786,
+            4.042083710880758
+          ],
+          "stats": {
+            "min": 4.042083710880758,
+            "max": 8.996087705515412,
+            "mean": 7.16872308804964,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 5,
+          "segment_values": [
+            8.162666937024792,
+            5.8441614591467825,
+            6.104275620476727,
+            5.319981428137115,
+            6.3381070029233495,
+            8.434500150174506,
+            7.734310071415043,
+            7.736013778235671,
+            8.781777576881721,
+            8.145617597342007,
+            8.919229478947184,
+            8.014406173760081,
+            8.315440409045273,
+            8.454827536847958,
+            6.344619680145591,
+            9.05534230845253,
+            5.743597982729926
+          ],
+          "stats": {
+            "min": 5.319981428137115,
+            "max": 9.05534230845253,
+            "mean": 7.496992658334486,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 6,
+          "segment_values": [
+            9.466240069897436,
+            6.427862596927384,
+            5.680833716441757,
+            5.335367430326679,
+            6.420773006339119,
+            7.628387979437527,
+            6.6853972758400895,
+            7.422336320089441,
+            8.689201388952327,
+            7.594809515764132,
+            8.027152643067756,
+            7.1828978943408135,
+            8.922557279409613,
+            9.172916527419334,
+            7.279986669963013,
+            9.500210327142037,
+            6.762055666748306
+          ],
+          "stats": {
+            "min": 5.335367430326679,
+            "max": 9.500210327142037,
+            "mean": 7.541116841653339,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 7,
+          "segment_values": [
+            8.55442291710753,
+            7.2144942279862265,
+            5.827833341881,
+            5.980147027608519,
+            5.748435021067843,
+            6.985222031324561,
+            6.334821272670349,
+            6.275831953190258,
+            7.964122563180691,
+            7.009867967038593,
+            7.23295976963442,
+            6.560919612620886,
+            8.468635662481269,
+            9.310582983649295,
+            6.701799060637377,
+            8.66355764328169,
+            4.061406552321578
+          ],
+          "stats": {
+            "min": 4.061406552321578,
+            "max": 9.310582983649295,
+            "mean": 6.993827035746005,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 8,
+          "segment_values": [
+            7.867143048216439,
+            6.285380745540302,
+            6.4420490667825145,
+            7.361501554518676,
+            7.440919997587217,
+            7.925425454742181,
+            6.303097676134765,
+            5.735434875052773,
+            6.824913572292473,
+            6.767177244689795,
+            6.580175852991879,
+            6.567720442237858,
+            7.7059623740238825,
+            7.296185183015622,
+            6.1089819952518845,
+            7.961630980104458,
+            5.936363728202502
+          ],
+          "stats": {
+            "min": 5.735434875052773,
+            "max": 7.961630980104458,
+            "mean": 6.88882728184619,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 9,
+          "segment_values": [
+            7.436988870434389,
+            7.884703699726546,
+            6.963273462992176,
+            7.348309535166612,
+            7.8777999294359,
+            7.378908575831142,
+            5.639124300734771,
+            6.33627195204136,
+            6.078508459641794,
+            6.320371761798258,
+            5.763486645449502,
+            6.45135035700066,
+            6.758196993402232,
+            6.106686932527509,
+            4.898910756508561,
+            6.73052000433781,
+            4.779122743504478
+          ],
+          "stats": {
+            "min": 4.779122743504478,
+            "max": 7.884703699726546,
+            "mean": 6.514854998854924,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 10,
+          "segment_values": [
+            7.327168699721431,
+            7.654007107647152,
+            6.366773710489983,
+            7.468997418363879,
+            7.7191207549765455,
+            7.1380439433514535,
+            5.416384991906689,
+            5.385596897164762,
+            6.406035732034221,
+            6.217518144362874,
+            6.696569938245351,
+            6.066672976526338,
+            5.7441850507320655,
+            6.2565610890117656,
+            5.9209410327607355,
+            6.350965688669923,
+            4.882740004587956
+          ],
+          "stats": {
+            "min": 4.882740004587956,
+            "max": 7.7191207549765455,
+            "mean": 6.412840187091359,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 11,
+          "segment_values": [
+            6.379132097880583,
+            6.172958859176348,
+            6.586867992295063,
+            6.986722156052923,
+            7.089135693338618,
+            6.435270285610512,
+            5.295542983579507,
+            5.45770283301722,
+            5.926473418262577,
+            6.0171774834872584,
+            6.638477922242401,
+            6.032282732234022,
+            5.891754291480145,
+            5.669908913649869,
+            5.87612108757019,
+            6.193435322698199,
+            4.909163550150994
+          ],
+          "stats": {
+            "min": 4.909163550150994,
+            "max": 7.089135693338618,
+            "mean": 6.091654566042731,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 12,
+          "segment_values": [
+            5.762449050788906,
+            5.16923318507415,
+            5.540949126234631,
+            6.203425737635334,
+            6.857290518139414,
+            6.0682858740496,
+            5.151664316982062,
+            5.513811700443424,
+            6.493600551103536,
+            6.022413877050463,
+            6.650764275273146,
+            5.5026571121320105,
+            6.116432628733229,
+            5.757688396900241,
+            5.249164534937794,
+            5.916453888005612,
+            5.05521150182723
+          ],
+          "stats": {
+            "min": 5.05521150182723,
+            "max": 6.857290518139414,
+            "mean": 5.825382133841811,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        },
+        {
+          "frameIndex": 13,
+          "segment_values": [
+            6.20792224548972,
+            5.494909674216532,
+            4.874044303580149,
+            6.229513050215233,
+            6.90019619813539,
+            6.48082905943678,
+            4.885996937833431,
+            5.4531833144755835,
+            6.304301406004182,
+            6.078513692015379,
+            6.421035595095102,
+            5.315705440861856,
+            6.146897975761469,
+            5.9362368327059665,
+            5.415397181386026,
+            5.994157104190302,
+            5.168328321641704
+          ],
+          "stats": {
+            "min": 4.874044303580149,
+            "max": 6.90019619813539,
+            "mean": 5.84159813723793,
+            "n_nan": 0
+          },
+          "unit": "mm"
+        }
+      ],
+      "computed_at": "2026-11-21T14:37:03.027Z"
+    },
+    "rvStrain": {
+      "regions": [
+        {
+          "region": 1,
+          "label": "Basal_Seg1",
+          "strain": 1.64,
+          "gcs": 1.64,
+          "gas": -11.78,
+          "chord_ed_mm": 38.901,
+          "chord_es_mm": 39.539,
+          "area_ed_mm2": 737.12,
+          "area_es_mm2": 650.289,
+          "radius_ed_mm": 47.247,
+          "radius_es_mm": 43.483
+        },
+        {
+          "region": 2,
+          "label": "Basal_Seg2",
+          "strain": -16.37,
+          "gcs": -16.37,
+          "gas": -37.92,
+          "chord_ed_mm": 42.867,
+          "chord_es_mm": 35.85,
+          "area_ed_mm2": 781.479,
+          "area_es_mm2": 485.121,
+          "radius_ed_mm": 46.766,
+          "radius_es_mm": 39.086
+        },
+        {
+          "region": 3,
+          "label": "Basal_Seg3",
+          "strain": -10.05,
+          "gcs": -10.05,
+          "gas": -54.3,
+          "chord_ed_mm": 49.432,
+          "chord_es_mm": 44.466,
+          "area_ed_mm2": 1142.016,
+          "area_es_mm2": 521.93,
+          "radius_ed_mm": 56.518,
+          "radius_es_mm": 48.559
+        },
+        {
+          "region": 4,
+          "label": "Mid_Seg1",
+          "strain": -20.46,
+          "gcs": -20.46,
+          "gas": -34.06,
+          "chord_ed_mm": 40.768,
+          "chord_es_mm": 32.426,
+          "area_ed_mm2": 689.929,
+          "area_es_mm2": 454.919,
+          "radius_ed_mm": 46.922,
+          "radius_es_mm": 39.5
+        },
+        {
+          "region": 5,
+          "label": "Mid_Seg2",
+          "strain": -15.52,
+          "gcs": -15.52,
+          "gas": -33.06,
+          "chord_ed_mm": 40.659,
+          "chord_es_mm": 34.35,
+          "area_ed_mm2": 796.58,
+          "area_es_mm2": 533.256,
+          "radius_ed_mm": 48.357,
+          "radius_es_mm": 39.844
+        },
+        {
+          "region": 6,
+          "label": "Mid_Seg3",
+          "strain": -12.02,
+          "gcs": -12.02,
+          "gas": -45.5,
+          "chord_ed_mm": 40.161,
+          "chord_es_mm": 35.334,
+          "area_ed_mm2": 692.76,
+          "area_es_mm2": 377.526,
+          "radius_ed_mm": 47.48,
+          "radius_es_mm": 39.068
+        },
+        {
+          "region": 7,
+          "label": "Apical_Seg1",
+          "strain": -11.72,
+          "gcs": -11.72,
+          "gas": -59.65,
+          "chord_ed_mm": 25.553,
+          "chord_es_mm": 22.557,
+          "area_ed_mm2": 327.504,
+          "area_es_mm2": 132.134,
+          "radius_ed_mm": 38.192,
+          "radius_es_mm": 31.548
+        },
+        {
+          "region": 8,
+          "label": "Apical_Seg2",
+          "strain": -12.96,
+          "gcs": -12.96,
+          "gas": -70.47,
+          "chord_ed_mm": 25.914,
+          "chord_es_mm": 22.555,
+          "area_ed_mm2": 380.358,
+          "area_es_mm2": 112.314,
+          "radius_ed_mm": 38.808,
+          "radius_es_mm": 28.547
+        },
+        {
+          "region": 9,
+          "label": "Apical_Seg3",
+          "strain": -10.08,
+          "gcs": -10.08,
+          "gas": -91.88,
+          "chord_ed_mm": 19.811,
+          "chord_es_mm": 17.814,
+          "area_ed_mm2": 185.932,
+          "area_es_mm2": 15.101,
+          "radius_ed_mm": 31.545,
+          "radius_es_mm": 25.072
+        }
+      ],
+      "septal_regions": [
+        {
+          "region": 1,
+          "ring": "basal",
+          "label": "Basal_Septal",
+          "gcs": -12.05,
+          "chord_ed_mm": 56.212,
+          "chord_es_mm": 49.439
+        },
+        {
+          "region": 2,
+          "ring": "mid",
+          "label": "Mid_Septal",
+          "gcs": -9.45,
+          "chord_ed_mm": 56.962,
+          "chord_es_mm": 51.58
+        },
+        {
+          "region": 3,
+          "ring": "apical",
+          "label": "Apical_Septal",
+          "gcs": 6.44,
+          "chord_ed_mm": 37.697,
+          "chord_es_mm": 40.126
+        }
+      ],
+      "global_rv_strain": -12.09,
+      "global_rv_gcs": -12.09,
+      "global_rv_septal_gcs": -6.45,
+      "global_rv_gas": -42.75,
+      "vox_xy_mm": 1.6826900243759155,
+      "alignment_source": "landmark",
+      "alignment_angle_deg": 60.725414785991255,
+      "edFrameIndex": 0,
+      "esFrameIndex": 5,
+      "segmentationModel": "unet",
+      "computed_at": "2026-11-21T14:39:35.137Z"
+    },
+    "rvRegionalHealthStatus": {
+      "status": "ok",
+      "overall_grade_unchanged": true,
+      "source": "rvStrain",
+      "segments": [
+        {
+          "idx": 1,
+          "region": "basal",
+          "label": "Basal_Seg1",
+          "gcs": 1.64,
+          "gas": -11.78,
+          "level": "severe",
+          "abs_level": "severe",
+          "rel_gap": 13.59,
+          "rel_flag": true
+        },
+        {
+          "idx": 2,
+          "region": "basal",
+          "label": "Basal_Seg2",
+          "gcs": -16.37,
+          "gas": -37.92,
+          "level": "normal",
+          "abs_level": "mild",
+          "rel_gap": -4.42,
+          "rel_flag": false
+        },
+        {
+          "idx": 3,
+          "region": "basal",
+          "label": "Basal_Seg3",
+          "gcs": -10.05,
+          "gas": -54.3,
+          "level": "normal",
+          "abs_level": "moderate",
+          "rel_gap": 1.9,
+          "rel_flag": false
+        },
+        {
+          "idx": 4,
+          "region": "mid",
+          "label": "Mid_Seg1",
+          "gcs": -20.46,
+          "gas": -34.06,
+          "level": "normal",
+          "abs_level": "normal",
+          "rel_gap": -8.51,
+          "rel_flag": false
+        },
+        {
+          "idx": 5,
+          "region": "mid",
+          "label": "Mid_Seg2",
+          "gcs": -15.52,
+          "gas": -33.06,
+          "level": "normal",
+          "abs_level": "mild",
+          "rel_gap": -3.57,
+          "rel_flag": false
+        },
+        {
+          "idx": 6,
+          "region": "mid",
+          "label": "Mid_Seg3",
+          "gcs": -12.02,
+          "gas": -45.5,
+          "level": "normal",
+          "abs_level": "mild",
+          "rel_gap": -0.07,
+          "rel_flag": false
+        },
+        {
+          "idx": 7,
+          "region": "apical",
+          "label": "Apical_Seg1",
+          "gcs": -11.72,
+          "gas": -59.65,
+          "level": "normal",
+          "abs_level": "moderate",
+          "rel_gap": 0.23,
+          "rel_flag": false
+        },
+        {
+          "idx": 8,
+          "region": "apical",
+          "label": "Apical_Seg2",
+          "gcs": -12.96,
+          "gas": -70.47,
+          "level": "normal",
+          "abs_level": "mild",
+          "rel_gap": -1.01,
+          "rel_flag": false
+        },
+        {
+          "idx": 9,
+          "region": "apical",
+          "label": "Apical_Seg3",
+          "gcs": -10.08,
+          "gas": -91.88,
+          "level": "normal",
+          "abs_level": "moderate",
+          "rel_gap": 1.87,
+          "rel_flag": false
+        }
+      ],
+      "reduced_count": 1,
+      "affected_idx": [
+        1
+      ],
+      "skipped_idx": [],
+      "summary": "Severe reduction in 1 basal RV region",
+      "patient_mean_gcs": -11.95,
+      "relative_rule_applied": true,
+      "thresholds": {
+        "seg_gcs_normal_max": -17,
+        "seg_gcs_mild_max": -12,
+        "seg_gcs_moderate_max": -7,
+        "rel_gap_pct": 25,
+        "rel_gap_threshold_abs": 2.987
+      },
+      "disclaimer": "Advisory regional assessment, not a diagnosis. Unlike the LV, the RV has no validated strain reference range at ANY level — global or per-region. Thresholds here are borrowed from the LV's global strain reference purely as a conservative, consistently applied anchor, and must be interpreted by a qualified clinician alongside the full clinical picture. This layer never changes any LV grade and produces no RV grade of its own.",
+      "method": "Hybrid per-region classification: absolute GCS band (anchored on the LV's EACVI/ASE global peak-GCS reference, borrowed — not RV-validated) AND a relative gap versus the patient's own mean regional RV GCS.",
+      "warnings": [],
+      "computed_at": "2026-11-21T14:39:35.375Z"
+    },
+    "strain": {
+      "segments": [
+        {
+          "segment": 1,
+          "label": "Basal Anterior",
+          "grs": 8.28,
+          "gcs": -9.03,
+          "wt_ed_mm": 7.539,
+          "wt_es_mm": 8.163
+        },
+        {
+          "segment": 2,
+          "label": "Basal Anteroseptal",
+          "grs": -3.01,
+          "gcs": -17.01,
+          "wt_ed_mm": 6.025,
+          "wt_es_mm": 5.844
+        },
+        {
+          "segment": 3,
+          "label": "Basal Inferoseptal",
+          "grs": 20.07,
+          "gcs": -13.98,
+          "wt_ed_mm": 5.084,
+          "wt_es_mm": 6.104
+        },
+        {
+          "segment": 4,
+          "label": "Basal Inferior",
+          "grs": -8.9,
+          "gcs": -17.43,
+          "wt_ed_mm": 5.84,
+          "wt_es_mm": 5.32
+        },
+        {
+          "segment": 5,
+          "label": "Basal Inferolateral",
+          "grs": -6.23,
+          "gcs": -14.67,
+          "wt_ed_mm": 6.759,
+          "wt_es_mm": 6.338
+        },
+        {
+          "segment": 6,
+          "label": "Basal Anterolateral",
+          "grs": 20.78,
+          "gcs": -17.09,
+          "wt_ed_mm": 6.984,
+          "wt_es_mm": 8.435
+        },
+        {
+          "segment": 7,
+          "label": "Mid Anterior",
+          "grs": 28.59,
+          "gcs": -8.96,
+          "wt_ed_mm": 6.015,
+          "wt_es_mm": 7.734
+        },
+        {
+          "segment": 8,
+          "label": "Mid Anteroseptal",
+          "grs": 21.31,
+          "gcs": -22.62,
+          "wt_ed_mm": 6.377,
+          "wt_es_mm": 7.736
+        },
+        {
+          "segment": 9,
+          "label": "Mid Inferoseptal",
+          "grs": 42.59,
+          "gcs": -15.12,
+          "wt_ed_mm": 6.159,
+          "wt_es_mm": 8.782
+        },
+        {
+          "segment": 10,
+          "label": "Mid Inferior",
+          "grs": 34.68,
+          "gcs": -10,
+          "wt_ed_mm": 6.048,
+          "wt_es_mm": 8.146
+        },
+        {
+          "segment": 11,
+          "label": "Mid Inferolateral",
+          "grs": 39.74,
+          "gcs": -23.56,
+          "wt_ed_mm": 6.383,
+          "wt_es_mm": 8.919
+        },
+        {
+          "segment": 12,
+          "label": "Mid Anterolateral",
+          "grs": 44.63,
+          "gcs": -7.43,
+          "wt_ed_mm": 5.541,
+          "wt_es_mm": 8.014
+        },
+        {
+          "segment": 13,
+          "label": "Apical Anterior",
+          "grs": 60.05,
+          "gcs": -19.56,
+          "wt_ed_mm": 5.196,
+          "wt_es_mm": 8.315
+        },
+        {
+          "segment": 14,
+          "label": "Apical Septal",
+          "grs": 65.14,
+          "gcs": -25.89,
+          "wt_ed_mm": 5.12,
+          "wt_es_mm": 8.455
+        },
+        {
+          "segment": 15,
+          "label": "Apical Inferior",
+          "grs": 15.19,
+          "gcs": -30.09,
+          "wt_ed_mm": 5.508,
+          "wt_es_mm": 6.345
+        },
+        {
+          "segment": 16,
+          "label": "Apical Lateral",
+          "grs": 47.74,
+          "gcs": -23.12,
+          "wt_ed_mm": 6.129,
+          "wt_es_mm": 9.055
+        },
+        {
+          "segment": 17,
+          "label": "Apex",
+          "grs": 21.43,
+          "gcs": -43.42,
+          "wt_ed_mm": 4.73,
+          "wt_es_mm": 5.744
+        }
+      ],
+      "global_grs": 25.64,
+      "global_gcs": -22.9,
+      "ed_wt_mean_mm": 5.967,
+      "es_wt_mean_mm": 7.497,
+      "vox_xy_mm": 1.6826900243759155,
+      "alignment_source": "landmark",
+      "alignment_angle_deg": 60.725414785991255,
+      "edFrameIndex": 0,
+      "esFrameIndex": 5,
+      "segmentationModel": "unet",
+      "source": "frames",
+      "computed_at": "2026-11-21T14:39:37.300Z",
+      "staleSince": "2026-11-24T03:27:14.999Z"
+    },
+    "rvHealthStatus": {
+      "status": "Outside reference range",
+      "confidence": "normal",
+      "sex": "unspecified",
+      "bsa_m2": null,
+      "evidence": [
+        {
+          "label": "RV Ejection Fraction",
+          "level": "warn",
+          "detail": "RVEF 41.6 % — below the lower limit of normal for both men (44 %) and women (47 %)."
+        },
+        {
+          "label": "RV End-Diastolic Volume Index",
+          "level": "unavailable",
+          "detail": "RVEDV 86.0 mL — not indexed: enter height and weight to compute body surface area."
+        },
+        {
+          "label": "RV End-Systolic Volume Index",
+          "level": "unavailable",
+          "detail": "RVESV 50.2 mL — not indexed: enter height and weight to compute body surface area."
+        }
+      ],
+      "features_used": [
+        "RVEF"
+      ],
+      "features_missing": [
+        "sex",
+        "RVEDVi",
+        "RVESVi"
+      ],
+      "reference": {
+        "source": "Kawel-Boehm N, et al. SCMR reference values (\"normal values\") in cardiovascular magnetic resonance: 2025 update. J Cardiovasc Magn Reson 2025;27:101853",
+        "convention": "papillary muscles and trabeculations counted as blood-pool volume",
+        "sex": null,
+        "rvef_lower_limit": null,
+        "rvedvi_range": null,
+        "rvesvi_range": null,
+        "by_sex": {
+          "male": {
+            "rvef_lower_limit": 44,
+            "rvedvi_range": [
+              47,
+              116
+            ],
+            "rvesvi_range": [
+              16,
+              52
+            ]
+          },
+          "female": {
+            "rvef_lower_limit": 47,
+            "rvedvi_range": [
+              44,
+              99
+            ],
+            "rvesvi_range": [
+              13,
+              43
+            ]
+          }
+        }
+      },
+      "disclaimer": "Comparison with published sex-specific reference ranges (SCMR 2025). NOT a diagnosis and not a severity grade — interpretation by a qualified clinician is required.",
+      "method": "sex-specific-reference-range-scmr-2025",
+      "warnings": [
+        "Sex not selected — each value was checked against both the men's and the women's reference ranges; a verdict is given only where they agree.",
+        "Status rests on RVEF alone — indexed RV volumes could not be assessed."
+      ],
+      "computed_at": "2026-11-21T14:43:11.019Z"
+    }
+  }
+]

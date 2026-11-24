@@ -12,7 +12,6 @@ import path from "path";
 import crypto from "crypto";
 import multer from "multer";
 import logger from "../services/logger"; // Import Winston Logger
-import { normalizeLandmarkJobResult } from "../utils/landmark_order";
 import {
   updateJob,
   readJob,
@@ -149,7 +148,11 @@ router.post("/landmark-callback", async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const result = normalizeLandmarkJobResult(req.body?.result);
+    // Stored exactly as the GPU service sent it -- anterior/inferior is decided once, geometrically,
+    // in landmark_inference_api.py's _assign_rvip_classes, and must never be re-labelled afterward
+    // (a Y-position re-check here could silently flip a slice the geometric classifier got right,
+    // e.g. at the 0/360 wrap it specifically exists to handle).
+    const result = req.body?.result;
     // Accept all response formats:
     //   Old format:          { predictions: [...], total_frames, model_used, image_dimensions }
     //   Legacy single-frame: { slices: [...], avg_lm1, avg_lm2, n_total, n_collapsed, n_2ch, n_1ch_fallback }
