@@ -270,17 +270,10 @@ try {
     }
 
     # An installed copy asks whether the team has published a newer version. This window closes by itself after a
-    # successful start, so the notice is also shown in a popup that stays until the user presses OK.
+    # successful start, so the notice is also shown in a popup that stays until the user answers it. With a safe
+    # download link it asks Yes/No and Yes opens the download page (Show-UpdateNotice; it never stops the start).
     $update = Get-UpdateNotice $scriptDir
-    if ($update) {
-        $text = "A new version of VisHeart ($($update.Version)) is available."
-        if ($update.Note) { $text += "`n`n$($update.Note)" }
-        if ($update.Download) { $text += "`n`nDownload the Update installer from:`n$($update.Download)" }
-        else { $text += "`n`nAsk the VisHeart team where to download it." }
-        $text += "`n`nVisHeart is running and you can keep using it. Install the update when convenient."
-        foreach ($line in ($text -split "`n")) { if ($line) { Write-Log "UPDATE: $line" } }
-        try { (New-Object -ComObject WScript.Shell).Popup($text, 0, 'VisHeart update available', 64) | Out-Null } catch { }
-    }
+    if ($update) { Show-UpdateNotice $update -Log { param($Message) Write-Log $Message } | Out-Null }
 
     if ($backendOk -and $frontendOk -and $inferenceOk -and ((-not $gpuAvailable) -or $inferenceGpuOk)) {
         Write-Log 'Startup successful.'
