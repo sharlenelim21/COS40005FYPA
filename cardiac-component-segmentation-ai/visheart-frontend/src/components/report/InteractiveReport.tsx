@@ -218,7 +218,14 @@ function Bullseye({
   const apex = byId.get(17);
   return (
     <svg
-      viewBox="0 0 280 280" width="100%" height={240} role="img"
+      // The ring's outer radius (140) exactly equals cx/cy, so the circle
+      // touches all four canvas edges with zero margin. A square viewBox left
+      // no room for "Anterior"/"Inferior" outside the ring, so they rendered
+      // stamped on top of the wedges. Extra top/bottom margin (-20..300, ring
+      // itself unchanged at 0..280) gives them a clear band to sit in; the
+      // taller `height` keeps the ring the same on-screen size instead of
+      // shrinking to fit the new aspect ratio.
+      viewBox="0 -20 280 320" width="100%" height={298} role="img"
       aria-label="AHA 17-segment bullseye"
       className={interactive ? "text-foreground" : undefined}
     >
@@ -233,8 +240,8 @@ function Bullseye({
         </circle>
         <text x={cx} y={cy + 3} textAnchor="middle" fontSize={12} fontWeight={700} fill="#0b1220" style={{ pointerEvents: "none" }}>17</text>
       </g>
-      <text x={cx} y={16} textAnchor="middle" fontSize={13} className="fill-muted-foreground">Anterior</text>
-      <text x={cx} y={272} textAnchor="middle" fontSize={13} className="fill-muted-foreground">Inferior</text>
+      <text x={cx} y={-5} textAnchor="middle" fontSize={13} className="fill-muted-foreground">Anterior</text>
+      <text x={cx} y={295} textAnchor="middle" fontSize={13} className="fill-muted-foreground">Inferior</text>
       <text x={12} y={cy + 4} textAnchor="start" fontSize={13} className="fill-muted-foreground">Septal</text>
       <text x={268} y={cy + 4} textAnchor="end" fontSize={13} className="fill-muted-foreground">Lateral</text>
     </svg>
@@ -1924,10 +1931,10 @@ export function InteractiveReport({
                           </span>
                           {g.resolved_from_partial_data && (
                             <span
-                              className="flex items-center gap-0.5 rounded-full border border-red-500/50 bg-red-500/15 px-1.5 py-0.5 text-[12.5px] font-semibold text-red-700 dark:text-red-400"
+                              className="flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-full border border-red-500/50 bg-red-500/15 px-1.5 py-0.5 text-[12.5px] font-semibold text-red-700 dark:text-red-400"
                               title="This gate's result was decided from only some of its required values — the rest were unavailable, but couldn't have changed the outcome either way."
                             >
-                              <AlertTriangle className="h-2.5 w-2.5" /> Partial data
+                              <AlertTriangle className="h-2.5 w-2.5 shrink-0" /> Partial data
                             </span>
                           )}
                         </span>
@@ -2260,7 +2267,7 @@ export function InteractiveReport({
                     )}
                   </div>
                 ) : (
-                  <div className="flex h-full min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-border p-6 text-center">
+                  <div className="flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-border p-6 text-center">
                     <p className="text-sm text-muted-foreground">Full-cycle curves need the per-frame strain series.</p>
                     <p className="mt-1 text-sm text-muted-foreground">
                       The single ED→ES result is shown in the bullseye. Run the strain series to plot strain across the cardiac cycle.

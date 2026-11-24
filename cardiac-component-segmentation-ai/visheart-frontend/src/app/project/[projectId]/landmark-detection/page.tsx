@@ -1256,17 +1256,30 @@ export default function LandmarkDetectionPage() {
       ? projectData.dimensions.slices
       : 1;
 
-  // Cardiac-cycle playback for the Structure/Strain tabs: the sidebar's "Frame" playback bar
-  // drives it, and the bullseye and 3D heart animate from the same frame. Kept separate from
-  // `state.currentFrame`, which is the SLICE index used by the landmark viewer.
+  // Cardiac-cycle playback for the Structure tab: the sidebar's "Frame" playback bar drives it,
+  // and the bullseye and 3D heart animate from this frame. Kept separate from `state.currentFrame`,
+  // which is the SLICE index used by the landmark viewer.
+  //
+  // Structure and Strain used to share this single cyclePlayback (the page rendering both the
+  // bullseye and the 3D heart "from the same frame" was the original reasoning) -- but that meant
+  // scrubbing Structure to frame 2 silently moved Strain's Full-cycle position too, and vice versa,
+  // which read as a bug once the two tabs were actually used side by side (reported live,
+  // 2026-11-24). They're independent per-tab timers now: `cyclePlayback` stays Structure's own
+  // (almost every existing consumer below -- frameThicknessValues, structureRvMesh, useMotionMesh,
+  // the RV FAC memos, AhaBullseyePanel -- is Structure-tab-only despite the generic name), and
+  // `strainCyclePlayback` is Strain's own, used only by StrainPreviewPanel and the Strain tab's
+  // sidebar "Frame" bar.
   const cyclePlayback = useCyclePlayback(projectData?.dimensions?.frames ?? 0);
   const { frame: strainPlaybackFrame, fps: strainPlaybackFps, setPlaying: setCyclePlaying } = cyclePlayback;
+  const strainCyclePlayback = useCyclePlayback(projectData?.dimensions?.frames ?? 0);
+  const { frame: strainTabFrame, fps: strainTabFps, setPlaying: setStrainTabPlaying } = strainCyclePlayback;
 
-  // Structure/Strain-tab shortcut: Space plays/pauses the cardiac cycle while the sidebar shows its
-  // "Frame" playback bar (always on Structure; on Strain only in Full cycle scope -- same condition
-  // as the sidebar). The Landmarks tab's Space (slice playback) is handled in the effect above.
+  // Structure/Strain-tab shortcut: Space plays/pauses whichever tab's cardiac cycle is showing
+  // (always on Structure; on Strain only in Full cycle scope -- same condition as the sidebar).
+  // The Landmarks tab's Space (slice playback) is handled in the effect above.
   const cycleBarVisible =
     hasPredictions && (workspace === "structure" || (workspace === "strain" && computeScope !== "quick"));
+  const setActiveCyclePlaying = workspace === "strain" ? setStrainTabPlaying : setCyclePlaying;
   useEffect(() => {
     if (!cycleBarVisible) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1275,14 +1288,16 @@ export default function LandmarkDetectionPage() {
       if (isKeyForFocusedControl(event.target) || isArrowOrSpaceForFocusedControl(event.target)) return;
       // Always play/pause, even when a button has focus (Enter still presses buttons).
       event.preventDefault();
-      setCyclePlaying((playing) => !playing);
+      setActiveCyclePlaying((playing) => !playing);
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [cycleBarVisible, setCyclePlaying]);
+  }, [cycleBarVisible, setActiveCyclePlaying]);
   // Smooth motion: the 3D hearts ease from one frame to the next over one playback step (the cycle
   // advances every 1000 / fps ms), so the heart moves continuously instead of jumping per frame.
+  // Structure and Strain each animate at their OWN tab's speed now that their timers are separate.
   const motionTransitionMs = Math.min(1000, 1000 / Math.max(strainPlaybackFps, 0.5));
+  const strainMotionTransitionMs = Math.min(1000, 1000 / Math.max(strainTabFps, 0.5));
 
 
   // Per-frame wall thickness, when the full-cycle strain series has been run for
@@ -1904,9 +1919,9 @@ export default function LandmarkDetectionPage() {
   // because only switching SIDEBAR TABS paused it (handleTabChange above), not switching scope
   // within the same Strain tab (reported live, with a recording, 2026-11-11).
   const handleStrainScopeChange = useCallback((scope: "quick" | "full") => {
-    if (scope === "quick") setCyclePlaying(false);
+    if (scope === "quick") setStrainTabPlaying(false);
     setComputeScope(scope);
-  }, [setCyclePlaying]);
+  }, [setStrainTabPlaying]);
 
   // Bundled and passed to LandmarkSidebar's "Compute strain" card (Strain tab) —
   // a single prop instead of ~18 individual ones, since the card and the main
@@ -2135,7 +2150,7 @@ export default function LandmarkDetectionPage() {
             visibleLandmarks={visibleLandmarks}
             replacementFileError={replacementFileError}
             confidentCount={confidentCount}
-            cyclePlayback={cyclePlayback}
+            cyclePlayback={workspace === "strain" ? strainCyclePlayback : cyclePlayback}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
@@ -2423,8 +2438,8 @@ export default function LandmarkDetectionPage() {
                 <StrainPreviewPanel
                   selectedStrainType={selectedStrainType}
                   activeModel={activeModel}
-                  currentFrame={strainPlaybackFrame}
-                  motionTransitionMs={motionTransitionMs}
+                  currentFrame={strainTabFrame}
+                  motionTransitionMs={strainMotionTransitionMs}
                   selectedSegment={selectedStrainSegment}
                   onSelectSegment={setSelectedStrainSegment}
                   avgLm1={state.avgLm1 ?? null}
@@ -2545,7 +2560,7 @@ export default function LandmarkDetectionPage() {
                 visibleLandmarks={visibleLandmarks}
                 replacementFileError={replacementFileError}
                 confidentCount={confidentCount}
-                cyclePlayback={cyclePlayback}
+                cyclePlayback={workspace === "strain" ? strainCyclePlayback : cyclePlayback}
             onTabChange={setWorkspace}
             activeTab={workspace}
             activeModel={activeModel}
