@@ -18,13 +18,18 @@ on that PC, and nothing is reachable from other computers. Patient data never le
 
 ## Install and use (for users)
 
-**Download:** [VisHeart on Google Drive](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv?usp=sharing)
+**Download** (two Google Drive folders):
+
+- **New PC:** [visheart installer](https://drive.google.com/drive/folders/1-meCfpVEbuur0gNHqRrU_MBaIo1TEbac) holds
+  the Full installers, `VisHeart-Full-<version>.zip`.
+- **PC that already has VisHeart:** [visheart version update](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv)
+  holds the Update installers, `VisHeart-Update-<version>.zip`. The update popup opens this folder.
 
 You need Windows 10 (version 2004 or later) or Windows 11, 64-bit, administrator rights to install, at least 40 GB
 of free disk space for VisHeart, and about 6 GB more while installing (for the download). An NVIDIA graphics card is
 optional: without one, VisHeart is slower and the MedSAM tool is not available.
 
-1. Open the Google Drive folder, click the newest `VisHeart-Full-<version>.zip` (one file, about 2.8 GB) and click
+1. Open the **visheart installer** folder, click the newest `VisHeart-Full-<version>.zip` (one file, about 2.8 GB) and click
    **Download**. Google Drive says it cannot scan large files for viruses; click **Download anyway**.
 2. In your Downloads folder, right-click the zip and choose **Extract All**, then **Extract**.
 3. In the extracted folder, double-click `VisHeart-Full-<version>.exe`. (If you open the `.exe` without extracting
@@ -41,7 +46,8 @@ optional: without one, VisHeart is slower and the MedSAM tool is not available.
 
 - **Stop:** Start menu > VisHeart > **Stop VisHeart**.
 - **Update:** VisHeart shows a popup when a new version is published. Download the newest
-  `VisHeart-Update-<version>.zip`, extract it and run the `.exe` in it. Your data is kept.
+  `VisHeart-Update-<version>.zip` from the [visheart version update](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv)
+  folder, extract it and run the `.exe` in it. Your data is kept.
 - **Uninstall:** Windows Settings > Apps > Installed apps > VisHeart > **...** > Uninstall.
 
 Full user guide: [`installer/INSTALL.md`](cardiac-component-segmentation-ai/installer/INSTALL.md).
@@ -174,8 +180,11 @@ Do this on a "build PC" that has been set up once (Inno Setup, pnpm, the two mod
    Each build checks the code, models and Docker images first and stops with a clear message if something is
    wrong. The results are `VisHeart-Update-<version>.zip` and `VisHeart-Full-<version>.zip` in
    `cardiac-component-segmentation-ai/installer/out/`.
-4. Test the installers, then upload **only the two zip files** to the Google Drive folder.
-5. Edit `installer/latest.json` (new version, Drive link, short note) and merge it into `main`. Installed PCs then
+4. Test the installers, then upload **only the zip files**: `VisHeart-Full-<version>.zip` to
+   [visheart installer](https://drive.google.com/drive/folders/1-meCfpVEbuur0gNHqRrU_MBaIo1TEbac) and
+   `VisHeart-Update-<version>.zip` to [visheart version update](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv).
+5. Edit `installer/latest.json`: the new version and a short note (the link to the visheart version update folder is
+   already there and stays the same). Merge it into `main`. Installed PCs then
    show the "update available" popup.
 
 Updates remove what the old version no longer uses: old program files and old VisHeart Docker images. User data is
