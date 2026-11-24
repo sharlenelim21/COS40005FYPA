@@ -18,9 +18,14 @@ VisHeart runs on one Windows PC. You use it in a web browser on that PC. Other c
 
 ## Download
 
-The VisHeart team shares a Google Drive folder with you. Ask them for access if you do not have it.
+VisHeart is shared in two Google Drive folders. Ask the VisHeart team for access if a link does not open.
 
-1. In that folder, click the newest `VisHeart-Full-<version>.zip` (about 2.8 GB) and click **Download**.
+- [visheart installer](https://drive.google.com/drive/folders/1-meCfpVEbuur0gNHqRrU_MBaIo1TEbac): Full installers,
+  for a PC that does not have VisHeart yet. Use this one to install.
+- [visheart version update](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv): Update
+  installers, for a PC that already has VisHeart (see Updates below).
+
+1. In the **visheart installer** folder, click the newest `VisHeart-Full-<version>.zip` (about 2.8 GB) and click **Download**.
 2. Google Drive says it cannot scan the file for viruses because it is large. Click **Download anyway**.
 
 ## Install
@@ -65,7 +70,9 @@ somewhere safe. Once you change the password, the one in the note no longer work
 When the team tells you there is a new version, or VisHeart shows a **"VisHeart update available"** popup when it
 starts (VisHeart keeps working while the popup is open):
 
-1. Download the newest `VisHeart-Update-<version>.zip` (about 800 MB) from the Google Drive folder.
+1. Download the newest `VisHeart-Update-<version>.zip` (about 800 MB) from the
+   [visheart version update](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv) folder. The
+   popup's link opens the same folder.
 2. Extract it as in Install step 1, and run `VisHeart-Update-<version>.exe` from the extracted folder. It stops
    VisHeart and updates it. The drive VisHeart is installed on needs at least 10 GB free.
 3. Start VisHeart with the icon as usual. If the new version needs new parts, this start downloads them first and

@@ -95,14 +95,16 @@ The build PC is the computer that makes the installers. It needs:
 5. **Test it before you upload.** Install the Update over a test install and check that you can still log in and
    that your change is there. The first time, and after any change to the installer itself, test the Full installer
    on a clean Windows PC or VM.
-6. **Upload.** Put `VisHeart-<Variant>-<version>.zip` (the one file, not the folder) in the team's VisHeart Google
-   Drive folder. Google Drive splits a folder download over about 2 GB into several dated zips, and a user who
+6. **Upload.** Put `VisHeart-<Variant>-<version>.zip` (the one file, not the folder) in its Google Drive folder:
+   Full installers in [visheart installer](https://drive.google.com/drive/folders/1-meCfpVEbuur0gNHqRrU_MBaIo1TEbac),
+   Update installers in [visheart version update](https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv).
+   Google Drive splits a folder download over about 2 GB into several dated zips, and a user who
    extracts only one gets "Please insert Disk 2"; a single file downloads whole, under its own name. Remove or rename
    older versions, so users pick the newest.
 7. **Tell the users** which version to download, and whether it is an Update or needs a Full install.
 8. **Publish the update notice**, only after step 6, so the link works. Edit `installer/latest.json`: set `version` to
-   the new `installer/VERSION` and `note` to one or two sentences. `download` already holds the team's shared Google
-   Drive folder and stays the same. Commit it and get it onto the `main` branch on GitHub. Each installed PC reads that file every time
+   the new `installer/VERSION` and `note` to one or two sentences. `download` already holds the visheart version
+   update folder and stays the same. Commit it and get it onto the `main` branch on GitHub. Each installed PC reads that file every time
    VisHeart starts (`updateUrl` in `release.json`) and shows a popup when the version is newer than its own.
    Without internet, or while the file is not on `main`, there is simply no popup; starting is never blocked.
 
