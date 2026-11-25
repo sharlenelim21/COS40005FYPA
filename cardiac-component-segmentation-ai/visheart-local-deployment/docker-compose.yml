@@ -42,8 +42,8 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     ports:
-      - "${VH_BIND:+${VH_BIND}:}3000:3000"  # Frontend
-      - "${VH_BIND:+${VH_BIND}:}5000:5000"  # Backend API
+      - "${VH_BIND:+${VH_BIND:-}:}3000:3000"  # Frontend
+      - "${VH_BIND:+${VH_BIND:-}:}5000:5000"  # Backend API
     environment:
       # ========== Backend Configuration ==========
       NODE_ENV: development

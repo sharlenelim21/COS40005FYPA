@@ -19,3 +19,7 @@ cardiac-component-segmentation-ai/visheart-local-deployment/database.owner
 cardiac-component-segmentation-ai/visheart-local-deployment/release.env
 cardiac-component-segmentation-ai/installer/smtp.release.env
 cardiac-component-segmentation-ai/installer/out/
+
+# AI coding-assistant settings (Claude Code, Codex): personal, never committed
+.claude/
+.codex/
