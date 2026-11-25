@@ -72,7 +72,12 @@ Describe 'docker-compose.yml defaults (no env file)' {
             "$($entry.Service):$($entry.Port.target)=$($entry.Port.host_ip)" |
                 Should Be "$($entry.Service):$($entry.Port.target)=$want"
         }
-        $app.image | Should Be 'sharlene21/visheart-local:1.6.0'
+        # The default app image must be the one installer/release.json ships, so developers running from git and
+        # installed PCs run the same image. No version is written here: after a new image is pushed, change both files
+        # (RELEASING.md, section 3, step 2) and this test passes; change only one and it fails.
+        $release = Get-Content -Raw (Join-Path $deploymentDir '..\installer\release.json') | ConvertFrom-Json
+        "docker-compose.yml default image = $($app.image)" |
+            Should Be "docker-compose.yml default image = $($release.images.VH_APP_IMAGE)"
         $config.services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD | Should Be 'P@ssw0rd123!'
         $app.environment.MONGODB_URI | Should Match ([regex]::Escape('admin:P%40ssw0rd123%21@'))
         $app.environment.ADMIN_PASS | Should Be 'P@ssw0rd123!'

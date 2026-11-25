@@ -77,7 +77,8 @@ The build PC is the computer that makes the installers. It needs:
       docker push sharlene21/visheart-local:1.6.0
       ```
    4. Set `"VH_APP_IMAGE": "sharlene21/visheart-local:1.6.0"` in `installer/release.json` (your own image name, if
-      you pushed to another account).
+      you pushed to another account). Steps 2 and 4 go together: the Pester test `Compose.Tests.ps1` fails in CI when
+      the default in `docker-compose.yml` and `release.json` name different images.
 
    Use a new version number every time, never `latest` or an old number: an installed PC downloads an image only when
    its tag is new to it, so a changed image pushed under an old tag never reaches users.
