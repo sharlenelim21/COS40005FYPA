@@ -1,6 +1,6 @@
 {
   "comment": "Start VisHeart on installed PCs reads this file from the main branch on GitHub (release.json updateUrl) and shows a popup when version is newer than the installed one. For a release, change only version (= installer/VERSION of that release) and note (one or two sentences, max 300 characters), and only AFTER the new installer zips are in the Drive folder. download is the team's shared Google Drive folder; it stays the same.",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "download": "https://drive.google.com/drive/folders/1XUpuhkLg4mF25GY7j9Gl1y7s0hChwndv?usp=sharing",
-  "note": ""
+  "note": "Fixes the update notice not opening the download page automatically."
 }
