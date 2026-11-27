@@ -269,8 +269,10 @@ def _heatmap_to_coord(heatmap_ch: np.ndarray, H_orig: int, W_orig: int):
 # is stored, rather than propagating a silently-swapped alignment.
 #
 # Geometry: angles measured anti-clockwise from the LV centroid. The point
-# at the smaller angle is anterior; the point at the larger angle is
-# inferior. See Landmark-logic-Sharlene.pdf for the derivation.
+# at the smaller angle is inferior; the point at the larger angle is
+# anterior (client correction, 2026-11-27 — the training classes are the
+# other way round from what was first assumed: class 1 is inferior, class 2
+# is anterior). See Landmark-logic-Sharlene.pdf for the original derivation.
 # ---------------------------------------------------------------------------
 
 def _lv_centroid_from_mask(seg_2d: Optional[np.ndarray], lv_class: float = 3.0) -> Optional[tuple[float, float]]:
@@ -293,22 +295,28 @@ def _assign_rvip_classes(
     position around the LV centroid.
 
     Quadrant-based, not a plain angle comparison: within the same quadrant
-    the smaller angle is anterior, as before, but a plain "smaller angle
-    wins" comparison gets the Q4->Q1 case backwards (a point at 350 degrees
-    reads as "larger" than one at 10 degrees, even though it is the earlier
-    one going anti-clockwise around the 0/360 wrap). Quadrant order fixes
-    that, and the two near-opposite pairs (Q1/Q3, Q2/Q4) -- where quadrant
-    order alone doesn't decide it -- fall back to whichever point sits
-    closer to the far quadrant boundary (225 degrees for Q1/Q3, 315 degrees
-    for Q2/Q4). Client-supplied logic (assign_classes_v2.py, 2026-11-24),
+    the smaller angle wins, as before, but a plain "smaller angle wins"
+    comparison gets the Q4->Q1 case backwards (a point at 350 degrees reads
+    as "larger" than one at 10 degrees, even though it is the earlier one
+    going anti-clockwise around the 0/360 wrap). Quadrant order fixes that,
+    and the two near-opposite pairs (Q1/Q3, Q2/Q4) -- where quadrant order
+    alone doesn't decide it -- fall back to whichever point sits closer to
+    the far quadrant boundary (225 degrees for Q1/Q3, 315 degrees for
+    Q2/Q4). Client-supplied logic (assign_classes_v2.py, 2026-11-24),
     replacing the plain comparison; see Landmark-logic-Sharlene.pdf for the
     original derivation this refines.
+
+    The smaller-angle point is class 1 (inferior); the larger-angle point is
+    class 2 (anterior) — per the client's 2026-11-27 correction, swapped
+    from the names used when this function was first written.
 
     Returns
     -------
     (anterior_point, inferior_point, swapped)
-        swapped is True when point_b (the original lm2) turned out to be
-        anterior — i.e. the model's channel order needed correcting.
+        swapped is True exactly when point_b (the model's raw second
+        channel) is the smaller-angle point of the pair — a plain count of
+        how often the two points land in that configuration, independent of
+        which anatomical name (anterior/inferior) each angle maps to.
     """
     cx, cy = centroid
     ax, ay = point_a
@@ -342,6 +350,12 @@ def _assign_rvip_classes(
     else:
         b_is_anterior = True
 
+    # b_is_anterior is True exactly when point_b has the smaller angle of the
+    # pair. The local names below still follow that (smaller angle = variable
+    # "anterior", larger angle = variable "inferior"), as in this function's
+    # first version; the client's 2026-11-27 correction is applied only at
+    # the return below, by swapping which local name is reported as which —
+    # so the larger-angle point is now reported as anterior.
     if b_is_anterior:
         inferior, anterior = point_a, point_b
         swapped = True
@@ -349,7 +363,7 @@ def _assign_rvip_classes(
         inferior, anterior = point_b, point_a
         swapped = False
 
-    return anterior, inferior, swapped
+    return inferior, anterior, swapped
 
 
 # ---------------------------------------------------------------------------
